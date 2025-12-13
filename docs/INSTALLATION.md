@@ -15,7 +15,7 @@ You can do almost all of the actual configuration through the web UI. This docum
 **Hardware (varies by features):**
 - Chat only: Any modern CPU
 - TTS: CPU fine, ~1GB RAM for Kokoro
-- STT: CPU works (slow), NVIDIA GPU recommended for real-time
+- STT: CPU works (slower), NVIDIA GPU recommended for real-time
 - Wake word: Minimal overhead
 
 ## Installation
