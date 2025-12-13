@@ -62,7 +62,7 @@ python main.py
 
 # Access web UI 
 # https://localhost:8073
-# Click the ... > App Settings > then customize your LLM info
+# Click the gear icon > App Settings > then customize your LLM info
 
 # Open LM Studio or llama.cpp so the Sapphire app can use your LLM.
 
