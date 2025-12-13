@@ -2,6 +2,8 @@
 
 Linux only (yet). Tested on Ubuntu 22.04/24.04, should work on Debian-based distros and Arch.
 
+You can do almost all of the actual configuration through the web UI. This document is for power users. 
+
 ## Requirements
 
 **System:**
