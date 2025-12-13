@@ -2,7 +2,7 @@
 
 Sapphire is a Privacy-first virtual persona framework. Make your own AI assistant to help with your work, a storyteller with personality, or just a companion with long term memory. This is a persona framework for AI models. Can be used as web UI or as a pure STT/TTS interface. This connects to your LLM server to provide an immersive and customizable experience. 
 
-<img width="2253" height="1472" alt="image" src="https://github.com/user-attachments/assets/5ba87677-6aa3-4e16-a575-22552c445084" />
+<img width="2253" height="1472" alt="image" src="https://github.com/ddxfish/sapphire/blob/main/docs/screenshots/sapphire-ai.png" />
 
 This is a one-person passion project. 
 
