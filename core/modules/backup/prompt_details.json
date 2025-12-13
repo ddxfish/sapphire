@@ -1,0 +1,13 @@
+{
+    "title": "Backup Manager",
+    "description": "Automatic backup system for user data - runs on schedule, no voice/chat triggers",
+    "version": "1.0.0",
+    "keywords": [],
+    "skip_llm": true,
+    "exact_match": true,
+    "save_to_history": false,
+    "auto_start": false,
+    "startup_script": null,
+    "restart_on_failure": false,
+    "startup_order": 0
+}

@@ -1,0 +1,15 @@
+/* Hello World Plugin Styles */
+.plugin-hello-world {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+.plugin-hello-world h3 {
+  color: #4a90e2;
+}
+
+.plugin-hello-world p {
+  font-style: italic;
+}

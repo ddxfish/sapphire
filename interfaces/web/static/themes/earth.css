@@ -1,0 +1,112 @@
+/* Earth Theme - /static/themes/earth.css */
+/* Dirt foundation, grass midtones, sky accents - a slice of planet */
+[data-theme="earth"] {
+    /* Colors - Core - rich brown earth base */
+    --bg: #1a130d;
+    --bg-secondary: #241a12;
+    --bg-dark: #2e2018;
+    --bg-tertiary: #3a2a1e;
+    --bg-hover: #4a3828;
+    --bg-inset: rgba(20, 15, 10, 0.5);
+    --text: #e8ddd0;
+    --text-bright: #fff8f0;
+    --text-light: #dcd0c0;
+    --text-secondary: #c8b8a0;
+    --text-tertiary: #a89878;
+    --text-muted: #887858;
+    --text-dim: #685840;
+    --border: #5a4030;
+    --border-light: #7a5840;
+    --border-hover: #9a7050;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(15, 10, 8, 0.9);
+    --overlay-medium: rgba(15, 10, 8, 0.8);
+    --shadow-medium: rgba(10, 5, 0, 0.5);
+    --shadow-heavy: rgba(10, 5, 0, 0.7);
+    --highlight-subtle: rgba(120, 180, 80, 0.08);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(120, 90, 60, 0.5);
+    --scrollbar-thumb-hover: rgba(120, 90, 60, 0.7);
+    
+    /* Inputs - darker soil */
+    --input-bg: #2a1e14;
+    --input-border: #5a4030;
+    --input-focus-border: #7cb342;
+    --input-focus-bg: #3a2a1e;
+    --placeholder-color: #806848;
+    
+    /* Code/Mono */
+    --code-bg: rgba(30, 20, 15, 0.6);
+    
+    /* Focus ring - grass green */
+    --focus-ring: rgba(124, 179, 66, 0.5);
+    
+    /* Selection - sky blue */
+    --selection-bg: rgba(100, 180, 220, 0.4);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%237cb342" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - grass green */
+    --primary: #7cb342;
+    --primary-hover: #689f38;
+    
+    /* Success - lush green */
+    --success: #8bc34a;
+    --success-text: #9ccc65;
+    --success-bg: rgba(139, 195, 74, 0.95);
+    --success-light: rgba(156, 204, 101, 0.2);
+    --success-border: rgba(156, 204, 101, 0.4);
+    --success-border-hover: rgba(156, 204, 101, 0.6);
+    
+    /* Warning - sunset orange */
+    --warning: #e07830;
+    --warning-text: #f09040;
+    --warning-bg: rgba(224, 120, 48, 0.95);
+    --warning-light: rgba(240, 144, 64, 0.2);
+    --warning-border: rgba(240, 144, 64, 0.4);
+    
+    /* Error/Danger - clay red */
+    --error: #c45040;
+    --error-text: #e06050;
+    --error-bg: rgba(196, 80, 64, 0.95);
+    --error-light: rgba(224, 96, 80, 0.2);
+    --error-border: rgba(224, 96, 80, 0.4);
+    --error-border-hover: rgba(224, 96, 80, 0.6);
+    --error-subtle: rgba(224, 96, 80, 0.1);
+    --danger: #b84030;
+    --danger-hover: #a03020;
+    --danger-red: #d05040;
+    --danger-glow: rgba(184, 64, 48, 0.7);
+    
+    /* Info - sky blue */
+    --info-bg: rgba(100, 180, 220, 0.95);
+    
+    /* Accent colors - sky and nature */
+    --accent-blue: #64b4dc;
+    --accent-blue-hover: #50a0c8;
+    --accent-blue-light: rgba(100, 180, 220, 0.2);
+    --accent-blue-border: rgba(100, 180, 220, 0.4);
+    --accent-cyan: #4db6ac;
+    --accent-cyan-light: rgba(77, 182, 172, 0.2);
+    --accent-orange: #e07830;
+    
+    /* Chat message backgrounds - grass user, sky assistant */
+    --user-bg: #2a3a20;
+    --assistant-bg: #203040;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(196, 80, 64, 0.15);
+    --plugin-spice-bg-hover: rgba(196, 80, 64, 0.25);
+    --plugin-ability-bg: rgba(100, 180, 220, 0.12);
+    --plugin-ability-bg-hover: rgba(100, 180, 220, 0.2);
+    --plugin-prompt-bg: rgba(124, 179, 66, 0.15);
+    --plugin-prompt-bg-focus: rgba(124, 179, 66, 0.28);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(156, 204, 101, 0.12);
+}

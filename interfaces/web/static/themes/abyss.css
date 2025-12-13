@@ -1,0 +1,112 @@
+/* Abyss Theme - /static/themes/abyss.css */
+/* Deep ocean darkness - where light comes from within */
+[data-theme="abyss"] {
+    /* Colors - Core - crushing depth black-blue */
+    --bg: #050810;
+    --bg-secondary: #080c18;
+    --bg-dark: #0c1020;
+    --bg-tertiary: #101828;
+    --bg-hover: #182038;
+    --bg-inset: rgba(5, 8, 20, 0.7);
+    --text: #a8c0d8;
+    --text-bright: #d0e8ff;
+    --text-light: #90b0d0;
+    --text-secondary: #7898b8;
+    --text-tertiary: #607898;
+    --text-muted: #485870;
+    --text-dim: #303848;
+    --border: #182838;
+    --border-light: #203448;
+    --border-hover: #284058;
+    
+    /* Overlays & Shadows - void */
+    --overlay-bg: rgba(2, 4, 10, 0.95);
+    --overlay-medium: rgba(2, 4, 10, 0.9);
+    --shadow-medium: rgba(0, 0, 10, 0.6);
+    --shadow-heavy: rgba(0, 0, 10, 0.8);
+    --highlight-subtle: rgba(100, 200, 255, 0.05);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(80, 160, 200, 0.25);
+    --scrollbar-thumb-hover: rgba(80, 160, 200, 0.4);
+    
+    /* Inputs */
+    --input-bg: #0a1018;
+    --input-border: #1a2838;
+    --input-focus-border: #40a0c0;
+    --input-focus-bg: #101820;
+    --placeholder-color: #405060;
+    
+    /* Code/Mono */
+    --code-bg: rgba(5, 10, 20, 0.6);
+    
+    /* Focus ring - bioluminescent */
+    --focus-ring: rgba(64, 200, 255, 0.4);
+    
+    /* Selection */
+    --selection-bg: rgba(64, 200, 255, 0.3);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%2350a0c8" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - bioluminescent cyan */
+    --primary: #40c8e0;
+    --primary-hover: #30a8c0;
+    
+    /* Success - ghostly green glow */
+    --success: #40c890;
+    --success-text: #50e0a8;
+    --success-bg: rgba(64, 200, 144, 0.9);
+    --success-light: rgba(80, 224, 168, 0.15);
+    --success-border: rgba(80, 224, 168, 0.35);
+    --success-border-hover: rgba(80, 224, 168, 0.55);
+    
+    /* Warning - anglerfish gold */
+    --warning: #d0a040;
+    --warning-text: #e8b850;
+    --warning-bg: rgba(208, 160, 64, 0.9);
+    --warning-light: rgba(232, 184, 80, 0.15);
+    --warning-border: rgba(232, 184, 80, 0.35);
+    
+    /* Error/Danger - deep red, barely visible */
+    --error: #a04050;
+    --error-text: #c05868;
+    --error-bg: rgba(160, 64, 80, 0.9);
+    --error-light: rgba(192, 88, 104, 0.15);
+    --error-border: rgba(192, 88, 104, 0.35);
+    --error-border-hover: rgba(192, 88, 104, 0.55);
+    --error-subtle: rgba(192, 88, 104, 0.08);
+    --danger: #903848;
+    --danger-hover: #802838;
+    --danger-red: #b04858;
+    --danger-glow: rgba(144, 56, 72, 0.7);
+    
+    /* Info - deep blue glow */
+    --info-bg: rgba(64, 160, 200, 0.9);
+    
+    /* Accent colors - bioluminescence */
+    --accent-blue: #50b8e0;
+    --accent-blue-hover: #40a0c8;
+    --accent-blue-light: rgba(80, 184, 224, 0.18);
+    --accent-blue-border: rgba(80, 184, 224, 0.35);
+    --accent-cyan: #40e0d0;
+    --accent-cyan-light: rgba(64, 224, 208, 0.18);
+    --accent-orange: #d09040;
+    
+    /* Chat message backgrounds - depth layers */
+    --user-bg: #101828;
+    --assistant-bg: #0c1420;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(160, 64, 80, 0.15);
+    --plugin-spice-bg-hover: rgba(160, 64, 80, 0.25);
+    --plugin-ability-bg: rgba(64, 224, 208, 0.1);
+    --plugin-ability-bg-hover: rgba(64, 224, 208, 0.18);
+    --plugin-prompt-bg: rgba(64, 200, 224, 0.12);
+    --plugin-prompt-bg-focus: rgba(64, 200, 224, 0.22);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(80, 224, 168, 0.1);
+}

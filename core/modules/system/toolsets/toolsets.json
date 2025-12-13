@@ -1,0 +1,17 @@
+{
+  "_comment": "Default toolsets - copy to user/toolsets/toolsets.json to customize",
+  "default": {
+    "functions": [
+      "get_memories",
+      "search_memory"
+    ]
+  },
+  "work": {
+    "functions": [
+      "search_for_urls",
+      "get_website_from_url",
+      "get_wikipedia",
+      "research_topic"
+    ]
+  }
+}

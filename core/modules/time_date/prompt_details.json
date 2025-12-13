@@ -1,0 +1,13 @@
+{
+    "title": "Time and Date",
+    "description": "Reports current time and date",
+    "version": "1.0.0",
+    "keywords": ["what time is it"],
+    "skip_llm": true,
+    "exact_match": true,
+    "save_to_history": false,
+    "auto_start": false,
+    "startup_script": null,
+    "restart_on_failure": false,
+    "startup_order": 0
+}

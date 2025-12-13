@@ -1,0 +1,112 @@
+/* Sapphire Theme - /static/themes/sapphire.css */
+/* Deep blue aesthetic for your AI companion */
+[data-theme="sapphire"] {
+    /* Colors - Core */
+    --bg: #0a1628;
+    --bg-secondary: #0f1f3a;
+    --bg-dark: #162a4a;
+    --bg-tertiary: #1a3152;
+    --bg-hover: #234068;
+    --bg-inset: rgba(0, 20, 60, 0.4);
+    --text: #c8d4e8;
+    --text-bright: #ffffff;
+    --text-light: #dce4f2;
+    --text-secondary: #a8b8d0;
+    --text-tertiary: #8899b8;
+    --text-muted: #6078a0;
+    --text-dim: #405880;
+    --border: #1e3a5f;
+    --border-light: #2a4a75;
+    --border-hover: #3a5a88;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(5, 15, 35, 0.9);
+    --overlay-medium: rgba(5, 15, 35, 0.8);
+    --shadow-medium: rgba(0, 10, 30, 0.5);
+    --shadow-heavy: rgba(0, 10, 30, 0.7);
+    --highlight-subtle: rgba(100, 150, 255, 0.08);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(100, 150, 220, 0.3);
+    --scrollbar-thumb-hover: rgba(100, 150, 220, 0.5);
+    
+    /* Inputs */
+    --input-bg: #132840;
+    --input-border: #2a4a75;
+    --input-focus-border: #4080c0;
+    --input-focus-bg: #1a3858;
+    --placeholder-color: #5070a0;
+    
+    /* Code/Mono */
+    --code-bg: rgba(0, 20, 50, 0.5);
+    
+    /* Focus ring */
+    --focus-ring: rgba(80, 160, 255, 0.5);
+    
+    /* Selection */
+    --selection-bg: rgba(80, 140, 220, 0.5);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%236088b0" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - sapphire blue */
+    --primary: #3080e0;
+    --primary-hover: #2068c0;
+    
+    /* Success */
+    --success: #40a060;
+    --success-text: #50c878;
+    --success-bg: rgba(64, 160, 96, 0.95);
+    --success-light: rgba(80, 200, 120, 0.18);
+    --success-border: rgba(80, 200, 120, 0.35);
+    --success-border-hover: rgba(80, 200, 120, 0.55);
+    
+    /* Warning */
+    --warning: #e0a020;
+    --warning-text: #f0c040;
+    --warning-bg: rgba(224, 160, 32, 0.95);
+    --warning-light: rgba(240, 192, 64, 0.18);
+    --warning-border: rgba(240, 192, 64, 0.35);
+    
+    /* Error/Danger */
+    --error: #e05050;
+    --error-text: #ff6b6b;
+    --error-bg: rgba(224, 80, 80, 0.95);
+    --error-light: rgba(255, 107, 107, 0.18);
+    --error-border: rgba(255, 107, 107, 0.35);
+    --error-border-hover: rgba(255, 107, 107, 0.55);
+    --error-subtle: rgba(255, 107, 107, 0.08);
+    --danger: #c04040;
+    --danger-hover: #a03030;
+    --danger-red: #e05050;
+    --danger-glow: rgba(192, 64, 64, 0.7);
+    
+    /* Info */
+    --info-bg: rgba(48, 128, 224, 0.95);
+    
+    /* Accent colors - gem tones */
+    --accent-blue: #50a0ff;
+    --accent-blue-hover: #3888e8;
+    --accent-blue-light: rgba(80, 160, 255, 0.2);
+    --accent-blue-border: rgba(80, 160, 255, 0.4);
+    --accent-cyan: #40d0d0;
+    --accent-cyan-light: rgba(64, 208, 208, 0.2);
+    --accent-orange: #f0a040;
+    
+    /* Chat message backgrounds */
+    --user-bg: #1a3858;
+    --assistant-bg: #183848;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(200, 80, 100, 0.15);
+    --plugin-spice-bg-hover: rgba(200, 80, 100, 0.25);
+    --plugin-ability-bg: rgba(64, 208, 208, 0.12);
+    --plugin-ability-bg-hover: rgba(64, 208, 208, 0.18);
+    --plugin-prompt-bg: rgba(48, 128, 180, 0.2);
+    --plugin-prompt-bg-focus: rgba(48, 128, 180, 0.35);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(80, 200, 120, 0.12);
+}

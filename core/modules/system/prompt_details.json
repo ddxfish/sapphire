@@ -1,0 +1,13 @@
+{
+    "title": "System Settings",
+    "description": "Change system settings like: system prompt, system voice, system pitch, system speed, system preset, system ability",
+    "version": "1.0.0",
+    "keywords": ["system"],
+    "skip_llm": true,
+    "exact_match": false,
+    "save_to_history": false,
+    "auto_start": false,
+    "startup_script": null,
+    "restart_on_failure": false,
+    "startup_order": 0
+}

@@ -1,0 +1,111 @@
+/* Dark Theme - /static/themes/dark.css */
+[data-theme="dark"] {
+    /* Colors - Core */
+    --bg: #121212;
+    --bg-secondary: #1a1a1a;
+    --bg-dark: #222;
+    --bg-tertiary: #2c2c2c;
+    --bg-hover: #383838;
+    --bg-inset: rgba(0, 0, 0, 0.25);
+    --text: #e0e0e0;
+    --text-bright: #fff;
+    --text-light: #ddd;
+    --text-secondary: #ccc;
+    --text-tertiary: #aaa;
+    --text-muted: #888;
+    --text-dim: #666;
+    --border: #333;
+    --border-light: #444;
+    --border-hover: #555;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(0, 0, 0, 0.8);
+    --overlay-medium: rgba(0, 0, 0, 0.7);
+    --shadow-medium: rgba(0, 0, 0, 0.4);
+    --shadow-heavy: rgba(0, 0, 0, 0.5);
+    --highlight-subtle: rgba(255, 255, 255, 0.05);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+    
+    /* Inputs */
+    --input-bg: var(--bg-tertiary);
+    --input-border: var(--border-light);
+    --input-focus-border: var(--border-hover);
+    --input-focus-bg: var(--bg-hover);
+    --placeholder-color: #666;
+    
+    /* Code/Mono */
+    --code-bg: rgba(0, 0, 0, 0.3);
+    
+    /* Focus ring for accessibility */
+    --focus-ring: rgba(74, 158, 255, 0.5);
+    
+    /* Selection */
+    --selection-bg: rgba(74, 158, 255, 0.4);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow - theme-aware SVG */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23888888" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary */
+    --primary: #2979ff;
+    --primary-hover: #1e5bb8;
+    
+    /* Success (green) */
+    --success: #4caf50;
+    --success-text: #2ecc71;
+    --success-bg: rgba(76, 175, 80, 0.95);
+    --success-light: rgba(46, 204, 113, 0.15);
+    --success-border: rgba(46, 204, 113, 0.3);
+    --success-border-hover: rgba(46, 204, 113, 0.5);
+    
+    /* Warning (yellow) */
+    --warning: #ff9800;
+    --warning-text: #f1c40f;
+    --warning-bg: rgba(255, 152, 0, 0.95);
+    --warning-light: rgba(241, 196, 15, 0.15);
+    --warning-border: rgba(241, 196, 15, 0.3);
+    
+    /* Error/Danger (red) */
+    --error: #ef5350;
+    --error-text: #e74c3c;
+    --error-bg: rgba(239, 83, 80, 0.95);
+    --error-light: rgba(231, 76, 60, 0.15);
+    --error-border: rgba(231, 76, 60, 0.3);
+    --error-border-hover: rgba(231, 76, 60, 0.5);
+    --error-subtle: rgba(231, 76, 60, 0.05);
+    --danger: #b71c1c;
+    --danger-hover: #a01818;
+    --danger-red: #d32f2f;
+    --danger-glow: rgba(183, 28, 28, 0.7);
+    
+    /* Info */
+    --info-bg: rgba(41, 121, 255, 0.95);
+    
+    /* Accent colors */
+    --accent-blue: #4a9eff;
+    --accent-blue-hover: #3a8eef;
+    --accent-blue-light: rgba(74, 158, 255, 0.2);
+    --accent-blue-border: rgba(74, 158, 255, 0.4);
+    --accent-cyan: #00cccc;
+    --accent-cyan-light: rgba(0, 204, 204, 0.2);
+    --accent-orange: #f39c12;
+    
+    /* Chat message backgrounds */
+    --user-bg: #2a3942;
+    --assistant-bg: #364135;
+    
+    /* Plugin-specific accents (themeable) */
+    --plugin-spice-bg: rgba(180, 60, 60, 0.15);
+    --plugin-spice-bg-hover: rgba(180, 60, 60, 0.25);
+    --plugin-ability-bg: rgba(0, 255, 255, 0.1);
+    --plugin-ability-bg-hover: rgba(0, 255, 255, 0.15);
+    --plugin-prompt-bg: rgba(0, 80, 80, 0.25);
+    --plugin-prompt-bg-focus: rgba(0, 80, 80, 0.4);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(76, 175, 80, 0.1);
+}

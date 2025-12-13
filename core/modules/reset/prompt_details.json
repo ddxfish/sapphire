@@ -1,0 +1,13 @@
+{
+    "title": "Reset and Remove History",
+    "description": "Manages chat history - 'Reset' clears all history, 'Remove Last X Messages' removes specified messages",
+    "version": "1.2.0",
+    "keywords": ["reset", "remove last"],
+    "skip_llm": true,
+    "exact_match": false,
+    "save_to_history": false,
+    "auto_start": false,
+    "startup_script": null,
+    "restart_on_failure": false,
+    "startup_order": 0
+}

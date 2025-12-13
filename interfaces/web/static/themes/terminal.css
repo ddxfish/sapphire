@@ -1,0 +1,112 @@
+/* Terminal Theme - /static/themes/terminal.css */
+/* Green phosphor CRT - the way our ancestors computed */
+[data-theme="terminal"] {
+    /* Colors - Core - true black with phosphor green */
+    --bg: #0a0a0a;
+    --bg-secondary: #0d0d0d;
+    --bg-dark: #141414;
+    --bg-tertiary: #181818;
+    --bg-hover: #1e1e1e;
+    --bg-inset: rgba(0, 0, 0, 0.7);
+    --text: #33ff33;
+    --text-bright: #66ff66;
+    --text-light: #33dd33;
+    --text-secondary: #33cc33;
+    --text-tertiary: #33aa33;
+    --text-muted: #338833;
+    --text-dim: #336633;
+    --border: #1a3a1a;
+    --border-light: #2a5a2a;
+    --border-hover: #33ff33;
+    
+    /* Overlays & Shadows - green glow */
+    --overlay-bg: rgba(0, 0, 0, 0.95);
+    --overlay-medium: rgba(0, 0, 0, 0.9);
+    --shadow-medium: rgba(0, 40, 0, 0.5);
+    --shadow-heavy: rgba(0, 60, 0, 0.7);
+    --highlight-subtle: rgba(51, 255, 51, 0.05);
+    
+    /* Scrollbar */
+    --scrollbar-track: #0a0a0a;
+    --scrollbar-thumb: rgba(51, 255, 51, 0.3);
+    --scrollbar-thumb-hover: rgba(51, 255, 51, 0.5);
+    
+    /* Inputs */
+    --input-bg: #0d0d0d;
+    --input-border: #1a3a1a;
+    --input-focus-border: #33ff33;
+    --input-focus-bg: #111111;
+    --placeholder-color: #336633;
+    
+    /* Code/Mono */
+    --code-bg: rgba(0, 20, 0, 0.5);
+    
+    /* Focus ring - phosphor glow */
+    --focus-ring: rgba(51, 255, 51, 0.4);
+    
+    /* Selection */
+    --selection-bg: rgba(51, 255, 51, 0.3);
+    --selection-text: #000;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%2333ff33" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - bright phosphor */
+    --primary: #33ff33;
+    --primary-hover: #22dd22;
+    
+    /* Success - brighter green */
+    --success: #44ff44;
+    --success-text: #66ff66;
+    --success-bg: rgba(68, 255, 68, 0.9);
+    --success-light: rgba(102, 255, 102, 0.15);
+    --success-border: rgba(102, 255, 102, 0.4);
+    --success-border-hover: rgba(102, 255, 102, 0.6);
+    
+    /* Warning - amber phosphor variant */
+    --warning: #ccff33;
+    --warning-text: #ddff55;
+    --warning-bg: rgba(204, 255, 51, 0.9);
+    --warning-light: rgba(221, 255, 85, 0.15);
+    --warning-border: rgba(221, 255, 85, 0.4);
+    
+    /* Error/Danger - red phosphor would be wrong, use dim green */
+    --error: #ff3333;
+    --error-text: #ff5555;
+    --error-bg: rgba(255, 51, 51, 0.9);
+    --error-light: rgba(255, 85, 85, 0.15);
+    --error-border: rgba(255, 85, 85, 0.4);
+    --error-border-hover: rgba(255, 85, 85, 0.6);
+    --error-subtle: rgba(255, 85, 85, 0.08);
+    --danger: #dd2222;
+    --danger-hover: #bb1111;
+    --danger-red: #ff4444;
+    --danger-glow: rgba(221, 34, 34, 0.7);
+    
+    /* Info */
+    --info-bg: rgba(51, 255, 51, 0.9);
+    
+    /* Accent colors - monochrome green */
+    --accent-blue: #33ff33;
+    --accent-blue-hover: #22dd22;
+    --accent-blue-light: rgba(51, 255, 51, 0.15);
+    --accent-blue-border: rgba(51, 255, 51, 0.4);
+    --accent-cyan: #33ffaa;
+    --accent-cyan-light: rgba(51, 255, 170, 0.15);
+    --accent-orange: #ccff33;
+    
+    /* Chat message backgrounds */
+    --user-bg: #0a1a0a;
+    --assistant-bg: #0a140a;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(255, 51, 51, 0.12);
+    --plugin-spice-bg-hover: rgba(255, 51, 51, 0.2);
+    --plugin-ability-bg: rgba(51, 255, 170, 0.1);
+    --plugin-ability-bg-hover: rgba(51, 255, 170, 0.18);
+    --plugin-prompt-bg: rgba(51, 255, 51, 0.1);
+    --plugin-prompt-bg-focus: rgba(51, 255, 51, 0.2);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(102, 255, 102, 0.1);
+}

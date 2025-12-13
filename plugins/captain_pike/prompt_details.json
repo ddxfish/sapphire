@@ -1,0 +1,13 @@
+{
+    "title": "Captain Pike",
+    "description": "Communicates with beeps like Captain Pike from Star Trek",
+    "version": "1.0.0",
+    "keywords": ["captain pike", "christopher pike"],
+    "skip_llm": false,
+    "exact_match": false,
+    "save_to_history": true,
+    "auto_start": false,
+    "startup_script": null,
+    "restart_on_failure": false,
+    "startup_order": 0
+}

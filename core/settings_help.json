@@ -1,0 +1,322 @@
+{
+  "_comment": "Help text for settings - displayed in settings modal UI",
+  
+  "DEFAULT_USERNAME": {
+    "short": "Your display name in conversations",
+    "long": "The name used to identify you in chat messages. This appears in the message history and can be changed at any time without affecting past messages. Used in prompts via the {user_name} placeholder."
+  },
+  "DEFAULT_AI_NAME": {
+    "short": "AI assistant's display name",
+    "long": "The name the AI uses to refer to itself. Used in prompts via the {ai_name} placeholder. Changes apply immediately to new messages. This affects how the AI identifies itself in conversations."
+  },
+  
+  "FFMPEG_PATH": {
+    "short": "Path to FFmpeg binary for audio processing",
+    "long": "Location of the FFmpeg executable used for audio format conversion and processing. Required for TTS audio playback. Default is /usr/bin/ffmpeg on Linux systems."
+  },
+  "TRANSCRIBE_SAMPLE_RATE": {
+    "short": "Audio sample rate for transcription (Hz)",
+    "long": "Sample rate used when processing audio for speech-to-text. 16000 Hz (16 kHz) is standard for speech recognition and provides good accuracy with reasonable file sizes."
+  },
+  "TRANSCRIBE_CHANNELS": {
+    "short": "Number of audio channels for transcription",
+    "long": "Audio channel count for transcription. Set to 1 for mono (recommended for speech), or 2 for stereo. Mono is more efficient for voice recognition."
+  },
+  
+  "SOCKS_ENABLED": {
+    "short": "Route web requests through SOCKS proxy",
+    "long": "When enabled, all web search and URL fetching will route through the specified SOCKS proxy server. Useful for privacy, accessing region-restricted content, or routing through Tor. Requires SOCKS_HOST and SOCKS_PORT to be configured."
+  },
+  "SOCKS_HOST": {
+    "short": "SOCKS proxy server hostname or IP",
+    "long": "Hostname or IP address of the SOCKS proxy server. For Tor, this is typically 127.0.0.1. Only used when SOCKS_ENABLED is true."
+  },
+  "SOCKS_PORT": {
+    "short": "SOCKS proxy server port number",
+    "long": "Port number for the SOCKS proxy server. Standard Tor SOCKS port is 9050. Default SOCKS5 port is 1080. Only used when SOCKS_ENABLED is true."
+  },
+  
+  "MODULES_ENABLED": {
+    "short": "Enable/disable module system for debug",
+    "long": "Modules extend core functionality with additional features like prompt management, presets, and system integrations. Disabling this will prevent any modules from loading. Requires system restart to take effect."
+  },
+  "PLUGINS_ENABLED": {
+    "short": "Enable/disable plugin system for debug",
+    "long": "Plugins add UI extensions and additional interface features like the settings modal, 3D avatars, and custom sidebars. Disabling this will prevent plugins from loading in the web interface. Requires page refresh to take effect."
+  },
+  "FUNCTIONS_ENABLED": {
+    "short": "Enable function/tool calling capabilities",
+    "long": "When enabled, the AI can use tools like web search, memory storage/retrieval, image generation, Wikipedia lookup, and more. Disabling this restricts the AI to text-only responses without any external capabilities or tool access."
+  },
+  
+  "BACKUPS_ENABLED": {
+    "short": "Enable automatic backup system",
+    "long": "When enabled, the system will automatically create backups of the user/ directory on a schedule. Daily backups run at 3am, weekly on Sundays, monthly on the 1st. Manual backups can be triggered from the UI."
+  },
+  "BACKUPS_KEEP_DAILY": {
+    "short": "Number of daily backups to retain",
+    "long": "How many daily backup files to keep before rotating old ones. Oldest backups are deleted first when the limit is exceeded. Set to 0 to disable daily backups."
+  },
+  "BACKUPS_KEEP_WEEKLY": {
+    "short": "Number of weekly backups to retain",
+    "long": "How many weekly backup files to keep. Weekly backups are created on Sundays. Oldest backups are deleted first when the limit is exceeded. Set to 0 to disable weekly backups."
+  },
+  "BACKUPS_KEEP_MONTHLY": {
+    "short": "Number of monthly backups to retain",
+    "long": "How many monthly backup files to keep. Monthly backups are created on the 1st of each month. Oldest backups are deleted first when the limit is exceeded. Set to 0 to disable monthly backups."
+  },
+  "BACKUPS_KEEP_MANUAL": {
+    "short": "Number of manual backups to retain",
+    "long": "How many manual backup files to keep. Manual backups are triggered via the Backup Now button in the UI. Oldest backups are deleted first when the limit is exceeded."
+  },
+  
+  "WAKE_WORD_ENABLED": {
+    "short": "Enable wake word detection (Hey Mycroft)",
+    "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Requires Mycroft Precise engine to be installed and configured at PRECISE_ENGINE_PATH. Uses continuous audio monitoring which may impact system resources."
+  },
+  "WAKEWORD_DEVICE_INDEX": {
+    "short": "Audio input device for wake word detection",
+    "long": "Index of the audio input device to use for wake word listening. Set to null to use system default. Use 'arecord -l' or similar tools to list available devices and their indices."
+  },
+  "CHUNK_SIZE": {
+    "short": "Audio buffer chunk size in bytes",
+    "long": "Size of audio chunks processed for wake word detection. Smaller values reduce latency but increase CPU usage. 1024 bytes is a good balance for most systems. Must be a power of 2."
+  },
+  "BUFFER_DURATION": {
+    "short": "Wake word audio buffer duration (seconds)",
+    "long": "How many seconds of audio to buffer before processing for wake word detection. Longer buffers improve accuracy but increase latency. 0.5 seconds is typical for responsive detection."
+  },
+  "FRAME_SKIP": {
+    "short": "Skip frames during wake word processing",
+    "long": "Process every Nth audio frame to reduce CPU usage. 1 means process every frame (most accurate). Higher values reduce CPU load but may miss wake words. 1-3 is recommended range."
+  },
+  "RECORDING_SAMPLE_RATE": {
+    "short": "Sample rate for audio recording (Hz)",
+    "long": "Sample rate used when recording audio input. 16000 Hz (16 kHz) is standard for speech and works well with most speech recognition models. Higher rates use more storage/bandwidth without much benefit for speech."
+  },
+  "PLAYBACK_SAMPLE_RATE": {
+    "short": "Sample rate for audio playback (Hz)",
+    "long": "Sample rate for audio output and TTS playback. 48000 Hz (48 kHz) is CD quality and works well for most modern audio systems. Match this to your sound card's native rate for best quality."
+  },
+  "WAKE_WORD_MODEL_PATH_TEMPLATE": {
+    "short": "RELATIVE path to wake word model file",
+    "long": "Template path to the Mycroft Precise model file (.pb format). The path is relative to the project root. Default is 'core/wakeword/models/hey-mycroft.pb'. Custom models can be trained for different wake words."
+  },
+  "PRECISE_ENGINE_PATH": {
+    "short": "Path to Mycroft Precise engine executable",
+    "long": "Full path to the precise-engine binary used for wake word detection. Typically installed at /usr/local/bin/precise-engine/precise-engine. Must be installed separately from Mycroft Precise repository."
+  },
+  "WAKE_WORD_SENSITIVITY": {
+    "short": "Wake word detection sensitivity threshold",
+    "long": "Detection threshold between 0 and 1. Lower values (0.3-0.4) reduce false positives but may miss some wake words. Higher values (0.5-0.6) are more responsive but may trigger on similar sounds. 0.46 is a good default."
+  },
+  "WAKE_WORD_TRIGGER_LEVEL": {
+    "short": "Consecutive detections required to trigger",
+    "long": "Number of consecutive wake word detections required before triggering. Higher values (3-5) reduce false positives from random noise. Lower values (1-2) are more responsive but less reliable. 3 is recommended."
+  },
+  "WAKE_TONE_DURATION": {
+    "short": "Duration of wake acknowledgment tone (seconds)",
+    "long": "How long the beep tone plays when wake word is detected. 0.15 seconds (150ms) is a quick, audible confirmation. Longer durations may feel sluggish."
+  },
+  "WAKE_TONE_FREQUENCY": {
+    "short": "Frequency of wake acknowledgment tone (Hz)",
+    "long": "Pitch of the beep tone when wake word is detected. 880 Hz is a pleasant, attention-getting tone (A5 musical note). Higher frequencies are more piercing, lower are more subtle."
+  },
+  "CALLBACK_THREAD_POOL_SIZE": {
+    "short": "Thread pool size for wake word callbacks",
+    "long": "Number of threads available for processing wake word detections. 1 is sufficient for most use cases since wake words happen sequentially. Higher values only needed for parallel processing scenarios."
+  },
+  
+  "STT_ENABLED": {
+    "short": "Enable speech-to-text recognition",
+    "long": "When enabled, allows voice input through the microphone button in the UI. Requires the STT server to be running on the configured host and port. Disabling this will hide the microphone button and disable voice input."
+  },
+  "STT_ENGINE": {
+    "short": "Speech recognition engine to use",
+    "long": "Which STT engine to use for transcription. 'faster_whisper' is recommended for best speed/accuracy balance. Uses OpenAI's Whisper models with optimized inference. Alternative engines may be added in future."
+  },
+  "STT_MODEL_SIZE": {
+    "short": "Whisper model size for transcription quality",
+    "long": "Larger models are more accurate but slower and use more RAM/VRAM. Options: tiny (~1GB RAM, fast but less accurate), base (~1GB RAM, good for testing), small (~2GB RAM, good balance), medium (~5GB RAM, high accuracy), large (~10GB RAM, best accuracy). The .en variants (base.en, small.en, etc.) are English-only and ~30% faster."
+  },
+  "STT_LANGUAGE": {
+    "short": "Language code for speech recognition",
+    "long": "ISO 639-1 language code for transcription. 'en' for English, 'es' for Spanish, 'fr' for French, etc. Helps the model better recognize the target language. Use .en model variants for English-only for better performance."
+  },
+  "STT_HOST": {
+    "short": "Hostname of STT server",
+    "long": "Hostname or IP address where the speech-to-text server is running. Use 'localhost' or '127.0.0.1' if running on the same machine. For remote servers, use the server's IP or hostname."
+  },
+  "STT_SERVER_PORT": {
+    "short": "Port number of STT server",
+    "long": "Port where the speech-to-text server listens for requests. Default is 5050. Change if you have port conflicts or are running multiple instances. Must match the port the STT server is configured to use."
+  },
+  "FASTER_WHISPER_CUDA_DEVICE": {
+    "short": "CUDA device index for GPU acceleration",
+    "long": "Which NVIDIA GPU to use for Whisper inference (0 for first GPU, 1 for second, etc.). Only used when FASTER_WHISPER_DEVICE is set to 'cuda'. Check 'nvidia-smi' to see available GPUs and their indices."
+  },
+  "FASTER_WHISPER_DEVICE": {
+    "short": "Compute device for Whisper inference",
+    "long": "Which hardware to use for speech recognition. 'cpu' uses processor (slower but works everywhere). 'cuda' uses NVIDIA GPU (much faster, requires CUDA-capable GPU). 'auto' automatically detects best available option."
+  },
+  "FASTER_WHISPER_COMPUTE_TYPE": {
+    "short": "Precision/quantization for Whisper model",
+    "long": "Numerical precision for model weights. Lower precision is faster and uses less memory but may be slightly less accurate. Options: 'int8' (fastest, lowest memory, recommended for CPU), 'float16' (good for GPU), 'float32' (highest quality, slowest). int8 offers great speed with minimal accuracy loss."
+  },
+  "FASTER_WHISPER_BEAM_SIZE": {
+    "short": "Beam search size for transcription quality",
+    "long": "Number of alternative hypotheses to consider during decoding. Higher values (7-10) improve accuracy but are slower. Lower values (1-5) are faster but may be less accurate. 5-7 is a good balance for most uses."
+  },
+  "FASTER_WHISPER_NUM_WORKERS": {
+    "short": "CPU threads for Whisper processing",
+    "long": "Number of CPU threads to use for transcription. Higher values speed up processing but use more CPU. Set to number of CPU cores for best performance. 8 is good for modern systems. Auto-detected if not specified."
+  },
+  "FASTER_WHISPER_VAD_FILTER": {
+    "short": "Enable Voice Activity Detection filter",
+    "long": "When enabled, uses VAD to filter out non-speech audio before transcription. Improves accuracy by ignoring silence and background noise. Recommended to keep enabled for better results and faster processing."
+  },
+  "FASTER_WHISPER_VAD_PARAMETERS": {
+    "short": "Voice Activity Detection configuration",
+    "long": "JSON object configuring VAD behavior. 'min_silence_duration_ms' sets how long silence must last before considering speech ended (500ms is good default). Lower values make transcription more responsive but may split sentences."
+  },
+  
+  "RECORDER_CHUNK_SIZE": {
+    "short": "Audio recording chunk size (bytes)",
+    "long": "Size of audio chunks when recording from microphone. 1024 bytes provides good latency. Smaller values reduce lag but increase CPU usage. Must be compatible with your audio hardware (typically powers of 2)."
+  },
+  "RECORDER_CHANNELS": {
+    "short": "Recording audio channel count",
+    "long": "Number of audio channels for recording. 1 for mono (recommended for speech), 2 for stereo. Mono is more efficient and works better for voice recognition since speech is typically mono."
+  },
+  "RECORDER_SILENCE_THRESHOLD": {
+    "short": "Silence detection threshold level",
+    "long": "Audio level below which sound is considered silence. Lower values (0.001-0.003) are more sensitive and stop recording sooner. Higher values require louder speech to be detected. 0.0025 works well in most environments."
+  },
+  "RECORDER_SILENCE_DURATION": {
+    "short": "Silence duration to stop recording (seconds)",
+    "long": "How long silence must last before stopping recording. 1.0 second allows natural pauses in speech without cutting off. Shorter values make interaction snappier but may cut sentences. Longer values are safer but less responsive."
+  },
+  "RECORDER_SPEECH_DURATION": {
+    "short": "Minimum speech duration to consider speech",
+    "long": "How long speech must be detected before starting to record. 0.2 seconds prevents very short noise bursts from triggering transcribe. Too high may miss quick utterances."
+  },
+  "RECORDER_LEVEL_HISTORY_SIZE": {
+    "short": "Audio level history buffer size",
+    "long": "Number of recent audio level samples to keep for noise floor calculation. Advanced feature, only extend if you have long transcription. "
+  },
+  "RECORDER_BACKGROUND_PERCENTILE": {
+    "short": "(Important) What % of your audio is background noise",
+    "long": "How much of your audio is background noise. Used only with wakeword recording. This is so VAD can calculate when to cut off recording and transcribe. Use low values for good mic with noise filtering, and high values for bad webcam mics. "
+  },
+  "RECORDER_NOISE_MULTIPLIER": {
+    "short": "Multiplier above noise floor for detection",
+    "long": "How much louder than background noise audio must be to count as speech. 1.1 means 10% louder than noise floor. Higher values (1.2-1.5) reduce false positives but may miss quiet speech."
+  },
+  "RECORDER_MAX_SECONDS": {
+    "short": "Maximum recording duration (seconds)",
+    "long": "Safety limit on recording length to prevent infinite recording. 30 seconds allows long utterances while preventing runaway recordings. Increase for longer inputs, decrease to save resources."
+  },
+  "RECORDER_BEEP_WAIT_TIME": {
+    "short": "Delay after beep before recording (seconds)",
+    "long": "How long to wait after playing the start beep before beginning recording. 0.15 seconds allows the beep to finish and prevents it from being recorded. Too short may capture beep tail."
+  },
+  "RECORDER_SAMPLE_RATES": {
+    "short": "Supported sample rates to try (Hz)",
+    "long": "List of sample rates to attempt when initializing audio recording, in order of preference. System will try each until one works. 44100 and 48000 are common for modern hardware, 16000 for older systems."
+  },
+  "RECORDER_PREFERRED_DEVICES": {
+    "short": "Preferred audio device names",
+    "long": "List of audio system names to prefer, in order. 'pipewire' is modern Linux audio, 'pulse' is PulseAudio, 'default' is system default. First available option will be used."
+  },
+  
+  "TTS_ENABLED": {
+    "short": "Enable text-to-speech output",
+    "long": "When enabled, AI responses will be spoken aloud using the configured TTS engine. Requires TTS server to be running on the specified endpoint. Disabling this will silence audio output but won't affect transcription or chat functionality."
+  },
+  "TTS_VOICE_NAME": {
+    "short": "Voice model name for speech synthesis",
+    "long": "The specific voice model to use from your TTS engine. Available voices depend on which TTS system you're using (Kokoro, etc). Common options might include different genders, accents, or character voices. Changes take effect immediately on next synthesis."
+  },
+  "TTS_SPEED": {
+    "short": "Speech playback speed multiplier",
+    "long": "Controls how fast the AI speaks. 1.0 is normal speed, higher values speed up speech (1.5 = 50% faster), lower values slow it down (0.8 = 20% slower). Typical range is 0.8 to 1.5. Very high speeds may reduce clarity."
+  },
+  "TTS_PITCH_SHIFT": {
+    "short": "Voice pitch adjustment multiplier",
+    "long": "Adjusts the pitch of the synthesized voice. 1.0 is original pitch, values above 1.0 raise pitch (higher/younger sounding), values below 1.0 lower pitch (deeper/older sounding). Typical range is 0.8 to 1.2. Extreme values may sound unnatural."
+  },
+  "TTS_PRIMARY_SERVER": {
+    "short": "Primary TTS server endpoint URL",
+    "long": "URL of the main text-to-speech server. Format: http://hostname:port. System will try this server first for all TTS requests. If it fails, falls back to TTS_FALLBACK_SERVER if configured."
+  },
+  "TTS_FALLBACK_SERVER": {
+    "short": "Fallback TTS server endpoint URL",
+    "long": "Backup TTS server URL used if primary server is unavailable. Provides redundancy for uninterrupted service. Set to same value as primary if you don't have a backup server. Format: http://hostname:port."
+  },
+  "TTS_FALLBACK_TIMEOUT": {
+    "short": "Timeout before trying fallback server (seconds)",
+    "long": "How long to wait for primary TTS server before switching to fallback. 0.2 seconds (200ms) provides quick failover. Too low may not give primary server enough time. Too high causes noticeable delays when primary is down."
+  },
+  "TTS_AUDIO_PLAYER": {
+    "short": "Audio player command for TTS playback",
+    "long": "Command-line audio player used to play synthesized speech. /usr/bin/aplay is standard on Linux. Alternative: /usr/bin/ffplay, /usr/bin/mpv. Must support reading audio from stdin or file path."
+  },
+  
+  "LLM_MAX_HISTORY": {
+    "short": "Maximum conversation messages to send to LLM (truncate earlier)",
+    "long": "How many past messages to send to LLM to make it faster or work better. Truncates earlier chat messages. Use even numbers. "
+  },
+  "LLM_MAX_TOKENS": {
+    "short": "Maximum tokens to send to AI (truncate earlier)",
+    "long": "The maximum length of AI input in tokens (roughly 4 characters per token). Prevents extremely long responses that could hang or timeout. Also used for models without context shift."
+  },
+  "LLM_REQUEST_TIMEOUT": {
+    "short": "Maximum wait time for LLM response (seconds)",
+    "long": "How long to wait for the language model to respond before timing out. 240 seconds (4 minutes) allows for very long responses with tool use. Shorter timeouts prevent hanging but may interrupt legitimate slow responses."
+  },
+  "LLM_PRIMARY": {
+    "short": "Primary language model server configuration",
+    "long": "JSON object with connection details for the main LLM server. Includes base_url (API endpoint), api_key (authentication), model (model name), timeout (connection timeout in seconds), and enabled (true/false). System tries primary first, falls back to LLM_FALLBACK if primary fails."
+  },
+  "LLM_FALLBACK": {
+    "short": "Fallback language model server configuration",
+    "long": "Backup LLM server configuration used if primary is unavailable. Same structure as LLM_PRIMARY. Provides redundancy so conversations can continue even if one server is down. Can use different model or same model on different server."
+  },
+  "GENERATION_DEFAULTS": {
+    "short": "Default parameters for text generation",
+    "long": "JSON object with default generation settings: max_tokens (response length limit), temperature (randomness/creativity, 0-2), top_p (nucleus sampling, 0-1), presence_penalty (topic diversity, -2 to 2), frequency_penalty (repetition reduction, -2 to 2). These can be overridden per-request."
+  },
+  "FORCE_THINKING": {
+    "short": "Override the AI's initial think tags to force it to think a certain way",
+    "long": "When enabled, prepends THINKING_PREFILL to every prompt to encourage the model to think a certain way. Useful for debugging or understanding decision-making. May make responses longer and slower. Most modern models don't need this."
+  },
+  "THINKING_PREFILL": {
+    "short": "Text to prepend for thinking mode",
+    "long": "Opening text that triggers the model's chain-of-thought reasoning. Only used if FORCE_THINKING is enabled. Should start with a <think> tag or similar, then an INCOMPLETE sentence so the AI finishes it."
+  },
+  
+  "TOOL_HISTORY_MAX_ENTRIES": {
+    "short": "Debug tool log file in user dir, max tool log count",
+    "long": "Set to 0 for no extra logs to be written or a number like 20 to see full tool debug."
+  },
+  "MAX_TOOL_ITERATIONS": {
+    "short": "how many total tool iterations can be called (these can be parallel)",
+    "long": "How many iterations the AI can do tool calls for. Prevents runaway tool calling."
+  },
+  "MAX_PARALLEL_TOOLS": {
+    "short": "Maximum tool calls per iteration",
+    "long": "How many tools the AI can call in a single tool iteration. Allows multiple tools at once. Multiple iterations per reply."
+  },
+  "DELETE_EARLY_THINK_PROSE": {
+    "short": "Remove thinking tags from tool responses (or try to)",
+    "long": "When enabled, attempts to strip actual reply text from early think tags. This way it can think without saying anything via TTS."
+  },
+  "DEBUG_TOOL_CALLING": {
+    "short": "Enable verbose tool calling debug logs",
+    "long": "When enabled, logs detailed information about every tool call: parameters, responses, timing, errors. Very helpful for debugging tool issues but creates large log files. Disable in production for better performance."
+  },
+  "SESSION_TIMEOUT_DAYS": {
+    "short": "How long login sessions remain valid (days)",
+    "long": "Number of days a login session cookie remains valid before requiring re-login. 30 days means users stay logged in for a month. Shorter values are more secure but less convenient. Set to 1 for daily re-authentication."
+  }
+}

@@ -1,0 +1,112 @@
+/* Synthwave Theme - /static/themes/synthwave.css */
+/* Retro 80s neon aesthetic - because every AI deserves a Tron moment */
+[data-theme="synthwave"] {
+    /* Colors - Core */
+    --bg: #1a1025;
+    --bg-secondary: #241535;
+    --bg-dark: #2d1a42;
+    --bg-tertiary: #352048;
+    --bg-hover: #452860;
+    --bg-inset: rgba(20, 10, 35, 0.5);
+    --text: #e8d0f0;
+    --text-bright: #ffffff;
+    --text-light: #f0e0ff;
+    --text-secondary: #c8a8e0;
+    --text-tertiary: #a080c0;
+    --text-muted: #8060a0;
+    --text-dim: #604080;
+    --border: #402860;
+    --border-light: #503878;
+    --border-hover: #684898;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(15, 8, 25, 0.92);
+    --overlay-medium: rgba(15, 8, 25, 0.85);
+    --shadow-medium: rgba(0, 0, 0, 0.5);
+    --shadow-heavy: rgba(0, 0, 0, 0.7);
+    --highlight-subtle: rgba(255, 100, 200, 0.08);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(200, 100, 255, 0.3);
+    --scrollbar-thumb-hover: rgba(200, 100, 255, 0.5);
+    
+    /* Inputs */
+    --input-bg: #2a1840;
+    --input-border: #503878;
+    --input-focus-border: #ff66b2;
+    --input-focus-bg: #3a2055;
+    --placeholder-color: #7050a0;
+    
+    /* Code/Mono */
+    --code-bg: rgba(30, 15, 50, 0.6);
+    
+    /* Focus ring - hot pink */
+    --focus-ring: rgba(255, 102, 178, 0.5);
+    
+    /* Selection */
+    --selection-bg: rgba(255, 102, 178, 0.4);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23a070c0" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - neon cyan */
+    --primary: #00e5ff;
+    --primary-hover: #00b8cc;
+    
+    /* Success - neon green */
+    --success: #39ff14;
+    --success-text: #50ff30;
+    --success-bg: rgba(57, 255, 20, 0.9);
+    --success-light: rgba(80, 255, 48, 0.18);
+    --success-border: rgba(80, 255, 48, 0.4);
+    --success-border-hover: rgba(80, 255, 48, 0.6);
+    
+    /* Warning - neon orange */
+    --warning: #ff9500;
+    --warning-text: #ffb020;
+    --warning-bg: rgba(255, 149, 0, 0.95);
+    --warning-light: rgba(255, 176, 32, 0.18);
+    --warning-border: rgba(255, 176, 32, 0.4);
+    
+    /* Error/Danger - neon red/pink */
+    --error: #ff1744;
+    --error-text: #ff4070;
+    --error-bg: rgba(255, 23, 68, 0.95);
+    --error-light: rgba(255, 64, 112, 0.18);
+    --error-border: rgba(255, 64, 112, 0.4);
+    --error-border-hover: rgba(255, 64, 112, 0.6);
+    --error-subtle: rgba(255, 64, 112, 0.08);
+    --danger: #ff1744;
+    --danger-hover: #d01040;
+    --danger-red: #ff4070;
+    --danger-glow: rgba(255, 23, 68, 0.7);
+    
+    /* Info - cyan */
+    --info-bg: rgba(0, 229, 255, 0.9);
+    
+    /* Accent colors - neon palette */
+    --accent-blue: #00e5ff;
+    --accent-blue-hover: #00b8cc;
+    --accent-blue-light: rgba(0, 229, 255, 0.2);
+    --accent-blue-border: rgba(0, 229, 255, 0.4);
+    --accent-cyan: #00ffff;
+    --accent-cyan-light: rgba(0, 255, 255, 0.2);
+    --accent-orange: #ff9500;
+    
+    /* Chat message backgrounds */
+    --user-bg: #3a2058;
+    --assistant-bg: #2a3048;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(255, 102, 178, 0.15);
+    --plugin-spice-bg-hover: rgba(255, 102, 178, 0.25);
+    --plugin-ability-bg: rgba(0, 229, 255, 0.12);
+    --plugin-ability-bg-hover: rgba(0, 229, 255, 0.18);
+    --plugin-prompt-bg: rgba(200, 100, 255, 0.15);
+    --plugin-prompt-bg-focus: rgba(200, 100, 255, 0.28);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(57, 255, 20, 0.12);
+}

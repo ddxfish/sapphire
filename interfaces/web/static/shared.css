@@ -1,0 +1,840 @@
+/* shared.css - Common UI components for Sapphire */
+
+/* =============================================================================
+   CSS VARIABLES - BASE DEFAULTS (dark fallback)
+   Theme files override these via [data-theme="name"] selectors
+   ============================================================================= */
+:root {
+    /* Colors - Core (dark defaults) */
+    --bg: #121212;
+    --bg-secondary: #1a1a1a;
+    --bg-dark: #222;
+    --bg-tertiary: #2c2c2c;
+    --bg-hover: #383838;
+    --bg-inset: rgba(0, 0, 0, 0.25);
+    --text: #e0e0e0;
+    --text-bright: #fff;
+    --text-light: #ddd;
+    --text-secondary: #ccc;
+    --text-tertiary: #aaa;
+    --text-muted: #888;
+    --text-dim: #666;
+    --border: #333;
+    --border-light: #444;
+    --border-hover: #555;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(0, 0, 0, 0.8);
+    --overlay-medium: rgba(0, 0, 0, 0.7);
+    --shadow-medium: rgba(0, 0, 0, 0.4);
+    --shadow-heavy: rgba(0, 0, 0, 0.5);
+    --highlight-subtle: rgba(255, 255, 255, 0.05);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.3);
+    
+    /* Inputs */
+    --input-bg: var(--bg-tertiary);
+    --input-border: var(--border-light);
+    --input-focus-border: var(--border-hover);
+    --input-focus-bg: var(--bg-hover);
+    --placeholder-color: #666;
+    
+    /* Code/Mono */
+    --code-bg: rgba(0, 0, 0, 0.3);
+    
+    /* Focus ring for accessibility */
+    --focus-ring: rgba(74, 158, 255, 0.5);
+    
+    /* Selection */
+    --selection-bg: rgba(74, 158, 255, 0.4);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23888888" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Border radius */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    
+    /* Font sizes */
+    --font-xs: 10px;
+    --font-sm: 11px;
+    --font-base: 13px;
+    --font-md: 14px;
+    --font-lg: 16px;
+    --font-xl: 18px;
+    --font-2xl: 20px;
+    
+    /* Transitions */
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.2s ease;
+    --transition-slow: 0.3s ease;
+    
+    /* Primary */
+    --primary: #2979ff;
+    --primary-hover: #1e5bb8;
+    
+    /* Success (green) */
+    --success: #4caf50;
+    --success-text: #2ecc71;
+    --success-bg: rgba(76, 175, 80, 0.95);
+    --success-light: rgba(46, 204, 113, 0.15);
+    --success-border: rgba(46, 204, 113, 0.3);
+    --success-border-hover: rgba(46, 204, 113, 0.5);
+    
+    /* Warning (yellow) */
+    --warning: #ff9800;
+    --warning-text: #f1c40f;
+    --warning-bg: rgba(255, 152, 0, 0.95);
+    --warning-light: rgba(241, 196, 15, 0.15);
+    --warning-border: rgba(241, 196, 15, 0.3);
+    
+    /* Error/Danger (red) */
+    --error: #ef5350;
+    --error-text: #e74c3c;
+    --error-bg: rgba(239, 83, 80, 0.95);
+    --error-light: rgba(231, 76, 60, 0.15);
+    --error-border: rgba(231, 76, 60, 0.3);
+    --error-border-hover: rgba(231, 76, 60, 0.5);
+    --error-subtle: rgba(231, 76, 60, 0.05);
+    --danger: #b71c1c;
+    --danger-hover: #a01818;
+    --danger-red: #d32f2f;
+    --danger-glow: rgba(183, 28, 28, 0.7);
+    
+    /* Info */
+    --info-bg: rgba(41, 121, 255, 0.95);
+    
+    /* Accent colors */
+    --accent-blue: #4a9eff;
+    --accent-blue-hover: #3a8eef;
+    --accent-blue-light: rgba(74, 158, 255, 0.2);
+    --accent-blue-border: rgba(74, 158, 255, 0.4);
+    --accent-cyan: #00cccc;
+    --accent-cyan-light: rgba(0, 204, 204, 0.2);
+    --accent-orange: #f39c12;
+    
+    /* Chat message backgrounds */
+    --user-bg: #2a3942;
+    --assistant-bg: #364135;
+    
+    /* Plugin-specific accents (themeable) */
+    --plugin-spice-bg: rgba(180, 60, 60, 0.15);
+    --plugin-spice-bg-hover: rgba(180, 60, 60, 0.25);
+    --plugin-ability-bg: rgba(0, 255, 255, 0.1);
+    --plugin-ability-bg-hover: rgba(0, 255, 255, 0.15);
+    --plugin-prompt-bg: rgba(0, 80, 80, 0.25);
+    --plugin-prompt-bg-focus: rgba(0, 80, 80, 0.4);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(76, 175, 80, 0.1);
+    
+    /* Fonts */
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-heading: var(--font-body);
+    --font-mono: 'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace;
+}
+
+/* =============================================================================
+   GLOBAL SELECTION & PLACEHOLDER
+   ============================================================================= */
+::selection {
+    background: var(--selection-bg);
+    color: var(--selection-text);
+}
+
+::placeholder {
+    color: var(--placeholder-color);
+    opacity: 1;
+}
+
+/* =============================================================================
+   TOAST NOTIFICATIONS
+   ============================================================================= */
+#toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.toast {
+    padding: 12px 20px;
+    border-radius: var(--radius-md);
+    background: var(--error-bg);
+    color: var(--text-bright);
+    font-size: var(--font-md);
+    box-shadow: 0 4px 12px var(--shadow-medium);
+    opacity: 0;
+    transform: translateX(100px);
+    animation: toastIn var(--transition-slow) forwards, toastOut var(--transition-slow) 3.7s forwards;
+    pointer-events: auto;
+    max-width: 350px;
+}
+
+.toast.success { background: var(--success-bg); }
+.toast.warning { background: var(--warning-bg); }
+.toast.info { background: var(--info-bg); }
+
+@keyframes toastIn { to { opacity: 1; transform: translateX(0); } }
+@keyframes toastOut { to { opacity: 0; transform: translateX(100px); } }
+
+/* =============================================================================
+   ACCORDION / COLLAPSIBLE (Unified)
+   ============================================================================= */
+.accordion {
+    margin-bottom: 1px;
+}
+
+.accordion-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 6px;
+    background: var(--bg-tertiary);
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--transition-normal);
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+}
+
+.accordion-header:hover {
+    background: var(--bg-hover);
+}
+
+.accordion-toggle {
+    font-size: var(--font-xs);
+    width: 12px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    transition: transform var(--transition-normal);
+}
+
+.accordion-toggle:not(.collapsed)::before { content: '▼'; }
+.accordion-toggle.collapsed::before { content: '▶'; }
+
+.accordion-title {
+    flex: 1;
+}
+
+.accordion-count {
+    color: var(--text-dim);
+    font-size: var(--font-xs);
+}
+
+.accordion-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity var(--transition-normal);
+}
+
+.accordion-header:hover .accordion-actions {
+    opacity: 1;
+}
+
+.accordion-content {
+    background: var(--bg-secondary);
+}
+
+.accordion-content.collapsed {
+    display: none;
+}
+
+/* =============================================================================
+   MODAL SYSTEM
+   ============================================================================= */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--overlay-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    opacity: 0;
+    transition: opacity var(--transition-slow);
+}
+
+.modal-overlay.active {
+    opacity: 1;
+}
+
+.modal-base {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    max-width: 600px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    transform: scale(0.95);
+    transition: transform var(--transition-slow);
+}
+
+.modal-overlay.active .modal-base {
+    transform: scale(1);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3,
+.modal-header h2 {
+    margin: 0;
+    font-size: var(--font-xl);
+    color: var(--text);
+    font-weight: 600;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-footer {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+}
+
+/* Modal form fields */
+.modal-field {
+    margin-bottom: 20px;
+}
+
+.modal-field:last-child {
+    margin-bottom: 0;
+}
+
+.modal-field label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: var(--font-md);
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.modal-field input,
+.modal-field select,
+.modal-field textarea {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-size: var(--font-md);
+    font-family: inherit;
+    transition: border-color var(--transition-normal), background-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.modal-field input:focus,
+.modal-field select:focus,
+.modal-field textarea:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    background-color: var(--input-focus-bg);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.modal-field textarea {
+    resize: vertical;
+    min-height: 120px;
+    font-family: var(--font-mono);
+    line-height: 1.5;
+}
+
+.modal-field input[readonly],
+.modal-field textarea[readonly] {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+/* Checkbox group in modals */
+.checkbox-group {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--input-bg);
+    padding: 8px;
+}
+
+/* =============================================================================
+   BUTTONS
+   ============================================================================= */
+
+/* Base button */
+.btn {
+    padding: 8px 16px;
+    border-radius: var(--radius-md);
+    font-size: var(--font-md);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    border: 1px solid transparent;
+    background: var(--bg-tertiary);
+    color: var(--text);
+}
+
+.btn:hover {
+    background: var(--bg-hover);
+}
+
+.btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Size variants */
+.btn-sm {
+    padding: 5px 10px;
+    font-size: var(--font-base);
+    border-radius: var(--radius-sm);
+}
+
+.btn-lg {
+    padding: 14px 28px;
+    font-size: var(--font-md);
+    font-weight: 600;
+}
+
+/* Color variants */
+.btn-primary {
+    background: var(--primary);
+    color: var(--text-bright);
+    border-color: var(--primary);
+}
+
+.btn-primary:hover {
+    background: var(--primary-hover);
+}
+
+.btn-primary:disabled {
+    background: var(--border-hover);
+    border-color: var(--border-hover);
+}
+
+.btn-secondary {
+    background: var(--bg-tertiary);
+    color: var(--text);
+    border-color: var(--border-light);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
+}
+
+.btn-danger {
+    background: var(--error-light);
+    color: var(--error-text);
+    border-color: var(--error-border);
+}
+
+.btn-danger:hover {
+    background: var(--error-border);
+    border-color: var(--error-border-hover);
+}
+
+.btn-success {
+    background: var(--success-light);
+    color: var(--success-text);
+    border-color: var(--success-border);
+}
+
+.btn-success:hover {
+    background: var(--success-border);
+    border-color: var(--success-border-hover);
+}
+
+.btn-info {
+    background: var(--bg-secondary);
+    color: var(--accent-cyan);
+    border-color: var(--border-light);
+}
+
+.btn-info:hover {
+    background: var(--bg-hover);
+}
+
+/* Ghost button - transparent with visible border */
+.btn-ghost {
+    background: transparent;
+    border-color: var(--border-light);
+}
+
+.btn-ghost:hover {
+    background: var(--bg-hover);
+    border-color: var(--text);
+}
+
+/* Icon buttons - square, for icons/emojis */
+.btn-icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text);
+    cursor: pointer;
+    font-size: var(--font-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-normal);
+}
+
+.btn-icon:hover {
+    background: var(--bg-hover);
+    color: var(--text-bright);
+}
+
+.btn-icon:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.btn-icon-sm {
+    width: 24px;
+    height: 24px;
+    font-size: var(--font-base);
+    border-radius: var(--radius-sm);
+}
+
+.btn-icon-xs {
+    width: 20px;
+    height: 20px;
+    padding: 2px 4px;
+    font-size: var(--font-sm);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+    background: transparent;
+}
+
+/* Hover color modifiers - apply colored hover to any button */
+.hover-danger:hover {
+    background: var(--error-light);
+    border-color: var(--error);
+    color: var(--error);
+}
+
+.hover-success:hover {
+    background: var(--success-light);
+    border-color: var(--success);
+    color: var(--success);
+}
+
+.hover-info:hover {
+    background: var(--accent-blue-light);
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+/* Plugin toolbar buttons - emoji-only buttons for plugin headers */
+.plugin-btn {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text);
+    cursor: pointer;
+    font-size: var(--font-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-normal);
+}
+
+.plugin-btn:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
+}
+
+.plugin-btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Inline action buttons - tiny buttons next to dropdowns/items */
+.inline-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: var(--font-base);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-normal);
+    flex-shrink: 0;
+}
+
+.inline-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.inline-btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.inline-btn.add { color: var(--success-text); }
+.inline-btn.add:hover { background: var(--success-light); }
+
+.inline-btn.edit { color: var(--accent-cyan); }
+.inline-btn.edit:hover { background: var(--accent-cyan-light); }
+
+.inline-btn.delete { color: var(--error-text); }
+.inline-btn.delete:hover { background: var(--error-light); }
+
+/* =============================================================================
+   FORM CONTROLS
+   ============================================================================= */
+.form-input,
+.form-select,
+.form-textarea,
+select {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--font-md);
+    font-family: inherit;
+    transition: border-color var(--transition-normal), background-color var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus,
+select:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    background-color: var(--input-focus-bg);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.form-textarea {
+    resize: vertical;
+    min-height: 80px;
+    font-family: var(--font-mono);
+}
+
+.form-select,
+select {
+    cursor: pointer;
+    appearance: none;
+    background-image: var(--select-arrow);
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    background-size: 20px;
+    padding-right: 35px;
+}
+
+/* Select variants */
+.form-select-sm, select.form-select-sm {
+    padding: 4px 8px;
+    padding-right: 30px;
+    font-size: var(--font-base);
+}
+
+.form-select-mono, select.form-select-mono {
+    font-family: var(--font-mono);
+}
+
+.checkbox-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-normal);
+}
+
+.checkbox-wrap:hover {
+    background: var(--highlight-subtle);
+}
+
+.checkbox-wrap input[type="checkbox"] {
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.checkbox-wrap input[type="checkbox"]:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.checkbox-wrap span {
+    flex: 1;
+    color: var(--text);
+    font-size: var(--font-md);
+    line-height: 1.4;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-secondary);
+    font-size: var(--font-md);
+    font-weight: 500;
+}
+
+/* =============================================================================
+   CLOSE BUTTON
+   ============================================================================= */
+.close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: var(--font-2xl);
+    cursor: pointer;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-normal);
+}
+
+.close-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-bright);
+}
+
+.close-btn:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* =============================================================================
+   EDIT MODE (inline editing in messages)
+   ============================================================================= */
+.edit-textarea {
+    width: 100%;
+    font-family: inherit;
+    font-size: inherit;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--input-bg);
+    color: var(--text);
+    resize: vertical;
+}
+
+.edit-textarea:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* =============================================================================
+   SCROLLBAR STYLING
+   ============================================================================= */
+.styled-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.styled-scrollbar::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+.styled-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: var(--radius-sm);
+}
+
+.styled-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+/* =============================================================================
+   BADGE / TAG
+   ============================================================================= */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge-primary { background: var(--primary); color: var(--text-bright); }
+.badge-success { background: var(--success-light); color: var(--success-text); border: 1px solid var(--success-border); }
+.badge-warning { background: var(--warning-light); color: var(--warning-text); border: 1px solid var(--warning-border); }
+.badge-danger { background: var(--error-light); color: var(--error-text); border: 1px solid var(--error-border); }
+
+/* =============================================================================
+   SPINNER
+   ============================================================================= */
+.spinner {
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    border: 2px solid var(--border-hover);
+    border-top-color: var(--text-bright);
+}
+
+.spinner-sm { width: 14px; height: 14px; }
+.spinner-md { width: 20px; height: 20px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* =============================================================================
+   PLACEHOLDER / EMPTY STATE
+   ============================================================================= */
+.placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+    text-align: center;
+    padding: 20px;
+}

@@ -1,0 +1,13 @@
+{
+    "title": "Memory Engine",
+    "description": "Long-term memory storage and retrieval system",
+    "version": "1.0.0",
+    "keywords": ["memory search", "memory recent", "memory add"],
+    "skip_llm": true,
+    "exact_match": false,
+    "save_to_history": true,
+    "auto_start": true,
+    "startup_script": "memory_server.py",
+    "restart_on_failure": true,
+    "startup_order": 1
+}

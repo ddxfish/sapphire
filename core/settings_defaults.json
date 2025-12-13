@@ -1,0 +1,136 @@
+{
+  "_comment": "Default settings - DO NOT EDIT. Customize via user/settings.json or web UI",
+  
+  "identity": {
+    "DEFAULT_USERNAME": "Human Protagonist",
+    "DEFAULT_AI_NAME": "Sapphire"
+  },
+  
+  "api": {
+    "FFMPEG_PATH": "/usr/bin/ffmpeg",
+    "TRANSCRIBE_SAMPLE_RATE": 16000,
+    "TRANSCRIBE_CHANNELS": 1
+  },
+  
+  "network": {
+    "SOCKS_ENABLED": false,
+    "SOCKS_HOST": "",
+    "SOCKS_PORT": 1080
+  },
+  
+  "features": {
+    "MODULES_ENABLED": true,
+    "PLUGINS_ENABLED": true,
+    "FUNCTIONS_ENABLED": true
+  },
+  
+  "backups": {
+    "BACKUPS_ENABLED": true,
+    "BACKUPS_KEEP_DAILY": 7,
+    "BACKUPS_KEEP_WEEKLY": 4,
+    "BACKUPS_KEEP_MONTHLY": 3,
+    "BACKUPS_KEEP_MANUAL": 5
+  },
+  
+  "wakeword": {
+    "WAKE_WORD_ENABLED": false,
+    "WAKEWORD_DEVICE_INDEX": null,
+    "CHUNK_SIZE": 1024,
+    "BUFFER_DURATION": 0.5,
+    "FRAME_SKIP": 1,
+    "RECORDING_SAMPLE_RATE": 16000,
+    "PLAYBACK_SAMPLE_RATE": 48000,
+    "WAKE_WORD_MODEL_PATH_TEMPLATE": "user/wakeword/models/hey-mycroft.pb",
+    "PRECISE_ENGINE_PATH": "/usr/local/bin/precise-engine/precise-engine",
+    "WAKE_WORD_SENSITIVITY": 0.46,
+    "WAKE_WORD_TRIGGER_LEVEL": 3,
+    "WAKE_TONE_DURATION": 0.150,
+    "WAKE_TONE_FREQUENCY": 880,
+    "CALLBACK_THREAD_POOL_SIZE": 1
+  },
+  
+  "stt": {
+    "STT_ENABLED": false,
+    "STT_ENGINE": "faster_whisper",
+    "STT_MODEL_SIZE": "base.en",
+    "STT_LANGUAGE": "en",
+    "STT_HOST": "localhost",
+    "STT_SERVER_PORT": 5050,
+    "FASTER_WHISPER_CUDA_DEVICE": 0,
+    "FASTER_WHISPER_DEVICE": "cpu",
+    "FASTER_WHISPER_COMPUTE_TYPE": "int8",
+    "FASTER_WHISPER_BEAM_SIZE": 7,
+    "FASTER_WHISPER_NUM_WORKERS": 8,
+    "FASTER_WHISPER_VAD_FILTER": true,
+    "FASTER_WHISPER_VAD_PARAMETERS": {
+      "min_silence_duration_ms": 500
+    }
+  },
+  
+  "recorder": {
+    "RECORDER_CHUNK_SIZE": 1024,
+    "RECORDER_CHANNELS": 1,
+    "RECORDER_SILENCE_THRESHOLD": 0.0025,
+    "RECORDER_SILENCE_DURATION": 1.0,
+    "RECORDER_SPEECH_DURATION": 0.2,
+    "RECORDER_LEVEL_HISTORY_SIZE": 15,
+    "RECORDER_BACKGROUND_PERCENTILE": 20,
+    "RECORDER_NOISE_MULTIPLIER": 1.1,
+    "RECORDER_MAX_SECONDS": 30,
+    "RECORDER_BEEP_WAIT_TIME": 0.15,
+    "RECORDER_SAMPLE_RATES": [44100, 48000, 16000, 8000],
+    "RECORDER_PREFERRED_DEVICES": ["pipewire", "pulse", "default"]
+  },
+  
+  "tts": {
+    "TTS_ENABLED": false,
+    "TTS_VOICE_NAME": "af_heart",
+    "TTS_SPEED": 1.25,
+    "TTS_PITCH_SHIFT": 0.98,
+    "TTS_PRIMARY_SERVER": "http://localhost:5012",
+    "TTS_FALLBACK_SERVER": "http://127.0.0.1:5012",
+    "TTS_FALLBACK_TIMEOUT": 0.2,
+    "TTS_AUDIO_PLAYER": "/usr/bin/aplay"
+  },
+  
+  "llm": {
+    "LLM_MAX_HISTORY": 30,
+    "LLM_MAX_TOKENS": 32000,
+    "LLM_REQUEST_TIMEOUT": 240.0,
+    "LLM_PRIMARY": {
+      "base_url": "http://127.0.0.1:1234/v1",
+      "api_key": "lm-studio",
+      "model": "lmstudio-community/llama-3.2-1b-instruct",
+      "timeout": 0.2,
+      "enabled": true
+    },
+    "LLM_FALLBACK": {
+      "base_url": "http://127.0.0.1:8009/v1",
+      "api_key": "local-swarm",
+      "model": "qwen3-8b",
+      "timeout": 0.2,
+      "enabled": true
+    },
+    "GENERATION_DEFAULTS": {
+      "max_tokens": 4096,
+      "temperature": 0.82,
+      "top_p": 0.95,
+      "presence_penalty": 0.2,
+      "frequency_penalty": 0.2
+    },
+    "FORCE_THINKING": false,
+    "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that"
+  },
+  
+  "tools": {
+    "TOOL_HISTORY_MAX_ENTRIES": 0,
+    "MAX_TOOL_ITERATIONS": 4,
+    "MAX_PARALLEL_TOOLS": 1,
+    "DELETE_EARLY_THINK_PROSE": true,
+    "DEBUG_TOOL_CALLING": false
+  },
+  
+  "auth": {
+    "SESSION_TIMEOUT_DAYS": 30
+  }
+}

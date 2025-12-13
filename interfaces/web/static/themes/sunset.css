@@ -1,0 +1,112 @@
+/* Sunset Theme - /static/themes/sunset.css */
+/* Warm orange sky fading to purple - golden hour forever */
+[data-theme="sunset"] {
+    /* Colors - Core - deep purple base with warm overlay */
+    --bg: #1a1018;
+    --bg-secondary: #261820;
+    --bg-dark: #322028;
+    --bg-tertiary: #3e2830;
+    --bg-hover: #503440;
+    --bg-inset: rgba(30, 15, 25, 0.5);
+    --text: #f8e8e0;
+    --text-bright: #fff5f0;
+    --text-light: #f0dcd0;
+    --text-secondary: #e0c8b8;
+    --text-tertiary: #c0a898;
+    --text-muted: #a08878;
+    --text-dim: #806858;
+    --border: #5a3040;
+    --border-light: #7a4050;
+    --border-hover: #9a5868;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(20, 10, 18, 0.9);
+    --overlay-medium: rgba(20, 10, 18, 0.8);
+    --shadow-medium: rgba(30, 10, 20, 0.5);
+    --shadow-heavy: rgba(30, 10, 20, 0.7);
+    --highlight-subtle: rgba(255, 150, 100, 0.1);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(220, 120, 80, 0.4);
+    --scrollbar-thumb-hover: rgba(220, 120, 80, 0.6);
+    
+    /* Inputs */
+    --input-bg: #2a1820;
+    --input-border: #5a3848;
+    --input-focus-border: #f08050;
+    --input-focus-bg: #3a2030;
+    --placeholder-color: #805858;
+    
+    /* Code/Mono */
+    --code-bg: rgba(40, 20, 30, 0.5);
+    
+    /* Focus ring - warm coral */
+    --focus-ring: rgba(240, 128, 80, 0.5);
+    
+    /* Selection */
+    --selection-bg: rgba(240, 128, 80, 0.4);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23f08050" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - sunset orange */
+    --primary: #f08050;
+    --primary-hover: #d86840;
+    
+    /* Success - golden yellow */
+    --success: #d8a040;
+    --success-text: #e8b050;
+    --success-bg: rgba(216, 160, 64, 0.95);
+    --success-light: rgba(232, 176, 80, 0.2);
+    --success-border: rgba(232, 176, 80, 0.4);
+    --success-border-hover: rgba(232, 176, 80, 0.6);
+    
+    /* Warning - bright orange */
+    --warning: #ff9040;
+    --warning-text: #ffa050;
+    --warning-bg: rgba(255, 144, 64, 0.95);
+    --warning-light: rgba(255, 160, 80, 0.2);
+    --warning-border: rgba(255, 160, 80, 0.4);
+    
+    /* Error/Danger - deep red */
+    --error: #e04848;
+    --error-text: #f06060;
+    --error-bg: rgba(224, 72, 72, 0.95);
+    --error-light: rgba(240, 96, 96, 0.2);
+    --error-border: rgba(240, 96, 96, 0.4);
+    --error-border-hover: rgba(240, 96, 96, 0.6);
+    --error-subtle: rgba(240, 96, 96, 0.1);
+    --danger: #c83838;
+    --danger-hover: #b02828;
+    --danger-red: #e05050;
+    --danger-glow: rgba(200, 56, 56, 0.7);
+    
+    /* Info - coral pink */
+    --info-bg: rgba(240, 128, 80, 0.95);
+    
+    /* Accent colors - sunset palette */
+    --accent-blue: #8090c0;
+    --accent-blue-hover: #6878a8;
+    --accent-blue-light: rgba(128, 144, 192, 0.2);
+    --accent-blue-border: rgba(128, 144, 192, 0.4);
+    --accent-cyan: #70a0a8;
+    --accent-cyan-light: rgba(112, 160, 168, 0.2);
+    --accent-orange: #ff9040;
+    
+    /* Chat message backgrounds - warm tones */
+    --user-bg: #3a2838;
+    --assistant-bg: #382820;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(224, 72, 72, 0.15);
+    --plugin-spice-bg-hover: rgba(224, 72, 72, 0.25);
+    --plugin-ability-bg: rgba(112, 160, 168, 0.12);
+    --plugin-ability-bg-hover: rgba(112, 160, 168, 0.2);
+    --plugin-prompt-bg: rgba(240, 128, 80, 0.15);
+    --plugin-prompt-bg-focus: rgba(240, 128, 80, 0.28);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(232, 176, 80, 0.12);
+}

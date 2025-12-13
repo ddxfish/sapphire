@@ -1,0 +1,8 @@
+{
+  "_comment": "Spice pool - create user/prompt_spices.json to override entire file",
+  "none": [],
+  "action": [
+    "Something unexpected is about to happen!",
+    "The stakes are higher than they appear."
+  ]
+}

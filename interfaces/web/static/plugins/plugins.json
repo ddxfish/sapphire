@@ -1,0 +1,36 @@
+{
+  "enabled": [
+    "prompt-manager",
+    "ability-manager",
+    "settings-modal",
+    "spice-manager",
+    "backup"
+  ],
+  "plugins": {
+    "sapphire-3d": {
+      "title": "3D Avatar",
+      "collapsible": true
+    },
+    "prompt-manager": {
+      "title": "Prompt Editor",
+      "collapsible": true,
+      "defaultOpen": true
+    },
+    "ability-manager": {
+      "title": "Tool Set Editor",
+      "collapsible": true
+    },
+    "settings-modal": {
+      "title": "Settings Modal",
+      "collapsible": true,
+      "showInSidebar": false
+    },
+    "backup": {
+      "title": "Backup Modal",
+      "collapsible": true,
+      "showInSidebar": false
+    },
+    "spice-manager": { "title": "Spice Editor", "collapsible": true }
+
+  }
+}
