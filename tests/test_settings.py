@@ -170,7 +170,7 @@ class TestUserOverrides:
             mgr._user = {"KEY": "user_value"}
             mgr._config = {"KEY": "user_value"}
             mgr._lock = threading.Lock()
-            mgr.save = MagicMock()
+            mgr._remove_key_from_file = MagicMock()
             mgr._merge_settings = lambda: setattr(mgr, '_config', {**mgr._defaults, **mgr._user})
             
             result = mgr.remove_user_override("KEY")
