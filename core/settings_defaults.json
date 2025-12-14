@@ -98,14 +98,14 @@
     "LLM_REQUEST_TIMEOUT": 240.0,
     "LLM_PRIMARY": {
       "base_url": "http://127.0.0.1:1234/v1",
-      "api_key": "lm-studio",
+      "api_key": "lm-studio-no-key-needed",
       "model": "lmstudio-community/llama-3.2-1b-instruct",
       "timeout": 0.2,
       "enabled": true
     },
     "LLM_FALLBACK": {
       "base_url": "http://127.0.0.1:8009/v1",
-      "api_key": "local-swarm",
+      "api_key": "local-swarm-no-key-needed",
       "model": "qwen3-8b",
       "timeout": 0.2,
       "enabled": true
