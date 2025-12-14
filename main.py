@@ -175,7 +175,7 @@ class VoiceChatSystem:
                 from core.wakeword.wake_detector import WakeWordDetector as RealWakeWordDetector
                 
                 self.wake_word_recorder = RealAudioRecorder()
-                self.wake_detector = RealWakeWordDetector(model_path=config.WAKE_WORD_MODEL_PATH)
+                self.wake_detector = RealWakeWordDetector(model_name=config.WAKEWORD_MODEL)
                 self.wake_detector.set_audio_recorder(self.wake_word_recorder)
                 self.wake_detector.set_system(self)
                 logger.info("Wake word components initialized successfully")

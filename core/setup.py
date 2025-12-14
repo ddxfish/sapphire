@@ -131,37 +131,23 @@ def delete_password_hash() -> bool:
 
 def ensure_wakeword_models() -> bool:
     """
-    Ensure wakeword models exist in user/wakeword/models/.
-    Downloads hey-mycroft model files if they don't exist.
+    Ensure OpenWakeWord models are downloaded.
+    OWW auto-downloads models on first use, but this pre-downloads them.
     Returns True if models are available, False on error.
     """
-    import urllib.request
-    
-    models_dir = Path("user/wakeword/models")
-    model_files = {
-        "hey-mycroft.pb": "https://github.com/MycroftAI/precise-data/raw/refs/heads/models/hey-mycroft.pb",
-        "hey-mycroft.pb.params": "https://github.com/MycroftAI/precise-data/raw/refs/heads/models/hey-mycroft.pb.params"
-    }
-    
     try:
-        models_dir.mkdir(parents=True, exist_ok=True)
+        import openwakeword
+        from openwakeword.utils import download_models
         
-        for filename, url in model_files.items():
-            filepath = models_dir / filename
-            if filepath.exists():
-                continue
-            
-            logger.info(f"Downloading wakeword model: {filename}")
-            try:
-                urllib.request.urlretrieve(url, filepath)
-                logger.info(f"Downloaded: {filepath}")
-            except Exception as e:
-                logger.error(f"Failed to download {filename}: {e}")
-                return False
-        
+        logger.info("Downloading OpenWakeWord models...")
+        download_models()
+        logger.info("OpenWakeWord models ready")
         return True
+    except ImportError:
+        logger.warning("OpenWakeWord not installed - skipping model download")
+        return False
     except Exception as e:
-        logger.error(f"Failed to ensure wakeword models: {e}")
+        logger.error(f"Failed to download OpenWakeWord models: {e}")
         return False
 
 
