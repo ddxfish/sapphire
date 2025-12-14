@@ -71,16 +71,16 @@
   },
   
   "WAKE_WORD_ENABLED": {
-    "short": "Enable wake word detection (Hey Mycroft)",
-    "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Requires Mycroft Precise engine to be installed and configured at PRECISE_ENGINE_PATH. Uses continuous audio monitoring which may impact system resources."
+    "short": "Enable wake word detection",
+    "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Uses OpenWakeWord with ONNX inference for cross-platform compatibility. Continuous audio monitoring may impact system resources on low-power devices."
   },
   "WAKEWORD_DEVICE_INDEX": {
     "short": "Audio input device for wake word detection",
     "long": "Index of the audio input device to use for wake word listening. Set to null to use system default. Use 'arecord -l' or similar tools to list available devices and their indices."
   },
   "CHUNK_SIZE": {
-    "short": "Audio buffer chunk size in bytes",
-    "long": "Size of audio chunks processed for wake word detection. Smaller values reduce latency but increase CPU usage. 1024 bytes is a good balance for most systems. Must be a power of 2."
+    "short": "Audio buffer chunk size in samples",
+    "long": "Size of audio chunks for wake word detection. 1280 samples (80ms at 16kHz) is optimal for OpenWakeWord. Larger multiples of 1280 increase efficiency but add latency."
   },
   "BUFFER_DURATION": {
     "short": "Wake word audio buffer duration (seconds)",
@@ -98,21 +98,17 @@
     "short": "Sample rate for audio playback (Hz)",
     "long": "Sample rate for audio output and TTS playback. 48000 Hz (48 kHz) is CD quality and works well for most modern audio systems. Match this to your sound card's native rate for best quality."
   },
-  "WAKE_WORD_MODEL_PATH_TEMPLATE": {
-    "short": "RELATIVE path to wake word model file",
-    "long": "Template path to the Mycroft Precise model file (.pb format). The path is relative to the project root. Default is 'core/wakeword/models/hey-mycroft.pb'. Custom models can be trained for different wake words."
+  "WAKEWORD_MODEL": {
+    "short": "Wake word to listen for",
+    "long": "The wake word model to use for detection. OpenWakeWord includes pre-trained models: 'hey_mycroft', 'hey_jarvis', 'alexa', 'hey_rhasspy'. Custom trained models can be added by placing .onnx files in user/wakeword/models/ and specifying the model name here."
   },
-  "PRECISE_ENGINE_PATH": {
-    "short": "Path to Mycroft Precise engine executable",
-    "long": "Full path to the precise-engine binary used for wake word detection. Typically installed at /usr/local/bin/precise-engine/precise-engine. Must be installed separately from Mycroft Precise repository."
+  "WAKEWORD_THRESHOLD": {
+    "short": "Detection confidence threshold (0.0-1.0)",
+    "long": "Minimum confidence score required to trigger wake word detection. Lower values (0.3-0.4) are more sensitive but may cause false positives. Higher values (0.6-0.8) require clearer pronunciation but reduce false triggers. Default 0.5 is a good balance for most environments."
   },
-  "WAKE_WORD_SENSITIVITY": {
-    "short": "Wake word detection sensitivity threshold",
-    "long": "Detection threshold between 0 and 1. Lower values (0.3-0.4) reduce false positives but may miss some wake words. Higher values (0.5-0.6) are more responsive but may trigger on similar sounds. 0.46 is a good default."
-  },
-  "WAKE_WORD_TRIGGER_LEVEL": {
-    "short": "Consecutive detections required to trigger",
-    "long": "Number of consecutive wake word detections required before triggering. Higher values (3-5) reduce false positives from random noise. Lower values (1-2) are more responsive but less reliable. 3 is recommended."
+  "WAKEWORD_FRAMEWORK": {
+    "short": "Inference framework (onnx or tflite)",
+    "long": "The inference backend for wake word detection. 'onnx' works on all platforms including Windows. 'tflite' is Linux-only but may be slightly faster on some ARM devices. Use 'onnx' unless you have a specific reason to use tflite."
   },
   "WAKE_TONE_DURATION": {
     "short": "Duration of wake acknowledgment tone (seconds)",

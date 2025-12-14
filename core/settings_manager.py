@@ -75,11 +75,6 @@ class SettingsManager:
         # Add BASE_DIR
         self._defaults['BASE_DIR'] = str(self.BASE_DIR)
         
-        # Construct WAKE_WORD_MODEL_PATH from template
-        if 'WAKE_WORD_MODEL_PATH_TEMPLATE' in self._defaults:
-            template = self._defaults['WAKE_WORD_MODEL_PATH_TEMPLATE']
-            self._defaults['WAKE_WORD_MODEL_PATH'] = str(self.BASE_DIR / template)
-        
         # Construct STT_SERVER_URL
         if 'STT_HOST' in self._defaults and 'STT_SERVER_PORT' in self._defaults:
             host = self._defaults['STT_HOST']

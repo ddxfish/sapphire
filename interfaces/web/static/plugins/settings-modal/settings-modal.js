@@ -328,6 +328,25 @@ class SettingsModal {
   renderInput(key, value, type) {
     const inputId = `setting-${key}`;
     
+    // Special case: WAKEWORD_MODEL dropdown
+    if (key === 'WAKEWORD_MODEL') {
+      const models = ['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy'];
+      const options = models.map(m => {
+        const display = m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        return `<option value="${m}" ${value === m ? 'selected' : ''}>${display}</option>`;
+      }).join('');
+      return `<select id="${inputId}" data-key="${key}">${options}</select>`;
+    }
+    
+    // Special case: WAKEWORD_FRAMEWORK dropdown
+    if (key === 'WAKEWORD_FRAMEWORK') {
+      const frameworks = ['onnx', 'tflite'];
+      const options = frameworks.map(f =>
+        `<option value="${f}" ${value === f ? 'selected' : ''}>${f.toUpperCase()}</option>`
+      ).join('');
+      return `<select id="${inputId}" data-key="${key}">${options}</select>`;
+    }
+    
     if (type === 'checkbox') {
       return `
         <label class="checkbox-container">
@@ -412,7 +431,7 @@ class SettingsModal {
       btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
     });
     
-    this.modal.querySelectorAll('input, textarea').forEach(input => {
+    this.modal.querySelectorAll('input, textarea, select').forEach(input => {
       input.addEventListener('change', (e) => this.handleInputChange(e));
     });
     
@@ -660,7 +679,7 @@ class SettingsModal {
     const content = this.modal.querySelector('.settings-modal-content');
     content.innerHTML = this.renderTabContent();
     
-    this.modal.querySelectorAll('input, textarea').forEach(input => {
+    this.modal.querySelectorAll('input, textarea, select').forEach(input => {
       input.addEventListener('change', (e) => this.handleInputChange(e));
     });
     
