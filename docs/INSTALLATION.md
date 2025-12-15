@@ -64,6 +64,9 @@ pip install -r requirements-tts.txt
 
 # STT (Whisper transcription)  
 pip install -r requirements-stt.txt
+
+# Wakeword (openwakeword)
+# Just enable in settings UI
 ```
 
 ### 4. LLM Backend

@@ -84,16 +84,7 @@ TTS is disabled by default. It runs an API for Kokoro TTS inside the Sapphire ap
 
 ### Wake Word
 
-The wakeword is used with a local mic if you want to use Sapphire without a keyboard. Requires [Mycroft Precise Engine](https://github.com/MycroftAI/mycroft-precise) to use this way. Install precise-engine, then enable Wakeword in Sapphire settings. 
-
-```bash
-# x86_64 Linux
-curl -L https://github.com/MycroftAI/mycroft-precise/releases/download/v0.3.0/precise-all_0.3.0_x86_64.tar.gz -o /tmp/precise.tar.gz
-sudo mkdir -p /usr/local/bin/precise-engine
-sudo tar -xzf /tmp/precise.tar.gz -C /usr/local/bin/precise-engine --strip-components=1
-sudo chmod +x /usr/local/bin/precise-engine/*
-rm /tmp/precise.tar.gz
-```
+The wakeword is used with a local mic if you want to use Sapphire without a keyboard. This now uses OpenWakeWord, which is cross platform and open source. It requires ONNX runtime which is already in the main requirements.txt. Just checkmark it in settings to enable, save, and restart Sapphire.
 
 ---
 
@@ -146,7 +137,7 @@ Sapphire is a virtual persona framework. It excels at things like storytelling, 
 - Core state machine support - store a history.json state for story (ship power 50% etc)
 - Windows support - compat layer, or maybe switch to OWW and use dual OS function paths
 - Home assistant - tool calling, UX was poor, need rework of this
-
+- (done) Switch to Open Wake Word
 
 ---
 
@@ -163,6 +154,6 @@ I am a solo dev, and Sapphire has a specific vision I am working towards, so I a
 ## Acknowledgments
 
 Built with:
-- [Mycroft Precise](https://github.com/MycroftAI/mycroft-precise) — Wake word detection
+- Open Wake Word
 - [Faster Whisper](https://github.com/guillaumekln/faster-whisper) — Speech recognition
 - [Kokoro TTS](https://github.com/hexgrad/kokoro) — Voice synthesis
