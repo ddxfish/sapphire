@@ -4,7 +4,7 @@ Sapphire is a Privacy-first virtual persona framework. Make your own AI assistan
 
 <img width="2253" height="1472" alt="image" src="https://github.com/ddxfish/sapphire/blob/main/docs/screenshots/sapphire-ai.png" />
 
-This is a one-person passion project. 
+This is a one-person passion project that took me a lifetime to build.
 
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-blue.svg)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-green.svg)
@@ -17,7 +17,7 @@ This is a one-person passion project.
 - Wake word activation ("Hey Mycroft")
 - Voice input via Faster Whisper (both web ui and mic)
 - Voice output via Kokoro TTS (both web ui and mic)
-- Spoken system commands ("system voice david")
+- Spoken system commands ("system voice isabella")
 - Web UI with multi-chat management and speech to text
 
 **Make it yours**
@@ -39,7 +39,7 @@ This is a one-person passion project.
 **Get weird**
 - Let the AI manage it's own prompt via meta tools
 - Give the AI ability to reset and end the chat
-- Do stories, add home assistant to change house lights to match story
+- Do stories, have sapphire trigger your house lights to match the story
 - Test AI responses - Test in various ethical scenarios
 - Personalize your AI to wake you up each morning, no more alarm clock
 
@@ -84,7 +84,7 @@ TTS is disabled by default. It runs an API for Kokoro TTS inside the Sapphire ap
 
 ### Wake Word
 
-The wakeword is used with a local mic if you want to use Sapphire without a keyboard. This now uses OpenWakeWord, which is cross platform and open source. It requires ONNX runtime which is already in the main requirements.txt. Just checkmark it in settings to enable, save, and restart Sapphire.
+The wakeword is used with a local mic if you want to use Sapphire without a keyboard. This now uses OpenWakeWord, which is cross platform and open source. It requires ONNX runtime which is already in the main requirements.txt. Just checkmark it in settings to enable, save, and restart Sapphire. You need speech to text and text to speech to use this.
 
 ---
 
@@ -124,9 +124,9 @@ Optional:
 
 Yes! Sapphire is private by design. All local for your chats, isolated to the user/ dir in Sapphire. Wake word, speech recognition, and LLM inference run on your machine. No telemetry, no analytics, no external calls unless you explicitly configure a cloud LLM fallback. It downloads Whisper models and Mycroft models if you enable those, but only on next run. For web scraping privacy, configure a SOCKS5 proxy — see [SOCKS.md](docs/SOCKS.md).
 
-**What can I use this for?**
+**Are my settings safe?**
 
-Sapphire is a virtual persona framework. It excels at things like storytelling, voice assistant tasks and testing AI model behavior in various scenarios. You can customize the experience, add more tools or plugins. It turns an LLM into an immersive persona. 
+I will protect prompt files heavily, keeping the format as-is long-term. The main settings file is seeing heavy development, it will change a lot. 
 
 ---
 
