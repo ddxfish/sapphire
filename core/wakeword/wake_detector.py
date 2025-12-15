@@ -15,6 +15,7 @@ class WakeWordDetector:
         
         Args:
             model_name: Name of wakeword model (e.g., 'hey_mycroft', 'hey_jarvis', 'alexa')
+                       or path to custom .onnx/.tflite file.
                        If None, uses config.WAKEWORD_MODEL
         """
         try:
@@ -25,14 +26,19 @@ class WakeWordDetector:
             logger.error(f"OpenWakeWord not installed: {e}")
             raise ImportError("openwakeword package required. Install with: pip install openwakeword")
         
-        self.model_name = model_name or config.WAKEWORD_MODEL
+        # Resolve model name to path if it's a custom model
+        from core.wakeword import resolve_model_path
+        raw_model = model_name or config.WAKEWORD_MODEL
+        self.model_name = raw_model  # Keep original for display/predictions
+        self.model_path = resolve_model_path(raw_model)
+        
         self.threshold = getattr(config, 'WAKEWORD_THRESHOLD', 0.5)
         
-        logger.info(f"Initializing OpenWakeWord: model={self.model_name}, threshold={self.threshold}")
+        logger.info(f"Initializing OpenWakeWord: model={self.model_name}, path={self.model_path}, threshold={self.threshold}")
         
         try:
             self.model = self._oww_model_class(
-                wakeword_models=[self.model_name],
+                wakeword_models=[self.model_path],
                 inference_framework=getattr(config, 'WAKEWORD_FRAMEWORK', 'onnx')
             )
             logger.info("OpenWakeWord model initialized successfully")
@@ -168,7 +174,14 @@ class WakeWordDetector:
                 # Get prediction from OWW
                 predictions = self.model.predict(audio_array)
                 
+                # Debug: log prediction keys on first frame (or periodically)
+                if not hasattr(self, '_logged_keys'):
+                    logger.info(f"OWW prediction keys: {list(predictions.keys())}")
+                    logger.info(f"Looking for key: {self.model_name}")
+                    self._logged_keys = True
+                
                 # Check if wake word detected
+                # OWW keys predictions by model name (stem), even for custom paths
                 score = predictions.get(self.model_name, 0)
                 if score >= self.threshold:
                     logger.info(f"Wake word '{self.model_name}' detected with score {score:.3f}")

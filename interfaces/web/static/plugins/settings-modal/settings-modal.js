@@ -18,6 +18,8 @@ class SettingsModal {
     this.currentTheme = null;
     // Avatar paths
     this.avatarPaths = { user: null, assistant: null };
+    // Wakeword models (default fallback)
+    this.wakewordModels = ['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', 'weather'];
   }
 
   async open() {
@@ -45,6 +47,9 @@ class SettingsModal {
       
       // Load available themes
       await this.loadThemes();
+      
+      // Load available wakeword models
+      await this.loadWakewordModels();
       
       // Load avatar paths
       await this.loadAvatarPaths();
@@ -80,6 +85,21 @@ class SettingsModal {
     } catch (e) {
       console.warn('Could not load themes.json, using defaults:', e);
       this.availableThemes = ['dark'];
+    }
+  }
+
+  async loadWakewordModels() {
+    try {
+      const res = await fetch('/api/settings/wakeword-models');
+      if (res.ok) {
+        const data = await res.json();
+        this.wakewordModels = data.all || this.wakewordModels;
+        if (data.custom && data.custom.length > 0) {
+          console.log(`Loaded ${data.custom.length} custom wakeword model(s)`);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load wakeword models, using defaults:', e);
     }
   }
 
@@ -330,8 +350,7 @@ class SettingsModal {
     
     // Special case: WAKEWORD_MODEL dropdown
     if (key === 'WAKEWORD_MODEL') {
-      const models = ['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy'];
-      const options = models.map(m => {
+      const options = this.wakewordModels.map(m => {
         const display = m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         return `<option value="${m}" ${value === m ? 'selected' : ''}>${display}</option>`;
       }).join('');

@@ -100,7 +100,7 @@
   },
   "WAKEWORD_MODEL": {
     "short": "Wake word to listen for",
-    "long": "The wake word model to use for detection. OpenWakeWord includes pre-trained models: 'hey_mycroft', 'hey_jarvis', 'alexa', 'hey_rhasspy'. Custom trained models can be added by placing .onnx files in user/wakeword/models/ and specifying the model name here."
+    "long": "The wake word model to use for detection. Built-in models include: 'alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', and 'weather'. Custom models are auto-detected from user/wakeword/models/ - just drop .onnx or .tflite files there and they'll appear in the dropdown. Community models available at github.com/fwartner/home-assistant-wakewords-collection"
   },
   "WAKEWORD_THRESHOLD": {
     "short": "Detection confidence threshold (0.0-1.0)",

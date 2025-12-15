@@ -335,4 +335,22 @@ def create_settings_api():
             logger.error(f"Error resetting chat defaults: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
     
+    @bp.route('/settings/wakeword-models', methods=['GET'])
+    def get_wakeword_models():
+        """Get available wakeword models (builtin + custom from user/wakeword/models/)"""
+        try:
+            from core.wakeword import get_available_models
+            models = get_available_models()
+            
+            return jsonify({
+                "status": "success",
+                "builtin": models['builtin'],
+                "custom": models['custom'],
+                "all": models['all'],
+                "count": len(models['all'])
+            })
+        except Exception as e:
+            logger.error(f"Error getting wakeword models: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
     return bp

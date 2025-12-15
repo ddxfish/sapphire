@@ -498,6 +498,11 @@ def save_chat_defaults():
 def reset_chat_defaults():
     return proxy('/api/settings/chat-defaults', 'DELETE', timeout=10)
 
+@app.route('/api/settings/wakeword-models', methods=['GET'])
+@require_login
+def get_wakeword_models():
+    return proxy('/api/settings/wakeword-models')
+
 # =============================================================================
 # PROMPTS MANAGEMENT ROUTES (9 routes)
 # =============================================================================
