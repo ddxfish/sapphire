@@ -81,7 +81,7 @@ class SettingsManager:
             port = self._defaults['STT_SERVER_PORT']
             self._defaults['STT_SERVER_URL'] = f"http://{host}:{port}"
         
-        # Auth is now handled entirely by core/setup.py using ~/.config/sapphire/secret_key
+        # Auth is now handled entirely by core/setup.py using ~/.config/sapphire/secret_key or %APPDATA%\Sapphire\
         # Remove legacy env var handling
     
     def _load_user_settings(self):

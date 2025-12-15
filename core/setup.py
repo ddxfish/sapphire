@@ -1,12 +1,19 @@
-# core/setup.py - Password and API key management
+# core/setup.py - Password, API keys, and platform config management
 """
-Single source of truth: ~/.config/sapphire/secret_key contains bcrypt hash.
-This hash serves as:
-1. Password verification (bcrypt.checkpw)
-2. API key for internal requests
-3. Flask session secret
+Single source of truth for secrets and platform-appropriate config paths.
+
+Config locations by platform:
+- Windows: %APPDATA%/Sapphire/
+- macOS: ~/Library/Application Support/Sapphire/
+- Linux: ~/.config/sapphire/
+
+Files stored:
+- secret_key: bcrypt hash for auth
+- socks_config: SOCKS5 proxy credentials
+- claude_api_key: Anthropic API key
 """
 import os
+import sys
 import logging
 import shutil
 from pathlib import Path
@@ -18,8 +25,35 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path.home() / '.config' / 'sapphire'
+
+def get_config_dir() -> Path:
+    """
+    Get platform-appropriate config directory for secrets.
+    
+    Returns:
+        Path to config directory (created if needed on first access)
+    """
+    if sys.platform == 'win32':
+        # Windows: %APPDATA%/Sapphire
+        base = os.environ.get('APPDATA')
+        if base:
+            return Path(base) / 'Sapphire'
+        return Path.home() / 'AppData' / 'Roaming' / 'Sapphire'
+    elif sys.platform == 'darwin':
+        # macOS: ~/Library/Application Support/Sapphire
+        return Path.home() / 'Library' / 'Application Support' / 'Sapphire'
+    else:
+        # Linux/Unix: XDG Base Directory spec
+        xdg_config = os.environ.get('XDG_CONFIG_HOME')
+        if xdg_config:
+            return Path(xdg_config) / 'sapphire'
+        return Path.home() / '.config' / 'sapphire'
+
+
+CONFIG_DIR = get_config_dir()
 SECRET_KEY_FILE = CONFIG_DIR / 'secret_key'
+SOCKS_CONFIG_FILE = CONFIG_DIR / 'socks_config'
+CLAUDE_API_KEY_FILE = CONFIG_DIR / 'claude_api_key'
 
 
 def ensure_config_directory() -> bool:
@@ -79,11 +113,12 @@ def save_password_hash(password: str) -> str | None:
         hash_bytes = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         hash_str = hash_bytes.decode('utf-8')
         
-        # Write to file
+        # Write to file with restrictive permissions (Unix only)
         SECRET_KEY_FILE.write_text(hash_str)
-        os.chmod(SECRET_KEY_FILE, 0o600)
+        if sys.platform != 'win32':
+            os.chmod(SECRET_KEY_FILE, 0o600)
         
-        logger.info("Password hash saved successfully")
+        logger.info(f"Password hash saved to {SECRET_KEY_FILE}")
         return hash_str
     except Exception as e:
         logger.error(f"Failed to save password hash: {e}")
@@ -127,6 +162,80 @@ def delete_password_hash() -> bool:
     except Exception as e:
         logger.error(f"Failed to delete password hash: {e}")
         return False
+
+
+def get_socks_credentials() -> tuple[str | None, str | None]:
+    """
+    Load SOCKS5 credentials with priority:
+    1. Environment variables (SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD)
+    2. Config file: CONFIG_DIR/socks_config
+    3. Project file: user/.socks_config (legacy/dev convenience)
+    
+    Returns (username, password) or (None, None) if not found.
+    """
+    # Try env vars first (production/deployment)
+    username = os.environ.get('SAPPHIRE_SOCKS_USERNAME')
+    password = os.environ.get('SAPPHIRE_SOCKS_PASSWORD')
+    
+    if username and password:
+        logger.info("Using SOCKS credentials from environment variables")
+        return username, password
+    
+    # Try platform config directory
+    if SOCKS_CONFIG_FILE.exists():
+        try:
+            lines = SOCKS_CONFIG_FILE.read_text().splitlines()
+            if len(lines) >= 2:
+                username = lines[0].strip()
+                password = lines[1].strip()
+                if username and password:
+                    logger.info(f"Using SOCKS credentials from {SOCKS_CONFIG_FILE}")
+                    return username, password
+        except Exception as e:
+            logger.debug(f"Failed to read {SOCKS_CONFIG_FILE}: {e}")
+    
+    # Try project-local file (legacy/dev convenience)
+    project_config = Path(__file__).parent.parent / 'user' / '.socks_config'
+    if project_config.exists():
+        try:
+            lines = project_config.read_text().splitlines()
+            if len(lines) >= 2:
+                username = lines[0].strip()
+                password = lines[1].strip()
+                if username and password:
+                    logger.info(f"Using SOCKS credentials from {project_config}")
+                    return username, password
+        except Exception as e:
+            logger.debug(f"Failed to read {project_config}: {e}")
+    
+    return None, None
+
+
+def get_claude_api_key() -> str | None:
+    """
+    Load Claude API key with priority:
+    1. Environment variable (ANTHROPIC_API_KEY)
+    2. Config file: CONFIG_DIR/claude_api_key
+    
+    Returns API key or None if not found.
+    """
+    # Try env var first (standard Anthropic pattern)
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if api_key:
+        logger.info("Using Claude API key from ANTHROPIC_API_KEY environment variable")
+        return api_key
+    
+    # Try config file
+    if CLAUDE_API_KEY_FILE.exists():
+        try:
+            api_key = CLAUDE_API_KEY_FILE.read_text().strip()
+            if api_key:
+                logger.info(f"Using Claude API key from {CLAUDE_API_KEY_FILE}")
+                return api_key
+        except Exception as e:
+            logger.debug(f"Failed to read {CLAUDE_API_KEY_FILE}: {e}")
+    
+    return None
 
 
 def ensure_wakeword_models() -> bool:

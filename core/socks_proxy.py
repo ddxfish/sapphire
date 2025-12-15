@@ -3,15 +3,15 @@ SOCKS5 Proxy Session Factory
 Simple core feature for routing HTTP requests through SOCKS5 proxy
 """
 
-import os
 import logging
-from pathlib import Path
 import requests
 import config
+from core.setup import get_socks_credentials, CONFIG_DIR
 
 logger = logging.getLogger(__name__)
 
 _cached_session = None
+
 
 def clear_session_cache():
     """Clear cached session - useful when headers change"""
@@ -19,55 +19,6 @@ def clear_session_cache():
     _cached_session = None
     logger.info("Session cache cleared")
 
-def _load_socks_credentials():
-    """
-    Load SOCKS5 credentials with priority:
-    1. Environment variables (SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD)
-    2. Project file: user/.socks_config
-    3. Home file: ~/.sapphire/.socks_config
-    
-    Returns (username, password) or (None, None) if not found.
-    """
-    # Try env vars first (production/deployment)
-    username = os.environ.get('SAPPHIRE_SOCKS_USERNAME')
-    password = os.environ.get('SAPPHIRE_SOCKS_PASSWORD')
-    
-    if username and password:
-        logger.info("Using SOCKS credentials from environment variables")
-        return username, password
-    
-    # Try project-local file (dev convenience)
-    project_config = Path(__file__).parent.parent / 'user' / '.socks_config'
-    if project_config.exists():
-        try:
-            with open(project_config, 'r') as f:
-                lines = f.readlines()
-            if len(lines) >= 2:
-                username = lines[0].strip()
-                password = lines[1].strip()
-                if username and password:
-                    logger.info(f"Using SOCKS credentials from {project_config}")
-                    return username, password
-        except Exception as e:
-            logger.debug(f"Failed to read {project_config}: {e}")
-    
-    # Try home directory file (legacy)
-    home_config = Path.home() / '.sapphire' / '.socks_config'
-    if home_config.exists():
-        try:
-            with open(home_config, 'r') as f:
-                lines = f.readlines()
-            if len(lines) >= 2:
-                username = lines[0].strip()
-                password = lines[1].strip()
-                if username and password:
-                    logger.info(f"Using SOCKS credentials from {home_config}")
-                    return username, password
-        except Exception as e:
-            logger.debug(f"Failed to read {home_config}: {e}")
-    
-    # Not found - that's fine, will use direct connection
-    return None, None
 
 def get_session():
     """
@@ -83,13 +34,13 @@ def get_session():
     session = requests.Session()
     
     if config.SOCKS_ENABLED:
-        username, password = _load_socks_credentials()
+        username, password = get_socks_credentials()
         
         if not username or not password:
             raise ValueError(
                 "SOCKS5 is enabled in config but credentials not found. "
                 "Set SAPPHIRE_SOCKS_USERNAME and SAPPHIRE_SOCKS_PASSWORD environment variables, "
-                "or create user/.socks_config or ~/.sapphire/.socks_config with credentials"
+                f"or create {CONFIG_DIR / 'socks_config'} with username on line 1, password on line 2"
             )
         
         proxy_url = f"socks5://{username}:{password}@{config.SOCKS_HOST}:{config.SOCKS_PORT}"
@@ -108,7 +59,6 @@ def get_session():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'en-US,en;q=0.9',
-        # Accept-Encoding removed - requests library handles compression automatically
         'DNT': '1',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',

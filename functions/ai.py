@@ -1,7 +1,7 @@
 # functions/ai.py
 
 import logging
-from pathlib import Path
+from core.setup import get_claude_api_key, CLAUDE_API_KEY_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,12 @@ def execute(function_name, arguments, config):
             
             import anthropic
             
-            key_file = Path.home() / '.claude'
-            if not key_file.exists():
-                return "Claude API key file not found at ~/.claude", False
-            
-            api_key = key_file.read_text().strip()
+            api_key = get_claude_api_key()
             if not api_key:
-                return "Claude API key file is empty.", False
+                return (
+                    f"Claude API key not found. Set ANTHROPIC_API_KEY environment variable "
+                    f"or create {CLAUDE_API_KEY_FILE} with your API key."
+                ), False
             
             client = anthropic.Anthropic(api_key=api_key)
             
