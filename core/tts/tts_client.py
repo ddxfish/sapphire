@@ -13,6 +13,15 @@ import wave
 
 logger = logging.getLogger(__name__)
 
+
+def get_temp_dir():
+    """Get optimal temp directory. Prefers /dev/shm (Linux RAM disk) for speed."""
+    shm = '/dev/shm'
+    if os.path.exists(shm) and os.access(shm, os.W_OK):
+        return shm
+    return tempfile.gettempdir()
+
+
 class TTSClient:
     """Generic HTTP-based TTS client with server fallback and audio processing"""
     
@@ -25,6 +34,7 @@ class TTSClient:
         self.pitch_shift = config.TTS_PITCH_SHIFT
         self.speed = config.TTS_SPEED
         self.voice_name = config.TTS_VOICE_NAME
+        self.temp_dir = get_temp_dir()
         
         self.play_process = None
         self.lock = threading.Lock()
@@ -32,6 +42,7 @@ class TTSClient:
         
         logger.info(f"TTS client initialized: {self.primary_server}")
         logger.info(f"Voice: {self.voice_name}, Speed: {self.speed}, Pitch: {self.pitch_shift}")
+        logger.info(f"Temp directory: {self.temp_dir}")
     
     def set_voice(self, voice_name):
         """Set the voice for TTS"""
@@ -90,8 +101,7 @@ class TTSClient:
             return wav_path
             
         try:
-            temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else '/tmp'
-            shifted_path = tempfile.mktemp(suffix='.wav', dir=temp_dir)
+            shifted_path = tempfile.mktemp(suffix='.wav', dir=self.temp_dir)
             
             with wave.open(wav_path, 'rb') as wf:
                 params = wf.getparams()
@@ -132,8 +142,7 @@ class TTSClient:
                 logger.error(f"TTS server error: {response.status_code}")
                 return None
             
-            temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else '/tmp'
-            fd, temp_path = tempfile.mkstemp(suffix='.wav', dir=temp_dir)
+            fd, temp_path = tempfile.mkstemp(suffix='.wav', dir=self.temp_dir)
             os.close(fd)
             
             with open(temp_path, 'wb') as f:

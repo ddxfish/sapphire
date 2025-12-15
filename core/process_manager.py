@@ -4,10 +4,12 @@ import signal
 import logging
 import threading
 import time
-from pathlib import Path
 import sys
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+IS_WINDOWS = sys.platform == 'win32'
 
 
 class ProcessManager:
@@ -38,11 +40,12 @@ class ProcessManager:
             logger.error(f"Manager Error: Script not found at {self.script_path}")
             return False
         else:
-            # Make shell scripts executable
-            try:
-                os.chmod(self.script_path, 0o755)
-            except OSError as e:
-                logger.warning(f"Could not set executable bit on {self.script_path}: {e}")
+            # Make shell scripts executable (Unix only, no-op on Windows)
+            if not IS_WINDOWS:
+                try:
+                    os.chmod(self.script_path, 0o755)
+                except OSError as e:
+                    logger.warning(f"Could not set executable bit on {self.script_path}: {e}")
 
         logger.info(f"Starting Process: {' '.join(self.command)}")
         logger.info(f"Logs will be written to: {self.log_file}")
@@ -50,13 +53,22 @@ class ProcessManager:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            with open(self.log_file, "a") as log:  # Append mode for restarts
-                self.process = subprocess.Popen(
-                    self.command,
-                    stdout=log,
-                    stderr=log,
-                    preexec_fn=os.setsid
-                )
+            with open(self.log_file, "a") as log:
+                if IS_WINDOWS:
+                    # Windows: no process groups, just start the process
+                    self.process = subprocess.Popen(
+                        self.command,
+                        stdout=log,
+                        stderr=log
+                    )
+                else:
+                    # Unix: create new session for process group management
+                    self.process = subprocess.Popen(
+                        self.command,
+                        stdout=log,
+                        stderr=log,
+                        preexec_fn=os.setsid
+                    )
             
             logger.info(f"Process for '{self.script_path.name}' started with PID: {self.process.pid}")
             return True
@@ -72,17 +84,33 @@ class ProcessManager:
         self._monitor_running = False
         
         if self.process and self.process.poll() is None:
-            logger.info(f"Stopping process group for '{self.script_path.name}' (PGID: {os.getpgid(self.process.pid)})...")
-            try:
-                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-                self.process.wait(timeout=10)
-                logger.info(f"Process '{self.script_path.name}' stopped successfully.")
-            except (subprocess.TimeoutExpired, ProcessLookupError):
-                logger.warning(f"Process '{self.script_path.name}' did not terminate gracefully, sending SIGKILL.")
+            if IS_WINDOWS:
+                # Windows: terminate then kill if needed
+                logger.info(f"Stopping process '{self.script_path.name}' (PID: {self.process.pid})...")
                 try:
-                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
-                except ProcessLookupError:
-                    logger.warning(f"Process group for '{self.script_path.name}' not found for SIGKILL.")
+                    self.process.terminate()
+                    self.process.wait(timeout=10)
+                    logger.info(f"Process '{self.script_path.name}' stopped successfully.")
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Process '{self.script_path.name}' did not terminate gracefully, forcing kill.")
+                    self.process.kill()
+                    try:
+                        self.process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        logger.error(f"Process '{self.script_path.name}' could not be killed.")
+            else:
+                # Unix: kill entire process group
+                logger.info(f"Stopping process group for '{self.script_path.name}' (PGID: {os.getpgid(self.process.pid)})...")
+                try:
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                    self.process.wait(timeout=10)
+                    logger.info(f"Process '{self.script_path.name}' stopped successfully.")
+                except (subprocess.TimeoutExpired, ProcessLookupError):
+                    logger.warning(f"Process '{self.script_path.name}' did not terminate gracefully, sending SIGKILL.")
+                    try:
+                        os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        logger.warning(f"Process group for '{self.script_path.name}' not found for SIGKILL.")
         else:
             logger.info(f"Process for '{self.script_path.name}' not running or already stopped.")
 

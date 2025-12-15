@@ -7,6 +7,7 @@ import logging
 import numpy as np
 import re
 import threading
+import tempfile
 import psutil
 from kokoro import KPipeline
 
@@ -23,10 +24,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# --- Cross-platform temp directory ---
+def get_temp_dir():
+    """Get optimal temp directory. Prefers /dev/shm (Linux RAM disk) for speed."""
+    shm = '/dev/shm'
+    if os.path.exists(shm) and os.access(shm, os.W_OK):
+        return shm
+    return tempfile.gettempdir()
+
+
 # --- Constants ---
 HOST = '0.0.0.0'
 PORT = 5012
-TEMP_DIR = '/dev/shm'
+TEMP_DIR = get_temp_dir()
 DEFAULT_VOICE = 'af_heart'
 DEFAULT_SPEED = 1.0
 AUDIO_SAMPLE_RATE = 24000
@@ -59,7 +70,7 @@ def schedule_restart(reason: str):
 app = Flask(__name__)
 logger.info("Loading Kokoro model...")
 pipeline = KPipeline(lang_code='a')
-logger.info("Model loaded successfully!")
+logger.info(f"Model loaded successfully! Using temp dir: {TEMP_DIR}")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
 
@@ -178,7 +189,8 @@ def health_check():
         'model': 'loaded',
         'requests': request_count,
         'memory_gb': round(mem_gb, 2),
-        'memory_limit_gb': MAX_MEMORY_GB
+        'memory_limit_gb': MAX_MEMORY_GB,
+        'temp_dir': TEMP_DIR
     }
 
 
@@ -186,6 +198,7 @@ def main():
     """Main server function."""
     logger.info(f"Starting Kokoro TTS server on {HOST}:{PORT}")
     logger.info(f"Memory limit: {MAX_MEMORY_GB}GB, Request limit: {MAX_REQUESTS}")
+    logger.info(f"Temp directory: {TEMP_DIR}")
     app.run(host=HOST, port=PORT, debug=False, threaded=True)
 
 

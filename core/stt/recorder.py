@@ -12,6 +12,15 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
+def get_temp_dir():
+    """Get optimal temp directory. Prefers /dev/shm (Linux RAM disk) for speed."""
+    shm = '/dev/shm'
+    if os.path.exists(shm) and os.access(shm, os.W_OK):
+        return shm
+    return tempfile.gettempdir()
+
+
 class AudioRecorder:
     def __init__(self):
         self.format = pyaudio.paInt16
@@ -22,6 +31,7 @@ class AudioRecorder:
         self._recording = False
         self.device_index = None
         self.rate = None
+        self.temp_dir = get_temp_dir()
         
         # Initialize PyAudio with robust error handling
         self._init_pyaudio()
@@ -38,6 +48,7 @@ class AudioRecorder:
                     raise RuntimeError("No suitable input device found after retry")
             
             logger.info(f"Selected device {self.device_index} with sample rate {self.rate}")
+            logger.info(f"Temp directory: {self.temp_dir}")
 
     def _init_pyaudio(self):
         """Initialize PyAudio with error handling."""
@@ -268,9 +279,9 @@ class AudioRecorder:
             return None
             
         try:
-            # Use /tmp for temp files since /dev/shm might not exist on all systems
+            # Use cross-platform temp directory
             timestamp = int(time.time())
-            temp_path = f"/tmp/voice_assistant_{timestamp}.wav"
+            temp_path = os.path.join(self.temp_dir, f"voice_assistant_{timestamp}.wav")
             
             with wave.open(temp_path, 'wb') as wf:
                 wf.setnchannels(config.RECORDER_CHANNELS)
