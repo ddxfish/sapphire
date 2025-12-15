@@ -14,8 +14,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Bootstrap user files before any modules try to load them
-from core.setup import ensure_prompt_files
+from core.setup import ensure_prompt_files, ensure_chat_defaults
 ensure_prompt_files()
+ensure_chat_defaults()
 
 # Wrap all further imports to catch errors
 try:
@@ -107,11 +108,25 @@ class VoiceChatSystem:
 
     def _prime_default_prompt(self):
         try:
-            prompt_details = prompts.get_prompt('default')
+            # Read default prompt name from chat_defaults.json
+            import json
+            from pathlib import Path
+            chat_defaults_path = Path(__file__).parent / "user" / "settings" / "chat_defaults.json"
+            
+            prompt_name = 'default'  # fallback if file missing
+            if chat_defaults_path.exists():
+                with open(chat_defaults_path, 'r') as f:
+                    defaults = json.load(f)
+                    prompt_name = defaults.get('prompt', 'default')
+            
+            prompt_details = prompts.get_prompt(prompt_name)
+            if not prompt_details:
+                raise ValueError(f"Prompt '{prompt_name}' not found")
+            
             content = prompt_details['content'] if isinstance(prompt_details, dict) else str(prompt_details)
             self.llm_chat.set_system_prompt(content)
-            prompts.set_active_preset_name('default')
-            logger.info("System primed with default prompt from file.")
+            prompts.set_active_preset_name(prompt_name)
+            logger.info(f"System primed with '{prompt_name}' prompt.")
         except Exception as e:
             logger.error(f"FATAL: Could not prime default prompt: {e}")
             fallback_prompt = (

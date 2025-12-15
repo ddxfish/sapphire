@@ -35,7 +35,7 @@
     }
   },
   "scenario_presets": {
-    "sapphire_default": {
+    "sapphire_assembled": {
       "persona": "sapphire",
       "location": "default",
       "relationship": "friend",
@@ -45,7 +45,7 @@
       "extras": ["reference_history"],
       "emotions": ["curious", "focused"]
     },
-    "professional_default": {
+    "professional_assembled": {
       "persona": "professional",
       "location": "office",
       "relationship": "colleague",

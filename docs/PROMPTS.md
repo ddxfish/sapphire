@@ -24,8 +24,6 @@ Use when: Single personality, no variation needed.
 
 Prompt built from swappable sections. Mix and match. Add emotions and extras with checkboxes. Allow the AI to edit the pieces itself. This is more advanced, but highly flexible to create dynamic stories. Recommended for advanced users or if you have an AI companion. 
 
-Location: `user/prompt_pieces.json` (components) + `user/prompt_presets.json` (combinations)
-
 ### Sections
 
 | Section | Purpose |
@@ -124,5 +122,4 @@ Assembled prompts come from these components, they get assembled into one prompt
 |------|---------|
 | `prompt_monoliths.json` | Full prompt strings |
 | `prompt_pieces.json` | Component library |
-| `prompt_presets.json` | Assembled combinations |
 | `prompt_spices.json` | Random injected snippets |

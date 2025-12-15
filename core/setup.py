@@ -274,8 +274,7 @@ def ensure_prompt_files() -> bool:
     files = [
         "prompt_monoliths.json",
         "prompt_pieces.json",
-        "prompt_spices.json",
-        "prompt_presets.json"
+        "prompt_spices.json"
     ]
     
     try:
@@ -297,4 +296,31 @@ def ensure_prompt_files() -> bool:
         return True
     except Exception as e:
         logger.error(f"Failed to ensure prompt files: {e}")
+        return False
+
+
+def ensure_chat_defaults() -> bool:
+    """
+    Bootstrap chat_defaults.json from core to user/settings/ if missing.
+    This sets the default prompt, voice, ability, etc. for new installs.
+    Returns True if file available, False on error.
+    """
+    source = Path(__file__).parent / "modules" / "system" / "prompts" / "chat_defaults.json"
+    target_dir = Path(__file__).parent.parent / "user" / "settings"
+    target = target_dir / "chat_defaults.json"
+    
+    try:
+        if target.exists():
+            return True
+        
+        if not source.exists():
+            logger.warning(f"Factory chat_defaults.json not found at {source}")
+            return False
+        
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        logger.info(f"Bootstrapped chat_defaults.json to user/settings/")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure chat_defaults: {e}")
         return False

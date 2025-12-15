@@ -15,7 +15,7 @@ Assembled Components:
 - Extras/Emotions: Multi-select, combined into prompt
 
 Toolbar Buttons:
-- + New prompt  • 💾 Save  • 📑 Save As
+- + New prompt  • 🔄 Refresh  • 💾 Save  • 📑 Save As
 - 🗑 Delete  • 🔍 Preview  • ⚡ Activate
 
 Editing Components:
@@ -25,6 +25,7 @@ Editing Components:
 - 🗑 Delete selected component
 
 Tips:
+- Use Refresh after AI edits prompts via tools
 - Preview shows final assembled text
 - Activate loads prompt for current chat
 - Changes auto-save to user/prompts/`,
@@ -38,6 +39,7 @@ Tips:
     this.elements = {
       select: wrapper.querySelector('#pm-preset-select'),
       newBtn: wrapper.querySelector('#pm-new-btn'),
+      refreshBtn: wrapper.querySelector('#pm-refresh-btn'),
       deleteBtn: wrapper.querySelector('#pm-delete-btn'),
       loadBtn: wrapper.querySelector('#pm-load-btn'),
       editor: wrapper.querySelector('#pm-editor'),
@@ -82,6 +84,7 @@ Tips:
   bindEvents() {
     this.elements.select.addEventListener('change', () => this.handleSelect());
     this.elements.newBtn.addEventListener('click', () => this.handleNew());
+    this.elements.refreshBtn.addEventListener('click', () => this.handleRefresh());
     this.elements.deleteBtn.addEventListener('click', () => this.handleDelete());
     this.elements.loadBtn.addEventListener('click', () => this.handleLoad());
     this.elements.saveBtn.addEventListener('click', () => this.handleSave());
@@ -154,6 +157,20 @@ Tips:
       console.error('Failed to load prompt:', e);
       this.elements.editor.innerHTML = `<div class="pm-error">Error: ${e.message}</div>`;
       showToast('Failed to load prompt', 'error');
+    }
+  },
+  
+  async handleRefresh() {
+    try {
+      await this.loadComponents();
+      await this.loadPromptList();
+      if (this.currentPrompt) {
+        await this.handleSelect();
+      }
+      showToast('Refreshed', 'success');
+    } catch (e) {
+      console.error('Refresh failed:', e);
+      showToast('Refresh failed', 'error');
     }
   },
   

@@ -290,6 +290,35 @@ def _normalize_component(component: str) -> str:
     return mappings.get(c, c)
 
 
+def _is_assembled_prompt() -> bool:
+    """Check if current prompt is assembled type (not monolith)."""
+    from core.modules.system import prompts
+    
+    preset_name = prompts.get_active_preset_name()
+    if not preset_name:
+        return False
+    
+    prompt_data = prompts.get_prompt(preset_name)
+    if isinstance(prompt_data, dict):
+        return prompt_data.get('type') == 'assembled'
+    return False
+
+
+def _require_assembled_prompt() -> tuple | None:
+    """
+    Check if current prompt is assembled. 
+    Returns error tuple if monolith, None if assembled (OK to proceed).
+    """
+    if not _is_assembled_prompt():
+        return (
+            "This function only works with ASSEMBLED prompts, not monoliths. "
+            "Switch to an assembled prompt first using activate_prompt_by_name, "
+            "or create a new assembled prompt with set_full_system_prompt.",
+            False
+        )
+    return None
+
+
 def _normalize_name(name: str) -> str:
     """Normalize prompt/key name: lowercase, strip, remove punctuation."""
     if not name:
@@ -553,6 +582,10 @@ def execute(function_name, arguments, config):
             if not component or not key:
                 return "Both component and key are required.", False
             
+            # Check if using assembled prompt
+            if err := _require_assembled_prompt():
+                return err
+            
             component = _normalize_component(component)
             key = _normalize_name(key)
             
@@ -587,6 +620,10 @@ def execute(function_name, arguments, config):
             
             if not component or not key or not value:
                 return "Component, key, and value are all required.", False
+            
+            # Check if using assembled prompt
+            if err := _require_assembled_prompt():
+                return err
             
             component = _normalize_component(component)
             key = _normalize_name(key)
@@ -647,18 +684,24 @@ def execute(function_name, arguments, config):
 
         # Emotion functions
         elif function_name == "add_prompt_emotion":
+            if err := _require_assembled_prompt():
+                return err
             key = arguments.get('key')
             if not key:
                 return _handle_list_component('emotions')
             return _handle_add_list_component('emotions', key, headers, main_api_url)
 
         elif function_name == "remove_prompt_emotion":
+            if err := _require_assembled_prompt():
+                return err
             key = arguments.get('key')
             if not key:
                 return "Emotion key is required.", False
             return _handle_remove_list_component('emotions', key, headers, main_api_url)
 
         elif function_name == "create_prompt_emotion":
+            if err := _require_assembled_prompt():
+                return err
             key = arguments.get('key')
             value = arguments.get('value')
             if not key or not value:
@@ -667,18 +710,24 @@ def execute(function_name, arguments, config):
 
         # Extra functions
         elif function_name == "add_prompt_extra":
+            if err := _require_assembled_prompt():
+                return err
             key = arguments.get('key')
             if not key:
                 return _handle_list_component('extras')
             return _handle_add_list_component('extras', key, headers, main_api_url)
 
         elif function_name == "remove_prompt_extra":
+            if err := _require_assembled_prompt():
+                return err
             key = arguments.get('key')
             if not key:
                 return "Extra key is required.", False
             return _handle_remove_list_component('extras', key, headers, main_api_url)
 
         elif function_name == "create_prompt_extra":
+            if err := _require_assembled_prompt():
+                return err
             key = arguments.get('key')
             value = arguments.get('value')
             if not key or not value:

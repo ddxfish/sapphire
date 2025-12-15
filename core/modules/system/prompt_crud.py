@@ -204,8 +204,7 @@ def load_user_prompts():
     SYSTEM_FILES = {
         'prompt_monoliths.json', 
         'prompt_pieces.json', 
-        'prompt_spices.json',
-        'prompt_presets.json'
+        'prompt_spices.json'
     }
     
     try:
