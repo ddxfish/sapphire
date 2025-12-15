@@ -108,7 +108,6 @@ Optional:
 | [Installation](https://github.com/ddxfish/sapphire/blob/main/docs/INSTALLATION.md) | Installation, customization for your use, systemd service |
 | [Configuration](https://github.com/ddxfish/sapphire/blob/main/docs/CONFIGURATION.md) | Settings system, file locations, reload tiers |
 | [Prompts](https://github.com/ddxfish/sapphire/blob/main/docs/PROMPTS.md) | Monolith vs assembled prompts, presets |
-| [SOCKS](https://github.com/ddxfish/sapphire/blob/main/docs/SOCKS.md) | Use a SOCKS proxy for web requests (tools) |
 | [Spice](https://github.com/ddxfish/sapphire/blob/main/docs/SPICE.md) | Random personality injection system |
 | [Tools](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLS.md) | Creating AI-callable functions (web search, memory, etc.) |
 | [Toolsets](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLSETS.md) | Grouping tools into switchable ability sets |
