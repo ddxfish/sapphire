@@ -10,7 +10,6 @@ models/*
 *.cpython-310.pyc
 kokoro/kokoro/__pycache__/*
 *.pt
-*.onnx
 *.pth
 chat_history.json
 *chat_history.json*
