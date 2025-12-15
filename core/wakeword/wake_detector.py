@@ -174,12 +174,6 @@ class WakeWordDetector:
                 # Get prediction from OWW
                 predictions = self.model.predict(audio_array)
                 
-                # Debug: log prediction keys on first frame (or periodically)
-                if not hasattr(self, '_logged_keys'):
-                    logger.info(f"OWW prediction keys: {list(predictions.keys())}")
-                    logger.info(f"Looking for key: {self.model_name}")
-                    self._logged_keys = True
-                
                 # Check if wake word detected
                 # OWW keys predictions by model name (stem), even for custom paths
                 score = predictions.get(self.model_name, 0)
