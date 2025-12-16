@@ -226,16 +226,16 @@
     "long": "When enabled, AI responses will be spoken aloud using the configured TTS engine. Requires TTS server to be running on the specified endpoint. Disabling this will silence audio output but won't affect transcription or chat functionality."
   },
   "TTS_VOICE_NAME": {
-    "short": "Voice model name for speech synthesis",
-    "long": "The specific voice model to use from your TTS engine. Available voices depend on which TTS system you're using (Kokoro, etc). Common options might include different genders, accents, or character voices. Changes take effect immediately on next synthesis."
+    "short": "Fallback voice (use Chat Settings for per-chat)",
+    "long": "Default voice used when creating new chats or if per-chat settings are missing. For regular use, set voice in Chat Settings modal instead - each chat stores its own voice preference."
   },
   "TTS_SPEED": {
-    "short": "Speech playback speed multiplier",
-    "long": "Controls how fast the AI speaks. 1.0 is normal speed, higher values speed up speech (1.5 = 50% faster), lower values slow it down (0.8 = 20% slower). Typical range is 0.8 to 1.5. Very high speeds may reduce clarity."
+    "short": "Fallback speed (use Chat Settings for per-chat)",
+    "long": "Default speech speed for new chats. 1.0 is normal, higher is faster. For regular use, set speed in Chat Settings modal instead - each chat stores its own speed preference."
   },
   "TTS_PITCH_SHIFT": {
-    "short": "Voice pitch adjustment multiplier",
-    "long": "Adjusts the pitch of the synthesized voice. 1.0 is original pitch, values above 1.0 raise pitch (higher/younger sounding), values below 1.0 lower pitch (deeper/older sounding). Typical range is 0.8 to 1.2. Extreme values may sound unnatural."
+    "short": "Fallback pitch (use Chat Settings for per-chat)",
+    "long": "Default voice pitch for new chats. 1.0 is original, higher raises pitch, lower deepens it. For regular use, set pitch in Chat Settings modal instead - each chat stores its own pitch preference."
   },
   "TTS_PRIMARY_SERVER": {
     "short": "Primary TTS server endpoint URL",

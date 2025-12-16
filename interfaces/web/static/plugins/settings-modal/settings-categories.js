@@ -19,8 +19,7 @@ export const CATEGORIES = {
       'TTS_PITCH_SHIFT',
       'TTS_PRIMARY_SERVER',
       'TTS_FALLBACK_SERVER',
-      'TTS_FALLBACK_TIMEOUT',
-      'TTS_AUDIO_PLAYER'
+      'TTS_FALLBACK_TIMEOUT'
     ]
   },
   
