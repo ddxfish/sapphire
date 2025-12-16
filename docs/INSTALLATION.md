@@ -40,7 +40,7 @@ source ~/.venvs/sapphire/bin/activate
 
 ```bash
 sudo apt update
-sudo apt install ffmpeg portaudio19-dev python3-dev build-essential
+sudo apt install portaudio19-dev python3-dev build-essential
 ```
 
 For GPU-accelerated STT (optional):

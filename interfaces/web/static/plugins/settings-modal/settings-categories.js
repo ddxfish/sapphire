@@ -20,8 +20,7 @@ export const CATEGORIES = {
       'TTS_PRIMARY_SERVER',
       'TTS_FALLBACK_SERVER',
       'TTS_FALLBACK_TIMEOUT',
-      'TTS_AUDIO_PLAYER',
-      'FFMPEG_PATH'
+      'TTS_AUDIO_PLAYER'
     ]
   },
   

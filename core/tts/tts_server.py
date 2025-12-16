@@ -143,17 +143,17 @@ def generate_tts():
 
     file_uuid = uuid.uuid4().hex
     timestamp = int(time.time())
-    file_path = os.path.join(TEMP_DIR, f'audio_{timestamp}_{file_uuid}.wav')
+    file_path = os.path.join(TEMP_DIR, f'audio_{timestamp}_{file_uuid}.flac')
 
     try:
-        sf.write(file_path, audio, AUDIO_SAMPLE_RATE)
+        sf.write(file_path, audio, AUDIO_SAMPLE_RATE, format='FLAC')
         g.file_to_delete = file_path
         
         response = send_file(
             file_path,
-            mimetype='audio/wav',
+            mimetype='audio/flac',
             as_attachment=True,
-            download_name='tts_output.wav'
+            download_name='tts_output.flac'
         )
         return response
     except Exception as e:

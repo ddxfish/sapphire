@@ -1,10 +1,15 @@
-// audio.js - Audio lifecycle
+// audio.js - Audio lifecycle with native WAV recording (no server-side ffmpeg needed)
 import * as ui from './ui.js';
 import * as api from './api.js';
 
-let recorder, chunks = [];
+let audioContext, mediaStream, sourceNode, processorNode;
+let audioChunks = [];
 let player, blobUrl, ttsCtrl;
 let isRec = false, isStreaming = false;
+
+// Recording settings - match what Whisper expects
+const SAMPLE_RATE = 16000;
+const NUM_CHANNELS = 1;
 
 // Volume state
 let volume = 1.0;
@@ -111,32 +116,151 @@ export const playText = async (txt) => {
     }
 };
 
+/**
+ * Encode PCM samples as WAV file
+ * @param {Float32Array} samples - Audio samples (-1 to 1)
+ * @param {number} sampleRate - Sample rate in Hz
+ * @returns {Blob} WAV file blob
+ */
+function encodeWAV(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    
+    // WAV header
+    const writeString = (offset, string) => {
+        for (let i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
+        }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true); // fmt chunk size
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, NUM_CHANNELS, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * NUM_CHANNELS * 2, true); // byte rate
+    view.setUint16(32, NUM_CHANNELS * 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    
+    // Convert float samples to 16-bit PCM
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        offset += 2;
+    }
+    
+    return new Blob([buffer], { type: 'audio/wav' });
+}
+
+/**
+ * Downsample audio buffer to target sample rate
+ * @param {Float32Array} buffer - Source audio buffer
+ * @param {number} sourceSampleRate - Source sample rate
+ * @param {number} targetSampleRate - Target sample rate
+ * @returns {Float32Array} Downsampled buffer
+ */
+function downsample(buffer, sourceSampleRate, targetSampleRate) {
+    if (sourceSampleRate === targetSampleRate) {
+        return buffer;
+    }
+    const ratio = sourceSampleRate / targetSampleRate;
+    const newLength = Math.round(buffer.length / ratio);
+    const result = new Float32Array(newLength);
+    
+    for (let i = 0; i < newLength; i++) {
+        const srcIndex = i * ratio;
+        const srcIndexFloor = Math.floor(srcIndex);
+        const srcIndexCeil = Math.min(srcIndexFloor + 1, buffer.length - 1);
+        const t = srcIndex - srcIndexFloor;
+        // Linear interpolation
+        result[i] = buffer[srcIndexFloor] * (1 - t) + buffer[srcIndexCeil] * t;
+    }
+    
+    return result;
+}
+
 const startRec = async () => {
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        recorder = new MediaRecorder(stream);
-        recorder.ondataavailable = e => chunks.push(e.data);
-        recorder.start();
+        mediaStream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                channelCount: 1,
+                sampleRate: { ideal: SAMPLE_RATE },
+                echoCancellation: true,
+                noiseSuppression: true
+            } 
+        });
+        
+        // Create audio context (browser may give us a different sample rate)
+        audioContext = new AudioContext();
+        sourceNode = audioContext.createMediaStreamSource(mediaStream);
+        
+        // Use ScriptProcessor for capturing (deprecated but universal)
+        // Buffer size 4096 is a good balance of latency vs overhead
+        processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+        audioChunks = [];
+        
+        processorNode.onaudioprocess = (e) => {
+            if (isRec) {
+                // Copy the input data (it gets reused)
+                const inputData = e.inputBuffer.getChannelData(0);
+                audioChunks.push(new Float32Array(inputData));
+            }
+        };
+        
+        sourceNode.connect(processorNode);
+        processorNode.connect(audioContext.destination); // Required for processing to work
+        
         return true;
-    } catch {
+    } catch (e) {
+        console.error('Mic access error:', e);
         alert('Mic access denied');
         return false;
     }
 };
 
-const stopRec = () => new Promise(resolve => {
-    if (recorder && recorder.state === 'recording') {
-        recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'audio/webm' });
-            chunks = [];
-            recorder.stream.getTracks().forEach(t => t.stop());
-            resolve(blob);
-        };
-        recorder.stop();
-    } else {
-        resolve(null);
+const stopRec = async () => {
+    if (!audioContext || audioChunks.length === 0) {
+        return null;
     }
-});
+    
+    // Disconnect nodes
+    try {
+        sourceNode?.disconnect();
+        processorNode?.disconnect();
+    } catch {}
+    
+    // Stop media stream
+    mediaStream?.getTracks().forEach(t => t.stop());
+    
+    // Concatenate all chunks
+    const totalLength = audioChunks.reduce((acc, chunk) => acc + chunk.length, 0);
+    const fullBuffer = new Float32Array(totalLength);
+    let offset = 0;
+    for (const chunk of audioChunks) {
+        fullBuffer.set(chunk, offset);
+        offset += chunk.length;
+    }
+    audioChunks = [];
+    
+    // Downsample to 16kHz if needed
+    const sourceSampleRate = audioContext.sampleRate;
+    const samples = downsample(fullBuffer, sourceSampleRate, SAMPLE_RATE);
+    
+    // Close audio context
+    try {
+        await audioContext.close();
+    } catch {}
+    audioContext = null;
+    
+    // Encode as WAV
+    return encodeWAV(samples, SAMPLE_RATE);
+};
 
 export const handlePress = async (btn) => {
     if (isRec) return;

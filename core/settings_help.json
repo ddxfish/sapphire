@@ -10,10 +10,6 @@
     "long": "The name the AI uses to refer to itself. Used in prompts via the {ai_name} placeholder. Changes apply immediately to new messages. This affects how the AI identifies itself in conversations."
   },
   
-  "FFMPEG_PATH": {
-    "short": "Path to FFmpeg binary for audio processing",
-    "long": "Location of the FFmpeg executable used for audio format conversion and processing. Required for TTS audio playback. Default is /usr/bin/ffmpeg on Linux systems."
-  },
   "TRANSCRIBE_SAMPLE_RATE": {
     "short": "Audio sample rate for transcription (Hz)",
     "long": "Sample rate used when processing audio for speech-to-text. 16000 Hz (16 kHz) is standard for speech recognition and provides good accuracy with reasonable file sizes."

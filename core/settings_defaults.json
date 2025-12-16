@@ -7,7 +7,6 @@
   },
   
   "api": {
-    "FFMPEG_PATH": "/usr/bin/ffmpeg",
     "TRANSCRIBE_SAMPLE_RATE": 16000,
     "TRANSCRIBE_CHANNELS": 1
   },

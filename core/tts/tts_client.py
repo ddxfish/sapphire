@@ -137,7 +137,7 @@ class TTSClient:
                 return None, None
             
             # Save to temp file (soundfile needs a file to read WAV properly)
-            fd, temp_path = tempfile.mkstemp(suffix='.wav', dir=self.temp_dir)
+            fd, temp_path = tempfile.mkstemp(suffix='.flac', dir=self.temp_dir)
             os.close(fd)
             
             with open(temp_path, 'wb') as f:
@@ -227,7 +227,7 @@ class TTSClient:
                 return None
             
             # Save to temp, apply pitch, return bytes
-            fd, temp_path = tempfile.mkstemp(suffix='.wav', dir=self.temp_dir)
+            fd, temp_path = tempfile.mkstemp(suffix='.flac', dir=self.temp_dir)
             os.close(fd)
             
             with open(temp_path, 'wb') as f:

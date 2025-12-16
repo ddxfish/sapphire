@@ -2,17 +2,11 @@
 import os
 import tempfile
 import logging
-import subprocess
 import io
 import json
 from flask import Flask, Blueprint, request, jsonify, send_file, Response
 from core.modules.system import prompts
 import config
-
-# Load config with fallbacks
-FFMPEG_PATH = getattr(config, 'FFMPEG_PATH', '/usr/bin/ffmpeg')
-TRANSCRIBE_SAMPLE_RATE = getattr(config, 'TRANSCRIBE_SAMPLE_RATE', 16000)
-TRANSCRIBE_CHANNELS = getattr(config, 'TRANSCRIBE_CHANNELS', 1)
 
 logger = logging.getLogger(__name__)
 app = Flask(__name__)
@@ -227,19 +221,16 @@ def create_api(system_instance):
         if 'audio' not in request.files: 
             return jsonify({"error": "No audio file provided"}), 400
         audio_file = request.files['audio']
-        _, temp_path_orig = tempfile.mkstemp()
-        _, temp_path_conv = tempfile.mkstemp(suffix=".wav")
+        _, temp_path = tempfile.mkstemp(suffix=".wav")
         try:
-            audio_file.save(temp_path_orig)
-            command = [FFMPEG_PATH, "-i", temp_path_orig, "-ar", str(TRANSCRIBE_SAMPLE_RATE), "-ac", str(TRANSCRIBE_CHANNELS), "-y", temp_path_conv]
-            subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            transcribed_text = system_instance.whisper_client.transcribe_file(temp_path_conv)
+            # Browser sends 16kHz mono WAV - save directly
+            audio_file.save(temp_path)
+            transcribed_text = system_instance.whisper_client.transcribe_file(temp_path)
         except Exception as e:
             logger.error(f"Transcription error: {e}", exc_info=True)
             return jsonify({"error": "Failed to process audio"}), 500
         finally:
-            if os.path.exists(temp_path_orig): os.unlink(temp_path_orig)
-            if os.path.exists(temp_path_conv): os.unlink(temp_path_conv)
+            if os.path.exists(temp_path): os.unlink(temp_path)
         return jsonify({"text": transcribed_text})
 
     @bp.route('/history', methods=['GET'])
