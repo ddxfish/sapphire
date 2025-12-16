@@ -1,44 +1,49 @@
 # functions/memory.py
+# Direct SQLite memory storage - no server required
 
-import socket
-import json
+import sqlite3
 import logging
+from pathlib import Path
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 ENABLED = True
-OLDEST_MEMORIES_COUNT = 5
-LATEST_MEMORIES_COUNT = 10
-SEARCH_RESULTS_LIMIT = 10
 
-SOCKET_PATH = '/tmp/sapphire_memory.sock'
+# Database location - lazy initialized
+_db_path = None
+_db_initialized = False
+
+STOPWORDS = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+             'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
+             'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+             'would', 'should', 'could', 'may', 'might', 'can', 'this', 'that',
+             'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'}
 
 AVAILABLE_FUNCTIONS = [
-    'get_memories',
-    'set_memory',
-    'search_memory',
+    'save_memory',
+    'search_memory', 
+    'get_recent_memories',
 ]
 
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_memories",
-            "description": "Retrieve your oldest foundational memories and latest recent memories about the user",
-            "parameters": {"type": "object", "properties": {}, "required": []}
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_memory",
-            "description": "Store a new memory for future recall. Rate importance 1-10 (10=critical, 5=useful, 1=minor)",
+            "name": "save_memory",
+            "description": "Save important information to long-term memory for future conversations",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "content": {"type": "string", "description": "Memory content"},
-                    "importance": {"type": "integer", "description": "Importance 1-10", "default": 5}
+                    "content": {
+                        "type": "string",
+                        "description": "The information to remember"
+                    },
+                    "importance": {
+                        "type": "integer",
+                        "description": "Importance level 1-10 (10 = critical)",
+                        "default": 5
+                    }
                 },
                 "required": ["content"]
             }
@@ -48,44 +53,108 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "Search stored memories by keywords",
+            "description": "Search stored memories by keywords or topic",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query"}
+                    "query": {
+                        "type": "string",
+                        "description": "Search terms or topic"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return",
+                        "default": 10
+                    }
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_memories",
+            "description": "Get the most recent memories",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of recent memories to retrieve",
+                        "default": 10
+                    }
+                }
             }
         }
     }
 ]
 
-def send_request(action: str, params: dict) -> dict:
-    """Send request to memory engine via Unix socket."""
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(SOCKET_PATH)
-        
-        request = {'action': action, 'params': params}
-        sock.sendall((json.dumps(request) + '\n\n').encode('utf-8'))
-        
-        response = b''
-        while chunk := sock.recv(4096):
-            response += chunk
-            if not chunk:
-                break
-        
-        sock.close()
-        
-        return json.loads(response.decode('utf-8'))
-        
-    except FileNotFoundError:
-        return {'success': False, 'error': 'Memory engine not running'}
-    except Exception as e:
-        logger.error(f"Memory request error: {e}")
-        return {'success': False, 'error': str(e)}
 
-def format_time_ago(timestamp_str: str) -> str:
+def _get_db_path():
+    """Get database path, resolving from project root."""
+    global _db_path
+    if _db_path is None:
+        # Resolve path relative to project root (functions/ is one level down)
+        project_root = Path(__file__).parent.parent
+        _db_path = project_root / "user" / "memory.db"
+    return _db_path
+
+
+def _ensure_db():
+    """Initialize database if needed. Called lazily on first access."""
+    global _db_initialized
+    if _db_initialized:
+        return True
+    
+    try:
+        db_path = _get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                importance INTEGER DEFAULT 5 CHECK(importance >= 1 AND importance <= 10),
+                keywords TEXT,
+                context TEXT
+            )
+        ''')
+        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_keywords ON memories(keywords)')
+        
+        conn.commit()
+        conn.close()
+        
+        _db_initialized = True
+        logger.info(f"Memory database ready at {db_path}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize memory database: {e}")
+        return False
+
+
+def _get_connection():
+    """Get database connection, ensuring DB exists first."""
+    _ensure_db()
+    return sqlite3.connect(_get_db_path())
+
+
+def _extract_keywords(content: str) -> str:
+    """Extract keywords from content by removing stopwords."""
+    words = content.lower().split()
+    keywords = [w.strip('.,!?;:') for w in words if len(w) > 2 and w.lower() not in STOPWORDS]
+    return ' '.join(sorted(set(keywords)))
+
+
+def _format_time_ago(timestamp_str: str) -> str:
     """Format timestamp as simple relative time."""
     try:
         ts = datetime.fromisoformat(timestamp_str)
@@ -97,107 +166,149 @@ def format_time_ago(timestamp_str: str) -> str:
         minutes = (diff.seconds % 3600) // 60
         
         if days > 0:
-            return f"{days} day{'s' if days != 1 else ''} ago"
+            return f"{days}d ago"
         elif hours > 0:
-            return f"{hours} hour{'s' if hours != 1 else ''} ago"
+            return f"{hours}h ago"
         elif minutes > 0:
-            return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            return f"{minutes}m ago"
         else:
             return "just now"
     except:
-        return "unknown time"
-
-def format_memory(mem: dict) -> str:
-    """Format single memory as: (X days ago) content"""
-    time_ago = format_time_ago(mem['timestamp'])
-    return f"({time_ago}) {mem['content']}"
+        return ""
 
 
-def execute(function_name, arguments, config):
+def _save_memory(content: str, importance: int = 5) -> tuple:
+    """Store a new memory."""
     try:
-        if function_name == "get_memories":
-            response = send_request('get', {
-                'oldest': OLDEST_MEMORIES_COUNT,
-                'latest': LATEST_MEMORIES_COUNT
-            })
-            
-            if not response.get('success', True):
-                return f"Memory retrieval failed: {response.get('error', 'Unknown error')}", False
-            
-            data = response.get('data', {})
-            oldest_memories = data.get('oldest', [])
-            latest_memories = data.get('latest', [])
-            
-            if not oldest_memories and not latest_memories:
-                return "No memories stored yet.", True
-            
-            # Combine and deduplicate by ID
-            seen_ids = set()
-            all_memories = []
-            
-            # Add oldest first
-            for mem in oldest_memories:
-                if mem['id'] not in seen_ids:
-                    all_memories.append(mem)
-                    seen_ids.add(mem['id'])
-            
-            # Add latest (skip duplicates)
-            for mem in latest_memories:
-                if mem['id'] not in seen_ids:
-                    all_memories.append(mem)
-                    seen_ids.add(mem['id'])
-            
-            # Format output
-            lines = ["Your memories are retrieved:"]
-            for mem in all_memories:
-                time_ago = format_time_ago(mem['timestamp'])
-                lines.append(f"({time_ago}) (Importance: {mem['importance']}) {mem['content']}")
-            
-            return '\n'.join(lines), True
+        if not content or not content.strip():
+            return "Cannot save empty memory.", False
         
-        elif function_name == "set_memory":
-            content = arguments.get('content')
-            if not content:
-                return "Cannot store empty memory.", False
-            
-            importance = arguments.get('importance', 5)
-            
-            response = send_request('set', {
-                'content': content,
-                'importance': importance
-            })
-            
-            if not response.get('success'):
-                return f"Failed to store memory: {response.get('error', 'Unknown error')}", False
-            
-            return f"Memory stored (importance: {importance}/10)", True
+        importance = max(1, min(10, importance))
+        keywords = _extract_keywords(content)
+        
+        conn = _get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO memories (content, importance, keywords)
+            VALUES (?, ?, ?)
+        ''', (content.strip(), importance, keywords))
+        
+        memory_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Stored memory ID {memory_id} with importance {importance}")
+        return f"Memory saved (ID: {memory_id}, importance: {importance})", True
+        
+    except Exception as e:
+        logger.error(f"Error saving memory: {e}")
+        return f"Failed to save memory: {e}", False
+
+
+def _search_memory(query: str, limit: int = 10) -> tuple:
+    """Search memories by query string."""
+    try:
+        if not query or not query.strip():
+            return "Search query cannot be empty.", False
+        
+        query_keywords = _extract_keywords(query)
+        search_terms = query_keywords.split()
+        
+        if not search_terms:
+            # Fall back to raw query words if keyword extraction removed everything
+            search_terms = query.lower().split()[:5]
+        
+        conn = _get_connection()
+        cursor = conn.cursor()
+        
+        # Build LIKE query for each term
+        like_conditions = ' OR '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in search_terms])
+        like_params = []
+        for term in search_terms:
+            like_params.extend([f'%{term}%', f'%{term}%'])
+        
+        cursor.execute(f'''
+            SELECT id, content, timestamp, importance
+            FROM memories
+            WHERE {like_conditions}
+            ORDER BY importance DESC, timestamp DESC
+            LIMIT ?
+        ''', like_params + [limit])
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not rows:
+            return f"No memories found matching '{query}'", True
+        
+        results = []
+        for row in rows:
+            time_ago = _format_time_ago(row[2])
+            time_str = f" ({time_ago})" if time_ago else ""
+            preview = row[1][:150] + ('...' if len(row[1]) > 150 else '')
+            results.append(f"[{row[0]}]{time_str} importance:{row[3]} - {preview}")
+        
+        return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+        
+    except Exception as e:
+        logger.error(f"Error searching memory: {e}")
+        return f"Search failed: {e}", False
+
+
+def _get_recent_memories(count: int = 10) -> tuple:
+    """Get most recent memories."""
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, content, timestamp, importance
+            FROM memories
+            ORDER BY timestamp DESC
+            LIMIT ?
+        ''', (count,))
+        
+        rows = cursor.fetchall()
+        conn.close()
+        
+        if not rows:
+            return "No memories stored yet.", True
+        
+        results = []
+        for row in rows:
+            time_ago = _format_time_ago(row[2])
+            time_str = f" ({time_ago})" if time_ago else ""
+            preview = row[1][:150] + ('...' if len(row[1]) > 150 else '')
+            results.append(f"[{row[0]}]{time_str} importance:{row[3]} - {preview}")
+        
+        return f"Recent {len(rows)} memories:\n" + "\n".join(results), True
+        
+    except Exception as e:
+        logger.error(f"Error getting recent memories: {e}")
+        return f"Failed to retrieve memories: {e}", False
+
+
+def execute(function_name: str, arguments: dict, config) -> tuple:
+    """Execute memory function. Returns (result_string, success_bool)."""
+    try:
+        if function_name == "save_memory":
+            content = arguments.get("content", "")
+            importance = arguments.get("importance", 5)
+            return _save_memory(content, importance)
         
         elif function_name == "search_memory":
-            query = arguments.get('query')
-            if not query:
-                return "Search query cannot be empty.", False
-            
-            response = send_request('search', {
-                'query': query,
-                'limit': SEARCH_RESULTS_LIMIT
-            })
-            
-            if not response.get('success'):
-                return f"Search failed: {response.get('error', 'Unknown error')}", False
-            
-            results = response.get('results', [])
-            
-            if not results:
-                return f"No memories found matching '{query}'.", True
-            
-            lines = [f"Found {len(results)} memories:"]
-            for mem in results:
-                lines.append(format_memory(mem))
-            
-            return '\n'.join(lines), True
+            query = arguments.get("query", "")
+            limit = arguments.get("limit", 10)
+            return _search_memory(query, limit)
         
-        return f"Unknown function: {function_name}", False
-    
+        elif function_name == "get_recent_memories":
+            count = arguments.get("count", 10)
+            return _get_recent_memories(count)
+        
+        else:
+            return f"Unknown memory function: {function_name}", False
+            
     except Exception as e:
-        logger.error(f"{function_name} error: {e}")
-        return f"Error executing {function_name}: {str(e)}", False
+        logger.error(f"Memory function error: {e}")
+        return f"Memory error: {e}", False
