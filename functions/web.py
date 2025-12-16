@@ -166,16 +166,7 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
     return results
 
 def extract_content(html: str) -> str:
-    try:
-        import trafilatura
-        if content := trafilatura.extract(html, include_comments=False, include_tables=False):
-            logger.info(f"[WEB] Trafilatura extracted {len(content)} chars")
-            return content
-    except ImportError:
-        logger.info("[WEB] Trafilatura not available, using BeautifulSoup")
-    except Exception as e:
-        logger.warning(f"[WEB] Trafilatura failed: {e}, falling back to BeautifulSoup")
-    
+    """Extract readable content from HTML using BeautifulSoup."""
     soup = BeautifulSoup(html, 'html.parser')
     for tag in soup(WORK_WEBSITE_STRIP_ELEMENTS + ['form']):
         tag.decompose()
@@ -183,7 +174,7 @@ def extract_content(html: str) -> str:
     text = soup.get_text(separator=' ', strip=True)
     lines = (line.strip() for line in text.splitlines())
     result = '\n'.join(chunk for line in lines for chunk in line.split("  ") if chunk)
-    logger.info(f"[WEB] BeautifulSoup extracted {len(result)} chars")
+    logger.info(f"[WEB] Extracted {len(result)} chars")
     return result
 
 def fetch_single_site(url: str, max_chars: int = 10000) -> dict:
