@@ -88,8 +88,7 @@
     "TTS_PITCH_SHIFT": 0.98,
     "TTS_PRIMARY_SERVER": "http://localhost:5012",
     "TTS_FALLBACK_SERVER": "http://127.0.0.1:5012",
-    "TTS_FALLBACK_TIMEOUT": 0.2,
-    "TTS_AUDIO_PLAYER": "/usr/bin/aplay"
+    "TTS_FALLBACK_TIMEOUT": 0.2
   },
   
   "llm": {

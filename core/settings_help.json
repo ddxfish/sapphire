@@ -253,11 +253,6 @@
     "short": "Timeout before trying fallback server (seconds)",
     "long": "How long to wait for primary TTS server before switching to fallback. 0.2 seconds (200ms) provides quick failover. Too low may not give primary server enough time. Too high causes noticeable delays when primary is down."
   },
-  "TTS_AUDIO_PLAYER": {
-    "short": "Audio player command for TTS playback",
-    "long": "Command-line audio player used to play synthesized speech. /usr/bin/aplay is standard on Linux. Alternative: /usr/bin/ffplay, /usr/bin/mpv. Must support reading audio from stdin or file path."
-  },
-  
   "LLM_MAX_HISTORY": {
     "short": "Maximum conversation messages to send to LLM (truncate earlier)",
     "long": "How many past messages to send to LLM to make it faster or work better. Truncates earlier chat messages. Use even numbers. "
