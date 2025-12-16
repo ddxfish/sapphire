@@ -47,8 +47,8 @@ This is a one-person passion project that took me a lifetime to build.
 ## Quick Start
 
 ```bash
-# System packages
-sudo apt-get install portaudio19-dev
+# System packages (Linux)
+sudo apt-get install libportaudio2
 
 # Clone and enter
 git clone https://github.com/ddxfish/sapphire.git

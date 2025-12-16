@@ -5,21 +5,15 @@ cryptography>=41.0.0  # For self-signed HTTPS certificates
 # LLM API Client
 openai>=1.12.0
 
-# Audio Processing (wakeword, TTS, local playback)
-PyAudio>=0.2.14
+# Audio Processing (wakeword, TTS, STT, local playback)
 numpy>=1.24.0
 sounddevice>=0.4.6
 soundfile>=0.12.1
-
-# Wake Word Detection (OpenWakeWord)
-openwakeword>=0.6.0
 
 # Tokenization
 tiktoken>=0.5.0
 
 # HTTP and Web, for functions that use web
 requests>=2.31.0
-urllib3>=2.0.0
 beautifulsoup4>=4.12.0
-trafilatura>=1.6.0
 bcrypt>=4.0.0

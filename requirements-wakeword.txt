@@ -1,0 +1,2 @@
+# Wake Word Detection (OpenWakeWord)
+openwakeword>=0.6.0

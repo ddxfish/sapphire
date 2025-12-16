@@ -89,11 +89,10 @@ class WakeWordDetector:
         """Discard any accumulated audio in the input buffer to prevent stale detections."""
         try:
             stream = self.audio_recorder.get_stream()
-            if stream:
-                available = stream.get_read_available()
-                if available > 0:
-                    stream.read(available, exception_on_overflow=False)
-                    logger.debug(f"Flushed {available} samples from audio buffer")
+            if stream and stream.read_available > 0:
+                available = stream.read_available
+                stream.read(available)  # Discard the data
+                logger.debug(f"Flushed {available} samples from audio buffer")
         except Exception as e:
             logger.debug(f"Buffer flush: {e}")
 
@@ -167,9 +166,11 @@ class WakeWordDetector:
                     time.sleep(0.1)
                     continue
                 
-                # Read audio frame
-                audio_data = stream.read(frame_samples, exception_on_overflow=False)
-                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                # Read audio frame (sounddevice returns numpy array directly)
+                audio_data, overflowed = stream.read(frame_samples)
+                if overflowed:
+                    logger.debug("Audio buffer overflow in wake detection")
+                audio_array = audio_data.flatten().astype(np.int16)
                 
                 # Get prediction from OWW
                 predictions = self.model.predict(audio_array)
