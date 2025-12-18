@@ -86,7 +86,9 @@ TTS is disabled by default. It runs an API for Kokoro TTS inside the Sapphire ap
 
 ### Wake Word
 
-The wakeword is used with a local mic if you want to use Sapphire without a keyboard. This now uses OpenWakeWord, which is cross platform and open source. It requires ONNX runtime which is already in the main requirements.txt. Just checkmark it in settings to enable, save, and restart Sapphire. You need speech to text and text to speech to use this.
+Wakeword is disabled by default. Open Wake Word is used for hands-free mic and speaker. Just pip, then enable in Sapphire settings, restart the app.
+
+```pip install -r requirements-wakeword.txt```
 
 ---
 
