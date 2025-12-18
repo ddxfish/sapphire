@@ -142,7 +142,7 @@ Sapphire creates `user/` directory with your settings and data. **Run once befor
 - **Chat**: Send a message, get a response
 - **TTS** (if enabled): Response should be spoken
 - **STT** (if enabled): Mic button appears, try voice input
-- **Wake word** (if enabled): Say "Hey Mycroft"
+- **Wake word** (if enabled): Say "Hey Sapphire"
 
 ## Making It Yours
 
@@ -173,7 +173,7 @@ Use Sapphire hands-free with wake word, like a smart speaker.
 }
 ```
 
-**Usage:** Say "Hey Mycroft" → speak your question → hear the response.
+**Usage:** Say "Hey Sapphire" → speak your question → hear the response.
 
 After initial web setup, you can run headless. The wake word listener runs continuously.
 
