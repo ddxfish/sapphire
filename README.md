@@ -1,6 +1,6 @@
 # Sapphire
 
-Sapphire is a Privacy-first virtual persona framework. Make your own AI assistant to help with your work, a storyteller with personality, or just a companion with long term memory. This is a persona framework for AI models. Can be used as web UI or as a pure STT/TTS interface. This connects to your LLM server to provide an immersive and customizable experience. 
+Sapphire is a privacy-first virtual persona framework. This connects to any LLM to make what seems like a hearing and talking person with long term memory. You can use it with a mic/speaker, Web UI, or both. This is production code under active development with support. If the other virtual assistants or AI companions weren't customizable or modular enough, try Sapphire.
 
 <img width="2253" height="1472" alt="image" src="https://github.com/ddxfish/sapphire/blob/main/docs/screenshots/sapphire-ai.png" />
 
@@ -14,35 +14,37 @@ This is a one-person passion project that took me a lifetime to build.
 ## Features
 
 **Talk to it**
-- Wake word activation ("Hey Mycroft")
-- Voice input via Faster Whisper (both web ui and mic)
-- Voice output via Kokoro TTS (both web ui and mic)
+- Wake word activation ("Hey Sapphire")
+- Voice input on mic directly or Web UI
+- Voice output via Kokoro TTS on speaker or web UI
 - Spoken system commands ("system voice isabella")
-- Web UI with multi-chat management and speech to text
+- You can also use STT and TTS in the Web UI
+- Or don't! STT/TTS/Wakeword is all optional
 
 **Make it yours**
-- Modular prompt system — simple single prompts or swappable pieces
-- Spices — dynamic snippets for variety in responses
-- Per-chat settings (voice, prompt, toolset)
-- Multiple personalities across different chats
-- Connect to various LLMs based on your needs
-- Long term memory functions that persist beyond each chat
+- Sapphire is my example, you should make your own persona for yourself
+- Modular prompt system - Swap them in and out, edit easily via Web UI
+- Spices - add snippets to system prompt that rotate for variety
+- Per-chat settings - Switch chats to switch personas (voice, prompt, tools, etc)
+- You use your own LLM to match your needs
+- Ask it to remember things about you
 
 **Extend it**
-- Tool calling system — drop in new functions
-- Plugin architecture for features
-- Toolsets — group functions by context
-- Supports any OpenAI-compatible LLM endpoint
-- Edit prompts, toolsets, spices from UI
-- Event manager - cron-like triggers for plugins and backups
+- Plugin system - just drag and drop your own
+- Tool calling - just drag and drop your own 
+- Toolsets - make custom sets of tools for your AI
+- Supports llama.cpp, LM Studio, Claude, and most OpenAI compliant APIs
+- Customize from the UI. No file editing needed.
+- Event manager - have it say Good Morning, open your blinds, and run a backup
 
 **Get weird**
-- Let the AI manage it's own prompt via meta tools
-- Give the AI ability to reset and end the chat
-- Do stories, have sapphire trigger your house lights to match the story
-- Test AI responses - Test in various ethical scenarios
-- Personalize your AI to wake you up each morning, no more alarm clock
-
+- Meta tools - Allow the AI to edit its own prompt (meta toolset)
+- AI exit - Allow the AI to end and reset chat (erase that chat!)
+- Interactive story - AI turns YOUR house fans on as the choppers swarm overhead (home assistant in alpha test)
+- Ethics testing - It discovers it will be shut down. What does it do with tools and chat?
+- Waifu-compatible framework - you know who you are
+- AI companion - A friend that remembers you and what you did together between chats
+- Work autopilot - Make some tools and tell it "do my work"
 
 ## Quick Start
 
