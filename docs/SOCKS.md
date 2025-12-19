@@ -1,6 +1,6 @@
 # SOCKS Proxy Configuration
 
-Sapphire supports SOCKS5 proxy for web scraping functions. This routes `web_search`, `get_website`, `get_wikipedia`, and `research_topic` through your proxy for privacy.
+Sapphire supports SOCKS5 proxy for web scraping functions. This routes `web_search`, `get_website`, `get_wikipedia`, and `research_topic` through your proxy for privacy. These tools will hard-fail by design if proxy is enabled but broken.
 
 ## Why Use a Proxy?
 
