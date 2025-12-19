@@ -171,8 +171,22 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
     2. Config file: CONFIG_DIR/socks_config
     3. Project file: user/.socks_config (legacy/dev convenience)
     
+    Supports both formats:
+      username
+      password
+    OR:
+      username=myuser
+      password=mypass
+    
     Returns (username, password) or (None, None) if not found.
     """
+    def parse_line(line: str) -> str:
+        """Strip key= prefix if present"""
+        line = line.strip()
+        if '=' in line:
+            return line.split('=', 1)[1].strip()
+        return line
+    
     # Try env vars first (production/deployment)
     username = os.environ.get('SAPPHIRE_SOCKS_USERNAME')
     password = os.environ.get('SAPPHIRE_SOCKS_PASSWORD')
@@ -186,8 +200,8 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
         try:
             lines = SOCKS_CONFIG_FILE.read_text().splitlines()
             if len(lines) >= 2:
-                username = lines[0].strip()
-                password = lines[1].strip()
+                username = parse_line(lines[0])
+                password = parse_line(lines[1])
                 if username and password:
                     logger.info(f"Using SOCKS credentials from {SOCKS_CONFIG_FILE}")
                     return username, password
@@ -200,8 +214,8 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
         try:
             lines = project_config.read_text().splitlines()
             if len(lines) >= 2:
-                username = lines[0].strip()
-                password = lines[1].strip()
+                username = parse_line(lines[0])
+                password = parse_line(lines[1])
                 if username and password:
                     logger.info(f"Using SOCKS credentials from {project_config}")
                     return username, password

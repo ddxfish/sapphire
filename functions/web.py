@@ -6,7 +6,7 @@ import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.socks_proxy import get_session
+from core.socks_proxy import get_session, SocksAuthError
 import config
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,7 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
         preview = resp.text[:500].replace('\n', ' ')
         logger.warning(f"[WEB] No results, HTML preview: {preview}")
     return results
+
 
 def extract_content(html: str) -> str:
     """Extract readable content from HTML using BeautifulSoup."""
@@ -424,6 +425,9 @@ def execute(function_name, arguments, config):
         logger.warning(f"[WEB] Unknown function: {function_name}")
         return f"Unknown function: {function_name}", False
 
+    except SocksAuthError as e:
+        logger.error(f"[WEB] {function_name} SOCKS auth failed: {e}")
+        return f"Web access blocked: {e}", False
     except Exception as e:
         logger.error(f"[WEB] {function_name} unhandled error: {type(e).__name__}: {e}")
         return f"Error executing {function_name}: {str(e)}", False

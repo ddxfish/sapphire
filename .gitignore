@@ -37,3 +37,4 @@ user/scenes/*
 user_backups/*
 user_claude/*
 *.pytest_cache*
+test.py

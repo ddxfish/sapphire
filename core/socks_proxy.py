@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 _cached_session = None
 
 
+class SocksAuthError(Exception):
+    """Raised when SOCKS5 authentication fails"""
+    pass
+
+
 def clear_session_cache():
     """Clear cached session - useful when headers change"""
     global _cached_session
@@ -20,11 +25,48 @@ def clear_session_cache():
     logger.info("Session cache cleared")
 
 
+def _test_socks_auth(host: str, port: int, username: str, password: str, timeout: float = 5.0) -> bool:
+    """
+    Quick SOCKS5 auth test. Returns True if auth succeeds, raises SocksAuthError if not.
+    Uses short timeout to fail fast on bad credentials.
+    """
+    try:
+        import socks
+    except ImportError:
+        logger.warning("PySocks not available for auth test, skipping")
+        return True
+    
+    test_sock = socks.socksocket()
+    test_sock.set_proxy(socks.SOCKS5, host, port, username=username, password=password)
+    test_sock.settimeout(timeout)
+    
+    try:
+        # Connect to a reliable, fast host
+        test_sock.connect(('1.1.1.1', 80))
+        test_sock.close()
+        return True
+    except socks.ProxyError as e:
+        test_sock.close()
+        if 'authentication failed' in str(e).lower():
+            raise SocksAuthError(
+                f"SOCKS5 authentication failed. Check credentials in user/.socks_config - "
+                f"file should contain just username on line 1, password on line 2 (no 'username=' prefix)"
+            )
+        raise SocksAuthError(f"SOCKS5 proxy error: {e}")
+    except Exception as e:
+        test_sock.close()
+        raise SocksAuthError(f"SOCKS5 connection failed: {type(e).__name__}: {e}")
+
+
 def get_session():
     """
     Get configured requests session.
     Returns SOCKS5 session if enabled, plain session otherwise.
     Caches and reuses session for performance.
+    
+    Raises:
+        SocksAuthError: If SOCKS5 auth fails (fast failure, no caching)
+        ValueError: If SOCKS5 enabled but credentials missing
     """
     global _cached_session
     
@@ -42,6 +84,9 @@ def get_session():
                 "Set SAPPHIRE_SOCKS_USERNAME and SAPPHIRE_SOCKS_PASSWORD environment variables, "
                 f"or create {CONFIG_DIR / 'socks_config'} with username on line 1, password on line 2"
             )
+        
+        # Test auth before caching session - fail fast on bad creds
+        _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password)
         
         proxy_url = f"socks5://{username}:{password}@{config.SOCKS_HOST}:{config.SOCKS_PORT}"
         
