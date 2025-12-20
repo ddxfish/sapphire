@@ -3,6 +3,8 @@ import soundfile as sf
 import numpy as np
 import os
 import sys
+import time
+import tempfile
 import logging
 import config
 
@@ -72,23 +74,55 @@ def initialize_model(model_size=config.STT_MODEL_SIZE, language=config.STT_LANGU
         logger.error(f"Failed to initialize model: {e}")
         return False
 
+
+def safe_unlink(path, retries=3, delay=0.2):
+    """Windows-safe file deletion with retries."""
+    for attempt in range(retries):
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+            return True
+        except PermissionError:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                logger.warning(f"Could not delete temp file after {retries} attempts: {path}")
+                return False
+        except Exception as e:
+            logger.warning(f"Error deleting {path}: {e}")
+            return False
+    return True
+
+
 @app.route('/transcribe', methods=['POST'])
 def transcribe_audio():
     """Handle transcription requests."""
+    temp_path = None
+    processed_path = None
+    
     try:
         # Process audio file
         audio_file = request.files['audio']
-        temp_path = 'temp_audio.wav'
+        
+        # Windows fix: use tempfile.mkstemp with unique names and close fd immediately
+        fd, temp_path = tempfile.mkstemp(suffix=".wav", prefix="stt_input_")
+        os.close(fd)  # Close fd so other processes can access the file
+        
         audio_file.save(temp_path)
         
         # Load and normalize audio
         audio_data, sample_rate = sf.read(temp_path)
         if len(audio_data.shape) > 1:  # Convert stereo to mono
             audio_data = audio_data.mean(axis=1)
-        audio_data = audio_data / np.max(np.abs(audio_data))
         
-        # Save preprocessed audio
-        processed_path = temp_path + '_processed.wav'
+        # Normalize if audio has content
+        max_val = np.max(np.abs(audio_data))
+        if max_val > 0:
+            audio_data = audio_data / max_val
+        
+        # Save preprocessed audio to unique temp file
+        fd2, processed_path = tempfile.mkstemp(suffix=".wav", prefix="stt_processed_")
+        os.close(fd2)
         sf.write(processed_path, audio_data, sample_rate)
         
         # Configure transcription parameters
@@ -103,16 +137,19 @@ def transcribe_audio():
         segments, _ = model.transcribe(processed_path, **transcription_params)
         text = " ".join([segment.text for segment in segments]).strip()
         
-        # Cleanup
-        for path in [processed_path, temp_path]:
-            if os.path.exists(path):
-                os.unlink(path)
-            
         return jsonify({"text": text})
         
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         return jsonify({"error": str(e)}), 500
+    
+    finally:
+        # Windows-safe cleanup with retries
+        if processed_path:
+            safe_unlink(processed_path)
+        if temp_path:
+            safe_unlink(temp_path)
+
 
 def run_server(host=config.STT_HOST, port=config.STT_SERVER_PORT):
     """Run the Flask server."""

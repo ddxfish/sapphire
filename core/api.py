@@ -4,6 +4,7 @@ import tempfile
 import logging
 import io
 import json
+import time
 from flask import Flask, Blueprint, request, jsonify, send_file, Response
 from core.modules.system import prompts
 import config
@@ -221,8 +222,11 @@ def create_api(system_instance):
         if 'audio' not in request.files: 
             return jsonify({"error": "No audio file provided"}), 400
         audio_file = request.files['audio']
-        _, temp_path = tempfile.mkstemp(suffix=".wav")
+        
+        # Windows fix: mkstemp returns (fd, path) - must close fd before other processes can access
+        fd, temp_path = tempfile.mkstemp(suffix=".wav")
         try:
+            os.close(fd)  # Close fd immediately so file can be accessed by other processes
             # Browser sends 16kHz mono WAV - save directly
             audio_file.save(temp_path)
             transcribed_text = system_instance.whisper_client.transcribe_file(temp_path)
@@ -230,7 +234,18 @@ def create_api(system_instance):
             logger.error(f"Transcription error: {e}", exc_info=True)
             return jsonify({"error": "Failed to process audio"}), 500
         finally:
-            if os.path.exists(temp_path): os.unlink(temp_path)
+            # Windows-safe cleanup with retry
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except PermissionError:
+                # File still locked, try again after brief wait
+                time.sleep(0.1)
+                try:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except Exception as cleanup_err:
+                    logger.warning(f"Could not clean up temp file {temp_path}: {cleanup_err}")
         return jsonify({"text": transcribed_text})
 
     @bp.route('/history', methods=['GET'])
