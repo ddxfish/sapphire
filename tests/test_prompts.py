@@ -1,8 +1,110 @@
 """Unit tests for prompt system (prompt_manager, prompt_crud, prompt_state)"""
 import pytest
 import json
+import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+
+
+class TestPromptManagerLoading:
+    """Test prompt data loading methods."""
+    
+    def test_load_pieces_success(self, tmp_path):
+        """_load_pieces should load prompt_pieces.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        pieces = {
+            "components": {"persona": {"test": "Test persona"}},
+            "scenario_presets": {"default": {}}
+        }
+        (prompts_dir / "prompt_pieces.json").write_text(
+            json.dumps(pieces), encoding='utf-8'
+        )
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._components = {}
+            mgr._scenario_presets = {}
+            
+            mgr._load_pieces()
+            
+            assert "persona" in mgr._components
+            assert mgr._components["persona"]["test"] == "Test persona"
+    
+    def test_load_pieces_missing_file(self, tmp_path):
+        """_load_pieces should handle missing file gracefully."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._components = {}
+            mgr._scenario_presets = {}
+            
+            mgr._load_pieces()  # Should not raise
+            
+            assert mgr._components == {}
+            assert mgr._scenario_presets == {}
+    
+    def test_load_monoliths_success(self, tmp_path):
+        """_load_monoliths should load prompt_monoliths.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        monoliths = {
+            "_comment": "skip this",
+            "default": "Default prompt text",
+            "custom": "Custom prompt"
+        }
+        (prompts_dir / "prompt_monoliths.json").write_text(
+            json.dumps(monoliths), encoding='utf-8'
+        )
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._monoliths = {}
+            
+            mgr._load_monoliths()
+            
+            assert "default" in mgr._monoliths
+            assert "custom" in mgr._monoliths
+            assert "_comment" not in mgr._monoliths
+    
+    def test_load_spices_success(self, tmp_path):
+        """_load_spices should load prompt_spices.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        spices = {
+            "_comment": "skip",
+            "humor": ["joke1", "joke2"],
+            "emotions": ["happy", "sad"]
+        }
+        (prompts_dir / "prompt_spices.json").write_text(
+            json.dumps(spices), encoding='utf-8'
+        )
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._spices = {}
+            
+            mgr._load_spices()
+            
+            assert "humor" in mgr._spices
+            assert "_comment" not in mgr._spices
 
 
 class TestPromptManagerTemplates:
@@ -16,6 +118,7 @@ class TestPromptManagerTemplates:
             mgr = PromptManager()
             mgr.USER_DIR = Path("/tmp")
             
+            # Patch where settings is imported FROM (inside the method)
             with patch('core.settings_manager.settings') as mock_settings:
                 mock_settings.get.side_effect = lambda k, d: "Sapphire" if k == "DEFAULT_AI_NAME" else d
                 
@@ -146,6 +249,262 @@ class TestPromptManagerAssembly:
             
             assert "humor" in result.lower() or "Use humor" in result
             assert "brief" in result.lower() or "concise" in result.lower()
+    
+    def test_assemble_with_emotions(self):
+        """Should include emotions in assembly."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = Path("/tmp")
+            mgr._components = {
+                "persona": {"base": "AI assistant"},
+                "goals": {},
+                "location": {},
+                "relationship": {},
+                "format": {},
+                "scenario": {},
+                "extras": {},
+                "emotions": {
+                    "happy": "feeling happy",
+                    "curious": "feeling curious"
+                }
+            }
+            
+            components = {
+                "persona": "base",
+                "extras": [],
+                "emotions": ["happy", "curious"]
+            }
+            
+            result = mgr.assemble_from_components(components)
+            
+            assert "happy" in result.lower() or "Emotions:" in result
+
+
+class TestPromptManagerSaving:
+    """Test prompt save methods."""
+    
+    def test_save_scenario_presets(self, tmp_path):
+        """save_scenario_presets should write to prompt_pieces.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        # Create initial file
+        initial = {"components": {}, "scenario_presets": {}}
+        pieces_file = prompts_dir / "prompt_pieces.json"
+        pieces_file.write_text(json.dumps(initial), encoding='utf-8')
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._scenario_presets = {"new_preset": {"persona": "test"}}
+            
+            mgr.save_scenario_presets()
+            
+            saved = json.loads(pieces_file.read_text(encoding='utf-8'))
+            assert "new_preset" in saved["scenario_presets"]
+    
+    def test_save_monoliths(self, tmp_path):
+        """save_monoliths should write to prompt_monoliths.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._monoliths = {"test_mono": "Test prompt content"}
+            
+            mgr.save_monoliths()
+            
+            mono_file = prompts_dir / "prompt_monoliths.json"
+            saved = json.loads(mono_file.read_text(encoding='utf-8'))
+            assert saved["test_mono"] == "Test prompt content"
+    
+    def test_save_components(self, tmp_path):
+        """save_components should write to prompt_pieces.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        initial = {"components": {}, "scenario_presets": {}}
+        pieces_file = prompts_dir / "prompt_pieces.json"
+        pieces_file.write_text(json.dumps(initial), encoding='utf-8')
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._components = {"persona": {"new": "New persona"}}
+            
+            mgr.save_components()
+            
+            saved = json.loads(pieces_file.read_text(encoding='utf-8'))
+            assert saved["components"]["persona"]["new"] == "New persona"
+    
+    def test_save_spices(self, tmp_path):
+        """save_spices should write to prompt_spices.json."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._spices = {"humor": ["joke1", "joke2"]}
+            
+            mgr.save_spices()
+            
+            spice_file = prompts_dir / "prompt_spices.json"
+            saved = json.loads(spice_file.read_text(encoding='utf-8'))
+            assert saved["humor"] == ["joke1", "joke2"]
+
+
+class TestPromptManagerEncoding:
+    """Test UTF-8 encoding in prompt file operations."""
+    
+    def test_load_pieces_utf8(self, tmp_path):
+        """_load_pieces should handle UTF-8 content."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        pieces = {"components": {"persona": {"japanese": "日本語テスト"}}}
+        (prompts_dir / "prompt_pieces.json").write_text(
+            json.dumps(pieces, ensure_ascii=False), encoding='utf-8'
+        )
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._components = {}
+            mgr._scenario_presets = {}
+            
+            mgr._load_pieces()
+            
+            assert mgr._components["persona"]["japanese"] == "日本語テスト"
+    
+    def test_save_monoliths_utf8(self, tmp_path):
+        """save_monoliths should write UTF-8 content."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        prompts_dir = tmp_path / "user" / "prompts"
+        prompts_dir.mkdir(parents=True)
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr.USER_DIR = prompts_dir
+            mgr._monoliths = {"chinese": "你好世界"}
+            
+            mgr.save_monoliths()
+            
+            mono_file = prompts_dir / "prompt_monoliths.json"
+            saved = json.loads(mono_file.read_text(encoding='utf-8'))
+            assert saved["chinese"] == "你好世界"
+
+
+class TestPromptManagerFileWatcher:
+    """Test file watcher functionality."""
+    
+    def test_start_file_watcher(self):
+        """start_file_watcher should start background thread."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._watcher_thread = None
+            mgr._watcher_running = False
+            mgr.USER_DIR = Path("/tmp")
+            mgr._last_mtimes = {}
+            
+            def mock_loop():
+                pass
+            mgr._file_watcher_loop = mock_loop
+            
+            mgr.start_file_watcher()
+            
+            assert mgr._watcher_running is True
+            assert mgr._watcher_thread is not None
+            
+            mgr._watcher_running = False
+    
+    def test_stop_file_watcher(self):
+        """stop_file_watcher should stop background thread."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._watcher_running = True
+            mgr._watcher_thread = MagicMock()
+            mgr._watcher_thread.is_alive.return_value = True
+            
+            mgr.stop_file_watcher()
+            
+            assert mgr._watcher_running is False
+            mgr._watcher_thread.join.assert_called_once()
+    
+    def test_reload(self):
+        """reload() should reload all data."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._lock = threading.Lock()
+            mgr._load_all = MagicMock()
+            
+            mgr.reload()
+            
+            mgr._load_all.assert_called_once()
+
+
+class TestPromptManagerProperties:
+    """Test property accessors."""
+    
+    def test_components_property(self):
+        """components property should return _components."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._components = {"test": "value"}
+            
+            assert mgr.components == {"test": "value"}
+    
+    def test_scenario_presets_property(self):
+        """scenario_presets property should return _scenario_presets."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._scenario_presets = {"preset1": {}}
+            
+            assert mgr.scenario_presets == {"preset1": {}}
+    
+    def test_monoliths_property(self):
+        """monoliths property should return _monoliths."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._monoliths = {"mono1": "text"}
+            
+            assert mgr.monoliths == {"mono1": "text"}
+    
+    def test_spices_property(self):
+        """spices property should return _spices."""
+        from core.modules.system.prompt_manager import PromptManager
+        
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+            mgr._spices = {"humor": []}
+            
+            assert mgr.spices == {"humor": []}
 
 
 class TestPromptCrud:
