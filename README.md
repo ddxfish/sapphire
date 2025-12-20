@@ -1,10 +1,10 @@
 # Sapphire
 
-Sapphire is a privacy-first virtual persona framework. This connects to any LLM to make what seems like a hearing and talking person with long term memory. You can use it with a mic/speaker, Web UI, or both. This is production code under active development with support. If the other virtual assistants or AI companions weren't customizable or modular enough, try Sapphire.
+You talk to it, but it's her that talks back. Customize your own virtual people: TTS, STT, wakeword, personality, goals, emotions. You can use it with a mic/speaker, Web UI, or both. Highly extensible, just drag in funcs or plugins. Built-in tools: long-term memory, web access, self-prompt editing. This is made for YOU to make your own personas.
 
 <img width="2253" height="1472" alt="image" src="https://github.com/ddxfish/sapphire/blob/main/docs/screenshots/sapphire-ai.png" />
 
-This is a one-person passion project that took me a lifetime to build.
+This is a one-person passion project that took me a lifetime to build over many iterations. It will never be done.
 
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-blue.svg)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-green.svg)
@@ -13,40 +13,40 @@ This is a one-person passion project that took me a lifetime to build.
 
 ## Features
 
-**Talk to it**
-- Wake word activation ("Hey Sapphire")
-- Voice input on mic directly or Web UI
-- Voice output via Kokoro TTS on speaker or web UI
-- Spoken system commands ("system voice isabella")
-- You can also use STT and TTS in the Web UI
-- Or don't! STT/TTS/Wakeword is all optional
+It's got speech recognition, text to speech, wakeword, and tools can serve many uses. It's build on customization.
 
 **Make it yours**
-- Sapphire is my example, you should make your own persona for yourself
-- Modular prompt system - Swap them in and out, edit easily via Web UI
-- Spices - add snippets to system prompt that rotate for variety
-- Per-chat settings - Switch chats to switch personas (voice, prompt, tools, etc)
-- You use your own LLM to match your needs
-- Ask it to remember things about you
+- Make Sapphire yours: persona, location, goals, scenarios, emotions, story format, etc
+- Modular prompt system - you can swap prompt pieces in chat (ex: add Happy to emotions)
+- Spices - these inject random snippets into sys prompt for variety
+- Per-chat settings - Switching chats switches personas (voice, prompt, tools, etc)
+- You use your own LLM to match your needs (LM Studio)
 
 **Extend it**
 - Plugin system - just drag and drop your own
 - Tool calling - just drag and drop your own 
 - Toolsets - make custom sets of tools for your AI
-- Supports llama.cpp, LM Studio, Claude, and most OpenAI compliant APIs
-- Customize from the UI. No file editing needed.
+- Supports llama.cpp, LM Studio, Claude, and most OpenAI compliant APIs as the LLM core
+- Customize everything from the UI. No file editing needed.
 - Event manager - have it say Good Morning, open your blinds, and run a backup
 
-**Get weird**
-- Meta tools - Allow the AI to edit its own prompt (meta toolset)
-- AI exit - Allow the AI to end and reset chat (erase that chat!)
-- Interactive story - AI turns YOUR house fans on as the choppers swarm overhead (home assistant in alpha test)
+**Get weird (Uses)**
+- Meta tools - Allow the AI to edit its own prompt and goals via tools
 - Ethics testing - It discovers it will be shut down. What does it do with tools and chat?
 - Waifu-compatible framework - you know who you are
 - AI companion - A friend that remembers you and what you did together between chats
 - Work autopilot - Make some tools and tell it "do my work"
+- Sentient House - go mic and speaker only, your Sapphire wakes you up at 8am, turns on lights
+- Storytelling - SUPER good. Drop it right in a scenario via a prompt
+- Research - Pulls X websites in one shot, digests, summarizes
+- Can be used as a plain old Web UI as well
+
 
 ## Quick Start
+
+(Elaborate) Use Conda or venv. Core only has a few reqs. TTS STT Wakeword triple it. Python 3.11 is what I liked best. 
+
+(elaborate) Open LM Studio, load your model, enable API in dev tab and open to LAN in settings if needed.
 
 ```bash
 # System packages (Linux)
@@ -56,21 +56,19 @@ sudo apt-get install libportaudio2
 git clone https://github.com/ddxfish/sapphire.git
 cd sapphire
 
-# Install dependencies
+# Install core dependencies
 pip install -r requirements.txt
 
 # Run (first run creates user/ directory and prompts for password)
 python main.py
 
-# Access web UI 
-# https://localhost:8073
-# Click the gear icon > App Settings > then customize your LLM info
-
-# Open LM Studio or llama.cpp so the Sapphire app can use your LLM.
+# Web UI: https://localhost:8073 (self-signed SSL)
+# Default LLM: LM Studio (change in settings if needed)
+# Say hi to Sapphire
 
 ```
 
-## Enable features
+## Enable more persona features
 
 ### STT (Speech to text) 
 
@@ -92,6 +90,23 @@ Wakeword is disabled by default. Open Wake Word is used for hands-free mic and s
 
 ---
 
+## Update
+
+Update is safe unless you modified core files.
+
+- User dir: wont touch
+- Modified core files: reverted (changed)
+- You put your files in bad places: untouched
+
+```bash 
+cd sapphire
+#Stop the sapphire program/service
+git pull
+#Start Sapphire
+```
+
+---
+
 ## Requirements
 
 - Ubuntu 22.04+ (or similar Linux)
@@ -99,7 +114,7 @@ Wakeword is disabled by default. Open Wake Word is used for hands-free mic and s
 - Local LLM server (LM Studio or llama.cpp)
 
 Optional:
-- CUDA GPU for faster Whisper
+- CUDA GPU for faster Whisper, TTS, LM Studio
 - Microphone for voice input
 - Speakers for TTS output
 
@@ -111,6 +126,7 @@ Optional:
 |-------|-------------|
 | [Installation](https://github.com/ddxfish/sapphire/blob/main/docs/INSTALLATION.md) | Installation, customization for your use, systemd service |
 | [Configuration](https://github.com/ddxfish/sapphire/blob/main/docs/CONFIGURATION.md) | Settings system, file locations, reload tiers |
+| [Customization](https://github.com/ddxfish/sapphire/blob/main/docs/CUSTOMIZATION.md) | How to customize your personas |
 | [Prompts](https://github.com/ddxfish/sapphire/blob/main/docs/PROMPTS.md) | Monolith vs assembled prompts, presets |
 | [Spice](https://github.com/ddxfish/sapphire/blob/main/docs/SPICE.md) | Random personality injection system |
 | [Tools](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLS.md) | Creating AI-callable functions (web search, memory, etc.) |
@@ -121,32 +137,17 @@ Optional:
 
 ---
 
-## FAQ
+## Full Customization of your personas
 
-**Is this private?**
+You will want to customize yours. This guide has what you need to make this into multiple use cases. 
 
-Yes! Sapphire is private by design. All local for your chats, isolated to the user/ dir in Sapphire. Wake word, speech recognition, and LLM inference run on your machine. No telemetry, no analytics, no external calls unless you explicitly configure a cloud LLM fallback. It downloads Whisper models and Mycroft models if you enable those, but only on next run. For web scraping privacy, configure a SOCKS5 proxy — see [SOCKS.md](docs/SOCKS.md).
-
-**Are my settings safe?**
-
-I will protect prompt files heavily, keeping the format as-is long-term. The main settings file is seeing heavy development, it will change a lot. 
-
----
-
-## To do 
-
-- Image generation API script - already integrated into UI, publish server
-- Sapphire 3D - three js 3d model of Sapphire avatar - alpha test, no core support etc
-- Core state machine support - store a history.json state for story (ship power 50% etc)
-- Windows support - compat layer, or maybe switch to OWW and use dual OS function paths
-- Home assistant - tool calling, UX was poor, need rework of this
-- (done) Switch to Open Wake Word
+[Customization](https://github.com/ddxfish/sapphire/blob/main/docs/CUSTOMIZATION.md)  
 
 ---
 
 ## Contributions
 
-I am a solo dev, and Sapphire has a specific vision I am working towards, so I am likely to reject new features unless they are simple and reliable. I am implementing core features to allow new things in the app like for the LLM to control a 3d avatar, core functionality for state machines to track story elements, etc. 
+I am a solo dev with a burning passion, and Sapphire has a specific vision I am working towards. Simple, reliable, core features that add persona or reliable core features. I work on this almost every day. If you know Three JS and want to join for the Sapphire 3D Avatar, reach out to me, I need help.
 
 ## Licenses
 
