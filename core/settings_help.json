@@ -217,8 +217,16 @@
     "long": "List of sample rates to attempt when initializing audio recording, in order of preference. System will try each until one works. 44100 and 48000 are common for modern hardware, 16000 for older systems."
   },
   "RECORDER_PREFERRED_DEVICES": {
-    "short": "Preferred audio device names",
-    "long": "List of audio system names to prefer, in order. 'pipewire' is modern Linux audio, 'pulse' is PulseAudio, 'default' is system default. First available option will be used."
+    "short": "Active audio device names (auto-set by platform)",
+    "long": "List of audio device name substrings to prefer, in order of priority. Auto-populated from Linux or Windows list based on detected platform. First matching device is used. Edit the platform-specific lists to customize."
+  },
+  "RECORDER_PREFERRED_DEVICES_LINUX": {
+    "short": "Preferred audio devices for Linux",
+    "long": "Audio device names to try on Linux, in order. 'pipewire' is modern Linux audio, 'pulse' is PulseAudio, 'default' uses system default. Names are matched as substrings against available device names."
+  },
+  "RECORDER_PREFERRED_DEVICES_WINDOWS": {
+    "short": "Preferred audio devices for Windows",
+    "long": "Audio device names to try on Windows, in order. 'default' uses Windows default device, 'microsoft sound mapper' is legacy fallback, 'speakers'/'microphone' match common device names. Names are matched as substrings."
   },
   
   "TTS_ENABLED": {

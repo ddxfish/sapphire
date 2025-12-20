@@ -4,6 +4,7 @@ Loads defaults applies path/URL construction merges user overrides
 """
 import json
 import os
+import sys
 import shutil
 import logging
 import threading
@@ -11,6 +12,8 @@ import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+IS_WINDOWS = sys.platform == 'win32'
 
 class SettingsManager:
     """Manages application settings with hot-reload and persistence."""
@@ -71,7 +74,7 @@ class SettingsManager:
             self._defaults = {}
     
     def _apply_construction(self):
-        """Apply programmatic path/URL construction"""
+        """Apply programmatic path/URL construction and platform-specific defaults"""
         # Add BASE_DIR
         self._defaults['BASE_DIR'] = str(self.BASE_DIR)
         
@@ -80,6 +83,13 @@ class SettingsManager:
             host = self._defaults['STT_HOST']
             port = self._defaults['STT_SERVER_PORT']
             self._defaults['STT_SERVER_URL'] = f"http://{host}:{port}"
+        
+        # Apply platform-specific audio device defaults
+        if IS_WINDOWS:
+            platform_devices = self._defaults.get('RECORDER_PREFERRED_DEVICES_WINDOWS', ['default'])
+        else:
+            platform_devices = self._defaults.get('RECORDER_PREFERRED_DEVICES_LINUX', ['default'])
+        self._defaults['RECORDER_PREFERRED_DEVICES'] = platform_devices
         
         # Auth is now handled entirely by core/setup.py using ~/.config/sapphire/secret_key or %APPDATA%\Sapphire\
         # Remove legacy env var handling

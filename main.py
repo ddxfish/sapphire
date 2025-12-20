@@ -4,7 +4,7 @@ import sys
 import time
 import threading
 import subprocess
-import signal
+#import signal
 from pathlib import Path
 
 # CRITICAL: Import logging setup FIRST before any core modules

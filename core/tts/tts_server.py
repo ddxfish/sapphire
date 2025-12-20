@@ -13,7 +13,7 @@ from kokoro import KPipeline
 
 # --- Set up file-based logging ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
-log_dir = os.path.join(script_dir, 'user', 'logs')
+log_dir = os.path.join(script_dir, '..', '..', 'user', 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_file_path = os.path.join(log_dir, 'kokoro.log')
 
