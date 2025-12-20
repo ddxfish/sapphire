@@ -46,7 +46,8 @@ class ToolsetManager:
         path = user_path if user_path.exists() else core_path
         
         try:
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
+
                 data = json.load(f)
             
             # Filter out metadata keys
@@ -175,7 +176,8 @@ class ToolsetManager:
             data = {"_comment": "Your custom toolsets"}
             data.update(self._toolsets)
             
-            with open(user_path, 'w') as f:
+            with open(user_path, 'w', encoding='utf-8') as f:
+
                 json.dump(data, f, indent=2)
             
             # Update mtime after save to prevent watcher from triggering

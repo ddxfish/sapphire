@@ -32,7 +32,8 @@ def get_user_defaults() -> Dict[str, Any]:
     
     if user_defaults_path.exists():
         try:
-            with open(user_defaults_path, 'r') as f:
+            with open(user_defaults_path, 'r', encoding='utf-8') as f:
+
                 user_defaults = json.load(f)
             # Merge: start with system defaults, override with user settings
             merged = SYSTEM_DEFAULTS.copy()

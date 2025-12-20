@@ -69,7 +69,8 @@ class ModuleLoader:
                 
                 try:
                     # Load module config
-                    with open(config_file, 'r') as f:
+                    with open(config_file, 'r', encoding='utf-8') as f:
+
                         module_config = json.load(f)
                     
                     # Mark whether this is core or plugin

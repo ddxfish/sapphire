@@ -233,7 +233,7 @@ class FunctionManager:
         try:
             os.makedirs(os.path.dirname(self.tool_history_file), exist_ok=True)
             if os.path.exists(self.tool_history_file):
-                with open(self.tool_history_file, 'r') as f:
+                with open(self.tool_history_file, 'r', encoding='utf-8') as f:
                     self.tool_history = json.load(f)
         except Exception as e:
             logger.error(f"Error loading tool history: {e}")
@@ -247,7 +247,7 @@ class FunctionManager:
         
         try:
             os.makedirs(os.path.dirname(self.tool_history_file), exist_ok=True)
-            with open(self.tool_history_file, 'w') as f:
+            with open(self.tool_history_file, 'w', encoding='utf-8') as f:
                 json.dump(self.tool_history, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving tool history: {e}")

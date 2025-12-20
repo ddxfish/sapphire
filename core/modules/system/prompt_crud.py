@@ -215,7 +215,7 @@ def load_user_prompts():
                 continue
                 
             try:
-                with open(file_path, 'r') as f:
+                with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     name = data.get('name', file_path.stem)
                     prompt_state._user_prompts[name] = data

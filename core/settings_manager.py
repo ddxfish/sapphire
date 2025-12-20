@@ -65,7 +65,7 @@ class SettingsManager:
         """Load core/settings_defaults.json"""
         defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
         try:
-            with open(defaults_path, 'r') as f:
+            with open(defaults_path, 'r', encoding='utf-8') as f:
                 nested = json.load(f)
             self._defaults = self._flatten_dict(nested)
             logger.info(f"Loaded default settings from {defaults_path}")
@@ -99,7 +99,7 @@ class SettingsManager:
         user_path = self.BASE_DIR / 'user' / 'settings.json'
         if user_path.exists():
             try:
-                with open(user_path, 'r') as f:
+                with open(user_path, 'r', encoding='utf-8') as f:
                     nested = json.load(f)
                 self._user = self._flatten_dict(nested)
                 logger.info(f"Loaded user settings from {user_path}")
@@ -124,7 +124,7 @@ class SettingsManager:
             try:
                 # Load the defaults again in nested form
                 defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
-                with open(defaults_path, 'r') as f:
+                with open(defaults_path, 'r', encoding='utf-8') as f:
                     nested = json.load(f)
                 
                 # Remove auth section (has env vars and computed values)
@@ -134,7 +134,7 @@ class SettingsManager:
                 # Add helpful comment
                 nested['_comment'] = 'Example settings - copy to settings.json and customize'
                 
-                with open(example_path, 'w') as f:
+                with open(example_path, 'w', encoding='utf-8') as f:
                     json.dump(nested, f, indent=2)
                 logger.info(f"Created {example_path}")
             except Exception as e:
@@ -181,7 +181,7 @@ class SettingsManager:
         try:
             # Load existing nested structure or start fresh
             if user_path.exists():
-                with open(user_path, 'r') as f:
+                with open(user_path, 'r', encoding='utf-8') as f:
                     nested = json.load(f)
             else:
                 nested = {"_comment": "Your custom settings - edit freely or use web UI"}
@@ -190,7 +190,7 @@ class SettingsManager:
             nested = self._deep_update_from_flat(nested, self._user)
             
             user_path.parent.mkdir(exist_ok=True)
-            with open(user_path, 'w') as f:
+            with open(user_path, 'w', encoding='utf-8') as f:
                 json.dump(nested, f, indent=2)
             
             self._update_mtime()
@@ -205,7 +205,7 @@ class SettingsManager:
         # Load category mapping from defaults to know where keys belong
         defaults_path = self.BASE_DIR / 'core' / 'settings_defaults.json'
         try:
-            with open(defaults_path, 'r') as f:
+            with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults_nested = json.load(f)
         except:
             return nested
@@ -415,14 +415,14 @@ class SettingsManager:
             if not user_path.exists():
                 return
             
-            with open(user_path, 'r') as f:
+            with open(user_path, 'r', encoding='utf-8') as f:
                 nested = json.load(f)
             
             # Find and remove the key from nested structure
             removed = self._remove_from_nested(nested, key)
             
             if removed:
-                with open(user_path, 'w') as f:
+                with open(user_path, 'w', encoding='utf-8') as f:
                     json.dump(nested, f, indent=2)
                 self._update_mtime()
                 logger.debug(f"Removed '{key}' from settings file")

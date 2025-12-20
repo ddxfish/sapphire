@@ -238,7 +238,7 @@ def create_settings_api():
             if not help_path.exists():
                 return jsonify({"error": "Help file not found"}), 404
             
-            with open(help_path, 'r') as f:
+            with open(help_path, 'r', encoding='utf-8') as f:
                 help_data = json.load(f)
             
             return jsonify({
@@ -258,7 +258,7 @@ def create_settings_api():
             if not help_path.exists():
                 return jsonify({"error": "Help file not found"}), 404
             
-            with open(help_path, 'r') as f:
+            with open(help_path, 'r', encoding='utf-8') as f:
                 help_data = json.load(f)
             
             if key not in help_data:
@@ -302,7 +302,7 @@ def create_settings_api():
             CHAT_DEFAULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
             
             # Save the defaults
-            with open(CHAT_DEFAULTS_PATH, 'w') as f:
+            with open(CHAT_DEFAULTS_PATH, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
             
             logger.info(f"Saved chat defaults: {list(data.keys())}")

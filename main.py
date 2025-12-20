@@ -115,7 +115,8 @@ class VoiceChatSystem:
             
             prompt_name = 'default'  # fallback if file missing
             if chat_defaults_path.exists():
-                with open(chat_defaults_path, 'r') as f:
+                with open(chat_defaults_path, 'r', encoding='utf-8') as f:
+
                     defaults = json.load(f)
                     prompt_name = defaults.get('prompt', 'default')
             

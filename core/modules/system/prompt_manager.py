@@ -46,7 +46,7 @@ class PromptManager:
             return
         
         try:
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
             self._components = data.get("components", {})
@@ -68,7 +68,7 @@ class PromptManager:
             return
         
         try:
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 self._monoliths = json.load(f)
             
             # Remove metadata keys
@@ -89,7 +89,7 @@ class PromptManager:
             return
         
         try:
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 self._spices = json.load(f)
             
             # Remove metadata keys
@@ -235,7 +235,7 @@ class PromptManager:
         
         # Load existing data
         try:
-            with open(target_path, 'r') as f:
+            with open(target_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
         except Exception:
             data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
@@ -244,7 +244,7 @@ class PromptManager:
         data['scenario_presets'] = self._scenario_presets
         
         # Save back
-        with open(target_path, 'w') as f:
+        with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved scenario presets to {target_path}")
     
@@ -254,7 +254,7 @@ class PromptManager:
         
         # Load existing to preserve _comment
         try:
-            with open(target_path, 'r') as f:
+            with open(target_path, 'r', encoding='utf-8') as f:
                 old_data = json.load(f)
             comment = old_data.get('_comment')
         except Exception:
@@ -267,7 +267,7 @@ class PromptManager:
         data.update(self._monoliths)
         
         # Save
-        with open(target_path, 'w') as f:
+        with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved monoliths to {target_path}")
     
@@ -277,7 +277,7 @@ class PromptManager:
         
         # Load existing data
         try:
-            with open(target_path, 'r') as f:
+            with open(target_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
         except Exception:
             data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
@@ -286,7 +286,7 @@ class PromptManager:
         data['components'] = self._components
         
         # Save back
-        with open(target_path, 'w') as f:
+        with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved components to {target_path}")
     
@@ -298,7 +298,7 @@ class PromptManager:
         data = {"_comment": "User spices - managed via Spice Manager plugin"}
         data.update(self._spices)
         
-        with open(target_path, 'w') as f:
+        with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved spices to {target_path}")
     
