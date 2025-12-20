@@ -1,128 +1,137 @@
 # Configuration
 
-> **For individual setting descriptions:** Use the Settings UI (gear icon) which shows help text for each option, or see `core/settings_help.json` directly.
+## Quickstart
 
-## How Configuration Works
+**Most configuration happens in the web UI.** Click the gear icon to access settings.
 
-Sapphire uses a layered configuration system:
+To run Sapphire for the first time:
+```bash
+python main.py
+```
+Visit `https://localhost:8073`, set your password, and you're in.
+
+**You need an LLM server running.** LM Studio or llama.cpp with the API enabled and a model loaded. The model you choose determines a lot about personality and capability. Qwen3 8B is a simple test to confirm things work.
+
+**Things you might want to change before your first real conversation:**
+
+| Setting | Where | What |
+|---------|-------|------|
+| LLM endpoint | Settings → LLM | Point to your LM Studio / llama.cpp server, defaults to local LM studio with API enabled |
+| Names | Settings → Identity | Your name and AI name |
+| STT recording cutoff | Settings → Recorder | Raise "Recorder Background Percentile" to 40-ish on a webcam mic or STT wont cut off |
+
+Everything else has sensible defaults. Explore the Settings UI - each option has help text explaining what it does.
+
+---
+
+## Personalization
+
+Each chat can have completely different personas, voices, and capabilities. Switch between them instantly.
+
+### Make the Settings Yours
+- Gear icon → App Settings 
+- Change names and avatars
+- Enable TTS, STT, and Wakeword if desired
+- Pick your wake word and adjust background noise sensitivity
+
+### Make the Prompt Yours
+- Open the Prompt editor in the sidebar, click **+**
+- Choose **Assembled** (more customizable) and name it
+- Click **+** next to sections to add:
+  - **Persona** - Who the AI is
+  - **Relationship** - Who you are to the AI
+  - **Location, Goals, Format, Scenario, Extras, Emotions** - Optional flavor
+- Save with the disk icon
+
+### Make the Default Chat Yours
+- Open the default chat (upper left), click **... → Chat Settings**
+- Select your preferred prompt
+- Choose which tools the AI can use
+- Set TTS voice, pitch, speed
+- **SPICE** adds randomness to replies
+- **Inject Date** lets the AI know the current date
+- **Custom text** is always included in addition to system prompt
+- Click **Set as Default** then **Save**
+
+### Make Multiple Personas
+- Click **...** next to any chat name → **New chat**
+- Configure that chat differently via **... → Chat Settings**
+- Each chat maintains its own prompt, voice, and tool configuration
+- So change the voice, toolset, prompt etc and save it
+
+---
+
+## Technical Reference
+
+For developers and those who want to understand the internals.
+
+### Configuration Layers
 
 ```
 core/settings_defaults.json    ← System defaults (don't edit)
         ↓ merged with
-user/settings.json             ← Your overrides (safe to edit)
+user/settings.json             ← Your overrides
         ↓ equals
-Runtime config                 ← What Sapphire actually uses
+Runtime config
 ```
 
-On first run, Sapphire creates `user/settings.example.json` as a template. Copy it to `user/settings.json` and customize. You only need to include settings you want to change - everything else uses defaults.
+On first run, `user/settings.example.json` is created as a template. Copy to `user/settings.json` and add only settings you want to override.
 
-Settings can be changed three ways:
-1. **Settings UI** - Gear icon in web interface (recommended)
-2. **Edit user/settings.json** - Changes detected automatically within ~2 seconds
-3. **API** - `PUT /api/settings/<key>` for programmatic changes
+Settings can be changed via:
+- **UI** - Gear icon (recommended)
+- **File** - Edit `user/settings.json` (auto-detected within ~2 seconds)
+- **API** - `PUT /api/settings/<key>`
 
-## Settings File Format
+### Reload Tiers
 
-Settings are organized into categories but flattened at runtime:
+| Tier | When | Examples |
+|------|------|----------|
+| Hot | Immediate | Names, TTS voice/speed/pitch, generation params |
+| Component | Restart needed | TTS/STT enabled, server URLs, module toggles |
+| Restart | Restart needed | Ports, paths, model configs |
 
-```json
-{
-  "identity": {
-    "DEFAULT_USERNAME": "Captain",
-    "DEFAULT_AI_NAME": "Number One"
-  },
-  "tts": {
-    "TTS_ENABLED": true,
-    "TTS_SPEED": 1.3
-  }
-}
-```
+The UI indicates the tier for each setting.
 
-Categories in `settings_defaults.json`: identity, api, network, features, backups, wakeword, stt, recorder, tts, llm, tools, auth.
-
-## Reload Tiers
-
-Not all settings take effect immediately:
-
-| Tier | Effect | Settings |
-|------|--------|----------|
-| **Hot** | Immediate | Names, TTS voice/speed/pitch, generation params, thinking mode |
-| **Component** | Needs restart | TTS/STT enabled, server URLs, module/plugin/function toggles |
-| **Restart** | Needs restart | Everything else (ports, paths, model configs, etc.) |
-
-The Settings UI indicates which tier each setting belongs to. When in doubt, restart Sapphire.
-
-## Special Configuration
-
-### Authentication
-
-Password hash stored outside the project at `~/.config/sapphire/secret_key`. This bcrypt hash serves as:
-- Password verification for web login
-- API key for internal requests (`X-API-Key` header)
-- Flask session secret
-
-Delete this file to reset password (triggers setup wizard on next visit).
-
-### Environment Variables
-
-Two optional env vars for SOCKS proxy authentication:
-- `SAPPHIRE_SOCKS_USERNAME` - Proxy username
-- `SAPPHIRE_SOCKS_PASSWORD` - Proxy password
-
-### Chat Defaults
-
-New chats inherit settings from `user/settings/chat_defaults.json`:
-
-```json
-{
-  "prompt": "default",
-  "ability": "default", 
-  "voice": "af_heart",
-  "pitch": 0.94,
-  "speed": 1.3,
-  "spice_enabled": true,
-  "spice_turns": 3,
-  "inject_datetime": false,
-  "custom_context": ""
-}
-```
-
-Set via Settings UI → "Save as Default" or edit directly.
-
-### Themes
-
-Theme selection stored in browser localStorage, not in settings.json. Themes are CSS files in `interfaces/web/static/themes/`.
-
-### Hardcoded Values
-
-These cannot be changed via configuration:
-- Internal API: `127.0.0.1:8071`
-- Web UI: `0.0.0.0:8073` (HTTPS)
-- TTS Server: port `5012`
-- STT Server: port `5050`
-
-## File Locations Summary
+### Key File Locations
 
 | File | Purpose |
 |------|---------|
 | `core/settings_defaults.json` | System defaults (read-only) |
-| `core/settings_help.json` | Help text for Settings UI |
-| `user/settings.json` | Your configuration overrides |
-| `user/settings.example.json` | Template (auto-generated) |
+| `core/settings_help.json` | Help text for UI |
+| `user/settings.json` | Your overrides |
 | `user/settings/chat_defaults.json` | Defaults for new chats |
 | `~/.config/sapphire/secret_key` | Password hash |
 
-## Troubleshooting
+### Authentication
 
-**Settings not taking effect?**
-- Check the tier - may need restart
-- Verify JSON syntax in user/settings.json
-- Check logs for "Settings reloaded" or errors
+The bcrypt hash serves as password, API key, and session secret. Delete to reset (triggers setup wizard).
 
-**Reset to defaults?**
-- Delete `user/settings.json` and restart
-- Or use API: `POST /api/settings/reset`
+- **Linux/Mac:** `~/.config/sapphire/secret_key`
+- **Windows:** `%APPDATA%\sapphire\secret_key`
 
-**Can't log in after password change?**
-- Delete `~/.config/sapphire/secret_key`
-- Restart and complete setup wizard
+### Default Ports
+
+These are the original defaults (adjustable in Settings):
+
+- Internal API: `127.0.0.1:8071`
+- Web UI: `0.0.0.0:8073` (HTTPS)
+- TTS Server: `5012`
+- STT Server: `5050`
+
+### SOCKS Proxy Authentication
+
+Two options for proxy credentials:
+
+**Option 1 - Config file** (recommended): Create `user/.socks_config` with username on line 1, password on line 2.
+
+**Option 2 - Environment variables:**
+- `SAPPHIRE_SOCKS_USERNAME`
+- `SAPPHIRE_SOCKS_PASSWORD`
+
+### Troubleshooting
+
+**Settings not working?** Check the reload tier, verify JSON syntax, check logs.
+
+**Reset to defaults?** Delete `user/settings.json` and restart, or `POST /api/settings/reset`.
+
+**Can't log in?** Delete `~/.config/sapphire/secret_key` and restart.
