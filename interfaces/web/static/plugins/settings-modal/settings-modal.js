@@ -610,9 +610,11 @@ class SettingsModal {
       return;
     }
     
-    const saveBtn = this.modal.querySelector('#settings-save');
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Saving...';
+    const saveBtn = this.modal?.querySelector('#settings-save');
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+    }
     
     try {
       const parsedChanges = {};
@@ -641,19 +643,21 @@ class SettingsModal {
       }
       
       this.pendingChanges = {};
+      
+      // Modal may have been closed during async operations
+      if (!this.modal) return;
+      
       await this.loadData();
       this.refreshContent();
-      
-      this.modal.querySelectorAll('.setting-row.modified').forEach(row => {
-        row.classList.remove('modified');
-      });
       
     } catch (e) {
       console.error('Save failed:', e);
       showToast('Save failed: ' + e.message, 'error');
     } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Changes';
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Changes';
+      }
     }
   }
 
@@ -695,7 +699,11 @@ class SettingsModal {
   }
 
   refreshContent() {
+    if (!this.modal) return;
+    
     const content = this.modal.querySelector('.settings-modal-content');
+    if (!content) return;
+    
     content.innerHTML = this.renderTabContent();
     
     this.modal.querySelectorAll('input, textarea, select').forEach(input => {
