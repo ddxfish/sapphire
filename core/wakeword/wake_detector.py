@@ -52,21 +52,15 @@ class WakeWordDetector:
         self.running = False
         self.listen_thread = None
         
-        # Tone generation for wake acknowledgment
-        samples = np.linspace(0, config.WAKE_TONE_DURATION, 
-                              int(config.PLAYBACK_SAMPLE_RATE * config.WAKE_TONE_DURATION))
-        self.tone_data = (0.5 * np.sin(2 * np.pi * config.WAKE_TONE_FREQUENCY * samples)
-                        ).astype(np.float32)
+        # Pre-generate tone for wake acknowledgment
+        # sd.play() handles all buffering/latency cross-platform
+        duration = getattr(config, 'WAKE_TONE_DURATION', 0.15)
+        frequency = getattr(config, 'WAKE_TONE_FREQUENCY', 880)
+        sample_rate = getattr(config, 'PLAYBACK_SAMPLE_RATE', 48000)
         
-        # Audio output stream for tone
-        self.audio_stream = sd.OutputStream(
-            samplerate=config.PLAYBACK_SAMPLE_RATE,
-            channels=1,
-            dtype=np.float32,
-            latency=0.001,
-            blocksize=128
-        )
-        self.audio_stream.start()
+        samples = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+        self.tone_data = (0.5 * np.sin(2 * np.pi * frequency * samples)).astype(np.float32)
+        self.tone_sample_rate = sample_rate
         
         self.callback_pool = ThreadPoolExecutor(max_workers=config.CALLBACK_THREAD_POOL_SIZE)
         self.playback_lock = threading.Lock()
@@ -82,8 +76,13 @@ class WakeWordDetector:
         self.system = system
 
     def _play_tone(self):
+        """Play wake acknowledgment tone using sounddevice's built-in playback."""
         with self.playback_lock:
-            self.audio_stream.write(self.tone_data)
+            try:
+                sd.play(self.tone_data, self.tone_sample_rate)
+                # Don't wait - let it play async
+            except Exception as e:
+                logger.debug(f"Tone playback error: {e}")
 
     def _flush_audio_buffer(self):
         """Discard any accumulated audio in the input buffer to prevent stale detections."""
@@ -214,8 +213,8 @@ class WakeWordDetector:
         if self.listen_thread:
             self.listen_thread.join(timeout=2.0)
             logger.info("Listen thread stopped")
-        if self.audio_stream:
-            self.audio_stream.stop()
-            self.audio_stream.close()
-            logger.info("Audio output stream closed")
+        try:
+            sd.stop()  # Stop any playing audio
+        except Exception:
+            pass
         self.callback_pool.shutdown()
