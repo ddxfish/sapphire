@@ -107,7 +107,10 @@ Note: Set as Default is for all future chats. Save is for this chat only. Each c
 Keyword-triggered extensions. Feed [PLUGINS.md](docs/PLUGINS.md) to an AI and drop the output in `user/plugins/`. Can run on keywords, in background, or on schedule.
 
 ### Custom Tools
-AI-callable functions. Simpler than plugins-one file in `user/functions/`. Control your devices, check services, simulate capabilities. Feed [TOOLS.md](docs/TOOLS.md) to an AI to generate them.
+AI-callable functions. Simpler than plugins- they are one file in `user/functions/`. Control your devices, check services, simulate capabilities like email/text or even crazy sims like hire a lawyer or deceive(). Feed [TOOLS.md](docs/TOOLS.md) to an AI to generate them.
 
 ### Custom Wake Word
-Drop ONNX models in `user/wakeword/models/`. Trained "Hey Sapphire" in ~2 hours with synthetic data. [Community wakewords](https://github.com/fwartner/home-assistant-wakewords-collection) available.
+Drop ONNX models in `user/wakeword/models/`. I trained "Hey Sapphire" in ~2 hours with synthetic data. [Community wakewords](https://github.com/fwartner/home-assistant-wakewords-collection) available.
+
+### Custom Web UI Plugins
+Plugin system only partially implemented so far. Works fully but will wipe out plugins.json on update.
