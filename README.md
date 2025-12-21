@@ -42,7 +42,7 @@ This is a one-person passion project that took me a lifetime to build over many 
 </tr>
 <tr>
 <td><a href="docs/screenshots/edit-past-messages.png"><img src="docs/screenshots/edit-past-messages.png" alt="Edit Messages"/></a></td>
-<td><strong>Chat History Control</strong><br/>Edit, regenerate, continue, or delete any message—even the AI's responses.</td>
+<td><strong>Chat History Control</strong><br/>Edit, regenerate, continue, or delete any message-even the AI's responses.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/backup-manager.png"><img src="docs/screenshots/backup-manager.png" alt="Backup Manager"/></a></td>
@@ -165,6 +165,7 @@ Optional:
 | [Plugins](https://github.com/ddxfish/sapphire/blob/main/docs/PLUGINS.md) | Keyword-triggered UI/voice extensions |
 | [SOCKS Proxy](https://github.com/ddxfish/sapphire/blob/main/docs/SOCKS.md) | Privacy proxy for web scraping functions |
 | [Troubleshooting](https://github.com/ddxfish/sapphire/blob/main/docs/TROUBLESHOOTING.md) | Common issues and fixes |
+| [Technical](https://github.com/ddxfish/sapphire/blob/main/docs/TECHNICAL.md) | For nerds |
 
 ## Contributions
 
@@ -172,11 +173,11 @@ I am a solo dev with a burning passion, and Sapphire has a specific vision I am 
 
 ## Licenses
 
-[AGPL-3.0](LICENSE) — Free to use, modify, and distribute. If you modify and deploy it as a service, you must share your source code changes.
+[AGPL-3.0](LICENSE) - Free to use, modify, and distribute. If you modify and deploy it as a service, you must share your source code changes.
 
 ## Acknowledgments
 
 Built with:
-- [openWakeWord](https://github.com/dscripka/openWakeWord) — Wake word detection
-- [Faster Whisper](https://github.com/guillaumekln/faster-whisper) — Speech recognition
-- [Kokoro TTS](https://github.com/hexgrad/kokoro) — Voice synthesis
+- [openWakeWord](https://github.com/dscripka/openWakeWord) - Wake word detection
+- [Faster Whisper](https://github.com/guillaumekln/faster-whisper) - Speech recognition
+- [Kokoro TTS](https://github.com/hexgrad/kokoro) - Voice synthesis

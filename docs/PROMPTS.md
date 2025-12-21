@@ -111,8 +111,8 @@ Assembled prompts come from these components, they get assembled into one prompt
 
 ## Variables used in prompts
 
-- `{ai_name}` — From settings, default "Sapphire"
-- `{user_name}` — From settings, default "Human Protagonist"
+- `{ai_name}` - From settings, default "Sapphire"
+- `{user_name}` - From settings, default "Human Protagonist"
 
 ---
 
