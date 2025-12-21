@@ -274,3 +274,43 @@ This setup lets you study AI decision-making in controlled conditions without af
 ## Troubleshooting
 
 Moved to TROUBLESHOOTING.md
+
+
+
+## Files for spices
+
+| File | Purpose |
+|------|---------|
+| `prompt_spices.json` | Default spice pools (don't edit) |
+| `user/prompt_spices.json` | Your custom pools (overrides) |
+
+
+
+
+
+## Example toolsets
+
+```json
+{
+  "default": {
+    "functions": ["get_memories", "search_memory"]
+  },
+  "work": {
+    "functions": ["web_search", "get_website", "get_wikipedia"]
+  },
+  "minimal": {
+    "functions": []
+  }
+}
+```
+
+---
+
+## Files toolsets
+
+| File | Purpose |
+|------|---------|
+| `core/modules/system/toolsets/toolsets.json` | Default toolsets |
+| `user/toolsets/toolsets.json` | Your custom toolsets |
+
+User file overrides defaults.

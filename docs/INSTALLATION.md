@@ -2,25 +2,14 @@
 
 ## Requirements
 
-**System**
-- Linux with PulseAudio or PipeWire (Ubuntu tested)
-- Windows 11+
-- Python 3.10+
+- Ubuntu 22.04+ or Windows 11+
+- Python 3.10+ 
+- Local LLM (LM Studio)
+- 12-16GB system RAM
+- (recommended) miniconda
+- (recommended) Nvidia graphics card
 
-**Hardware**
-- Web UI runs on almost any CPU
-- STT and TTS are slower on CPU, needs 12-16GB total RAM
-- Nvidia speeds up STT TTS a lot
-
-**LLM**
-- You run this yourself, Sapphire connects to it
-- Nvidia is faster than CPU for desktops
-- 1GB VRAM up to to 1000GB VRAM
-- Can run on another computer or use any OpenAI compliant API
-
-## Installation
-
-### Linux (skip for Windows)
+## Linux (skip for Windows)
 
 ```bash
 sudo apt update
@@ -28,16 +17,18 @@ sudo apt install libportaudio2 python3-dev
 ```
 
 
-### Python Environment (conda OR venv)
+## Python Environment
 
-Install [miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install) if you plan on using GPU. 
+Install [miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install) especially if you plan on using GPU. 
 
 ```bash
 conda create -n sapphire python=3.11
 conda activate sapphire
 ```
 
-### Install Sapphire
+## Install Sapphire
+
+Install [git](https://git-scm.com/install/windows) for Windows, Linux usually already has it.
 
 ```bash
 git clone https://github.com/ddxfish/sapphire.git
@@ -45,7 +36,9 @@ cd sapphire
 pip install -r requirements.txt
 ```
 
-### Optional: TTS, STT, wakeword
+## Optional: TTS, STT, wakeword
+
+Enable these in Sapphire Settings after you install.
 
 ```bash
 # TTS (Kokoro)
@@ -58,18 +51,16 @@ pip install -r requirements-stt.txt
 pip install -r requirements-wakeword.txt
 ```
 
-Dont forget to enable TTS, STT, Wakeword in Settings UI.
-
 ### For GPU-accelerated STT/TTS (optional)
-Try Sapphire first. You may not need this. If you don't see your GPU activity during TTS or STT, this command will get the nightly build of torch and install. 
+Try Sapphire first. You may not need this. Only run this if you don't see your Nvidia card being used.
 
 ```bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 ```
 
-### LLM Backend
+## LLM Backend
 
-Pick an LLM backend and open your model in it. Sapphire will connect to LM Studio's default settings for easy-mode.
+Sapphire uses your LLM you run separately. If you are new, just install LM Studio, download Qwen3 8B, then enable the API in LM Studio
 
 - **LM Studio** (recommended): Load your model, start API server on port 1234
 - **llama-server**: `llama-server -m model.gguf --host 127.0.0.1 --port 1234 -c 8192 -t 8`
@@ -119,6 +110,15 @@ python main.py
 
 Sapphire creates `user/` directory with your settings and data. Make sure you **run once before customizing** - this bootstraps config files and directories.
 
+## Update Sapphire (for later)
+
+This preserves your user dir and pulls the latest Sapphire. Your files are safe unless you modified core files.
+
+```bash
+cd sapphire
+git pull
+```
+
 ## Running as Service (Linux, Optional)
 
 ```bash
@@ -142,6 +142,7 @@ StandardError=journal
 #Environment="SAPPHIRE_SOCKS_USERNAME=abc"
 #Environment="SAPPHIRE_SOCKS_PASSWORD=123"
 Environment="PYTHONUNBUFFERED=1"
+#Change YOURUSERNAME twice here
 ExecStart=/bin/bash -c 'source /home/YOURUSERNAME/miniconda3/etc/profile.d/conda.sh && conda activate sapphire && python3 /home/YOURUSERNAME/sapphire/main.py'
 Restart=on-failure
 RestartSec=90

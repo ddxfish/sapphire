@@ -1,19 +1,16 @@
 # Sapphire
 
-You talk to it, but it's her that talks back. Customize your own virtual people: TTS, STT, wakeword, personality, goals, emotions, tools. You can use it with a mic/speaker, Web UI, or both. Highly extensible, just drag in funcs or plugins. Built-in tools: long-term memory, web access, self-prompt editing. Windows and Linux support. This is made for you to make your own personas for work or play.
+You talk to it, but it's her that talks back. Customize your own virtual persona: TTS, STT, wakeword, personality, goals, emotions, tools. You can use it with a mic/speaker, Web UI, or both. Highly extensible. Includes long-term memory, web access, self-prompt editing. Windows and Linux support. This is made for you to make your own personas for work or play.
 
 <sub>🔊 Has audio</sub>
 <video src="https://github.com/user-attachments/assets/ed0dca80-121b-46e0-9c94-b98d6e9228c8" controls width="100%"></video>
 
-This is a one-person passion project that took me a lifetime to build over many iterations. It will never be done.
 
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-blue)
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 ![Windows 11+](https://img.shields.io/badge/Windows_11+-0078D6?logo=windows&logoColor=white)
-![Local First](https://img.shields.io/badge/Local_First-100%25-success)
 ![Waifu Compatible](https://img.shields.io/badge/Waifu-Compatible-ff69b4)
-![LM Studio](https://img.shields.io/badge/LM_Studio-Compatible-blueviolet)
 ![Status: Active](https://img.shields.io/badge/Status-Active-success)
 ![Self Hosted](https://img.shields.io/badge/Self_Hosted-100%25-informational)
 
@@ -62,7 +59,7 @@ This is a one-person passion project that took me a lifetime to build over many 
 </tr>
 <tr>
 <td><a href="docs/screenshots/prompt-editor-assembled.png"><img src="docs/screenshots/prompt-editor-assembled.png" alt="Assembled Prompt" width="48%"/></a> <a href="docs/screenshots/prompt-editor-monolith.png"><img src="docs/screenshots/prompt-editor-monolith.png" alt="Monolith Prompt" width="48%"/></a></td>
-<td><strong>Prompt Editor</strong><br/>Assembled prompts have swappable pieces the AI can edit itself. Monoliths are simpler text blocks. See <a href="docs/PROMPTS.md">Prompts</a>.</td>
+<td><strong>Prompt Editor</strong><br/>Assembled prompts (left) have swappable pieces the AI can edit itself. Monoliths (right) are simpler text blocks. See <a href="docs/PROMPTS.md">Prompts</a>.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/spice-editor.png"><img src="docs/screenshots/spice-editor.png" alt="Spice Editor"/></a></td>
@@ -78,68 +75,36 @@ This is a one-person passion project that took me a lifetime to build over many 
 
 ## Quick Start
 
-### Linux
-
 ```bash
+#Linux (skip for Windows)
 sudo apt-get install libportaudio2
-```
 
-### Conda (recommended)
-
-```bash
+#Conda env (requires miniconda)
 conda create -n sapphire python=3.11
 conda activate sapphire
-```
 
-### LM Studio
-
-Open LM Studio, load your model, enable API in developer tab.
-
-### Install Sapphire, Run Once
-
-```bash
+#Clone and run 
 git clone https://github.com/ddxfish/sapphire.git
 cd sapphire
 pip install -r requirements.txt
 python main.py
-```
 
-Web UI: https://localhost:8073 (self-signed SSL)
-
-### Install Optional (TTS, STT, Wakeword)
-
-```bash
+#Optional TTS, STT, Wakeword
 pip install -r requirements-tts.txt
-```
-```bash
 pip install -r requirements-stt.txt
-```
-```bash
 pip install -r requirements-wakeword.txt
 ```
 
-After you install the ones you want, enabled them in Sapphire settings and restart the app.
-
-## Update
-
-```bash
-cd sapphire
-git pull
-```
-
-User directory is preserved. Modified core files get reverted.
+Web UI: https://localhost:8073 (self-signed SSL)
 
 ## Requirements
 
 - Ubuntu 22.04+ or Windows 11+
 - Python 3.10+ 
-- Local LLM server (LM Studio or llama.cpp)
-
-Optional:
-- Conda or venv (recommended)
-- CUDA GPU for faster Whisper, TTS, LM Studio
-- Microphone for voice input
-- Speakers for TTS output
+- Local LLM (LM Studio)
+- 12-16GB system RAM
+- (recommended) miniconda
+- (recommended) Nvidia graphics card
 
 ## Documentation
 
@@ -158,7 +123,7 @@ Optional:
 
 ## Contributions
 
-I am a solo dev with a burning passion, and Sapphire has a specific vision I am working towards. Simple, reliable, core features that add persona or reliable core features. I work on this almost every day. I'm about to expand the plugin system(s) and make it easier to add user plugins, so until then plugins will change a bit. If you know Three JS and want to help with the web ui 3d sapphire avatar, reach out to me. my github username @ gmail.com.
+I am a solo dev with a burning passion, and Sapphire has a specific vision I am working towards. Rapid development makes it hard for contributions right now, as the architecture is changing while I settle on the plugin format. If you want you can reach me at my github username @gmail.com.
 
 ## Licenses
 
