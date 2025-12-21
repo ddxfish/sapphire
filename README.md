@@ -78,7 +78,7 @@ This is a one-person passion project that took me a lifetime to build over many 
 
 ## Quick Start
 
-### System
+### Linux
 
 ```bash
 sudo apt-get install libportaudio2
@@ -95,41 +95,30 @@ conda activate sapphire
 
 Open LM Studio, load your model, enable API in developer tab.
 
-### Install
+### Install Sapphire, Run Once
 
 ```bash
 git clone https://github.com/ddxfish/sapphire.git
 cd sapphire
 pip install -r requirements.txt
-```
-
-### Run
-
-```bash
 python main.py
 ```
 
 Web UI: https://localhost:8073 (self-signed SSL)
 
-### TTS
+### Install Optional (TTS, STT, Wakeword)
 
 ```bash
 pip install -r requirements-tts.txt
 ```
-
-### STT
-
 ```bash
 pip install -r requirements-stt.txt
 ```
-
-### Wake Word
-
 ```bash
 pip install -r requirements-wakeword.txt
 ```
 
-Enable each in Settings after install, then restart the app.
+After you install the ones you want, enabled them in Sapphire settings and restart the app.
 
 ## Update
 
