@@ -2,8 +2,8 @@
 
 You talk to it, but it's her that talks back. Customize your own virtual people: TTS, STT, wakeword, personality, goals, emotions, tools. You can use it with a mic/speaker, Web UI, or both. Highly extensible, just drag in funcs or plugins. Built-in tools: long-term memory, web access, self-prompt editing. Windows and Linux support. This is made for you to make your own personas for work or play.
 
-<video src="docs/videos/sapphire-story-demo.mp4" controls width="100%"></video>
 <sub>🔊 Has audio</sub>
+<video src="https://github.com/user-attachments/assets/ed0dca80-121b-46e0-9c94-b98d6e9228c8" controls width="100%"></video>
 
 This is a one-person passion project that took me a lifetime to build over many iterations. It will never be done.
 
