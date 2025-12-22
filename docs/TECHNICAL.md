@@ -314,3 +314,19 @@ Moved to TROUBLESHOOTING.md
 | `user/toolsets/toolsets.json` | Your custom toolsets |
 
 User file overrides defaults.
+
+
+
+## Proxy
+
+Add to `user/settings.json`:
+
+```json
+{
+  "network": {
+    "SOCKS_ENABLED": true,
+    "SOCKS_HOST": "your-proxy-host.com",
+    "SOCKS_PORT": 1080
+  }
+}
+```

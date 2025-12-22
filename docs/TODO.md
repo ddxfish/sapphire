@@ -6,5 +6,5 @@
 - Home assistant - plugin calls existing HA items and puts in sys prompt, checkbox in chat settings for this, and tools to call
 - (looking for help) Three JS character avatar for Sapphire 3D. 3d Anime avatar, left bar or full screen.
 - (75% done) Image generation API script - already integrated into core, cleanup server though and post repo
-- (95% done) Windows support - compat layer, or maybe switch to OWW and use dual OS function paths
+- (done v1.1.0) Windows support - compat layer, or maybe switch to OWW and use dual OS function paths
 - (done v1.0.4) Switch to Open Wake Word

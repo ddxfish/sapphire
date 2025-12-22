@@ -38,7 +38,7 @@ pip install -r requirements.txt
 
 ## Optional: TTS, STT, wakeword
 
-Enable these in Sapphire Settings after you install.
+Enable these in Sapphire Settings after you install, then restart app.
 
 ```bash
 # TTS (Kokoro)
@@ -49,13 +49,6 @@ pip install -r requirements-stt.txt
 
 # Wakeword (openwakeword)
 pip install -r requirements-wakeword.txt
-```
-
-### For GPU-accelerated STT/TTS (optional)
-Try Sapphire first. You may not need this. Only run this if you don't see your Nvidia card being used.
-
-```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 ```
 
 ## LLM Backend

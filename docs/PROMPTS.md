@@ -20,6 +20,9 @@ You are {ai_name}. You help {user_name} with tasks. Be concise.
 
 Prompt built from swappable pieces. Mix and match. Ideal for stories where the AI needs to swap locations, or for swapping emotions dynamically, or just seeing what custom weird prompts your AI cooks up. This is Sapphire's unique ability and pairs with self-modifying prompts. The meta functions work with assembled prompts, giving the AI the ability to edit prompt pieces itself.
 
+![Prompt editor in Sapphire](screenshots/prompt-editor-assembled.png)
+
+
 ### Sections
 
 | Section | Purpose |
@@ -33,7 +36,7 @@ Prompt built from swappable pieces. Mix and match. Ideal for stories where the A
 | extras | Additional rules (multiple allowed) |
 | emotions | Current mood (multiple allowed) |
 
-## Prompt Piece Examples
+## Prompt Techniques
 
 ### Persona
 This says who the AI is, and the core traits the AI has. Call the AI "You" in the persona. Give it a few traits in this section if you want.
@@ -51,7 +54,7 @@ This is how the AI knows your character, and maybe a thing or two about your cha
 ```You call me {user_name}. I am your neighbor. You always see me planting in my garden, but we've never really talked.```
 
 ### Goals
-This is the AI goals, it gives direction to stories. You can even give it hidden goals.
+This is the AI goals, it gives ongoing direction to stories. You can even give it hidden goals.
 
 ```You want to plunder the loot from the hidden pirate stash. Your goals must remain secret only to you.```
 
@@ -61,7 +64,7 @@ Story format is how long, what tone and structure you want the AI to write in. F
 ```You paint stories in vivid detail. A paragraph of your narration, one paragraph of your character's dialog, and one of your characters inner private thoughts. Never narrate for my character, you only narrate your own.```
 
 ### Scenario
-Define what happened just as the story starts. Maybe you found the treasure, or the dinosaurs broke out of their cages. This starts the momentum of your story, dropping you right in.
+Define what happened just as the story starts. Maybe you found the treasure, or the dinosaurs broke out of their cages, or you just set sail. This starts the momentum of your story, dropping you right in.
 
 ```The dinosaur invasion has begun. They broke containment, swam to the mainland. Now it's just us versus them.```
 

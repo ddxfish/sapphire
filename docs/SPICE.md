@@ -9,6 +9,9 @@ Spices help stories from going stale, and helps prevent loops or repetitive text
 3. Each message, one random snippet injects into prompt
 4. Rotates every X messages based on your chat settings
 
+<img src="screenshots/spice-editor.png" alt="Spice Editor in Sapphire">
+
+
 ## Example Pool
 
 ```json

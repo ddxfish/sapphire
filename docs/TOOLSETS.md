@@ -1,6 +1,6 @@
 # Toolsets
 
-Named groups of tools. Switch what abilities the AI has access to per-chat. This is so you can group up some memory stuff and some web stuff together and set it as the default, or whatever combo you want to use. Each of your personas may have a different toolset based on what they do.
+Named groups of tools so you don't have to switch between memory and web for example, just use any tools you want in a set. Switch what abilities the AI has access to per-chat. Each of your personas may have a different toolset based on what they do.
 
 ## Usage
 

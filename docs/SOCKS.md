@@ -1,30 +1,16 @@
 # SOCKS Proxy Configuration
 
-Sapphire supports SOCKS5 proxy for web scraping functions. This routes `web_search`, `get_website`, `get_wikipedia`, and `research_topic` through your proxy for privacy. These tools will hard-fail by design if proxy is enabled but broken.
+A proxy is not a VPN. This just routes functions like the AI doing a web_search, get_website or research_topic through the proxy. If you add functions, you must code them to use the proxy. Only functions use the proxy, things like model downloads for STT does not use the proxy.
 
-## Why Use a Proxy?
+If the proxy is enabled but broken, functions that use the proxy will fail for security. 
 
-When using web functions, your IP is exposed to every site the AI visits. A SOCKS5 proxy masks your real IP, adding a layer of privacy for research and web scraping.
+## Enable in Settings
 
-## Setup
+Use the web UI: Settings → Network → Enable SOCKS.
+<img src="screenshots/socks-proxy.png" alt="socks proxy in Sapphire settings" width="100%">
 
-### 1. Enable in Settings
 
-Add to `user/settings.json`:
-
-```json
-{
-  "network": {
-    "SOCKS_ENABLED": true,
-    "SOCKS_HOST": "your-proxy-host.com",
-    "SOCKS_PORT": 1080
-  }
-}
-```
-
-Or use the web UI: Settings → Network → Enable SOCKS.
-
-### 2. Configure Credentials
+### Configure Credentials
 
 SOCKS credentials are stored separately from settings for security. Choose one method:
 
@@ -46,48 +32,12 @@ username=your_username
 password=your_password
 ```
 
-Set permissions: `chmod 600 user/.socks_config`
-
-### 3. Restart Sapphire
+### Restart Sapphire
 
 The proxy applies on startup. Restart to activate.
 
 ## Verify It Works
 
-1. Ask the AI to search for something: "Search for weather in Tokyo"
-2. Check logs for proxy connection: `grep SOCKS user/logs/sapphire.log`
-3. Or ask the AI: "What is my IP address?" (compare with/without proxy)
-
-## Proxy Providers
-
-Any SOCKS5 proxy works. Common options:
-
-- **Self-hosted**: Run your own on a VPS with `dante-server` or `microsocks`
-- **VPN providers**: Many include SOCKS5 (Mullvad, Private Internet Access, etc.)
-- **Commercial**: Dedicated proxy services (Bright Data, Oxylabs, etc.)
-
-## Troubleshooting
-
-**"SOCKS5 is enabled but credentials are not configured"**
-- Credentials not found. Check env vars or `user/.socks_config`
-
-**"SOCKS proxy connection error"**
-- Wrong host/port, or proxy is down
-- Verify proxy is reachable: `curl --socks5 user:pass@host:port https://httpbin.org/ip`
-
-**Web functions work without proxy when SOCKS_ENABLED=true**
-- Sapphire falls back to direct connection if proxy fails
-- Check logs for proxy errors
-
-## What Gets Proxied
-
-Only outbound HTTP requests from web functions use the proxy:
-
-| Proxied | Not Proxied |
-|---------|-------------|
-| web_search | LLM API calls |
-| get_website | TTS/STT servers |
-| get_wikipedia | Internal API |
-| research_topic | Memory engine |
-
-LLM traffic stays direct to your local server.
+1. Enable web tools in a chat
+2. Ask the AI to get your IP via https://icanhazip.com/
+3. Check logs for proxy connection: `grep SOCKS user/logs/sapphire.log`

@@ -1,50 +1,121 @@
-# Tools in Sapphire
+# Tools
 
-Tools are functions the AI can call to interact with the world. Unlike modules (keyword-triggered), tools use OpenAI-compatible function calling - the AI decides when and how to use them.
+Tools are functions the AI can call to interact with the world - search the web, save memories, control devices, etc. Unlike plugins (which YOU trigger with keywords), the AI decides when to use tools based on context.
 
-Feed this whole file to an AI like Claude, it includes all the details it needs to make tools/functions.
+**Terminology:** In Sapphire, "tools", "functions", and "abilities" are used interchangeably. They all mean the same thing: capabilities the AI can invoke.
 
----
+## What Are Tools?
 
-## Concepts
+When you ask the AI something like "search for news about SpaceX", the AI recognizes it needs the `web_search` tool and calls it automatically. You don't say a magic keyword - the AI figures it out from your request.
 
-**Tool**: A single callable function (e.g., `web_search`, `get_memories`)
-
-**Tool File**: A Python file in `functions/` containing one or more related tools
-
-**Toolset**: A named group of tools that can be switched per-chat
-
----
+**Tools vs Plugins:**
+- **Tools**: The AI decides to call them. Contextual, flexible.
+- **Plugins**: YOU trigger them with keywords. Deterministic, predictable.
 
 ## Using Tools
 
-### In Chat
+<img src="screenshots/tool-results.png" alt="Tool results in Sapphire" width="100%">
 
-Tools are automatically available based on your active toolset. The AI sees tool descriptions and decides when to call them.
+### Toolsets
 
-### Switching Toolsets
+Tools are grouped into **toolsets** - named collections you can switch between. Each persona can have its own custom set of tools you choose. See more in [TOOLS.md](TOOLS.md)
 
-Use the chat settings dropdown or pills to switch toolsets. Each toolset defines which tools the AI can access.
+### Included Basic Tools
 
-Special values:
-- `all` - Every available tool
-- `none` - No tools (pure conversation)
-- `default` - Basic tools (memory by default)
+| Tool | What it does |
+|------|--------------|
+| `save_memory` | Store info for future conversations |
+| `search_memory` | Find stored memories by keyword |
+| `get_recent_memories` | Get latest memories |
+| `search_for_urls` | Web search, returns URLs |
+| `get_website_from_url` | Fetch webpage content |
+| `get_wikipedia` | Get Wikipedia article |
+| `research_topic` | Multi-source research |
 
----
+## Managing Tools
 
-## Tool Files
+### Locations
 
-Location: `functions/` (core) or `user/functions/` (custom)
+| Path | Purpose | Git Tracked |
+|------|---------|-------------|
+| `functions/` | Core tools | Yes |
+| `user/functions/` | Your custom tools | No |
 
-### Required Exports
+### Enable/Disable
 
-```python
-ENABLED = True                    # Set False to disable without deleting
-AVAILABLE_FUNCTIONS = [...]       # List of function names to expose
-TOOLS = [...]                     # OpenAI-format tool definitions
-def execute(function_name, arguments, config): ...  # Execution handler
-```
+Each tool file has `ENABLED = True/False` at the top. Set to `False` to disable without deleting.
+
+## Custom Toolsets
+
+Use the **Toolset Manager** in the web UI. see [TOOLSETS.md](TOOLSETS.md)
+
+## Creating Tools with AI (feed it this)
+
+> Create a Sapphire tool that [describe what you want].
+>
+> **Tool file requirements:**
+> - Location: `functions/{name}.py` or `user/functions/{name}.py`
+> - Must export: `ENABLED`, `AVAILABLE_FUNCTIONS`, `TOOLS`, and `execute()` function
+> - `execute()` returns tuple: `(result_string, success_bool)`
+> - Tool definitions use OpenAI function calling schema
+>
+> **Example tool file:**
+> ```python
+> import logging
+>
+> logger = logging.getLogger(__name__)
+>
+> ENABLED = True
+>
+> AVAILABLE_FUNCTIONS = ['my_tool']
+>
+> TOOLS = [
+>     {
+>         "type": "function",
+>         "function": {
+>             "name": "my_tool",
+>             "description": "What this does and WHEN to use it",
+>             "parameters": {
+>                 "type": "object",
+>                 "properties": {
+>                     "query": {
+>                         "type": "string",
+>                         "description": "The search query"
+>                     }
+>                 },
+>                 "required": ["query"]
+>             }
+>         }
+>     }
+> ]
+>
+> def execute(function_name, arguments, config):
+>     try:
+>         if function_name == "my_tool":
+>             query = arguments.get('query')
+>             if not query:
+>                 return "I need a query.", False
+>             
+>             # Do the work here
+>             result = f"Processed: {query}"
+>             return result, True
+>
+>         return f"Unknown function: {function_name}", False
+>     except Exception as e:
+>         logger.error(f"{function_name} error: {e}")
+>         return f"Error: {str(e)}", False
+> ```
+>
+> Give me the complete file, ready to drop in.
+
+After the AI gives you the file:
+1. Save to `functions/your_tool.py` or `user/functions/your_tool.py`
+2. Add to a toolset (UI or JSON)
+3. Restart Sapphire
+
+## Technical Reference
+
+Condensed reference for developers and AI assistants.
 
 ### File Structure
 
@@ -55,396 +126,116 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-ENABLED = True
+ENABLED = True                          # Set False to disable
 
-AVAILABLE_FUNCTIONS = [
-    'my_tool',
-]
+AVAILABLE_FUNCTIONS = ['func_name']     # List of function names
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "my_tool",
-            "description": "What this tool does - be specific",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "arg_name": {
-                        "type": "string",
-                        "description": "What this argument is for"
-                    }
-                },
-                "required": ["arg_name"]
-            }
-        }
-    }
-]
-
+TOOLS = [...]                           # OpenAI schema (see below)
 
 def execute(function_name, arguments, config):
-    """Execute tool calls. Returns (result_string, success_bool)."""
-    try:
-        if function_name == "my_tool":
-            arg = arguments.get('arg_name')
-            if not arg:
-                return "I need the argument.", False
-            
-            # Do the work
-            result = f"Processed: {arg}"
-            return result, True
-
-        return f"Unknown function: {function_name}", False
-
-    except Exception as e:
-        logger.error(f"{function_name} error: {e}")
-        return f"Error: {str(e)}", False
+    """Returns (result_string, success_bool)"""
+    ...
 ```
 
----
-
-## Tool Definition Format
-
-Each tool in the `TOOLS` list follows OpenAI's function calling schema:
+### Tool Definition (OpenAI Schema)
 
 ```python
 {
     "type": "function",
     "function": {
-        "name": "function_name",           # Unique identifier, snake_case
-        "description": "...",              # What, when, why to use this tool
+        "name": "function_name",
+        "description": "What it does and WHEN to use it",
         "parameters": {
             "type": "object",
             "properties": {
                 "param_name": {
-                    "type": "string",      # string, integer, boolean, array, object
-                    "description": "..."
-                },
-                "optional_param": {
-                    "type": "integer",
-                    "description": "...",
-                    "default": 5           # Optional default value
+                    "type": "string",       # string, integer, number, boolean, array, object
+                    "description": "What this is for"
                 }
             },
-            "required": ["param_name"]     # List required params
+            "required": ["param_name"]
         }
     }
 }
 ```
 
-### Parameter Types
-
-| Type | Example | Notes |
-|------|---------|-------|
-| `string` | `"hello"` | Most common |
-| `integer` | `42` | Whole numbers |
-| `number` | `3.14` | Floats |
-| `boolean` | `true` | True/false |
-| `array` | `["a", "b"]` | Use `items` to define element type |
-| `object` | `{"key": "val"}` | Nested structures |
-
-### Array Example
-
+**No parameters:**
 ```python
-"lines": {
-    "type": "array",
-    "items": {"type": "string"},
-    "description": "Lines to append"
-}
+"parameters": {"type": "object", "properties": {}, "required": []}
 ```
 
-### No Parameters
-
+**Array parameter:**
 ```python
-"parameters": {
-    "type": "object",
-    "properties": {},
-    "required": []
-}
+"items": {"type": "array", "items": {"type": "string"}, "description": "List of items"}
 ```
 
----
-
-## The execute() Function
+### execute() Function
 
 ```python
 def execute(function_name, arguments, config):
     """
     Args:
-        function_name: Which tool was called (string)
+        function_name: Which tool was called
         arguments: Dict of arguments from the AI
-        config: Sapphire config module (for settings access)
+        config: Sapphire config module
     
     Returns:
-        Tuple of (result_string, success_bool)
+        (result_string, success_bool)
     """
+    if function_name == "my_tool":
+        # Validate
+        query = arguments.get('query')
+        if not query:
+            return "I need a query.", False
+        
+        # Do work
+        return f"Result: {query}", True
+    
+    return f"Unknown: {function_name}", False
 ```
 
-### Return Values
+**Return values:**
+- `return "Success message", True` - Worked
+- `return "Error message", False` - Failed (AI sees this)
+- `return "No results for X", True` - Empty result (not an error)
 
-- `return "Success message", True` - Tool worked
-- `return "Error message", False` - Tool failed (AI will see this)
+### Best Practices
 
-### Pattern: Dispatcher
+**Descriptions matter:** The AI uses descriptions to decide WHEN to call tools.
+```python
+# Good - tells AI when to use it
+"description": "Search the web for URLs. Use get_website_from_url to read content."
 
+# Bad - doesn't help AI decide
+"description": "Searches the web"
+```
+
+**Lazy imports:** For heavy dependencies, import inside execute():
 ```python
 def execute(function_name, arguments, config):
-    try:
-        if function_name == "tool_a":
-            return handle_tool_a(arguments)
-        elif function_name == "tool_b":
-            return handle_tool_b(arguments)
-        
-        return f"Unknown function: {function_name}", False
-    
-    except Exception as e:
-        logger.error(f"{function_name} error: {e}")
-        return f"Error: {str(e)}", False
+    if function_name == "heavy_tool":
+        import heavy_library  # Only loaded when called
 ```
 
-### Pattern: Validation
+### Toolsets Format
 
-```python
-if function_name == "my_tool":
-    query = arguments.get('query')
-    if not query:
-        return "I need a query.", False
-    
-    # Proceed with valid input
-```
-
----
-
-## Toolsets
-
-Toolsets group tools by purpose. Define in `core/modules/system/toolsets/toolsets.json` or override in `user/toolsets/toolsets.json`.
-
-### Format
-
+`user/toolsets/toolsets.json`:
 ```json
 {
-  "default": {
-    "functions": ["get_memories", "search_memory"]
-  },
-  "work": {
-    "functions": ["web_search", "get_website", "get_wikipedia"]
-  },
-  "research": {
-    "functions": ["web_search", "get_website", "research_topic", "get_wikipedia", "ask_claude"]
-  },
-  "minimal": {
-    "functions": []
+  "my_set": {
+    "functions": ["save_memory", "web_search"]
   }
 }
 ```
 
-### UI Editor
+User file overrides `core/modules/system/toolsets/toolsets.json`.
 
-Use the Toolset Manager in the web UI to create and edit toolsets without editing JSON.
-
----
-
-## Creating New Tools
-
-### Step 1: Create File
-
-```bash
-# In Sapphire directory
-touch functions/my_tools.py
-# Or for user-only: mkdir -p user/functions && touch user/functions/my_tools.py
-```
-
-### Step 2: Define Structure
-
-```python
-import logging
-
-logger = logging.getLogger(__name__)
-
-ENABLED = True
-
-AVAILABLE_FUNCTIONS = [
-    'my_function',
-]
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "my_function",
-            "description": "Describe what this does clearly",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "input": {
-                        "type": "string",
-                        "description": "What to process"
-                    }
-                },
-                "required": ["input"]
-            }
-        }
-    }
-]
-
-
-def execute(function_name, arguments, config):
-    try:
-        if function_name == "my_function":
-            input_val = arguments.get('input')
-            if not input_val:
-                return "Input is required.", False
-            
-            # Your logic here
-            return f"Processed: {input_val}", True
-
-        return f"Unknown function: {function_name}", False
-
-    except Exception as e:
-        logger.error(f"{function_name} error: {e}")
-        return f"Error: {str(e)}", False
-```
-
-### Step 3: Add to Toolset (optional)
-
-Either edit `user/toolsets/toolsets.json` or use the UI Toolset Manager to add your function to a toolset.
-
-### Step 4: Restart
-
-Sapphire loads tools at startup. Restart to pick up new tools.
-
----
-
-## Best Practices
-
-### Descriptions
-
-Write descriptions that help the AI know WHEN to use a tool:
-
-```python
-# Good
-"description": "Search the web to find relevant URLs. Returns titles and URLs only - use get_website to read content."
-
-# Bad
-"description": "Searches the web"
-```
-
-### Error Handling
-
-Always return meaningful errors:
-
-```python
-if not query:
-    return "I need a search query.", False
-
-if not results:
-    return f"No results found for '{query}'.", True  # Not an error, just empty
-```
-
-### Logging
-
-Use the module logger for debugging:
-
-```python
-logger = logging.getLogger(__name__)
-
-# In execute:
-logger.info(f"Processing: {arguments}")
-logger.error(f"Failed: {e}")
-```
-
-### External Dependencies
-
-Import inside execute() if the dependency is optional or heavy:
-
-```python
-def execute(function_name, arguments, config):
-    if function_name == "heavy_tool":
-        import heavy_library  # Only loaded when tool is called
-```
-
----
-
-## Files Reference
+### Files Reference
 
 | Path | Purpose |
 |------|---------|
-| `functions/*.py` | Core tool files |
-| `functions/simulations/*.py` | Simulation/testing tools |
-| `user/functions/*.py` | Your custom tools |
+| `functions/` | Core tools |
+| `user/functions/` | Your custom tools |
 | `core/modules/system/toolsets/toolsets.json` | Default toolsets |
 | `user/toolsets/toolsets.json` | Your toolset overrides |
 | `core/chat/function_manager.py` | Tool loading system |
-
----
-
-## AI Reference: Creating Tools
-
-When asked to create a new tool, use this template:
-
-```python
-# functions/{name}.py
-"""
-{Brief description of what this tool file provides}
-"""
-
-import logging
-
-logger = logging.getLogger(__name__)
-
-ENABLED = True
-
-AVAILABLE_FUNCTIONS = [
-    '{function_name}',
-]
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "{function_name}",
-            "description": "{Clear description of what this does and when to use it}",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "{param}": {
-                        "type": "{type}",
-                        "description": "{What this parameter is for}"
-                    }
-                },
-                "required": ["{param}"]
-            }
-        }
-    }
-]
-
-
-def execute(function_name, arguments, config):
-    """Execute tool functions."""
-    try:
-        if function_name == "{function_name}":
-            {param} = arguments.get('{param}')
-            if not {param}:
-                return "{Param} is required.", False
-            
-            # Implementation
-            result = "..."
-            return result, True
-
-        return f"Unknown function: {function_name}", False
-
-    except Exception as e:
-        logger.error(f"{function_name} error: {e}")
-        return f"Error: {str(e)}", False
-```
-
-### Checklist
-
-- [ ] `ENABLED = True`
-- [ ] `AVAILABLE_FUNCTIONS` lists all function names
-- [ ] `TOOLS` has valid OpenAI schema for each function
-- [ ] `execute()` handles all functions in AVAILABLE_FUNCTIONS
-- [ ] `execute()` returns `(string, bool)` tuple
-- [ ] Required params validated before use
-- [ ] Errors logged and returned cleanly
-- [ ] Description explains WHEN to use, not just WHAT it does
