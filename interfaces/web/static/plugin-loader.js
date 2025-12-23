@@ -90,9 +90,17 @@ class PluginLoader {
     const t0 = performance.now();
     
     try {
-      const response = await fetch('/static/plugins/plugins.json');
+      // Try API first (returns merged user + static config)
+      let response = await fetch('/api/webui/plugins/config');
+      
+      // Fallback to static file if API fails (e.g., not logged in)
       if (!response.ok) {
-        console.log('[PluginLoader] No plugins.json found, skipping plugins');
+        console.log('[PluginLoader] API unavailable, falling back to static plugins.json');
+        response = await fetch('/static/plugins/plugins.json');
+      }
+      
+      if (!response.ok) {
+        console.log('[PluginLoader] No plugins config found, skipping plugins');
         return;
       }
       

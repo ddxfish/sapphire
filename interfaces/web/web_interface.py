@@ -24,6 +24,7 @@ sys.path.insert(0, project_root)
 
 import config
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
+from interfaces.web.plugins_api import plugins_bp
 
 API_BASE = "http://127.0.0.1:8071"
 SDXL_BASE = "http://127.0.0.1:5153"
@@ -77,6 +78,9 @@ def init_app():
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 init_app()
+
+# Register blueprints
+app.register_blueprint(plugins_bp)
 
 # --- Auth Decorators ---
 def require_setup(f):

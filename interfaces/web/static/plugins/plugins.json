@@ -3,6 +3,7 @@
     "prompt-manager",
     "ability-manager",
     "settings-modal",
+    "plugins-modal",
     "spice-manager",
     "backup"
   ],
@@ -22,6 +23,11 @@
     },
     "settings-modal": {
       "title": "Settings Modal",
+      "collapsible": true,
+      "showInSidebar": false
+    },
+    "plugins-modal": {
+      "title": "Plugins",
       "collapsible": true,
       "showInSidebar": false
     },
