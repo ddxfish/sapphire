@@ -73,9 +73,9 @@ export function injectStyles() {
     .plugins-modal-tabs {
       display: flex;
       gap: 4px;
-      padding: 12px 20px 0;
-      border-bottom: 1px solid var(--border);
-      overflow-x: auto;
+      padding: 8px 20px;
+      background: var(--bg-tertiary);
+      overflow: hidden;
     }
     
     .plugins-modal-tabs .tab-btn {
@@ -84,8 +84,7 @@ export function injectStyles() {
       background: transparent;
       color: var(--text-muted);
       cursor: pointer;
-      border-bottom: 2px solid transparent;
-      margin-bottom: -1px;
+      border-radius: 6px;
       font-size: 13px;
       white-space: nowrap;
       transition: all 0.15s ease;
@@ -98,7 +97,7 @@ export function injectStyles() {
     
     .plugins-modal-tabs .tab-btn.active {
       color: var(--accent-blue);
-      border-bottom-color: var(--accent-blue);
+      background: var(--bg-secondary);
     }
     
     .plugins-modal-tabs .tab-icon {
