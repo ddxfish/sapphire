@@ -5,7 +5,8 @@
     "settings-modal",
     "plugins-modal",
     "spice-manager",
-    "backup"
+    "backup",
+    "image-gen"
   ],
   "plugins": {
     "sapphire-3d": {
@@ -36,7 +37,12 @@
       "collapsible": true,
       "showInSidebar": false
     },
-    "spice-manager": { "title": "Spice Editor", "collapsible": true }
+    "spice-manager": { "title": "Spice Editor", "collapsible": true },
+    "image-gen": {
+      "title": "Image Generation",
+      "collapsible": true,
+      "showInSidebar": false
+    }
 
   }
 }

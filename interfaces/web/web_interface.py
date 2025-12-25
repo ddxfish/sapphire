@@ -24,10 +24,15 @@ sys.path.insert(0, project_root)
 
 import config
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
-from interfaces.web.plugins_api import plugins_bp
+from interfaces.web.plugins_api import plugins_bp, load_plugin_settings
 
 API_BASE = "http://127.0.0.1:8071"
-SDXL_BASE = "http://127.0.0.1:5153"
+SDXL_DEFAULT = "http://127.0.0.1:5153"
+
+def get_sdxl_url():
+    """Get SDXL API URL from image-gen settings or use default."""
+    settings = load_plugin_settings('image-gen')
+    return settings.get('api_url', SDXL_DEFAULT)
 
 app = Flask(__name__)
 
@@ -271,8 +276,11 @@ def proxy_sdxl_image(image_id):
         logger.warning(f"Invalid SDXL image_id attempted: {image_id}")
         return jsonify({"error": "Invalid image ID"}), 400
     
+    sdxl_url = get_sdxl_url()
+    logger.info(f"SDXL proxy fetching from: {sdxl_url}/output/{image_id}.jpg")
+    
     try:
-        response = requests.get(f'{SDXL_BASE}/output/{image_id}.jpg', timeout=10)
+        response = requests.get(f'{sdxl_url}/output/{image_id}.jpg', timeout=10)
         if response.status_code == 200:
             return send_file(
                 io.BytesIO(response.content),
@@ -285,7 +293,11 @@ def proxy_sdxl_image(image_id):
         else:
             return jsonify({"error": f"SDXL returned {response.status_code}"}), 500
     except requests.exceptions.Timeout:
+        logger.error(f"SDXL timeout fetching {image_id} from {sdxl_url}")
         return jsonify({"error": "SDXL timeout"}), 504
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"SDXL connection error for {image_id} at {sdxl_url}: {e}")
+        return jsonify({"error": f"Cannot connect to SDXL server at {sdxl_url}"}), 502
     except Exception as e:
         logger.error(f"SDXL proxy error for {image_id}: {e}")
         return jsonify({"error": "Image fetch failed"}), 500

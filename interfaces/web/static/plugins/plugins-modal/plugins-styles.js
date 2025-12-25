@@ -73,35 +73,55 @@ export function injectStyles() {
     .plugins-modal-tabs {
       display: flex;
       gap: 4px;
-      padding: 8px 20px;
-      background: var(--bg-tertiary);
-      overflow: hidden;
+      padding: 12px 12px 0 12px;
+      background: var(--bg);
+      overflow-x: auto;
+      overflow-y: hidden;
+      border-bottom: 1px solid var(--border);
+      min-height: 52px;
+      max-height: 52px;
     }
     
     .plugins-modal-tabs .tab-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       padding: 8px 16px;
-      border: none;
-      background: transparent;
-      color: var(--text-muted);
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: var(--radius-md, 8px) var(--radius-md, 8px) 0 0;
+      color: var(--text-tertiary);
       cursor: pointer;
-      border-radius: 6px;
-      font-size: 13px;
+      font-size: var(--font-base, 14px);
       white-space: nowrap;
-      transition: all 0.15s ease;
+      transition: all var(--transition-normal, 0.15s);
     }
     
     .plugins-modal-tabs .tab-btn:hover {
-      color: var(--text);
       background: var(--bg-hover);
+      color: var(--text-bright);
+    }
+    
+    .plugins-modal-tabs .tab-btn:focus {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--focus-ring);
     }
     
     .plugins-modal-tabs .tab-btn.active {
-      color: var(--accent-blue);
       background: var(--bg-secondary);
+      color: var(--text-bright);
+      border-color: var(--border-light);
+      border-bottom: 1px solid var(--bg-secondary);
+      margin-bottom: -1px;
     }
     
     .plugins-modal-tabs .tab-icon {
-      margin-right: 6px;
+      font-size: var(--font-lg, 16px);
+    }
+    
+    .plugins-modal-tabs .tab-label {
+      font-weight: 500;
     }
     
     .plugins-modal-content {
