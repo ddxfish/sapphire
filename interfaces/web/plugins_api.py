@@ -259,3 +259,48 @@ def get_plugins_config():
     Used by frontend to load plugins.json equivalent.
     """
     return jsonify(get_merged_plugins())
+
+
+@plugins_bp.route('/api/webui/plugins/image-gen/test-connection', methods=['POST'])
+@require_login
+def test_sdxl_connection():
+    """Test connection to SDXL server."""
+    import requests as req
+    
+    data = request.json or {}
+    url = data.get('url', '').strip()
+    
+    if not url:
+        return jsonify({"success": False, "error": "No URL provided"}), 400
+    
+    # Basic URL validation
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
+    
+    try:
+        # Try to hit the SDXL server's root or a known endpoint
+        response = req.get(url, timeout=5)
+        
+        return jsonify({
+            "success": True,
+            "status_code": response.status_code,
+            "message": f"Connected successfully (HTTP {response.status_code})"
+        })
+    except req.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Connection timed out (5s)"}), 200
+    except req.exceptions.ConnectionError as e:
+        return jsonify({"success": False, "error": f"Cannot connect: {str(e)[:100]}"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error: {str(e)[:100]}"}), 200
+
+
+@plugins_bp.route('/api/webui/plugins/image-gen/defaults', methods=['GET'])
+@require_login
+def get_image_gen_defaults():
+    """Get default settings for image-gen plugin from backend source of truth."""
+    try:
+        from functions.image import DEFAULTS
+        return jsonify(DEFAULTS)
+    except ImportError as e:
+        logger.error(f"Failed to import image.py DEFAULTS: {e}")
+        return jsonify({"error": "Could not load defaults"}), 500
