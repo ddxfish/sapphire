@@ -113,4 +113,7 @@ AI-callable functions. Simpler than plugins- they are one file in `user/function
 Drop ONNX models in `user/wakeword/models/`. I trained "Hey Sapphire" in ~2 hours with synthetic data. [Community wakewords](https://github.com/fwartner/home-assistant-wakewords-collection) available.
 
 ### Custom Web UI Plugins
-Plugin system works in Web UI but will reset plugins.json on app update.
+Extensible JavaScript plugins for the interface. See [WEB-PLUGINS.md](WEB-PLUGINS.md).
+
+### SSL Certificate
+If the self-signed SSL certificate is annoying, disable it in Gear → Settings → System (`WEB_UI_SSL_ADHOC`) to use plain HTTP.

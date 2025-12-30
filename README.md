@@ -66,6 +66,14 @@ You talk to it, but it's her that talks back. Customize your own virtual persona
 <td><strong>Spice Injection</strong><br/>Random snippets injected each reply. Keeps stories and conversations from going stale. See <a href="docs/SPICE.md">Spice</a>.</td>
 </tr>
 <tr>
+<td><a href="docs/screenshots/webui-plugins.png"><img src="docs/screenshots/webui-plugins.png" alt="Web UI Plugins"/></a></td>
+<td><strong>Web UI Plugins</strong><br/>Extensible JavaScript plugins for the web interface. Add widgets to sidebar, gear menu, or settings tabs. See <a href="docs/WEB-PLUGINS.md">Web UI Plugins</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/image-generation.png"><img src="docs/screenshots/image-generation.png" alt="Image Generation"/></a></td>
+<td><strong>Image Generation</strong><br/>SDXL image generation with character replacement. AI describes scenes, characters stay consistent. See <a href="docs/IMAGE-GEN.md">Image Generation</a>.</td>
+</tr>
+<tr>
 <td><a href="docs/screenshots/toolset-editor.png"><img src="docs/screenshots/toolset-editor.png" alt="Toolset Editor"/></a></td>
 <td><strong>Tools and Toolsets</strong><br/>Mix and match tool sets per persona. Easy to create, easy to have the AI make more for you. See <a href="docs/TOOLS.md">Tools</a> and <a href="docs/TOOLSETS.md">Toolsets</a>.</td>
 </tr>
@@ -117,6 +125,8 @@ Web UI: https://localhost:8073 (self-signed SSL)
 | [Tools](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLS.md) | Creating AI-callable functions (web search, memory, etc.) |
 | [Toolsets](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLSETS.md) | Grouping tools into switchable ability sets |
 | [Plugins](https://github.com/ddxfish/sapphire/blob/main/docs/PLUGINS.md) | Keyword-triggered UI/voice extensions |
+| [Web UI Plugins](https://github.com/ddxfish/sapphire/blob/main/docs/WEB-PLUGINS.md) | JavaScript extensions for the web interface |
+| [Image Generation](https://github.com/ddxfish/sapphire/blob/main/docs/IMAGE-GEN.md) | SDXL integration with character consistency |
 | [SOCKS Proxy](https://github.com/ddxfish/sapphire/blob/main/docs/SOCKS.md) | Privacy proxy for web scraping functions |
 | [Troubleshooting](https://github.com/ddxfish/sapphire/blob/main/docs/TROUBLESHOOTING.md) | Common issues and fixes |
 | [Technical](https://github.com/ddxfish/sapphire/blob/main/docs/TECHNICAL.md) | For nerds |
