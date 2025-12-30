@@ -375,6 +375,8 @@ class TestReload:
     
     def test_reset_to_defaults(self):
         """reset_to_defaults() should clear user overrides."""
+        import threading
+        from pathlib import Path
         from core.settings_manager import SettingsManager
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
@@ -382,7 +384,14 @@ class TestReload:
             mgr._defaults = {"KEY": "default"}
             mgr._user = {"KEY": "user", "OTHER": "other"}
             mgr._config = {}
+            mgr._lock = threading.RLock()
             mgr._merge_settings = lambda: setattr(mgr, '_config', {**mgr._defaults, **mgr._user})
+            mgr._update_mtime = lambda: None
+            mgr.BASE_DIR = Path('/tmp/test_settings_reset')
+            
+            # Create temp dir so file ops work
+            mgr.BASE_DIR.mkdir(exist_ok=True)
+            (mgr.BASE_DIR / 'user').mkdir(exist_ok=True)
             
             mgr.reset_to_defaults()
             
