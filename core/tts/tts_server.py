@@ -1,6 +1,7 @@
 from flask import Flask, request, send_file, g
 import time
 import os
+import sys
 import uuid
 import soundfile as sf
 import logging
@@ -11,8 +12,12 @@ import tempfile
 import psutil
 from kokoro import KPipeline
 
-# --- Set up file-based logging ---
+# --- Path setup for config import ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(script_dir))
+sys.path.insert(0, project_root)
+
+# --- Set up file-based logging ---
 log_dir = os.path.join(script_dir, '..', '..', 'user', 'logs')
 os.makedirs(log_dir, exist_ok=True)
 log_file_path = os.path.join(log_dir, 'kokoro.log')
@@ -23,6 +28,17 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# --- Import config after logging setup ---
+try:
+    import config
+    HOST = config.TTS_SERVER_HOST
+    PORT = config.TTS_SERVER_PORT
+    logger.info(f"Loaded TTS server config: {HOST}:{PORT}")
+except Exception as e:
+    logger.warning(f"Could not load config, using defaults: {e}")
+    HOST = '0.0.0.0'
+    PORT = 5012
 
 
 # --- Cross-platform temp directory ---
@@ -35,8 +51,6 @@ def get_temp_dir():
 
 
 # --- Constants ---
-HOST = '0.0.0.0'
-PORT = 5012
 TEMP_DIR = get_temp_dir()
 DEFAULT_VOICE = 'af_heart'
 DEFAULT_SPEED = 1.0

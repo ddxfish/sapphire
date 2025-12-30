@@ -26,7 +26,8 @@ import config
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
 from interfaces.web.plugins_api import plugins_bp, load_plugin_settings
 
-API_BASE = "http://127.0.0.1:8071"
+# Construct API base URL from config
+API_BASE = f"http://{config.API_HOST}:{config.API_PORT}"
 SDXL_DEFAULT = "http://127.0.0.1:5153"
 
 def get_sdxl_url():
@@ -817,5 +818,6 @@ def security_headers(response):
 # =============================================================================
 
 if __name__ == '__main__':
-    logger.info("Starting web interface on port 8073")
-    app.run(host='0.0.0.0', port=8073, debug=False, ssl_context='adhoc')
+    ssl_ctx = 'adhoc' if config.WEB_UI_SSL_ADHOC else None
+    logger.info(f"Starting web interface on {config.WEB_UI_HOST}:{config.WEB_UI_PORT} (SSL: {ssl_ctx})")
+    app.run(host=config.WEB_UI_HOST, port=config.WEB_UI_PORT, debug=False, ssl_context=ssl_ctx)

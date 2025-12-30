@@ -17,6 +17,8 @@ export const CATEGORIES = {
       'TTS_VOICE_NAME',
       'TTS_SPEED',
       'TTS_PITCH_SHIFT',
+      'TTS_SERVER_HOST',
+      'TTS_SERVER_PORT',
       'TTS_PRIMARY_SERVER',
       'TTS_FALLBACK_SERVER',
       'TTS_FALLBACK_TIMEOUT'
@@ -128,7 +130,12 @@ export const CATEGORIES = {
     description: 'System and advanced settings',
     keys: [
       'MODULES_ENABLED',
-      'PLUGINS_ENABLED'
+      'PLUGINS_ENABLED',
+      'WEB_UI_HOST',
+      'WEB_UI_PORT',
+      'WEB_UI_SSL_ADHOC',
+      'API_HOST',
+      'API_PORT'
     ]
   },
   appearance: {

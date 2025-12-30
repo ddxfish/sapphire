@@ -84,6 +84,12 @@ class SettingsManager:
             port = self._defaults['STT_SERVER_PORT']
             self._defaults['STT_SERVER_URL'] = f"http://{host}:{port}"
         
+        # Construct API_URL (for internal use by web_interface and functions)
+        if 'API_HOST' in self._defaults and 'API_PORT' in self._defaults:
+            host = self._defaults['API_HOST']
+            port = self._defaults['API_PORT']
+            self._defaults['API_URL'] = f"http://{host}:{port}"
+        
         # Apply platform-specific audio device defaults
         if IS_WINDOWS:
             platform_devices = self._defaults.get('RECORDER_PREFERRED_DEVICES_WINDOWS', ['default'])

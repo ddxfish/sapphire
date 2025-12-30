@@ -87,9 +87,19 @@
     "TTS_VOICE_NAME": "af_heart",
     "TTS_SPEED": 1.25,
     "TTS_PITCH_SHIFT": 0.98,
+    "TTS_SERVER_HOST": "0.0.0.0",
+    "TTS_SERVER_PORT": 5012,
     "TTS_PRIMARY_SERVER": "http://localhost:5012",
     "TTS_FALLBACK_SERVER": "http://127.0.0.1:5012",
     "TTS_FALLBACK_TIMEOUT": 0.2
+  },
+  
+  "server": {
+    "WEB_UI_HOST": "0.0.0.0",
+    "WEB_UI_PORT": 8073,
+    "WEB_UI_SSL_ADHOC": true,
+    "API_HOST": "127.0.0.1",
+    "API_PORT": 8071
   },
   
   "llm": {

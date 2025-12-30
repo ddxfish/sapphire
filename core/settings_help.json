@@ -33,16 +33,16 @@
   },
   
   "MODULES_ENABLED": {
-    "short": "Enable/disable module system for debug",
-    "long": "Modules extend core functionality with additional features like prompt management, presets, and system integrations. Disabling this will prevent any modules from loading. Requires system restart to take effect."
+    "short": "Enable built-in keyword modules (reset, stop, etc.)",
+    "long": "Modules are keyword-triggered behaviors in core/modules/ like 'reset' (clear chat), 'stop' (halt TTS), time/date queries, and the prompt management system. Disabling prevents these from loading. Different from FUNCTIONS_ENABLED which controls LLM tool calling. Requires restart."
   },
   "PLUGINS_ENABLED": {
-    "short": "Enable/disable plugin system for debug",
-    "long": "Plugins add UI extensions and additional interface features like the settings modal, 3D avatars, and custom sidebars. Disabling this will prevent plugins from loading in the web interface. Requires page refresh to take effect."
+    "short": "Enable plugin modules from plugins/ directory",
+    "long": "Plugins add UI extensions and additional keyword-triggered modules from the plugins/ directory. Disabling this will prevent plugins from loading in the web interface. Different from FUNCTIONS which are LLM tools. Requires page refresh to take effect."
   },
   "FUNCTIONS_ENABLED": {
-    "short": "Enable function/tool calling capabilities",
-    "long": "When enabled, the AI can use tools like web search, memory storage/retrieval, image generation, Wikipedia lookup, and more. Disabling this restricts the AI to text-only responses without any external capabilities or tool access."
+    "short": "Enable LLM tool calling (web search, memory, etc.)",
+    "long": "When enabled, the AI can use tools from functions/ like web search, memory storage/retrieval, image generation, self-modification (meta), and more. Disabling this restricts the AI to text-only responses without any tool access. Different from MODULES which are keyword-triggered behaviors."
   },
   
   "BACKUPS_ENABLED": {
@@ -233,6 +233,14 @@
     "short": "Enable text-to-speech output",
     "long": "When enabled, AI responses will be spoken aloud using the configured TTS engine. Requires TTS server to be running on the specified endpoint. Disabling this will silence audio output but won't affect transcription or chat functionality."
   },
+  "TTS_SERVER_HOST": {
+    "short": "TTS server bind address",
+    "long": "Network interface for the Kokoro TTS server to bind to. Use '0.0.0.0' to accept connections from any interface (required for remote access), or '127.0.0.1' for local-only. Requires restart."
+  },
+  "TTS_SERVER_PORT": {
+    "short": "TTS server port number",
+    "long": "Port number for the Kokoro TTS server. Default is 5012. Must match TTS_PRIMARY_SERVER URL. Requires restart to take effect."
+  },
   "TTS_VOICE_NAME": {
     "short": "Fallback voice (use Chat Settings for per-chat)",
     "long": "Default voice used when creating new chats or if per-chat settings are missing. For regular use, set voice in Chat Settings modal instead - each chat stores its own voice preference."
@@ -313,5 +321,25 @@
   "SESSION_TIMEOUT_DAYS": {
     "short": "How long login sessions remain valid (days)",
     "long": "Number of days a login session cookie remains valid before requiring re-login. 30 days means users stay logged in for a month. Shorter values are more secure but less convenient. Set to 1 for daily re-authentication."
+  },
+  "WEB_UI_HOST": {
+    "short": "Web interface bind address",
+    "long": "Network interface for the web UI to bind to. Use '0.0.0.0' to accept connections from any interface (required for remote access), or '127.0.0.1' for local-only access. Requires restart."
+  },
+  "WEB_UI_PORT": {
+    "short": "Web interface port number",
+    "long": "Port number for the web interface. Default is 8073. Access the UI at https://hostname:port after restart. Requires restart to take effect."
+  },
+  "WEB_UI_SSL_ADHOC": {
+    "short": "Use self-signed SSL certificate",
+    "long": "When enabled, Flask generates a temporary self-signed SSL certificate for HTTPS. Browser will show security warning but connection is encrypted. Disable only if you're behind a reverse proxy that handles SSL. Requires restart."
+  },
+  "API_HOST": {
+    "short": "Backend API bind address",
+    "long": "Network interface for the internal API server. Default '127.0.0.1' restricts to localhost only (recommended). The web UI proxies requests to this API. Requires restart."
+  },
+  "API_PORT": {
+    "short": "Backend API port number",
+    "long": "Port number for the internal backend API. Default is 8071. The web UI connects to this port internally. Requires restart to take effect."
   }
 }

@@ -6,6 +6,7 @@ Meta tools for AI to inspect/modify its own system prompt.
 import logging
 import requests
 import uuid
+import config as app_config
 
 logger = logging.getLogger(__name__)
 
@@ -520,7 +521,7 @@ def _handle_create_list_component(component_type: str, key: str, value: str, hea
 
 def execute(function_name, arguments, config):
     """Execute meta-related functions."""
-    main_api_url = 'http://localhost:8071'
+    main_api_url = app_config.API_URL
     headers = _get_api_headers()
     
     try:

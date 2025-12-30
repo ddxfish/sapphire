@@ -326,7 +326,7 @@ def main():
     print("running api server")
     def run_api_server():
         try:
-            app.run(host='127.0.0.1', port=8071, debug=False)
+            app.run(host=config.API_HOST, port=config.API_PORT, debug=False)
         except Exception as e:
             logger.error(f"API server crashed: {e}", exc_info=True)
 
