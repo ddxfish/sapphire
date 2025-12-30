@@ -133,12 +133,14 @@ def create_settings_api():
     def reset_settings():
         """Reset all settings to defaults (clear user overrides)"""
         try:
-            settings.reset_to_defaults()
-            settings.save()
+            success = settings.reset_to_defaults()
+            
+            if not success:
+                return jsonify({"error": "Failed to reset settings file"}), 500
             
             return jsonify({
                 "status": "success",
-                "message": "All settings reset to defaults",
+                "message": "All settings reset to defaults. Restart required.",
                 "count": len(settings.get_all_settings())
             })
         except Exception as e:

@@ -686,11 +686,27 @@ class SettingsModal {
   }
 
   async resetAll() {
-    if (!confirm('Reset ALL settings to defaults? This cannot be undone!')) return;
+    // First confirmation - basic
+    if (!confirm('⚠️ Reset ALL settings to defaults?\n\nThis will erase all your customizations!')) return;
+    
+    // Second confirmation - require typing
+    const confirmText = prompt(
+      '🚨 FINAL WARNING 🚨\n\n' +
+      'This will:\n' +
+      '• Delete ALL your custom settings\n' +
+      '• Restore factory defaults\n' +
+      '• Require a restart to take effect\n\n' +
+      'Type "RESET" to confirm:'
+    );
+    
+    if (confirmText !== 'RESET') {
+      showToast('Reset cancelled', 'info');
+      return;
+    }
     
     try {
       await settingsAPI.resetSettings();
-      showToast('All settings reset to defaults', 'success');
+      showToast('✓ All settings reset. Restart Sapphire to apply.', 'success');
       await this.loadData();
       this.refreshContent();
     } catch (e) {

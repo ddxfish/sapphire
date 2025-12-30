@@ -260,10 +260,29 @@ class SettingsManager:
             logger.info("Settings reloaded from disk")
     
     def reset_to_defaults(self):
-        """Reset all settings to defaults (clears user overrides)"""
-        self._user = {}
-        self._merge_settings()
-        logger.info("Settings reset to defaults")
+        """Reset all settings to defaults (clears user overrides and file)"""
+        with self._lock:
+            self._user = {}
+            self._merge_settings()
+            
+            # Actually delete/recreate the settings file
+            user_path = self.BASE_DIR / 'user' / 'settings.json'
+            try:
+                if user_path.exists():
+                    user_path.unlink()
+                    logger.info(f"Deleted user settings file: {user_path}")
+                
+                # Write minimal fresh file
+                user_path.parent.mkdir(exist_ok=True)
+                with open(user_path, 'w', encoding='utf-8') as f:
+                    json.dump({"_comment": "Your custom settings - edit freely or use web UI"}, f, indent=2)
+                
+                self._update_mtime()
+                logger.info("Settings reset to defaults")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to reset settings file: {e}")
+                return False
     
     def register_reload_callback(self, key, callback):
         """
