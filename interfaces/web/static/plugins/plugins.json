@@ -9,10 +9,6 @@
     "image-gen"
   ],
   "plugins": {
-    "sapphire-3d": {
-      "title": "3D Avatar",
-      "collapsible": true
-    },
     "prompt-manager": {
       "title": "Prompt Editor",
       "collapsible": true,
