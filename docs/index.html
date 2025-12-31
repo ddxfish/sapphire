@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sapphire - Local AI Voice Assistant</title>
+    <meta name="description" content="Privacy-first AI voice assistant with wake word, STT, TTS, and multi-LLM support. Runs 100% local.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💎</text></svg>">
+    <style>
+        :root {
+            --bg: #0d1117;
+            --bg-card: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --accent: #4a9eff;
+            --accent-hover: #6bb3ff;
+            --sapphire: #2563eb;
+            --sapphire-glow: rgba(37, 99, 235, 0.3);
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { color: var(--accent-hover); }
+        
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Hero */
+        .hero {
+            padding: 60px 0 40px;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--accent), #a855f7);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero .tagline {
+            font-size: 1.4rem;
+            color: var(--text-muted);
+            max-width: 700px;
+            margin: 0 auto 32px;
+        }
+        
+        .badges {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+        
+        .badges img { height: 22px; }
+        
+        .cta-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: var(--sapphire);
+            color: white;
+            box-shadow: 0 0 20px var(--sapphire-glow);
+        }
+        
+        .btn-primary:hover {
+            background: #3b82f6;
+            color: white;
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--text);
+        }
+        
+        /* Video */
+        .video-section {
+            padding: 40px 0;
+        }
+        
+        .video-wrapper {
+            position: relative;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        
+        .video-wrapper video {
+            width: 100%;
+            display: block;
+        }
+        
+        .video-note {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-top: 12px;
+        }
+        
+        /* Features */
+        .features {
+            padding: 60px 0;
+        }
+        
+        .features h2 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 48px;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+        
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            transition: border-color 0.2s;
+        }
+        
+        .feature-card:hover {
+            border-color: var(--accent);
+        }
+        
+        .feature-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .feature-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+        
+        .feature-icon {
+            font-size: 1.3rem;
+        }
+        
+        /* Screenshots */
+        .screenshots {
+            padding: 60px 0;
+        }
+        
+        .screenshots h2 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 48px;
+        }
+        
+        .screenshot-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        
+        .screenshot-item {
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .screenshot-item:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+        }
+        
+        .screenshot-item img {
+            width: 100%;
+            display: block;
+        }
+        
+        .screenshot-item figcaption {
+            padding: 12px;
+            background: var(--bg-card);
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+        
+        /* Install */
+        .install {
+            padding: 60px 0;
+        }
+        
+        .install h2 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 32px;
+        }
+        
+        .code-block {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            overflow-x: auto;
+            max-width: 700px;
+            margin: 0 auto;
+        }
+        
+        .code-block pre {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.9rem;
+            line-height: 1.7;
+        }
+        
+        .code-block .comment { color: #6a737d; }
+        .code-block .cmd { color: var(--text); }
+        
+        .requirements {
+            text-align: center;
+            margin-top: 24px;
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+        
+        /* Docs */
+        .docs {
+            padding: 60px 0;
+        }
+        
+        .docs h2 {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 32px;
+        }
+        
+        .docs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .docs-link {
+            display: block;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+            transition: border-color 0.2s;
+        }
+        
+        .docs-link:hover {
+            border-color: var(--accent);
+        }
+        
+        /* Footer */
+        footer {
+            padding: 40px 0;
+            text-align: center;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+        }
+        
+        footer a { color: var(--text-muted); }
+        footer a:hover { color: var(--accent); }
+        
+        /* Responsive */
+        @media (max-width: 600px) {
+            .hero h1 { font-size: 2.5rem; }
+            .hero .tagline { font-size: 1.1rem; }
+            .btn { padding: 12px 20px; font-size: 0.95rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <section class="hero">
+            <h1>💎 Sapphire</h1>
+            <p class="tagline">Privacy-first AI voice assistant. Wake word, STT, TTS, multi-LLM support. Runs 100% local.</p>
+            
+            <div class="badges">
+                <img src="https://img.shields.io/badge/License-AGPL_3.0-blue" alt="AGPL-3.0">
+                <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+                <img src="https://img.shields.io/badge/Self_Hosted-100%25-informational" alt="Self Hosted">
+                <img src="https://img.shields.io/badge/Status-Active-success" alt="Active">
+                <img src="https://img.shields.io/badge/Waifu-Compatible-ff69b4" alt="Waifu Compatible">
+            </div>
+            
+            <div class="cta-buttons">
+                <a href="https://github.com/ddxfish/sapphire" class="btn btn-primary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                    View on GitHub
+                </a>
+                <a href="INSTALLATION.html" class="btn btn-secondary">Installation Guide</a>
+            </div>
+        </section>
+        
+        <section class="video-section">
+            <div class="video-wrapper">
+                <video controls poster="screenshots/sapphire-ai.png">
+                    <source src="https://github.com/user-attachments/assets/ed0dca80-121b-46e0-9c94-b98d6e9228c8" type="video/mp4">
+                    Your browser does not support video.
+                </video>
+            </div>
+            <p class="video-note">🔊 Demo with audio: Speech to text → LLM → text to speech.</p>
+        </section>
+        
+        <section class="features">
+            <h2>What Makes Sapphire Different</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🔒</span> Fully Local</h3>
+                    <p>No cloud. No telemetry. Your conversations never leave your machine. Optional SOCKS proxy for web tools.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🎤</span> True Voice Assistant</h3>
+                    <p>Wake word detection, speech-to-text, text-to-speech. Hands-free operation with any mic and speaker.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🧠</span> Multi-LLM Support</h3>
+                    <p>LM Studio, llama.cpp, Claude API, any OpenAI-compatible endpoint. Switch models per conversation.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🛠️</span> Extensible Tools</h3>
+                    <p>Web search, memory, notes, image generation, and more. Multi-step reasoning chains tools together.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">👤</span> Per-Chat Personas</h3>
+                    <p>Each chat has its own prompt, voice, tools, and personality. Switch chat = switch persona.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🔌</span> Plugin Architecture</h3>
+                    <p>Extend both backend (Python modules) and frontend (JS plugins). Sidebar auto-populates with controls.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">✏️</span> Prompt Engineering</h3>
+                    <p>Assembled prompts with swappable pieces. Spice injection keeps responses fresh. AI can edit its own prompt.</p>
+                </div>
+            </div>
+        </section>
+        
+        <section class="screenshots">
+            <h2>Screenshots</h2>
+            <div class="screenshot-grid">
+                <figure class="screenshot-item">
+                    <a href="screenshots/sapphire-ai.png" target="_blank">
+                        <img src="screenshots/sapphire-ai.png" alt="Main chat interface" loading="lazy">
+                    </a>
+                    <figcaption>Web UI with streaming responses</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/multi-step-tool-reasoning.png" target="_blank">
+                        <img src="screenshots/multi-step-tool-reasoning.png" alt="Multi-step reasoning" loading="lazy">
+                    </a>
+                    <figcaption>Multi-step tool reasoning</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/prompt-editor-assembled.png" target="_blank">
+                        <img src="screenshots/prompt-editor-assembled.png" alt="Prompt editor" loading="lazy">
+                    </a>
+                    <figcaption>Assembled prompt editor</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/theme-switcher.png" target="_blank">
+                        <img src="screenshots/theme-switcher.png" alt="Theme switcher" loading="lazy">
+                    </a>
+                    <figcaption>13 themes with live preview</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/settings-manager.png" target="_blank">
+                        <img src="screenshots/settings-manager.png" alt="Settings" loading="lazy">
+                    </a>
+                    <figcaption>Settings manager</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/image-generation.png" target="_blank">
+                        <img src="screenshots/image-generation.png" alt="Image generation" loading="lazy">
+                    </a>
+                    <figcaption>SDXL image generation</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/per-chat-settings.png" target="_blank">
+                        <img src="screenshots/per-chat-settings.png" alt="Per-chat settings" loading="lazy">
+                    </a>
+                    <figcaption>Per-chat persona settings</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/toolset-editor.png" target="_blank">
+                        <img src="screenshots/toolset-editor.png" alt="Toolset editor" loading="lazy">
+                    </a>
+                    <figcaption>Toolset editor</figcaption>
+                </figure>
+            </div>
+        </section>
+        
+        <section class="install">
+            <h2>Quick Start</h2>
+            <div class="code-block">
+<pre><span class="comment"># Linux only</span>
+<span class="cmd">sudo apt-get install libportaudio2</span>
+
+<span class="comment"># Create environment</span>
+<span class="cmd">conda create -n sapphire python=3.11</span>
+<span class="cmd">conda activate sapphire</span>
+
+<span class="comment"># Clone and run</span>
+<span class="cmd">git clone https://github.com/ddxfish/sapphire.git</span>
+<span class="cmd">cd sapphire</span>
+<span class="cmd">pip install -r requirements.txt</span>
+<span class="cmd">python main.py</span>
+
+<span class="comment"># Web UI at https://localhost:8073</span></pre>
+            </div>
+            <p class="requirements">Requires Python 3.10+, 12-16GB RAM. Local LLM via LM Studio recommended.</p>
+        </section>
+        
+        <section class="docs">
+            <h2>Documentation</h2>
+            <div class="docs-grid">
+                <a href="INSTALLATION.html" class="docs-link">Installation</a>
+                <a href="CONFIGURATION.html" class="docs-link">Configuration</a>
+                <a href="PROMPTS.html" class="docs-link">Prompts</a>
+                <a href="TOOLS.html" class="docs-link">Tools</a>
+                <a href="PLUGINS.html" class="docs-link">Plugins</a>
+                <a href="TECHNICAL.html" class="docs-link">Technical</a>
+            </div>
+        </section>
+    </div>
+    
+    <footer>
+        <div class="container">
+            <p>
+                <a href="https://github.com/ddxfish/sapphire">GitHub</a> · 
+                <a href="https://github.com/ddxfish/sapphire/blob/main/LICENSE">AGPL-3.0</a> · 
+                Built by <a href="https://github.com/ddxfish">ddxfish</a>
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
