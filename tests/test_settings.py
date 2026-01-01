@@ -280,8 +280,6 @@ class TestSettingsTiers:
             mgr = SettingsManager()
             
             assert mgr.validate_tier("DEFAULT_USERNAME") == "hot"
-            assert mgr.validate_tier("TTS_VOICE_NAME") == "hot"
-            assert mgr.validate_tier("TTS_SPEED") == "hot"
     
     def test_component_tier(self):
         """Component-reload settings should return 'component'."""

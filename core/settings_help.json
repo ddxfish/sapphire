@@ -241,18 +241,6 @@
     "short": "TTS server port number",
     "long": "Port number for the Kokoro TTS server. Default is 5012. Must match TTS_PRIMARY_SERVER URL. Requires restart to take effect."
   },
-  "TTS_VOICE_NAME": {
-    "short": "Fallback voice (use Chat Settings for per-chat)",
-    "long": "Default voice used when creating new chats or if per-chat settings are missing. For regular use, set voice in Chat Settings modal instead - each chat stores its own voice preference."
-  },
-  "TTS_SPEED": {
-    "short": "Fallback speed (use Chat Settings for per-chat)",
-    "long": "Default speech speed for new chats. 1.0 is normal, higher is faster. For regular use, set speed in Chat Settings modal instead - each chat stores its own speed preference."
-  },
-  "TTS_PITCH_SHIFT": {
-    "short": "Fallback pitch (use Chat Settings for per-chat)",
-    "long": "Default voice pitch for new chats. 1.0 is original, higher raises pitch, lower deepens it. For regular use, set pitch in Chat Settings modal instead - each chat stores its own pitch preference."
-  },
   "TTS_PRIMARY_SERVER": {
     "short": "Primary TTS server endpoint URL",
     "long": "URL of the main text-to-speech server. Format: http://hostname:port. System will try this server first for all TTS requests. If it fails, falls back to TTS_FALLBACK_SERVER if configured."

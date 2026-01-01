@@ -71,7 +71,7 @@ Note: Write prompt from first person. You should refer to yourself as "I" in pro
 - Open the default chat (upper left), click **... → Chat Settings**
 - Select your preferred prompt
 - Choose which tools the AI can use
-- Set TTS voice, pitch, speed
+- Set TTS voice, pitch, speed. (try: Heart, Sky, Isabella)
 - **SPICE** adds randomness to replies
 - **Inject Date** lets the AI know the current date
 - **Custom text** is always included in addition to system prompt

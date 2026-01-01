@@ -314,7 +314,6 @@ class SettingsManager:
         # Tier 1: Hot-reload (safe to change at runtime)
         hot_reload = {
             'DEFAULT_USERNAME', 'DEFAULT_AI_NAME',
-            'TTS_VOICE_NAME', 'TTS_SPEED', 'TTS_PITCH_SHIFT',
             'GENERATION_DEFAULTS', 'LLM_MAX_HISTORY', 'LLM_MAX_TOKENS',
             'FORCE_THINKING', 'THINKING_PREFILL'
         }

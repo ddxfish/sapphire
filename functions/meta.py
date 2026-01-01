@@ -1,6 +1,6 @@
 # functions/meta.py
 """
-Meta tools for AI to inspect/modify its own system prompt.
+Meta tools for AI to inspect/modify its own system prompt and settings.
 Tools are dynamically filtered based on prompt mode (monolith vs assembled).
 """
 
@@ -21,13 +21,26 @@ AVAILABLE_FUNCTIONS = [
     'remove_piece',
     'create_piece',
     'list_pieces',
+    'change_ai_name',
+    'change_username',
+    'set_tts_voice',
+    'set_tts_pitch',
+    'set_tts_speed',
 ]
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt'],
-    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces'],
+    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_ai_name', 'change_username', 'set_tts_voice', 'set_tts_pitch', 'set_tts_speed'],
+    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_ai_name', 'change_username', 'set_tts_voice', 'set_tts_pitch', 'set_tts_speed'],
 }
+
+# Available TTS voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female)
+TTS_VOICES = [
+    'am_adam', 'am_eric', 'am_liam', 'am_michael',
+    'af_bella', 'af_nicole', 'af_heart', 'af_jessica', 'af_sarah', 'af_river', 'af_sky',
+    'bf_emma', 'bf_isabella', 'bf_alice', 'bf_lily',
+    'bm_george', 'bm_daniel', 'bm_lewis',
+]
 
 TOOLS = [
     # === Universal tools (both modes) ===
@@ -52,16 +65,16 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "switch_prompt",
-            "description": "Switch to a different system prompt by name.",
+            "description": "Switch to a different system prompt. Without name, lists available prompts.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Name of prompt to activate"
+                        "description": "Optional: name of prompt to activate"
                     }
                 },
-                "required": ["name"]
+                "required": []
             }
         }
     },
@@ -79,6 +92,91 @@ TOOLS = [
                     }
                 },
                 "required": ["reason"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "change_ai_name",
+            "description": "Change your AI name. Updates the setting used in prompts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Your new name"
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "change_username",
+            "description": "Change the user's name. Updates the setting used in prompts.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The user's new name"
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_tts_voice",
+            "description": "Set TTS voice. Without name, lists current/available voices. Prefix indicates accent/gender: am=American Male, af=American Female, bm=British Male, bf=British Female.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Optional: voice name to set"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_tts_pitch",
+            "description": "Set TTS pitch. Recommended range 0.9 to 1.1.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "number",
+                        "description": "Pitch value (0.5 to 1.5)"
+                    }
+                },
+                "required": ["value"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_tts_speed",
+            "description": "Set TTS speed. Recommended range 0.9 to 1.3.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "value": {
+                        "type": "number",
+                        "description": "Speed value (0.5 to 2.0)"
+                    }
+                },
+                "required": ["value"]
             }
         }
     },
@@ -314,6 +412,39 @@ def _is_list_component(component: str) -> bool:
     return component in ['emotions', 'extras']
 
 
+def _get_active_chat(headers: dict, api_url: str) -> str:
+    """Get the active chat name."""
+    try:
+        response = requests.get(
+            f"{api_url}/chats/active",
+            headers=headers,
+            timeout=5
+        )
+        if response.status_code == 200:
+            return response.json().get('active_chat', 'default')
+    except Exception as e:
+        logger.error(f"Failed to get active chat: {e}")
+    return 'default'
+
+
+def _update_chat_setting(setting_key: str, value, headers: dict, api_url: str) -> tuple:
+    """Update a single chat setting (voice, pitch, speed)."""
+    chat_name = _get_active_chat(headers, api_url)
+    
+    try:
+        response = requests.put(
+            f"{api_url}/chats/{chat_name}/settings",
+            json={"settings": {setting_key: value}},
+            headers=headers,
+            timeout=5
+        )
+        if response.status_code != 200:
+            return False, f"Failed to update {setting_key}: {response.text}"
+        return True, "OK"
+    except Exception as e:
+        return False, f"Failed to update {setting_key}: {e}"
+
+
 def execute(function_name, arguments, config):
     """Execute meta-related functions."""
     main_api_url = app_config.API_URL
@@ -347,8 +478,33 @@ def execute(function_name, arguments, config):
             from core.modules.system import prompts
             
             name = arguments.get('name')
+            
+            # No name provided - list available prompts
             if not name:
-                return "Prompt name is required.", False
+                try:
+                    response = requests.get(
+                        f"{main_api_url}/api/prompts",
+                        headers=headers,
+                        timeout=5
+                    )
+                    if response.status_code == 200:
+                        prompt_list = response.json().get('prompts', [])
+                        current = prompts.get_active_preset_name()
+                        lines = [f"Current: {current}", "Available prompts:"]
+                        for p in prompt_list:
+                            marker = " *" if p['name'] == current else ""
+                            lines.append(f"  {p['name']} ({p['type']}, {p['char_count']} chars){marker}")
+                        return '\n'.join(lines), True
+                    else:
+                        # Fallback to local list
+                        available = prompts.list_prompts()
+                        current = prompts.get_active_preset_name()
+                        return f"Current: {current}\nAvailable: {', '.join(available)}", True
+                except Exception as e:
+                    logger.error(f"Failed to list prompts: {e}")
+                    available = prompts.list_prompts()
+                    current = prompts.get_active_preset_name()
+                    return f"Current: {current}\nAvailable: {', '.join(available)}", True
             
             name = _normalize_name(name)
             prompt_data = prompts.get_prompt(name)
@@ -384,6 +540,121 @@ def execute(function_name, arguments, config):
             response.raise_for_status()
             
             return f"Chat reset. Reason: {reason}", True
+
+        elif function_name == "change_ai_name":
+            name = arguments.get('name', '').strip()
+            if not name:
+                return "Name is required.", False
+            
+            response = requests.put(
+                f"{main_api_url}/api/settings/DEFAULT_AI_NAME",
+                json={"value": name, "persist": True},
+                headers=headers,
+                timeout=5
+            )
+            
+            if response.status_code != 200:
+                return f"Failed to change AI name: {response.text}", False
+            
+            logger.info(f"AI name changed to: {name}")
+            return f"AI name changed to {name}. This will appear in prompts using {{ai_name}}.", True
+
+        elif function_name == "change_username":
+            name = arguments.get('name', '').strip()
+            if not name:
+                return "Name is required.", False
+            
+            response = requests.put(
+                f"{main_api_url}/api/settings/DEFAULT_USERNAME",
+                json={"value": name, "persist": True},
+                headers=headers,
+                timeout=5
+            )
+            
+            if response.status_code != 200:
+                return f"Failed to change username: {response.text}", False
+            
+            logger.info(f"Username changed to: {name}")
+            return f"Username changed to {name}. This will appear in prompts using {{user_name}}.", True
+
+        elif function_name == "set_tts_voice":
+            name = arguments.get('name', '').strip().lower()
+            
+            # No name - list available voices with current
+            if not name:
+                current_voice = "unknown"
+                try:
+                    chat_name = _get_active_chat(headers, main_api_url)
+                    response = requests.get(
+                        f"{main_api_url}/chats/{chat_name}/settings",
+                        headers=headers,
+                        timeout=5
+                    )
+                    if response.status_code == 200:
+                        current_voice = response.json().get('settings', {}).get('voice', 'af_heart')
+                except Exception:
+                    pass
+                
+                lines = [f"Current: {current_voice}", "Available voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female):"]
+                am = [v for v in TTS_VOICES if v.startswith('am_')]
+                af = [v for v in TTS_VOICES if v.startswith('af_')]
+                bm = [v for v in TTS_VOICES if v.startswith('bm_')]
+                bf = [v for v in TTS_VOICES if v.startswith('bf_')]
+                lines.append(f"  American Male: {', '.join(am)}")
+                lines.append(f"  American Female: {', '.join(af)}")
+                lines.append(f"  British Male: {', '.join(bm)}")
+                lines.append(f"  British Female: {', '.join(bf)}")
+                return '\n'.join(lines), True
+            
+            if name not in TTS_VOICES:
+                return f"Voice '{name}' not found. Use set_tts_voice without params to list available voices.", False
+            
+            success, msg = _update_chat_setting('voice', name, headers, main_api_url)
+            if not success:
+                return msg, False
+            
+            logger.info(f"TTS voice changed to: {name}")
+            return f"Voice changed to {name}.", True
+
+        elif function_name == "set_tts_pitch":
+            value = arguments.get('value')
+            if value is None:
+                return "Pitch value is required. Recommended range: 0.9 to 1.1.", False
+            
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return "Pitch must be a number.", False
+            
+            if value < 0.5 or value > 1.5:
+                return "Pitch must be between 0.5 and 1.5. Recommended range: 0.9 to 1.1.", False
+            
+            success, msg = _update_chat_setting('pitch', value, headers, main_api_url)
+            if not success:
+                return msg, False
+            
+            logger.info(f"TTS pitch changed to: {value}")
+            return f"Pitch changed to {value}.", True
+
+        elif function_name == "set_tts_speed":
+            value = arguments.get('value')
+            if value is None:
+                return "Speed value is required. Recommended range: 0.9 to 1.3.", False
+            
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return "Speed must be a number.", False
+            
+            if value < 0.5 or value > 2.0:
+                return "Speed must be between 0.5 and 2.0. Recommended range: 0.9 to 1.3.", False
+            
+            success, msg = _update_chat_setting('speed', value, headers, main_api_url)
+            if not success:
+                return msg, False
+            
+            logger.info(f"TTS speed changed to: {value}")
+            return f"Speed changed to {value}.", True
 
         # === Monolith-only tools ===
         

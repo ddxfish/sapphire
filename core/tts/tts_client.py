@@ -30,9 +30,10 @@ class TTSClient:
         self.primary_server = config.TTS_PRIMARY_SERVER
         self.fallback_server = config.TTS_FALLBACK_SERVER
         self.fallback_timeout = config.TTS_FALLBACK_TIMEOUT
-        self.pitch_shift = config.TTS_PITCH_SHIFT
-        self.speed = config.TTS_SPEED
-        self.voice_name = config.TTS_VOICE_NAME
+        # Hardcoded fallbacks - chat settings override these on chat load
+        self.pitch_shift = 0.98
+        self.speed = 1.3
+        self.voice_name = "af_heart"
         self.temp_dir = get_temp_dir()
         
         self.lock = threading.Lock()

@@ -10,13 +10,14 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# System defaults for chat settings - pulled from config where possible
+# System defaults for chat settings - hardcoded fallbacks
+# Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
 SYSTEM_DEFAULTS = {
     "prompt": "default",  
     "ability": "default", 
-    "voice": getattr(config, 'TTS_VOICE', 'af_heart'),
-    "pitch": getattr(config, 'TTS_PITCH_SHIFT', 0.94),
-    "speed": getattr(config, 'TTS_SPEED', 1.3),
+    "voice": "af_heart",
+    "pitch": 0.98,
+    "speed": 1.3,
     "spice_enabled": True,
     "spice_turns": 3,
     "inject_datetime": False,

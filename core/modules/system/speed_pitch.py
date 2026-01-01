@@ -1,12 +1,11 @@
 import logging
-import config
 
 logger = logging.getLogger(__name__)
 
 # Pitch functions
 def get_default_pitch():
-    """Get the default pitch from config."""
-    return getattr(config, 'TTS_PITCH_SHIFT', 0.94)
+    """Get the default pitch (hardcoded fallback)."""
+    return 0.98
 
 def change_pitch(system, pitch_input):
     """Change the TTS pitch."""
@@ -24,8 +23,8 @@ def change_pitch(system, pitch_input):
 
 # Speed functions
 def get_default_speed():
-    """Get the default speech speed from config."""
-    return getattr(config, 'TTS_SPEED', 1.3)
+    """Get the default speech speed (hardcoded fallback)."""
+    return 1.3
 
 def change_speed(system, speed_input):
     """Change the TTS speech speed."""
