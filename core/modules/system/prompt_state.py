@@ -200,6 +200,11 @@ def is_assembled_mode():
     return preset == "assembled" or preset in prompt_manager.scenario_presets
 
 
+def get_prompt_mode() -> str:
+    """Get current prompt mode as string for tool filtering."""
+    return "assembled" if is_assembled_mode() else "monolith"
+
+
 def set_component(component_type, value):
     """Set a component - only works in assembled mode."""
     global _assembled_state

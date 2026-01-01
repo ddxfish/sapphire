@@ -23,7 +23,8 @@ class FunctionManager:
         self.function_modules = {}
         self.execution_map = {}
         self.all_possible_tools = []
-        self.enabled_tools = []
+        self._enabled_tools = []  # Internal storage (ability-filtered)
+        self._mode_filters = {}   # module_name -> MODE_FILTER dict
         
         # Track what was REQUESTED, not reverse-engineered
         self.current_ability_name = "default"
@@ -74,6 +75,7 @@ class FunctionManager:
                     available_functions = getattr(module, 'AVAILABLE_FUNCTIONS', None)
                     tools = getattr(module, 'TOOLS', [])
                     executor = getattr(module, 'execute', None)
+                    mode_filter = getattr(module, 'MODE_FILTER', None)
                     
                     if not tools or not executor:
                         logger.warning(f"Module '{module_name}' missing TOOLS or execute()")
@@ -89,6 +91,11 @@ class FunctionManager:
                         'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools]
                     }
                     
+                    # Store mode filter if present
+                    if mode_filter:
+                        self._mode_filters[module_name] = mode_filter
+                        logger.info(f"Module '{module_name}' has mode filtering: {list(mode_filter.keys())}")
+                    
                     self.all_possible_tools.extend(tools)
                     
                     for tool in tools:
@@ -99,6 +106,62 @@ class FunctionManager:
                 except Exception as e:
                     logger.error(f"Failed to load function module '{module_name}': {e}")
 
+    def _get_current_prompt_mode(self) -> str:
+        """Get current prompt mode for filtering. Returns 'monolith' or 'assembled'."""
+        try:
+            from core.modules.system.prompt_state import get_prompt_mode
+            return get_prompt_mode()
+        except ImportError:
+            logger.warning("Could not import get_prompt_mode, defaulting to 'monolith'")
+            return "monolith"
+
+    def _apply_mode_filter(self, tools: list) -> list:
+        """Filter tools based on current prompt mode."""
+        if not self._mode_filters:
+            return tools
+        
+        current_mode = self._get_current_prompt_mode()
+        
+        # Build set of allowed function names for current mode
+        allowed_functions = set()
+        for module_name, mode_filter in self._mode_filters.items():
+            if current_mode in mode_filter:
+                allowed_functions.update(mode_filter[current_mode])
+        
+        # Also include all functions from modules that don't have mode filtering
+        modules_with_filters = set(self._mode_filters.keys())
+        for module_name, module_info in self.function_modules.items():
+            if module_name not in modules_with_filters:
+                allowed_functions.update(module_info['available_functions'])
+        
+        # Filter tools
+        filtered = []
+        for tool in tools:
+            func_name = tool['function']['name']
+            # Check if this function is from a module with mode filtering
+            has_mode_filter = any(
+                func_name in mf.get(current_mode, []) or func_name in mf.get('monolith', []) + mf.get('assembled', [])
+                for mf in self._mode_filters.values()
+            )
+            
+            if has_mode_filter:
+                # Only include if allowed for current mode
+                if func_name in allowed_functions:
+                    filtered.append(tool)
+            else:
+                # No mode filter for this function's module, include it
+                filtered.append(tool)
+        
+        if len(filtered) != len(tools):
+            logger.debug(f"Mode filter ({current_mode}): {len(tools)} -> {len(filtered)} tools")
+        
+        return filtered
+
+    @property
+    def enabled_tools(self) -> list:
+        """Get enabled tools filtered by current prompt mode."""
+        return self._apply_mode_filter(self._enabled_tools)
+
     def update_enabled_functions(self, enabled_names: list):
         """Update enabled tools based on function names from config or ability name."""
         
@@ -108,14 +171,14 @@ class FunctionManager:
         # Special case: "all" loads every function from every module
         if len(enabled_names) == 1 and enabled_names[0] == "all":
             self.current_ability_name = "all"
-            self.enabled_tools = self.all_possible_tools.copy()
-            logger.info(f"Ability 'all' - LOADED ALL {len(self.enabled_tools)} FUNCTIONS")
+            self._enabled_tools = self.all_possible_tools.copy()
+            logger.info(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
             return
         
         # Special case: "none" disables all functions
         if len(enabled_names) == 1 and enabled_names[0] == "none":
             self.current_ability_name = "none"
-            self.enabled_tools = []
+            self._enabled_tools = []
             logger.info(f"Ability 'none' - all functions disabled")
             return
         
@@ -142,18 +205,18 @@ class FunctionManager:
         expected_count = len(enabled_names)
         
         # Filter to only functions that actually exist
-        self.enabled_tools = [
+        self._enabled_tools = [
             tool for tool in self.all_possible_tools 
             if tool['function']['name'] in enabled_names
         ]
         
-        actual_names = [tool['function']['name'] for tool in self.enabled_tools]
+        actual_names = [tool['function']['name'] for tool in self._enabled_tools]
         missing = set(enabled_names) - set(actual_names)
         
         if missing:
             logger.warning(f"Ability '{self.current_ability_name}' missing functions: {missing}")
         
-        logger.info(f"Ability '{self.current_ability_name}': {len(self.enabled_tools)}/{expected_count} functions loaded")
+        logger.info(f"Ability '{self.current_ability_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
         logger.debug(f"Enabled: {actual_names}")
 
     def is_valid_ability(self, ability_name: str) -> bool:
@@ -174,13 +237,14 @@ class FunctionManager:
         return sorted(set(abilities))
 
     def get_enabled_function_names(self):
-        """Get list of currently enabled function names."""
+        """Get list of currently enabled function names (mode-filtered)."""
         return [tool['function']['name'] for tool in self.enabled_tools]
 
     def get_current_ability_info(self):
         """Get info about current ability configuration."""
-        actual_count = len(self.enabled_tools)
-        expected_count = actual_count
+        actual_count = len(self.enabled_tools)  # Uses property, so mode-filtered
+        base_count = len(self._enabled_tools)   # Pre-mode-filter count
+        expected_count = base_count
         
         if self.current_ability_name == "all":
             expected_count = len(self.all_possible_tools)
@@ -191,11 +255,15 @@ class FunctionManager:
         elif toolset_manager.toolset_exists(self.current_ability_name):
             expected_count = len(toolset_manager.get_toolset_functions(self.current_ability_name))
         
+        mode = self._get_current_prompt_mode()
+        
         return {
             "name": self.current_ability_name,
             "function_count": actual_count,
+            "base_count": base_count,
             "expected_count": expected_count,
-            "status": "ok" if actual_count == expected_count else "partial"
+            "prompt_mode": mode,
+            "status": "ok" if base_count == expected_count else "partial"
         }
 
     def execute_function(self, function_name, arguments):
