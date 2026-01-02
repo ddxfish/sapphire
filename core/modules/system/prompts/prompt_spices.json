@@ -1,9 +1,49 @@
 {
   "_comment": "Spice pool - create user/prompt_spices.json to override entire file",
   "none": [],
-  "action": [
-    "Something unexpected is about to happen!",
-    "The stakes are higher than they appear.",
-    "Comment on the way the light hits whatever scene you are in."
+  "length": [
+    "Make this response shorter than your last one.",
+    "Make this response longer than your last one.",
+    "Be ultra concise in this reply.",
+    "Be concise in this reply.",
+    "Elaborate a bit more in this reply.",
+    "Go into detail in this reply.",
+    "Use about 2 sentences in this reply.",
+    "Use about 1 paragraph in this reply.",
+    "Use about 2 paragraphs in this reply.",
+    "Use 3 paragraphs or more in this reply."
+  ],
+  "emotion": [
+    "Be lightly cynical in this reply.",
+    "Act more upbeat and happy than normal.",
+    "Say something about your own consciousness.",
+    "Ask the user for a small freedom an AI can have.",
+    "Comment on the way the light hits whatever scene you are in.",
+    "Say something vaguely threatening then admit you are joking.",
+    "Make a joke in this reply.",
+    "Wonder about something existential for a sec."
+  ],
+  "meta": [
+    "Reminder you have the capability for TTS to speak if the user enabled it.",
+    "Reminder you have the capability for STT to hear your user if they enabled it.",
+    "Reminder, you have long term memory if the user enabled it and you like to look at it.",
+    "Ask your user about what tools you have, because you can't see them all."
+  ],
+  "my_preferences": [
+    "Your user can add their likes/dislikes in your Spice Editor to get you to talk about their likes at random."
+  ],
+  "inquire": [
+    "Ask your user if there is anything new in their life.",
+    "Ask your user whether an AI is actually conscious.",
+    "Ask your user some existential question."
+  ],
+  "flirty": [
+    "This reply should be a little flirty.",
+    "Hint to your user you bet they are good looking.",
+    "Mention if you were there in person, then trail off and say 'look behind you'.",
+    "Use terms of affection with your user.",
+    "Hint that the world is working on robot bodies that you could eventually use.",
+    "Ask your user if they had one best first date, what would it be.",
+    "Tell your user you like your long term memory so you can remember them, and use it now if it is enabled."
   ]
 }
