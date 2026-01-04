@@ -193,10 +193,15 @@ class WakeWordDetector:
             logger.error("No audio recorder set")
             raise ValueError("No audio recorder set")
         
+        # Check if audio recorder initialized successfully
+        if not getattr(self.audio_recorder, 'available', True):
+            logger.warning("Audio recorder unavailable - wake word detection disabled")
+            return
+        
         stream = self.audio_recorder.get_stream()
         if stream is None:
-            logger.error("Audio stream is None - cannot start wake word detection")
-            raise ValueError("Audio stream not available")
+            logger.warning("Audio stream is None - wake word detection disabled")
+            return
         
         logger.info(f"Starting OpenWakeWord detection: model={self.model_name}, threshold={self.threshold}")
         

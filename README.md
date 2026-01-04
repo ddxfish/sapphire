@@ -110,7 +110,7 @@ Web UI: https://localhost:8073 (self-signed SSL)
 - Ubuntu 22.04+ or Windows 11+
 - Python 3.10+ 
 - Local LLM (LM Studio)
-- 12-16GB system RAM
+- 16GB+ system RAM
 - (recommended) miniconda
 - (recommended) Nvidia graphics card
 

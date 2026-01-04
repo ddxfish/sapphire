@@ -5,7 +5,7 @@
 - Ubuntu 22.04+ or Windows 11+
 - Python 3.10+ 
 - Local LLM (LM Studio)
-- 12-16GB system RAM
+- 16GB+ system RAM
 - (recommended) miniconda
 - (recommended) Nvidia graphics card
 
@@ -19,7 +19,7 @@ sudo apt install libportaudio2 python3-dev
 
 ## Python Environment
 
-Install [miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install) especially if you plan on using GPU. 
+Install [miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install) especially if you plan on using GPU. Conda is better than venv for this use case.
 
 ```bash
 conda create -n sapphire python=3.11
