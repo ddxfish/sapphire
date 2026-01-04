@@ -40,11 +40,116 @@ class TTSClient:
         self.should_stop = threading.Event()
         self._is_playing = False
         
+        # Audio output device setup
+        self.output_device = None
+        self.output_rate = None
+        self.audio_available = False
+        self._init_output_device()
+        
         logger.info(f"TTS client initialized: {self.primary_server}")
         logger.info(f"Voice: {self.voice_name}, Speed: {self.speed}, Pitch: {self.pitch_shift}")
         logger.info(f"Temp directory: {self.temp_dir}")
-        logger.info("Audio playback: sounddevice (cross-platform)")
+        
+        if self.audio_available:
+            logger.info(f"Audio playback: device={self.output_device}, rate={self.output_rate}Hz")
+        else:
+            logger.warning("Audio playback unavailable - TTS will be silent")
     
+    def _init_output_device(self):
+        """Find a working output device and compatible sample rate."""
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            logger.error(f"Failed to query audio devices: {e}")
+            return
+        
+        # Build list of output devices
+        output_devices = []
+        for i, dev in enumerate(devices):
+            if dev['max_output_channels'] > 0:
+                logger.debug(f"Found output device {i}: {dev['name']} "
+                           f"(default_rate={dev['default_samplerate']})")
+                output_devices.append((i, dev))
+        
+        if not output_devices:
+            logger.error("No output devices found")
+            return
+        
+        # Try default device first
+        try:
+            default_out = sd.default.device[1]
+            if default_out is not None:
+                for idx, dev_info in output_devices:
+                    if idx == default_out:
+                        if self._try_output_device(idx, dev_info):
+                            return
+                        break
+        except Exception:
+            pass
+        
+        # Fall back to any available device
+        for idx, dev_info in output_devices:
+            if self._try_output_device(idx, dev_info):
+                return
+        
+        logger.error("No compatible output device found")
+
+    def _try_output_device(self, device_index, dev_info):
+        """Try to use an output device, testing sample rates.
+        
+        Returns True if device is usable.
+        """
+        device_name = dev_info['name']
+        default_rate = int(dev_info['default_samplerate'])
+        
+        # Common TTS output rates to test
+        test_rates = [default_rate, 48000, 44100, 24000, 22050, 16000]
+        # Remove duplicates while preserving order
+        seen = set()
+        test_rates = [r for r in test_rates if not (r in seen or seen.add(r))]
+        
+        for rate in test_rates:
+            if self._test_output_rate(device_index, rate):
+                self.output_device = device_index
+                self.output_rate = rate
+                self.audio_available = True
+                logger.info(f"Output device '{device_name}' OK at {rate}Hz")
+                return True
+        
+        logger.debug(f"Output device '{device_name}' failed all sample rate tests")
+        return False
+
+    def _test_output_rate(self, device_index, sample_rate):
+        """Test if output device supports a given sample rate."""
+        try:
+            # Generate tiny silent audio to test
+            test_audio = np.zeros(int(sample_rate * 0.01), dtype=np.float32)
+            sd.play(test_audio, sample_rate, device=device_index)
+            sd.stop()
+            logger.debug(f"Output device {device_index} OK at {sample_rate}Hz")
+            return True
+        except Exception as e:
+            logger.debug(f"Output device {device_index} failed at {sample_rate}Hz: {e}")
+            return False
+
+    def _resample(self, audio_data, from_rate, to_rate):
+        """Resample audio from one rate to another using linear interpolation."""
+        if from_rate == to_rate:
+            return audio_data
+        
+        ratio = to_rate / from_rate
+        old_length = len(audio_data)
+        new_length = int(old_length * ratio)
+        
+        if new_length == 0:
+            return np.array([], dtype=audio_data.dtype)
+        
+        old_indices = np.arange(old_length)
+        new_indices = np.linspace(0, old_length - 1, new_length)
+        resampled = np.interp(new_indices, old_indices, audio_data.astype(np.float64))
+        
+        return resampled.astype(audio_data.dtype)
+
     def set_voice(self, voice_name):
         """Set the voice for TTS"""
         self.voice_name = voice_name
@@ -80,6 +185,10 @@ class TTSClient:
 
     def speak(self, text):
         """Send text to TTS server and play audio"""
+        if not self.audio_available:
+            logger.warning("Audio playback unavailable - skipping TTS")
+            return False
+        
         processed_text = re.sub(
             r'<think>.*?</think>|<reasoning>.*?</reasoning>|<tools>.*?</tools>|\[.*?\]|\*|\n',
             '', text, flags=re.DOTALL
@@ -172,6 +281,9 @@ class TTSClient:
         
     def _generate_and_play_audio(self, text):
         """Generate audio from server and play it using sounddevice"""
+        if not self.audio_available:
+            return
+        
         try:
             audio_data, samplerate = self._fetch_audio(text)
             if audio_data is None or self.should_stop.is_set():
@@ -182,8 +294,18 @@ class TTSClient:
                     return
                 self._is_playing = True
             
-            # Play audio (blocking call, but we check should_stop in a loop)
-            sd.play(audio_data, samplerate)
+            # Convert stereo to mono if needed
+            if len(audio_data.shape) > 1:
+                audio_data = audio_data.mean(axis=1)
+            
+            # Resample to output device rate if different
+            if samplerate != self.output_rate:
+                logger.debug(f"Resampling audio from {samplerate}Hz to {self.output_rate}Hz")
+                audio_data = self._resample(audio_data, samplerate, self.output_rate)
+                samplerate = self.output_rate
+            
+            # Play audio
+            sd.play(audio_data, samplerate, device=self.output_device)
             
             # Wait for playback to complete or stop signal
             while sd.get_stream() and sd.get_stream().active and not self.should_stop.is_set():
@@ -194,7 +316,7 @@ class TTSClient:
                 sd.stop()
                 
         except Exception as e:
-            logger.error(f"Error in TTS client: {e}")
+            logger.error(f"Error in TTS playback: {e}")
         finally:
             with self.lock:
                 self._is_playing = False

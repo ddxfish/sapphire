@@ -9,6 +9,7 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
 class WakeWordDetector:
     def __init__(self, model_name=None):
         """Initialize OpenWakeWord detector.
@@ -52,18 +53,104 @@ class WakeWordDetector:
         self.running = False
         self.listen_thread = None
         
-        # Pre-generate tone for wake acknowledgment
-        # sd.play() handles all buffering/latency cross-platform
-        duration = getattr(config, 'WAKE_TONE_DURATION', 0.15)
-        frequency = getattr(config, 'WAKE_TONE_FREQUENCY', 880)
-        sample_rate = getattr(config, 'PLAYBACK_SAMPLE_RATE', 48000)
+        # Output device setup for tone playback
+        self.output_device = None
+        self.output_rate = None
+        self.tone_available = False
+        self._init_output_device()
         
-        samples = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
-        self.tone_data = (0.5 * np.sin(2 * np.pi * frequency * samples)).astype(np.float32)
-        self.tone_sample_rate = sample_rate
+        # Pre-generate tone for wake acknowledgment
+        self.tone_data = None
+        self.tone_sample_rate = None
+        if self.tone_available:
+            self._generate_tone()
         
         self.callback_pool = ThreadPoolExecutor(max_workers=config.CALLBACK_THREAD_POOL_SIZE)
         self.playback_lock = threading.Lock()
+
+    def _init_output_device(self):
+        """Find a working output device for tone playback."""
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            logger.error(f"Failed to query audio devices for tone: {e}")
+            return
+        
+        # Build list of output devices
+        output_devices = []
+        for i, dev in enumerate(devices):
+            if dev['max_output_channels'] > 0:
+                logger.debug(f"Found output device {i}: {dev['name']} "
+                           f"(default_rate={dev['default_samplerate']})")
+                output_devices.append((i, dev))
+        
+        if not output_devices:
+            logger.warning("No output devices found - wake tone disabled")
+            return
+        
+        # Try default device first
+        try:
+            default_out = sd.default.device[1]
+            if default_out is not None:
+                for idx, dev_info in output_devices:
+                    if idx == default_out:
+                        if self._try_output_device(idx, dev_info):
+                            return
+                        break
+        except Exception:
+            pass
+        
+        # Fall back to any available device
+        for idx, dev_info in output_devices:
+            if self._try_output_device(idx, dev_info):
+                return
+        
+        logger.warning("No compatible output device found - wake tone disabled")
+
+    def _try_output_device(self, device_index, dev_info):
+        """Try to use an output device, testing sample rates."""
+        device_name = dev_info['name']
+        default_rate = int(dev_info['default_samplerate'])
+        
+        # Preferred rate from config, then common rates
+        preferred_rate = getattr(config, 'PLAYBACK_SAMPLE_RATE', 48000)
+        test_rates = [preferred_rate, default_rate, 48000, 44100, 24000, 22050]
+        # Remove duplicates while preserving order
+        seen = set()
+        test_rates = [r for r in test_rates if not (r in seen or seen.add(r))]
+        
+        for rate in test_rates:
+            if self._test_output_rate(device_index, rate):
+                self.output_device = device_index
+                self.output_rate = rate
+                self.tone_available = True
+                logger.info(f"Tone output device '{device_name}' OK at {rate}Hz")
+                return True
+        
+        logger.debug(f"Output device '{device_name}' failed all sample rate tests")
+        return False
+
+    def _test_output_rate(self, device_index, sample_rate):
+        """Test if output device supports a given sample rate."""
+        try:
+            test_audio = np.zeros(int(sample_rate * 0.01), dtype=np.float32)
+            sd.play(test_audio, sample_rate, device=device_index)
+            sd.stop()
+            return True
+        except Exception as e:
+            logger.debug(f"Output device {device_index} failed at {sample_rate}Hz: {e}")
+            return False
+
+    def _generate_tone(self):
+        """Generate wake acknowledgment tone at detected output rate."""
+        duration = getattr(config, 'WAKE_TONE_DURATION', 0.15)
+        frequency = getattr(config, 'WAKE_TONE_FREQUENCY', 880)
+        
+        samples = np.linspace(0, duration, int(self.output_rate * duration), endpoint=False)
+        self.tone_data = (0.5 * np.sin(2 * np.pi * frequency * samples)).astype(np.float32)
+        self.tone_sample_rate = self.output_rate
+        
+        logger.debug(f"Generated wake tone: {frequency}Hz, {duration}s, {self.output_rate}Hz sample rate")
 
     def set_audio_recorder(self, audio_recorder):
         self.audio_recorder = audio_recorder
@@ -77,9 +164,12 @@ class WakeWordDetector:
 
     def _play_tone(self):
         """Play wake acknowledgment tone using sounddevice's built-in playback."""
+        if not self.tone_available or self.tone_data is None:
+            return
+        
         with self.playback_lock:
             try:
-                sd.play(self.tone_data, self.tone_sample_rate)
+                sd.play(self.tone_data, self.tone_sample_rate, device=self.output_device)
                 # Don't wait - let it play async
             except Exception as e:
                 logger.debug(f"Tone playback error: {e}")
