@@ -478,15 +478,16 @@ class TestMagicMethods:
             
             assert mgr.TEST_KEY == "test_value"
     
-    def test_getattr_returns_none_for_missing(self):
-        """settings.MISSING should return None."""
+    def test_getattr_raises_for_missing(self):
+        """settings.MISSING should raise AttributeError (enables getattr defaults)."""
         from core.settings_manager import SettingsManager
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             
-            assert mgr.MISSING is None
+            with pytest.raises(AttributeError):
+                _ = mgr.MISSING
     
     def test_contains(self):
         """'key in settings' should work."""
@@ -717,3 +718,183 @@ class TestGetAllSettings:
             settings["KEY"] = "modified"
             
             assert mgr._config["KEY"] == "value"
+
+
+class TestGetAttrFallback:
+    """Test __getattr__ behavior for missing keys.
+    
+    Critical: This tests the fix for the getattr(config, 'KEY', default) trap.
+    Before the fix, missing keys returned None instead of raising AttributeError,
+    which caused Python's getattr to think it got a valid value and skip the default.
+    """
+    
+    def test_getattr_returns_existing_key(self):
+        """__getattr__ should return value for existing keys."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"EXISTING_KEY": "test_value"}
+            
+            assert mgr.EXISTING_KEY == "test_value"
+    
+    def test_getattr_raises_for_missing_key(self):
+        """__getattr__ should raise AttributeError for missing keys."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {}
+            
+            with pytest.raises(AttributeError) as exc_info:
+                _ = mgr.NONEXISTENT_KEY
+            
+            assert "NONEXISTENT_KEY" in str(exc_info.value)
+    
+    def test_getattr_with_default_uses_default_for_missing(self):
+        """getattr(settings, 'MISSING', default) should return default."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {}
+            
+            result = getattr(mgr, "MISSING_KEY", "fallback_value")
+            assert result == "fallback_value"
+    
+    def test_getattr_with_default_uses_value_for_existing(self):
+        """getattr(settings, 'EXISTS', default) should return actual value."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"EXISTS": "real_value"}
+            
+            result = getattr(mgr, "EXISTS", "fallback_value")
+            assert result == "real_value"
+    
+    def test_getattr_private_key_delegation(self):
+        """Keys starting with _ should use object.__getattribute__."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"PUBLIC": "value"}
+            mgr._private = "private_value"
+            
+            # Should access instance attribute, not _config
+            assert mgr._private == "private_value"
+    
+    def test_none_value_is_valid(self):
+        """A key explicitly set to None should return None, not raise."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"NULLABLE_KEY": None}
+            
+            # Should return None, not raise AttributeError
+            assert mgr.NULLABLE_KEY is None
+    
+    def test_false_value_is_valid(self):
+        """A key set to False should return False, not trigger default."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"DISABLED_FEATURE": False}
+            
+            result = getattr(mgr, "DISABLED_FEATURE", True)
+            assert result is False
+    
+    def test_empty_list_is_valid(self):
+        """A key set to [] should return [], not trigger default."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"EMPTY_LIST": []}
+            
+            result = getattr(mgr, "EMPTY_LIST", ["default"])
+            assert result == []
+
+
+class TestConfigProxyChain:
+    """Test the full config.py -> settings_manager chain.
+    
+    This tests the actual usage pattern throughout Sapphire:
+    getattr(config, 'SETTING', default)
+    """
+    
+    def test_config_proxy_existing_key(self, tmp_path):
+        """config.KEY should return value for existing keys."""
+        # Create minimal defaults file
+        core_dir = tmp_path / "core"
+        core_dir.mkdir()
+        defaults = {"test": {"TEST_SETTING": "test_value"}}
+        (core_dir / "settings_defaults.json").write_text(json.dumps(defaults))
+        
+        # Create user dir (required by SettingsManager)
+        (tmp_path / "user").mkdir()
+        
+        # Patch BASE_DIR and reimport
+        with patch('core.settings_manager.Path') as mock_path:
+            mock_path.return_value.parent.parent = tmp_path
+            mock_path.__class__ = Path
+            
+            # Create fresh manager with our tmp_path
+            from core.settings_manager import SettingsManager
+            mgr = SettingsManager()
+            mgr.BASE_DIR = tmp_path
+            mgr._load_defaults()
+            mgr._merge_settings()
+            
+            assert mgr.TEST_SETTING == "test_value"
+    
+    def test_config_proxy_getattr_fallback(self):
+        """getattr(config_proxy, 'MISSING', default) should return default."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {"EXISTING": "value"}
+            
+            # This is the exact pattern used throughout Sapphire
+            result = getattr(mgr, "RECORDER_BLOCKSIZE_FALLBACKS", [1024, 512])
+            assert result == [1024, 512]
+    
+    def test_real_world_blocksize_pattern(self):
+        """Test the exact pattern that was broken before the fix."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {
+                "RECORDER_SAMPLE_RATES": [44100, 48000]
+                # Note: RECORDER_BLOCKSIZE_FALLBACKS intentionally missing
+            }
+            
+            # This pattern exists in recorder.py and audio_recorder.py
+            blocksizes = getattr(mgr, 'RECORDER_BLOCKSIZE_FALLBACKS', [1024, 512, 2048, 4096])
+            
+            # Before fix: would return None (iteration would fail)
+            # After fix: returns the default list
+            assert blocksizes == [1024, 512, 2048, 4096]
+            assert isinstance(blocksizes, list)
+    
+    def test_iteration_over_fallback_list(self):
+        """Ensure fallback list is actually iterable (the crash scenario)."""
+        from core.settings_manager import SettingsManager
+        
+        with patch.object(SettingsManager, '__init__', lambda self: None):
+            mgr = SettingsManager()
+            mgr._config = {}  # Empty - key missing
+            
+            blocksizes = getattr(mgr, 'RECORDER_BLOCKSIZE_FALLBACKS', [1024, 512])
+            
+            # This would raise TypeError before the fix
+            result = []
+            for blocksize in blocksizes:
+                result.append(blocksize)
+            
+            assert result == [1024, 512]

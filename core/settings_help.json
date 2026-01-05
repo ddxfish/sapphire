@@ -10,15 +10,6 @@
     "long": "The name the AI uses to refer to itself. Used in prompts via the {ai_name} placeholder. Changes apply immediately to new messages. This affects how the AI identifies itself in conversations."
   },
   
-  "TRANSCRIBE_SAMPLE_RATE": {
-    "short": "Audio sample rate for transcription (Hz)",
-    "long": "Sample rate used when processing audio for speech-to-text. 16000 Hz (16 kHz) is standard for speech recognition and provides good accuracy with reasonable file sizes."
-  },
-  "TRANSCRIBE_CHANNELS": {
-    "short": "Number of audio channels for transcription",
-    "long": "Audio channel count for transcription. Set to 1 for mono (recommended for speech), or 2 for stereo. Mono is more efficient for voice recognition."
-  },
-  
   "SOCKS_ENABLED": {
     "short": "Route web requests through SOCKS proxy",
     "long": "When enabled, all web search and URL fetching will route through the specified SOCKS proxy server. Useful for privacy, accessing region-restricted content, or routing through Tor. Requires SOCKS_HOST and SOCKS_PORT to be configured."
@@ -70,10 +61,6 @@
     "short": "Enable wake word detection",
     "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Uses OpenWakeWord with ONNX inference for cross-platform compatibility. Continuous audio monitoring may impact system resources on low-power devices."
   },
-  "WAKEWORD_DEVICE_INDEX": {
-    "short": "Audio input device for wake word detection",
-    "long": "Index of the audio input device to use for wake word listening. Set to null to use system default. Use 'arecord -l' or similar tools to list available devices and their indices."
-  },
   "CHUNK_SIZE": {
     "short": "Audio buffer chunk size in samples",
     "long": "Size of audio chunks for wake word detection. 1280 samples (80ms at 16kHz) is optimal for OpenWakeWord. Larger multiples of 1280 increase efficiency but add latency."
@@ -85,10 +72,6 @@
   "FRAME_SKIP": {
     "short": "Skip frames during wake word processing",
     "long": "Process every Nth audio frame to reduce CPU usage. 1 means process every frame (most accurate). Higher values reduce CPU load but may miss wake words. 1-3 is recommended range."
-  },
-  "RECORDING_SAMPLE_RATE": {
-    "short": "Sample rate for audio recording (Hz)",
-    "long": "Sample rate used when recording audio input. 16000 Hz (16 kHz) is standard for speech and works well with most speech recognition models. Higher rates use more storage/bandwidth without much benefit for speech."
   },
   "PLAYBACK_SAMPLE_RATE": {
     "short": "Sample rate for audio playback (Hz)",

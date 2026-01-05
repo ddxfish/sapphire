@@ -478,7 +478,9 @@ class SettingsManager:
         """Allow settings.KEY_NAME access"""
         if key.startswith('_'):
             return object.__getattribute__(self, key)
-        return self._config.get(key)
+        if key in self._config:
+            return self._config[key]
+        raise AttributeError(f"Setting '{key}' not found")
     
     def __contains__(self, key):
         """Allow 'key in settings' checks"""
