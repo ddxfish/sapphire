@@ -102,8 +102,10 @@ class TTSClient:
         device_name = dev_info['name']
         default_rate = int(dev_info['default_samplerate'])
         
+        logger.info(f"Testing output device '{device_name}' (default_rate={default_rate})")
+        
         # Common TTS output rates to test
-        test_rates = [default_rate, 48000, 44100, 24000, 22050, 16000]
+        test_rates = [default_rate, 48000, 44100, 32000, 24000, 22050, 16000, 96000]
         # Remove duplicates while preserving order
         seen = set()
         test_rates = [r for r in test_rates if not (r in seen or seen.add(r))]
@@ -122,14 +124,17 @@ class TTSClient:
     def _test_output_rate(self, device_index, sample_rate):
         """Test if output device supports a given sample rate."""
         try:
-            # Generate tiny silent audio to test
-            test_audio = np.zeros(int(sample_rate * 0.01), dtype=np.float32)
-            sd.play(test_audio, sample_rate, device=device_index)
-            sd.stop()
-            logger.debug(f"Output device {device_index} OK at {sample_rate}Hz")
+            stream = sd.OutputStream(
+                device=device_index,
+                samplerate=sample_rate,
+                channels=1,
+                dtype=np.float32
+            )
+            stream.close()
+            logger.info(f"  -> {sample_rate}Hz: OK")
             return True
         except Exception as e:
-            logger.debug(f"Output device {device_index} failed at {sample_rate}Hz: {e}")
+            logger.debug(f"  -> {sample_rate}Hz: FAIL ({e})")
             return False
 
     def _resample(self, audio_data, from_rate, to_rate):
