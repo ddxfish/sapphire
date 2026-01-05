@@ -1,6 +1,6 @@
-// modal.js - Settings modal UI component
+// settings-modal.js - Settings modal UI orchestrator
 import settingsAPI from './settings-api.js';
-import { CATEGORIES, getCategoryForKey } from './settings-categories.js';
+import { TABS, CATEGORIES } from './settings-categories.js';
 import { showToast } from '../../shared/toast.js';
 
 class SettingsModal {
@@ -18,12 +18,11 @@ class SettingsModal {
     this.currentTheme = null;
     // Avatar paths
     this.avatarPaths = { user: null, assistant: null };
-    // Wakeword models (default fallback)
+    // Wakeword models
     this.wakewordModels = ['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', 'weather'];
   }
 
   async open() {
-    // Store original theme for cancel/revert
     this.originalTheme = localStorage.getItem('sapphire-theme') || 'dark';
     this.currentTheme = this.originalTheme;
     
@@ -45,13 +44,8 @@ class SettingsModal {
       this.tiers = tiersData.tiers;
       this.help = helpData.help || {};
       
-      // Load available themes
       await this.loadThemes();
-      
-      // Load available wakeword models
       await this.loadWakewordModels();
-      
-      // Load avatar paths
       await this.loadAvatarPaths();
     } catch (e) {
       console.error('Failed to load settings:', e);
@@ -94,9 +88,6 @@ class SettingsModal {
       if (res.ok) {
         const data = await res.json();
         this.wakewordModels = data.all || this.wakewordModels;
-        if (data.custom && data.custom.length > 0) {
-          console.log(`Loaded ${data.custom.length} custom wakeword model(s)`);
-        }
       }
     } catch (e) {
       console.warn('Could not load wakeword models, using defaults:', e);
@@ -136,181 +127,30 @@ class SettingsModal {
   }
 
   renderTabs() {
-    return Object.entries(CATEGORIES).map(([id, cat]) => `
+    return TABS.map(tab => `
       <button 
-        class="tab-btn ${id === this.currentTab ? 'active' : ''}" 
-        data-tab="${id}"
+        class="tab-btn ${tab.id === this.currentTab ? 'active' : ''}" 
+        data-tab="${tab.id}"
       >
-        <span class="tab-icon">${cat.icon}</span>
-        <span class="tab-label">${cat.name}</span>
+        <span class="tab-icon">${tab.icon}</span>
+        <span class="tab-label">${tab.name}</span>
       </button>
     `).join('');
   }
 
   renderTabContent() {
-    return Object.entries(CATEGORIES).map(([id, cat]) => {
-      if (id === 'appearance') {
-        return `
-          <div class="tab-content ${id === this.currentTab ? 'active' : ''}" data-tab="${id}">
-            <div class="tab-header">
-              <h3>${cat.icon} ${cat.name}</h3>
-              <p>${cat.description}</p>
-            </div>
-            ${this.renderAppearanceTab()}
-          </div>
-        `;
-      }
-      
-      if (id === 'identity') {
-        return `
-          <div class="tab-content ${id === this.currentTab ? 'active' : ''}" data-tab="${id}">
-            <div class="tab-header">
-              <h3>${cat.icon} ${cat.name}</h3>
-              <p>${cat.description}</p>
-            </div>
-            <div class="settings-list">
-              ${this.renderCategorySettings(cat.keys)}
-            </div>
-            ${this.renderAvatarUploadSection()}
-          </div>
-        `;
-      }
-      
-      if (id === 'system') {
-        return `
-          <div class="tab-content ${id === this.currentTab ? 'active' : ''}" data-tab="${id}">
-            <div class="tab-header">
-              <h3>${cat.icon} ${cat.name}</h3>
-              <p>${cat.description}</p>
-            </div>
-            ${this.renderSystemTabContent()}
-          </div>
-        `;
-      }
-      
-      return `
-        <div class="tab-content ${id === this.currentTab ? 'active' : ''}" data-tab="${id}">
-          <div class="tab-header">
-            <h3>${cat.icon} ${cat.name}</h3>
-            <p>${cat.description}</p>
-          </div>
-          <div class="settings-list">
-            ${this.renderCategorySettings(cat.keys)}
-          </div>
+    return TABS.map(tab => `
+      <div class="tab-content ${tab.id === this.currentTab ? 'active' : ''}" data-tab="${tab.id}">
+        <div class="tab-header">
+          <h3>${tab.icon} ${tab.name}</h3>
+          <p>${tab.description}</p>
         </div>
-      `;
-    }).join('');
-  }
-
-  renderAvatarUploadSection() {
-    const userPath = this.avatarPaths?.user || '/static/users/user.png';
-    const assistantPath = this.avatarPaths?.assistant || '/static/users/assistant.png';
-    const ts = Date.now();
-    
-    return `
-      <div class="avatar-upload-section">
-        <div class="avatar-column">
-          <h4>User Avatar</h4>
-          <img src="${userPath}?t=${ts}" alt="User" class="avatar-preview" id="user-avatar-preview" 
-               onerror="this.src='/static/users/user.png'">
-          <input type="file" id="user-avatar-input" accept=".png,.jpg,.jpeg,.gif,.webp" hidden>
-          <button class="btn btn-secondary" id="user-avatar-btn">Choose File</button>
-          <span class="avatar-hint">PNG, JPG, GIF, WEBP • Max 4MB</span>
-        </div>
-        <div class="avatar-column">
-          <h4>Assistant Avatar</h4>
-          <img src="${assistantPath}?t=${ts}" alt="Assistant" class="avatar-preview" id="assistant-avatar-preview"
-               onerror="this.src='/static/users/assistant.png'">
-          <input type="file" id="assistant-avatar-input" accept=".png,.jpg,.jpeg,.gif,.webp" hidden>
-          <button class="btn btn-secondary" id="assistant-avatar-btn">Choose File</button>
-          <span class="avatar-hint">PNG, JPG, GIF, WEBP • Max 4MB</span>
-        </div>
+        ${tab.render(this)}
       </div>
-    `;
+    `).join('');
   }
 
-  renderAppearanceTab() {
-    const themeOptions = this.availableThemes.map(theme => {
-      const selected = theme === this.currentTheme ? 'selected' : '';
-      const displayName = theme.charAt(0).toUpperCase() + theme.slice(1);
-      return `<option value="${theme}" ${selected}>${displayName}</option>`;
-    }).join('');
-
-    return `
-      <div class="appearance-container">
-        <div class="appearance-controls">
-          <div class="setting-row">
-            <div class="setting-label">
-              <label for="theme-select">Theme</label>
-              <div class="help-text-short">Choose your visual theme</div>
-            </div>
-            <div class="setting-input">
-              <select id="theme-select">${themeOptions}</select>
-            </div>
-          </div>
-        </div>
-        
-        <div class="theme-preview">
-          <div class="preview-titlebar">
-            <span class="preview-dots">
-              <span class="dot red"></span>
-              <span class="dot yellow"></span>
-              <span class="dot green"></span>
-            </span>
-            <span class="preview-title">Preview</span>
-          </div>
-          <div class="preview-content">
-            <p class="preview-text">Sample text showing how content appears with this theme.</p>
-            
-            <div class="preview-accordion">
-              <div class="preview-accordion-header">
-                <span class="preview-toggle">▼</span>
-                <span>Accordion Section</span>
-              </div>
-              <div class="preview-accordion-body">Collapsed content area</div>
-            </div>
-            
-            <div class="preview-buttons">
-              <span class="preview-btn primary">Primary</span>
-              <span class="preview-btn secondary">Secondary</span>
-              <span class="preview-btn danger">Danger</span>
-            </div>
-            
-            <div class="preview-messages">
-              <div class="preview-bubble user">User message bubble</div>
-              <div class="preview-bubble assistant">Assistant response bubble</div>
-            </div>
-            
-            <div class="preview-input">
-              <span class="preview-input-box">Type message...</span>
-              <span class="preview-send">Send</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  renderSystemTabContent() {
-    const systemCategory = CATEGORIES.system;
-    return `
-      <div class="system-tab-content">
-        ${systemCategory.keys.length > 0 ? `
-          <div class="settings-list">
-            ${this.renderCategorySettings(systemCategory.keys)}
-          </div>
-        ` : ''}
-        
-        <div class="system-danger-zone">
-          <h4>Danger Zone</h4>
-          <p>These actions are irreversible and will affect all settings.</p>
-          <button class="btn btn-danger btn-lg" id="settings-reset-all">Reset All Settings to Defaults</button>
-          <p class="warning-text">This will delete your user/settings.json file and revert everything to default values. This action cannot be undone.</p>
-        </div>
-      </div>
-    `;
-  }
-
+  // Generic settings renderer - used by tabs
   renderCategorySettings(keys) {
     return keys.map(key => {
       const value = this.settings[key];
@@ -348,7 +188,7 @@ class SettingsModal {
   renderInput(key, value, type) {
     const inputId = `setting-${key}`;
     
-    // Special case: WAKEWORD_MODEL dropdown
+    // Special: WAKEWORD_MODEL dropdown
     if (key === 'WAKEWORD_MODEL') {
       const options = this.wakewordModels.map(m => {
         const display = m.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -357,7 +197,7 @@ class SettingsModal {
       return `<select id="${inputId}" data-key="${key}">${options}</select>`;
     }
     
-    // Special case: WAKEWORD_FRAMEWORK dropdown
+    // Special: WAKEWORD_FRAMEWORK dropdown
     if (key === 'WAKEWORD_FRAMEWORK') {
       const frameworks = ['onnx', 'tflite'];
       const options = frameworks.map(f =>
@@ -435,6 +275,7 @@ class SettingsModal {
   }
 
   attachEventListeners() {
+    // Core modal listeners
     this.modal.querySelector('#settings-close').addEventListener('click', () => this.close());
     
     this.modal.addEventListener('click', (e) => {
@@ -446,18 +287,22 @@ class SettingsModal {
     };
     document.addEventListener('keydown', this.escHandler);
     
+    // Tab switching
     this.modal.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
     });
     
+    // Settings inputs
     this.modal.querySelectorAll('input, textarea, select').forEach(input => {
       input.addEventListener('change', (e) => this.handleInputChange(e));
     });
     
+    // Reset buttons
     this.modal.querySelectorAll('.reset-btn').forEach(btn => {
       btn.addEventListener('click', () => this.resetSetting(btn.dataset.key));
     });
     
+    // Help icons
     this.modal.querySelectorAll('.help-icon').forEach(icon => {
       icon.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -465,109 +310,18 @@ class SettingsModal {
       });
     });
     
+    // Footer buttons
     this.modal.querySelector('#settings-save').addEventListener('click', () => this.saveChanges());
     this.modal.querySelector('#settings-reload').addEventListener('click', () => this.reloadSettings());
     
-    const resetAllBtn = this.modal.querySelector('#settings-reset-all');
-    if (resetAllBtn) {
-      resetAllBtn.addEventListener('click', () => this.resetAll());
-    }
-    
-    // Theme dropdown handler
-    const themeSelect = this.modal.querySelector('#theme-select');
-    if (themeSelect) {
-      themeSelect.addEventListener('change', (e) => this.handleThemeChange(e.target.value));
-    }
-    
-    // Avatar upload handlers
-    this.attachAvatarListeners();
-  }
-
-  attachAvatarListeners() {
-    const userBtn = this.modal.querySelector('#user-avatar-btn');
-    const userInput = this.modal.querySelector('#user-avatar-input');
-    const assistantBtn = this.modal.querySelector('#assistant-avatar-btn');
-    const assistantInput = this.modal.querySelector('#assistant-avatar-input');
-    
-    if (userBtn && userInput) {
-      userBtn.addEventListener('click', () => userInput.click());
-      userInput.addEventListener('change', (e) => this.handleAvatarUpload('user', e.target.files[0]));
-    }
-    
-    if (assistantBtn && assistantInput) {
-      assistantBtn.addEventListener('click', () => assistantInput.click());
-      assistantInput.addEventListener('change', (e) => this.handleAvatarUpload('assistant', e.target.files[0]));
-    }
-  }
-
-  async handleAvatarUpload(role, file) {
-    if (!file) return;
-    
-    // Check existing avatar and confirm overwrite
-    const checkResult = await settingsAPI.checkAvatar(role).catch(() => ({ exists: false }));
-    if (checkResult.exists) {
-      if (!confirm(`Replace existing ${role} avatar?`)) {
-        // Reset file input
-        const input = this.modal.querySelector(`#${role}-avatar-input`);
-        if (input) input.value = '';
-        return;
+    // Tab-specific listeners
+    for (const tab of TABS) {
+      if (tab.attachListeners) {
+        const contentEl = this.modal.querySelector(`.tab-content[data-tab="${tab.id}"]`);
+        if (contentEl) {
+          tab.attachListeners(this, contentEl);
+        }
       }
-    }
-    
-    const btn = this.modal.querySelector(`#${role}-avatar-btn`);
-    const originalText = btn?.textContent;
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = 'Uploading...';
-    }
-    
-    try {
-      const result = await settingsAPI.uploadAvatar(role, file);
-      
-      // Update preview with cache-busted URL
-      const preview = this.modal.querySelector(`#${role}-avatar-preview`);
-      if (preview && result.path) {
-        preview.src = `${result.path}?t=${Date.now()}`;
-        this.avatarPaths[role] = result.path;
-      }
-      
-      showToast(`${role.charAt(0).toUpperCase() + role.slice(1)} avatar updated`, 'success');
-    } catch (e) {
-      console.error('Avatar upload failed:', e);
-      showToast(`Upload failed: ${e.message}`, 'error');
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = originalText;
-      }
-      // Reset file input
-      const input = this.modal.querySelector(`#${role}-avatar-input`);
-      if (input) input.value = '';
-    }
-  }
-
-  handleThemeChange(themeName) {
-    this.currentTheme = themeName;
-    
-    // Apply immediately to document
-    document.documentElement.setAttribute('data-theme', themeName);
-    
-    // Swap theme CSS file
-    this.loadThemeCSS(themeName);
-  }
-
-  loadThemeCSS(themeName) {
-    const existingLink = document.getElementById('theme-stylesheet');
-    const href = `/static/themes/${themeName}.css`;
-    
-    if (existingLink) {
-      existingLink.href = href;
-    } else {
-      const link = document.createElement('link');
-      link.id = 'theme-stylesheet';
-      link.rel = 'stylesheet';
-      link.href = href;
-      document.head.appendChild(link);
     }
   }
 
@@ -644,7 +398,6 @@ class SettingsModal {
       
       this.pendingChanges = {};
       
-      // Modal may have been closed during async operations
       if (!this.modal) return;
       
       await this.loadData();
@@ -686,10 +439,8 @@ class SettingsModal {
   }
 
   async resetAll() {
-    // First confirmation - basic
     if (!confirm('⚠️ Reset ALL settings to defaults?\n\nThis will erase all your customizations!')) return;
     
-    // Second confirmation - require typing
     const confirmText = prompt(
       '🚨 FINAL WARNING 🚨\n\n' +
       'This will:\n' +
@@ -722,6 +473,7 @@ class SettingsModal {
     
     content.innerHTML = this.renderTabContent();
     
+    // Re-attach input listeners
     this.modal.querySelectorAll('input, textarea, select').forEach(input => {
       input.addEventListener('change', (e) => this.handleInputChange(e));
     });
@@ -737,19 +489,15 @@ class SettingsModal {
       });
     });
     
-    const resetAllBtn = this.modal.querySelector('#settings-reset-all');
-    if (resetAllBtn) {
-      resetAllBtn.addEventListener('click', () => this.resetAll());
+    // Re-attach tab-specific listeners
+    for (const tab of TABS) {
+      if (tab.attachListeners) {
+        const contentEl = this.modal.querySelector(`.tab-content[data-tab="${tab.id}"]`);
+        if (contentEl) {
+          tab.attachListeners(this, contentEl);
+        }
+      }
     }
-    
-    // Re-attach theme handler
-    const themeSelect = this.modal.querySelector('#theme-select');
-    if (themeSelect) {
-      themeSelect.addEventListener('change', (e) => this.handleThemeChange(e.target.value));
-    }
-    
-    // Re-attach avatar handlers
-    this.attachAvatarListeners();
   }
 
   showHelpDetails(key) {
@@ -804,7 +552,11 @@ class SettingsModal {
     // Revert theme if changed but not saved
     if (this.currentTheme !== this.originalTheme) {
       document.documentElement.setAttribute('data-theme', this.originalTheme);
-      this.loadThemeCSS(this.originalTheme);
+      // Load original theme CSS
+      const existingLink = document.getElementById('theme-stylesheet');
+      if (existingLink) {
+        existingLink.href = `/static/themes/${this.originalTheme}.css`;
+      }
     }
     
     this.modal.classList.remove('active');
