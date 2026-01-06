@@ -373,7 +373,31 @@ export default {
     result.className = 'test-result';
     
     try {
-      const res = await fetch(`/api/llm/test/${key}`, { method: 'POST' });
+      // Collect current form values for this provider
+      const card = container.querySelector(`.provider-card[data-provider="${key}"]`);
+      const formData = {};
+      
+      card.querySelectorAll('.provider-field').forEach(input => {
+        const field = input.dataset.field;
+        if (!field || field === 'model_select') return;
+        if (field === 'api_key' && !input.value.trim()) return; // Don't send empty api_key
+        formData[field] = input.value;
+      });
+      
+      // Get model from dropdown or custom field
+      const modelSelect = card.querySelector('.model-select');
+      const modelCustom = card.querySelector('.model-custom');
+      if (modelSelect && modelSelect.value !== '__custom__') {
+        formData.model = modelSelect.value;
+      } else if (modelCustom && modelCustom.value.trim()) {
+        formData.model = modelCustom.value.trim();
+      }
+      
+      const res = await fetch(`/api/llm/test/${key}`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
       const data = await res.json();
       
       if (data.status === 'success') {

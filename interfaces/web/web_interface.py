@@ -542,7 +542,7 @@ def update_fallback_order():
 @app.route('/api/llm/test/<provider_key>', methods=['POST'])
 @require_login
 def test_llm_provider(provider_key):
-    return proxy(f'/api/llm/test/{provider_key}', 'POST', timeout=60)
+    return proxy(f'/api/llm/test/{provider_key}', 'POST', json=request.json, timeout=60)
 
 # =============================================================================
 # PROMPTS MANAGEMENT ROUTES (9 routes)

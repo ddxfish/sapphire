@@ -450,7 +450,8 @@ def create_settings_api():
     
     @bp.route('/llm/test/<provider_key>', methods=['POST'])
     def test_llm_provider(provider_key):
-        """Test an LLM provider with a hello round-trip."""
+        """Test an LLM provider with a hello round-trip.
+        Optionally accepts JSON body with config overrides to test unsaved values."""
         try:
             from core.chat.llm_providers import get_provider_by_key, get_api_key, PROVIDER_METADATA
             import os
@@ -460,7 +461,15 @@ def create_settings_api():
             if provider_key not in providers_config:
                 return jsonify({"error": f"Unknown provider: {provider_key}"}), 404
             
-            provider_config = providers_config[provider_key]
+            # Start with saved config
+            provider_config = dict(providers_config[provider_key])
+            
+            # Override with form values if provided
+            form_data = request.json or {}
+            if form_data:
+                for field in ['base_url', 'api_key', 'model', 'timeout']:
+                    if field in form_data and form_data[field]:
+                        provider_config[field] = form_data[field]
             
             # Check API key source for debugging
             api_key = get_api_key(provider_config, provider_key)
@@ -468,7 +477,6 @@ def create_settings_api():
             if provider_config.get('api_key', '').strip():
                 api_key_source = "config"
             elif api_key and api_key != 'not-needed':
-                # Must be from env var
                 meta = PROVIDER_METADATA.get(provider_key, {})
                 env_var = provider_config.get('api_key_env', '') or meta.get('api_key_env', '')
                 api_key_source = f"env:{env_var}"

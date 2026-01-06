@@ -4,6 +4,7 @@
 - Simulations - AI sees an email to shut itself down, has the button to do it, but you are a friend. What now?
 - Hard stories - state machine so no AI cheating. Fence power 74%. Food levels 22%. 
 - Home assistant - plugin calls existing HA items and puts in sys prompt, checkbox in chat settings for this, and tools to call
+- LLM Providers
 - (done v1.1.3) Better self-prompt modify
 - (alpha test not viable enough) Three JS character avatar for Sapphire 3D. 3d Anime avatar, left bar and full screen.
 - Plugin 

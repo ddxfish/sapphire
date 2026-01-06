@@ -333,7 +333,8 @@ class SettingsManager:
         hot_reload = {
             'DEFAULT_USERNAME', 'DEFAULT_AI_NAME',
             'GENERATION_DEFAULTS', 'LLM_MAX_HISTORY', 'LLM_MAX_TOKENS',
-            'FORCE_THINKING', 'THINKING_PREFILL'
+            'FORCE_THINKING', 'THINKING_PREFILL',
+            'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT'
         }
         
         # Tier 2: Component reload (need to reconnect/reinit)
