@@ -255,7 +255,7 @@ def create_settings_api():
     def get_setting_help(key):
         """Get help text for a specific setting"""
         try:
-            help_path = Path(__file__).parent.parent / 'settings_help.json'
+            help_path = Path(__file__).parent / 'settings_help.json'
             
             if not help_path.exists():
                 return jsonify({"error": "Help file not found"}), 404

@@ -12,6 +12,6 @@ def __getattr__(name):
     """Forward all config.SOMETHING to settings_manager"""
     return getattr(_settings, name)
 
-# For backwards compatibility with 'key in config' checks
-def __contains__(key):
-    return key in _settings
+def __dir__():
+    """Enable IDE autocompletion by exposing available settings"""
+    return list(_settings._config.keys())
