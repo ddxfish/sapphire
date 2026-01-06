@@ -12,7 +12,7 @@ from .module_loader import ModuleLoader
 from .function_manager import FunctionManager
 from .chat_streaming import StreamingChat
 from .chat_tool_calling import ToolCallingEngine, filter_to_thinking_only
-from .llm_providers import get_provider, get_provider_for_url
+from .llm_providers import get_provider, get_provider_for_url, get_provider_by_key, get_first_available_provider
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,20 @@ class LLMChat:
         logger.info("LLMChat.__init__ starting...")
         self.system = system
         
-        # Initialize both LLM providers upfront
-        self.provider_primary = self._init_provider(config.LLM_PRIMARY, "primary")
-        self.provider_fallback = self._init_provider(config.LLM_FALLBACK, "fallback")
+        # Provider cache - populated lazily
+        self._provider_cache = {}
+        
+        # Support both old and new config formats
+        if hasattr(config, 'LLM_PROVIDERS') and config.LLM_PROVIDERS:
+            # New format: LLM_PROVIDERS dict + LLM_FALLBACK_ORDER
+            self._use_new_config = True
+            logger.info(f"Using new LLM_PROVIDERS config with {len(config.LLM_PROVIDERS)} providers")
+        else:
+            # Legacy format: LLM_PRIMARY/LLM_FALLBACK
+            self._use_new_config = False
+            self.provider_primary = self._init_provider_legacy(getattr(config, 'LLM_PRIMARY', {}), "primary")
+            self.provider_fallback = self._init_provider_legacy(getattr(config, 'LLM_FALLBACK', {}), "fallback")
+            logger.info("Using legacy LLM_PRIMARY/LLM_FALLBACK config")
         
         if isinstance(history, ChatSessionManager):
             self.session_manager = history
@@ -49,26 +60,24 @@ class LLMChat:
         
         logger.info("LLMChat.__init__ completed")
 
-    def _init_provider(self, llm_config, name):
-        """Initialize an LLM provider from config dict with auto-detection."""
+    def _init_provider_legacy(self, llm_config, name):
+        """Initialize an LLM provider from legacy config dict."""
         if not llm_config.get("enabled", False):
             logger.info(f"LLM {name} is disabled")
             return None
         
-        # Auto-detect provider from URL if not specified
         if "provider" not in llm_config:
             base_url = llm_config.get("base_url", "")
             detected = get_provider_for_url(base_url)
             llm_config = {**llm_config, "provider": detected}
-            logger.info(f"Auto-detected provider '{detected}' for {name} from URL")
         
         try:
             provider = get_provider(llm_config, config.LLM_REQUEST_TIMEOUT)
             if provider:
-                logger.info(f"Initialized {name} provider [{provider.provider_name}]: {llm_config['base_url']}")
+                logger.info(f"Initialized {name} provider [{provider.provider_name}]: {llm_config.get('base_url', 'N/A')}")
             return provider
         except Exception as e:
-            logger.error(f"Failed to init {name} provider ({llm_config.get('base_url')}): {e}")
+            logger.error(f"Failed to init {name} provider: {e}")
             return None
             
     def set_system_prompt(self, prompt_content: str) -> bool:
@@ -362,27 +371,72 @@ class LLMChat:
             return error_text
 
     def _select_provider(self):
-        """Select LLM provider with primary->fallback logic. Returns provider or raises."""
+        """Select LLM provider using per-chat settings or fallback order. Returns provider or raises."""
         
-        # Try primary
-        if self.provider_primary and config.LLM_PRIMARY.get("enabled"):
-            try:
-                if self.provider_primary.health_check():
-                    logger.info(f"Using primary LLM [{self.provider_primary.provider_name}]: {self.provider_primary.model}")
-                    return self.provider_primary
-            except Exception as e:
-                logger.warning(f"Primary LLM health check failed: {e}")
+        if self._use_new_config:
+            providers_config = config.LLM_PROVIDERS
+            fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
+            
+            # Check per-chat LLM settings
+            chat_settings = self.session_manager.get_chat_settings()
+            chat_primary = chat_settings.get('llm_primary', 'auto')
+            chat_fallback = chat_settings.get('llm_fallback', 'auto')
+            
+            # If chat has specific provider set (not "auto"), try that first
+            if chat_primary and chat_primary != 'auto':
+                provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT)
+                if provider:
+                    try:
+                        if provider.health_check():
+                            logger.info(f"Using chat-specific primary '{chat_primary}' [{provider.provider_name}]")
+                            return provider
+                    except Exception as e:
+                        logger.warning(f"Chat primary '{chat_primary}' health check failed: {e}")
+                
+                # Try chat-specific fallback if primary failed
+                if chat_fallback and chat_fallback != 'auto':
+                    provider = get_provider_by_key(chat_fallback, providers_config, config.LLM_REQUEST_TIMEOUT)
+                    if provider:
+                        try:
+                            if provider.health_check():
+                                logger.info(f"Using chat-specific fallback '{chat_fallback}' [{provider.provider_name}]")
+                                return provider
+                        except Exception as e:
+                            logger.warning(f"Chat fallback '{chat_fallback}' health check failed: {e}")
+            
+            # Fall through to global fallback order (auto mode)
+            result = get_first_available_provider(
+                providers_config,
+                fallback_order,
+                config.LLM_REQUEST_TIMEOUT
+            )
+            
+            if result:
+                provider_key, provider = result
+                logger.info(f"Using provider '{provider_key}' [{provider.provider_name}]: {provider.model}")
+                return provider
+            
+            raise ConnectionError("No LLM providers available")
         
-        # Try fallback
-        if self.provider_fallback and config.LLM_FALLBACK.get("enabled"):
-            try:
-                if self.provider_fallback.health_check():
-                    logger.info(f"Using fallback LLM [{self.provider_fallback.provider_name}]: {self.provider_fallback.model}")
-                    return self.provider_fallback
-            except Exception as e:
-                logger.error(f"Fallback LLM health check failed: {e}")
-        
-        raise ConnectionError("No LLM endpoints available")
+        else:
+            # Legacy config: LLM_PRIMARY/LLM_FALLBACK
+            if self.provider_primary and getattr(config, 'LLM_PRIMARY', {}).get("enabled"):
+                try:
+                    if self.provider_primary.health_check():
+                        logger.info(f"Using primary LLM [{self.provider_primary.provider_name}]: {self.provider_primary.model}")
+                        return self.provider_primary
+                except Exception as e:
+                    logger.warning(f"Primary LLM health check failed: {e}")
+            
+            if self.provider_fallback and getattr(config, 'LLM_FALLBACK', {}).get("enabled"):
+                try:
+                    if self.provider_fallback.health_check():
+                        logger.info(f"Using fallback LLM [{self.provider_fallback.provider_name}]: {self.provider_fallback.model}")
+                        return self.provider_fallback
+                except Exception as e:
+                    logger.error(f"Fallback LLM health check failed: {e}")
+            
+            raise ConnectionError("No LLM endpoints available")
 
     def reset(self):
         self.session_manager.clear()

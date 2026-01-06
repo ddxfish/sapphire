@@ -521,6 +521,30 @@ def get_wakeword_models():
     return proxy('/api/settings/wakeword-models')
 
 # =============================================================================
+# LLM PROVIDER ROUTES (4 routes)
+# =============================================================================
+
+@app.route('/api/llm/providers', methods=['GET'])
+@require_login
+def get_llm_providers():
+    return proxy('/api/llm/providers')
+
+@app.route('/api/llm/providers/<provider_key>', methods=['PUT'])
+@require_login
+def update_llm_provider(provider_key):
+    return proxy(f'/api/llm/providers/{provider_key}', 'PUT', json=request.json, timeout=10)
+
+@app.route('/api/llm/fallback-order', methods=['PUT'])
+@require_login
+def update_fallback_order():
+    return proxy('/api/llm/fallback-order', 'PUT', json=request.json, timeout=10)
+
+@app.route('/api/llm/test/<provider_key>', methods=['POST'])
+@require_login
+def test_llm_provider(provider_key):
+    return proxy(f'/api/llm/test/{provider_key}', 'POST', timeout=60)
+
+# =============================================================================
 # PROMPTS MANAGEMENT ROUTES (9 routes)
 # =============================================================================
 

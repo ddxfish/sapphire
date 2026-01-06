@@ -21,7 +21,9 @@ SYSTEM_DEFAULTS = {
     "spice_enabled": True,
     "spice_turns": 3,
     "inject_datetime": False,
-    "custom_context": ""
+    "custom_context": "",
+    "llm_primary": "auto",      # "auto" or provider key like "claude"
+    "llm_fallback": "auto"      # "auto" or provider key
 }
 
 def get_user_defaults() -> Dict[str, Any]:

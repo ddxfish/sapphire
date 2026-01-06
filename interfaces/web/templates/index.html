@@ -194,6 +194,20 @@
                         <label for="setting-custom-context">Custom Context:</label>
                         <textarea id="setting-custom-context" class="form-control" rows="3" placeholder="Custom text injected into system prompt..."></textarea>
                     </div>
+                    
+                    <div class="form-group">
+                        <label for="setting-llm-primary">Primary LLM:</label>
+                        <select id="setting-llm-primary" class="form-control">
+                            <option value="auto">Auto (follow fallback order)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="setting-llm-fallback">Fallback LLM:</label>
+                        <select id="setting-llm-fallback" class="form-control">
+                            <option value="auto">Auto (follow fallback order)</option>
+                        </select>
+                    </div>
                 </div>
             </div>
             

@@ -5,6 +5,8 @@ import { getElements, getTtsEnabled } from '../core/state.js';
 import { closeAllKebabs } from './chat-manager.js';
 import { updateScene } from './scene.js';
 
+let llmProviders = [];
+
 export async function openSettingsModal() {
     closeAllKebabs();
     const { chatSelect, settingsModal } = getElements();
@@ -54,6 +56,18 @@ export async function openSettingsModal() {
             console.warn('Could not load abilities list:', e);
         }
         
+        // Load LLM providers list
+        try {
+            const llmResp = await fetch('/api/llm/providers');
+            if (llmResp.ok) {
+                const llmData = await llmResp.json();
+                llmProviders = llmData.providers || [];
+                populateLlmDropdowns(settings);
+            }
+        } catch (e) {
+            console.warn('Could not load LLM providers:', e);
+        }
+        
         // Populate form
         document.getElementById('setting-prompt').value = settings.prompt || 'sapphire';
         document.getElementById('setting-ability').value = settings.ability || 'default';
@@ -87,6 +101,27 @@ export async function openSettingsModal() {
     }
 }
 
+function populateLlmDropdowns(settings) {
+    const primarySelect = document.getElementById('setting-llm-primary');
+    const fallbackSelect = document.getElementById('setting-llm-fallback');
+    
+    if (!primarySelect || !fallbackSelect) return;
+    
+    // Build options
+    const options = '<option value="auto">Auto (follow fallback order)</option>' +
+        llmProviders
+            .filter(p => p.enabled)
+            .map(p => `<option value="${p.key}">${p.display_name}${p.is_local ? ' 🏠' : ' ☁️'}</option>`)
+            .join('');
+    
+    primarySelect.innerHTML = options;
+    fallbackSelect.innerHTML = options;
+    
+    // Set current values
+    primarySelect.value = settings.llm_primary || 'auto';
+    fallbackSelect.value = settings.llm_fallback || 'auto';
+}
+
 export async function saveSettings() {
     const { chatSelect, settingsModal } = getElements();
     
@@ -103,7 +138,9 @@ export async function saveSettings() {
             spice_enabled: document.getElementById('setting-spice').checked,
             spice_turns: parseInt(document.getElementById('setting-spice-turns').value) || 3,
             inject_datetime: document.getElementById('setting-datetime').checked,
-            custom_context: document.getElementById('setting-custom-context').value
+            custom_context: document.getElementById('setting-custom-context').value,
+            llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
+            llm_fallback: document.getElementById('setting-llm-fallback')?.value || 'auto'
         };
         
         await api.updateChatSettings(chatName, settings);
@@ -141,7 +178,9 @@ export async function saveAsDefaults() {
             spice_enabled: document.getElementById('setting-spice').checked,
             spice_turns: parseInt(document.getElementById('setting-spice-turns').value) || 3,
             inject_datetime: document.getElementById('setting-datetime').checked,
-            custom_context: document.getElementById('setting-custom-context').value
+            custom_context: document.getElementById('setting-custom-context').value,
+            llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
+            llm_fallback: document.getElementById('setting-llm-fallback')?.value || 'auto'
         };
         
         const res = await fetch('/api/settings/chat-defaults', {

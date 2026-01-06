@@ -359,4 +359,191 @@ def create_settings_api():
             logger.error(f"Error getting wakeword models: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
     
+    # =========================================================================
+    # LLM PROVIDER ENDPOINTS
+    # =========================================================================
+    
+    @bp.route('/llm/providers', methods=['GET'])
+    def get_llm_providers():
+        """Get all configured LLM providers with metadata for UI."""
+        try:
+            from core.chat.llm_providers import get_available_providers, PROVIDER_METADATA
+            import os
+            
+            providers_config = settings.get('LLM_PROVIDERS', {})
+            fallback_order = settings.get('LLM_FALLBACK_ORDER', [])
+            
+            providers = get_available_providers(providers_config)
+            
+            # Add env var status for each provider
+            for p in providers:
+                key = p['key']
+                config = providers_config.get(key, {})
+                meta = PROVIDER_METADATA.get(key, {})
+                env_var = config.get('api_key_env') or meta.get('api_key_env', '')
+                p['env_var'] = env_var
+                p['has_env_key'] = bool(env_var and os.environ.get(env_var))
+                p['has_config_key'] = bool(config.get('api_key', '').strip())
+            
+            return jsonify({
+                "status": "success",
+                "providers": providers,
+                "fallback_order": fallback_order,
+                "metadata": PROVIDER_METADATA,
+                "count": len(providers)
+            })
+        except Exception as e:
+            logger.error(f"Error getting LLM providers: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/llm/providers/<provider_key>', methods=['PUT'])
+    def update_llm_provider(provider_key):
+        """Update a specific LLM provider config."""
+        try:
+            data = request.json
+            if not data:
+                return jsonify({"error": "No data provided"}), 400
+            
+            providers_config = settings.get('LLM_PROVIDERS', {})
+            
+            if provider_key not in providers_config:
+                return jsonify({"error": f"Unknown provider: {provider_key}"}), 404
+            
+            # Merge updates into existing config
+            providers_config[provider_key].update(data)
+            settings.set('LLM_PROVIDERS', providers_config, persist=True)
+            
+            logger.info(f"Updated LLM provider '{provider_key}': {list(data.keys())}")
+            
+            return jsonify({
+                "status": "success",
+                "provider": provider_key,
+                "config": providers_config[provider_key]
+            })
+        except Exception as e:
+            logger.error(f"Error updating LLM provider: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/llm/fallback-order', methods=['PUT'])
+    def update_fallback_order():
+        """Update LLM fallback order."""
+        try:
+            data = request.json
+            if not data or 'order' not in data:
+                return jsonify({"error": "Missing 'order' in request"}), 400
+            
+            new_order = data['order']
+            if not isinstance(new_order, list):
+                return jsonify({"error": "'order' must be a list"}), 400
+            
+            settings.set('LLM_FALLBACK_ORDER', new_order, persist=True)
+            
+            logger.info(f"Updated LLM fallback order: {new_order}")
+            
+            return jsonify({
+                "status": "success",
+                "fallback_order": new_order
+            })
+        except Exception as e:
+            logger.error(f"Error updating fallback order: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/llm/test/<provider_key>', methods=['POST'])
+    def test_llm_provider(provider_key):
+        """Test an LLM provider with a hello round-trip."""
+        try:
+            from core.chat.llm_providers import get_provider_by_key, get_api_key, PROVIDER_METADATA
+            import os
+            
+            providers_config = settings.get('LLM_PROVIDERS', {})
+            
+            if provider_key not in providers_config:
+                return jsonify({"error": f"Unknown provider: {provider_key}"}), 404
+            
+            provider_config = providers_config[provider_key]
+            
+            # Check API key source for debugging
+            api_key = get_api_key(provider_config, provider_key)
+            api_key_source = "none"
+            if provider_config.get('api_key', '').strip():
+                api_key_source = "config"
+            elif api_key and api_key != 'not-needed':
+                # Must be from env var
+                meta = PROVIDER_METADATA.get(provider_key, {})
+                env_var = provider_config.get('api_key_env', '') or meta.get('api_key_env', '')
+                api_key_source = f"env:{env_var}"
+            elif api_key == 'not-needed':
+                api_key_source = "local"
+            
+            logger.info(f"Testing provider '{provider_key}': api_key_source={api_key_source}, has_key={bool(api_key)}")
+            
+            # Temporarily enable for test even if disabled
+            test_config = {**providers_config, provider_key: {**provider_config, 'enabled': True}}
+            
+            provider = get_provider_by_key(
+                provider_key, 
+                test_config, 
+                settings.get('LLM_REQUEST_TIMEOUT', 240.0)
+            )
+            
+            if not provider:
+                return jsonify({
+                    "status": "error",
+                    "error": "Failed to create provider instance",
+                    "details": f"API key source: {api_key_source}, has_key: {bool(api_key)}",
+                    "api_key_source": api_key_source
+                }), 400
+            
+            # Health check first
+            try:
+                healthy = provider.health_check()
+                if not healthy:
+                    return jsonify({
+                        "status": "error",
+                        "error": "Health check failed",
+                        "details": "Provider endpoint not reachable",
+                        "api_key_source": api_key_source
+                    }), 503
+            except Exception as health_err:
+                return jsonify({
+                    "status": "error",
+                    "error": "Health check failed",
+                    "details": str(health_err),
+                    "api_key_source": api_key_source
+                }), 503
+            
+            # Actual hello test
+            try:
+                test_messages = [
+                    {"role": "user", "content": "Say 'Hello from Sapphire!' and nothing else."}
+                ]
+                
+                response = provider.chat_completion(
+                    messages=test_messages,
+                    generation_params={"max_tokens": 50, "temperature": 0.1}
+                )
+                
+                reply = response.content or ""
+                
+                return jsonify({
+                    "status": "success",
+                    "provider": provider_key,
+                    "model": provider.model,
+                    "response": reply[:200],
+                    "usage": response.usage,
+                    "api_key_source": api_key_source
+                })
+                
+            except Exception as chat_err:
+                return jsonify({
+                    "status": "error",
+                    "error": "Chat test failed",
+                    "details": str(chat_err)[:300],
+                    "api_key_source": api_key_source
+                }), 500
+                
+        except Exception as e:
+            logger.error(f"Error testing LLM provider: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+    
     return bp
