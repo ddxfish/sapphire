@@ -185,6 +185,54 @@
 .toast.warning { background: var(--warning-bg); }
 .toast.info { background: var(--info-bg); }
 
+/* Action Toast (with buttons) */
+.toast.toast-action {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    animation: toastIn var(--transition-slow) forwards;
+}
+
+.toast-message {
+    flex: 1;
+}
+
+.toast-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.toast-btn {
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: var(--font-sm);
+    transition: opacity var(--transition-fast);
+}
+
+.toast-btn:hover {
+    opacity: 0.85;
+}
+
+.toast-btn-action {
+    background: var(--text-bright);
+    color: var(--bg-dark);
+    font-weight: 600;
+}
+
+.toast-btn-dismiss {
+    background: transparent;
+    color: var(--text-bright);
+    opacity: 0.7;
+    padding: 6px 8px;
+}
+
+.toast-btn-dismiss:hover {
+    opacity: 1;
+}
+
 @keyframes toastIn { to { opacity: 1; transform: translateX(0); } }
 @keyframes toastOut { to { opacity: 0; transform: translateX(100px); } }
 

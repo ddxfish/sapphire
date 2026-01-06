@@ -185,3 +185,66 @@ export async function handleLogout() {
         window.location.href = '/login';
     }
 }
+
+export async function handleRestart() {
+    closeAllKebabs();
+    if (!confirm('Restart Sapphire? The page will reload when the server is back.')) {
+        return;
+    }
+    try {
+        await fetch('/api/system/restart', { method: 'POST' });
+        showRestartingScreen();
+    } catch (e) {
+        console.error('Restart failed:', e);
+        alert('Restart request failed: ' + e.message);
+    }
+}
+
+function showRestartingScreen() {
+    document.body.innerHTML = `
+        <div style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;font-family:system-ui,sans-serif;background:#1a1a2e;">
+            <div style="font-size:1.5rem;color:#888;">Restarting Sapphire...</div>
+            <div id="restart-status" style="font-size:1rem;color:#666;">Waiting for server...</div>
+            <button id="manual-refresh-btn" style="display:none;padding:12px 24px;font-size:1rem;cursor:pointer;background:#4a9eff;color:white;border:none;border-radius:6px;">
+                Click to Refresh
+            </button>
+        </div>
+    `;
+    
+    // Show manual button after 5 seconds regardless
+    setTimeout(() => {
+        const btn = document.getElementById('manual-refresh-btn');
+        if (btn) {
+            btn.style.display = 'block';
+            btn.addEventListener('click', () => window.location.reload());
+        }
+    }, 5000);
+    
+    // Start polling after 2 second delay
+    setTimeout(() => pollForServer(), 2000);
+}
+
+function pollForServer(attempts = 0) {
+    const statusEl = document.getElementById('restart-status');
+    const maxAttempts = 30;
+    
+    if (attempts >= maxAttempts) {
+        if (statusEl) statusEl.textContent = 'Server may be ready. Click button to refresh.';
+        return;
+    }
+    
+    if (statusEl) statusEl.textContent = `Checking server... (${attempts + 1}/${maxAttempts})`;
+    
+    fetch('/api/settings', { method: 'GET' })
+        .then(r => {
+            if (r.ok) {
+                if (statusEl) statusEl.textContent = 'Server is back! Refreshing...';
+                setTimeout(() => window.location.reload(), 500);
+            } else {
+                setTimeout(() => pollForServer(attempts + 1), 1000);
+            }
+        })
+        .catch(() => {
+            setTimeout(() => pollForServer(attempts + 1), 1000);
+        });
+}

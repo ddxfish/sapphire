@@ -15,7 +15,8 @@ import {
     handleImportFile,
     toggleKebab,
     closeAllKebabs,
-    handleLogout
+    handleLogout,
+    handleRestart
 } from '../features/chat-manager.js';
 import { 
     openSettingsModal, 
@@ -158,6 +159,9 @@ export function bindAllEvents() {
     
     // Logout
     document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
+    
+    // Restart
+    document.getElementById('restart-btn')?.addEventListener('click', handleRestart);
     
     // Document-level events
     document.addEventListener('visibilitychange', () => handleVisibilityChange(triggerSendWithText));

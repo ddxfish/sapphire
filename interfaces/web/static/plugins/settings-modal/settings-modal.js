@@ -1,7 +1,7 @@
 // settings-modal.js - Settings modal UI orchestrator
 import settingsAPI from './settings-api.js';
 import { TABS, CATEGORIES } from './settings-categories.js';
-import { showToast } from '../../shared/toast.js';
+import { showToast, showActionToast } from '../../shared/toast.js';
 
 class SettingsModal {
   constructor() {
@@ -386,7 +386,15 @@ class SettingsModal {
       showToast(`Saved ${Object.keys(parsedChanges).length} settings`, 'success');
       
       if (result.restart_required) {
-        showToast('Restart required - some settings need system restart', 'info');
+        const keys = result.restart_keys || [];
+        const keyList = keys.length > 0 ? keys.join(', ') : 'some settings';
+        showActionToast(
+          `Restart required for: ${keyList}`,
+          'Restart Now',
+          () => this.triggerRestart(),
+          'warning',
+          0  // Persistent until dismissed
+        );
       } else if (result.component_reload_required) {
         showToast('Refresh recommended - reload page to see changes', 'info');
       } else if (needsUIRefresh) {
@@ -463,6 +471,59 @@ class SettingsModal {
     } catch (e) {
       showToast('Reset failed: ' + e.message, 'error');
     }
+  }
+
+  async triggerRestart() {
+    try {
+      await fetch('/api/system/restart', { method: 'POST' });
+      document.body.innerHTML = `
+        <div style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;font-family:system-ui,sans-serif;background:#1a1a2e;">
+            <div style="font-size:1.5rem;color:#888;">Restarting Sapphire...</div>
+            <div id="restart-status" style="font-size:1rem;color:#666;">Waiting for server...</div>
+            <button id="manual-refresh-btn" style="display:none;padding:12px 24px;font-size:1rem;cursor:pointer;background:#4a9eff;color:white;border:none;border-radius:6px;">
+                Click to Refresh
+            </button>
+        </div>
+      `;
+      
+      // Show manual button after 5 seconds
+      setTimeout(() => {
+        const btn = document.getElementById('manual-refresh-btn');
+        if (btn) {
+          btn.style.display = 'block';
+          btn.addEventListener('click', () => window.location.reload());
+        }
+      }, 5000);
+      
+      setTimeout(() => this.pollForServer(), 2000);
+    } catch (e) {
+      showToast('Restart failed: ' + e.message, 'error');
+    }
+  }
+
+  pollForServer(attempts = 0) {
+    const statusEl = document.getElementById('restart-status');
+    const maxAttempts = 30;
+    
+    if (attempts >= maxAttempts) {
+      if (statusEl) statusEl.textContent = 'Server may be ready. Click button to refresh.';
+      return;
+    }
+    
+    if (statusEl) statusEl.textContent = `Checking server... (${attempts + 1}/${maxAttempts})`;
+    
+    fetch('/api/settings', { method: 'GET' })
+      .then(r => {
+        if (r.ok) {
+          if (statusEl) statusEl.textContent = 'Server is back! Refreshing...';
+          setTimeout(() => window.location.reload(), 500);
+        } else {
+          setTimeout(() => this.pollForServer(attempts + 1), 1000);
+        }
+      })
+      .catch(() => {
+        setTimeout(() => this.pollForServer(attempts + 1), 1000);
+      });
   }
 
   refreshContent() {

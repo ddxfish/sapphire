@@ -368,7 +368,7 @@ def run():
             return 1
 
         voice_chat.start_voice_components()
-        api_blueprint = create_api(voice_chat)
+        api_blueprint = create_api(voice_chat, restart_callback=request_restart, shutdown_callback=request_shutdown)
         app.register_blueprint(api_blueprint)
         
         settings_api_blueprint = create_settings_api()

@@ -12,8 +12,14 @@ import config
 logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
-def create_api(system_instance):
-    """Create and return a Blueprint with all API routes."""
+def create_api(system_instance, restart_callback=None, shutdown_callback=None):
+    """Create and return a Blueprint with all API routes.
+    
+    Args:
+        system_instance: VoiceChatSystem instance
+        restart_callback: Function to call to request restart (sets flag in main loop)
+        shutdown_callback: Function to call to request shutdown (sets flag in main loop)
+    """
     bp = Blueprint('sapphire_api', __name__)
     logger.info("API Blueprint created with VoiceChatSystem")
     
@@ -698,9 +704,10 @@ def create_api(system_instance):
     @bp.route('/api/system/restart', methods=['POST'])
     def request_system_restart():
         """Request application restart. Returns immediately, restart happens async."""
+        if not restart_callback:
+            return jsonify({"error": "Restart not available"}), 503
         try:
-            import sapphire
-            sapphire.request_restart()
+            restart_callback()
             logger.info("Restart requested via API")
             return jsonify({
                 "status": "restarting",
@@ -713,9 +720,10 @@ def create_api(system_instance):
     @bp.route('/api/system/shutdown', methods=['POST'])
     def request_system_shutdown():
         """Request clean application shutdown."""
+        if not shutdown_callback:
+            return jsonify({"error": "Shutdown not available"}), 503
         try:
-            import sapphire
-            sapphire.request_shutdown()
+            shutdown_callback()
             logger.info("Shutdown requested via API")
             return jsonify({
                 "status": "shutting_down",
