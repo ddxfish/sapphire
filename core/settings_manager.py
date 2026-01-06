@@ -171,7 +171,7 @@ class SettingsManager:
                 
                 # Track if this setting requires restart
                 tier = self.validate_tier(key)
-                if tier == 'restart':
+                if tier == 'restart' and hasattr(self, '_pending_restart_keys'):
                     self._restart_pending = True
                     self._pending_restart_keys.add(key)
             
@@ -192,11 +192,12 @@ class SettingsManager:
             self.save()
             
             # Track which settings require restart
-            for key in settings_dict.keys():
-                tier = self.validate_tier(key)
-                if tier == 'restart':
-                    self._restart_pending = True
-                    self._pending_restart_keys.add(key)
+            if hasattr(self, '_pending_restart_keys'):
+                for key in settings_dict.keys():
+                    tier = self.validate_tier(key)
+                    if tier == 'restart':
+                        self._restart_pending = True
+                        self._pending_restart_keys.add(key)
     
     def save(self):
         """Persist current user settings to disk in nested format"""
@@ -352,17 +353,18 @@ class SettingsManager:
     
     def is_restart_required(self):
         """Check if any settings changes require restart."""
-        return self._restart_pending
+        return getattr(self, '_restart_pending', False)
     
     def get_pending_restart_keys(self):
         """Get list of changed keys that need restart."""
-        return list(self._pending_restart_keys)
+        return list(getattr(self, '_pending_restart_keys', set()))
     
     def clear_restart_pending(self):
         """Clear restart pending flag (call after restart)."""
         with self._lock:
             self._restart_pending = False
-            self._pending_restart_keys.clear()
+            if hasattr(self, '_pending_restart_keys'):
+                self._pending_restart_keys.clear()
     
     def _update_mtime(self):
         """Update last known mtime of user settings file"""
