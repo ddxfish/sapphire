@@ -81,7 +81,9 @@ def run_sapphire():
             stderr=sys.stderr
         )
         
-        # Wait for process to complete
+        # Wait indefinitely - signals are forwarded via handle_signal(), so Ctrl+C
+        # will reach the child. No timeout/watchdog needed; if child hangs, user
+        # can still Ctrl+C which sets _runner_stopping and forwards SIGINT.
         _child_process.wait()
         exit_code = _child_process.returncode
         _child_process = None

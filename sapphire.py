@@ -312,21 +312,23 @@ class VoiceChatSystem:
             time.sleep(1.0)
 
     def stop(self):
+        """Stop all components with error isolation - one failure won't block others."""
         logger.info("Stopping voice chat system...")
-        self.stop_components()
         
-        if self.web_interface_manager:
-            self.web_interface_manager.stop()
+        stop_actions = [
+            ("voice components", self.stop_components),
+            ("web interface", lambda: self.web_interface_manager and self.web_interface_manager.stop()),
+            ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
+            ("settings watcher", settings.stop_file_watcher),
+            ("prompt watcher", lambda: prompts.prompt_manager.stop_file_watcher()),
+            ("toolset watcher", toolset_manager.stop_file_watcher),
+        ]
         
-        if self.tts_server_manager:
-            self.tts_server_manager.stop()
-        
-        settings.stop_file_watcher()
-        
-        from core.modules.system import prompts
-        prompts.prompt_manager.stop_file_watcher()
-        
-        toolset_manager.stop_file_watcher()
+        for name, action in stop_actions:
+            try:
+                action()
+            except Exception as e:
+                logger.error(f"Failed to stop {name}: {e}")
 
 
 def run():
