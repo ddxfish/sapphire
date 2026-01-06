@@ -586,33 +586,6 @@ export function injectStyles() {
       font-style: italic;
     }
 
-    /* Tier Badges */
-    .tier-badge {
-      padding: 4px 10px;
-      border-radius: var(--radius-sm);
-      font-size: var(--font-sm);
-      font-weight: 600;
-      white-space: nowrap;
-    }
-
-    .tier-green {
-      background: var(--success-light);
-      color: var(--success-text);
-      border: 1px solid var(--success-border);
-    }
-
-    .tier-yellow {
-      background: var(--warning-light);
-      color: var(--warning-text);
-      border: 1px solid var(--warning-border);
-    }
-
-    .tier-red {
-      background: var(--error-light);
-      color: var(--error-text);
-      border: 1px solid var(--error-border);
-    }
-
     /* Icon buttons in settings */
     .settings-modal .btn-icon {
       background: var(--bg-hover);

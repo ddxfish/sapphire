@@ -7,7 +7,6 @@ class SettingsModal {
   constructor() {
     this.modal = null;
     this.settings = null;
-    this.tiers = null;
     this.userOverrides = [];
     this.help = {};
     this.currentTab = 'identity';
@@ -33,15 +32,13 @@ class SettingsModal {
 
   async loadData() {
     try {
-      const [settingsData, tiersData, helpData] = await Promise.all([
+      const [settingsData, helpData] = await Promise.all([
         settingsAPI.getAllSettings(),
-        settingsAPI.getTiers(),
         settingsAPI.getSettingsHelp().catch(() => ({ help: {} }))
       ]);
       
       this.settings = settingsData.settings;
       this.userOverrides = settingsData.user_overrides || [];
-      this.tiers = tiersData.tiers;
       this.help = helpData.help || {};
       
       await this.loadThemes();
@@ -156,7 +153,6 @@ class SettingsModal {
       const value = this.settings[key];
       if (value === undefined) return '';
       
-      const tier = this.getTierForKey(key);
       const isOverridden = this.userOverrides.includes(key);
       const inputType = settingsAPI.getInputType(value);
       const helpText = this.help[key];
@@ -177,7 +173,6 @@ class SettingsModal {
           </div>
           
           <div class="setting-actions">
-            ${this.renderTierBadge(tier)}
             ${isOverridden ? `<button class="btn-icon reset-btn" data-key="${key}" title="Reset to default">↺</button>` : ''}
           </div>
         </div>
@@ -249,29 +244,12 @@ class SettingsModal {
     `;
   }
 
-  renderTierBadge(tier) {
-    const badges = {
-      hot: { color: 'green', text: 'Hot', title: 'Applied immediately' },
-      component: { color: 'yellow', text: 'Component', title: 'Requires component reload' },
-      restart: { color: 'red', text: 'Restart', title: 'Requires system restart' }
-    };
-    
-    const badge = badges[tier] || badges.restart;
-    return `<span class="tier-badge tier-${badge.color}" title="${badge.title}">${badge.text}</span>`;
-  }
-
   formatLabel(key) {
     return key
       .replace(/_/g, ' ')
       .split(' ')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
       .join(' ');
-  }
-
-  getTierForKey(key) {
-    if (this.tiers.hot.includes(key)) return 'hot';
-    if (this.tiers.component.includes(key)) return 'component';
-    return 'restart';
   }
 
   attachEventListeners() {
