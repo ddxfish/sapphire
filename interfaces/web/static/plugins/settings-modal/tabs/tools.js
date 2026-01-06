@@ -11,8 +11,7 @@ export default {
     'MAX_TOOL_ITERATIONS',
     'MAX_PARALLEL_TOOLS',
     'DELETE_EARLY_THINK_PROSE',
-    'DEBUG_TOOL_CALLING',
-    'ABILITIES'
+    'DEBUG_TOOL_CALLING'
   ],
 
   render(modal) {
