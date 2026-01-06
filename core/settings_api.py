@@ -218,11 +218,15 @@ def create_settings_api():
             
             logger.info(f"Batch updated {len(validated)} settings")
             
+            # Collect keys that require restart for UI feedback
+            restart_keys = [k for k, v in validated.items() if v['tier'] == 'restart']
+            
             return jsonify({
                 "status": "success",
                 "updated": results,
                 "count": len(validated),
                 "restart_required": restart_required,
+                "restart_keys": restart_keys,
                 "component_reload_required": component_reload_required,
                 "message": f"Updated {len(validated)} settings"
             })
