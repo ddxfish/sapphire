@@ -382,6 +382,10 @@ class LLMChat:
             chat_primary = chat_settings.get('llm_primary', 'auto')
             chat_fallback = chat_settings.get('llm_fallback', 'auto')
             
+            # Handle "none" - explicitly disabled
+            if chat_primary == 'none':
+                raise ConnectionError("LLM disabled for this chat (llm_primary=none)")
+            
             # If chat has specific provider set (not "auto"), try that first
             if chat_primary and chat_primary != 'auto':
                 provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT)
@@ -393,8 +397,8 @@ class LLMChat:
                     except Exception as e:
                         logger.warning(f"Chat primary '{chat_primary}' health check failed: {e}")
                 
-                # Try chat-specific fallback if primary failed
-                if chat_fallback and chat_fallback != 'auto':
+                # Try chat-specific fallback if primary failed (unless fallback is "none")
+                if chat_fallback and chat_fallback not in ('auto', 'none'):
                     provider = get_provider_by_key(chat_fallback, providers_config, config.LLM_REQUEST_TIMEOUT)
                     if provider:
                         try:
@@ -403,6 +407,10 @@ class LLMChat:
                                 return provider
                         except Exception as e:
                             logger.warning(f"Chat fallback '{chat_fallback}' health check failed: {e}")
+                
+                # If chat_fallback is "none", don't try global fallback
+                if chat_fallback == 'none':
+                    raise ConnectionError(f"Chat primary '{chat_primary}' failed and fallback disabled")
             
             # Fall through to global fallback order (auto mode)
             result = get_first_available_provider(

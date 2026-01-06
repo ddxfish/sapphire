@@ -48,15 +48,13 @@ PROVIDER_METADATA = {
         'provider_class': 'claude',
         'required_fields': ['api_key', 'model'],
         'optional_fields': ['timeout'],
-        'model_options': [
-            'claude-sonnet-4-20250514',
-            'claude-opus-4-20250514',
-            'claude-3-5-sonnet-20241022',
-            'claude-3-5-haiku-20241022',
-            'claude-3-opus-20240229',
-        ],
+        'model_options': {
+            'claude-sonnet-4-5': 'Sonnet 4.5',
+            'claude-haiku-4-5': 'Haiku 4.5',
+            'claude-opus-4-5': 'Opus 4.5',
+        },
         'is_local': False,
-        'default_timeout': 5.0,
+        'default_timeout': 10.0,
         'api_key_env': 'ANTHROPIC_API_KEY',
     },
     'fireworks': {
@@ -64,14 +62,14 @@ PROVIDER_METADATA = {
         'provider_class': 'fireworks',
         'required_fields': ['base_url', 'api_key', 'model'],
         'optional_fields': ['timeout'],
-        'model_options': [
-            'accounts/fireworks/models/glm-4p7',
-            'accounts/fireworks/models/llama-v3p1-70b-instruct',
-            'accounts/fireworks/models/llama-v3p1-405b-instruct',
-            'accounts/fireworks/models/qwen2p5-72b-instruct',
-        ],
+        'model_options': {
+            'accounts/fireworks/models/glm-4p7': 'GLM-4 Plus',
+            'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
+            'accounts/fireworks/models/deepseek-v3p2': 'DeepSeek V3.2',
+            'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking',
+        },
         'is_local': False,
-        'default_timeout': 5.0,
+        'default_timeout': 10.0,
         'api_key_env': 'FIREWORKS_API_KEY',
     },
     'openai': {
@@ -79,16 +77,25 @@ PROVIDER_METADATA = {
         'provider_class': 'openai',
         'required_fields': ['base_url', 'api_key', 'model'],
         'optional_fields': ['timeout'],
-        'model_options': [
-            'gpt-4o',
-            'gpt-4o-mini',
-            'gpt-4-turbo',
-            'o1',
-            'o1-mini',
-        ],
+        'model_options': {
+            'gpt-4o': 'GPT-4o',
+            'gpt-4o-mini': 'GPT-4o Mini',
+            'gpt-4-turbo': 'GPT-4 Turbo',
+            'o1': 'o1',
+            'o1-mini': 'o1 Mini',
+        },
         'is_local': False,
-        'default_timeout': 5.0,
+        'default_timeout': 10.0,
         'api_key_env': 'OPENAI_API_KEY',
+    },
+    'other': {
+        'display_name': 'Other (OpenAI Compatible)',
+        'provider_class': 'openai',
+        'required_fields': ['base_url', 'api_key', 'model'],
+        'optional_fields': ['timeout'],
+        'model_options': None,  # Free-form model entry
+        'is_local': False,
+        'default_timeout': 10.0,
     },
 }
 

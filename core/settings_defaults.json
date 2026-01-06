@@ -110,8 +110,8 @@
         "display_name": "Claude",
         "api_key": "",
         "api_key_env": "ANTHROPIC_API_KEY",
-        "model": "claude-sonnet-4-20250514",
-        "timeout": 5.0,
+        "model": "claude-sonnet-4-5",
+        "timeout": 10.0,
         "enabled": false
       },
       "fireworks": {
@@ -121,7 +121,7 @@
         "api_key": "",
         "api_key_env": "FIREWORKS_API_KEY",
         "model": "accounts/fireworks/models/glm-4p7",
-        "timeout": 5.0,
+        "timeout": 10.0,
         "enabled": false
       },
       "openai": {
@@ -131,11 +131,20 @@
         "api_key": "",
         "api_key_env": "OPENAI_API_KEY",
         "model": "gpt-4o",
-        "timeout": 5.0,
+        "timeout": 10.0,
+        "enabled": false
+      },
+      "other": {
+        "provider": "openai",
+        "display_name": "Other (OpenAI Compatible)",
+        "base_url": "",
+        "api_key": "",
+        "model": "",
+        "timeout": 10.0,
         "enabled": false
       }
     },
-    "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "fireworks", "openai"],
+    "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "fireworks", "openai", "other"],
     "GENERATION_DEFAULTS": {
       "max_tokens": 4096,
       "temperature": 0.82,

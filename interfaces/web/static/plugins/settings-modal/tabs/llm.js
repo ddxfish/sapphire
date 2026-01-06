@@ -55,9 +55,25 @@ export default {
   renderProviderSections(modal, providers) {
     const defaultMeta = {
       lmstudio: { display_name: 'LM Studio', is_local: true, model_options: null, required_fields: ['base_url'], default_timeout: 0.3 },
-      claude: { display_name: 'Claude', is_local: false, model_options: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'], required_fields: ['api_key', 'model'], api_key_env: 'ANTHROPIC_API_KEY', default_timeout: 5.0 },
-      fireworks: { display_name: 'Fireworks', is_local: false, model_options: ['accounts/fireworks/models/glm-4p7', 'accounts/fireworks/models/llama-v3p1-70b-instruct', 'accounts/fireworks/models/qwen2p5-72b-instruct'], required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'FIREWORKS_API_KEY', default_timeout: 5.0 },
-      openai: { display_name: 'OpenAI', is_local: false, model_options: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1', 'o1-mini'], required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'OPENAI_API_KEY', default_timeout: 5.0 }
+      claude: { display_name: 'Claude', is_local: false, model_options: {
+        'claude-sonnet-4-5': 'Sonnet 4.5',
+        'claude-haiku-4-5': 'Haiku 4.5',
+        'claude-opus-4-5': 'Opus 4.5'
+      }, required_fields: ['api_key', 'model'], api_key_env: 'ANTHROPIC_API_KEY', default_timeout: 10.0 },
+      fireworks: { display_name: 'Fireworks', is_local: false, model_options: {
+        'accounts/fireworks/models/glm-4p7': 'GLM-4 Plus',
+        'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
+        'accounts/fireworks/models/deepseek-v3p2': 'DeepSeek V3.2',
+        'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking'
+      }, required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'FIREWORKS_API_KEY', default_timeout: 10.0 },
+      openai: { display_name: 'OpenAI', is_local: false, model_options: {
+        'gpt-4o': 'GPT-4o',
+        'gpt-4o-mini': 'GPT-4o Mini',
+        'gpt-4-turbo': 'GPT-4 Turbo',
+        'o1': 'o1',
+        'o1-mini': 'o1 Mini'
+      }, required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'OPENAI_API_KEY', default_timeout: 10.0 },
+      other: { display_name: 'Other (OpenAI Compatible)', is_local: false, model_options: null, required_fields: ['base_url', 'api_key', 'model'], default_timeout: 10.0 }
     };
     
     return Object.entries(providers).map(([key, config]) => {
@@ -100,7 +116,7 @@ export default {
     const required = meta.required_fields || [];
     
     // Base URL
-    if (required.includes('base_url') || config.base_url) {
+    if (required.includes('base_url') || config.base_url !== undefined) {
       fields.push(`
         <div class="field-row">
           <label>Base URL</label>
@@ -126,18 +142,20 @@ export default {
       `);
     }
     
-    // Model selection
-    if (meta.model_options) {
+    // Model selection - handle dict (friendly names) vs null (free text)
+    if (meta.model_options && typeof meta.model_options === 'object') {
+      // Dict with {value: friendly_name}
       const currentModel = config.model || '';
-      const isCustom = currentModel && !meta.model_options.includes(currentModel);
+      const modelKeys = Object.keys(meta.model_options);
+      const isCustom = currentModel && !modelKeys.includes(currentModel);
       
       fields.push(`
         <div class="field-row">
           <label>Model</label>
           <div class="model-select-group">
             <select class="provider-field model-select" data-provider="${key}" data-field="model_select">
-              ${meta.model_options.map(m => 
-                `<option value="${m}" ${currentModel === m ? 'selected' : ''}>${m.split('/').pop()}</option>`
+              ${modelKeys.map(m => 
+                `<option value="${m}" ${currentModel === m ? 'selected' : ''}>${meta.model_options[m]}</option>`
               ).join('')}
               <option value="__custom__" ${isCustom ? 'selected' : ''}>Other (custom)</option>
             </select>
@@ -147,6 +165,15 @@ export default {
           </div>
         </div>
       `);
+    } else if (required.includes('model')) {
+      // Free-form model entry (for "other" provider or providers without preset options)
+      fields.push(`
+        <div class="field-row">
+          <label>Model</label>
+          <input type="text" class="provider-field" data-provider="${key}" data-field="model" 
+                 value="${config.model || ''}" placeholder="Model name">
+        </div>
+      `);
     }
     
     // Timeout
@@ -154,7 +181,7 @@ export default {
       <div class="field-row">
         <label>Health Check Timeout (sec)</label>
         <input type="number" class="provider-field" data-provider="${key}" data-field="timeout" 
-               value="${config.timeout || meta.default_timeout || 5.0}" step="0.1" min="0.1" max="30">
+               value="${config.timeout || meta.default_timeout || 10.0}" step="0.1" min="0.1" max="60">
       </div>
     `);
     
@@ -269,7 +296,7 @@ export default {
         const hint = container.querySelector(`.key-hint[data-provider="${p.key}"]`);
         if (hint) {
           if (p.has_config_key) {
-            hint.textContent = '✓ API key configured';
+            hint.textContent = '✓ Set in Sapphire';
             hint.className = 'field-hint key-hint key-set';
           } else if (p.has_env_key) {
             hint.textContent = `✓ Using ${p.env_var}`;

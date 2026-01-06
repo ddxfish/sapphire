@@ -107,15 +107,17 @@ function populateLlmDropdowns(settings) {
     
     if (!primarySelect || !fallbackSelect) return;
     
-    // Build options
-    const options = '<option value="auto">Auto (follow fallback order)</option>' +
-        llmProviders
-            .filter(p => p.enabled)
-            .map(p => `<option value="${p.key}">${p.display_name}${p.is_local ? ' 🏠' : ' ☁️'}</option>`)
-            .join('');
+    // Build options - Auto and None plus enabled providers
+    const baseOptions = '<option value="auto">Auto (follow fallback order)</option>' +
+        '<option value="none">None (disabled)</option>';
     
-    primarySelect.innerHTML = options;
-    fallbackSelect.innerHTML = options;
+    const providerOptions = llmProviders
+        .filter(p => p.enabled)
+        .map(p => `<option value="${p.key}">${p.display_name}${p.is_local ? ' 🏠' : ' ☁️'}</option>`)
+        .join('');
+    
+    primarySelect.innerHTML = baseOptions + providerOptions;
+    fallbackSelect.innerHTML = baseOptions + providerOptions;
     
     // Set current values
     primarySelect.value = settings.llm_primary || 'auto';
