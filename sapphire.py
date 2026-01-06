@@ -51,7 +51,6 @@ except Exception as e:
     sys.exit(1)
 
 from core.process_manager import ProcessManager
-import core.sapphire_logging
 
 from core.modules.system import prompts
 from core.modules.system.toolsets import toolset_manager
