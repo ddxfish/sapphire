@@ -803,6 +803,23 @@ def download_backup(filename):
 
 
 # =============================================================================
+# SYSTEM MANAGEMENT ROUTES (2 routes)
+# =============================================================================
+
+@app.route('/api/system/restart', methods=['POST'])
+@require_login
+def restart_system():
+    """Request application restart."""
+    return proxy('/api/system/restart', 'POST', timeout=5)
+
+@app.route('/api/system/shutdown', methods=['POST'])
+@require_login
+def shutdown_system():
+    """Request application shutdown."""
+    return proxy('/api/system/shutdown', 'POST', timeout=5)
+
+
+# =============================================================================
 # SECURITY HEADERS
 # =============================================================================
 

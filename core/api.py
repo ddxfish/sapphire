@@ -691,4 +691,38 @@ def create_api(system_instance):
             logger.error(f"Error downloading backup: {e}")
             return jsonify({"error": str(e)}), 500
     
+    # =============================================================================
+    # SYSTEM MANAGEMENT ROUTES
+    # =============================================================================
+    
+    @bp.route('/api/system/restart', methods=['POST'])
+    def request_system_restart():
+        """Request application restart. Returns immediately, restart happens async."""
+        try:
+            import sapphire
+            sapphire.request_restart()
+            logger.info("Restart requested via API")
+            return jsonify({
+                "status": "restarting",
+                "message": "Restart initiated. Server will be back shortly."
+            })
+        except Exception as e:
+            logger.error(f"Failed to request restart: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/api/system/shutdown', methods=['POST'])
+    def request_system_shutdown():
+        """Request clean application shutdown."""
+        try:
+            import sapphire
+            sapphire.request_shutdown()
+            logger.info("Shutdown requested via API")
+            return jsonify({
+                "status": "shutting_down",
+                "message": "Shutdown initiated."
+            })
+        except Exception as e:
+            logger.error(f"Failed to request shutdown: {e}")
+            return jsonify({"error": str(e)}), 500
+    
     return bp
