@@ -373,8 +373,6 @@ class SettingsModal {
           'warning',
           0  // Persistent until dismissed
         );
-      } else if (result.component_reload_required) {
-        showToast('Refresh recommended - reload page to see changes', 'info');
       } else if (needsUIRefresh) {
         if (confirm('Settings saved! Refresh page to see changes?')) {
           window.location.reload();

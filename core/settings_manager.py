@@ -32,6 +32,10 @@ class SettingsManager:
         self._last_mtime = None
         self._last_check = 0
         
+        # Restart tracking
+        self._restart_pending = False
+        self._pending_restart_keys = set()
+        
         self._load_defaults()
         self._apply_construction()
         self._load_user_settings()
@@ -164,6 +168,12 @@ class SettingsManager:
             if persist:
                 self._user[key] = value
                 self.save()
+                
+                # Track if this setting requires restart
+                tier = self.validate_tier(key)
+                if tier == 'restart':
+                    self._restart_pending = True
+                    self._pending_restart_keys.add(key)
             
             # Trigger hot-reload callback if registered
             if key in self._reload_callbacks:
@@ -180,6 +190,13 @@ class SettingsManager:
         if persist:
             self._user.update(settings_dict)
             self.save()
+            
+            # Track which settings require restart
+            for key in settings_dict.keys():
+                tier = self.validate_tier(key)
+                if tier == 'restart':
+                    self._restart_pending = True
+                    self._pending_restart_keys.add(key)
     
     def save(self):
         """Persist current user settings to disk in nested format"""
@@ -332,6 +349,20 @@ class SettingsManager:
             return 'component'
         else:
             return 'restart'
+    
+    def is_restart_required(self):
+        """Check if any settings changes require restart."""
+        return self._restart_pending
+    
+    def get_pending_restart_keys(self):
+        """Get list of changed keys that need restart."""
+        return list(self._pending_restart_keys)
+    
+    def clear_restart_pending(self):
+        """Clear restart pending flag (call after restart)."""
+        with self._lock:
+            self._restart_pending = False
+            self._pending_restart_keys.clear()
     
     def _update_mtime(self):
         """Update last known mtime of user settings file"""

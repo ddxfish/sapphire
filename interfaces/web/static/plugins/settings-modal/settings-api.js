@@ -32,10 +32,6 @@ class SettingsAPI {
     });
   }
 
-  async getTiers() {
-    return await fetchWithTimeout('/api/settings/tiers');
-  }
-
   async resetSettings() {
     return await fetchWithTimeout('/api/settings/reset', { method: 'POST' });
   }
