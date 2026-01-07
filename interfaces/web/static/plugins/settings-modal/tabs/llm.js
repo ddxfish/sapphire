@@ -1,6 +1,6 @@
-// tabs/llm.js - LLM provider settings with test buttons and model selection
+// tabs/llm.js - LLM provider settings with draggable cards for fallback order
 
-let providerStatus = {};  // Track has_env_key, has_config_key per provider
+let providerStatus = {};
 
 export default {
   id: 'llm',
@@ -20,28 +20,24 @@ export default {
 
   render(modal) {
     const providers = modal.settings.LLM_PROVIDERS || {};
+    const fallbackOrder = modal.settings.LLM_FALLBACK_ORDER || Object.keys(providers);
     const hasProviders = Object.keys(providers).length > 0;
 
     if (!hasProviders) {
       return `<div class="llm-settings"><p class="no-providers">No providers configured</p></div>`;
     }
 
-    const providerSections = this.renderProviderSections(modal, providers);
-    const fallbackSection = this.renderFallbackOrder(modal);
+    const providerSections = this.renderProviderSections(modal, providers, fallbackOrder);
     const generalSettings = this.renderGeneralSettings(modal);
 
     return `
       <div class="llm-settings">
         <div class="llm-providers-section">
           <h4>Providers</h4>
-          <p class="section-desc">Configure LLM providers. Test each to verify connectivity.</p>
-          ${providerSections}
-        </div>
-        
-        <div class="llm-fallback-section">
-          <h4>Fallback Order</h4>
-          <p class="section-desc">Order in which providers are tried when set to "Auto".</p>
-          ${fallbackSection}
+          <p class="section-desc">Configure LLM providers. Drag to set fallback order. Test each to verify connectivity.</p>
+          <div class="providers-list" id="providers-list">
+            ${providerSections}
+          </div>
         </div>
         
         <div class="llm-general-section">
@@ -52,7 +48,7 @@ export default {
     `;
   },
 
-  renderProviderSections(modal, providers) {
+  renderProviderSections(modal, providers, fallbackOrder) {
     const defaultMeta = {
       lmstudio: { display_name: 'LM Studio', is_local: true, model_options: null, required_fields: ['base_url'], default_timeout: 0.3 },
       claude: { display_name: 'Claude', is_local: false, model_options: {
@@ -76,16 +72,25 @@ export default {
       other: { display_name: 'Other (OpenAI Compatible)', is_local: false, model_options: null, required_fields: ['base_url', 'api_key', 'model'], default_timeout: 10.0 }
     };
     
-    return Object.entries(providers).map(([key, config]) => {
+    // Render in fallback order, append any missing providers at end
+    const orderedKeys = [...fallbackOrder];
+    Object.keys(providers).forEach(key => {
+      if (!orderedKeys.includes(key)) orderedKeys.push(key);
+    });
+    
+    return orderedKeys.filter(key => providers[key]).map((key, idx) => {
+      const config = providers[key];
       const meta = defaultMeta[key] || {};
       const displayName = config.display_name || meta.display_name || key;
       const isEnabled = config.enabled || false;
       const isLocal = meta.is_local || false;
       
       return `
-        <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}">
+        <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}" draggable="true">
           <div class="provider-header" data-provider="${key}">
             <div class="provider-title">
+              <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
+              <span class="provider-order">${idx + 1}</span>
               <span class="provider-icon">${isLocal ? '🏠' : '☁️'}</span>
               <span class="provider-name">${displayName}</span>
               <span class="provider-status ${isEnabled ? 'on' : 'off'}">${isEnabled ? '●' : '○'}</span>
@@ -118,7 +123,6 @@ export default {
     const fields = [];
     const required = meta.required_fields || [];
     
-    // Base URL
     if (required.includes('base_url') || config.base_url !== undefined) {
       fields.push(`
         <div class="field-row">
@@ -129,7 +133,6 @@ export default {
       `);
     }
     
-    // API Key - show status indicator
     if (required.includes('api_key') || (!meta.is_local && key !== 'lmstudio')) {
       const envVar = config.api_key_env || meta.api_key_env || '';
       const hasConfigKey = config.api_key && config.api_key.trim();
@@ -145,9 +148,7 @@ export default {
       `);
     }
     
-    // Model selection - handle dict (friendly names) vs null (free text)
     if (meta.model_options && typeof meta.model_options === 'object') {
-      // Dict with {value: friendly_name}
       const currentModel = config.model || '';
       const modelKeys = Object.keys(meta.model_options);
       const isCustom = currentModel && !modelKeys.includes(currentModel);
@@ -170,7 +171,6 @@ export default {
         </div>
       `);
     } else if (required.includes('model')) {
-      // Free-form model entry (for "other" provider or providers without preset options)
       fields.push(`
         <div class="field-row">
           <label>Model</label>
@@ -180,7 +180,6 @@ export default {
       `);
     }
     
-    // Timeout
     fields.push(`
       <div class="field-row">
         <label>Timeout (sec)</label>
@@ -190,30 +189,6 @@ export default {
     `);
     
     return fields.join('');
-  },
-
-  renderFallbackOrder(modal) {
-    const order = modal.settings.LLM_FALLBACK_ORDER || [];
-    const providers = modal.settings.LLM_PROVIDERS || {};
-    
-    return `
-      <div class="fallback-list" id="fallback-order-list">
-        ${order.map((key, idx) => {
-          const config = providers[key] || {};
-          const displayName = config.display_name || key;
-          const isEnabled = config.enabled || false;
-          return `
-            <div class="fallback-item ${isEnabled ? '' : 'disabled'}" data-key="${key}">
-              <span class="drag-handle">⋮⋮</span>
-              <span class="fallback-num">${idx + 1}</span>
-              <span class="fallback-name">${displayName}</span>
-              <span class="fallback-status">${isEnabled ? '✓' : '✗'}</span>
-            </div>
-          `;
-        }).join('')}
-      </div>
-      <p class="fallback-hint">Drag to reorder. Only enabled providers will be used.</p>
-    `;
   },
 
   renderGeneralSettings(modal) {
@@ -226,13 +201,12 @@ export default {
   },
 
   attachListeners(modal, container) {
-    // Fetch provider status (env keys, etc) and update UI
     this.refreshProviderStatus(container);
     
-    // Provider header click - toggle collapse
+    // Provider header click - toggle collapse (ignore if drag handle clicked)
     container.querySelectorAll('.provider-header').forEach(header => {
       header.addEventListener('click', (e) => {
-        const key = header.dataset.provider;
+        if (e.target.closest('.provider-drag-handle')) return;
         const card = header.closest('.provider-card');
         const fields = card.querySelector('.provider-fields');
         const indicator = header.querySelector('.collapse-indicator');
@@ -265,8 +239,6 @@ export default {
           status.classList.add('off');
           status.textContent = '○';
         }
-        
-        this.refreshFallbackList(modal, container);
       });
     });
     
@@ -298,8 +270,8 @@ export default {
       btn.addEventListener('click', (e) => this.testProvider(e.target.closest('.btn-test').dataset.provider, container));
     });
     
-    // Fallback order drag-drop
-    this.initDragDrop(container, modal);
+    // Provider card drag-drop for reordering
+    this.initCardDragDrop(container);
   },
 
   async refreshProviderStatus(container) {
@@ -349,7 +321,6 @@ export default {
     if (field === 'api_key') {
       if (value.trim()) {
         await this.updateProvider(key, { api_key: value });
-        // Update UI to show key is set
         e.target.value = '';
         e.target.placeholder = '••••••••••••••••';
         this.refreshProviderStatus(container);
@@ -375,7 +346,6 @@ export default {
       if (!res.ok) {
         console.error('Failed to update provider:', await res.json());
       }
-      // LLM changes auto-save silently - no toast needed for every field change
     } catch (e) {
       console.error('Error updating provider:', e);
     }
@@ -391,7 +361,6 @@ export default {
     result.className = 'test-result';
     
     try {
-      // Collect current form values for this provider
       const card = container.querySelector(`.provider-card[data-provider="${key}"]`);
       const formData = {};
       
@@ -402,7 +371,6 @@ export default {
         formData[field] = input.value;
       });
       
-      // Get model from dropdown or custom field
       const modelSelect = card.querySelector('.model-select');
       const modelCustom = card.querySelector('.model-custom');
       if (modelSelect && modelSelect.value !== '__custom__') {
@@ -423,7 +391,6 @@ export default {
         result.textContent = `✓ ${response}`;
         result.classList.add('success');
       } else {
-        // Show error + details for rich feedback
         const errorMsg = data.error || 'Unknown error';
         const details = data.details || '';
         result.textContent = `✗ ${errorMsg}${details ? ': ' + details : ''}`;
@@ -438,39 +405,57 @@ export default {
     }
   },
 
-  initDragDrop(container, modal) {
-    const list = container.querySelector('#fallback-order-list');
+  initCardDragDrop(container) {
+    const list = container.querySelector('#providers-list');
     if (!list) return;
     
-    let dragItem = null;
+    let dragCard = null;
     
-    list.querySelectorAll('.fallback-item').forEach(item => {
-      item.draggable = true;
+    list.querySelectorAll('.provider-card').forEach(card => {
+      const handle = card.querySelector('.provider-drag-handle');
       
-      item.addEventListener('dragstart', () => {
-        dragItem = item;
-        item.classList.add('dragging');
+      // Only allow drag initiation from handle
+      handle.addEventListener('mousedown', () => {
+        card.setAttribute('draggable', 'true');
       });
       
-      item.addEventListener('dragend', () => {
-        item.classList.remove('dragging');
-        this.saveFallbackOrder(container);
+      card.addEventListener('dragstart', (e) => {
+        // Only proceed if initiated from handle
+        if (!e.target.closest('.provider-drag-handle') && e.target !== card) {
+          e.preventDefault();
+          return;
+        }
+        dragCard = card;
+        card.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
       });
       
-      item.addEventListener('dragover', (e) => {
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        this.saveProviderOrder(container);
+      });
+      
+      card.addEventListener('dragover', (e) => {
         e.preventDefault();
+        if (!dragCard || dragCard === card) return;
+        
         const afterElement = this.getDragAfterElement(list, e.clientY);
         if (afterElement == null) {
-          list.appendChild(dragItem);
+          list.appendChild(dragCard);
         } else {
-          list.insertBefore(dragItem, afterElement);
+          list.insertBefore(dragCard, afterElement);
         }
+      });
+      
+      // Reset draggable on mouseup anywhere (so clicks still work)
+      document.addEventListener('mouseup', () => {
+        card.setAttribute('draggable', 'true');
       });
     });
   },
 
   getDragAfterElement(container, y) {
-    const elements = [...container.querySelectorAll('.fallback-item:not(.dragging)')];
+    const elements = [...container.querySelectorAll('.provider-card:not(.dragging)')];
     return elements.reduce((closest, child) => {
       const box = child.getBoundingClientRect();
       const offset = y - box.top - box.height / 2;
@@ -481,9 +466,16 @@ export default {
     }, { offset: Number.NEGATIVE_INFINITY }).element;
   },
 
-  async saveFallbackOrder(container) {
-    const list = container.querySelector('#fallback-order-list');
-    const order = [...list.querySelectorAll('.fallback-item')].map(item => item.dataset.key);
+  async saveProviderOrder(container) {
+    const list = container.querySelector('#providers-list');
+    const cards = [...list.querySelectorAll('.provider-card')];
+    const order = cards.map(card => card.dataset.provider);
+    
+    // Update order numbers in UI
+    cards.forEach((card, idx) => {
+      const orderEl = card.querySelector('.provider-order');
+      if (orderEl) orderEl.textContent = idx + 1;
+    });
     
     try {
       await fetch('/api/llm/fallback-order', {
@@ -491,31 +483,8 @@ export default {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order })
       });
-      
-      list.querySelectorAll('.fallback-item').forEach((item, idx) => {
-        item.querySelector('.fallback-num').textContent = idx + 1;
-      });
     } catch (e) {
-      console.error('Failed to save fallback order:', e);
+      console.error('Failed to save provider order:', e);
     }
-  },
-
-  refreshFallbackList(modal, container) {
-    const list = container.querySelector('#fallback-order-list');
-    if (!list) return;
-    
-    list.querySelectorAll('.fallback-item').forEach(item => {
-      const key = item.dataset.key;
-      const toggle = container.querySelector(`.provider-enabled[data-provider="${key}"]`);
-      const isEnabled = toggle ? toggle.checked : false;
-      
-      if (isEnabled) {
-        item.classList.remove('disabled');
-        item.querySelector('.fallback-status').textContent = '✓';
-      } else {
-        item.classList.add('disabled');
-        item.querySelector('.fallback-status').textContent = '✗';
-      }
-    });
   }
 };

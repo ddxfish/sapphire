@@ -809,7 +809,6 @@ export function injectStyles() {
     }
     
     .llm-providers-section,
-    .llm-fallback-section,
     .llm-general-section {
       margin-bottom: 32px;
     }
@@ -970,7 +969,7 @@ export function injectStyles() {
       gap: 8px;
     }
     
-    .model-custom.hidden {
+    .model-custom-row.hidden {
       display: none;
     }
     
@@ -1024,76 +1023,45 @@ export function injectStyles() {
       background: var(--error-subtle);
     }
     
-    /* Fallback Order List */
-    .fallback-list {
-      background: var(--bg-tertiary);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      overflow: hidden;
-    }
-    
-    .fallback-item {
+    /* Provider Card Drag & Drop */
+    .providers-list {
       display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--border);
-      cursor: grab;
-      transition: background var(--transition-fast);
+      flex-direction: column;
     }
     
-    .fallback-item:last-child {
-      border-bottom: none;
-    }
-    
-    .fallback-item:hover {
-      background: var(--bg-hover);
-    }
-    
-    .fallback-item.disabled {
-      opacity: 0.5;
-    }
-    
-    .fallback-item.dragging {
-      opacity: 0.5;
-      background: var(--accent-blue-light);
-    }
-    
-    .drag-handle {
-      color: var(--text-muted);
+    .provider-drag-handle {
+      color: var(--text-dim);
       font-size: var(--font-lg);
       cursor: grab;
+      padding: 0 4px;
+      user-select: none;
     }
     
-    .fallback-num {
-      width: 24px;
-      height: 24px;
+    .provider-drag-handle:hover {
+      color: var(--text-muted);
+    }
+    
+    .provider-drag-handle:active {
+      cursor: grabbing;
+    }
+    
+    .provider-order {
+      width: 22px;
+      height: 22px;
       display: flex;
       align-items: center;
       justify-content: center;
       background: var(--bg);
       border-radius: 50%;
-      font-size: var(--font-sm);
+      font-size: var(--font-xs);
       font-weight: 600;
       color: var(--text-muted);
     }
     
-    .fallback-name {
-      flex: 1;
-      font-weight: 500;
-      color: var(--text-light);
-    }
-    
-    .fallback-status {
-      font-size: var(--font-sm);
-      color: var(--text-muted);
-    }
-    
-    .fallback-hint {
-      margin: 8px 0 0 0;
-      font-size: var(--font-xs);
-      color: var(--text-dim);
-      font-style: italic;
+    .provider-card.dragging {
+      opacity: 0.5;
+      border-color: var(--accent-blue);
+      background: var(--accent-blue-light);
     }
     
     /* Key status hints */
