@@ -794,3 +794,230 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
         max-width:94%;
     }
 }
+
+/* =============================================================================
+   LLM PROVIDER CARDS
+   ============================================================================= */
+
+.provider-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+
+.provider-card.enabled {
+    border-color: var(--accent);
+}
+
+.provider-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    cursor: pointer;
+    user-select: none;
+    background: var(--surface-elevated);
+    transition: background 0.15s ease;
+}
+
+.provider-header:hover {
+    background: var(--hover);
+}
+
+.provider-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+}
+
+.provider-icon {
+    font-size: 1.1em;
+}
+
+.provider-name {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.provider-status {
+    font-size: 0.8em;
+    color: var(--text-muted);
+}
+
+.provider-status.on {
+    color: var(--success, #22c55e);
+}
+
+.collapse-indicator {
+    color: var(--text-muted);
+    font-size: 0.75em;
+    margin-left: 8px;
+    transition: transform 0.2s ease;
+}
+
+.provider-fields {
+    padding: 16px;
+    border-top: 1px solid var(--border);
+    transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease;
+    max-height: 500px;
+    opacity: 1;
+}
+
+.provider-fields.collapsed {
+    max-height: 0;
+    padding: 0 16px;
+    opacity: 0;
+    overflow: hidden;
+    border-top: none;
+}
+
+/* 2-column grid for provider fields on desktop */
+.provider-fields-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 16px;
+}
+
+.provider-fields-grid .field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.provider-fields-grid .field-row.full-width {
+    grid-column: 1 / -1;
+}
+
+.provider-fields-grid label {
+    font-size: var(--font-sm);
+    color: var(--text-secondary);
+}
+
+.provider-fields-grid input,
+.provider-fields-grid select {
+    padding: 8px 10px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--font-md);
+}
+
+.provider-fields-grid input:focus,
+.provider-fields-grid select:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+.provider-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+
+.test-result {
+    font-size: var(--font-sm);
+}
+
+.test-result.success {
+    color: var(--success, #22c55e);
+}
+
+.test-result.error {
+    color: var(--error, #ef4444);
+}
+
+.field-hint {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.key-hint.key-set,
+.key-hint.key-env {
+    color: var(--success, #22c55e);
+}
+
+/* Toggle switch in header */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--border);
+    transition: 0.2s;
+    border-radius: 22px;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: var(--text);
+    transition: 0.2s;
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: var(--accent);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(18px);
+}
+
+/* Mobile: single column */
+@media (max-width: 768px) {
+    .provider-fields-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .provider-header {
+        padding: 10px 12px;
+    }
+    
+    .provider-fields {
+        padding: 12px;
+    }
+}
+
+/* Hidden utility */
+.hidden {
+    display: none !important;
+}
+
+.model-custom-row.hidden {
+    display: none !important;
+}
+
+.env-hint {
+    color: var(--text-muted);
+    font-weight: normal;
+    font-size: 0.85em;
+}

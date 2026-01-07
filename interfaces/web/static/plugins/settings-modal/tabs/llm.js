@@ -61,7 +61,7 @@ export default {
         'claude-opus-4-5': 'Opus 4.5'
       }, required_fields: ['api_key', 'model'], api_key_env: 'ANTHROPIC_API_KEY', default_timeout: 10.0 },
       fireworks: { display_name: 'Fireworks', is_local: false, model_options: {
-        'accounts/fireworks/models/glm-4p7': 'GLM-4 Plus',
+        'accounts/fireworks/models/glm-4p7': 'GLM 4.7',
         'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
         'accounts/fireworks/models/deepseek-v3p2': 'DeepSeek V3.2',
         'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking'
@@ -84,20 +84,23 @@ export default {
       
       return `
         <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}">
-          <div class="provider-header">
+          <div class="provider-header" data-provider="${key}">
             <div class="provider-title">
               <span class="provider-icon">${isLocal ? '🏠' : '☁️'}</span>
               <span class="provider-name">${displayName}</span>
               <span class="provider-status ${isEnabled ? 'on' : 'off'}">${isEnabled ? '●' : '○'}</span>
+              <span class="collapse-indicator">▼</span>
             </div>
-            <label class="toggle-switch">
+            <label class="toggle-switch" onclick="event.stopPropagation()">
               <input type="checkbox" class="provider-enabled" data-provider="${key}" ${isEnabled ? 'checked' : ''}>
               <span class="toggle-slider"></span>
             </label>
           </div>
           
-          <div class="provider-fields ${isEnabled ? '' : 'collapsed'}">
-            ${this.renderProviderFields(key, config, meta)}
+          <div class="provider-fields collapsed" data-provider="${key}">
+            <div class="provider-fields-grid">
+              ${this.renderProviderFields(key, config, meta)}
+            </div>
             
             <div class="provider-actions">
               <button class="btn btn-sm btn-test" data-provider="${key}">
@@ -134,7 +137,7 @@ export default {
       
       fields.push(`
         <div class="field-row">
-          <label>API Key <span class="key-status" data-provider="${key}">${envVar ? `<span class="env-hint">(or ${envVar})</span>` : ''}</span></label>
+          <label>API Key ${envVar ? `<span class="env-hint">(or ${envVar})</span>` : ''}</label>
           <input type="password" class="provider-field api-key-field" data-provider="${key}" data-field="api_key" 
                  value="" placeholder="${displayValue || 'Enter API key'}">
           <small class="field-hint key-hint" data-provider="${key}"></small>
@@ -152,17 +155,18 @@ export default {
       fields.push(`
         <div class="field-row">
           <label>Model</label>
-          <div class="model-select-group">
-            <select class="provider-field model-select" data-provider="${key}" data-field="model_select">
-              ${modelKeys.map(m => 
-                `<option value="${m}" ${currentModel === m ? 'selected' : ''}>${meta.model_options[m]}</option>`
-              ).join('')}
-              <option value="__custom__" ${isCustom ? 'selected' : ''}>Other (custom)</option>
-            </select>
-            <input type="text" class="provider-field model-custom ${isCustom ? '' : 'hidden'}" 
-                   data-provider="${key}" data-field="model" 
-                   value="${isCustom ? currentModel : ''}" placeholder="Custom model name">
-          </div>
+          <select class="provider-field model-select" data-provider="${key}" data-field="model_select">
+            ${modelKeys.map(m => 
+              `<option value="${m}" ${currentModel === m ? 'selected' : ''}>${meta.model_options[m]}</option>`
+            ).join('')}
+            <option value="__custom__" ${isCustom ? 'selected' : ''}>Other (custom)</option>
+          </select>
+        </div>
+        <div class="field-row model-custom-row ${isCustom ? '' : 'hidden'}">
+          <label>Custom Model</label>
+          <input type="text" class="provider-field model-custom" 
+                 data-provider="${key}" data-field="model" 
+                 value="${isCustom ? currentModel : ''}" placeholder="Custom model name">
         </div>
       `);
     } else if (required.includes('model')) {
@@ -179,7 +183,7 @@ export default {
     // Timeout
     fields.push(`
       <div class="field-row">
-        <label>Health Check Timeout (sec)</label>
+        <label>Timeout (sec)</label>
         <input type="number" class="provider-field" data-provider="${key}" data-field="timeout" 
                value="${config.timeout || meta.default_timeout || 10.0}" step="0.1" min="0.1" max="60">
       </div>
@@ -225,6 +229,19 @@ export default {
     // Fetch provider status (env keys, etc) and update UI
     this.refreshProviderStatus(container);
     
+    // Provider header click - toggle collapse
+    container.querySelectorAll('.provider-header').forEach(header => {
+      header.addEventListener('click', (e) => {
+        const key = header.dataset.provider;
+        const card = header.closest('.provider-card');
+        const fields = card.querySelector('.provider-fields');
+        const indicator = header.querySelector('.collapse-indicator');
+        
+        fields.classList.toggle('collapsed');
+        indicator.textContent = fields.classList.contains('collapsed') ? '▼' : '▲';
+      });
+    });
+    
     // Provider enable/disable toggles
     container.querySelectorAll('.provider-enabled').forEach(toggle => {
       toggle.addEventListener('change', async (e) => {
@@ -234,19 +251,16 @@ export default {
         await this.updateProvider(key, { enabled });
         
         const card = e.target.closest('.provider-card');
-        const fields = card.querySelector('.provider-fields');
         const status = card.querySelector('.provider-status');
         if (enabled) {
           card.classList.add('enabled');
           card.classList.remove('disabled');
-          fields.classList.remove('collapsed');
           status.classList.add('on');
           status.classList.remove('off');
           status.textContent = '●';
         } else {
           card.classList.remove('enabled');
           card.classList.add('disabled');
-          fields.classList.add('collapsed');
           status.classList.remove('on');
           status.classList.add('off');
           status.textContent = '○';
@@ -265,12 +279,15 @@ export default {
     container.querySelectorAll('.model-select').forEach(select => {
       select.addEventListener('change', (e) => {
         const key = e.target.dataset.provider;
-        const customInput = e.target.parentElement.querySelector('.model-custom');
+        const card = e.target.closest('.provider-card');
+        const customRow = card.querySelector('.model-custom-row');
+        const customInput = card.querySelector('.model-custom');
+        
         if (e.target.value === '__custom__') {
-          customInput.classList.remove('hidden');
-          customInput.focus();
+          customRow?.classList.remove('hidden');
+          customInput?.focus();
         } else {
-          customInput.classList.add('hidden');
+          customRow?.classList.add('hidden');
           this.updateProvider(key, { model: e.target.value });
         }
       });
@@ -299,7 +316,7 @@ export default {
             hint.textContent = '✓ Set in Sapphire';
             hint.className = 'field-hint key-hint key-set';
           } else if (p.has_env_key) {
-            hint.textContent = `✓ Using ${p.env_var}`;
+            hint.textContent = `✓ From env var ${p.env_var}`;
             hint.className = 'field-hint key-hint key-env';
           } else {
             hint.textContent = '';
