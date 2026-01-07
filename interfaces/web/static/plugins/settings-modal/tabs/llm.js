@@ -1,6 +1,7 @@
 // tabs/llm.js - LLM provider settings with draggable cards for fallback order
 
 let providerStatus = {};
+let generationProfiles = {};  // Cache of MODEL_GENERATION_PROFILES
 
 export default {
   id: 'llm',
@@ -13,7 +14,7 @@ export default {
     'LLM_REQUEST_TIMEOUT',
     'LLM_PROVIDERS',
     'LLM_FALLBACK_ORDER',
-    'GENERATION_DEFAULTS',
+    'MODEL_GENERATION_PROFILES',
     'FORCE_THINKING',
     'THINKING_PREFILL'
   ],
@@ -22,6 +23,9 @@ export default {
     const providers = modal.settings.LLM_PROVIDERS || {};
     const fallbackOrder = modal.settings.LLM_FALLBACK_ORDER || Object.keys(providers);
     const hasProviders = Object.keys(providers).length > 0;
+    
+    // Cache generation profiles for use in handlers
+    generationProfiles = modal.settings.MODEL_GENERATION_PROFILES || {};
 
     if (!hasProviders) {
       return `<div class="llm-settings"><p class="no-providers">No providers configured</p></div>`;
@@ -57,10 +61,15 @@ export default {
         'claude-opus-4-5': 'Opus 4.5'
       }, required_fields: ['api_key', 'model'], api_key_env: 'ANTHROPIC_API_KEY', default_timeout: 10.0 },
       fireworks: { display_name: 'Fireworks', is_local: false, model_options: {
-        'accounts/fireworks/models/glm-4p7': 'GLM 4.7',
-        'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
+        'accounts/fireworks/models/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
+        'accounts/fireworks/models/qwen3-coder-480b-a35b-instruct': 'Qwen3 Coder 480B',
+        'accounts/fireworks/models/kimi-k2-thinking': 'Kimi K2 Thinking',
+        'accounts/fireworks/models/qwq-32b': 'QwQ 32B',
+        'accounts/fireworks/models/gpt-oss-120b': 'GPT-OSS 120B',
         'accounts/fireworks/models/deepseek-v3p2': 'DeepSeek V3.2',
-        'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking'
+        'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking',
+        'accounts/fireworks/models/glm-4p7': 'GLM 4.7',
+        'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1'
       }, required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'FIREWORKS_API_KEY', default_timeout: 10.0 },
       openai: { display_name: 'OpenAI', is_local: false, model_options: {
         'gpt-4o': 'GPT-4o',
@@ -85,6 +94,9 @@ export default {
       const isEnabled = config.enabled || false;
       const isLocal = meta.is_local || false;
       
+      // Get current model for this provider
+      const currentModel = config.model || '';
+      
       return `
         <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}" draggable="true">
           <div class="provider-header" data-provider="${key}">
@@ -106,7 +118,7 @@ export default {
             <div class="provider-fields-grid">
               ${this.renderProviderFields(key, config, meta)}
             </div>
-            
+            ${this.renderGenerationParams(key, currentModel)}
             <div class="provider-actions">
               <button class="btn btn-sm btn-test" data-provider="${key}">
                 <span class="btn-icon">🔌</span> Test Connection
@@ -163,7 +175,7 @@ export default {
             <option value="__custom__" ${isCustom ? 'selected' : ''}>Other (custom)</option>
           </select>
         </div>
-        <div class="field-row model-custom-row ${isCustom ? '' : 'hidden'}">
+        <div class="field-row model-custom-row ${isCustom ? '' : 'hidden'}" data-provider="${key}">
           <label>Custom Model</label>
           <input type="text" class="provider-field model-custom" 
                  data-provider="${key}" data-field="model" 
@@ -191,8 +203,54 @@ export default {
     return fields.join('');
   },
 
+  renderGenerationParams(providerKey, modelName) {
+    // Look up this model's profile, fall back to __fallback__ or defaults
+    const fallback = generationProfiles['__fallback__'] || {};
+    const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, presence_penalty: 0.1, frequency_penalty: 0.1, ...fallback };
+    const params = generationProfiles[modelName] || defaults;
+    
+    const temp = params.temperature ?? defaults.temperature;
+    const topP = params.top_p ?? defaults.top_p;
+    const maxTokens = params.max_tokens ?? defaults.max_tokens;
+    const presencePen = params.presence_penalty ?? defaults.presence_penalty;
+    const freqPen = params.frequency_penalty ?? defaults.frequency_penalty;
+    
+    return `
+      <div class="generation-params-section" data-provider="${providerKey}" data-model="${modelName}">
+        <div class="generation-params-label">Generation Defaults <span class="gen-model-hint">(${modelName || 'no model selected'})</span></div>
+        <div class="generation-params-grid">
+          <div class="gen-param">
+            <label>Temp</label>
+            <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="temperature" 
+                   value="${temp}" step="0.05" min="0" max="2">
+          </div>
+          <div class="gen-param">
+            <label>Top P</label>
+            <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="top_p" 
+                   value="${topP}" step="0.05" min="0" max="1">
+          </div>
+          <div class="gen-param">
+            <label>n_tokens</label>
+            <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="max_tokens" 
+                   value="${maxTokens}" step="1" min="1" max="128000">
+          </div>
+          <div class="gen-param">
+            <label>Pres Pen</label>
+            <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="presence_penalty" 
+                   value="${presencePen}" step="0.05" min="-2" max="2">
+          </div>
+          <div class="gen-param">
+            <label>Freq Pen</label>
+            <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="frequency_penalty" 
+                   value="${freqPen}" step="0.05" min="-2" max="2">
+          </div>
+        </div>
+      </div>
+    `;
+  },
+
   renderGeneralSettings(modal) {
-    const generalKeys = ['LLM_MAX_HISTORY', 'LLM_MAX_TOKENS', 'LLM_REQUEST_TIMEOUT', 'GENERATION_DEFAULTS', 'FORCE_THINKING', 'THINKING_PREFILL'];
+    const generalKeys = ['LLM_MAX_HISTORY', 'LLM_MAX_TOKENS', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL'];
     return `
       <div class="settings-list">
         ${modal.renderCategorySettings(generalKeys)}
@@ -203,7 +261,7 @@ export default {
   attachListeners(modal, container) {
     this.refreshProviderStatus(container);
     
-    // Provider header click - toggle collapse (ignore if drag handle clicked)
+    // Provider header click - toggle collapse
     container.querySelectorAll('.provider-header').forEach(header => {
       header.addEventListener('click', (e) => {
         if (e.target.closest('.provider-drag-handle')) return;
@@ -247,7 +305,12 @@ export default {
       input.addEventListener('change', (e) => this.handleFieldChange(e, container));
     });
     
-    // Model select -> custom toggle
+    // Generation param changes - save to MODEL_GENERATION_PROFILES
+    container.querySelectorAll('.gen-param-input').forEach(input => {
+      input.addEventListener('change', (e) => this.handleGenParamChange(e, container));
+    });
+    
+    // Model select -> load that model's generation params
     container.querySelectorAll('.model-select').forEach(select => {
       select.addEventListener('change', (e) => {
         const key = e.target.dataset.provider;
@@ -261,6 +324,17 @@ export default {
         } else {
           customRow?.classList.add('hidden');
           this.updateProvider(key, { model: e.target.value });
+          this.loadModelGenParams(e.target.value, card);
+        }
+      });
+    });
+    
+    // Custom model input - load params when user finishes typing
+    container.querySelectorAll('.model-custom').forEach(input => {
+      input.addEventListener('change', (e) => {
+        const card = e.target.closest('.provider-card');
+        if (e.target.value.trim()) {
+          this.loadModelGenParams(e.target.value.trim(), card);
         }
       });
     });
@@ -272,6 +346,62 @@ export default {
     
     // Provider card drag-drop for reordering
     this.initCardDragDrop(container);
+  },
+
+  loadModelGenParams(modelName, card) {
+    // Load from cached profiles
+    const fallback = generationProfiles['__fallback__'] || {};
+    const defaults = { temperature: 0.7, top_p: 0.9, max_tokens: 4096, presence_penalty: 0.1, frequency_penalty: 0.1, ...fallback };
+    const params = generationProfiles[modelName] || defaults;
+    
+    // Update UI inputs
+    const section = card.querySelector('.generation-params-section');
+    section.dataset.model = modelName;
+    
+    // Update hint
+    const hint = section.querySelector('.gen-model-hint');
+    if (hint) hint.textContent = `(${modelName || 'no model selected'})`;
+    
+    card.querySelector('.gen-param-input[data-param="temperature"]').value = params.temperature ?? defaults.temperature;
+    card.querySelector('.gen-param-input[data-param="top_p"]').value = params.top_p ?? defaults.top_p;
+    card.querySelector('.gen-param-input[data-param="max_tokens"]').value = params.max_tokens ?? defaults.max_tokens;
+    card.querySelector('.gen-param-input[data-param="presence_penalty"]').value = params.presence_penalty ?? defaults.presence_penalty;
+    card.querySelector('.gen-param-input[data-param="frequency_penalty"]').value = params.frequency_penalty ?? defaults.frequency_penalty;
+  },
+
+  async handleGenParamChange(e, container) {
+    const card = e.target.closest('.provider-card');
+    const section = card.querySelector('.generation-params-section');
+    const modelName = section.dataset.model;
+    
+    if (!modelName) {
+      console.warn('No model selected, cannot save generation params');
+      return;
+    }
+    
+    // Gather all params from UI
+    const genParams = {};
+    card.querySelectorAll('.gen-param-input').forEach(input => {
+      const p = input.dataset.param;
+      genParams[p] = p === 'max_tokens' ? parseInt(input.value) : parseFloat(input.value);
+    });
+    
+    // Update local cache
+    generationProfiles[modelName] = genParams;
+    
+    // Save to MODEL_GENERATION_PROFILES via API
+    try {
+      const res = await fetch('/api/settings/MODEL_GENERATION_PROFILES', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: generationProfiles })
+      });
+      if (!res.ok) {
+        console.error('Failed to save generation profiles:', await res.json());
+      }
+    } catch (e) {
+      console.error('Error saving generation profiles:', e);
+    }
   },
 
   async refreshProviderStatus(container) {
@@ -414,13 +544,11 @@ export default {
     list.querySelectorAll('.provider-card').forEach(card => {
       const handle = card.querySelector('.provider-drag-handle');
       
-      // Only allow drag initiation from handle
       handle.addEventListener('mousedown', () => {
         card.setAttribute('draggable', 'true');
       });
       
       card.addEventListener('dragstart', (e) => {
-        // Only proceed if initiated from handle
         if (!e.target.closest('.provider-drag-handle') && e.target !== card) {
           e.preventDefault();
           return;
@@ -447,7 +575,6 @@ export default {
         }
       });
       
-      // Reset draggable on mouseup anywhere (so clicks still work)
       document.addEventListener('mouseup', () => {
         card.setAttribute('draggable', 'true');
       });
@@ -471,7 +598,6 @@ export default {
     const cards = [...list.querySelectorAll('.provider-card')];
     const order = cards.map(card => card.dataset.provider);
     
-    // Update order numbers in UI
     cards.forEach((card, idx) => {
       const orderEl = card.querySelector('.provider-order');
       if (orderEl) orderEl.textContent = idx + 1;

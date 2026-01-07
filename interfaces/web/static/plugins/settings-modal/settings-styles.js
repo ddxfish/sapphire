@@ -926,6 +926,18 @@ export function injectStyles() {
       display: none;
     }
     
+    .provider-fields-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px 16px;
+    }
+    
+    @media (max-width: 600px) {
+      .provider-fields-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    
     .field-row {
       margin-bottom: 12px;
     }
@@ -1062,6 +1074,79 @@ export function injectStyles() {
       opacity: 0.5;
       border-color: var(--accent-blue);
       background: var(--accent-blue-light);
+    }
+    
+    /* Generation Params Grid (for Other/custom models) */
+    .generation-params-section {
+      margin-top: 16px;
+      padding: 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    
+    .generation-params-label {
+      font-size: var(--font-xs);
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 10px;
+    }
+    
+    .gen-model-hint {
+      font-weight: normal;
+      text-transform: none;
+      color: var(--text-dim);
+      font-size: var(--font-xs);
+    }
+    
+    .generation-params-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+    }
+    
+    @media (max-width: 768px) {
+      .generation-params-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+    
+    @media (max-width: 600px) {
+      .generation-params-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+    }
+    
+    .gen-param {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .gen-param label {
+      font-size: var(--font-xs);
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+    
+    .gen-param-input {
+      width: 100%;
+      padding: 6px 8px;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-sm);
+      color: var(--text-bright);
+      font-size: var(--font-sm);
+      font-family: var(--font-mono);
+      text-align: center;
+    }
+    
+    .gen-param-input:focus {
+      outline: none;
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 2px var(--focus-ring);
     }
     
     /* Key status hints */

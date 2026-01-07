@@ -63,10 +63,15 @@ PROVIDER_METADATA = {
         'required_fields': ['base_url', 'api_key', 'model'],
         'optional_fields': ['timeout'],
         'model_options': {
-            'accounts/fireworks/models/glm-4p7': 'GLM-4 Plus',
-            'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
+            'accounts/fireworks/models/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
+            'accounts/fireworks/models/qwen3-coder-480b-a35b-instruct': 'Qwen3 Coder 480B',
+            'accounts/fireworks/models/kimi-k2-thinking': 'Kimi K2 Thinking',
+            'accounts/fireworks/models/qwq-32b': 'QwQ 32B',
+            'accounts/fireworks/models/gpt-oss-120b': 'GPT-OSS 120B',
             'accounts/fireworks/models/deepseek-v3p2': 'DeepSeek V3.2',
             'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking',
+            'accounts/fireworks/models/glm-4p7': 'GLM 4.7',
+            'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
         },
         'is_local': False,
         'default_timeout': 10.0,
@@ -137,6 +142,57 @@ def get_api_key(provider_config: Dict[str, Any], provider_key: str) -> str:
         return 'not-needed'
     
     return ''
+
+
+def get_generation_params(provider_key: str, model: str, providers_config: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Get generation parameters for a model.
+    
+    Resolution order:
+    1. Provider-specific generation_params (for custom/other models)
+    2. MODEL_GENERATION_PROFILES lookup by model name
+    3. Fallback profile (__fallback__)
+    
+    Args:
+        provider_key: The provider key (e.g., 'claude', 'other')
+        model: The model name string
+        providers_config: The LLM_PROVIDERS dict
+    
+    Returns:
+        Dict with temperature, top_p, max_tokens, presence_penalty, frequency_penalty
+    """
+    import config as app_config
+    
+    default_params = {
+        'temperature': 0.7,
+        'top_p': 0.9,
+        'max_tokens': 4096,
+        'presence_penalty': 0.1,
+        'frequency_penalty': 0.1
+    }
+    
+    # 1. Check provider-specific generation_params (for Other/custom models)
+    provider_config = providers_config.get(provider_key, {})
+    if provider_config.get('generation_params'):
+        params = provider_config['generation_params']
+        if params:
+            logger.debug(f"Using provider-specific generation_params for {provider_key}")
+            return {**default_params, **params}
+    
+    # 2. Look up MODEL_GENERATION_PROFILES
+    profiles = getattr(app_config, 'MODEL_GENERATION_PROFILES', {})
+    if model and model in profiles:
+        logger.debug(f"Using generation profile for model '{model}'")
+        return {**default_params, **profiles[model]}
+    
+    # 3. Fallback profile
+    if '__fallback__' in profiles:
+        logger.debug(f"Using __fallback__ generation profile for '{model}'")
+        return {**default_params, **profiles['__fallback__']}
+    
+    # 4. Ultimate fallback - return defaults
+    logger.debug(f"Using hardcoded default generation params for '{model}'")
+    return default_params
 
 
 def get_provider_by_key(
@@ -363,6 +419,7 @@ __all__ = [
     'get_available_providers',
     'get_provider_metadata',
     'get_api_key',
+    'get_generation_params',
     'get_provider',
     'get_provider_for_url',
     'migrate_legacy_config',

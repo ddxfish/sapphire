@@ -12,7 +12,7 @@ from .module_loader import ModuleLoader
 from .function_manager import FunctionManager
 from .chat_streaming import StreamingChat
 from .chat_tool_calling import ToolCallingEngine, filter_to_thinking_only
-from .llm_providers import get_provider, get_provider_for_url, get_provider_by_key, get_first_available_provider
+from .llm_providers import get_provider, get_provider_for_url, get_provider_by_key, get_first_available_provider, get_generation_params
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,14 @@ class LLMChat:
             self.session_manager.add_user_message(user_input)
             
             active_tools = self.function_manager.enabled_tools
-            provider = self._select_provider()
+            provider_key, provider = self._select_provider()
+            
+            # Get generation params for this provider/model
+            gen_params = get_generation_params(
+                provider_key, 
+                provider.model, 
+                getattr(config, 'LLM_PROVIDERS', {})
+            )
 
             tool_call_count = 0
             last_tool_name = None
@@ -213,7 +220,7 @@ class LLMChat:
 
                 try:
                     response_msg = self.tool_engine.call_llm_with_metrics(
-                        provider, messages, config.GENERATION_DEFAULTS, tools=active_tools
+                        provider, messages, gen_params, tools=active_tools
                     )
                 except Exception as llm_error:
                     iteration_time = time.time() - iteration_start_time
@@ -335,7 +342,7 @@ class LLMChat:
 
             try:
                 final_response_msg = self.tool_engine.call_llm_with_metrics(
-                    provider, messages, config.GENERATION_DEFAULTS, tools=None
+                    provider, messages, gen_params, tools=None
                 )
                 final_response_content = final_response_msg.content or f"I used {tool_call_count} tools and gathered information, but couldn't formulate a final answer."
                 
@@ -371,7 +378,7 @@ class LLMChat:
             return error_text
 
     def _select_provider(self):
-        """Select LLM provider using per-chat settings or fallback order. Returns provider or raises."""
+        """Select LLM provider using per-chat settings or fallback order. Returns (provider_key, provider) tuple or raises."""
         
         if self._use_new_config:
             providers_config = config.LLM_PROVIDERS
@@ -393,7 +400,7 @@ class LLMChat:
                     try:
                         if provider.health_check():
                             logger.info(f"Using chat-specific primary '{chat_primary}' [{provider.provider_name}]")
-                            return provider
+                            return (chat_primary, provider)
                     except Exception as e:
                         logger.warning(f"Chat primary '{chat_primary}' health check failed: {e}")
                 
@@ -404,7 +411,7 @@ class LLMChat:
                         try:
                             if provider.health_check():
                                 logger.info(f"Using chat-specific fallback '{chat_fallback}' [{provider.provider_name}]")
-                                return provider
+                                return (chat_fallback, provider)
                         except Exception as e:
                             logger.warning(f"Chat fallback '{chat_fallback}' health check failed: {e}")
                 
@@ -422,7 +429,7 @@ class LLMChat:
             if result:
                 provider_key, provider = result
                 logger.info(f"Using provider '{provider_key}' [{provider.provider_name}]: {provider.model}")
-                return provider
+                return (provider_key, provider)
             
             raise ConnectionError("No LLM providers available")
         
@@ -432,7 +439,7 @@ class LLMChat:
                 try:
                     if self.provider_primary.health_check():
                         logger.info(f"Using primary LLM [{self.provider_primary.provider_name}]: {self.provider_primary.model}")
-                        return self.provider_primary
+                        return ('legacy_primary', self.provider_primary)
                 except Exception as e:
                     logger.warning(f"Primary LLM health check failed: {e}")
             
@@ -440,7 +447,7 @@ class LLMChat:
                 try:
                     if self.provider_fallback.health_check():
                         logger.info(f"Using fallback LLM [{self.provider_fallback.provider_name}]: {self.provider_fallback.model}")
-                        return self.provider_fallback
+                        return ('legacy_fallback', self.provider_fallback)
                 except Exception as e:
                     logger.error(f"Fallback LLM health check failed: {e}")
             

@@ -120,7 +120,7 @@
         "base_url": "https://api.fireworks.ai/inference/v1",
         "api_key": "",
         "api_key_env": "FIREWORKS_API_KEY",
-        "model": "accounts/fireworks/models/glm-4p7",
+        "model": "accounts/fireworks/models/qwen3-235b-a22b-thinking-2507",
         "timeout": 10.0,
         "enabled": false
       },
@@ -141,16 +141,34 @@
         "api_key": "",
         "model": "",
         "timeout": 10.0,
-        "enabled": false
+        "enabled": false,
+        "generation_params": {}
       }
     },
     "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "fireworks", "openai", "other"],
-    "GENERATION_DEFAULTS": {
-      "max_tokens": 4096,
-      "temperature": 0.82,
-      "top_p": 0.95,
-      "presence_penalty": 0.2,
-      "frequency_penalty": 0.2
+    "MODEL_GENERATION_PROFILES": {
+      "_comment": "Balanced generation params per model. Edit values here to tune.",
+      "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      
+      "claude-sonnet-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "claude-haiku-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "claude-opus-4-5": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      
+      "gpt-4o": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "gpt-4o-mini": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "gpt-4-turbo": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "o1": { "temperature": 1.0, "top_p": 1.0, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "o1-mini": { "temperature": 1.0, "top_p": 1.0, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      
+      "accounts/fireworks/models/qwen3-235b-a22b-thinking-2507": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/qwen3-vl-235b-a22b-thinking": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/qwq-32b": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/kimi-k2-thinking": { "temperature": 0.6, "top_p": 0.8, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct": { "temperature": 0.3, "top_p": 0.7, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "accounts/fireworks/models/gpt-oss-120b": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "accounts/fireworks/models/deepseek-v3p2": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "accounts/fireworks/models/glm-4p7": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "accounts/fireworks/models/minimax-m2p1": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
     },
     "FORCE_THINKING": false,
     "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that"

@@ -4,7 +4,7 @@ import re
 from typing import Generator
 import config
 from .chat_tool_calling import strip_ui_markers, wrap_tool_result, filter_to_thinking_only
-from .llm_providers import LLMResponse
+from .llm_providers import LLMResponse, get_generation_params
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,14 @@ class StreamingChat:
                 yield force_prefill
             
             active_tools = self.main_chat.function_manager.enabled_tools
-            provider = self.main_chat._select_provider()
+            provider_key, provider = self.main_chat._select_provider()
+            
+            # Get generation params for this provider/model
+            gen_params = get_generation_params(
+                provider_key,
+                provider.model,
+                getattr(config, 'LLM_PROVIDERS', {})
+            )
 
             tool_call_count = 0
             last_tool_name = None
@@ -117,7 +124,7 @@ class StreamingChat:
                     self.current_stream = provider.chat_completion_stream(
                         messages,
                         tools=active_tools if active_tools else None,
-                        generation_params=config.GENERATION_DEFAULTS
+                        generation_params=gen_params
                     )
                     logger.info(f"[STREAM] Stream created, starting iteration")
                     
