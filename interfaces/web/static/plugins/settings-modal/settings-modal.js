@@ -317,6 +317,9 @@ class SettingsModal {
 
   handleInputChange(e) {
     const key = e.target.dataset.key;
+    // Ignore inputs without data-key (like LLM provider fields that use data-provider)
+    if (!key || key === 'undefined') return;
+    
     const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     
     this.pendingChanges[key] = value;
@@ -334,6 +337,15 @@ class SettingsModal {
       this.originalTheme = this.currentTheme;
       showToast(`Theme saved: ${this.currentTheme}`, 'success');
     }
+    
+    // Filter out any invalid keys before checking length
+    const validChanges = {};
+    for (const [key, value] of Object.entries(this.pendingChanges)) {
+      if (key && key !== 'undefined' && key !== 'null') {
+        validChanges[key] = value;
+      }
+    }
+    this.pendingChanges = validChanges;
     
     if (Object.keys(this.pendingChanges).length === 0) {
       if (this.currentTheme === this.originalTheme) {
@@ -355,9 +367,6 @@ class SettingsModal {
         parsedChanges[key] = settingsAPI.parseValue(value, originalValue);
       }
       
-      const uiSettings = ['TTS_ENABLED', 'STT_ENABLED'];
-      const needsUIRefresh = Object.keys(parsedChanges).some(key => uiSettings.includes(key));
-      
       const result = await settingsAPI.updateSettingsBatch(parsedChanges);
       await settingsAPI.reloadSettings();
       
@@ -373,11 +382,6 @@ class SettingsModal {
           'warning',
           0  // Persistent until dismissed
         );
-      } else if (needsUIRefresh) {
-        if (confirm('Settings saved! Refresh page to see changes?')) {
-          window.location.reload();
-          return;
-        }
       }
       
       this.pendingChanges = {};

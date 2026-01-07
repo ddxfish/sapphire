@@ -325,11 +325,10 @@ class SettingsManager:
         Check if a setting can be hot-reloaded or requires restart.
         
         Returns:
-            'hot': Can be applied immediately
-            'component': Requires component reload
-            'restart': Requires full restart
+            'hot': Can be applied immediately (read per-request)
+            'restart': Requires full service restart
         """
-        # Tier 1: Hot-reload (safe to change at runtime)
+        # Hot-reload: These are read per-request, no restart needed
         hot_reload = {
             'DEFAULT_USERNAME', 'DEFAULT_AI_NAME',
             'GENERATION_DEFAULTS', 'LLM_MAX_HISTORY', 'LLM_MAX_TOKENS',
@@ -337,18 +336,9 @@ class SettingsManager:
             'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT'
         }
         
-        # Tier 2: Component reload (need to reconnect/reinit)
-        component_reload = {
-            'TTS_ENABLED', 'STT_ENABLED',
-            'TTS_PRIMARY_SERVER', 'TTS_FALLBACK_SERVER',
-            'MODULES_ENABLED', 'PLUGINS_ENABLED', 'FUNCTIONS_ENABLED'
-        }
-        
-        # Everything else is Tier 3: restart required
+        # Everything else requires restart (TTS, STT, modules, etc. are initialized at startup)
         if key in hot_reload:
             return 'hot'
-        elif key in component_reload:
-            return 'component'
         else:
             return 'restart'
     

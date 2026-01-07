@@ -184,6 +184,22 @@ def create_settings_api():
             if not isinstance(settings_dict, dict):
                 return jsonify({"error": "'settings' must be a dictionary"}), 400
             
+            # Filter out invalid keys (undefined, null, empty)
+            settings_dict = {
+                k: v for k, v in settings_dict.items() 
+                if k and k not in ('undefined', 'null', 'None', '')
+            }
+            
+            if not settings_dict:
+                return jsonify({
+                    "status": "success",
+                    "updated": {},
+                    "count": 0,
+                    "restart_required": False,
+                    "restart_keys": [],
+                    "message": "No valid settings to update"
+                })
+            
             validated = {}
             errors = []
             
@@ -204,7 +220,6 @@ def create_settings_api():
             
             results = {}
             restart_required = False
-            component_reload_required = False
             
             for key, info in validated.items():
                 results[key] = {
@@ -213,8 +228,6 @@ def create_settings_api():
                 }
                 if info['tier'] == 'restart':
                     restart_required = True
-                elif info['tier'] == 'component':
-                    component_reload_required = True
             
             logger.info(f"Batch updated {len(validated)} settings")
             
@@ -227,7 +240,6 @@ def create_settings_api():
                 "count": len(validated),
                 "restart_required": restart_required,
                 "restart_keys": restart_keys,
-                "component_reload_required": component_reload_required,
                 "message": f"Updated {len(validated)} settings"
             })
         
@@ -450,108 +462,201 @@ def create_settings_api():
     
     @bp.route('/llm/test/<provider_key>', methods=['POST'])
     def test_llm_provider(provider_key):
-        """Test an LLM provider with a hello round-trip.
-        Optionally accepts JSON body with config overrides to test unsaved values."""
+        """
+        Test an LLM provider with a single hello request.
+        Returns rich error details for common failure modes.
+        Accepts JSON body with config overrides to test unsaved values.
+        """
         try:
             from core.chat.llm_providers import get_provider_by_key, get_api_key, PROVIDER_METADATA
-            import os
+            import requests as req_lib
             
             providers_config = settings.get('LLM_PROVIDERS', {})
             
             if provider_key not in providers_config:
-                return jsonify({"error": f"Unknown provider: {provider_key}"}), 404
+                return jsonify({
+                    "status": "error",
+                    "error": "Unknown provider",
+                    "details": f"Provider '{provider_key}' not configured"
+                }), 404
             
-            # Start with saved config
+            # Build test config from saved + form overrides
             provider_config = dict(providers_config[provider_key])
-            
-            # Override with form values if provided
             form_data = request.json or {}
-            if form_data:
-                for field in ['base_url', 'api_key', 'model', 'timeout']:
-                    if field in form_data and form_data[field]:
-                        provider_config[field] = form_data[field]
+            for field in ['base_url', 'api_key', 'model', 'timeout']:
+                if field in form_data and form_data[field]:
+                    provider_config[field] = form_data[field]
             
-            # Check API key source for debugging
+            # Check API key status for helpful errors
             api_key = get_api_key(provider_config, provider_key)
-            api_key_source = "none"
-            if provider_config.get('api_key', '').strip():
-                api_key_source = "config"
-            elif api_key and api_key != 'not-needed':
-                meta = PROVIDER_METADATA.get(provider_key, {})
+            meta = PROVIDER_METADATA.get(provider_key, {})
+            is_local = meta.get('is_local', False)
+            
+            if not is_local and not api_key:
                 env_var = provider_config.get('api_key_env', '') or meta.get('api_key_env', '')
-                api_key_source = f"env:{env_var}"
-            elif api_key == 'not-needed':
-                api_key_source = "local"
+                return jsonify({
+                    "status": "error",
+                    "error": "No API key",
+                    "details": f"Set API key in field or {env_var} env var" if env_var else "API key required"
+                }), 400
             
-            logger.info(f"Testing provider '{provider_key}': api_key_source={api_key_source}, has_key={bool(api_key)}")
+            # Check required fields
+            if not is_local and not provider_config.get('base_url') and provider_key not in ('claude',):
+                return jsonify({
+                    "status": "error",
+                    "error": "No base URL",
+                    "details": "Base URL required for this provider"
+                }), 400
             
-            # Temporarily enable for test even if disabled
+            if not provider_config.get('model') and meta.get('model_options'):
+                return jsonify({
+                    "status": "error",
+                    "error": "No model selected",
+                    "details": "Select a model from dropdown or enter custom"
+                }), 400
+            
+            # Create provider instance
             test_config = {**providers_config, provider_key: {**provider_config, 'enabled': True}}
             
-            provider = get_provider_by_key(
-                provider_key, 
-                test_config, 
-                settings.get('LLM_REQUEST_TIMEOUT', 240.0)
-            )
+            try:
+                provider = get_provider_by_key(
+                    provider_key, 
+                    test_config, 
+                    settings.get('LLM_REQUEST_TIMEOUT', 240.0)
+                )
+            except ImportError as e:
+                return jsonify({
+                    "status": "error",
+                    "error": "Missing dependency",
+                    "details": str(e)
+                }), 500
+            except Exception as e:
+                return jsonify({
+                    "status": "error",
+                    "error": "Provider init failed",
+                    "details": str(e)[:200]
+                }), 500
             
             if not provider:
                 return jsonify({
                     "status": "error",
-                    "error": "Failed to create provider instance",
-                    "details": f"API key source: {api_key_source}, has_key: {bool(api_key)}",
-                    "api_key_source": api_key_source
-                }), 400
+                    "error": "Provider creation failed",
+                    "details": "Check configuration"
+                }), 500
             
-            # Health check first
-            try:
-                healthy = provider.health_check()
-                if not healthy:
-                    return jsonify({
-                        "status": "error",
-                        "error": "Health check failed",
-                        "details": "Provider endpoint not reachable",
-                        "api_key_source": api_key_source
-                    }), 503
-            except Exception as health_err:
-                return jsonify({
-                    "status": "error",
-                    "error": "Health check failed",
-                    "details": str(health_err),
-                    "api_key_source": api_key_source
-                }), 503
+            # Single test: send hello message
+            test_messages = [{"role": "user", "content": "Say 'Hello from Sapphire!' and nothing else."}]
             
-            # Actual hello test
             try:
-                test_messages = [
-                    {"role": "user", "content": "Say 'Hello from Sapphire!' and nothing else."}
-                ]
-                
                 response = provider.chat_completion(
                     messages=test_messages,
                     generation_params={"max_tokens": 50, "temperature": 0.1}
                 )
                 
-                reply = response.content or ""
-                
                 return jsonify({
                     "status": "success",
                     "provider": provider_key,
                     "model": provider.model,
-                    "response": reply[:200],
-                    "usage": response.usage,
-                    "api_key_source": api_key_source
+                    "response": (response.content or "")[:200],
+                    "usage": response.usage
                 })
                 
-            except Exception as chat_err:
-                return jsonify({
-                    "status": "error",
-                    "error": "Chat test failed",
-                    "details": str(chat_err)[:300],
-                    "api_key_source": api_key_source
-                }), 500
+            except Exception as e:
+                return _parse_provider_error(e, provider_key, provider_config, meta)
                 
         except Exception as e:
-            logger.error(f"Error testing LLM provider: {e}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+            logger.error(f"Test endpoint error: {e}", exc_info=True)
+            return jsonify({
+                "status": "error",
+                "error": "Internal error",
+                "details": str(e)[:200]
+            }), 500
+    
+    def _parse_provider_error(error, provider_key, config, meta):
+        """Parse provider exceptions into user-friendly error responses."""
+        import requests as req_lib
+        
+        error_str = str(error).lower()
+        error_full = str(error)[:300]
+        
+        # Connection errors
+        if any(x in error_str for x in ['connection refused', 'failed to establish', 'no route to host', 'name or service not known', 'getaddrinfo failed']):
+            url = config.get('base_url', 'endpoint')
+            return jsonify({
+                "status": "error",
+                "error": "Connection failed",
+                "details": f"Cannot reach {url} - check URL and network"
+            }), 503
+        
+        # Timeout
+        if 'timeout' in error_str or 'timed out' in error_str:
+            return jsonify({
+                "status": "error",
+                "error": "Request timed out",
+                "details": "Server too slow to respond - try increasing timeout or check server"
+            }), 504
+        
+        # Auth errors (check error message and common HTTP codes)
+        if any(x in error_str for x in ['401', 'unauthorized', 'invalid api key', 'invalid_api_key', 'authentication']):
+            return jsonify({
+                "status": "error",
+                "error": "Authentication failed",
+                "details": "API key invalid, expired, or missing permissions"
+            }), 401
+        
+        if '403' in error_str or 'forbidden' in error_str:
+            return jsonify({
+                "status": "error",
+                "error": "Access denied",
+                "details": "API key doesn't have permission for this operation"
+            }), 403
+        
+        # Model not found
+        if any(x in error_str for x in ['404', 'not found', 'model_not_found', 'does not exist', 'invalid model']):
+            model = config.get('model', 'unknown')
+            return jsonify({
+                "status": "error",
+                "error": "Model not found",
+                "details": f"Model '{model}' not available - check model name"
+            }), 404
+        
+        # Rate limiting
+        if '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str:
+            return jsonify({
+                "status": "error",
+                "error": "Rate limited",
+                "details": "Too many requests - wait a moment and retry"
+            }), 429
+        
+        # Server errors
+        if any(x in error_str for x in ['500', '502', '503', 'internal server error', 'bad gateway', 'service unavailable']):
+            return jsonify({
+                "status": "error",
+                "error": "Server error",
+                "details": "Provider server error - try again later"
+            }), 503
+        
+        # Overloaded (Claude-specific)
+        if 'overloaded' in error_str:
+            return jsonify({
+                "status": "error",
+                "error": "Server overloaded",
+                "details": "Provider is overloaded - try again in a few minutes"
+            }), 503
+        
+        # Credit/billing issues
+        if any(x in error_str for x in ['insufficient', 'credit', 'billing', 'quota', 'exceeded']):
+            return jsonify({
+                "status": "error",
+                "error": "Billing issue",
+                "details": "Check account credits/billing status"
+            }), 402
+        
+        # Fallback - show actual error
+        return jsonify({
+            "status": "error",
+            "error": "Request failed",
+            "details": error_full
+        }), 500
     
     return bp

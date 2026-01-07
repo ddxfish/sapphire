@@ -157,8 +157,17 @@ class ClaudeProvider(BaseProvider):
         finish_reason = None
         usage = None
         
+        import time
+        stream_start = time.time()
+        first_chunk_time = None
+        
         with self._client.messages.stream(**request_kwargs) as stream:
+            logger.debug(f"[STREAM] Context entered, waiting for events... (elapsed: {time.time() - stream_start:.2f}s)")
             for event in stream:
+                if first_chunk_time is None:
+                    first_chunk_time = time.time()
+                    logger.info(f"[STREAM] First event received after {first_chunk_time - stream_start:.2f}s")
+                
                 event_type = event.type
                 
                 if event_type == "content_block_start":
@@ -212,7 +221,9 @@ class ClaudeProvider(BaseProvider):
                         }
                 
                 elif event_type == "message_stop":
-                    pass  # Final event, handled below
+                    logger.debug(f"[STREAM] message_stop received (elapsed: {time.time() - stream_start:.2f}s)")
+        
+        logger.info(f"[STREAM] Stream complete, total time: {time.time() - stream_start:.2f}s")
         
         # Build final response
         final_tool_calls = [
@@ -255,6 +266,11 @@ class ClaudeProvider(BaseProvider):
         """
         Convert OpenAI-format messages to Claude format.
         
+        Handles cross-provider compatibility issues:
+        - Empty assistant content (from providers that return null/empty with tool_calls)
+        - Empty tool results
+        - Ensures all non-final messages have content
+        
         Returns:
             (system_prompt, claude_messages)
         """
@@ -263,7 +279,7 @@ class ClaudeProvider(BaseProvider):
         
         for msg in messages:
             role = msg.get("role")
-            content = msg.get("content", "")
+            content = msg.get("content", "") or ""  # Normalize None to empty string
             
             if role == "system":
                 # Claude uses system as separate parameter
@@ -276,8 +292,8 @@ class ClaudeProvider(BaseProvider):
                     # Build content blocks for Claude
                     content_blocks = []
                     
-                    # Add text content if present
-                    if content:
+                    # Add text content if present (skip empty)
+                    if content and content.strip():
                         content_blocks.append({
                             "type": "text",
                             "text": content
@@ -303,22 +319,25 @@ class ClaudeProvider(BaseProvider):
                         "content": content_blocks
                     })
                 else:
-                    # Plain assistant message
-                    claude_messages.append({
-                        "role": "assistant",
-                        "content": content
-                    })
+                    # Plain assistant message - skip if empty (can happen from other providers)
+                    if content and content.strip():
+                        claude_messages.append({
+                            "role": "assistant",
+                            "content": content
+                        })
             
             elif role == "tool":
                 # Convert tool result to Claude format
                 # Claude expects tool results as user messages
+                # Ensure content is never empty
+                tool_content = content if content and content.strip() else "(empty result)"
                 claude_messages.append({
                     "role": "user",
                     "content": [
                         {
                             "type": "tool_result",
                             "tool_use_id": msg.get("tool_call_id"),
-                            "content": content
+                            "content": tool_content
                         }
                     ]
                 })
@@ -326,9 +345,13 @@ class ClaudeProvider(BaseProvider):
             elif role == "user":
                 # Check if content is already structured (list of blocks)
                 if isinstance(content, list):
-                    claude_messages.append({"role": "user", "content": content})
+                    # Structured content - pass through if not empty
+                    if content:
+                        claude_messages.append({"role": "user", "content": content})
                 else:
-                    claude_messages.append({"role": "user", "content": content})
+                    # Plain text - skip if empty
+                    if content and content.strip():
+                        claude_messages.append({"role": "user", "content": content})
         
         return system_prompt, claude_messages
     

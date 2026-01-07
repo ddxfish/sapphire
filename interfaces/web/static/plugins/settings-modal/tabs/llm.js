@@ -358,6 +358,7 @@ export default {
       if (!res.ok) {
         console.error('Failed to update provider:', await res.json());
       }
+      // LLM changes auto-save silently - no toast needed for every field change
     } catch (e) {
       console.error('Error updating provider:', e);
     }
@@ -380,7 +381,7 @@ export default {
       card.querySelectorAll('.provider-field').forEach(input => {
         const field = input.dataset.field;
         if (!field || field === 'model_select') return;
-        if (field === 'api_key' && !input.value.trim()) return; // Don't send empty api_key
+        if (field === 'api_key' && !input.value.trim()) return;
         formData[field] = input.value;
       });
       
@@ -401,14 +402,18 @@ export default {
       const data = await res.json();
       
       if (data.status === 'success') {
-        result.textContent = `✓ ${data.response?.substring(0, 50) || 'Connected!'}`;
+        const response = data.response?.substring(0, 60) || 'Connected!';
+        result.textContent = `✓ ${response}`;
         result.classList.add('success');
       } else {
-        result.textContent = `✗ ${data.error}: ${data.details || ''}`;
+        // Show error + details for rich feedback
+        const errorMsg = data.error || 'Unknown error';
+        const details = data.details || '';
+        result.textContent = `✗ ${errorMsg}${details ? ': ' + details : ''}`;
         result.classList.add('error');
       }
     } catch (e) {
-      result.textContent = `✗ Request failed: ${e.message}`;
+      result.textContent = `✗ Network error: ${e.message}`;
       result.classList.add('error');
     } finally {
       btn.disabled = false;
