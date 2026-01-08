@@ -698,6 +698,146 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             return jsonify({"error": str(e)}), 500
     
     # =============================================================================
+    # AUDIO DEVICE ROUTES
+    # =============================================================================
+    
+    @bp.route('/api/audio/devices', methods=['GET'])
+    def get_audio_devices():
+        """Get list of available audio input and output devices."""
+        try:
+            from core.audio import get_device_manager
+            dm = get_device_manager()
+            
+            # Force refresh to get current device list
+            devices = dm.query_devices(force_refresh=True)
+            
+            input_devices = []
+            output_devices = []
+            
+            for dev in devices:
+                dev_info = {
+                    'index': dev.index,
+                    'name': dev.name,
+                    'is_default': dev.is_default_input or dev.is_default_output,
+                }
+                
+                if dev.max_input_channels > 0:
+                    input_devices.append({
+                        **dev_info,
+                        'channels': dev.max_input_channels,
+                        'sample_rate': int(dev.default_samplerate),
+                        'is_default': dev.is_default_input,
+                    })
+                
+                if dev.max_output_channels > 0:
+                    output_devices.append({
+                        **dev_info,
+                        'channels': dev.max_output_channels,
+                        'sample_rate': int(dev.default_samplerate),
+                        'is_default': dev.is_default_output,
+                    })
+            
+            # Get current configured device
+            configured_input = getattr(config, 'AUDIO_INPUT_DEVICE', None)
+            configured_output = getattr(config, 'AUDIO_OUTPUT_DEVICE', None)
+            
+            return jsonify({
+                'input': input_devices,
+                'output': output_devices,
+                'configured_input': configured_input,
+                'configured_output': configured_output,
+            })
+            
+        except Exception as e:
+            logger.error(f"Failed to get audio devices: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/api/audio/test-input', methods=['POST'])
+    def test_audio_input():
+        """Test audio input device by recording a short sample."""
+        try:
+            from core.audio import get_device_manager
+            dm = get_device_manager()
+            
+            data = request.get_json() or {}
+            device_index = data.get('device_index')
+            duration = min(data.get('duration', 1.0), 3.0)  # Cap at 3 seconds
+            
+            # Convert 'auto' or None to None for auto-detection
+            if device_index == 'auto' or device_index == '':
+                device_index = None
+            elif device_index is not None:
+                try:
+                    device_index = int(device_index)
+                except (ValueError, TypeError):
+                    device_index = None
+            
+            result = dm.test_input_device(device_index=device_index, duration=duration)
+            
+            return jsonify(result)
+            
+        except Exception as e:
+            logger.error(f"Audio input test failed: {e}")
+            from core.audio import classify_audio_error
+            return jsonify({
+                'success': False,
+                'error': classify_audio_error(e)
+            }), 500
+    
+    @bp.route('/api/audio/test-output', methods=['POST'])
+    def test_audio_output():
+        """Test audio output device by playing a test tone."""
+        try:
+            import numpy as np
+            import sounddevice as sd
+            
+            data = request.get_json() or {}
+            device_index = data.get('device_index')
+            duration = min(data.get('duration', 0.5), 2.0)  # Cap at 2 seconds
+            frequency = data.get('frequency', 440)  # A4 note
+            
+            # Convert to int or None
+            if device_index == 'auto' or device_index == '' or device_index is None:
+                device_index = None
+            else:
+                try:
+                    device_index = int(device_index)
+                except (ValueError, TypeError):
+                    device_index = None
+            
+            # Generate test tone
+            sample_rate = 44100
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            
+            # Sine wave with fade in/out to avoid clicks
+            tone = np.sin(2 * np.pi * frequency * t)
+            fade_samples = int(sample_rate * 0.02)  # 20ms fade
+            fade_in = np.linspace(0, 1, fade_samples)
+            fade_out = np.linspace(1, 0, fade_samples)
+            tone[:fade_samples] *= fade_in
+            tone[-fade_samples:] *= fade_out
+            tone = (tone * 0.5 * 32767).astype(np.int16)  # 50% volume
+            
+            # Play tone
+            sd.play(tone, sample_rate, device=device_index)
+            sd.wait()
+            
+            return jsonify({
+                'success': True,
+                'duration': duration,
+                'frequency': frequency,
+                'device_index': device_index,
+            })
+            
+        except Exception as e:
+            logger.error(f"Audio output test failed: {e}")
+            from core.audio import classify_audio_error
+            return jsonify({
+                'success': False,
+                'error': classify_audio_error(e)
+            }), 500
+
+    # =============================================================================
     # SYSTEM MANAGEMENT ROUTES
     # =============================================================================
     

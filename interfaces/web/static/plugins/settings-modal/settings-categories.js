@@ -3,6 +3,7 @@
 
 import identityTab from './tabs/identity.js';
 import appearanceTab from './tabs/appearance.js';
+import audioTab from './tabs/audio.js';
 import ttsTab from './tabs/tts.js';
 import sttTab from './tabs/stt.js';
 import llmTab from './tabs/llm.js';
@@ -15,6 +16,7 @@ import systemTab from './tabs/system.js';
 export const TABS = [
   identityTab,
   appearanceTab,
+  audioTab,
   ttsTab,
   sttTab,
   llmTab,

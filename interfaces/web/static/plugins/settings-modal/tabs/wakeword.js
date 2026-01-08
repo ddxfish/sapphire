@@ -1,10 +1,10 @@
-// tabs/wakeword.js - Wake word detection and audio recording
+// tabs/wakeword.js - Wake word detection settings
 
 export default {
   id: 'wakeword',
   name: 'Wakeword',
   icon: '🎵',
-  description: 'Wake word detection and audio recording',
+  description: 'Wake word detection settings',
   keys: [
     'WAKE_WORD_ENABLED',
     'WAKEWORD_MODEL',
@@ -16,20 +16,7 @@ export default {
     'PLAYBACK_SAMPLE_RATE',
     'WAKE_TONE_DURATION',
     'WAKE_TONE_FREQUENCY',
-    'CALLBACK_THREAD_POOL_SIZE',
-    'RECORDER_CHUNK_SIZE',
-    'RECORDER_CHANNELS',
-    'RECORDER_SILENCE_THRESHOLD',
-    'RECORDER_SILENCE_DURATION',
-    'RECORDER_SPEECH_DURATION',
-    'RECORDER_LEVEL_HISTORY_SIZE',
-    'RECORDER_BACKGROUND_PERCENTILE',
-    'RECORDER_NOISE_MULTIPLIER',
-    'RECORDER_MAX_SECONDS',
-    'RECORDER_BEEP_WAIT_TIME',
-    'RECORDER_SAMPLE_RATES',
-    'RECORDER_PREFERRED_DEVICES_LINUX',
-    'RECORDER_PREFERRED_DEVICES_WINDOWS'
+    'CALLBACK_THREAD_POOL_SIZE'
   ],
 
   render(modal) {

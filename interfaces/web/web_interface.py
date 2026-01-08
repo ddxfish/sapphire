@@ -827,6 +827,29 @@ def download_backup(filename):
 
 
 # =============================================================================
+# AUDIO DEVICE ROUTES (3 routes)
+# =============================================================================
+
+@app.route('/api/audio/devices', methods=['GET'])
+@require_login
+def get_audio_devices():
+    """Get list of available audio devices."""
+    return proxy('/api/audio/devices')
+
+@app.route('/api/audio/test-input', methods=['POST'])
+@require_login
+def test_audio_input():
+    """Test audio input device."""
+    return proxy('/api/audio/test-input', 'POST', json=request.json, timeout=10)
+
+@app.route('/api/audio/test-output', methods=['POST'])
+@require_login
+def test_audio_output():
+    """Test audio output device."""
+    return proxy('/api/audio/test-output', 'POST', json=request.json, timeout=10)
+
+
+# =============================================================================
 # SYSTEM MANAGEMENT ROUTES (2 routes)
 # =============================================================================
 
