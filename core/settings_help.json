@@ -57,6 +57,31 @@
     "long": "How many manual backup files to keep. Manual backups are triggered via the Backup Now button in the UI. Oldest backups are deleted first when the limit is exceeded."
   },
   
+  "AUDIO_INPUT_DEVICE": {
+    "short": "Input device index (null = auto-detect)",
+    "long": "Specific audio input device to use by index number. Set to null for automatic detection which tries preferred devices first (pipewire, pulse on Linux). Use the Audio tab test feature to find your device index. Useful when you have multiple microphones."
+  },
+  "AUDIO_OUTPUT_DEVICE": {
+    "short": "Output device index (null = system default)",
+    "long": "Specific audio output device to use by index number. Set to null to use the system default output device. Most users should leave this as null unless routing audio to a specific device."
+  },
+  "AUDIO_SAMPLE_RATES": {
+    "short": "Sample rates to try when configuring audio",
+    "long": "List of sample rates to try when initializing audio devices. The system tests rates in order until one works. 44100 and 48000 are standard for most devices. Add your device's native rate if you experience issues."
+  },
+  "AUDIO_BLOCKSIZE_FALLBACKS": {
+    "short": "Buffer sizes to try when configuring audio",
+    "long": "List of audio buffer sizes to try when initializing devices. Smaller buffers (512) reduce latency but may cause underruns on slow systems. Larger buffers (2048, 4096) are more stable but add latency. 1024 is a good default."
+  },
+  "AUDIO_PREFERRED_DEVICES_LINUX": {
+    "short": "Preferred audio systems on Linux",
+    "long": "List of audio system names to prefer on Linux, tried in order. 'pipewire' is the modern standard, 'pulse' (PulseAudio) is widely compatible, 'default' uses ALSA directly. The system checks device names against these strings."
+  },
+  "AUDIO_PREFERRED_DEVICES_WINDOWS": {
+    "short": "Preferred audio devices on Windows",
+    "long": "List of device name fragments to prefer on Windows, tried in order. 'default' uses the Windows default device. Other entries match against device names to prefer specific microphones or sound cards."
+  },
+  
   "WAKE_WORD_ENABLED": {
     "short": "Enable wake word detection",
     "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Uses OpenWakeWord with ONNX inference for cross-platform compatibility. Continuous audio monitoring may impact system resources on low-power devices."

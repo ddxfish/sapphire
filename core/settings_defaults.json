@@ -26,6 +26,16 @@
     "BACKUPS_KEEP_MANUAL": 5
   },
   
+  "audio": {
+    "_comment": "Unified audio device settings used by STT and wakeword",
+    "AUDIO_INPUT_DEVICE": null,
+    "AUDIO_OUTPUT_DEVICE": null,
+    "AUDIO_SAMPLE_RATES": [44100, 48000, 16000, 8000],
+    "AUDIO_BLOCKSIZE_FALLBACKS": [1024, 512, 2048, 4096],
+    "AUDIO_PREFERRED_DEVICES_LINUX": ["pipewire", "pulse", "default"],
+    "AUDIO_PREFERRED_DEVICES_WINDOWS": ["default", "microsoft sound mapper", "microphone"]
+  },
+  
   "wakeword": {
     "WAKE_WORD_ENABLED": false,
     "CHUNK_SIZE": 1280,
