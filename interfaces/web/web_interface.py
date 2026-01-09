@@ -850,6 +850,29 @@ def test_audio_output():
 
 
 # =============================================================================
+# SETUP WIZARD ROUTES (3 routes)
+# =============================================================================
+
+@app.route('/api/setup/check-packages', methods=['GET'])
+@require_login
+def check_packages():
+    """Check if optional packages (TTS, STT, wakeword) are installed."""
+    return proxy('/api/setup/check-packages')
+
+@app.route('/api/setup/wizard-step', methods=['GET'])
+@require_login
+def get_wizard_step():
+    """Get current setup wizard step."""
+    return proxy('/api/setup/wizard-step')
+
+@app.route('/api/setup/wizard-step', methods=['PUT'])
+@require_login
+def set_wizard_step():
+    """Set setup wizard step (0-3)."""
+    return proxy('/api/setup/wizard-step', 'PUT', json=request.json, timeout=10)
+
+
+# =============================================================================
 # SYSTEM MANAGEMENT ROUTES (2 routes)
 # =============================================================================
 

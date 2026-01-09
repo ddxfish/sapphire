@@ -1,5 +1,6 @@
 {
   "enabled": [
+    "setup-wizard",
     "prompt-manager",
     "ability-manager",
     "settings-modal",
@@ -9,6 +10,11 @@
     "image-gen"
   ],
   "plugins": {
+    "setup-wizard": {
+      "title": "Setup Wizard",
+      "showInSidebar": false,
+      "autoShow": true
+    },
     "prompt-manager": {
       "title": "Prompt Editor",
       "collapsible": true,

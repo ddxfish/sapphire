@@ -659,4 +659,81 @@ def create_settings_api():
             "details": error_full
         }), 500
     
+    # =========================================================================
+    # Setup Wizard Endpoints
+    # =========================================================================
+    
+    @bp.route('/setup/check-packages', methods=['GET'])
+    def check_packages():
+        """Check if optional audio packages are installed."""
+        import subprocess
+        import sys
+        
+        def check_package(package_name):
+            """Check if a package is installed in current environment."""
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-c', f'import {package_name}'],
+                    capture_output=True,
+                    timeout=5
+                )
+                return result.returncode == 0
+            except Exception:
+                return False
+        
+        # Package mappings: import_name -> (display_name, requirements_file)
+        packages = {
+            'tts': {
+                'import_name': 'kokoro',
+                'display_name': 'Kokoro TTS',
+                'requirements': 'requirements-tts.txt',
+                'description': 'Text-to-speech engine for voice responses'
+            },
+            'stt': {
+                'import_name': 'faster_whisper',
+                'display_name': 'Faster Whisper',
+                'requirements': 'requirements-stt.txt',
+                'description': 'Speech recognition for voice input'
+            },
+            'wakeword': {
+                'import_name': 'openwakeword',
+                'display_name': 'OpenWakeWord',
+                'requirements': 'requirements-wakeword.txt',
+                'description': 'Wake word detection for hands-free activation'
+            }
+        }
+        
+        results = {}
+        for key, info in packages.items():
+            installed = check_package(info['import_name'])
+            results[key] = {
+                'installed': installed,
+                'package': info['display_name'],
+                'import_name': info['import_name'],
+                'requirements': info['requirements'],
+                'description': info['description']
+            }
+        
+        return jsonify({
+            'status': 'success',
+            'packages': results
+        })
+    
+    @bp.route('/setup/wizard-step', methods=['GET'])
+    def get_wizard_step():
+        """Get current wizard step."""
+        step = settings.get('SETUP_WIZARD_STEP', 0)
+        return jsonify({'step': step})
+    
+    @bp.route('/setup/wizard-step', methods=['PUT'])
+    def set_wizard_step():
+        """Set wizard step (0-3)."""
+        data = request.json
+        step = data.get('step', 0)
+        if not isinstance(step, int) or step < 0 or step > 3:
+            return jsonify({'error': 'Step must be 0-3'}), 400
+        
+        settings.set('SETUP_WIZARD_STEP', step, persist=True)
+        return jsonify({'status': 'success', 'step': step})
+    
     return bp

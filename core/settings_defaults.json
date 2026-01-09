@@ -194,5 +194,10 @@
   
   "auth": {
     "SESSION_TIMEOUT_DAYS": 30
+  },
+  
+  "setup": {
+    "SETUP_WIZARD_STEP": 0,
+    "_wizard_steps": "0=not started, 1=voice done, 2=audio done, 3=complete"
   }
 }
