@@ -1,5 +1,14 @@
 // tabs/audio.js - Audio device configuration
-// Unified audio settings for input/output device selection and testing
+// Uses shared/audio-devices.js for reusable components
+
+import {
+  renderInputDeviceSelector,
+  renderOutputDeviceSelector,
+  populateDeviceSelects,
+  attachAudioDeviceListeners,
+  runInputTest,
+  runOutputTest
+} from '../../../shared/audio-devices.js';
 
 export default {
   id: 'audio',
@@ -25,16 +34,16 @@ export default {
             <select id="audio-input-select" class="device-select">
               <option value="auto">Auto-detect (recommended)</option>
             </select>
-            <button class="btn btn-sm btn-test" id="test-input-btn">
+            <button class="btn btn-sm btn-test" data-test="input">
               <span class="btn-icon">🎤</span> Test
             </button>
           </div>
-          <div class="test-result" id="input-test-result"></div>
-          <div class="level-meter-container" id="input-level-container" style="display:none;">
+          <div class="test-result" data-result="input"></div>
+          <div class="level-meter-container" data-meter="input" style="display:none;">
             <div class="level-meter">
-              <div class="level-bar" id="input-level-bar"></div>
+              <div class="level-bar" data-bar="input"></div>
             </div>
-            <span class="level-value" id="input-level-value">0%</span>
+            <span class="level-value" data-value="input">0%</span>
           </div>
         </div>
 
@@ -45,11 +54,11 @@ export default {
             <select id="audio-output-select" class="device-select">
               <option value="auto">System default</option>
             </select>
-            <button class="btn btn-sm btn-test" id="test-output-btn">
+            <button class="btn btn-sm btn-test" data-test="output">
               <span class="btn-icon">🔊</span> Test
             </button>
           </div>
-          <div class="test-result" id="output-test-result"></div>
+          <div class="test-result" data-result="output"></div>
         </div>
 
         <div class="audio-advanced-section">
@@ -72,40 +81,30 @@ export default {
     `;
   },
 
-  attachListeners(modal, container) {
-    // Load devices on tab activation
-    this.loadDevices(container, modal);
-    
-    // Input device change
-    const inputSelect = container.querySelector('#audio-input-select');
-    if (inputSelect) {
-      inputSelect.addEventListener('change', async (e) => {
-        const value = e.target.value === 'auto' ? null : parseInt(e.target.value);
-        await this.updateSetting(modal, 'AUDIO_INPUT_DEVICE', value);
-      });
+  async attachListeners(modal, container) {
+    // Load and populate devices
+    try {
+      await populateDeviceSelects(container);
+    } catch (e) {
+      const inputResult = container.querySelector('[data-result="input"]');
+      if (inputResult) {
+        inputResult.textContent = `⚠ Could not load devices: ${e.message}`;
+        inputResult.className = 'test-result error';
+      }
     }
-    
-    // Output device change
-    const outputSelect = container.querySelector('#audio-output-select');
-    if (outputSelect) {
-      outputSelect.addEventListener('change', async (e) => {
-        const value = e.target.value === 'auto' ? null : parseInt(e.target.value);
-        await this.updateSetting(modal, 'AUDIO_OUTPUT_DEVICE', value);
-      });
-    }
-    
-    // Test input button
-    const testInputBtn = container.querySelector('#test-input-btn');
-    if (testInputBtn) {
-      testInputBtn.addEventListener('click', () => this.testInput(container));
-    }
-    
-    // Test output button
-    const testOutputBtn = container.querySelector('#test-output-btn');
-    if (testOutputBtn) {
-      testOutputBtn.addEventListener('click', () => this.testOutput(container));
-    }
-    
+
+    // Attach device change and test listeners
+    attachAudioDeviceListeners(container, {
+      onInputChange: (value) => {
+        modal.settings.AUDIO_INPUT_DEVICE = value;
+        modal.pendingChanges.AUDIO_INPUT_DEVICE = value;
+      },
+      onOutputChange: (value) => {
+        modal.settings.AUDIO_OUTPUT_DEVICE = value;
+        modal.pendingChanges.AUDIO_OUTPUT_DEVICE = value;
+      }
+    });
+
     // Advanced section toggle
     const advToggle = container.querySelector('#audio-advanced-toggle');
     const advContent = container.querySelector('#audio-advanced-content');
@@ -116,184 +115,6 @@ export default {
         advContent.classList.toggle('collapsed');
         if (toggle) toggle.classList.toggle('collapsed');
       });
-    }
-  },
-
-  async loadDevices(container, modal) {
-    try {
-      const res = await fetch('/api/audio/devices');
-      if (!res.ok) throw new Error('Failed to fetch devices');
-      
-      const data = await res.json();
-      
-      // Populate input devices
-      const inputSelect = container.querySelector('#audio-input-select');
-      if (inputSelect && data.input) {
-        // Keep auto option
-        inputSelect.innerHTML = '<option value="auto">Auto-detect (recommended)</option>';
-        
-        for (const dev of data.input) {
-          const opt = document.createElement('option');
-          opt.value = dev.index;
-          opt.textContent = `[${dev.index}] ${dev.name}${dev.is_default ? ' (default)' : ''}`;
-          if (data.configured_input === dev.index) {
-            opt.selected = true;
-          }
-          inputSelect.appendChild(opt);
-        }
-        
-        // Select auto if configured_input is null
-        if (data.configured_input === null) {
-          inputSelect.value = 'auto';
-        }
-      }
-      
-      // Populate output devices
-      const outputSelect = container.querySelector('#audio-output-select');
-      if (outputSelect && data.output) {
-        outputSelect.innerHTML = '<option value="auto">System default</option>';
-        
-        for (const dev of data.output) {
-          const opt = document.createElement('option');
-          opt.value = dev.index;
-          opt.textContent = `[${dev.index}] ${dev.name}${dev.is_default ? ' (default)' : ''}`;
-          if (data.configured_output === dev.index) {
-            opt.selected = true;
-          }
-          outputSelect.appendChild(opt);
-        }
-        
-        if (data.configured_output === null) {
-          outputSelect.value = 'auto';
-        }
-      }
-      
-    } catch (e) {
-      console.error('Failed to load audio devices:', e);
-      const inputResult = container.querySelector('#input-test-result');
-      if (inputResult) {
-        inputResult.textContent = `⚠ Could not load devices: ${e.message}`;
-        inputResult.className = 'test-result error';
-      }
-    }
-  },
-
-  async updateSetting(modal, key, value) {
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [key]: value })
-      });
-      
-      if (!res.ok) throw new Error('Failed to update setting');
-      
-      // Update local cache
-      modal.settings[key] = value;
-      modal.pendingChanges[key] = value;
-      
-    } catch (e) {
-      console.error(`Failed to update ${key}:`, e);
-    }
-  },
-
-  async testInput(container) {
-    const btn = container.querySelector('#test-input-btn');
-    const result = container.querySelector('#input-test-result');
-    const levelContainer = container.querySelector('#input-level-container');
-    const levelBar = container.querySelector('#input-level-bar');
-    const levelValue = container.querySelector('#input-level-value');
-    const select = container.querySelector('#audio-input-select');
-    
-    const deviceIndex = select?.value === 'auto' ? null : select?.value;
-    
-    btn.disabled = true;
-    btn.innerHTML = '<span class="btn-icon">⏳</span> Recording...';
-    result.textContent = '';
-    result.className = 'test-result';
-    levelContainer.style.display = 'flex';
-    levelBar.style.width = '0%';
-    levelValue.textContent = '0%';
-    
-    try {
-      const res = await fetch('/api/audio/test-input', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_index: deviceIndex, duration: 1.5 })
-      });
-      
-      const data = await res.json();
-      
-      if (data.success) {
-        const peakPct = Math.round(data.peak_level * 100);
-        levelBar.style.width = `${Math.min(peakPct, 100)}%`;
-        levelValue.textContent = `${peakPct}%`;
-        
-        // Color code the level
-        if (peakPct < 5) {
-          result.textContent = `⚠ Very low level (${peakPct}%) - check microphone`;
-          result.className = 'test-result warning';
-          levelBar.style.background = 'var(--accent-yellow, #f0ad4e)';
-        } else if (peakPct > 90) {
-          result.textContent = `⚠ Very high level (${peakPct}%) - may clip`;
-          result.className = 'test-result warning';
-          levelBar.style.background = 'var(--accent-red, #d9534f)';
-        } else {
-          result.textContent = `✓ Audio detected from ${data.device_name}`;
-          result.className = 'test-result success';
-          levelBar.style.background = 'var(--accent-green, #5cb85c)';
-        }
-      } else {
-        result.textContent = `✗ ${data.error}`;
-        result.className = 'test-result error';
-        levelContainer.style.display = 'none';
-      }
-      
-    } catch (e) {
-      result.textContent = `✗ Test failed: ${e.message}`;
-      result.className = 'test-result error';
-      levelContainer.style.display = 'none';
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<span class="btn-icon">🎤</span> Test';
-    }
-  },
-
-  async testOutput(container) {
-    const btn = container.querySelector('#test-output-btn');
-    const result = container.querySelector('#output-test-result');
-    const select = container.querySelector('#audio-output-select');
-    
-    const deviceIndex = select?.value === 'auto' ? null : select?.value;
-    
-    btn.disabled = true;
-    btn.innerHTML = '<span class="btn-icon">⏳</span> Playing...';
-    result.textContent = '';
-    result.className = 'test-result';
-    
-    try {
-      const res = await fetch('/api/audio/test-output', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_index: deviceIndex, duration: 0.5, frequency: 440 })
-      });
-      
-      const data = await res.json();
-      
-      if (data.success) {
-        result.textContent = '✓ Test tone played successfully';
-        result.className = 'test-result success';
-      } else {
-        result.textContent = `✗ ${data.error}`;
-        result.className = 'test-result error';
-      }
-      
-    } catch (e) {
-      result.textContent = `✗ Test failed: ${e.message}`;
-      result.className = 'test-result error';
-    } finally {
-      btn.disabled = false;
-      btn.innerHTML = '<span class="btn-icon">🔊</span> Test';
     }
   }
 };
