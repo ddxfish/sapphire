@@ -49,10 +49,10 @@ export async function testOutputDevice(deviceIndex = null, duration = 0.5, frequ
  * @param {number|null} value - Device index or null for auto
  */
 export async function updateAudioSetting(key, value) {
-  const res = await fetch('/api/settings', {
+  const res = await fetch(`/api/settings/${key}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ [key]: value })
+    body: JSON.stringify({ value })
   });
   if (!res.ok) {
     throw new Error('Failed to update audio setting');

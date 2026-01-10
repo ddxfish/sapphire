@@ -10,22 +10,11 @@ export default {
   icon: '🗣️',
 
   async render(settings) {
-    // Check installed packages
-    try {
-      packageStatus = await checkPackages();
-    } catch (e) {
-      console.warn('Could not check packages:', e);
-      packageStatus = {};
-    }
-
     const ttsEnabled = settings.TTS_ENABLED || false;
     const sttEnabled = settings.STT_ENABLED || false;
     const wakewordEnabled = settings.WAKE_WORD_ENABLED || false;
 
-    const ttsInstalled = packageStatus.tts?.installed || false;
-    const sttInstalled = packageStatus.stt?.installed || false;
-    const wakewordInstalled = packageStatus.wakeword?.installed || false;
-
+    // Render immediately with "Checking..." status - packages load async
     return `
       <div class="setup-tab-header">
         <h3>🗣️ How should Sapphire communicate?</h3>
@@ -50,7 +39,9 @@ export default {
             <span class="slider"></span>
           </label>
         </div>
-        ${this.renderPackageStatus('stt', sttInstalled)}
+        <div class="package-status checking" data-package="stt">
+          <span class="spinner">⏳</span> Checking Faster Whisper...
+        </div>
       </div>
 
       <!-- Voice Responses (TTS) -->
@@ -66,7 +57,9 @@ export default {
             <span class="slider"></span>
           </label>
         </div>
-        ${this.renderPackageStatus('tts', ttsInstalled)}
+        <div class="package-status checking" data-package="tts">
+          <span class="spinner">⏳</span> Checking Kokoro TTS...
+        </div>
       </div>
 
       <!-- Wake Word -->
@@ -82,7 +75,9 @@ export default {
             <span class="slider"></span>
           </label>
         </div>
-        ${this.renderPackageStatus('wakeword', wakewordInstalled)}
+        <div class="package-status checking" data-package="wakeword">
+          <span class="spinner">⏳</span> Checking OpenWakeWord...
+        </div>
       </div>
 
       <div class="help-tip">
@@ -92,30 +87,10 @@ export default {
     `;
   },
 
-  renderPackageStatus(key, installed) {
-    const pkg = packageStatus[key] || {};
-    const requirements = pkg.requirements || `requirements-${key}.txt`;
-
-    if (installed) {
-      return `
-        <div class="package-status installed">
-          ✓ ${pkg.package || key} is installed and ready to use
-        </div>
-      `;
-    }
-
-    return `
-      <div class="package-status not-installed">
-        <div>⚠️ Requires ${pkg.package || key} - install to enable this feature:</div>
-        <div class="pip-command">
-          <code>pip install -r ${requirements}</code>
-          <button class="copy-btn" data-copy="pip install -r ${requirements}">Copy</button>
-        </div>
-      </div>
-    `;
-  },
-
   attachListeners(container, settings, updateSettings) {
+    // Start package check async - updates DOM when complete
+    this.loadPackageStatus(container);
+
     // Feature toggles
     container.querySelectorAll('.feature-toggle input').forEach(toggle => {
       toggle.addEventListener('change', async (e) => {
@@ -123,12 +98,10 @@ export default {
         const enabled = e.target.checked;
         const card = e.target.closest('.feature-card');
 
-        // Update setting
         try {
           await updateSetting(settingKey, enabled);
           settings[settingKey] = enabled;
 
-          // Update card visual state
           if (enabled) {
             card.classList.add('enabled');
           } else {
@@ -136,27 +109,62 @@ export default {
           }
         } catch (err) {
           console.error('Failed to update setting:', err);
-          e.target.checked = !enabled; // Revert
+          e.target.checked = !enabled;
         }
       });
     });
 
-    // Copy buttons
-    container.querySelectorAll('.copy-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+    // Copy buttons (delegated - works for dynamically added buttons)
+    container.addEventListener('click', (e) => {
+      if (e.target.classList.contains('copy-btn')) {
         e.stopPropagation();
-        const text = btn.dataset.copy;
+        const text = e.target.dataset.copy;
         navigator.clipboard.writeText(text).then(() => {
-          const original = btn.textContent;
-          btn.textContent = 'Copied!';
-          setTimeout(() => btn.textContent = original, 1500);
+          const original = e.target.textContent;
+          e.target.textContent = 'Copied!';
+          setTimeout(() => e.target.textContent = original, 1500);
         });
-      });
+      }
     });
   },
 
+  async loadPackageStatus(container) {
+    try {
+      packageStatus = await checkPackages();
+
+      // Update each package status in DOM
+      for (const [key, info] of Object.entries(packageStatus)) {
+        const statusEl = container.querySelector(`[data-package="${key}"]`);
+        if (!statusEl) continue;
+
+        statusEl.classList.remove('checking');
+
+        if (info.installed) {
+          statusEl.classList.add('installed');
+          statusEl.innerHTML = `✓ ${info.package || key} is installed and ready to use`;
+        } else {
+          statusEl.classList.add('not-installed');
+          const requirements = info.requirements || `requirements-${key}.txt`;
+          statusEl.innerHTML = `
+            <div>⚠️ Requires ${info.package || key} - install to enable this feature:</div>
+            <div class="pip-command">
+              <code>pip install -r ${requirements}</code>
+              <button class="copy-btn" data-copy="pip install -r ${requirements}">Copy</button>
+            </div>
+          `;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not check packages:', e);
+      // Show error state
+      container.querySelectorAll('.package-status.checking').forEach(el => {
+        el.classList.remove('checking');
+        el.innerHTML = `⚠️ Could not check package status`;
+      });
+    }
+  },
+
   validate(settings) {
-    // Voice tab is always valid - features are optional
     return { valid: true };
   }
 };

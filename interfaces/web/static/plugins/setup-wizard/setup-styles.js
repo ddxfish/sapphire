@@ -239,6 +239,18 @@ export function injectSetupStyles() {
       background: rgba(240, 173, 78, 0.15);
       color: var(--accent-yellow, #f0ad4e);
     }
+    .package-status.checking {
+      background: rgba(74, 158, 255, 0.1);
+      color: var(--text-secondary, #888);
+    }
+    .package-status.checking .spinner {
+      display: inline-block;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
     .pip-command {
       display: flex;
       align-items: center;
