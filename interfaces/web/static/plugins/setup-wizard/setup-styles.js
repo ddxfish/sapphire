@@ -89,10 +89,16 @@ export function injectSetupStyles() {
     }
     .setup-step.active {
       background: var(--accent-color, #4a9eff);
+      color: #fff !important;
+    }
+    .setup-step.active .step-label {
       color: #fff;
     }
     .setup-step.completed {
       color: var(--accent-green, #5cb85c);
+    }
+    .setup-step.active.completed {
+      color: #fff;
     }
     .setup-step .step-num {
       width: 24px;

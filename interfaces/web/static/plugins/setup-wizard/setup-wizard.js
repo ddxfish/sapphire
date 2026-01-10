@@ -50,7 +50,6 @@ class SetupWizard {
       <div class="setup-wizard">
         <div class="setup-wizard-header">
           <h2>💎 Welcome to Sapphire</h2>
-          <p class="subtitle">Let's get your AI assistant set up in just a few steps</p>
         </div>
 
         <div class="setup-steps">

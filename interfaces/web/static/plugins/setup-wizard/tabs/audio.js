@@ -14,20 +14,9 @@ export default {
 
   render(settings) {
     return `
-      <div class="setup-tab-header">
-        <h3>🎧 Set up your audio devices</h3>
-        <p>Make sure Sapphire can hear you and you can hear her</p>
-      </div>
-
-      <div class="help-tip">
-        <span class="tip-icon">💡</span>
-        <span>Auto-detect usually works great! Only change these if you have multiple microphones or speakers.</span>
-      </div>
-
       <!-- Microphone -->
       <div class="audio-section">
         <h4>🎤 Microphone</h4>
-        <p>Select the microphone Sapphire should listen to</p>
         <div class="device-row">
           <select id="setup-audio-input" class="device-select">
             <option value="auto">Auto-detect (recommended)</option>
@@ -48,7 +37,6 @@ export default {
       <!-- Speakers -->
       <div class="audio-section">
         <h4>🔊 Speakers</h4>
-        <p>Select where Sapphire's voice should play</p>
         <div class="device-row">
           <select id="setup-audio-output" class="device-select">
             <option value="auto">System default</option>
@@ -58,11 +46,6 @@ export default {
           </button>
         </div>
         <div class="test-result" data-result="output"></div>
-      </div>
-
-      <div class="help-tip">
-        <span class="tip-icon">ℹ️</span>
-        <span>Click "Test" to check if your devices are working. For microphone, speak into it and watch the level meter.</span>
       </div>
     `;
   },

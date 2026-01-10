@@ -73,27 +73,13 @@ export default {
       .map(([key]) => key);
 
     return `
-      <div class="setup-tab-header">
-        <h3>🧠 Connect to an AI brain</h3>
-        <p>Choose where Sapphire gets her intelligence</p>
-      </div>
-
       <div class="help-tip">
         <span class="tip-icon">💡</span>
-        <span><strong>New to AI?</strong> Start with LM Studio for a free, private experience. Just download the app and load a model!</span>
-      </div>
-
-      <div class="llm-intro">
-        <p>Select a provider and configure it. You can enable multiple providers - Sapphire will automatically fall back if one isn't available.</p>
+        <span>Easy mode: Install LM Studio, load a model, start the server.</span>
       </div>
 
       <div class="provider-list">
         ${this.renderProviderCards(providers, enabledProviders)}
-      </div>
-
-      <div class="help-tip">
-        <span class="tip-icon">ℹ️</span>
-        <span>You can configure more providers and advanced settings later in Settings → LLM.</span>
       </div>
     `;
   },

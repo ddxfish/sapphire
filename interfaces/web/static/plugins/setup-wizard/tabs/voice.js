@@ -14,18 +14,7 @@ export default {
     const sttEnabled = settings.STT_ENABLED || false;
     const wakewordEnabled = settings.WAKE_WORD_ENABLED || false;
 
-    // Render immediately with "Checking..." status - packages load async
     return `
-      <div class="setup-tab-header">
-        <h3>🗣️ How should Sapphire communicate?</h3>
-        <p>Choose how you want to interact with your AI assistant</p>
-      </div>
-
-      <div class="help-tip">
-        <span class="tip-icon">💡</span>
-        <span>Each feature is optional. You can always chat by typing, but voice makes it feel more natural!</span>
-      </div>
-
       <!-- Speech Recognition (STT) -->
       <div class="feature-card ${sttEnabled ? 'enabled' : ''}" data-feature="stt">
         <div class="feature-card-header">
@@ -78,11 +67,6 @@ export default {
         <div class="package-status checking" data-package="wakeword">
           <span class="spinner">⏳</span> Checking OpenWakeWord...
         </div>
-      </div>
-
-      <div class="help-tip">
-        <span class="tip-icon">ℹ️</span>
-        <span>Don't worry if packages aren't installed yet - you can enable these features later in Settings.</span>
       </div>
     `;
   },
