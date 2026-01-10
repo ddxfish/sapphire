@@ -163,6 +163,14 @@ export function bindAllEvents() {
     // Restart
     document.getElementById('restart-btn')?.addEventListener('click', handleRestart);
     
+    // Setup Wizard
+    document.getElementById('setup-wizard-btn')?.addEventListener('click', () => {
+        closeAllKebabs();
+        if (window.sapphireSetupWizard) {
+            window.sapphireSetupWizard.open(true);
+        }
+    });
+    
     // Document-level events
     document.addEventListener('visibilitychange', () => handleVisibilityChange(triggerSendWithText));
     
