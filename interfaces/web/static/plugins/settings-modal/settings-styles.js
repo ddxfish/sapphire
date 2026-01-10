@@ -985,6 +985,40 @@ export function injectStyles() {
       display: none;
     }
     
+    /* Auto Mode Toggle - at top of accordion */
+    .auto-mode-row {
+      margin-bottom: 16px;
+      padding: 12px;
+      background: var(--surface-secondary);
+      border-radius: var(--radius-sm);
+      border-left: 3px solid var(--accent-color);
+    }
+    
+    .auto-mode-row .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: var(--font-sm);
+      font-weight: 500;
+      color: var(--text-primary);
+    }
+    
+    .auto-mode-row .checkbox-label input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: var(--accent-color);
+    }
+    
+    .auto-mode-row .auto-mode-hint {
+      display: block;
+      margin-top: 6px;
+      margin-left: 24px;
+      font-size: var(--font-xs);
+      color: var(--text-dim);
+    }
+    
     /* Provider Actions */
     .provider-actions {
       display: flex;

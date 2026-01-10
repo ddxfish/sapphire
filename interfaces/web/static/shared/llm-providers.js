@@ -144,6 +144,19 @@ export function renderProviderFields(key, config, meta) {
   const fields = [];
   const required = meta.required_fields || [];
 
+  // Auto mode toggle - at the top for visibility
+  const useAsFallback = config.use_as_fallback !== false; // Default true
+  fields.push(`
+    <div class="auto-mode-row">
+      <label class="checkbox-label">
+        <input type="checkbox" class="provider-field fallback-toggle" data-provider="${key}" data-field="use_as_fallback" 
+               ${useAsFallback ? 'checked' : ''}>
+        <span>Include in Auto mode</span>
+      </label>
+      <small class="auto-mode-hint">When checked, this provider will be used automatically based on fallback order</small>
+    </div>
+  `);
+
   // Base URL
   if (required.includes('base_url') || config.base_url !== undefined) {
     fields.push(`
@@ -437,6 +450,7 @@ export function initProviderDragDrop(listContainer, onReorder) {
 
 /**
  * Refresh API key status hints for all providers in container.
+ * Updates both hint text and input placeholder to show stars when key exists.
  */
 export async function refreshProviderKeyStatus(container) {
   try {
@@ -450,16 +464,34 @@ export async function refreshProviderKeyStatus(container) {
       status[p.key] = p;
       
       const hint = container.querySelector(`.key-hint[data-provider="${p.key}"]`);
-      if (hint) {
-        if (p.has_config_key) {
+      const input = container.querySelector(`.api-key-field[data-provider="${p.key}"]`);
+      
+      if (p.has_config_key) {
+        // User has set a key in Sapphire - this takes priority
+        if (hint) {
           hint.textContent = '✓ Set in Sapphire';
           hint.className = 'field-hint key-hint key-set';
-        } else if (p.has_env_key) {
-          hint.textContent = `✓ From env var ${p.env_var}`;
+        }
+        if (input) {
+          input.placeholder = '••••••••••••••••';
+        }
+      } else if (p.has_env_key) {
+        // Key from environment variable
+        if (hint) {
+          hint.textContent = `✓ From ${p.env_var} (enter key to override)`;
           hint.className = 'field-hint key-hint key-env';
-        } else {
+        }
+        if (input) {
+          input.placeholder = '•••••••• (from env)';
+        }
+      } else {
+        // No key set
+        if (hint) {
           hint.textContent = '';
           hint.className = 'field-hint key-hint';
+        }
+        if (input) {
+          input.placeholder = 'Enter API key';
         }
       }
     }

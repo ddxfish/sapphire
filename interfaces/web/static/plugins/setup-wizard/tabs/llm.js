@@ -152,7 +152,7 @@ export default {
       fields.push(`
         <div class="config-field">
           <label>API Key ${envVar ? `<span style="opacity:0.6">(or set ${envVar})</span>` : ''}</label>
-          <input type="password" data-provider="${key}" data-field="api_key" 
+          <input type="password" class="api-key-field" data-provider="${key}" data-field="api_key" 
                  value="" placeholder="${hasKey ? '••••••••••••' : 'Enter your API key'}">
           <div class="hint key-hint" data-provider="${key}">${hasKey ? '✓ Key is set' : ''}</div>
         </div>

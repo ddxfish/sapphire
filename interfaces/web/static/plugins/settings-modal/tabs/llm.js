@@ -210,6 +210,11 @@ export default {
       value = parseFloat(value) || 5.0;
     }
 
+    // Handle checkbox fields
+    if (field === 'use_as_fallback') {
+      value = e.target.checked;
+    }
+
     await updateProvider(key, { [field]: value });
   },
 

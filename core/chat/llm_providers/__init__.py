@@ -259,6 +259,10 @@ def get_first_available_provider(
     """
     Get first available provider following fallback order.
     
+    Only considers providers with use_as_fallback=True (default).
+    Providers with use_as_fallback=False are excluded from Auto mode
+    and can only be used when explicitly selected per-chat.
+    
     Args:
         providers_config: The LLM_PROVIDERS dict
         fallback_order: List of provider keys in priority order
@@ -277,7 +281,14 @@ def get_first_available_provider(
         if provider_key not in providers_config:
             continue
         
-        if not providers_config[provider_key].get('enabled', False):
+        config = providers_config[provider_key]
+        
+        if not config.get('enabled', False):
+            continue
+        
+        # Skip providers not in Auto fallback pool
+        if not config.get('use_as_fallback', True):
+            logger.debug(f"Provider '{provider_key}' excluded from Auto mode (use_as_fallback=False)")
             continue
         
         provider = get_provider_by_key(provider_key, providers_config, request_timeout)
