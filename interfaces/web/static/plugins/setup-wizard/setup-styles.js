@@ -551,6 +551,105 @@ export function injectSetupStyles() {
         display: none;
       }
     }
+
+    /* ========================================
+       Success Celebration
+       ======================================== */
+    .success-screen {
+      text-align: center;
+      padding: 60px 20px;
+    }
+    .success-screen h3 {
+      margin: 0 0 8px;
+      color: var(--text-primary, #fff);
+      font-size: 1.5rem;
+      animation: slideUp 0.5s ease 0.3s both;
+    }
+    .success-screen p {
+      color: var(--text-secondary, #888);
+      margin: 0;
+      animation: slideUp 0.5s ease 0.4s both;
+    }
+    
+    .celebration {
+      position: relative;
+      width: 120px;
+      height: 120px;
+      margin: 0 auto 24px;
+    }
+    
+    .success-icon {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0);
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, var(--accent-green, #5cb85c), #3d9140);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      color: #fff;
+      animation: popIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) 0.1s forwards;
+      box-shadow: 0 4px 20px rgba(92, 184, 92, 0.4);
+    }
+    
+    .sparkle {
+      position: absolute;
+      font-size: 1.2rem;
+      color: var(--accent-color, #4a9eff);
+      opacity: 0;
+      animation: sparkle 0.6s ease-out forwards;
+    }
+    .sparkle.s1 { top: 10%; left: 50%; animation-delay: 0.2s; color: #ffd700; }
+    .sparkle.s2 { top: 25%; left: 85%; animation-delay: 0.25s; color: var(--accent-green, #5cb85c); }
+    .sparkle.s3 { top: 70%; left: 90%; animation-delay: 0.3s; color: #ff6b9d; }
+    .sparkle.s4 { top: 85%; left: 50%; animation-delay: 0.35s; color: #ffd700; }
+    .sparkle.s5 { top: 70%; left: 10%; animation-delay: 0.4s; color: var(--accent-color, #4a9eff); }
+    .sparkle.s6 { top: 25%; left: 15%; animation-delay: 0.45s; color: #ff6b9d; }
+    
+    @keyframes popIn {
+      0% { transform: translate(-50%, -50%) scale(0); }
+      50% { transform: translate(-50%, -50%) scale(1.1); }
+      100% { transform: translate(-50%, -50%) scale(1); }
+    }
+    
+    @keyframes sparkle {
+      0% { 
+        opacity: 0; 
+        transform: scale(0) translate(0, 0); 
+      }
+      50% { 
+        opacity: 1; 
+      }
+      100% { 
+        opacity: 0; 
+        transform: scale(1.5) translate(
+          calc((var(--x, 0) - 50%) * 0.5),
+          calc((var(--y, 0) - 50%) * 0.5)
+        );
+      }
+    }
+    
+    .sparkle.s1 { --x: 50%; --y: -30%; }
+    .sparkle.s2 { --x: 120%; --y: 20%; }
+    .sparkle.s3 { --x: 110%; --y: 100%; }
+    .sparkle.s4 { --x: 50%; --y: 130%; }
+    .sparkle.s5 { --x: -20%; --y: 100%; }
+    .sparkle.s6 { --x: -10%; --y: 20%; }
+    
+    @keyframes slideUp {
+      from { 
+        opacity: 0; 
+        transform: translateY(10px); 
+      }
+      to { 
+        opacity: 1; 
+        transform: translateY(0); 
+      }
+    }
   `;
 
   document.head.appendChild(style);

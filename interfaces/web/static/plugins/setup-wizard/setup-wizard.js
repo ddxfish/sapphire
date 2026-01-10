@@ -255,13 +255,21 @@ class SetupWizard {
     await setWizardStep(3);
     this.completedStep = 3;
 
-    // Show success message briefly
+    // Show success message with celebration
     const content = this.modal.querySelector('.setup-wizard-content');
     content.innerHTML = `
-      <div style="text-align:center; padding: 60px 20px;">
-        <div style="font-size: 4rem; margin-bottom: 20px;">🎉</div>
-        <h3 style="margin: 0 0 12px; color: var(--text-primary, #fff);">You're all set!</h3>
-        <p style="color: var(--text-secondary, #888); margin: 0;">Sapphire is ready to chat. Have fun!</p>
+      <div class="success-screen">
+        <div class="celebration">
+          <div class="sparkle s1">✦</div>
+          <div class="sparkle s2">✦</div>
+          <div class="sparkle s3">✦</div>
+          <div class="sparkle s4">✦</div>
+          <div class="sparkle s5">✦</div>
+          <div class="sparkle s6">✦</div>
+          <div class="success-icon">✓</div>
+        </div>
+        <h3>You're all set!</h3>
+        <p>Sapphire is ready to chat.</p>
       </div>
     `;
 
