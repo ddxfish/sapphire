@@ -8,7 +8,7 @@ import ttsTab from './tabs/tts.js';
 import sttTab from './tabs/stt.js';
 import llmTab from './tabs/llm.js';
 import toolsTab from './tabs/tools.js';
-import networkTab from './tabs/network.js';
+import socksTab from './tabs/socks.js';
 import wakewordTab from './tabs/wakeword.js';
 import systemTab from './tabs/system.js';
 
@@ -21,7 +21,7 @@ export const TABS = [
   sttTab,
   llmTab,
   toolsTab,
-  networkTab,
+  socksTab,
   wakewordTab,
   systemTab
 ];

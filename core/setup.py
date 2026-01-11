@@ -167,27 +167,24 @@ def delete_password_hash() -> bool:
 def get_socks_credentials() -> tuple[str | None, str | None]:
     """
     Load SOCKS5 credentials with priority:
-    1. Environment variables (SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD)
-    2. Config file: CONFIG_DIR/socks_config
-    3. Project file: user/.socks_config (legacy/dev convenience)
-    
-    Supports both formats:
-      username
-      password
-    OR:
-      username=myuser
-      password=mypass
+    1. credentials.json (managed by credentials_manager)
+    2. Environment variables (SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD)
+    3. Legacy: CONFIG_DIR/socks_config
+    4. Legacy: user/.socks_config
     
     Returns (username, password) or (None, None) if not found.
     """
-    def parse_line(line: str) -> str:
-        """Strip key= prefix if present"""
-        line = line.strip()
-        if '=' in line:
-            return line.split('=', 1)[1].strip()
-        return line
+    # 1. Try credentials_manager first (avoids circular import by lazy loading)
+    try:
+        from core.credentials_manager import credentials
+        username, password = credentials.get_socks_credentials()
+        if username and password:
+            logger.debug("Using SOCKS credentials from credentials.json")
+            return username, password
+    except ImportError:
+        pass  # credentials_manager not available yet
     
-    # Try env vars first (production/deployment)
+    # 2. Try env vars (production/deployment)
     username = os.environ.get('SAPPHIRE_SOCKS_USERNAME')
     password = os.environ.get('SAPPHIRE_SOCKS_PASSWORD')
     
@@ -195,27 +192,27 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
         logger.info("Using SOCKS credentials from environment variables")
         return username, password
     
-    # Try platform config directory
+    # 3. Legacy: platform config directory file
     if SOCKS_CONFIG_FILE.exists():
         try:
             lines = SOCKS_CONFIG_FILE.read_text().splitlines()
             if len(lines) >= 2:
-                username = parse_line(lines[0])
-                password = parse_line(lines[1])
+                username = _parse_legacy_line(lines[0])
+                password = _parse_legacy_line(lines[1])
                 if username and password:
                     logger.info(f"Using SOCKS credentials from {SOCKS_CONFIG_FILE}")
                     return username, password
         except Exception as e:
             logger.debug(f"Failed to read {SOCKS_CONFIG_FILE}: {e}")
     
-    # Try project-local file (legacy/dev convenience)
+    # 4. Legacy: project-local file
     project_config = Path(__file__).parent.parent / 'user' / '.socks_config'
     if project_config.exists():
         try:
             lines = project_config.read_text().splitlines()
             if len(lines) >= 2:
-                username = parse_line(lines[0])
-                password = parse_line(lines[1])
+                username = _parse_legacy_line(lines[0])
+                password = _parse_legacy_line(lines[1])
                 if username and password:
                     logger.info(f"Using SOCKS credentials from {project_config}")
                     return username, password
@@ -225,21 +222,40 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
     return None, None
 
 
+def _parse_legacy_line(line: str) -> str:
+    """Strip key= prefix if present from legacy config files."""
+    line = line.strip()
+    if '=' in line:
+        return line.split('=', 1)[1].strip()
+    return line
+
+
 def get_claude_api_key() -> str | None:
     """
     Load Claude API key with priority:
-    1. Environment variable (ANTHROPIC_API_KEY)
-    2. Config file: CONFIG_DIR/claude_api_key
+    1. credentials.json (managed by credentials_manager)
+    2. Environment variable (ANTHROPIC_API_KEY)
+    3. Legacy: CONFIG_DIR/claude_api_key
     
     Returns API key or None if not found.
     """
-    # Try env var first (standard Anthropic pattern)
+    # 1. Try credentials_manager first
+    try:
+        from core.credentials_manager import credentials
+        api_key = credentials.get_llm_api_key('claude')
+        if api_key:
+            logger.debug("Using Claude API key from credentials.json")
+            return api_key
+    except ImportError:
+        pass
+    
+    # 2. Try env var (standard Anthropic pattern)
     api_key = os.environ.get('ANTHROPIC_API_KEY')
     if api_key:
         logger.info("Using Claude API key from ANTHROPIC_API_KEY environment variable")
         return api_key
     
-    # Try config file
+    # 3. Legacy: config file
     if CLAUDE_API_KEY_FILE.exists():
         try:
             api_key = CLAUDE_API_KEY_FILE.read_text().strip()

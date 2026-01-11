@@ -1200,6 +1200,91 @@ export function injectStyles() {
     }
     
     /* =============================================================================
+       SOCKS TAB - Credentials Section
+       ============================================================================= */
+    
+    .socks-credentials-section {
+      margin-top: 24px;
+      padding: 20px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+    }
+    
+    .socks-credentials-section h4 {
+      margin: 0 0 8px 0;
+      font-size: var(--font-md);
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+    
+    .socks-credentials-section .section-desc {
+      margin: 0 0 16px 0;
+      font-size: var(--font-sm);
+      color: var(--text-muted);
+    }
+    
+    .credential-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+    
+    .credential-status .status-indicator {
+      font-size: 16px;
+    }
+    
+    .credential-status .status-indicator.status-set {
+      color: var(--accent-green, #4ade80);
+    }
+    
+    .credential-status .status-indicator.status-unset {
+      color: var(--text-muted);
+    }
+    
+    .credential-status .status-indicator.status-error {
+      color: var(--accent-red, #f87171);
+    }
+    
+    .credential-status .status-text {
+      font-size: var(--font-sm);
+      color: var(--text-secondary);
+    }
+    
+    .credential-actions {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+      margin-bottom: 12px;
+    }
+    
+    .test-result-row {
+      padding: 12px;
+      margin-top: 12px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+    }
+    
+    .test-result-row .test-result {
+      font-size: var(--font-sm);
+      color: var(--text-secondary);
+    }
+    
+    .test-result-row .test-result.success {
+      color: var(--accent-green, #4ade80);
+    }
+    
+    .test-result-row .test-result.error {
+      color: var(--accent-red, #f87171);
+    }
+    
+    /* =============================================================================
        AUDIO TAB - Device Selection and Testing
        ============================================================================= */
     

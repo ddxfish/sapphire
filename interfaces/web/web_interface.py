@@ -521,6 +521,88 @@ def get_wakeword_models():
     return proxy('/api/settings/wakeword-models')
 
 # =============================================================================
+# CREDENTIALS ROUTES - stored in ~/.config/sapphire/credentials.json
+# =============================================================================
+
+@app.route('/api/credentials', methods=['GET'])
+@require_login
+def get_credentials():
+    return proxy('/api/credentials')
+
+@app.route('/api/credentials/llm/<provider>', methods=['PUT'])
+@require_login
+def set_llm_credential(provider):
+    return proxy(f'/api/credentials/llm/{provider}', 'PUT', json=request.json, timeout=10)
+
+@app.route('/api/credentials/llm/<provider>', methods=['DELETE'])
+@require_login
+def delete_llm_credential(provider):
+    return proxy(f'/api/credentials/llm/{provider}', 'DELETE', timeout=10)
+
+@app.route('/api/credentials/socks', methods=['GET'])
+@require_login
+def get_socks_credential():
+    return proxy('/api/credentials/socks')
+
+@app.route('/api/credentials/socks', methods=['PUT'])
+@require_login
+def set_socks_credential():
+    return proxy('/api/credentials/socks', 'PUT', json=request.json, timeout=10)
+
+@app.route('/api/credentials/socks', methods=['DELETE'])
+@require_login
+def delete_socks_credential():
+    return proxy('/api/credentials/socks', 'DELETE', timeout=10)
+
+@app.route('/api/credentials/socks/test', methods=['POST'])
+@require_login
+def test_socks_connection():
+    """Test SOCKS proxy by making a simple HTTP request through it."""
+    from core.socks_proxy import get_session, SocksAuthError, clear_session_cache
+    import config
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    if not config.SOCKS_ENABLED:
+        return jsonify({'status': 'error', 'error': 'SOCKS proxy is disabled in settings'})
+    
+    # Clear cache to force re-auth with current credentials
+    clear_session_cache()
+    
+    try:
+        logger.info(f"Testing SOCKS: {config.SOCKS_HOST}:{config.SOCKS_PORT}")
+        session = get_session()
+        logger.info("Session created, making test request to icanhazip.com")
+        
+        # Fast plain-text IP check
+        resp = session.get('https://icanhazip.com', timeout=8)
+        if resp.ok:
+            ip = resp.text.strip()
+            logger.info(f"SOCKS test success, exit IP: {ip}")
+            return jsonify({
+                'status': 'success',
+                'message': f"Connected via {ip}"
+            })
+        else:
+            return jsonify({'status': 'error', 'error': f'HTTP {resp.status_code}'})
+    except SocksAuthError as e:
+        logger.error(f"SOCKS auth error: {e}")
+        return jsonify({'status': 'error', 'error': str(e)})
+    except ValueError as e:
+        logger.error(f"SOCKS config error: {e}")
+        return jsonify({'status': 'error', 'error': str(e)})
+    except requests.exceptions.Timeout:
+        logger.error("SOCKS test timed out")
+        return jsonify({'status': 'error', 'error': 'Connection timed out - check host/port'})
+    except requests.exceptions.ProxyError as e:
+        logger.error(f"SOCKS proxy error: {e}")
+        return jsonify({'status': 'error', 'error': f'Proxy error: {e}'})
+    except Exception as e:
+        logger.error(f"SOCKS test error: {type(e).__name__}: {e}")
+        return jsonify({'status': 'error', 'error': f'{type(e).__name__}: {e}'})
+
+# =============================================================================
 # LLM PROVIDER ROUTES (4 routes)
 # =============================================================================
 

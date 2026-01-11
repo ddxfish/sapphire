@@ -24,6 +24,7 @@ AVAILABLE_FUNCTIONS = [
     'save_memory',
     'search_memory', 
     'get_recent_memories',
+    'delete_memory',
 ]
 
 TOOLS = [
@@ -85,6 +86,23 @@ TOOLS = [
                         "default": 10
                     }
                 }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete a memory by its ID number",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {
+                        "type": "integer",
+                        "description": "The ID number of the memory to delete (shown in brackets like [42])"
+                    }
+                },
+                "required": ["memory_id"]
             }
         }
     }
@@ -207,7 +225,7 @@ def _save_memory(content: str, importance: int = 5) -> tuple:
 
 
 def _search_memory(query: str, limit: int = 10) -> tuple:
-    """Search memories by query string."""
+    """Search memories by query string. Multiple terms use AND logic."""
     try:
         if not query or not query.strip():
             return "Search query cannot be empty.", False
@@ -222,8 +240,8 @@ def _search_memory(query: str, limit: int = 10) -> tuple:
         conn = _get_connection()
         cursor = conn.cursor()
         
-        # Build LIKE query for each term
-        like_conditions = ' OR '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in search_terms])
+        # Build AND query - all terms must match
+        like_conditions = ' AND '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in search_terms])
         like_params = []
         for term in search_terms:
             like_params.extend([f'%{term}%', f'%{term}%'])
@@ -240,7 +258,7 @@ def _search_memory(query: str, limit: int = 10) -> tuple:
         conn.close()
         
         if not rows:
-            return f"No memories found matching '{query}'", True
+            return f"No memories found matching all terms: '{query}'", True
         
         results = []
         for row in rows:
@@ -289,6 +307,37 @@ def _get_recent_memories(count: int = 10) -> tuple:
         return f"Failed to retrieve memories: {e}", False
 
 
+def _delete_memory(memory_id: int) -> tuple:
+    """Delete a memory by ID."""
+    try:
+        if not isinstance(memory_id, int) or memory_id < 1:
+            return "Invalid memory ID. Use the number shown in brackets [N].", False
+        
+        conn = _get_connection()
+        cursor = conn.cursor()
+        
+        # Check if memory exists first
+        cursor.execute('SELECT id, content FROM memories WHERE id = ?', (memory_id,))
+        row = cursor.fetchone()
+        
+        if not row:
+            conn.close()
+            return f"Memory [{memory_id}] not found.", False
+        
+        # Delete it
+        cursor.execute('DELETE FROM memories WHERE id = ?', (memory_id,))
+        conn.commit()
+        conn.close()
+        
+        preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
+        logger.info(f"Deleted memory ID {memory_id}")
+        return f"Deleted memory [{memory_id}]: {preview}", True
+        
+    except Exception as e:
+        logger.error(f"Error deleting memory: {e}")
+        return f"Failed to delete memory: {e}", False
+
+
 def execute(function_name: str, arguments: dict, config) -> tuple:
     """Execute memory function. Returns (result_string, success_bool)."""
     try:
@@ -305,6 +354,12 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
         elif function_name == "get_recent_memories":
             count = arguments.get("count", 10)
             return _get_recent_memories(count)
+        
+        elif function_name == "delete_memory":
+            memory_id = arguments.get("memory_id")
+            if memory_id is None:
+                return "Missing memory_id parameter.", False
+            return _delete_memory(int(memory_id))
         
         else:
             return f"Unknown memory function: {function_name}", False

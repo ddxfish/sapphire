@@ -107,20 +107,31 @@ PROVIDER_METADATA = {
 
 def get_api_key(provider_config: Dict[str, Any], provider_key: str) -> str:
     """
-    Get API key from config or environment variable.
+    Get API key from credentials_manager, config, or environment variable.
     
     Priority:
-    1. Explicit api_key in config (if non-empty)
-    2. Environment variable specified by api_key_env
-    3. Default env var for known providers
-    4. Empty string (for local providers that don't need keys)
+    1. credentials.json (managed by credentials_manager)
+    2. Explicit api_key in config (if non-empty)
+    3. Environment variable specified by api_key_env
+    4. Default env var for known providers
+    5. Empty string (for local providers that don't need keys)
     """
-    # Check explicit config value
+    # 1. Check credentials_manager first
+    try:
+        from core.credentials_manager import credentials
+        stored_key = credentials.get_llm_api_key(provider_key)
+        if stored_key and stored_key.strip():
+            logger.debug(f"Using API key from credentials.json for {provider_key}")
+            return stored_key
+    except ImportError:
+        pass
+    
+    # 2. Check explicit config value
     explicit_key = provider_config.get('api_key', '')
     if explicit_key and explicit_key.strip():
         return explicit_key
     
-    # Check env var from config
+    # 3. Check env var from config
     env_var = provider_config.get('api_key_env', '')
     if env_var:
         env_value = os.environ.get(env_var, '')
@@ -128,7 +139,7 @@ def get_api_key(provider_config: Dict[str, Any], provider_key: str) -> str:
             logger.debug(f"Using API key from env var {env_var} for {provider_key}")
             return env_value
     
-    # Check default env var from metadata
+    # 4. Check default env var from metadata
     metadata = PROVIDER_METADATA.get(provider_key, {})
     default_env = metadata.get('api_key_env', '')
     if default_env:
@@ -137,7 +148,7 @@ def get_api_key(provider_config: Dict[str, Any], provider_key: str) -> str:
             logger.debug(f"Using API key from default env var {default_env} for {provider_key}")
             return env_value
     
-    # Local providers don't need keys
+    # 5. Local providers don't need keys
     if metadata.get('is_local', False):
         return 'not-needed'
     

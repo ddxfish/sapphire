@@ -49,8 +49,7 @@ def _test_socks_auth(host: str, port: int, username: str, password: str, timeout
         test_sock.close()
         if 'authentication failed' in str(e).lower():
             raise SocksAuthError(
-                f"SOCKS5 authentication failed. Check credentials in user/.socks_config - "
-                f"file should contain just username on line 1, password on line 2 (no 'username=' prefix)"
+                "SOCKS5 authentication failed - check username/password in Settings → SOCKS"
             )
         raise SocksAuthError(f"SOCKS5 proxy error: {e}")
     except Exception as e:
@@ -80,10 +79,12 @@ def get_session():
         
         if not username or not password:
             raise ValueError(
-                "SOCKS5 is enabled in config but credentials not found. "
-                "Set SAPPHIRE_SOCKS_USERNAME and SAPPHIRE_SOCKS_PASSWORD environment variables, "
-                f"or create {CONFIG_DIR / 'socks_config'} with username on line 1, password on line 2"
+                "SOCKS5 is enabled but credentials not found. "
+                "Set them in Settings → SOCKS, or use environment variables "
+                "SAPPHIRE_SOCKS_USERNAME and SAPPHIRE_SOCKS_PASSWORD"
             )
+        
+        logger.info(f"Testing SOCKS5 auth to {config.SOCKS_HOST}:{config.SOCKS_PORT}")
         
         # Test auth before caching session - fail fast on bad creds
         _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password)

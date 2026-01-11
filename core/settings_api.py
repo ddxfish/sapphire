@@ -380,6 +380,7 @@ def create_settings_api():
         """Get all configured LLM providers with metadata for UI."""
         try:
             from core.chat.llm_providers import get_available_providers, PROVIDER_METADATA
+            from core.credentials_manager import credentials
             import os
             
             providers_config = settings.get('LLM_PROVIDERS', {})
@@ -387,7 +388,7 @@ def create_settings_api():
             
             providers = get_available_providers(providers_config)
             
-            # Add env var status for each provider
+            # Add credential status for each provider
             for p in providers:
                 key = p['key']
                 config = providers_config.get(key, {})
@@ -395,7 +396,9 @@ def create_settings_api():
                 env_var = config.get('api_key_env') or meta.get('api_key_env', '')
                 p['env_var'] = env_var
                 p['has_env_key'] = bool(env_var and os.environ.get(env_var))
-                p['has_config_key'] = bool(config.get('api_key', '').strip())
+                # Check credentials_manager first, then fall back to config
+                p['has_credential_key'] = credentials.has_llm_api_key(key)
+                p['has_config_key'] = p['has_credential_key'] or bool(config.get('api_key', '').strip())
             
             return jsonify({
                 "status": "success",
@@ -412,6 +415,8 @@ def create_settings_api():
     def update_llm_provider(provider_key):
         """Update a specific LLM provider config."""
         try:
+            from core.credentials_manager import credentials
+            
             data = request.json
             if not data:
                 return jsonify({"error": "No data provided"}), 400
@@ -421,9 +426,17 @@ def create_settings_api():
             if provider_key not in providers_config:
                 return jsonify({"error": f"Unknown provider: {provider_key}"}), 404
             
-            # Merge updates into existing config
-            providers_config[provider_key].update(data)
-            settings.set('LLM_PROVIDERS', providers_config, persist=True)
+            # Route api_key to credentials_manager, not settings
+            if 'api_key' in data:
+                api_key = data.pop('api_key')
+                if api_key:  # Only save non-empty keys
+                    credentials.set_llm_api_key(provider_key, api_key)
+                    logger.info(f"Stored API key for '{provider_key}' in credentials")
+            
+            # Merge remaining updates into existing config
+            if data:
+                providers_config[provider_key].update(data)
+                settings.set('LLM_PROVIDERS', providers_config, persist=True)
             
             logger.info(f"Updated LLM provider '{provider_key}': {list(data.keys())}")
             
@@ -735,5 +748,146 @@ def create_settings_api():
         
         settings.set('SETUP_WIZARD_STEP', step, persist=True)
         return jsonify({'status': 'success', 'step': step})
+    
+    # =========================================================================
+    # Credentials API - stored in ~/.config/sapphire/credentials.json
+    # =========================================================================
+    
+    @bp.route('/credentials', methods=['GET'])
+    def get_credentials():
+        """Get credentials summary (masked, no actual secrets exposed)."""
+        try:
+            from core.credentials_manager import credentials
+            summary = credentials.get_masked_summary()
+            return jsonify({
+                'status': 'success',
+                'credentials': summary
+            })
+        except Exception as e:
+            logger.error(f"Error getting credentials: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/credentials/llm/<provider>', methods=['PUT'])
+    def set_llm_credential(provider):
+        """Set API key for an LLM provider."""
+        try:
+            from core.credentials_manager import credentials
+            data = request.json
+            
+            if not data or 'api_key' not in data:
+                return jsonify({'error': "Missing 'api_key' in request body"}), 400
+            
+            api_key = data['api_key']
+            
+            if credentials.set_llm_api_key(provider, api_key):
+                return jsonify({
+                    'status': 'success',
+                    'provider': provider,
+                    'message': f"API key {'set' if api_key else 'cleared'} for {provider}"
+                })
+            else:
+                return jsonify({'error': 'Failed to save credential'}), 500
+                
+        except Exception as e:
+            logger.error(f"Error setting LLM credential: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/credentials/llm/<provider>', methods=['DELETE'])
+    def delete_llm_credential(provider):
+        """Clear API key for an LLM provider."""
+        try:
+            from core.credentials_manager import credentials
+            
+            if credentials.clear_llm_api_key(provider):
+                return jsonify({
+                    'status': 'success',
+                    'provider': provider,
+                    'message': f"API key cleared for {provider}"
+                })
+            else:
+                return jsonify({'error': 'Failed to clear credential'}), 500
+                
+        except Exception as e:
+            logger.error(f"Error clearing LLM credential: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/credentials/socks', methods=['GET'])
+    def get_socks_credential_status():
+        """Check if SOCKS credentials are set (no values exposed)."""
+        try:
+            from core.credentials_manager import credentials, CREDENTIALS_FILE
+            from core.setup import SOCKS_CONFIG_FILE
+            import os
+            
+            has_creds = credentials.has_socks_credentials()
+            
+            # Diagnostic info
+            diag = {
+                'credentials_file': str(CREDENTIALS_FILE),
+                'credentials_file_exists': CREDENTIALS_FILE.exists(),
+                'legacy_file': str(SOCKS_CONFIG_FILE),
+                'legacy_file_exists': SOCKS_CONFIG_FILE.exists(),
+                'env_username_set': bool(os.environ.get('SAPPHIRE_SOCKS_USERNAME')),
+                'env_password_set': bool(os.environ.get('SAPPHIRE_SOCKS_PASSWORD')),
+            }
+            
+            return jsonify({
+                'status': 'success',
+                'has_credentials': has_creds,
+                'debug': diag
+            })
+        except Exception as e:
+            logger.error(f"Error checking SOCKS credentials: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/credentials/socks', methods=['PUT'])
+    def set_socks_credential():
+        """Set SOCKS proxy credentials."""
+        try:
+            from core.credentials_manager import credentials
+            data = request.json
+            
+            if not data:
+                return jsonify({'error': 'Missing request body'}), 400
+            
+            username = data.get('username', '')
+            password = data.get('password', '')
+            
+            if credentials.set_socks_credentials(username, password):
+                # Clear cached session so new creds take effect
+                from core.socks_proxy import clear_session_cache
+                clear_session_cache()
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': 'SOCKS credentials ' + ('set' if username and password else 'cleared')
+                })
+            else:
+                return jsonify({'error': 'Failed to save credentials'}), 500
+                
+        except Exception as e:
+            logger.error(f"Error setting SOCKS credentials: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/credentials/socks', methods=['DELETE'])
+    def delete_socks_credential():
+        """Clear SOCKS proxy credentials."""
+        try:
+            from core.credentials_manager import credentials
+            
+            if credentials.clear_socks_credentials():
+                from core.socks_proxy import clear_session_cache
+                clear_session_cache()
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': 'SOCKS credentials cleared'
+                })
+            else:
+                return jsonify({'error': 'Failed to clear credentials'}), 500
+                
+        except Exception as e:
+            logger.error(f"Error clearing SOCKS credentials: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
     
     return bp

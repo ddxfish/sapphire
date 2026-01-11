@@ -1,0 +1,307 @@
+# core/credentials_manager.py
+r"""
+Credentials Manager - Secure storage for API keys and secrets
+
+Stores credentials in platform-appropriate config directory:
+- Linux: ~/.config/sapphire/credentials.json
+- macOS: ~/Library/Application Support/Sapphire/credentials.json
+- Windows: %APPDATA%\Sapphire\credentials.json
+
+This keeps credentials OUT of the project directory and backups.
+"""
+
+import json
+import os
+import sys
+import logging
+from pathlib import Path
+from typing import Optional
+from core.setup import CONFIG_DIR, SOCKS_CONFIG_FILE, CLAUDE_API_KEY_FILE
+
+logger = logging.getLogger(__name__)
+
+CREDENTIALS_FILE = CONFIG_DIR / 'credentials.json'
+
+# Schema for credentials.json
+DEFAULT_CREDENTIALS = {
+    "llm": {
+        "claude": {"api_key": ""},
+        "fireworks": {"api_key": ""},
+        "openai": {"api_key": ""},
+        "other": {"api_key": ""}
+    },
+    "socks": {
+        "username": "",
+        "password": ""
+    }
+}
+
+
+class CredentialsManager:
+    """Manages credentials stored outside project directory."""
+    
+    def __init__(self):
+        self._credentials = None
+        self._load()
+    
+    def _load(self):
+        """Load credentials from file, migrating legacy files if needed."""
+        logger.info(f"Loading credentials, checking {CREDENTIALS_FILE}")
+        
+        if CREDENTIALS_FILE.exists():
+            try:
+                with open(CREDENTIALS_FILE, 'r', encoding='utf-8') as f:
+                    self._credentials = json.load(f)
+                # Ensure all expected keys exist
+                self._ensure_schema()
+                logger.info(f"Loaded credentials from {CREDENTIALS_FILE}")
+            except Exception as e:
+                logger.error(f"Failed to load credentials: {e}")
+                self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
+        else:
+            logger.info(f"Credentials file does not exist, creating with defaults")
+            self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
+            self._migrate_legacy()
+            if not self._save():
+                logger.warning("Could not save initial credentials file - will operate in memory only")
+    
+    def _deep_copy(self, d: dict) -> dict:
+        """Deep copy a nested dict."""
+        return json.loads(json.dumps(d))
+    
+    def _ensure_schema(self):
+        """Ensure all expected keys exist in loaded credentials."""
+        changed = False
+        for section, defaults in DEFAULT_CREDENTIALS.items():
+            if section not in self._credentials:
+                self._credentials[section] = self._deep_copy(defaults)
+                changed = True
+            elif isinstance(defaults, dict):
+                for key, val in defaults.items():
+                    if key not in self._credentials[section]:
+                        self._credentials[section][key] = self._deep_copy(val) if isinstance(val, dict) else val
+                        changed = True
+        if changed:
+            if not self._save():
+                logger.warning("Schema update could not be saved to disk")
+    
+    def _migrate_legacy(self):
+        """Migrate from legacy credential files."""
+        migrated = False
+        
+        # Migrate SOCKS credentials from socks_config file
+        if SOCKS_CONFIG_FILE.exists():
+            try:
+                lines = SOCKS_CONFIG_FILE.read_text().splitlines()
+                if len(lines) >= 2:
+                    username = self._parse_legacy_line(lines[0])
+                    password = self._parse_legacy_line(lines[1])
+                    if username and password:
+                        self._credentials['socks']['username'] = username
+                        self._credentials['socks']['password'] = password
+                        logger.info(f"Migrated SOCKS credentials from {SOCKS_CONFIG_FILE}")
+                        migrated = True
+            except Exception as e:
+                logger.warning(f"Failed to migrate socks_config: {e}")
+        
+        # Migrate Claude API key from dedicated file
+        if CLAUDE_API_KEY_FILE.exists():
+            try:
+                api_key = CLAUDE_API_KEY_FILE.read_text().strip()
+                if api_key:
+                    self._credentials['llm']['claude']['api_key'] = api_key
+                    logger.info(f"Migrated Claude API key from {CLAUDE_API_KEY_FILE}")
+                    migrated = True
+            except Exception as e:
+                logger.warning(f"Failed to migrate claude_api_key: {e}")
+        
+        # Migrate API keys from user/settings.json LLM_PROVIDERS
+        self._migrate_settings_api_keys()
+        
+        if migrated:
+            logger.info("Legacy credential migration complete")
+    
+    def _migrate_settings_api_keys(self):
+        """Migrate api_key fields from user/settings.json to credentials."""
+        settings_file = Path(__file__).parent.parent / 'user' / 'settings.json'
+        if not settings_file.exists():
+            return
+        
+        try:
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                user_settings = json.load(f)
+            
+            providers = user_settings.get('LLM_PROVIDERS', {})
+            migrated_any = False
+            
+            for provider_key, config in providers.items():
+                api_key = config.get('api_key', '').strip()
+                if api_key:
+                    # Only migrate if we don't already have a key for this provider
+                    if not self._credentials.get('llm', {}).get(provider_key, {}).get('api_key'):
+                        if 'llm' not in self._credentials:
+                            self._credentials['llm'] = {}
+                        if provider_key not in self._credentials['llm']:
+                            self._credentials['llm'][provider_key] = {}
+                        self._credentials['llm'][provider_key]['api_key'] = api_key
+                        logger.info(f"Migrated {provider_key} API key from settings.json")
+                        migrated_any = True
+            
+            if migrated_any:
+                # Remove api_key from settings.json after migration
+                modified = False
+                for provider_key, config in providers.items():
+                    if 'api_key' in config and config['api_key']:
+                        config['api_key'] = ''
+                        modified = True
+                
+                if modified:
+                    with open(settings_file, 'w', encoding='utf-8') as f:
+                        json.dump(user_settings, f, indent=2)
+                    logger.info("Cleared migrated API keys from settings.json")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to migrate settings.json API keys: {e}")
+    
+    def _parse_legacy_line(self, line: str) -> str:
+        """Parse legacy config line, stripping key= prefix if present."""
+        line = line.strip()
+        if '=' in line:
+            return line.split('=', 1)[1].strip()
+        return line
+    
+    def _save(self) -> bool:
+        """Save credentials to file with restrictive permissions. Returns True on success."""
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            
+            with open(CREDENTIALS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self._credentials, f, indent=2)
+            
+            # Set restrictive permissions on Unix
+            if sys.platform != 'win32':
+                os.chmod(CREDENTIALS_FILE, 0o600)
+            
+            logger.info(f"Saved credentials to {CREDENTIALS_FILE}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save credentials to {CREDENTIALS_FILE}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to save credentials: {e}")
+    
+    # =========================================================================
+    # LLM API Keys
+    # =========================================================================
+    
+    def get_llm_api_key(self, provider: str) -> str:
+        """
+        Get API key for an LLM provider.
+        
+        Returns empty string if not set (caller should check env vars as fallback).
+        """
+        llm = self._credentials.get('llm', {})
+        provider_creds = llm.get(provider, {})
+        return provider_creds.get('api_key', '')
+    
+    def set_llm_api_key(self, provider: str, api_key: str) -> bool:
+        """Set API key for an LLM provider."""
+        try:
+            if 'llm' not in self._credentials:
+                self._credentials['llm'] = {}
+            if provider not in self._credentials['llm']:
+                self._credentials['llm'][provider] = {}
+            
+            self._credentials['llm'][provider]['api_key'] = api_key
+            
+            if not self._save():
+                logger.error(f"Failed to persist API key for '{provider}' to disk")
+                return False
+            
+            logger.info(f"Set API key for provider '{provider}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set API key for '{provider}': {e}")
+            return False
+    
+    def clear_llm_api_key(self, provider: str) -> bool:
+        """Clear API key for an LLM provider."""
+        return self.set_llm_api_key(provider, '')
+    
+    def has_llm_api_key(self, provider: str) -> bool:
+        """Check if provider has a stored API key."""
+        return bool(self.get_llm_api_key(provider).strip())
+    
+    # =========================================================================
+    # SOCKS Credentials
+    # =========================================================================
+    
+    def get_socks_credentials(self) -> tuple[str, str]:
+        """
+        Get SOCKS credentials.
+        
+        Returns (username, password) tuple. Empty strings if not set.
+        Caller should check env vars as fallback.
+        """
+        socks = self._credentials.get('socks', {})
+        return socks.get('username', ''), socks.get('password', '')
+    
+    def set_socks_credentials(self, username: str, password: str) -> bool:
+        """Set SOCKS credentials."""
+        try:
+            if 'socks' not in self._credentials:
+                self._credentials['socks'] = {}
+            
+            self._credentials['socks']['username'] = username
+            self._credentials['socks']['password'] = password
+            
+            if not self._save():
+                logger.error("Failed to persist SOCKS credentials to disk")
+                return False
+            
+            logger.info("Set SOCKS credentials")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set SOCKS credentials: {e}")
+            return False
+    
+    def clear_socks_credentials(self) -> bool:
+        """Clear SOCKS credentials."""
+        return self.set_socks_credentials('', '')
+    
+    def has_socks_credentials(self) -> bool:
+        """Check if SOCKS credentials are stored."""
+        username, password = self.get_socks_credentials()
+        return bool(username and password)
+    
+    # =========================================================================
+    # Utility
+    # =========================================================================
+    
+    def get_masked_summary(self) -> dict:
+        """
+        Get credentials summary with masked values for UI display.
+        
+        Shows which credentials are set without exposing actual values.
+        """
+        summary = {
+            "llm": {},
+            "socks": {
+                "has_credentials": self.has_socks_credentials()
+            }
+        }
+        
+        for provider in self._credentials.get('llm', {}):
+            summary['llm'][provider] = {
+                "has_key": self.has_llm_api_key(provider)
+            }
+        
+        return summary
+    
+    def reload(self):
+        """Reload credentials from disk."""
+        self._load()
+
+
+# Singleton instance
+credentials = CredentialsManager()
