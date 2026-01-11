@@ -14,6 +14,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "network": True,
         "function": {
             "name": "ask_claude",
             "description": "Ask Anthropic Claude for complex analysis beyond simple web search",

@@ -25,6 +25,7 @@ class FunctionManager:
         self.all_possible_tools = []
         self._enabled_tools = []  # Internal storage (ability-filtered)
         self._mode_filters = {}   # module_name -> MODE_FILTER dict
+        self._network_functions = set()  # Function names that require network access
         
         # Track what was REQUESTED, not reverse-engineered
         self.current_ability_name = "default"
@@ -90,6 +91,11 @@ class FunctionManager:
                         'executor': executor,
                         'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools]
                     }
+                    
+                    # Track network functions (per-tool flag)
+                    for tool in tools:
+                        if tool.get('network', False):
+                            self._network_functions.add(tool['function']['name'])
                     
                     # Store mode filter if present
                     if mode_filter:
@@ -239,6 +245,15 @@ class FunctionManager:
     def get_enabled_function_names(self):
         """Get list of currently enabled function names (mode-filtered)."""
         return [tool['function']['name'] for tool in self.enabled_tools]
+
+    def has_network_tools_enabled(self) -> bool:
+        """Check if any currently enabled tools require network access."""
+        enabled_names = set(self.get_enabled_function_names())
+        return bool(enabled_names & self._network_functions)
+
+    def get_network_functions(self) -> list:
+        """Get list of all functions that require network access."""
+        return list(self._network_functions)
 
     def get_current_ability_info(self):
         """Get info about current ability configuration."""

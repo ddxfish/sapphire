@@ -33,6 +33,9 @@ def create_abilities_api(system_instance):
             
             abilities = sorted(list(abilities_set))
             
+            # Get all network functions for checking
+            network_functions = set(function_manager.get_network_functions())
+            
             ability_details = []
             for ability_name in abilities:
                 if ability_name in ['all', 'none']:
@@ -61,11 +64,15 @@ def create_abilities_api(system_instance):
                     function_count = 0
                     function_list = []
                 
+                # Check if this ability includes any network tools
+                has_network = bool(set(function_list) & network_functions)
+                
                 ability_details.append({
                     "name": ability_name,
                     "function_count": function_count,
                     "type": ability_type,
-                    "functions": function_list
+                    "functions": function_list,
+                    "has_network_tools": has_network
                 })
             
             return jsonify({
@@ -83,11 +90,13 @@ def create_abilities_api(system_instance):
             function_manager = system_instance.llm_chat.function_manager
             ability_info = function_manager.get_current_ability_info()
             enabled_functions = function_manager.get_enabled_function_names()
+            has_network = function_manager.has_network_tools_enabled()
             
             return jsonify({
                 "name": ability_info.get("name", "custom"),
                 "function_count": ability_info.get("function_count", 0),
-                "enabled_functions": enabled_functions
+                "enabled_functions": enabled_functions,
+                "has_network_tools": has_network
             })
         except Exception as e:
             logger.error(f"Error getting current ability: {e}", exc_info=True)
@@ -127,6 +136,7 @@ def create_abilities_api(system_instance):
         try:
             function_manager = system_instance.llm_chat.function_manager
             enabled = set(function_manager.get_enabled_function_names())
+            network_funcs = set(function_manager.get_network_functions())
             
             modules = {}
             for module_name, module_info in function_manager.function_modules.items():
@@ -136,7 +146,8 @@ def create_abilities_api(system_instance):
                     functions.append({
                         "name": func_name,
                         "description": tool['function'].get('description', ''),
-                        "enabled": func_name in enabled
+                        "enabled": func_name in enabled,
+                        "network": func_name in network_funcs
                     })
                 
                 modules[module_name] = {
