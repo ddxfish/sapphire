@@ -289,13 +289,17 @@ class SetupWizard {
   }
 
   close() {
+    if (!this.modal) return; // Already closed
+    
     document.removeEventListener('keydown', this.escHandler);
     
     this.modal.classList.remove('active');
     
     setTimeout(() => {
-      this.modal.remove();
-      this.modal = null;
+      if (this.modal) {
+        this.modal.remove();
+        this.modal = null;
+      }
     }, 300);
   }
 }
