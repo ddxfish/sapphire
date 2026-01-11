@@ -131,17 +131,9 @@
     "short": "Enable speech-to-text recognition",
     "long": "When enabled, allows voice input through the microphone button in the UI. Requires the STT server to be running on the configured host and port. Disabling this will hide the microphone button and disable voice input."
   },
-  "STT_ENGINE": {
-    "short": "Speech recognition engine to use",
-    "long": "Which STT engine to use for transcription. 'faster_whisper' is recommended for best speed/accuracy balance. Uses OpenAI's Whisper models with optimized inference. Alternative engines may be added in future."
-  },
   "STT_MODEL_SIZE": {
     "short": "Whisper model size for transcription quality",
     "long": "Larger models are more accurate but slower and use more RAM/VRAM. Options: tiny (~1GB RAM, fast but less accurate), base (~1GB RAM, good for testing), small (~2GB RAM, good balance), medium (~5GB RAM, high accuracy), large (~10GB RAM, best accuracy). The .en variants (base.en, small.en, etc.) are English-only and ~30% faster."
-  },
-  "STT_LANGUAGE": {
-    "short": "Language code for speech recognition",
-    "long": "ISO 639-1 language code for transcription. 'en' for English, 'es' for Spanish, 'fr' for French, etc. Helps the model better recognize the target language. Use .en model variants for English-only for better performance."
   },
   "STT_HOST": {
     "short": "Hostname of STT server",
@@ -175,19 +167,7 @@
     "short": "Enable Voice Activity Detection filter",
     "long": "When enabled, uses VAD to filter out non-speech audio before transcription. Improves accuracy by ignoring silence and background noise. Recommended to keep enabled for better results and faster processing."
   },
-  "FASTER_WHISPER_VAD_PARAMETERS": {
-    "short": "Voice Activity Detection configuration",
-    "long": "JSON object configuring VAD behavior. 'min_silence_duration_ms' sets how long silence must last before considering speech ended (500ms is good default). Lower values make transcription more responsive but may split sentences."
-  },
   
-  "RECORDER_CHUNK_SIZE": {
-    "short": "Audio recording chunk size (bytes)",
-    "long": "Size of audio chunks when recording from microphone. 1024 bytes provides good latency. Smaller values reduce lag but increase CPU usage. Must be compatible with your audio hardware (typically powers of 2)."
-  },
-  "RECORDER_CHANNELS": {
-    "short": "Recording audio channel count",
-    "long": "Number of audio channels for recording. 1 for mono (recommended for speech), 2 for stereo. Mono is more efficient and works better for voice recognition since speech is typically mono."
-  },
   "RECORDER_SILENCE_THRESHOLD": {
     "short": "Silence detection threshold level",
     "long": "Audio level below which sound is considered silence. Lower values (0.001-0.003) are more sensitive and stop recording sooner. Higher values require louder speech to be detected. 0.0025 works well in most environments."
@@ -200,17 +180,9 @@
     "short": "Minimum speech duration to consider speech",
     "long": "How long speech must be detected before starting to record. 0.2 seconds prevents very short noise bursts from triggering transcribe. Too high may miss quick utterances."
   },
-  "RECORDER_LEVEL_HISTORY_SIZE": {
-    "short": "Audio level history buffer size",
-    "long": "Number of recent audio level samples to keep for noise floor calculation. Advanced feature, only extend if you have long transcription. "
-  },
   "RECORDER_BACKGROUND_PERCENTILE": {
     "short": "(Important) What % of your audio is background noise",
-    "long": "How much of your audio is background noise. Used only with wakeword recording. This is so VAD can calculate when to cut off recording and transcribe. Use low values for good mic with noise filtering, and high values for bad webcam mics. "
-  },
-  "RECORDER_NOISE_MULTIPLIER": {
-    "short": "Multiplier above noise floor for detection",
-    "long": "How much louder than background noise audio must be to count as speech. 1.1 means 10% louder than noise floor. Higher values (1.2-1.5) reduce false positives but may miss quiet speech."
+    "long": "How much of your audio is background noise. Used only with wakeword recording. This is so VAD can calculate when to cut off recording and transcribe. Use low values for good mic with noise filtering, and high values for bad webcam mics."
   },
   "RECORDER_MAX_SECONDS": {
     "short": "Maximum recording duration (seconds)",
@@ -219,22 +191,6 @@
   "RECORDER_BEEP_WAIT_TIME": {
     "short": "Delay after beep before recording (seconds)",
     "long": "How long to wait after playing the start beep before beginning recording. 0.15 seconds allows the beep to finish and prevents it from being recorded. Too short may capture beep tail."
-  },
-  "RECORDER_SAMPLE_RATES": {
-    "short": "Supported sample rates to try (Hz)",
-    "long": "List of sample rates to attempt when initializing audio recording, in order of preference. System will try each until one works. 44100 and 48000 are common for modern hardware, 16000 for older systems."
-  },
-  "RECORDER_PREFERRED_DEVICES": {
-    "short": "Active audio device names (auto-set by platform)",
-    "long": "List of audio device name substrings to prefer, in order of priority. Auto-populated from Linux or Windows list based on detected platform. First matching device is used. Edit the platform-specific lists to customize."
-  },
-  "RECORDER_PREFERRED_DEVICES_LINUX": {
-    "short": "Preferred audio devices for Linux",
-    "long": "Audio device names to try on Linux, in order. 'pipewire' is modern Linux audio, 'pulse' is PulseAudio, 'default' uses system default. Names are matched as substrings against available device names."
-  },
-  "RECORDER_PREFERRED_DEVICES_WINDOWS": {
-    "short": "Preferred audio devices for Windows",
-    "long": "Audio device names to try on Windows, in order. 'default' uses Windows default device, 'microsoft sound mapper' is legacy fallback, 'speakers'/'microphone' match common device names. Names are matched as substrings."
   },
   
   "TTS_ENABLED": {

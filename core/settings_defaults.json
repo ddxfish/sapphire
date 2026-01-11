@@ -62,10 +62,7 @@
     "FASTER_WHISPER_COMPUTE_TYPE": "int8",
     "FASTER_WHISPER_BEAM_SIZE": 7,
     "FASTER_WHISPER_NUM_WORKERS": 8,
-    "FASTER_WHISPER_VAD_FILTER": true,
-    "FASTER_WHISPER_VAD_PARAMETERS": {
-      "min_silence_duration_ms": 500
-    }
+    "FASTER_WHISPER_VAD_FILTER": true
   },
   
   "recorder": {
