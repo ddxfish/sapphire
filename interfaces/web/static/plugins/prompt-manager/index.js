@@ -15,7 +15,7 @@ Assembled Components:
 - Extras/Emotions: Multi-select, combined into prompt
 
 Toolbar Buttons:
-- + New prompt  • 🔄 Refresh  • 💾 Save  • 📑 Save As
+- + New prompt  • 🔄 Refresh  • 💾 Save
 - 🗑 Delete  • 🔍 Preview  • ⚡ Activate
 
 Editing Components:
@@ -31,6 +31,7 @@ Tips:
 - Changes auto-save to user/prompts/`,
 
   async init(container) {
+    console.log('[PromptManager] Initializing...');
     injectStyles();
     
     const wrapper = buildMainUI();
@@ -44,14 +45,17 @@ Tips:
       loadBtn: wrapper.querySelector('#pm-load-btn'),
       editor: wrapper.querySelector('#pm-editor'),
       saveBtn: wrapper.querySelector('#pm-save-btn'),
-      saveasBtn: wrapper.querySelector('#pm-saveas-btn'),
       previewBtn: wrapper.querySelector('#pm-preview-btn')
     };
     
     this.currentPrompt = null;
     this.currentData = null;
     this.components = {};
-    this.lastKnownPromptName = null;
+    this.lastLoadedContentHash = null;
+    
+    // Read active prompt from status bar immediately (don't wait for poll)
+    const statusEl = document.querySelector('.status-prompt-name');
+    this.lastKnownPromptName = statusEl?.textContent?.split('(')[0]?.trim() || null;
     
     this.bindEvents();
     await this.loadComponents();
@@ -62,6 +66,7 @@ Tips:
   startStatusWatcher() {
     this.statusCheckInterval = setInterval(async () => {
       try {
+        // Check if system prompt changed externally (status bar)
         const statusEl = document.querySelector('.status-prompt-name');
         if (statusEl) {
           const currentName = statusEl.textContent?.split('(')[0]?.trim();
@@ -71,8 +76,62 @@ Tips:
             await this.loadPromptList();
           }
         }
+        
+        // Auto-refresh: check if currently loaded prompt changed on disk
+        if (this.currentPrompt && !this._userIsEditing()) {
+          const freshData = await API.getPrompt(this.currentPrompt);
+          const freshHash = this._hashPromptData(freshData);
+          if (freshHash !== this.lastLoadedContentHash) {
+            // Reload components too (Claude may have added new ones)
+            await this.loadComponents();
+            this.currentData = freshData;
+            this.lastLoadedContentHash = freshHash;
+            this.elements.editor.innerHTML = buildEditor(freshData, this.components);
+            if (freshData.type === 'assembled') {
+              this.bindComponentButtons();
+            }
+          }
+        }
       } catch (e) {}
     }, 2000);
+  },
+  
+  _hashPromptData(data) {
+    // Simple hash for change detection
+    return JSON.stringify(data);
+  },
+  
+  _userIsEditing() {
+    // Check if user has focus on an editor field (don't refresh mid-edit)
+    const active = document.activeElement;
+    if (!active) return false;
+    const editor = this.elements.editor;
+    return editor && editor.contains(active);
+  },
+  
+  async _handleComponentChange(type, value) {
+    // Update in-memory data
+    if (this.currentData?.components) {
+      this.currentData.components[type] = value;
+    }
+    
+    // Auto-save and apply if this is the active prompt
+    console.log('[ComponentChange]', type, '=', value, 'saving...');
+    const data = this.collectData();
+    if (!data) return;
+    
+    try {
+      await API.savePrompt(this.currentPrompt, data);
+      
+      if (this.currentPrompt === this.lastKnownPromptName) {
+        await API.loadPrompt(this.currentPrompt);
+        console.log('[ComponentChange] Saved & applied');
+      } else {
+        console.log('[ComponentChange] Saved');
+      }
+    } catch (e) {
+      console.warn('[ComponentChange] Save failed:', e);
+    }
   },
   
   destroy() {
@@ -82,13 +141,13 @@ Tips:
   },
   
   bindEvents() {
+    console.log('[PromptManager] Binding events');
     this.elements.select.addEventListener('change', () => this.handleSelect());
     this.elements.newBtn.addEventListener('click', () => this.handleNew());
     this.elements.refreshBtn.addEventListener('click', () => this.handleRefresh());
     this.elements.deleteBtn.addEventListener('click', () => this.handleDelete());
     this.elements.loadBtn.addEventListener('click', () => this.handleLoad());
     this.elements.saveBtn.addEventListener('click', () => this.handleSave());
-    this.elements.saveasBtn.addEventListener('click', () => this.handleSaveAs());
     this.elements.previewBtn.addEventListener('click', () => this.handlePreview());
   },
   
@@ -139,15 +198,26 @@ Tips:
   
   async handleSelect() {
     const name = this.elements.select.value;
+    console.log('[handleSelect] name:', name, 'currentPrompt:', this.currentPrompt);
     if (!name) {
       this.elements.editor.innerHTML = '<div class="pm-placeholder">Select a prompt to edit</div>';
+      this.currentPrompt = null;
+      this.currentData = null;
+      this.lastLoadedContentHash = null;
       return;
+    }
+    
+    // Auto-save current prompt before switching (if we have one loaded)
+    console.log('[handleSelect] Should auto-save?', this.currentPrompt, '!==', name, '=', this.currentPrompt && this.currentPrompt !== name);
+    if (this.currentPrompt && this.currentPrompt !== name) {
+      await this._autoSaveCurrent();
     }
     
     try {
       const data = await API.getPrompt(name);
       this.currentPrompt = name;
       this.currentData = data;
+      this.lastLoadedContentHash = this._hashPromptData(data);
       this.elements.editor.innerHTML = buildEditor(data, this.components);
       
       if (data.type === 'assembled') {
@@ -160,12 +230,44 @@ Tips:
     }
   },
   
+  async _autoSaveCurrent() {
+    // Silently save current prompt before switching
+    console.log('[AutoSave] Triggered for:', this.currentPrompt);
+    const data = this.collectData();
+    if (!data) {
+      console.log('[AutoSave] collectData returned null, aborting');
+      return;
+    }
+    console.log('[AutoSave] Data collected:', data.components?.persona);
+    
+    try {
+      await API.savePrompt(this.currentPrompt, data);
+      console.log('[AutoSave] Saved successfully');
+      
+      // Also apply if this is the active prompt
+      console.log('[AutoSave] currentPrompt:', this.currentPrompt, 'lastKnownPromptName:', this.lastKnownPromptName);
+      if (this.currentPrompt === this.lastKnownPromptName) {
+        await API.loadPrompt(this.currentPrompt);
+        console.log('[AutoSave] Applied');
+      }
+    } catch (e) {
+      console.warn('Auto-save failed:', e);
+    }
+  },
+  
   async handleRefresh() {
     try {
       await this.loadComponents();
       await this.loadPromptList();
       if (this.currentPrompt) {
-        await this.handleSelect();
+        // Reload directly from disk without auto-saving (user wants to see disk state)
+        const data = await API.getPrompt(this.currentPrompt);
+        this.currentData = data;
+        this.lastLoadedContentHash = this._hashPromptData(data);
+        this.elements.editor.innerHTML = buildEditor(data, this.components);
+        if (data.type === 'assembled') {
+          this.bindComponentButtons();
+        }
       }
       showToast('Refreshed', 'success');
     } catch (e) {
@@ -175,6 +277,15 @@ Tips:
   },
   
   bindComponentButtons() {
+    // Auto-save when any component dropdown changes
+    const componentSelects = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+    componentSelects.forEach(type => {
+      const select = document.getElementById(`pm-${type}`);
+      if (select) {
+        select.addEventListener('change', () => this._handleComponentChange(type, select.value));
+      }
+    });
+    
     this.elements.editor.querySelectorAll('.inline-btn.add[data-type]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
@@ -298,8 +409,7 @@ Tips:
     
     const formattedOptions = {};
     Object.entries(availableExtras).forEach(([key, content]) => {
-      const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-      formattedOptions[key] = `${key}:<br>${preview}`;
+      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
     });
     
     showModal('Select Extras', [
@@ -327,8 +437,7 @@ Tips:
     
     const formattedOptions = {};
     Object.entries(availableEmotions).forEach(([key, content]) => {
-      const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-      formattedOptions[key] = `${key}:<br>${preview}`;
+      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
     });
     
     showModal('Select Emotions', [
@@ -355,6 +464,9 @@ Tips:
       return;
     }
     
+    // Save current changes before activating
+    await this._autoSaveCurrent();
+    
     try {
       await API.loadPrompt(name);
       showToast(`Loaded: ${name}`, 'success');
@@ -367,7 +479,7 @@ Tips:
   handleNew() {
     showModal('Create New Prompt', [
       { id: 'prompt-name', label: 'Prompt Name', type: 'text' },
-      { id: 'prompt-type', label: 'Type', type: 'select', options: ['monolith', 'assembled'], value: 'monolith' }
+      { id: 'prompt-type', label: 'Type', type: 'select', options: ['assembled', 'monolith'], value: 'assembled' }
     ], async (data) => {
       const name = data['prompt-name'].trim();
       if (!name) {
@@ -441,10 +553,27 @@ Tips:
     
     try {
       await API.savePrompt(this.currentPrompt, data);
-      showToast('Prompt saved!', 'success');
+      
+      // Auto-apply if we're editing the currently active prompt
+      const isActivePrompt = this.currentPrompt === this.lastKnownPromptName;
+      if (isActivePrompt) {
+        await API.loadPrompt(this.currentPrompt);
+        showToast('Saved & applied', 'success');
+      } else {
+        showToast('Saved', 'success');
+      }
+      
       await this.loadPromptList();
       this.elements.select.value = this.currentPrompt;
-      await this.handleSelect();
+      
+      // Refresh editor with saved data (updates hash)
+      const freshData = await API.getPrompt(this.currentPrompt);
+      this.currentData = freshData;
+      this.lastLoadedContentHash = this._hashPromptData(freshData);
+      this.elements.editor.innerHTML = buildEditor(freshData, this.components);
+      if (freshData.type === 'assembled') {
+        this.bindComponentButtons();
+      }
     } catch (e) {
       showToast(`Save failed: ${e.message}`, 'error');
     }
@@ -511,33 +640,5 @@ Tips:
         `
       }
     ], null);
-  },
-  
-  async handleSaveAs() {
-    if (!this.currentPrompt) {
-      showToast('No prompt selected', 'error');
-      return;
-    }
-    
-    const name = prompt('Save as (new name):');
-    if (!name || !name.trim()) return;
-    
-    const data = this.collectData();
-    if (!data) {
-      showToast('Failed to collect data', 'error');
-      return;
-    }
-    
-    data.name = name.trim();
-    
-    try {
-      await API.savePrompt(name.trim(), data);
-      showToast(`Saved as "${name}"`, 'success');
-      await this.loadPromptList();
-      this.elements.select.value = name.trim();
-      await this.handleSelect();
-    } catch (e) {
-      showToast(`Save As failed: ${e.message}`, 'error');
-    }
   }
 };
