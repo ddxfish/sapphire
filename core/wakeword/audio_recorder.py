@@ -46,8 +46,8 @@ class AudioRecorder:
         self._resample_ratio = 1.0
         self._needs_stereo_downmix = False
         
-        # Frame skipping parameters
-        self.frame_skip = config.FRAME_SKIP
+        # Frame skipping parameters (hardcoded to 1 - process every frame)
+        self.frame_skip = 1
         self.frame_counter = 0
         self.previous_result = np.array([], dtype=np.int16)
         

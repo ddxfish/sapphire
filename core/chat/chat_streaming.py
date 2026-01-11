@@ -91,8 +91,6 @@ class StreamingChat:
 
             tool_call_count = 0
             last_tool_name = None
-            
-            should_filter_thinking = getattr(config, 'DELETE_EARLY_THINK_PROSE', True)
 
             for iteration in range(config.MAX_TOOL_ITERATIONS):
                 if self.cancel_flag:
@@ -186,12 +184,8 @@ class StreamingChat:
                     # Combine manual prefill or force prefill with current response
                     full_content = prefill + current_response if has_prefill else current_response
                     
-                    if should_filter_thinking:
-                        filtered_content = filter_to_thinking_only(full_content)
-                        logger.info(f"[TRIM] [STREAMING] Thinking filter ENABLED")
-                    else:
-                        filtered_content = full_content
-                        logger.info(f"[TRIM] [STREAMING] Thinking filter DISABLED")
+                    # Always filter thinking content from tool call responses
+                    filtered_content = filter_to_thinking_only(full_content)
                     
                     messages.append({
                         "role": "assistant",

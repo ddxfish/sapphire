@@ -292,8 +292,8 @@ class FunctionManager:
             return f"Error executing {function_name}: {str(e)}"
 
     def _load_tool_history(self):
-        """Load tool history from disk. Skipped if TOOL_HISTORY_MAX_ENTRIES is 0."""
-        max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 100)
+        """Load tool history from disk. Disabled - legacy debug feature."""
+        max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 0)
         if max_entries == 0:
             self.tool_history = []
             return
@@ -308,8 +308,8 @@ class FunctionManager:
             self.tool_history = []
 
     def _save_tool_history(self):
-        """Save tool history to disk. Skipped if TOOL_HISTORY_MAX_ENTRIES is 0."""
-        max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 100)
+        """Save tool history to disk. Disabled - legacy debug feature."""
+        max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 0)
         if max_entries == 0:
             return
         
@@ -321,8 +321,8 @@ class FunctionManager:
             logger.error(f"Error saving tool history: {e}")
 
     def _log_tool_call(self, function_name, arguments, result, execution_time, success):
-        """Log tool call to history. Disabled if TOOL_HISTORY_MAX_ENTRIES is 0."""
-        max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 100)
+        """Log tool call to history. Disabled - legacy debug feature."""
+        max_entries = getattr(config, 'TOOL_HISTORY_MAX_ENTRIES', 0)
         if max_entries == 0:
             return
         

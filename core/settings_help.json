@@ -246,10 +246,6 @@
     "short": "Maximum tool calls per iteration",
     "long": "How many tools the AI can call in a single tool iteration. Allows multiple tools at once. Multiple iterations per reply."
   },
-  "DELETE_EARLY_THINK_PROSE": {
-    "short": "Remove thinking tags from tool responses (or try to)",
-    "long": "When enabled, attempts to strip actual reply text from early think tags. This way it can think without saying anything via TTS."
-  },
   "DEBUG_TOOL_CALLING": {
     "short": "Enable verbose tool calling debug logs",
     "long": "When enabled, logs detailed information about every tool call: parameters, responses, timing, errors. Very helpful for debugging tool issues but creates large log files. Disable in production for better performance."

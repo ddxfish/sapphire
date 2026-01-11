@@ -15,7 +15,6 @@ def filter_to_thinking_only(content: str) -> str:
     """
     Extract only <think> tags, removing all other content.
     Used for assistant messages with tool_calls to prevent premature responses.
-    Can be disabled via config.DELETE_EARLY_THINK_PROSE.
     """
     if not content:
         return ""

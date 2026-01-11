@@ -65,7 +65,7 @@ class WakeWordDetector:
         if self.tone_available:
             self._generate_tone()
         
-        self.callback_pool = ThreadPoolExecutor(max_workers=config.CALLBACK_THREAD_POOL_SIZE)
+        self.callback_pool = ThreadPoolExecutor(max_workers=1)
         self.playback_lock = threading.Lock()
 
     def _init_output_device(self):
@@ -114,8 +114,8 @@ class WakeWordDetector:
         
         logger.info(f"Testing output device '{device_name}' (default_rate={default_rate})")
         
-        # Preferred rate from config, then common rates
-        preferred_rate = getattr(config, 'PLAYBACK_SAMPLE_RATE', 48000)
+        # Preferred rate 48kHz, then common rates
+        preferred_rate = 48000
         test_rates = [preferred_rate, default_rate, 48000, 44100, 32000, 24000, 22050, 16000, 96000]
         # Remove duplicates while preserving order
         seen = set()

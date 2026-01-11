@@ -247,14 +247,8 @@ class LLMChat:
                 if response_msg.has_tool_calls:
                     logger.info(f"Processing {len(response_msg.tool_calls)} tool call(s) from LLM")
                     
-                    should_filter = getattr(config, 'DELETE_EARLY_THINK_PROSE', True)
-                    
-                    if should_filter:
-                        filtered_content = filter_to_thinking_only(response_msg.content or "")
-                        logger.info(f"[TRIM] Thinking filter ENABLED")
-                    else:
-                        filtered_content = response_msg.content or ""
-                        logger.info(f"[TRIM] Thinking filter DISABLED - using full content")
+                    # Always filter thinking content from tool call responses
+                    filtered_content = filter_to_thinking_only(response_msg.content or "")
                     
                     tool_calls_formatted = response_msg.get_tool_calls_as_dicts()
                     
@@ -300,14 +294,8 @@ class LLMChat:
                         tool_call_count += 1
                         logger.info("Processing text-based function call")
 
-                        should_filter = getattr(config, 'DELETE_EARLY_THINK_PROSE', True)
-                        
-                        if should_filter:
-                            filtered_content = filter_to_thinking_only(response_msg.content)
-                            logger.info(f"[TRIM] Thinking filter ENABLED (text-based)")
-                        else:
-                            filtered_content = response_msg.content
-                            logger.info(f"[TRIM] Thinking filter DISABLED (text-based)")
+                        # Always filter thinking content from tool call responses
+                        filtered_content = filter_to_thinking_only(response_msg.content)
 
                         last_tool_name = function_call_data["function_call"]["name"]
 

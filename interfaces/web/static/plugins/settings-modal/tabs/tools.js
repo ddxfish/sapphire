@@ -1,6 +1,4 @@
 // tabs/tools.js - Function calling and tool settings (simplified)
-// TOOL_HISTORY_MAX_ENTRIES removed (debug feature, default 0)
-// DELETE_EARLY_THINK_PROSE will be removed in Phase 4
 
 export default {
   id: 'tools',
@@ -13,7 +11,6 @@ export default {
     'FUNCTIONS_ENABLED',
     'MAX_TOOL_ITERATIONS',
     'MAX_PARALLEL_TOOLS',
-    'DELETE_EARLY_THINK_PROSE',
     'DEBUG_TOOL_CALLING'
   ],
 
@@ -24,9 +21,8 @@ export default {
     'MAX_PARALLEL_TOOLS'
   ],
 
-  // Advanced - debug/experimental
+  // Advanced - debug only
   advancedKeys: [
-    'DELETE_EARLY_THINK_PROSE',
     'DEBUG_TOOL_CALLING'
   ],
 
