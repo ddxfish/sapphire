@@ -37,10 +37,10 @@ export async function setWizardStep(step) {
  * Update a setting value.
  */
 export async function updateSetting(key, value) {
-  const res = await fetch('/api/settings', {
+  const res = await fetch(`/api/settings/${key}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ [key]: value })
+    body: JSON.stringify({ value })
   });
   if (!res.ok) throw new Error(`Failed to update ${key}`);
   return await res.json();
