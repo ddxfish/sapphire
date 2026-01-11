@@ -103,6 +103,7 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
   const isEnabled = config.enabled || false;
   const isLocal = meta.is_local || false;
   const currentModel = config.model || '';
+  const useAsFallback = config.use_as_fallback !== false;
 
   return `
     <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}" draggable="true">
@@ -112,8 +113,6 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
           <span class="provider-order">${idx + 1}</span>
           <span class="provider-icon">${isLocal ? '🏠' : '☁️'}</span>
           <span class="provider-name">${displayName}</span>
-          <span class="provider-status ${isEnabled ? 'on' : 'off'}">${isEnabled ? '●' : '○'}</span>
-          <span class="collapse-indicator">▼</span>
         </div>
         <label class="toggle-switch" onclick="event.stopPropagation()">
           <input type="checkbox" class="provider-enabled" data-provider="${key}" ${isEnabled ? 'checked' : ''}>
@@ -132,6 +131,13 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
           </button>
           <span class="test-result" data-provider="${key}"></span>
         </div>
+        <div class="auto-fallback-row">
+          <label class="checkbox-inline">
+            <input type="checkbox" class="provider-field fallback-toggle" data-provider="${key}" data-field="use_as_fallback" 
+                   ${useAsFallback ? 'checked' : ''}>
+            <span>Include in Auto fallback</span>
+          </label>
+        </div>
       </div>
     </div>
   `;
@@ -143,19 +149,6 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
 export function renderProviderFields(key, config, meta) {
   const fields = [];
   const required = meta.required_fields || [];
-
-  // Auto mode toggle - at the top for visibility
-  const useAsFallback = config.use_as_fallback !== false; // Default true
-  fields.push(`
-    <div class="auto-mode-row">
-      <label class="checkbox-label">
-        <input type="checkbox" class="provider-field fallback-toggle" data-provider="${key}" data-field="use_as_fallback" 
-               ${useAsFallback ? 'checked' : ''}>
-        <span>Include in Auto mode</span>
-      </label>
-      <small class="auto-mode-hint">When checked, this provider will be used automatically based on fallback order</small>
-    </div>
-  `);
 
   // Base URL
   if (required.includes('base_url') || config.base_url !== undefined) {
@@ -252,7 +245,7 @@ export function renderGenerationParams(providerKey, modelName, genProfiles = {})
 
   return `
     <div class="generation-params-section" data-provider="${providerKey}" data-model="${modelName}">
-      <div class="generation-params-label">Generation Defaults <span class="gen-model-hint">(${modelName || 'no model selected'})</span></div>
+      <div class="generation-params-label">Generation <span class="gen-model-hint">${modelName || 'no model'}</span></div>
       <div class="generation-params-grid">
         <div class="gen-param">
           <label>Temp</label>
@@ -265,17 +258,17 @@ export function renderGenerationParams(providerKey, modelName, genProfiles = {})
                  value="${topP}" step="0.05" min="0" max="1">
         </div>
         <div class="gen-param">
-          <label>n_tokens</label>
+          <label>Max Tok</label>
           <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="max_tokens" 
                  value="${maxTokens}" step="1" min="1" max="128000">
         </div>
         <div class="gen-param">
-          <label>Pres Pen</label>
+          <label>Pres</label>
           <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="presence_penalty" 
                  value="${presencePen}" step="0.05" min="-2" max="2">
         </div>
         <div class="gen-param">
-          <label>Freq Pen</label>
+          <label>Freq</label>
           <input type="number" class="gen-param-input" data-provider="${providerKey}" data-param="frequency_penalty" 
                  value="${freqPen}" step="0.05" min="-2" max="2">
         </div>
@@ -317,7 +310,7 @@ export function loadModelGenParamsIntoCard(card, modelName, genProfiles) {
   section.dataset.model = modelName;
 
   const hint = section.querySelector('.gen-model-hint');
-  if (hint) hint.textContent = `(${modelName || 'no model selected'})`;
+  if (hint) hint.textContent = modelName || 'no model';
 
   const setVal = (param, val) => {
     const input = card.querySelector(`.gen-param-input[data-param="${param}"]`);
@@ -507,20 +500,12 @@ export async function refreshProviderKeyStatus(container) {
  * Update card visual state after enable/disable toggle.
  */
 export function updateCardEnabledState(card, enabled) {
-  const status = card.querySelector('.provider-status');
-  
   if (enabled) {
     card.classList.add('enabled');
     card.classList.remove('disabled');
-    status?.classList.add('on');
-    status?.classList.remove('off');
-    if (status) status.textContent = '●';
   } else {
     card.classList.remove('enabled');
     card.classList.add('disabled');
-    status?.classList.remove('on');
-    status?.classList.add('off');
-    if (status) status.textContent = '○';
   }
 }
 
@@ -529,13 +514,8 @@ export function updateCardEnabledState(card, enabled) {
  */
 export function toggleProviderCollapse(card) {
   const fields = card.querySelector('.provider-fields');
-  const indicator = card.querySelector('.collapse-indicator');
-  
   if (fields) {
     fields.classList.toggle('collapsed');
-    if (indicator) {
-      indicator.textContent = fields.classList.contains('collapsed') ? '▼' : '▲';
-    }
   }
 }
 

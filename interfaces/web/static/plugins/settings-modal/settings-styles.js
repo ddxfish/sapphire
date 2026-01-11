@@ -831,6 +831,10 @@ export function injectStyles() {
       opacity: 0.7;
     }
     
+    .provider-card:hover .provider-drag-handle {
+      opacity: 1;
+    }
+    
     .provider-header {
       display: flex;
       align-items: center;
@@ -853,18 +857,6 @@ export function injectStyles() {
     .provider-name {
       font-weight: 600;
       color: var(--text-bright);
-    }
-    
-    .provider-status {
-      font-size: var(--font-sm);
-    }
-    
-    .provider-status.on {
-      color: var(--accent-green, #4ade80);
-    }
-    
-    .provider-status.off {
-      color: var(--text-muted);
     }
     
     /* Toggle Switch */
@@ -985,40 +977,6 @@ export function injectStyles() {
       display: none;
     }
     
-    /* Auto Mode Toggle - at top of accordion */
-    .auto-mode-row {
-      margin-bottom: 16px;
-      padding: 12px;
-      background: var(--surface-secondary);
-      border-radius: var(--radius-sm);
-      border-left: 3px solid var(--accent-color);
-    }
-    
-    .auto-mode-row .checkbox-label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-      font-size: var(--font-sm);
-      font-weight: 500;
-      color: var(--text-primary);
-    }
-    
-    .auto-mode-row .checkbox-label input[type="checkbox"] {
-      width: 16px;
-      height: 16px;
-      cursor: pointer;
-      accent-color: var(--accent-color);
-    }
-    
-    .auto-mode-row .auto-mode-hint {
-      display: block;
-      margin-top: 6px;
-      margin-left: 24px;
-      font-size: var(--font-xs);
-      color: var(--text-dim);
-    }
-    
     /* Provider Actions - responsive layout */
     .provider-actions {
       display: flex;
@@ -1128,10 +1086,13 @@ export function injectStyles() {
       cursor: grab;
       padding: 0 4px;
       user-select: none;
+      opacity: 0;
+      transition: opacity var(--transition-normal);
     }
     
     .provider-drag-handle:hover {
       color: var(--text-muted);
+      opacity: 1;
     }
     
     .provider-drag-handle:active {
@@ -1157,10 +1118,10 @@ export function injectStyles() {
       background: var(--accent-blue-light);
     }
     
-    /* Generation Params Grid (for Other/custom models) */
+    /* Generation Params Grid */
     .generation-params-section {
       margin-top: 16px;
-      padding: 12px;
+      padding: 10px 12px;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
@@ -1168,23 +1129,25 @@ export function injectStyles() {
     
     .generation-params-label {
       font-size: var(--font-xs);
-      font-weight: 600;
+      font-weight: 500;
       color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     
     .gen-model-hint {
       font-weight: normal;
-      text-transform: none;
       color: var(--text-dim);
-      font-size: var(--font-xs);
+      margin-left: 4px;
+    }
+    
+    .gen-model-hint::before {
+      content: '·';
+      margin-right: 4px;
     }
     
     .generation-params-grid {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 8px;
     }
     
@@ -1194,7 +1157,7 @@ export function injectStyles() {
       }
     }
     
-    @media (max-width: 600px) {
+    @media (max-width: 500px) {
       .generation-params-grid {
         grid-template-columns: repeat(2, 1fr);
       }
@@ -1244,6 +1207,39 @@ export function injectStyles() {
     
     .key-hint.key-env {
       color: var(--accent-blue);
+    }
+    
+    /* Auto fallback checkbox row - at bottom of provider card */
+    .auto-fallback-row {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    
+    .checkbox-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      font-size: var(--font-sm);
+      color: var(--text-secondary);
+    }
+    
+    .checkbox-inline input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: var(--accent-blue);
+    }
+    
+    .checkbox-inline span {
+      user-select: none;
+    }
+    
+    @media (max-width: 500px) {
+      .auto-fallback-row {
+        margin-top: 16px;
+      }
     }
     
     /* =============================================================================
