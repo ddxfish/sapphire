@@ -497,6 +497,26 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 #send-btn:hover { background: var(--primary-hover); }
 #send-btn:focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
 #send-btn:disabled { background: var(--border-light); cursor: not-allowed; }
+
+/* LLM Mode indicators - subtle glow on send button */
+#send-btn.llm-local { 
+    box-shadow: 0 0 6px rgba(41, 121, 255, 0.4);
+}
+#send-btn.llm-cloud { 
+    background: var(--warning);
+    box-shadow: 0 0 6px rgba(255, 152, 0, 0.5);
+}
+#send-btn.llm-cloud:hover { 
+    background: var(--accent-orange);
+}
+#send-btn.llm-auto { 
+    background: linear-gradient(135deg, var(--primary) 0%, var(--warning) 100%);
+    box-shadow: 0 0 6px rgba(255, 152, 0, 0.3);
+}
+#send-btn.llm-auto:hover { 
+    background: linear-gradient(135deg, var(--primary-hover) 0%, var(--accent-orange) 100%);
+}
+
 #stop-btn { background: var(--danger-red); }
 #stop-btn:hover { background: var(--danger); }
 #stop-btn:focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
@@ -535,7 +555,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
-.pill.warning {
+.pill.cloud-tools {
     border-color: var(--warning);
     background: var(--warning-light);
 }

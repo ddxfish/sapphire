@@ -7,7 +7,8 @@
 - Event bus for web ui plugins
 
 ## Done
-- (v1.1.4) LLM Providers (claude, openai, local, dynamically add more)
+- (v1.1.5) Setup wizard, Hide all advanced settings, audio device manager, cred manager for keys
+- (v1.1.4) LLM Providers (claude, openai, local, dynamically add more) fallbacks available
 - (done v1.1.3) Better self-prompt modify
 - (alpha test not viable enough) Three JS character avatar for Sapphire 3D. 3d Anime avatar, left bar and full screen.
 - Plugin 

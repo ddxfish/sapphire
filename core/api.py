@@ -276,13 +276,20 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             function_names = system_instance.llm_chat.function_manager.get_enabled_function_names()
             ability_info = system_instance.llm_chat.function_manager.get_current_ability_info()
             
+            # Check if enabled tools include network/cloud tools
+            # These are functions from web.py and network.py that make external requests
+            CLOUD_TOOLS = {'web_search', 'get_website', 'get_wikipedia', 'research_topic',
+                          'get_external_ip', 'check_internet', 'website_status'}
+            has_cloud_tools = bool(set(function_names or []) & CLOUD_TOOLS)
+            
             return jsonify({
                 "prompt": prompt_state,
                 "prompt_name": prompts.get_active_preset_name(),
                 "prompt_char_count": prompts.get_prompt_char_count(),
                 "functions": function_names,
                 "ability": ability_info,
-                "tts_enabled": config.TTS_ENABLED
+                "tts_enabled": config.TTS_ENABLED,
+                "has_cloud_tools": has_cloud_tools
             })
         except Exception as e:
             logger.error(f"Error getting system status: {e}")

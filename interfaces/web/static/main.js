@@ -1,12 +1,13 @@
 // main.js - Application orchestrator (optimized for parallel loading)
 import * as audio from './audio.js';
 import * as ui from './ui.js';
-import { initElements, initAvatar, refresh, setHistLen } from './core/state.js';
+import * as api from './api.js';
+import { initElements, initAvatar, refresh, setHistLen, getElements } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
 import { startMicIconPolling, stopMicIconPolling } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
-import { updateScene } from './features/scene.js';
+import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 
 async function init() {
@@ -30,6 +31,17 @@ async function init() {
         ]);
         
         setHistLen(historyLen);
+        
+        // Update send button based on active chat's LLM setting
+        try {
+            const { chatSelect } = getElements();
+            if (chatSelect?.value) {
+                const response = await api.getChatSettings(chatSelect.value);
+                updateSendButtonLLM(response?.settings?.llm_primary || 'auto');
+            }
+        } catch (e) {
+            updateSendButtonLLM('auto');
+        }
         
         // These are fast sync operations
         initVolumeControls();

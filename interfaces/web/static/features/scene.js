@@ -2,6 +2,36 @@
 import * as api from '../api.js';
 import { getElements, setTtsEnabled } from '../core/state.js';
 
+let hasCloudTools = false;
+
+export function getHasCloudTools() {
+    return hasCloudTools;
+}
+
+// Call this when chat's primary LLM is known (from chat-manager, chat-settings)
+export function updateSendButtonLLM(primary) {
+    const sendBtn = document.getElementById('send-btn');
+    if (!sendBtn) return;
+    
+    // Remove all mode classes first
+    sendBtn.classList.remove('llm-local', 'llm-cloud', 'llm-auto');
+    
+    // Cloud providers
+    const cloudProviders = ['claude', 'openai', 'fireworks', 'other'];
+    
+    if (primary === 'auto') {
+        sendBtn.classList.add('llm-auto');
+        sendBtn.title = 'Send (auto LLM selection)';
+    } else if (cloudProviders.includes(primary)) {
+        sendBtn.classList.add('llm-cloud');
+        sendBtn.title = `Send (${primary})`;
+    } else {
+        // lmstudio, none, or unknown = local/grey
+        sendBtn.classList.add('llm-local');
+        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send (${primary || 'local'})`;
+    }
+}
+
 export async function updateScene() {
     try {
         const status = await api.fetchSystemStatus();
@@ -12,8 +42,11 @@ export async function updateScene() {
             if (volumeRow) volumeRow.style.display = status.tts_enabled ? '' : 'none';
         }
         
+        // Track cloud tools status
+        hasCloudTools = status?.has_cloud_tools || false;
+        
         updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count);
-        updateFuncs(status?.functions, status?.ability);
+        updateFuncs(status?.functions, status?.ability, hasCloudTools);
     } catch {}
 }
 
@@ -46,7 +79,7 @@ function updatePrompt(state, promptName, charCount) {
     }
 }
 
-function updateFuncs(funcs, ability) {
+function updateFuncs(funcs, ability, cloudTools) {
     const { abilityPill } = getElements();
     if (!abilityPill) return;
     
@@ -56,22 +89,21 @@ function updateFuncs(funcs, ability) {
     if (!funcs || funcs.length === 0) {
         textEl.textContent = 'None (0)';
         tooltipEl.textContent = 'No functions enabled';
-        abilityPill.classList.remove('warning');
+        abilityPill.classList.remove('cloud-tools');
         return;
     }
     
     const name = ability?.name || 'Custom';
     const count = ability?.function_count || funcs.length;
-    const expected = ability?.expected_count;
     
     textEl.textContent = `${name} (${count})`;
+    tooltipEl.textContent = funcs.join(', ');
     
-    // Warning state if missing functions
-    if (expected && count < expected) {
-        abilityPill.classList.add('warning');
-        tooltipEl.textContent = `⚠️ ${count}/${expected} functions\n${funcs.join(', ')}`;
+    // Yellow indicator only for toolsets with network/cloud tools
+    if (cloudTools) {
+        abilityPill.classList.add('cloud-tools');
+        tooltipEl.textContent = '🌐 Network tools enabled\n' + funcs.join(', ');
     } else {
-        abilityPill.classList.remove('warning');
-        tooltipEl.textContent = funcs.join(', ');
+        abilityPill.classList.remove('cloud-tools');
     }
 }

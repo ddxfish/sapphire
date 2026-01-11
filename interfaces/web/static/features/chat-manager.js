@@ -3,7 +3,7 @@ import * as api from '../api.js';
 import * as audio from '../audio.js';
 import * as ui from '../ui.js';
 import { getElements, getIsProc, setHistLen, refresh } from '../core/state.js';
-import { updateScene } from './scene.js';
+import { updateScene, updateSendButtonLLM } from './scene.js';
 
 export async function populateChatDropdown() {
     const { chatSelect } = getElements();
@@ -34,6 +34,14 @@ export async function handleChatChange() {
         const len = await refresh(false);
         setHistLen(len);
         await updateScene();
+        
+        // Update send button based on this chat's primary LLM
+        try {
+            const response = await api.getChatSettings(selectedChat);
+            updateSendButtonLLM(response?.settings?.llm_primary || 'auto');
+        } catch (e) {
+            updateSendButtonLLM('auto');
+        }
     } catch (e) {
         console.error('Failed to switch chat:', e);
         ui.showToast(`Failed to switch chat: ${e.message}`, 'error');

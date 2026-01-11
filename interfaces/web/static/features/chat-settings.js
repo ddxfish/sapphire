@@ -3,7 +3,7 @@ import * as api from '../api.js';
 import * as ui from '../ui.js';
 import { getElements, getTtsEnabled } from '../core/state.js';
 import { closeAllKebabs } from './chat-manager.js';
-import { updateScene } from './scene.js';
+import { updateScene, updateSendButtonLLM } from './scene.js';
 
 let llmProviders = [];
 
@@ -149,6 +149,7 @@ export async function saveSettings() {
         closeSettingsModal();
         ui.showToast('Settings saved', 'success');
         await updateScene();
+        updateSendButtonLLM(settings.llm_primary);
         
     } catch (e) {
         console.error('Failed to save settings:', e);
