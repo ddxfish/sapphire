@@ -7,7 +7,6 @@ export default {
   description: 'System and advanced settings',
   
   keys: [
-    'MODULES_ENABLED',
     'PLUGINS_ENABLED',
     'WEB_UI_HOST',
     'WEB_UI_PORT',
@@ -17,7 +16,6 @@ export default {
   ],
 
   essentialKeys: [
-    'MODULES_ENABLED',
     'PLUGINS_ENABLED',
     'WEB_UI_SSL_ADHOC'
   ],

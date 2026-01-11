@@ -40,10 +40,12 @@ class ModuleLoader:
         auto_start_modules = []
         
         # Load from both directories
+        # Core modules ALWAYS load (mission critical: reset, stop, system, backup, time_date)
+        # PLUGINS_ENABLED controls both plugins/ and user/plugins/
         for search_dir, dir_label, dir_name, enabled in [
-            (self.core_dir, "core", "core.modules", config.MODULES_ENABLED), 
+            (self.core_dir, "core", "core.modules", True),  # Always enabled
             (self.plugins_dir, "plugin", "plugins", config.PLUGINS_ENABLED),
-            (self.user_plugins_dir, "user plugin", "user.plugins", True)
+            (self.user_plugins_dir, "user plugin", "user.plugins", config.PLUGINS_ENABLED)
         ]:
             if not enabled:
                 logger.info(f"{dir_label.title()} loading disabled by config")

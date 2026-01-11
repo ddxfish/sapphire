@@ -23,13 +23,9 @@
     "long": "Port number for the SOCKS proxy server. Standard Tor SOCKS port is 9050. Default SOCKS5 port is 1080. Only used when SOCKS_ENABLED is true."
   },
   
-  "MODULES_ENABLED": {
-    "short": "Enable built-in keyword modules (reset, stop, etc.)",
-    "long": "Modules are keyword-triggered behaviors in core/modules/ like 'reset' (clear chat), 'stop' (halt TTS), time/date queries, and the prompt management system. Disabling prevents these from loading. Different from FUNCTIONS_ENABLED which controls LLM tool calling. Requires restart."
-  },
   "PLUGINS_ENABLED": {
-    "short": "Enable plugin modules from plugins/ directory",
-    "long": "Plugins add UI extensions and additional keyword-triggered modules from the plugins/ directory. Disabling this will prevent plugins from loading in the web interface. Different from FUNCTIONS which are LLM tools. Requires page refresh to take effect."
+    "short": "Enable plugins from plugins/ and user/plugins/ directories",
+    "long": "Plugins add UI extensions and additional keyword-triggered modules. Disabling this prevents plugins from loading (both built-in plugins/ and custom user/plugins/). Core system modules (reset, stop, backup, etc.) are always enabled regardless of this setting. Requires page refresh to take effect."
   },
   "FUNCTIONS_ENABLED": {
     "short": "Enable LLM tool calling (web search, memory, etc.)",
