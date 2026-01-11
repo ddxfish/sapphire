@@ -1310,15 +1310,16 @@ export function injectStyles() {
       text-align: right;
     }
     
-    /* Audio Advanced Section */
-    .audio-advanced-section {
+    /* Generic Advanced Accordion Section (DRY - used by all tabs) */
+    .advanced-accordion-section {
       background: var(--bg-tertiary);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
       overflow: hidden;
+      margin-top: 16px;
     }
     
-    .audio-advanced-section .accordion-header {
+    .advanced-accordion-section .accordion-header {
       display: flex;
       align-items: center;
       gap: 8px;
@@ -1327,24 +1328,39 @@ export function injectStyles() {
       transition: background var(--transition-normal);
     }
     
-    .audio-advanced-section .accordion-header:hover {
+    .advanced-accordion-section .accordion-header:hover {
       background: var(--bg-hover);
     }
     
-    .audio-advanced-section .accordion-header h4 {
+    .advanced-accordion-section .accordion-header h4 {
       margin: 0;
       font-size: var(--font-base);
       color: var(--text-light);
       font-weight: 500;
     }
     
-    .audio-advanced-section .accordion-content {
+    .advanced-accordion-section .accordion-content {
       padding: 16px;
       border-top: 1px solid var(--border);
     }
     
-    .audio-advanced-section .accordion-content.collapsed {
+    .advanced-accordion-section .accordion-content.collapsed {
       display: none;
+    }
+    
+    /* Accordion toggle arrow indicator */
+    .accordion-toggle {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-top: 6px solid var(--text-tertiary);
+      transition: transform var(--transition-normal);
+    }
+    
+    .accordion-toggle.collapsed {
+      transform: rotate(-90deg);
     }
   `;
   document.head.appendChild(style);

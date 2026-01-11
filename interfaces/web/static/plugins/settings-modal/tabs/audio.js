@@ -2,12 +2,8 @@
 // Uses shared/audio-devices.js for reusable components
 
 import {
-  renderInputDeviceSelector,
-  renderOutputDeviceSelector,
   populateDeviceSelects,
-  attachAudioDeviceListeners,
-  runInputTest,
-  runOutputTest
+  attachAudioDeviceListeners
 } from '../../../shared/audio-devices.js';
 
 export default {
@@ -18,6 +14,14 @@ export default {
   keys: [
     'AUDIO_INPUT_DEVICE',
     'AUDIO_OUTPUT_DEVICE',
+    'AUDIO_SAMPLE_RATES',
+    'AUDIO_BLOCKSIZE_FALLBACKS',
+    'AUDIO_PREFERRED_DEVICES_LINUX',
+    'AUDIO_PREFERRED_DEVICES_WINDOWS'
+  ],
+
+  // Advanced settings hidden in accordion
+  advancedKeys: [
     'AUDIO_SAMPLE_RATES',
     'AUDIO_BLOCKSIZE_FALLBACKS',
     'AUDIO_PREFERRED_DEVICES_LINUX',
@@ -61,22 +65,7 @@ export default {
           <div class="test-result" data-result="output"></div>
         </div>
 
-        <div class="audio-advanced-section">
-          <div class="accordion-header collapsed" id="audio-advanced-toggle">
-            <span class="accordion-toggle collapsed"></span>
-            <h4>Advanced Settings</h4>
-          </div>
-          <div class="accordion-content collapsed" id="audio-advanced-content">
-            <div class="settings-list">
-              ${modal.renderCategorySettings([
-                'AUDIO_SAMPLE_RATES',
-                'AUDIO_BLOCKSIZE_FALLBACKS',
-                'AUDIO_PREFERRED_DEVICES_LINUX',
-                'AUDIO_PREFERRED_DEVICES_WINDOWS'
-              ])}
-            </div>
-          </div>
-        </div>
+        ${modal.renderAdvancedAccordion('audio-advanced', this.advancedKeys)}
       </div>
     `;
   },
@@ -105,16 +94,7 @@ export default {
       }
     });
 
-    // Advanced section toggle
-    const advToggle = container.querySelector('#audio-advanced-toggle');
-    const advContent = container.querySelector('#audio-advanced-content');
-    if (advToggle && advContent) {
-      advToggle.addEventListener('click', () => {
-        const toggle = advToggle.querySelector('.accordion-toggle');
-        advToggle.classList.toggle('collapsed');
-        advContent.classList.toggle('collapsed');
-        if (toggle) toggle.classList.toggle('collapsed');
-      });
-    }
+    // Attach accordion toggle listeners (uses DRY helper)
+    modal.attachAccordionListeners(container);
   }
 };

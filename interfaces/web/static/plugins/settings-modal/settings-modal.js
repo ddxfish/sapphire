@@ -180,6 +180,48 @@ class SettingsModal {
     }).join('');
   }
 
+  /**
+   * Render a collapsible advanced settings accordion.
+   * @param {string} id - Unique ID for this accordion (e.g., 'audio-advanced')
+   * @param {string[]} keys - Setting keys to render inside
+   * @param {string} title - Accordion header text (default: 'Advanced Settings')
+   * @returns {string} HTML string
+   */
+  renderAdvancedAccordion(id, keys, title = 'Advanced Settings') {
+    return `
+      <div class="advanced-accordion-section" data-accordion="${id}">
+        <div class="accordion-header collapsed" data-accordion-toggle="${id}">
+          <span class="accordion-toggle collapsed"></span>
+          <h4>${title}</h4>
+        </div>
+        <div class="accordion-content collapsed" data-accordion-content="${id}">
+          <div class="settings-list">
+            ${this.renderCategorySettings(keys)}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  /**
+   * Attach click listeners to all accordions in a container.
+   * Call this in tab's attachListeners() method.
+   * @param {HTMLElement} container - The tab content container
+   */
+  attachAccordionListeners(container) {
+    container.querySelectorAll('[data-accordion-toggle]').forEach(header => {
+      header.addEventListener('click', () => {
+        const id = header.dataset.accordionToggle;
+        const content = container.querySelector(`[data-accordion-content="${id}"]`);
+        const toggle = header.querySelector('.accordion-toggle');
+        
+        header.classList.toggle('collapsed');
+        if (content) content.classList.toggle('collapsed');
+        if (toggle) toggle.classList.toggle('collapsed');
+      });
+    });
+  }
+
   renderInput(key, value, type) {
     const inputId = `setting-${key}`;
     
