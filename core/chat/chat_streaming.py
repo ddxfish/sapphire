@@ -289,7 +289,52 @@ class StreamingChat:
                         logger.info(f"[SAVE] Total combined response: {len(full_response)} chars")
                     
                     self.main_chat.session_manager.add_assistant_final(full_response)
-                    break
+                    return  # Clean exit with final response
+            
+            # Loop exhausted without final response - force one
+            logger.warning(f"[STREAMING] Exceeded max iterations ({config.MAX_TOOL_ITERATIONS}). Forcing final answer.")
+            
+            messages.append({
+                "role": "user",
+                "content": "You've used tools multiple times. Stop using tools now and provide your final answer based on the information you gathered."
+            })
+            
+            try:
+                # One more streaming call with tools disabled
+                yield "\n\n"  # Visual separator
+                
+                final_stream = provider.chat_completion_stream(
+                    messages,
+                    tools=None,  # Disable tools to force text response
+                    generation_params=gen_params
+                )
+                
+                final_response = ""
+                for event in final_stream:
+                    if self.cancel_flag:
+                        break
+                    
+                    if event.get("type") == "content":
+                        chunk = event.get("content", "")
+                        final_response += chunk
+                        yield chunk
+                    elif event.get("type") == "done":
+                        break
+                
+                if final_response:
+                    full_final = (force_prefill or "") + final_response
+                    self.main_chat.session_manager.add_assistant_final(full_final)
+                    logger.info(f"[STREAMING] Forced final response: {len(final_response)} chars")
+                else:
+                    fallback = f"I used {tool_call_count} tools and gathered information."
+                    yield fallback
+                    self.main_chat.session_manager.add_assistant_final(fallback)
+                    
+            except Exception as final_error:
+                logger.error(f"[STREAMING] Forced final response failed: {final_error}")
+                error_msg = f"I completed {tool_call_count} tool calls but encountered an error generating the final response."
+                yield error_msg
+                self.main_chat.session_manager.add_assistant_final(error_msg)
             
             logger.info(f"[OK] Streaming chat completed successfully")
 
