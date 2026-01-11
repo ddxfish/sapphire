@@ -94,14 +94,6 @@
     "short": "Wake word audio buffer duration (seconds)",
     "long": "How many seconds of audio to buffer before processing for wake word detection. Longer buffers improve accuracy but increase latency. 0.5 seconds is typical for responsive detection."
   },
-  "FRAME_SKIP": {
-    "short": "Skip frames during wake word processing",
-    "long": "Process every Nth audio frame to reduce CPU usage. 1 means process every frame (most accurate). Higher values reduce CPU load but may miss wake words. 1-3 is recommended range."
-  },
-  "PLAYBACK_SAMPLE_RATE": {
-    "short": "Sample rate for audio playback (Hz)",
-    "long": "Sample rate for audio output and TTS playback. 48000 Hz (48 kHz) is CD quality and works well for most modern audio systems. Match this to your sound card's native rate for best quality."
-  },
   "WAKEWORD_MODEL": {
     "short": "Wake word to listen for",
     "long": "The wake word model to use for detection. Built-in models include: 'alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', and 'weather'. Custom models are auto-detected from user/wakeword/models/ - just drop .onnx or .tflite files there and they'll appear in the dropdown. Community models available at github.com/fwartner/home-assistant-wakewords-collection"
@@ -121,10 +113,6 @@
   "WAKE_TONE_FREQUENCY": {
     "short": "Frequency of wake acknowledgment tone (Hz)",
     "long": "Pitch of the beep tone when wake word is detected. 880 Hz is a pleasant, attention-getting tone (A5 musical note). Higher frequencies are more piercing, lower are more subtle."
-  },
-  "CALLBACK_THREAD_POOL_SIZE": {
-    "short": "Thread pool size for wake word callbacks",
-    "long": "Number of threads available for processing wake word detections. 1 is sufficient for most use cases since wake words happen sequentially. Higher values only needed for parallel processing scenarios."
   },
   
   "STT_ENABLED": {
@@ -250,10 +238,6 @@
     "long": "Opening text that triggers the model's chain-of-thought reasoning. Only used if FORCE_THINKING is enabled. Should start with a <think> tag or similar, then an INCOMPLETE sentence so the AI finishes it."
   },
   
-  "TOOL_HISTORY_MAX_ENTRIES": {
-    "short": "Debug tool log file in user dir, max tool log count",
-    "long": "Set to 0 for no extra logs to be written or a number like 20 to see full tool debug."
-  },
   "MAX_TOOL_ITERATIONS": {
     "short": "how many total tool iterations can be called (these can be parallel)",
     "long": "How many iterations the AI can do tool calls for. Prevents runaway tool calling."
