@@ -1433,8 +1433,8 @@ export function injectStyles() {
       display: none;
     }
     
-    /* Accordion toggle arrow indicator */
-    .accordion-toggle {
+    /* Accordion toggle arrow indicator - scoped to advanced sections only */
+    .advanced-accordion-section .accordion-toggle {
       display: inline-block;
       width: 0;
       height: 0;
@@ -1444,7 +1444,11 @@ export function injectStyles() {
       transition: transform var(--transition-normal);
     }
     
-    .accordion-toggle.collapsed {
+    .advanced-accordion-section .accordion-toggle::before {
+      content: none;
+    }
+    
+    .advanced-accordion-section .accordion-toggle.collapsed {
       transform: rotate(-90deg);
     }
   `;

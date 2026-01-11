@@ -36,6 +36,8 @@ export default {
         
         ${modal.renderAdvancedAccordion('system-advanced', this.advancedKeys)}
         
+        <div style="margin-bottom: 24px;"></div>
+        
         <div class="system-danger-zone">
           <h4>Danger Zone</h4>
           <p>These actions are irreversible and will affect all settings.</p>

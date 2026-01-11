@@ -15,6 +15,7 @@ export default {
       <div class="settings-list">
         ${modal.renderCategorySettings(this.keys)}
       </div>
+      <div style="margin-bottom: 20px;"></div>
       ${avatarSection}
     `;
   },
