@@ -1019,14 +1019,61 @@ export function injectStyles() {
       color: var(--text-dim);
     }
     
-    /* Provider Actions */
+    /* Provider Actions - responsive layout */
     .provider-actions {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
       gap: 12px;
       margin-top: 16px;
       padding-top: 12px;
       border-top: 1px solid var(--border);
+    }
+    
+    .provider-actions-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .auto-fallback-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      padding: 6px 10px;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: var(--font-sm);
+      color: var(--text-secondary);
+      transition: all var(--transition-normal);
+    }
+    
+    .auto-fallback-toggle:hover {
+      background: var(--bg-hover);
+      border-color: var(--border-hover);
+    }
+    
+    .auto-fallback-toggle input[type="checkbox"] {
+      cursor: pointer;
+    }
+    
+    /* Mobile: stack vertically, auto-fallback below test */
+    @media (max-width: 900px) {
+      .provider-actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      
+      .provider-actions-left {
+        flex-wrap: wrap;
+      }
+      
+      .auto-fallback-toggle {
+        justify-content: center;
+      }
     }
     
     .btn-test {
