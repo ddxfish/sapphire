@@ -11,6 +11,25 @@ const chatbgOverlay = document.getElementById('chatbg-overlay');
 const msgTpl = document.getElementById('message-template');
 const statusTpl = document.getElementById('status-template');
 
+// Avatar display setting (fetched on load)
+let avatarsInChat = true;
+
+// Fetch avatar setting on module init
+(async () => {
+    try {
+        const res = await fetch('/api/settings/AVATARS_IN_CHAT');
+        if (res.ok) {
+            const data = await res.json();
+            avatarsInChat = data.value !== false;
+        }
+    } catch (e) {
+        console.log('[UI] Could not fetch avatar setting, defaulting to enabled');
+    }
+})();
+
+// Export setter for immediate updates from settings modal
+export const setAvatarsInChat = (val) => { avatarsInChat = val; };
+
 // Avatar paths: user overrides first, then static fallbacks (try png then jpg in each)
 const AVATARS = {
     user: ['/user-assets/avatars/user.png', '/user-assets/avatars/user.jpg', '/static/users/user.png', '/static/users/user.jpg'],
@@ -51,6 +70,11 @@ const createElem = (tag, attrs = {}, content = '') => {
 };
 
 const setAvatarWithFallback = (img, role) => {
+    if (!avatarsInChat) {
+        img.style.display = 'none';
+        return;
+    }
+    
     const paths = AVATARS[role] || AVATARS.user;
     let idx = 0;
     

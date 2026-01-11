@@ -9,6 +9,10 @@
     "short": "AI assistant's display name",
     "long": "The name the AI uses to refer to itself. Used in prompts via the {ai_name} placeholder. Changes apply immediately to new messages. This affects how the AI identifies itself in conversations."
   },
+  "AVATARS_IN_CHAT": {
+    "short": "Show avatar images in chat messages",
+    "long": "When enabled, user and assistant avatar images appear next to each message in the chat. Disable to hide avatars for a cleaner, text-focused interface. Changes take effect on page refresh."
+  },
   
   "SOCKS_ENABLED": {
     "short": "Route web requests through SOCKS proxy",

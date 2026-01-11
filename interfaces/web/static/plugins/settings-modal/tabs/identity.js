@@ -7,7 +7,7 @@ export default {
   name: 'Identity',
   icon: '👤',
   description: 'User and AI identity settings',
-  keys: ['DEFAULT_USERNAME', 'DEFAULT_AI_NAME'],
+  keys: ['DEFAULT_USERNAME', 'DEFAULT_AI_NAME', 'AVATARS_IN_CHAT'],
 
   render(modal) {
     const avatarSection = this.renderAvatarSection(modal);

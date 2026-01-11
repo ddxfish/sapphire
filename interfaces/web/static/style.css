@@ -502,6 +502,8 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     content: attr(data-replicated-value) " ";
     white-space: pre-wrap;
     visibility: hidden;
+    max-height: 200px;
+    overflow: hidden;
 }
 
 .textarea-wrapper > textarea, .textarea-wrapper::after {
