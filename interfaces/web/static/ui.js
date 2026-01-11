@@ -243,10 +243,13 @@ export const appendStream = (chunk) => {
 };
 
 export const startTool = (toolId, toolName, args) => {
-    Streaming.startTool(toolId, toolName, args, scrollToBottomIfSticky);
+    console.log(`[UI] startTool: ${toolName} (${toolId})`);
+    const result = Streaming.startTool(toolId, toolName, args, scrollToBottomIfSticky);
+    console.log(`[UI] startTool result:`, result);
 };
 
 export const endTool = (toolId, toolName, result, isError) => {
+    console.log(`[UI] endTool: ${toolName} (${toolId})`);
     Streaming.endTool(toolId, toolName, result, isError, scrollToBottomIfSticky);
 };
 

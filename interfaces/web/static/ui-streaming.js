@@ -68,12 +68,20 @@ export const startStreaming = (container, messageElement, scrollCallback) => {
     
     container.appendChild(messageElement);
     if (scrollCallback) scrollCallback(true);
+    
+    console.log('[STREAM] startStreaming complete, streamMsg set');
     return contentDiv;
 };
 
+// Check if streaming is ready
+export const isStreamReady = () => streamMsg !== null;
+
 // Handle content text (with think tag parsing)
 export const appendStream = (chunk, scrollCallback) => {
-    if (!streamMsg) return;
+    if (!streamMsg) {
+        console.warn('[STREAM] appendStream called but streamMsg is null');
+        return;
+    }
     streamContent += chunk;
     
     const newContent = streamContent.slice(state.procIdx);
@@ -163,7 +171,12 @@ export const appendStream = (chunk, scrollCallback) => {
 
 // Handle tool_start event
 export const startTool = (toolId, toolName, args, scrollCallback) => {
-    if (!streamMsg) return;
+    console.log(`[STREAM] startTool called: ${toolName} (${toolId}), streamMsg=${!!streamMsg}`);
+    
+    if (!streamMsg) {
+        console.error('[STREAM] startTool failed: streamMsg is null!');
+        return false;
+    }
     
     // Clean up empty current paragraph
     if (state.curPara && !state.curPara.textContent.trim()) {
@@ -181,13 +194,40 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
     streamMsg.el.appendChild(newP);
     state.curPara = newP;
     
+    console.log(`[STREAM] Tool accordion created for ${toolId}, total tracked: ${Object.keys(state.toolAccordions).length}`);
+    
     if (scrollCallback) scrollCallback();
+    return true;
 };
 
 // Handle tool_end event
 export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
+    console.log(`[STREAM] endTool called: ${toolName} (${toolId}), tracked tools: ${Object.keys(state.toolAccordions).join(', ')}`);
+    
     const toolData = state.toolAccordions[toolId];
-    if (!toolData) return;
+    if (!toolData) {
+        console.warn(`[STREAM] endTool: No accordion found for ${toolId}, creating fallback`);
+        
+        // Fallback: create accordion now if streaming is active
+        if (streamMsg) {
+            const { acc, content, summary } = createToolAccordionElement(toolName, toolId, {});
+            acc.classList.remove('loading');
+            if (isError) acc.classList.add('error');
+            summary.innerHTML = `Tool Result: ${toolName}`;
+            content.textContent = 'Result:\n' + result;
+            
+            // Insert before current paragraph
+            if (state.curPara) {
+                streamMsg.el.insertBefore(acc, state.curPara);
+            } else {
+                streamMsg.el.appendChild(acc);
+            }
+            streamMsg.last = acc;
+            
+            if (scrollCallback) scrollCallback();
+        }
+        return;
+    }
     
     const { acc, content, summary, toolName: storedName } = toolData;
     
@@ -213,6 +253,8 @@ export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
 };
 
 export const finishStreaming = (updateToolbarsCallback) => {
+    console.log(`[STREAM] finishStreaming, tracked tools: ${Object.keys(state.toolAccordions).length}`);
+    
     if (!streamMsg) return;
     
     const msg = document.getElementById('streaming-message');

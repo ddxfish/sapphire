@@ -87,7 +87,22 @@ export async function handleSend() {
                 if (streamOk) ui.cancelStreaming();
                 ui.showToast(e.message, 'error');
             },
-            abortController.signal
+            abortController.signal,
+            null,  // prefill
+            // Tool event handlers
+            (id, name, args) => {
+                console.log(`[SEND] onToolStart: ${name} (${id}), streamOk=${streamOk}`);
+                if (!streamOk) {
+                    ui.hideStatus();
+                    ui.startStreaming();
+                    streamOk = true;
+                }
+                ui.startTool(id, name, args);
+            },
+            (id, name, result, error) => {
+                console.log(`[SEND] onToolEnd: ${name} (${id}), error=${error}`);
+                ui.endTool(id, name, result, error);
+            }
         );
         
         if (streamOk) return null;

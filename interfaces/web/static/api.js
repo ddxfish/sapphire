@@ -51,7 +51,63 @@ export const importChat = (messages) => fetchWithTimeout('/api/history/import', 
     body: JSON.stringify({ messages })
 }, 30000);
 
+// Shared SSE event processor
+const processSSEData = (data, handlers) => {
+    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk } = handlers;
+    
+    if (data.type === 'content') {
+        console.log('[SSE] content:', (data.text || '').substring(0, 50) + '...');
+        if (onChunk) onChunk(data.text || '');
+        return { gotContent: true };
+    }
+    
+    if (data.type === 'tool_start') {
+        console.log('[SSE] tool_start:', data.name, data.id);
+        if (onToolStart) {
+            onToolStart(data.id, data.name, data.args);
+        } else {
+            console.warn('[SSE] tool_start received but no handler!');
+        }
+        return { gotContent: true };
+    }
+    
+    if (data.type === 'tool_end') {
+        console.log('[SSE] tool_end:', data.name, data.id, 'error:', data.error);
+        if (onToolEnd) {
+            onToolEnd(data.id, data.name, data.result, data.error);
+        } else {
+            console.warn('[SSE] tool_end received but no handler!');
+        }
+        return {};
+    }
+    
+    if (data.type === 'reload') {
+        console.log('[SSE] reload');
+        if (onReload) onReload();
+        return { shouldReturn: true };
+    }
+    
+    // Legacy chunk format
+    if (data.chunk) {
+        if (data.chunk.includes('<<RELOAD_PAGE>>')) {
+            if (onReload) onReload();
+            return { shouldReturn: true };
+        }
+        if (onLegacyChunk) onLegacyChunk(data.chunk);
+        return { gotContent: true };
+    }
+    
+    if (data.done) {
+        console.log('[SSE] done, ephemeral:', data.ephemeral);
+        if (onDone) onDone(data.ephemeral || false);
+        return { shouldReturn: true, isDone: true };
+    }
+    
+    return {};
+};
+
 export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null) => {
+    console.log('[API] streamChatContinue, handlers:', { onChunk: !!onChunk, onToolStart: !!onToolStart, onToolEnd: !!onToolEnd });
     let reader = null;
     try {
         const res = await fetch('/api/chat/stream', {
@@ -74,6 +130,15 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
         const decoder = new TextDecoder();
         let buffer = '', gotContent = false;
         
+        const handlers = {
+            onChunk,
+            onToolStart,
+            onToolEnd,
+            onReload: () => setTimeout(() => window.location.reload(), 500),
+            onDone: (ephemeral) => onComplete(ephemeral),
+            onLegacyChunk: onChunk
+        };
+        
         while (true) {
             const { done, value } = await reader.read();
             if (done) return gotContent ? onComplete(false) : onError(new Error("No content"));
@@ -88,31 +153,15 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
                         const data = JSON.parse(line.slice(6));
                         if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
                         
-                        // Handle typed events
-                        if (data.type === 'content') {
-                            gotContent = true;
-                            onChunk(data.text || '');
-                        } else if (data.type === 'tool_start') {
-                            gotContent = true;
-                            if (onToolStart) onToolStart(data.id, data.name, data.args);
-                        } else if (data.type === 'tool_end') {
-                            if (onToolEnd) onToolEnd(data.id, data.name, data.result, data.error);
-                        } else if (data.type === 'reload') {
-                            setTimeout(() => window.location.reload(), 500);
+                        const result = processSSEData(data, handlers);
+                        if (result.gotContent) gotContent = true;
+                        if (result.shouldReturn) {
+                            await reader.cancel();
                             return;
                         }
-                        // Legacy: handle old 'chunk' format
-                        else if (data.chunk) {
-                            if (data.chunk.includes('<<RELOAD_PAGE>>')) {
-                                setTimeout(() => window.location.reload(), 500);
-                                return;
-                            }
-                            gotContent = true;
-                            onChunk(data.chunk);
-                        }
-                        
-                        if (data.done) return (await reader.cancel(), onComplete(data.ephemeral || false));
-                    } catch {}
+                    } catch (parseErr) {
+                        console.error('[SSE] Parse error:', parseErr, 'Line:', line);
+                    }
                 }
             }
         }
@@ -124,6 +173,7 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
 };
 
 export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null) => {
+    console.log('[API] streamChat, handlers:', { onChunk: !!onChunk, onToolStart: !!onToolStart, onToolEnd: !!onToolEnd });
     let reader = null;
     try {
         const body = prefill ? { text, prefill } : { text };
@@ -147,6 +197,15 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
         const decoder = new TextDecoder();
         let buffer = '', gotContent = false;
         
+        const handlers = {
+            onChunk,
+            onToolStart,
+            onToolEnd,
+            onReload: () => setTimeout(() => window.location.reload(), 500),
+            onDone: (ephemeral) => onComplete(ephemeral),
+            onLegacyChunk: onChunk
+        };
+        
         while (true) {
             const { done, value } = await reader.read();
             if (done) return gotContent ? onComplete(false) : onError(new Error("No content"));
@@ -161,31 +220,15 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
                         const data = JSON.parse(line.slice(6));
                         if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
                         
-                        // Handle typed events
-                        if (data.type === 'content') {
-                            gotContent = true;
-                            onChunk(data.text || '');
-                        } else if (data.type === 'tool_start') {
-                            gotContent = true;
-                            if (onToolStart) onToolStart(data.id, data.name, data.args);
-                        } else if (data.type === 'tool_end') {
-                            if (onToolEnd) onToolEnd(data.id, data.name, data.result, data.error);
-                        } else if (data.type === 'reload') {
-                            setTimeout(() => window.location.reload(), 500);
+                        const result = processSSEData(data, handlers);
+                        if (result.gotContent) gotContent = true;
+                        if (result.shouldReturn) {
+                            await reader.cancel();
                             return;
                         }
-                        // Legacy: handle old 'chunk' format for backwards compatibility
-                        else if (data.chunk) {
-                            if (data.chunk.includes('<<RELOAD_PAGE>>')) {
-                                setTimeout(() => window.location.reload(), 500);
-                                return;
-                            }
-                            gotContent = true;
-                            onChunk(data.chunk);
-                        }
-                        
-                        if (data.done) return (await reader.cancel(), onComplete(data.ephemeral || false));
-                    } catch {}
+                    } catch (parseErr) {
+                        console.error('[SSE] Parse error:', parseErr, 'Line:', line);
+                    }
                 }
             }
         }
