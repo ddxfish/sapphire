@@ -242,6 +242,14 @@ export const appendStream = (chunk) => {
     Streaming.appendStream(chunk, scrollToBottomIfSticky);
 };
 
+export const startTool = (toolId, toolName, args) => {
+    Streaming.startTool(toolId, toolName, args, scrollToBottomIfSticky);
+};
+
+export const endTool = (toolId, toolName, result, isError) => {
+    Streaming.endTool(toolId, toolName, result, isError, scrollToBottomIfSticky);
+};
+
 export const finishStreaming = async (ephemeral = false) => {
     console.log(`[SWAP] finishStreaming called, ephemeral=${ephemeral}`);
     const streamingMsg = document.getElementById('streaming-message');

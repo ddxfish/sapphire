@@ -181,15 +181,40 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         def generate():
             try:
                 chunk_count = 0
-                for chunk in system_instance.llm_chat.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message):
+                for event in system_instance.llm_chat.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message):
                     if system_instance.llm_chat.streaming_chat.cancel_flag:
                         logger.info(f"STREAMING CANCELLED at chunk {chunk_count}")
                         yield f"data: {json.dumps({'cancelled': True})}\n\n"
                         break
                     
-                    if chunk:
+                    if event:
                         chunk_count += 1
-                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                        
+                        # Handle typed events (dicts) vs legacy strings
+                        if isinstance(event, dict):
+                            event_type = event.get("type")
+                            
+                            if event_type == "content":
+                                yield f"data: {json.dumps({'type': 'content', 'text': event.get('text', '')})}\n\n"
+                            
+                            elif event_type == "tool_start":
+                                yield f"data: {json.dumps({'type': 'tool_start', 'id': event.get('id'), 'name': event.get('name'), 'args': event.get('args', {})})}\n\n"
+                            
+                            elif event_type == "tool_end":
+                                yield f"data: {json.dumps({'type': 'tool_end', 'id': event.get('id'), 'name': event.get('name'), 'result': event.get('result', ''), 'error': event.get('error', False)})}\n\n"
+                            
+                            elif event_type == "reload":
+                                yield f"data: {json.dumps({'type': 'reload'})}\n\n"
+                            
+                            else:
+                                # Unknown typed event, send as-is
+                                yield f"data: {json.dumps(event)}\n\n"
+                        else:
+                            # Legacy string chunk (backwards compatibility)
+                            if '<<RELOAD_PAGE>>' in str(event):
+                                yield f"data: {json.dumps({'type': 'reload'})}\n\n"
+                            else:
+                                yield f"data: {json.dumps({'type': 'content', 'text': str(event)})}\n\n"
                 
                 if not system_instance.llm_chat.streaming_chat.cancel_flag:
                     ephemeral = system_instance.llm_chat.streaming_chat.ephemeral

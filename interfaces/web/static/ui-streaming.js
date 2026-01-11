@@ -1,6 +1,5 @@
-// ui-streaming.js - Real-time streaming state and content assembly
+// ui-streaming.js - Real-time streaming with typed SSE events
 
-import * as Images from './ui-images.js';
 import { createAccordion } from './ui-parsing.js';
 
 // Streaming state
@@ -8,7 +7,8 @@ let streamMsg = null;
 let streamContent = '';
 let state = {
     inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null,
-    curPara: null, procIdx: 0
+    curPara: null, procIdx: 0,
+    toolAccordions: {}
 };
 
 const createElem = (tag, attrs = {}, content = '') => {
@@ -21,8 +21,36 @@ const createElem = (tag, attrs = {}, content = '') => {
 const resetState = (para = null) => {
     state = {
         inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null,
-        curPara: para, procIdx: 0
+        curPara: para, procIdx: 0,
+        toolAccordions: {}
     };
+};
+
+// Create a tool accordion with loading state
+const createToolAccordionElement = (toolName, toolId, args) => {
+    const details = createElem('details');
+    details.className = 'accordion-tool loading';
+    details.dataset.toolId = toolId;
+    details.open = false;
+    
+    const summary = createElem('summary');
+    summary.innerHTML = `<span class="tool-spinner"></span> Running: ${toolName}`;
+    
+    const contentDiv = createElem('div');
+    if (args && Object.keys(args).length > 0) {
+        try {
+            contentDiv.textContent = 'Inputs:\n' + JSON.stringify(args, null, 2);
+        } catch {
+            contentDiv.textContent = 'Running...';
+        }
+    } else {
+        contentDiv.textContent = 'Running...';
+    }
+    
+    details.appendChild(summary);
+    details.appendChild(contentDiv);
+    
+    return { acc: details, content: contentDiv, summary, toolName };
 };
 
 export const startStreaming = (container, messageElement, scrollCallback) => {
@@ -30,20 +58,20 @@ export const startStreaming = (container, messageElement, scrollCallback) => {
     const p = createElem('p');
     contentDiv.appendChild(p);
     
-    // Count existing think accordions in the entire chat
     const existingThinks = container.querySelectorAll('details summary');
     const thinkCount = Array.from(existingThinks).filter(s => s.textContent.includes('Think')).length;
     
     streamMsg = { el: contentDiv, para: p, last: p };
     streamContent = '';
     resetState(p);
-    state.thinkCnt = thinkCount;  // Start from existing count
+    state.thinkCnt = thinkCount;
     
     container.appendChild(messageElement);
     if (scrollCallback) scrollCallback(true);
     return contentDiv;
 };
 
+// Handle content text (with think tag parsing)
 export const appendStream = (chunk, scrollCallback) => {
     if (!streamMsg) return;
     streamContent += chunk;
@@ -64,11 +92,7 @@ export const appendStream = (chunk, scrollCallback) => {
             if (markers.length === 0) {
                 let add = newContent.slice(i);
                 if (state.curPara.textContent === '') add = add.replace(/^\s+/, '');
-                if (add.includes('⚙️ Running')) {
-                    state.curPara.innerHTML += add.replace('⚙️', '<span class="tool-spinner"></span>');
-                } else {
-                    state.curPara.textContent += add;
-                }
+                state.curPara.textContent += add;
                 i = newContent.length;
                 break;
             }
@@ -94,7 +118,7 @@ export const appendStream = (chunk, scrollCallback) => {
             }
             streamMsg.last = acc;
             i = pos + len;
-        } else if (state.inThink) {
+        } else {
             let endPos = -1;
             let endTag = '';
             
@@ -137,35 +161,71 @@ export const appendStream = (chunk, scrollCallback) => {
     if (scrollCallback) scrollCallback();
 };
 
+// Handle tool_start event
+export const startTool = (toolId, toolName, args, scrollCallback) => {
+    if (!streamMsg) return;
+    
+    // Clean up empty current paragraph
+    if (state.curPara && !state.curPara.textContent.trim()) {
+        state.curPara.remove();
+    }
+    
+    const { acc, content, summary, toolName: name } = createToolAccordionElement(toolName, toolId, args);
+    state.toolAccordions[toolId] = { acc, content, summary, toolName };
+    
+    streamMsg.el.appendChild(acc);
+    streamMsg.last = acc;
+    
+    // Create new paragraph for content after tool
+    const newP = createElem('p');
+    streamMsg.el.appendChild(newP);
+    state.curPara = newP;
+    
+    if (scrollCallback) scrollCallback();
+};
+
+// Handle tool_end event
+export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
+    const toolData = state.toolAccordions[toolId];
+    if (!toolData) return;
+    
+    const { acc, content, summary, toolName: storedName } = toolData;
+    
+    // Remove loading state
+    acc.classList.remove('loading');
+    if (isError) {
+        acc.classList.add('error');
+    }
+    
+    // Update summary
+    const displayName = storedName || toolName;
+    summary.innerHTML = `Tool Result: ${displayName}`;
+    
+    // Update content with result
+    const existingContent = content.textContent;
+    if (existingContent && existingContent !== 'Running...') {
+        content.textContent = existingContent + '\n\nResult:\n' + result;
+    } else {
+        content.textContent = 'Result:\n' + result;
+    }
+    
+    if (scrollCallback) scrollCallback();
+};
+
 export const finishStreaming = (updateToolbarsCallback) => {
     if (!streamMsg) return;
     
-    // Remove streaming marker
     const msg = document.getElementById('streaming-message');
     if (msg) {
         msg.removeAttribute('id');
         delete msg.dataset.streaming;
         
-        // Filter out early think prose if tools were called
         const contentDiv = msg.querySelector('.message-content');
-        const hasTools = contentDiv.querySelectorAll('details summary').length > 0 &&
-                         Array.from(contentDiv.querySelectorAll('details summary'))
-                             .some(s => s.textContent.includes('Tool'));
         
-        if (hasTools) {
-            // Remove paragraphs that appear before first think/tool accordion
-            const firstAccordion = contentDiv.querySelector('details');
-            if (firstAccordion) {
-                let node = contentDiv.firstChild;
-                while (node && node !== firstAccordion) {
-                    const next = node.nextSibling;
-                    if (node.nodeName === 'P') {
-                        node.remove();
-                    }
-                    node = next;
-                }
-            }
-        }
+        // Clean up empty paragraphs
+        contentDiv.querySelectorAll('p').forEach(p => {
+            if (!p.textContent.trim()) p.remove();
+        });
     }
     
     if (updateToolbarsCallback) updateToolbarsCallback();
@@ -175,17 +235,13 @@ export const finishStreaming = (updateToolbarsCallback) => {
 };
 
 export const cancelStreaming = () => {
-    // With race condition prevented, we can rely on the streaming message ID
     const streamingMessage = document.getElementById('streaming-message');
     
     if (streamingMessage) {
         streamingMessage.remove();
         console.log('[CLEANUP] Removed streaming message from DOM');
-    } else {
-        console.log('[INFO] No streaming message found (already removed or never created)');
     }
     
-    // Clean up state
     streamMsg = null;
     streamContent = '';
     resetState();

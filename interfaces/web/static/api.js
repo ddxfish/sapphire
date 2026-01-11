@@ -51,7 +51,7 @@ export const importChat = (messages) => fetchWithTimeout('/api/history/import', 
     body: JSON.stringify({ messages })
 }, 30000);
 
-export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null) => {
+export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null) => {
     let reader = null;
     try {
         const res = await fetch('/api/chat/stream', {
@@ -87,7 +87,22 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
                     try {
                         const data = JSON.parse(line.slice(6));
                         if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
-                        if (data.chunk) {
+                        
+                        // Handle typed events
+                        if (data.type === 'content') {
+                            gotContent = true;
+                            onChunk(data.text || '');
+                        } else if (data.type === 'tool_start') {
+                            gotContent = true;
+                            if (onToolStart) onToolStart(data.id, data.name, data.args);
+                        } else if (data.type === 'tool_end') {
+                            if (onToolEnd) onToolEnd(data.id, data.name, data.result, data.error);
+                        } else if (data.type === 'reload') {
+                            setTimeout(() => window.location.reload(), 500);
+                            return;
+                        }
+                        // Legacy: handle old 'chunk' format
+                        else if (data.chunk) {
                             if (data.chunk.includes('<<RELOAD_PAGE>>')) {
                                 setTimeout(() => window.location.reload(), 500);
                                 return;
@@ -95,6 +110,7 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
                             gotContent = true;
                             onChunk(data.chunk);
                         }
+                        
                         if (data.done) return (await reader.cancel(), onComplete(data.ephemeral || false));
                     } catch {}
                 }
@@ -107,7 +123,7 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
     }
 };
 
-export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null) => {
+export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null) => {
     let reader = null;
     try {
         const body = prefill ? { text, prefill } : { text };
@@ -144,7 +160,22 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
                     try {
                         const data = JSON.parse(line.slice(6));
                         if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
-                        if (data.chunk) {
+                        
+                        // Handle typed events
+                        if (data.type === 'content') {
+                            gotContent = true;
+                            onChunk(data.text || '');
+                        } else if (data.type === 'tool_start') {
+                            gotContent = true;
+                            if (onToolStart) onToolStart(data.id, data.name, data.args);
+                        } else if (data.type === 'tool_end') {
+                            if (onToolEnd) onToolEnd(data.id, data.name, data.result, data.error);
+                        } else if (data.type === 'reload') {
+                            setTimeout(() => window.location.reload(), 500);
+                            return;
+                        }
+                        // Legacy: handle old 'chunk' format for backwards compatibility
+                        else if (data.chunk) {
                             if (data.chunk.includes('<<RELOAD_PAGE>>')) {
                                 setTimeout(() => window.location.reload(), 500);
                                 return;
@@ -152,6 +183,7 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
                             gotContent = true;
                             onChunk(data.chunk);
                         }
+                        
                         if (data.done) return (await reader.cancel(), onComplete(data.ephemeral || false));
                     } catch {}
                 }

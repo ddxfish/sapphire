@@ -1,9 +1,9 @@
 import json
 import logging
 import re
-from typing import Generator
+from typing import Generator, Union, Dict, Any
 import config
-from .chat_tool_calling import strip_ui_markers, wrap_tool_result, filter_to_thinking_only
+from .chat_tool_calling import strip_ui_markers, wrap_tool_result
 from .llm_providers import LLMResponse, get_generation_params
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ class StreamingChat:
         self.tool_engine = main_chat.tool_engine
         self.cancel_flag = False
         self.current_stream = None
-        self.ephemeral = False  # True when response shouldn't persist (save_to_history: false)
+        self.ephemeral = False
 
     def _cleanup_stream(self):
         """Safely close current stream if it exists."""
@@ -28,24 +28,31 @@ class StreamingChat:
             finally:
                 self.current_stream = None
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False) -> Generator[str, None, None]:
-        logger.info(f"[START] [STREAMING START] User: said something here, cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}")
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False) -> Generator[Union[str, Dict[str, Any]], None, None]:
+        """
+        Stream chat responses. Yields typed events:
+        - {"type": "content", "text": "..."} for text content
+        - {"type": "tool_start", "id": "...", "name": "...", "args": {...}} when tool begins
+        - {"type": "tool_end", "id": "...", "result": "...", "error": bool} when tool completes
+        - {"type": "reload"} for page reload signal
+        - str for legacy compatibility (module responses, prefills)
+        """
+        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}")
         
         try:
             self.main_chat.refresh_spice_if_needed()
             self.cancel_flag = False
             self.current_stream = None
-            self.ephemeral = False  # Reset for each stream
+            self.ephemeral = False
 
             module_name, module_info, processed_text = self.main_chat.module_loader.detect_module(user_input)
             if module_name:
                 logger.info(f"[MODULE] Module detected: {module_name}")
                 module_config = self.main_chat.module_loader.modules.get(module_name, {})
                 should_save = module_config.get("save_to_history", True)
-                self.ephemeral = not should_save  # Signal frontend to skip TTS/swap
+                self.ephemeral = not should_save
                 active_chat = self.main_chat.session_manager.get_active_chat_name()
                 
-                # Check save_to_history BEFORE adding any messages
                 if should_save:
                     self.main_chat.session_manager.add_user_message(user_input)
                 
@@ -54,7 +61,8 @@ class StreamingChat:
                 if should_save:
                     self.main_chat.session_manager.add_assistant_final(response_text)
                 
-                yield response_text
+                # Module responses as content events
+                yield {"type": "content", "text": response_text}
                 return
 
             messages = self.main_chat._build_base_messages(user_input)
@@ -69,7 +77,7 @@ class StreamingChat:
             if has_prefill:
                 messages.append({"role": "assistant", "content": prefill})
                 logger.info(f"[CONTINUE] Continuing with {len(prefill)} char prefill")
-                yield prefill
+                yield {"type": "content", "text": prefill}
             
             # Handle forced thinking prefill
             force_prefill = None
@@ -77,12 +85,11 @@ class StreamingChat:
                 force_prefill = getattr(config, 'THINKING_PREFILL', '<think>')
                 messages.append({"role": "assistant", "content": force_prefill})
                 logger.info(f"[THINK] Forced thinking prefill: {force_prefill}")
-                yield force_prefill
+                yield {"type": "content", "text": force_prefill}
             
             active_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider = self.main_chat._select_provider()
             
-            # Get generation params for this provider/model
             gen_params = get_generation_params(
                 provider_key,
                 provider.model,
@@ -90,7 +97,6 @@ class StreamingChat:
             )
 
             tool_call_count = 0
-            last_tool_name = None
 
             for iteration in range(config.MAX_TOOL_ITERATIONS):
                 if self.cancel_flag:
@@ -98,20 +104,6 @@ class StreamingChat:
                     break
                 
                 logger.info(f"--- Streaming Iteration {iteration + 1}/{config.MAX_TOOL_ITERATIONS} ---")
-                
-                if getattr(config, 'DEBUG_TOOL_CALLING', False):
-                    logger.info(f"[MSGS] [STREAMING] Messages being sent ({len(messages)} total):")
-                    for i, msg in enumerate(messages[-5:]):
-                        role = msg.get("role")
-                        content = str(msg.get("content", ""))
-                        has_tools = "tool_calls" in msg
-                        
-                        if role == "assistant" and has_tools:
-                            logger.info(f"  [{i}] {role}: {len(content)} chars + tool_calls")
-                        elif role == "tool":
-                            logger.info(f"  [{i}] {role}: {msg.get('name')}")
-                        else:
-                            logger.info(f"  [{i}] {role}: {content[:80]}...")
                 
                 current_response = ""
                 tool_calls = []
@@ -124,7 +116,6 @@ class StreamingChat:
                         tools=active_tools if active_tools else None,
                         generation_params=gen_params
                     )
-                    logger.info(f"[STREAM] Stream created, starting iteration")
                     
                     chunk_count = 0
                     for event in self.current_stream:
@@ -138,12 +129,12 @@ class StreamingChat:
                         event_type = event.get("type")
                         
                         if event_type == "content":
-                            current_response += event.get("text", "")
-                            yield event.get("text", "")
+                            text = event.get("text", "")
+                            current_response += text
+                            yield {"type": "content", "text": text}
                         
                         elif event_type == "tool_call":
                             idx = event.get("index", 0)
-                            # Expand tool_calls list as needed
                             while len(tool_calls) <= idx:
                                 tool_calls.append({
                                     "id": "",
@@ -165,7 +156,6 @@ class StreamingChat:
                     self._cleanup_stream()
                     
                     if self.cancel_flag:
-                        logger.info(f"[STOP] [STREAMING] Exiting after stream cancellation")
                         break
                 
                 except Exception as e:
@@ -176,23 +166,18 @@ class StreamingChat:
                 if tool_calls and any(tc.get("id") and tc.get("function", {}).get("name") for tc in tool_calls):
                     logger.info(f"[TOOL] Processing {len(tool_calls)} tool call(s)")
                     
-                    # Slice to MAX_PARALLEL_TOOLS limit
                     tool_calls_to_execute = tool_calls[:config.MAX_PARALLEL_TOOLS]
-                    if len(tool_calls_to_execute) < len(tool_calls):
-                        logger.info(f"[LIMIT] Executing {len(tool_calls_to_execute)}/{len(tool_calls)} tools (MAX_PARALLEL_TOOLS={config.MAX_PARALLEL_TOOLS})")
                     
-                    # Combine manual prefill or force prefill with current response
+                    # Combine prefill with current response for history
                     full_content = prefill + current_response if has_prefill else current_response
                     
-                    # Always filter thinking content from tool call responses
-                    filtered_content = filter_to_thinking_only(full_content)
-                    
+                    # Store the actual content (no filtering/wrapping)
                     messages.append({
                         "role": "assistant",
-                        "content": filtered_content,
+                        "content": full_content,
                         "tool_calls": tool_calls_to_execute
                     })
-                    self.main_chat.session_manager.add_assistant_with_tool_calls(filtered_content, tool_calls_to_execute)
+                    self.main_chat.session_manager.add_assistant_with_tool_calls(full_content, tool_calls_to_execute)
                     
                     for tool_call in tool_calls_to_execute:
                         if self.cancel_flag:
@@ -204,68 +189,88 @@ class StreamingChat:
                         
                         tool_call_count += 1
                         function_name = tool_call["function"]["name"]
-                        last_tool_name = function_name
+                        tool_call_id = tool_call["id"]
                         
+                        # Close any open think tag in streamed content
                         if '<think>' in current_response and current_response.rfind('<think>') > current_response.rfind('</think>'):
-                            yield '</think>\n\n'
+                            yield {"type": "content", "text": "</think>\n\n"}
                         
                         try:
                             function_args = json.loads(tool_call["function"]["arguments"])
                         except json.JSONDecodeError:
                             function_args = {}
                         
-                        yield f"\n\nRunning {function_name}...\n\n"
+                        # Emit typed tool_start event
+                        yield {
+                            "type": "tool_start",
+                            "id": tool_call_id,
+                            "name": function_name,
+                            "args": function_args
+                        }
                         
                         try:
                             function_result = self.main_chat.function_manager.execute_function(function_name, function_args)
                             result_str = str(function_result)
                             clean_result = strip_ui_markers(result_str)
                             
-                            # Use provider for format_tool_result (Claude compatibility)
+                            # Emit typed tool_end event
+                            yield {
+                                "type": "tool_end",
+                                "id": tool_call_id,
+                                "name": function_name,
+                                "result": clean_result[:500] if len(clean_result) > 500 else clean_result,
+                                "error": False
+                            }
+                            
                             wrapped_msg = provider.format_tool_result(
-                                tool_call["id"],
+                                tool_call_id,
                                 function_name,
                                 clean_result
                             )
                             messages.append(wrapped_msg)
                             logger.info(f"[OK] [STREAMING] Tool {function_name} executed successfully")
                             
-                           
                             if function_name != "end_and_reset_chat":
                                 self.main_chat.session_manager.add_tool_result(
-                                    tool_call["id"],
+                                    tool_call_id,
                                     function_name,
                                     result_str,
                                     inputs=function_args
                                 )
                             
                             if function_name == "end_and_reset_chat":
-                                logger.info("[RESET] [STREAMING] Chat reset detected, ending stream without final response")
-                                yield "\n\n<<RELOAD_PAGE>>"
+                                logger.info("[RESET] [STREAMING] Chat reset detected")
+                                yield {"type": "reload"}
                                 return
 
                         except Exception as tool_error:
                             logger.error(f"Tool execution error: {tool_error}", exc_info=True)
                             error_result = f"Error: {str(tool_error)}"
                             
+                            yield {
+                                "type": "tool_end",
+                                "id": tool_call_id,
+                                "name": function_name,
+                                "result": error_result,
+                                "error": True
+                            }
+                            
                             wrapped_msg = provider.format_tool_result(
-                                tool_call["id"],
+                                tool_call_id,
                                 function_name,
                                 error_result
                             )
                             messages.append(wrapped_msg)
-                            
 
                             if function_name != "end_and_reset_chat":
                                 self.main_chat.session_manager.add_tool_result(
-                                    tool_call["id"],
+                                    tool_call_id,
                                     function_name,
                                     error_result,
                                     inputs=function_args
                                 )
                     
                     if self.cancel_flag:
-                        logger.info(f"[STOP] [STREAMING] Exiting after tool cancellation")
                         break
 
                     continue
@@ -275,23 +280,16 @@ class StreamingChat:
                     
                     full_response = current_response
                     
-                    # Prepend manual prefill
                     if has_prefill:
                         full_response = prefill + full_response
-                        logger.info(f"[SAVE] Added manual prefill: {len(prefill)} chars")
                     
-                    # Prepend force prefill
                     if force_prefill:
                         full_response = force_prefill + full_response
-                        logger.info(f"[SAVE] Added force prefill: {len(force_prefill)} chars")
-                    
-                    if has_prefill or force_prefill:
-                        logger.info(f"[SAVE] Total combined response: {len(full_response)} chars")
                     
                     self.main_chat.session_manager.add_assistant_final(full_response)
-                    return  # Clean exit with final response
+                    return
             
-            # Loop exhausted without final response - force one
+            # Loop exhausted - force final response
             logger.warning(f"[STREAMING] Exceeded max iterations ({config.MAX_TOOL_ITERATIONS}). Forcing final answer.")
             
             messages.append({
@@ -300,12 +298,11 @@ class StreamingChat:
             })
             
             try:
-                # One more streaming call with tools disabled
-                yield "\n\n"  # Visual separator
+                yield {"type": "content", "text": "\n\n"}
                 
                 final_stream = provider.chat_completion_stream(
                     messages,
-                    tools=None,  # Disable tools to force text response
+                    tools=None,
                     generation_params=gen_params
                 )
                 
@@ -315,28 +312,25 @@ class StreamingChat:
                         break
                     
                     if event.get("type") == "content":
-                        chunk = event.get("content", "")
+                        chunk = event.get("text", "")
                         final_response += chunk
-                        yield chunk
+                        yield {"type": "content", "text": chunk}
                     elif event.get("type") == "done":
                         break
                 
                 if final_response:
                     full_final = (force_prefill or "") + final_response
                     self.main_chat.session_manager.add_assistant_final(full_final)
-                    logger.info(f"[STREAMING] Forced final response: {len(final_response)} chars")
                 else:
                     fallback = f"I used {tool_call_count} tools and gathered information."
-                    yield fallback
+                    yield {"type": "content", "text": fallback}
                     self.main_chat.session_manager.add_assistant_final(fallback)
                     
             except Exception as final_error:
                 logger.error(f"[STREAMING] Forced final response failed: {final_error}")
                 error_msg = f"I completed {tool_call_count} tool calls but encountered an error generating the final response."
-                yield error_msg
+                yield {"type": "content", "text": error_msg}
                 self.main_chat.session_manager.add_assistant_final(error_msg)
-            
-            logger.info(f"[OK] Streaming chat completed successfully")
 
         except Exception as e:
             logger.error(f"[ERR] [STREAMING FATAL] Unhandled error: {e}", exc_info=True)

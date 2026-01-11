@@ -137,7 +137,20 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 streamOk && ui.cancelStreaming();
                 handleError(e, 'stream');
             },
-            abortController ? abortController.signal : null
+            abortController ? abortController.signal : null,
+            null,  // prefill
+            // Tool event handlers
+            (id, name, args) => {
+                if (!streamOk) {
+                    ui.hideStatus();
+                    ui.startStreaming();
+                    streamOk = true;
+                }
+                ui.startTool(id, name, args);
+            },
+            (id, name, result, error) => {
+                ui.endTool(id, name, result, error);
+            }
         );
         
         if (streamOk) return null;
@@ -264,7 +277,20 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 streamOk && ui.cancelStreaming();
                 handleError(e, 'regenerate');
             },
-            abortController ? abortController.signal : null
+            abortController ? abortController.signal : null,
+            null,  // prefill
+            // Tool event handlers
+            (id, name, args) => {
+                if (!streamOk) {
+                    ui.hideStatus();
+                    ui.startStreaming();
+                    streamOk = true;
+                }
+                ui.startTool(id, name, args);
+            },
+            (id, name, result, error) => {
+                ui.endTool(id, name, result, error);
+            }
         );
         
         console.log('[REGEN DEBUG] Counting messages...');
@@ -452,7 +478,19 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 streamOk && ui.cancelStreaming();
                 handleError(e, 'continue');
             },
-            abortController ? abortController.signal : null
+            abortController ? abortController.signal : null,
+            // Tool event handlers
+            (id, name, args) => {
+                if (!streamOk) {
+                    ui.hideStatus();
+                    ui.startStreaming();
+                    streamOk = true;
+                }
+                ui.startTool(id, name, args);
+            },
+            (id, name, result, error) => {
+                ui.endTool(id, name, result, error);
+            }
         );
         
         console.log('[CONTINUE DEBUG] Counting messages...');

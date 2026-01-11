@@ -435,6 +435,31 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     max-width: 100%;
 }
 
+/* Tool accordion loading state */
+.accordion-tool.loading {
+    border-color: var(--accent-blue);
+}
+
+.accordion-tool.loading summary {
+    color: var(--accent-blue);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.accordion-tool.loading summary .tool-spinner {
+    flex-shrink: 0;
+}
+
+/* Tool accordion error state */
+.accordion-tool.error {
+    border-color: var(--danger);
+}
+
+.accordion-tool.error summary {
+    color: var(--danger);
+}
+
 /* Image inside tool results */
 .tool-result-image {
     max-width: 100%;
