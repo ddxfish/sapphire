@@ -5,6 +5,7 @@ export default {
   name: 'System',
   icon: '⚡',
   description: 'System and advanced settings',
+  
   keys: [
     'MODULES_ENABLED',
     'PLUGINS_ENABLED',
@@ -15,14 +16,27 @@ export default {
     'API_PORT'
   ],
 
+  essentialKeys: [
+    'MODULES_ENABLED',
+    'PLUGINS_ENABLED',
+    'WEB_UI_SSL_ADHOC'
+  ],
+
+  advancedKeys: [
+    'WEB_UI_HOST',
+    'WEB_UI_PORT',
+    'API_HOST',
+    'API_PORT'
+  ],
+
   render(modal) {
     return `
       <div class="system-tab-content">
-        ${this.keys.length > 0 ? `
-          <div class="settings-list">
-            ${modal.renderCategorySettings(this.keys)}
-          </div>
-        ` : ''}
+        <div class="settings-list">
+          ${modal.renderCategorySettings(this.essentialKeys)}
+        </div>
+        
+        ${modal.renderAdvancedAccordion('system-advanced', this.advancedKeys)}
         
         <div class="system-danger-zone">
           <h4>Danger Zone</h4>
@@ -35,6 +49,8 @@ export default {
   },
 
   attachListeners(modal, contentEl) {
+    modal.attachAccordionListeners(contentEl);
+    
     const resetAllBtn = contentEl.querySelector('#settings-reset-all');
     if (resetAllBtn) {
       resetAllBtn.addEventListener('click', () => modal.resetAll());
