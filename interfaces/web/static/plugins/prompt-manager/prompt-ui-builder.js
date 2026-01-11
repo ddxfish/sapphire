@@ -105,6 +105,7 @@ function buildAssembledEditor(data, components) {
         <div class="pm-selected-items" id="pm-extras-display">${(comp.extras || []).join(', ') || 'none'}</div>
         <button class="inline-btn edit pm-extras-btn" title="Edit Extras">&#x270E;</button>
         <button class="inline-btn add" data-type="extras" title="Add">+</button>
+        <button class="inline-btn delete pm-extras-delete-btn" title="Delete Extras">&#x1F5D1;</button>
       </div>
     </div>
     <div class="pm-component">
@@ -113,6 +114,7 @@ function buildAssembledEditor(data, components) {
         <div class="pm-selected-items" id="pm-emotions-display">${(comp.emotions || []).join(', ') || 'none'}</div>
         <button class="inline-btn edit pm-emotions-btn" title="Edit Emotions">&#x270E;</button>
         <button class="inline-btn add" data-type="emotions" title="Add">+</button>
+        <button class="inline-btn delete pm-emotions-delete-btn" title="Delete Emotions">&#x1F5D1;</button>
       </div>
     </div>
   `;

@@ -31,7 +31,6 @@ Tips:
 - Changes auto-save to user/prompts/`,
 
   async init(container) {
-    console.log('[PromptManager] Initializing...');
     injectStyles();
     
     const wrapper = buildMainUI();
@@ -110,13 +109,10 @@ Tips:
   },
   
   async _handleComponentChange(type, value) {
-    // Update in-memory data
     if (this.currentData?.components) {
       this.currentData.components[type] = value;
     }
     
-    // Auto-save and apply if this is the active prompt
-    console.log('[ComponentChange]', type, '=', value, 'saving...');
     const data = this.collectData();
     if (!data) return;
     
@@ -125,12 +121,9 @@ Tips:
       
       if (this.currentPrompt === this.lastKnownPromptName) {
         await API.loadPrompt(this.currentPrompt);
-        console.log('[ComponentChange] Saved & applied');
-      } else {
-        console.log('[ComponentChange] Saved');
       }
     } catch (e) {
-      console.warn('[ComponentChange] Save failed:', e);
+      console.warn('Component change save failed:', e);
     }
   },
   
@@ -141,7 +134,6 @@ Tips:
   },
   
   bindEvents() {
-    console.log('[PromptManager] Binding events');
     this.elements.select.addEventListener('change', () => this.handleSelect());
     this.elements.newBtn.addEventListener('click', () => this.handleNew());
     this.elements.refreshBtn.addEventListener('click', () => this.handleRefresh());
@@ -198,7 +190,6 @@ Tips:
   
   async handleSelect() {
     const name = this.elements.select.value;
-    console.log('[handleSelect] name:', name, 'currentPrompt:', this.currentPrompt);
     if (!name) {
       this.elements.editor.innerHTML = '<div class="pm-placeholder">Select a prompt to edit</div>';
       this.currentPrompt = null;
@@ -208,7 +199,6 @@ Tips:
     }
     
     // Auto-save current prompt before switching (if we have one loaded)
-    console.log('[handleSelect] Should auto-save?', this.currentPrompt, '!==', name, '=', this.currentPrompt && this.currentPrompt !== name);
     if (this.currentPrompt && this.currentPrompt !== name) {
       await this._autoSaveCurrent();
     }
@@ -231,24 +221,15 @@ Tips:
   },
   
   async _autoSaveCurrent() {
-    // Silently save current prompt before switching
-    console.log('[AutoSave] Triggered for:', this.currentPrompt);
     const data = this.collectData();
-    if (!data) {
-      console.log('[AutoSave] collectData returned null, aborting');
-      return;
-    }
-    console.log('[AutoSave] Data collected:', data.components?.persona);
+    if (!data) return;
     
     try {
       await API.savePrompt(this.currentPrompt, data);
-      console.log('[AutoSave] Saved successfully');
       
       // Also apply if this is the active prompt
-      console.log('[AutoSave] currentPrompt:', this.currentPrompt, 'lastKnownPromptName:', this.lastKnownPromptName);
       if (this.currentPrompt === this.lastKnownPromptName) {
         await API.loadPrompt(this.currentPrompt);
-        console.log('[AutoSave] Applied');
       }
     } catch (e) {
       console.warn('Auto-save failed:', e);
@@ -320,6 +301,18 @@ Tips:
       e.preventDefault();
       e.stopPropagation();
       this.handleEmotionsModal();
+    });
+    
+    this.elements.editor.querySelector('.pm-extras-delete-btn')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleDeleteExtrasModal();
+    });
+    
+    this.elements.editor.querySelector('.pm-emotions-delete-btn')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleDeleteEmotionsModal();
     });
   },
   
@@ -457,6 +450,104 @@ Tips:
     });
   },
   
+  handleDeleteExtrasModal() {
+    const availableExtras = this.components.extras || {};
+    const keys = Object.keys(availableExtras);
+    
+    if (keys.length === 0) {
+      showToast('No extras to delete', 'info');
+      return;
+    }
+    
+    const formattedOptions = {};
+    Object.entries(availableExtras).forEach(([key, content]) => {
+      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
+    });
+    
+    showModal('Delete Extras', [
+      {
+        id: 'delete-extras',
+        label: 'Select extras to DELETE (permanent)',
+        type: 'checkboxes',
+        options: formattedOptions,
+        selected: []
+      }
+    ], async (data) => {
+      const toDelete = data['delete-extras'] || [];
+      if (toDelete.length === 0) {
+        showToast('Nothing selected', 'info');
+        return;
+      }
+      
+      if (!confirm(`Delete ${toDelete.length} extra(s)?\n\n${toDelete.join(', ')}\n\nThis cannot be undone.`)) {
+        return;
+      }
+      
+      let deleted = 0;
+      for (const key of toDelete) {
+        try {
+          await API.deleteComponent('extras', key);
+          deleted++;
+        } catch (e) {
+          console.error(`Failed to delete extras.${key}:`, e);
+        }
+      }
+      
+      showToast(`Deleted ${deleted} extra(s)`, 'success');
+      await this.loadComponents();
+      await this.handleSelect();
+    });
+  },
+  
+  handleDeleteEmotionsModal() {
+    const availableEmotions = this.components.emotions || {};
+    const keys = Object.keys(availableEmotions);
+    
+    if (keys.length === 0) {
+      showToast('No emotions to delete', 'info');
+      return;
+    }
+    
+    const formattedOptions = {};
+    Object.entries(availableEmotions).forEach(([key, content]) => {
+      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
+    });
+    
+    showModal('Delete Emotions', [
+      {
+        id: 'delete-emotions',
+        label: 'Select emotions to DELETE (permanent)',
+        type: 'checkboxes',
+        options: formattedOptions,
+        selected: []
+      }
+    ], async (data) => {
+      const toDelete = data['delete-emotions'] || [];
+      if (toDelete.length === 0) {
+        showToast('Nothing selected', 'info');
+        return;
+      }
+      
+      if (!confirm(`Delete ${toDelete.length} emotion(s)?\n\n${toDelete.join(', ')}\n\nThis cannot be undone.`)) {
+        return;
+      }
+      
+      let deleted = 0;
+      for (const key of toDelete) {
+        try {
+          await API.deleteComponent('emotions', key);
+          deleted++;
+        } catch (e) {
+          console.error(`Failed to delete emotions.${key}:`, e);
+        }
+      }
+      
+      showToast(`Deleted ${deleted} emotion(s)`, 'success');
+      await this.loadComponents();
+      await this.handleSelect();
+    });
+  },
+
   async handleLoad() {
     const name = this.currentPrompt;
     if (!name) {
