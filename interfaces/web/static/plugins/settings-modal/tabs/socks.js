@@ -20,45 +20,40 @@ export default {
         ${modal.renderCategorySettings(this.keys)}
         
         <div class="socks-credentials-section">
-          <h4>Proxy Credentials</h4>
-          <p class="section-desc">Stored securely outside project directory. Never included in backups.</p>
-          
-          <div class="credential-status" id="socks-credential-status">
-            <span class="status-indicator">⏳</span>
-            <span class="status-text">Checking...</span>
+          <div class="socks-creds-header">
+            <h4>Proxy Credentials</h4>
+            <div class="credential-status" id="socks-credential-status">
+              <span class="status-indicator">⏳</span>
+              <span class="status-text">Checking...</span>
+            </div>
           </div>
           
-          <div class="field-row">
-            <label>Username</label>
-            <input type="text" id="socks-username" class="socks-credential" 
-                   placeholder="Enter username" autocomplete="off">
+          <div class="socks-creds-grid">
+            <div class="field-row">
+              <label>Username</label>
+              <input type="text" id="socks-username" class="socks-credential" 
+                     placeholder="Enter username" autocomplete="off">
+            </div>
+            <div class="field-row">
+              <label>Password</label>
+              <input type="password" id="socks-password" class="socks-credential" 
+                     placeholder="Enter password" autocomplete="off">
+            </div>
           </div>
           
-          <div class="field-row">
-            <label>Password</label>
-            <input type="password" id="socks-password" class="socks-credential" 
-                   placeholder="Enter password" autocomplete="off">
-          </div>
-          
-          <div class="credential-actions">
-            <button class="btn btn-sm btn-primary" id="socks-save-creds">
-              <span class="btn-icon">💾</span> Save Credentials
-            </button>
-            <button class="btn btn-sm" id="socks-test-btn">
-              <span class="btn-icon">🔌</span> Test Connection
-            </button>
-            <button class="btn btn-sm btn-danger" id="socks-clear-creds">
-              <span class="btn-icon">🗑️</span> Clear
-            </button>
-          </div>
-          
-          <div class="test-result-row" id="socks-test-result" style="display: none;">
-            <span class="test-result"></span>
+          <div class="socks-actions-row">
+            <div class="credential-actions">
+              <button class="btn btn-sm btn-primary" id="socks-save-creds">💾 Save</button>
+              <button class="btn btn-sm" id="socks-test-btn">🔌 Test</button>
+              <button class="btn btn-sm btn-danger" id="socks-clear-creds">🗑️</button>
+            </div>
+            <div class="test-result-row" id="socks-test-result" style="display: none;">
+              <span class="test-result"></span>
+            </div>
           </div>
           
           <small class="field-hint">
-            Credentials stored in ~/.config/sapphire/credentials.json.
-            You can also use SAPPHIRE_SOCKS_USERNAME and SAPPHIRE_SOCKS_PASSWORD env vars.
+            Stored in ~/.config/sapphire/credentials.json or via SAPPHIRE_SOCKS_USERNAME/PASSWORD env vars.
           </small>
         </div>
       </div>
@@ -93,7 +88,7 @@ export default {
     }
     
     saveBtn.disabled = true;
-    saveBtn.innerHTML = '<span class="btn-icon">⏳</span> Saving...';
+    saveBtn.textContent = '⏳...';
     
     try {
       await fetchWithTimeout('/api/credentials/socks', {
@@ -110,7 +105,7 @@ export default {
       showToast(e.message || 'Failed to save', 'error');
     } finally {
       saveBtn.disabled = false;
-      saveBtn.innerHTML = '<span class="btn-icon">💾</span> Save Credentials';
+      saveBtn.textContent = '💾 Save';
     }
   },
 
@@ -120,7 +115,7 @@ export default {
     const resultSpan = resultRow?.querySelector('.test-result');
     
     testBtn.disabled = true;
-    testBtn.innerHTML = '<span class="btn-icon">⏳</span> Testing...';
+    testBtn.textContent = '⏳...';
     resultRow.style.display = 'block';
     resultSpan.textContent = 'Connecting...';
     resultSpan.className = 'test-result';
@@ -142,7 +137,7 @@ export default {
       resultSpan.classList.add('error');
     } finally {
       testBtn.disabled = false;
-      testBtn.innerHTML = '<span class="btn-icon">🔌</span> Test Connection';
+      testBtn.textContent = '🔌 Test';
     }
   },
 

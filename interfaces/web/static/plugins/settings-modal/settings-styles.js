@@ -1200,43 +1200,45 @@ export function injectStyles() {
     }
     
     /* =============================================================================
-       SOCKS TAB - Credentials Section
+       SOCKS TAB - Credentials Section (2-column layout)
        ============================================================================= */
     
     .socks-credentials-section {
       margin-top: 24px;
-      padding: 20px;
+      padding: 16px;
       background: var(--bg-tertiary);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
     }
     
-    .socks-credentials-section h4 {
-      margin: 0 0 8px 0;
+    .socks-creds-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    
+    .socks-creds-header h4 {
+      margin: 0;
       font-size: var(--font-md);
       color: var(--text-bright);
       font-weight: 600;
     }
     
-    .socks-credentials-section .section-desc {
-      margin: 0 0 16px 0;
-      font-size: var(--font-sm);
-      color: var(--text-muted);
-    }
-    
-    .credential-status {
+    .socks-credentials-section .credential-status {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 12px;
-      margin-bottom: 16px;
-      background: var(--bg-primary);
+      gap: 6px;
+      padding: 4px 10px;
+      margin: 0;
+      background: var(--bg-inset);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
+      font-size: var(--font-sm);
     }
     
     .credential-status .status-indicator {
-      font-size: 16px;
+      font-size: 14px;
     }
     
     .credential-status .status-indicator.status-set {
@@ -1256,17 +1258,57 @@ export function injectStyles() {
       color: var(--text-secondary);
     }
     
-    .credential-actions {
-      display: flex;
+    .socks-creds-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
       gap: 12px;
-      margin-top: 16px;
       margin-bottom: 12px;
     }
     
-    .test-result-row {
-      padding: 12px;
-      margin-top: 12px;
-      background: var(--bg-primary);
+    .socks-creds-grid .field-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .socks-creds-grid .field-row label {
+      font-size: var(--font-sm);
+      color: var(--text-secondary);
+    }
+    
+    .socks-creds-grid .field-row input {
+      padding: 8px 10px;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: var(--font-md);
+    }
+    
+    .socks-creds-grid .field-row input:focus {
+      outline: none;
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 2px var(--focus-ring);
+    }
+    
+    .socks-actions-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    
+    .socks-actions-row .credential-actions {
+      display: flex;
+      gap: 8px;
+      margin: 0;
+    }
+    
+    .socks-actions-row .test-result-row {
+      flex: 1;
+      padding: 6px 10px;
+      margin: 0;
+      background: var(--bg-inset);
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
     }
@@ -1282,6 +1324,27 @@ export function injectStyles() {
     
     .test-result-row .test-result.error {
       color: var(--accent-red, #f87171);
+    }
+    
+    @media (max-width: 600px) {
+      .socks-creds-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .socks-creds-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      
+      .socks-actions-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      
+      .socks-actions-row .test-result-row {
+        flex: none;
+      }
     }
     
     /* =============================================================================
