@@ -141,9 +141,7 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
             null,  // prefill
             // Tool event handlers
             (id, name, args) => {
-                console.log(`[SEND] onToolStart: ${name} (${id}), streamOk=${streamOk}`);
                 if (!streamOk) {
-                    console.log('[SEND] Starting streaming from tool_start');
                     ui.hideStatus();
                     ui.startStreaming();
                     streamOk = true;
@@ -151,7 +149,6 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 ui.startTool(id, name, args);
             },
             (id, name, result, error) => {
-                console.log(`[SEND] onToolEnd: ${name} (${id}), error=${error}`);
                 ui.endTool(id, name, result, error);
             }
         );
@@ -284,9 +281,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
             null,  // prefill
             // Tool event handlers
             (id, name, args) => {
-                console.log(`[REGEN] onToolStart: ${name} (${id}), streamOk=${streamOk}`);
                 if (!streamOk) {
-                    console.log('[REGEN] Starting streaming from tool_start');
                     ui.hideStatus();
                     ui.startStreaming();
                     streamOk = true;
@@ -294,7 +289,6 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 ui.startTool(id, name, args);
             },
             (id, name, result, error) => {
-                console.log(`[REGEN] onToolEnd: ${name} (${id}), error=${error}`);
                 ui.endTool(id, name, result, error);
             }
         );
@@ -487,9 +481,7 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             abortController ? abortController.signal : null,
             // Tool event handlers
             (id, name, args) => {
-                console.log(`[CONT] onToolStart: ${name} (${id}), streamOk=${streamOk}`);
                 if (!streamOk) {
-                    console.log('[CONT] Starting streaming from tool_start');
                     ui.hideStatus();
                     ui.startStreaming();
                     streamOk = true;
@@ -497,7 +489,6 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 ui.startTool(id, name, args);
             },
             (id, name, result, error) => {
-                console.log(`[CONT] onToolEnd: ${name} (${id}), error=${error}`);
                 ui.endTool(id, name, result, error);
             }
         );

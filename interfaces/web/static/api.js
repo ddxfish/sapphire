@@ -56,13 +56,11 @@ const processSSEData = (data, handlers) => {
     const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk } = handlers;
     
     if (data.type === 'content') {
-        console.log('[SSE] content:', (data.text || '').substring(0, 50) + '...');
         if (onChunk) onChunk(data.text || '');
         return { gotContent: true };
     }
     
     if (data.type === 'tool_start') {
-        console.log('[SSE] tool_start:', data.name, data.id);
         if (onToolStart) {
             onToolStart(data.id, data.name, data.args);
         } else {
@@ -72,7 +70,6 @@ const processSSEData = (data, handlers) => {
     }
     
     if (data.type === 'tool_end') {
-        console.log('[SSE] tool_end:', data.name, data.id, 'error:', data.error);
         if (onToolEnd) {
             onToolEnd(data.id, data.name, data.result, data.error);
         } else {
@@ -82,7 +79,6 @@ const processSSEData = (data, handlers) => {
     }
     
     if (data.type === 'reload') {
-        console.log('[SSE] reload');
         if (onReload) onReload();
         return { shouldReturn: true };
     }
@@ -98,7 +94,6 @@ const processSSEData = (data, handlers) => {
     }
     
     if (data.done) {
-        console.log('[SSE] done, ephemeral:', data.ephemeral);
         if (onDone) onDone(data.ephemeral || false);
         return { shouldReturn: true, isDone: true };
     }
@@ -107,7 +102,6 @@ const processSSEData = (data, handlers) => {
 };
 
 export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null) => {
-    console.log('[API] streamChatContinue, handlers:', { onChunk: !!onChunk, onToolStart: !!onToolStart, onToolEnd: !!onToolEnd });
     let reader = null;
     try {
         const res = await fetch('/api/chat/stream', {
@@ -173,7 +167,6 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
 };
 
 export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null) => {
-    console.log('[API] streamChat, handlers:', { onChunk: !!onChunk, onToolStart: !!onToolStart, onToolEnd: !!onToolEnd });
     let reader = null;
     try {
         const body = prefill ? { text, prefill } : { text };

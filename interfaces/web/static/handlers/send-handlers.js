@@ -91,7 +91,6 @@ export async function handleSend() {
             null,  // prefill
             // Tool event handlers
             (id, name, args) => {
-                console.log(`[SEND] onToolStart: ${name} (${id}), streamOk=${streamOk}`);
                 if (!streamOk) {
                     ui.hideStatus();
                     ui.startStreaming();
@@ -100,7 +99,6 @@ export async function handleSend() {
                 ui.startTool(id, name, args);
             },
             (id, name, result, error) => {
-                console.log(`[SEND] onToolEnd: ${name} (${id}), error=${error}`);
                 ui.endTool(id, name, result, error);
             }
         );

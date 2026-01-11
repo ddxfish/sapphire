@@ -11,6 +11,9 @@ let state = {
     toolAccordions: {}
 };
 
+// Queue for events that arrive before streaming is initialized
+let pendingToolEvents = [];
+
 const createElem = (tag, attrs = {}, content = '') => {
     const el = document.createElement(tag);
     Object.entries(attrs).forEach(([k, v]) => k === 'style' ? el.style.cssText = v : el.setAttribute(k, v));
@@ -24,6 +27,7 @@ const resetState = (para = null) => {
         curPara: para, procIdx: 0,
         toolAccordions: {}
     };
+    pendingToolEvents = [];
 };
 
 // Create a tool accordion with loading state
@@ -53,6 +57,22 @@ const createToolAccordionElement = (toolName, toolId, args) => {
     return { acc: details, content: contentDiv, summary, toolName };
 };
 
+// Process any queued tool events
+const processPendingToolEvents = (scrollCallback) => {
+    if (!streamMsg || pendingToolEvents.length === 0) return;
+    
+    const events = [...pendingToolEvents];
+    pendingToolEvents = [];
+    
+    for (const event of events) {
+        if (event.type === 'start') {
+            doStartTool(event.toolId, event.toolName, event.args, scrollCallback);
+        } else if (event.type === 'end') {
+            doEndTool(event.toolId, event.toolName, event.result, event.isError, scrollCallback);
+        }
+    }
+};
+
 export const startStreaming = (container, messageElement, scrollCallback) => {
     const contentDiv = messageElement.querySelector('.message-content');
     const p = createElem('p');
@@ -69,7 +89,9 @@ export const startStreaming = (container, messageElement, scrollCallback) => {
     container.appendChild(messageElement);
     if (scrollCallback) scrollCallback(true);
     
-    console.log('[STREAM] startStreaming complete, streamMsg set');
+    // Process any tool events that arrived before streaming started
+    processPendingToolEvents(scrollCallback);
+    
     return contentDiv;
 };
 
@@ -78,10 +100,7 @@ export const isStreamReady = () => streamMsg !== null;
 
 // Handle content text (with think tag parsing)
 export const appendStream = (chunk, scrollCallback) => {
-    if (!streamMsg) {
-        console.warn('[STREAM] appendStream called but streamMsg is null');
-        return;
-    }
+    if (!streamMsg) return;
     streamContent += chunk;
     
     const newContent = streamContent.slice(state.procIdx);
@@ -169,15 +188,8 @@ export const appendStream = (chunk, scrollCallback) => {
     if (scrollCallback) scrollCallback();
 };
 
-// Handle tool_start event
-export const startTool = (toolId, toolName, args, scrollCallback) => {
-    console.log(`[STREAM] startTool called: ${toolName} (${toolId}), streamMsg=${!!streamMsg}`);
-    
-    if (!streamMsg) {
-        console.error('[STREAM] startTool failed: streamMsg is null!');
-        return false;
-    }
-    
+// Internal function to actually create tool accordion
+const doStartTool = (toolId, toolName, args, scrollCallback) => {
     // Clean up empty current paragraph
     if (state.curPara && !state.curPara.textContent.trim()) {
         state.curPara.remove();
@@ -194,21 +206,26 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
     streamMsg.el.appendChild(newP);
     state.curPara = newP;
     
-    console.log(`[STREAM] Tool accordion created for ${toolId}, total tracked: ${Object.keys(state.toolAccordions).length}`);
-    
     if (scrollCallback) scrollCallback();
+};
+
+// Handle tool_start event
+export const startTool = (toolId, toolName, args, scrollCallback) => {
+    if (!streamMsg) {
+        // Queue the event for later processing
+        pendingToolEvents.push({ type: 'start', toolId, toolName, args });
+        return false;
+    }
+    
+    doStartTool(toolId, toolName, args, scrollCallback);
     return true;
 };
 
-// Handle tool_end event
-export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
-    console.log(`[STREAM] endTool called: ${toolName} (${toolId}), tracked tools: ${Object.keys(state.toolAccordions).join(', ')}`);
-    
+// Internal function to actually update tool accordion
+const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
     const toolData = state.toolAccordions[toolId];
     if (!toolData) {
-        console.warn(`[STREAM] endTool: No accordion found for ${toolId}, creating fallback`);
-        
-        // Fallback: create accordion now if streaming is active
+        // Fallback: create accordion now
         if (streamMsg) {
             const { acc, content, summary } = createToolAccordionElement(toolName, toolId, {});
             acc.classList.remove('loading');
@@ -223,9 +240,9 @@ export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
                 streamMsg.el.appendChild(acc);
             }
             streamMsg.last = acc;
-            
-            if (scrollCallback) scrollCallback();
+            state.toolAccordions[toolId] = { acc, content, summary, toolName };
         }
+        if (scrollCallback) scrollCallback();
         return;
     }
     
@@ -252,9 +269,18 @@ export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
     if (scrollCallback) scrollCallback();
 };
 
-export const finishStreaming = (updateToolbarsCallback) => {
-    console.log(`[STREAM] finishStreaming, tracked tools: ${Object.keys(state.toolAccordions).length}`);
+// Handle tool_end event
+export const endTool = (toolId, toolName, result, isError, scrollCallback) => {
+    if (!streamMsg) {
+        // Queue the event for later processing
+        pendingToolEvents.push({ type: 'end', toolId, toolName, result, isError });
+        return;
+    }
     
+    doEndTool(toolId, toolName, result, isError, scrollCallback);
+};
+
+export const finishStreaming = (updateToolbarsCallback) => {
     if (!streamMsg) return;
     
     const msg = document.getElementById('streaming-message');
@@ -278,11 +304,7 @@ export const finishStreaming = (updateToolbarsCallback) => {
 
 export const cancelStreaming = () => {
     const streamingMessage = document.getElementById('streaming-message');
-    
-    if (streamingMessage) {
-        streamingMessage.remove();
-        console.log('[CLEANUP] Removed streaming message from DOM');
-    }
+    if (streamingMessage) streamingMessage.remove();
     
     streamMsg = null;
     streamContent = '';

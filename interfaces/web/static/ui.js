@@ -243,18 +243,14 @@ export const appendStream = (chunk) => {
 };
 
 export const startTool = (toolId, toolName, args) => {
-    console.log(`[UI] startTool: ${toolName} (${toolId})`);
-    const result = Streaming.startTool(toolId, toolName, args, scrollToBottomIfSticky);
-    console.log(`[UI] startTool result:`, result);
+    Streaming.startTool(toolId, toolName, args, scrollToBottomIfSticky);
 };
 
 export const endTool = (toolId, toolName, result, isError) => {
-    console.log(`[UI] endTool: ${toolName} (${toolId})`);
     Streaming.endTool(toolId, toolName, result, isError, scrollToBottomIfSticky);
 };
 
 export const finishStreaming = async (ephemeral = false) => {
-    console.log(`[SWAP] finishStreaming called, ephemeral=${ephemeral}`);
     const streamingMsg = document.getElementById('streaming-message');
     
     Streaming.finishStreaming(updateToolbars);
