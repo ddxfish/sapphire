@@ -62,6 +62,79 @@ export const extractProseText = (el) => {
     return txt.trim();
 };
 
+// Extract fenced code blocks and replace with placeholders
+const extractCodeBlocks = (text) => {
+    const codeBlocks = [];
+    let counter = 0;
+    
+    // Match ```lang\ncode\n``` - language is optional
+    const processed = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+        const placeholder = `__CODE_BLOCK_${counter}__`;
+        codeBlocks.push({
+            placeholder,
+            language: lang || 'plaintext',
+            code: code.trimEnd()
+        });
+        counter++;
+        return placeholder;
+    });
+    
+    return { processed, codeBlocks };
+};
+
+// Create a code block element with optional header and copy button
+const createCodeBlock = (language, code) => {
+    const wrapper = document.createElement('pre');
+    
+    // Add header with language and copy button
+    if (language && language !== 'plaintext') {
+        const header = document.createElement('div');
+        header.className = 'code-block-header';
+        header.innerHTML = `
+            <span class="code-lang">${escapeHtml(language)}</span>
+            <button class="code-copy" title="Copy code">Copy</button>
+        `;
+        wrapper.appendChild(header);
+        
+        // Copy button handler
+        const copyBtn = header.querySelector('.code-copy');
+        copyBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(code);
+                copyBtn.textContent = 'Copied!';
+                setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+            } catch (e) {
+                copyBtn.textContent = 'Failed';
+                setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+            }
+        });
+    }
+    
+    const codeEl = document.createElement('code');
+    codeEl.className = `language-${language}`;
+    codeEl.textContent = code;
+    wrapper.appendChild(codeEl);
+    
+    // Syntax highlight if hljs is available
+    if (window.hljs) {
+        try {
+            window.hljs.highlightElement(codeEl);
+        } catch (e) {
+            // Fallback: no highlighting
+        }
+    }
+    
+    return wrapper;
+};
+
+// Process inline code (single backticks)
+const processInlineCode = (html) => {
+    // Match `code` but not inside already-escaped contexts
+    return html.replace(/`([^`\n]+)`/g, (match, code) => {
+        return `<code>${escapeHtml(code)}</code>`;
+    });
+};
+
 export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = null) => {
     globalThinkCounter = 0;
     
@@ -161,17 +234,19 @@ const renderToolResult = (el, part) => {
 const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) => {
     if (!txt) return;
     
-    // Step 1: Extract image placeholders (<<IMG::id>> -> __IMAGE_PLACEHOLDER_N__)
+    // Step 1: Extract code blocks first (before any other processing)
+    const { processed: textWithoutCode, codeBlocks } = extractCodeBlocks(txt);
+    txt = textWithoutCode;
+    
+    // Step 2: Extract image placeholders
     const { processedContent, images } = Images.extractImagePlaceholders(txt, isHistoryRender, scrollCallback);
     txt = processedContent;
     
-    // Step 2: Build safe HTML replacement function
-    // Escapes content first, then injects safe img elements for placeholders
+    // Step 3: Build safe HTML replacement function
     const safeReplaceImagePlaceholders = (content) => {
-        // Escape HTML to prevent XSS - placeholders survive (alphanumeric+underscore)
         let result = escapeHtml(content);
         
-        // Replace safe placeholders with actual img elements
+        // Replace image placeholders
         images.forEach(({ placeholder, imageId }) => {
             if (result.includes(placeholder)) {
                 const img = Images.createImageElement(imageId, isHistoryRender, scrollCallback);
@@ -180,7 +255,38 @@ const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) =
                 result = result.replace(placeholder, tempDiv.innerHTML);
             }
         });
+        
+        // Process inline code
+        result = processInlineCode(result);
+        
         return result;
+    };
+    
+    // Step 4: Replace code block placeholders with actual elements
+    const replaceCodePlaceholders = (container) => {
+        codeBlocks.forEach(({ placeholder, language, code }) => {
+            // Find text nodes containing placeholder
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+            let node;
+            while (node = walker.nextNode()) {
+                if (node.textContent.includes(placeholder)) {
+                    const codeEl = createCodeBlock(language, code);
+                    const parts = node.textContent.split(placeholder);
+                    const parent = node.parentNode;
+                    
+                    // Replace text node with: before text, code block, after text
+                    if (parts[0]) {
+                        parent.insertBefore(document.createTextNode(parts[0]), node);
+                    }
+                    parent.insertBefore(codeEl, node);
+                    if (parts[1]) {
+                        parent.insertBefore(document.createTextNode(parts[1]), node);
+                    }
+                    parent.removeChild(node);
+                    break;
+                }
+            }
+        });
     };
     
     // Handle think blocks
@@ -199,12 +305,14 @@ const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) =
                 const contentDiv = acc.querySelector('div');
                 contentDiv.innerHTML = safeReplaceImagePlaceholders(trimmed);
                 Images.replaceImagePlaceholdersInElement(contentDiv, images, isHistoryRender, scrollCallback);
+                replaceCodePlaceholders(contentDiv);
                 el.appendChild(acc);
             } else {
                 const p = createElem('p');
                 let paraContent = trimmed.replace(/\*\*/g, '');
                 p.innerHTML = safeReplaceImagePlaceholders(paraContent);
                 Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
+                replaceCodePlaceholders(p);
                 el.appendChild(p);
             }
         });
@@ -224,12 +332,14 @@ const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) =
             const contentDiv = acc.querySelector('div');
             contentDiv.innerHTML = safeReplaceImagePlaceholders(thought);
             Images.replaceImagePlaceholdersInElement(contentDiv, images, isHistoryRender, scrollCallback);
+            replaceCodePlaceholders(contentDiv);
             el.appendChild(acc);
         }
         if (after) {
             const p = createElem('p');
             p.innerHTML = safeReplaceImagePlaceholders(after);
             Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
+            replaceCodePlaceholders(p);
             el.appendChild(p);
         }
         return;
@@ -242,6 +352,7 @@ const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) =
         const p = createElem('p');
         p.innerHTML = safeReplaceImagePlaceholders(para.trim());
         Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
+        replaceCodePlaceholders(p);
         el.appendChild(p);
     });
 };
