@@ -5,9 +5,10 @@ import { getSettings, getWizardStep, setWizardStep } from './setup-api.js';
 import voiceTab from './tabs/voice.js';
 import audioTab from './tabs/audio.js';
 import llmTab from './tabs/llm.js';
+import identityTab from './tabs/identity.js';
 
-const TABS = [voiceTab, audioTab, llmTab];
-const STEP_NAMES = ['Voice', 'Audio', 'AI Brain'];
+const TABS = [voiceTab, audioTab, llmTab, identityTab];
+const STEP_NAMES = ['Voice', 'Audio', 'AI Brain', 'Identity'];
 
 class SetupWizard {
   constructor() {
@@ -31,13 +32,13 @@ class SetupWizard {
     }
 
     // If wizard is complete and not forced, don't show
-    if (this.completedStep >= 3 && !forceShow) {
+    if (this.completedStep >= 4 && !forceShow) {
       console.log('Setup wizard already completed');
       return;
     }
 
     // Start at first incomplete step
-    this.currentStep = Math.min(this.completedStep, 2);
+    this.currentStep = Math.min(this.completedStep, 3);
 
     this.render();
     this.attachEventListeners();
@@ -234,7 +235,7 @@ class SetupWizard {
   }
 
   confirmClose() {
-    if (this.completedStep >= 3) {
+    if (this.completedStep >= 4) {
       this.close();
       return;
     }
@@ -252,8 +253,8 @@ class SetupWizard {
 
   async finish() {
     // Mark as complete
-    await setWizardStep(3);
-    this.completedStep = 3;
+    await setWizardStep(4);
+    this.completedStep = 4;
 
     // Show success message with celebration
     const content = this.modal.querySelector('.setup-wizard-content');

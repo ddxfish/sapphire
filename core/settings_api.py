@@ -727,11 +727,11 @@ def create_settings_api():
     
     @bp.route('/setup/wizard-step', methods=['PUT'])
     def set_wizard_step():
-        """Set wizard step (0-3)."""
+        """Set wizard step (0-4)."""
         data = request.json
         step = data.get('step', 0)
-        if not isinstance(step, int) or step < 0 or step > 3:
-            return jsonify({'error': 'Step must be 0-3'}), 400
+        if not isinstance(step, int) or step < 0 or step > 4:
+            return jsonify({'error': 'Step must be 0-4'}), 400
         
         settings.set('SETUP_WIZARD_STEP', step, persist=True)
         return jsonify({'status': 'success', 'step': step})

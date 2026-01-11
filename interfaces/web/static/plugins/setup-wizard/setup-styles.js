@@ -553,6 +553,50 @@ export function injectSetupStyles() {
     }
 
     /* ========================================
+       Identity Tab
+       ======================================== */
+    .identity-section {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      max-width: 400px;
+      margin: 0 auto;
+      padding: 20px 0;
+    }
+    
+    .identity-field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .identity-field label {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: var(--text-primary, #fff);
+    }
+    
+    .identity-input {
+      padding: 14px 16px;
+      font-size: 1.1rem;
+      background: var(--surface-tertiary, #1a1a2a);
+      border: 2px solid var(--border-subtle, #333);
+      border-radius: 10px;
+      color: var(--text-primary, #fff);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    
+    .identity-input:focus {
+      outline: none;
+      border-color: var(--accent-color, #4a9eff);
+      box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.2);
+    }
+    
+    .identity-input::placeholder {
+      color: var(--text-dim, #666);
+    }
+
+    /* ========================================
        Success Celebration
        ======================================== */
     .success-screen {
