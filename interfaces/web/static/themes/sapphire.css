@@ -1,6 +1,10 @@
 /* Sapphire Theme - /static/themes/sapphire.css */
 /* Deep blue aesthetic for your AI companion */
 [data-theme="sapphire"] {
+    /* Trim - sapphire blue */
+    --trim: #50a0ff;
+    --trim-glow: rgba(80, 160, 255, 0.4);
+    
     /* Colors - Core */
     --bg: #0a1628;
     --bg-secondary: #0f1f3a;

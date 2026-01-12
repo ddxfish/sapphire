@@ -1,6 +1,10 @@
 /* Terminal Theme - /static/themes/terminal.css */
 /* Green phosphor CRT - the way our ancestors computed */
 [data-theme="terminal"] {
+    /* Trim - phosphor green */
+    --trim: #33ff33;
+    --trim-glow: rgba(51, 255, 51, 0.5);
+    
     /* Colors - Core - true black with phosphor green */
     --bg: #0a0a0a;
     --bg-secondary: #0d0d0d;

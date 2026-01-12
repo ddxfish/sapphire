@@ -10,10 +10,41 @@ import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 
+// Initialize appearance settings from localStorage (theme, density, font, trim)
+function initAppearance() {
+    const root = document.documentElement;
+    
+    // Density
+    const density = localStorage.getItem('sapphire-density');
+    if (density && density !== 'default') {
+        root.setAttribute('data-density', density);
+    }
+    
+    // Font
+    const font = localStorage.getItem('sapphire-font');
+    if (font && font !== 'system') {
+        root.setAttribute('data-font', font);
+    }
+    
+    // Trim color
+    const trim = localStorage.getItem('sapphire-trim');
+    if (trim) {
+        root.style.setProperty('--trim', trim);
+        // Generate matching glow
+        const r = parseInt(trim.slice(1, 3), 16);
+        const g = parseInt(trim.slice(3, 5), 16);
+        const b = parseInt(trim.slice(5, 7), 16);
+        root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.3)`);
+    }
+}
+
 async function init() {
     const t0 = performance.now();
     
     try {
+        // Initialize appearance settings first (sync, instant)
+        initAppearance();
+        
         // Initialize DOM references (sync, instant)
         initElements();
         

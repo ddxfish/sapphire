@@ -1,6 +1,10 @@
 /* Synthwave Theme - /static/themes/synthwave.css */
 /* Retro 80s neon aesthetic - because every AI deserves a Tron moment */
 [data-theme="synthwave"] {
+    /* Trim - hot pink neon */
+    --trim: #ff66b2;
+    --trim-glow: rgba(255, 102, 178, 0.4);
+    
     /* Colors - Core */
     --bg: #1a1025;
     --bg-secondary: #241535;
