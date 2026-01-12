@@ -221,6 +221,12 @@ class WakeWordDetector:
         start_time.value = time.time()
         logger.info("Wake word detected! Starting to listen...")
         
+        # Stop wakeword audio stream to avoid conflict with STT recorder
+        # Both use the same audio device - running simultaneously causes heap corruption
+        if self.audio_recorder:
+            logger.debug("Stopping wakeword audio stream for STT handoff")
+            self.audio_recorder.stop_recording()
+        
         try:
             logger.info("Recording your message...")
             audio_file = self.system.whisper_recorder.record_audio()
@@ -247,6 +253,11 @@ class WakeWordDetector:
             self.system.speak_error('recording')
         finally:
             logger.info(f"Total wake word handling took: {(time.time() - start_time.value)*1000:.1f}ms")
+            
+            # Restart wakeword audio stream after STT is done
+            if self.audio_recorder:
+                logger.debug("Restarting wakeword audio stream after STT")
+                self.audio_recorder.start_recording()
 
     def _listen_loop(self):
         """Main listening loop - polls OWW for predictions."""

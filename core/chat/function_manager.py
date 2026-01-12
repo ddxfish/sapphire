@@ -285,6 +285,14 @@ class FunctionManager:
         """Execute a function using the mapped executor."""
         start_time = time.time()
         
+        # Validate function is currently enabled
+        enabled_names = self.get_enabled_function_names()
+        if function_name not in enabled_names:
+            logger.warning(f"Function '{function_name}' called but not enabled. Enabled: {enabled_names}")
+            result = f"Error: The tool '{function_name}' is not currently available."
+            self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
+            return result
+        
         logger.info(f"Executing function: {function_name}")
         
         executor = self.execution_map.get(function_name)

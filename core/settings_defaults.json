@@ -10,7 +10,8 @@
   "network": {
     "SOCKS_ENABLED": false,
     "SOCKS_HOST": "",
-    "SOCKS_PORT": 1080
+    "SOCKS_PORT": 1080,
+    "SOCKS_TIMEOUT": 10.0
   },
   
   "features": {

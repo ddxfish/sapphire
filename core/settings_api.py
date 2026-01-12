@@ -393,12 +393,14 @@ def create_settings_api():
                 key = p['key']
                 config = providers_config.get(key, {})
                 meta = PROVIDER_METADATA.get(key, {})
-                env_var = config.get('api_key_env') or meta.get('api_key_env', '')
+                
+                # Use credential manager's centralized env var mapping
+                env_var = credentials.get_env_var_name(key) or config.get('api_key_env') or meta.get('api_key_env', '')
                 p['env_var'] = env_var
-                p['has_env_key'] = bool(env_var and os.environ.get(env_var))
-                # Check credentials_manager first, then fall back to config
+                p['has_env_key'] = credentials.has_env_api_key(key)
+                p['has_config_key'] = credentials.has_stored_api_key(key)
+                # Overall: has any key (stored or env)
                 p['has_credential_key'] = credentials.has_llm_api_key(key)
-                p['has_config_key'] = p['has_credential_key'] or bool(config.get('api_key', '').strip())
             
             return jsonify({
                 "status": "success",

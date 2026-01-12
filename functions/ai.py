@@ -1,7 +1,7 @@
 # functions/ai.py
 
 import logging
-from core.setup import get_claude_api_key, CLAUDE_API_KEY_FILE
+from core.credentials_manager import credentials
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,12 @@ def execute(function_name, arguments, config):
             
             import anthropic
             
-            api_key = get_claude_api_key()
+            api_key = credentials.get_llm_api_key('claude')
             if not api_key:
+                env_var = credentials.get_env_var_name('claude')
                 return (
-                    f"Claude API key not found. Set ANTHROPIC_API_KEY environment variable "
-                    f"or create {CLAUDE_API_KEY_FILE} with your API key."
+                    f"Claude API key not found. Set {env_var} environment variable "
+                    f"or add your API key in Settings → LLM → Claude."
                 ), False
             
             client = anthropic.Anthropic(api_key=api_key)

@@ -55,11 +55,32 @@ export const cloneImagesInline = (contentEl) => {
 export const extractProseText = (el) => {
     if (!el) return '';
     const clone = el.cloneNode(true);
-    clone.querySelectorAll('details').forEach(d => d.remove());
-    clone.querySelectorAll('img').forEach(img => img.remove());
+    
+    // Remove elements that shouldn't be spoken (order: larger containers first)
+    clone.querySelectorAll('details').forEach(d => d.remove());       // Accordions/details
+    clone.querySelectorAll('pre').forEach(pre => pre.remove());       // Code blocks (includes header)
+    clone.querySelectorAll('code').forEach(c => c.remove());          // Inline code
+    clone.querySelectorAll('table').forEach(t => t.remove());         // Tables
+    clone.querySelectorAll('img').forEach(img => img.remove());       // Images
+    clone.querySelectorAll('svg').forEach(svg => svg.remove());       // SVGs
+    clone.querySelectorAll('button').forEach(btn => btn.remove());    // Buttons (Copy, etc)
+    clone.querySelectorAll('.code-block-header').forEach(h => h.remove()); // Code headers (safety)
+    clone.querySelectorAll('.tool-accordion').forEach(t => t.remove());    // Tool accordions
+    clone.querySelectorAll('.accordion-tool').forEach(t => t.remove());    // Tool accordions alt
+    clone.querySelectorAll('[class*="code"]').forEach(c => c.remove());    // Any code-related class
+    
     let txt = clone.textContent.trim();
+    
+    // Strip any remaining think tags
     txt = txt.replace(/<(?:seed:)?think>.*?<\/(?:seed:think|seed:cot_budget_reflect|think)>/gs, '');
-    return txt.trim();
+    
+    // Strip any HTML tags that leaked through
+    txt = txt.replace(/<[^>]+>/g, '');
+    
+    // Clean up whitespace
+    txt = txt.replace(/\s+/g, ' ').trim();
+    
+    return txt;
 };
 
 // Extract fenced code blocks and replace with placeholders

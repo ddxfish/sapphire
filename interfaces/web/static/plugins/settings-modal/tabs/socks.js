@@ -11,7 +11,8 @@ export default {
   keys: [
     'SOCKS_ENABLED',
     'SOCKS_HOST',
-    'SOCKS_PORT'
+    'SOCKS_PORT',
+    'SOCKS_TIMEOUT'
   ],
 
   render(modal) {

@@ -194,10 +194,36 @@ class TTSClient:
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
         
-        processed_text = re.sub(
-            r'<think>.*?</think>|<reasoning>.*?</reasoning>|<tools>.*?</tools>|\[.*?\]|\*|\n',
-            '', text, flags=re.DOTALL
-        )
+        # Strip content that shouldn't be spoken
+        # Order matters: remove larger blocks first, then inline patterns
+        strip_patterns = [
+            r'<think>.*?</think>',           # Think tags
+            r'<reasoning>.*?</reasoning>',   # Reasoning tags
+            r'<tools>.*?</tools>',           # Tools tags
+            r'```[\s\S]*?```',               # Code blocks (fenced)
+            r'`[^`]+`',                       # Inline code
+            r'!\[.*?\]\(.*?\)',              # Image markdown ![alt](url)
+            r'\|.*?\|(?:\n\|.*?\|)*',        # Markdown tables (pipe-delimited rows)
+            r'\[.*?\]\(.*?\)',               # Link markdown [text](url) - keep after images
+            r'\*\*.*?\*\*',                  # Bold **text**
+            r'__.*?__',                      # Bold __text__
+            r'\*',                           # Remaining asterisks
+            r'_',                            # Remaining underscores  
+            r'#+\s*',                        # Heading markers
+            r'\n',                           # Newlines
+            r'<[^>]+>',                      # HTML tags (fallback if HTML leaks through)
+        ]
+        processed_text = text
+        for pattern in strip_patterns:
+            processed_text = re.sub(pattern, ' ', processed_text, flags=re.DOTALL)
+        
+        # Remove common UI text that shouldn't be spoken
+        ui_words = ['Copy', 'Copied!', 'Failed', 'Loading...', '...']
+        for word in ui_words:
+            processed_text = processed_text.replace(word, '')
+        
+        # Collapse multiple spaces
+        processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
         self.stop()
         self.should_stop.clear()

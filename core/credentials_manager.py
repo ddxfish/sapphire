@@ -36,6 +36,15 @@ DEFAULT_CREDENTIALS = {
     }
 }
 
+# Environment variable names for each provider
+# Used by get_llm_api_key() to check env first, then override with stored credential
+PROVIDER_ENV_VARS = {
+    'claude': 'ANTHROPIC_API_KEY',
+    'fireworks': 'FIREWORKS_API_KEY',
+    'openai': 'OPENAI_API_KEY',
+    # 'other' has no standard env var - fully manual
+}
+
 
 class CredentialsManager:
     """Manages credentials stored outside project directory."""
@@ -198,11 +207,59 @@ class CredentialsManager:
         """
         Get API key for an LLM provider.
         
-        Returns empty string if not set (caller should check env vars as fallback).
+        Priority (DRY - all credential logic centralized here):
+        1. Stored credential in credentials.json (user set in Sapphire UI)
+        2. Environment variable fallback
+        
+        Returns empty string if neither is set.
         """
+        # Check stored credential first (takes priority - user explicitly set it)
+        stored_key = self._get_stored_api_key(provider)
+        if stored_key:
+            return stored_key
+        
+        # Fall back to environment variable
+        env_var = PROVIDER_ENV_VARS.get(provider, '')
+        if env_var:
+            env_value = os.environ.get(env_var, '')
+            if env_value and env_value.strip():
+                logger.debug(f"Using API key from env var {env_var} for {provider}")
+                return env_value
+        
+        return ''
+    
+    def _get_stored_api_key(self, provider: str) -> str:
+        """Get API key stored in credentials.json only (not env)."""
         llm = self._credentials.get('llm', {})
         provider_creds = llm.get(provider, {})
-        return provider_creds.get('api_key', '')
+        return provider_creds.get('api_key', '').strip()
+    
+    def has_stored_api_key(self, provider: str) -> bool:
+        """Check if provider has a key stored in credentials.json."""
+        return bool(self._get_stored_api_key(provider))
+    
+    def has_env_api_key(self, provider: str) -> bool:
+        """Check if provider has a key from environment variable."""
+        env_var = PROVIDER_ENV_VARS.get(provider, '')
+        if env_var:
+            return bool(os.environ.get(env_var, '').strip())
+        return False
+    
+    def get_api_key_source(self, provider: str) -> str:
+        """
+        Get the source of the API key for UI display.
+        
+        Returns: 'stored', 'env', or 'none'
+        """
+        if self.has_stored_api_key(provider):
+            return 'stored'
+        if self.has_env_api_key(provider):
+            return 'env'
+        return 'none'
+    
+    def get_env_var_name(self, provider: str) -> str:
+        """Get the environment variable name for a provider."""
+        return PROVIDER_ENV_VARS.get(provider, '')
     
     def set_llm_api_key(self, provider: str, api_key: str) -> bool:
         """Set API key for an LLM provider."""
@@ -229,8 +286,8 @@ class CredentialsManager:
         return self.set_llm_api_key(provider, '')
     
     def has_llm_api_key(self, provider: str) -> bool:
-        """Check if provider has a stored API key."""
-        return bool(self.get_llm_api_key(provider).strip())
+        """Check if provider has an API key (from either stored or env)."""
+        return bool(self.get_llm_api_key(provider))
     
     # =========================================================================
     # SOCKS Credentials

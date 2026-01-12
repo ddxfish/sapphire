@@ -25,7 +25,7 @@ def clear_session_cache():
     logger.info("Session cache cleared")
 
 
-def _test_socks_auth(host: str, port: int, username: str, password: str, timeout: float = 5.0) -> bool:
+def _test_socks_auth(host: str, port: int, username: str, password: str, timeout: float = 10.0) -> bool:
     """
     Quick SOCKS5 auth test. Returns True if auth succeeds, raises SocksAuthError if not.
     Uses short timeout to fail fast on bad credentials.
@@ -87,7 +87,8 @@ def get_session():
         logger.info(f"Testing SOCKS5 auth to {config.SOCKS_HOST}:{config.SOCKS_PORT}")
         
         # Test auth before caching session - fail fast on bad creds
-        _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password)
+        timeout = getattr(config, 'SOCKS_TIMEOUT', 10.0)
+        _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
         
         proxy_url = f"socks5://{username}:{password}@{config.SOCKS_HOST}:{config.SOCKS_PORT}"
         
