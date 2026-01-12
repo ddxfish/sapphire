@@ -239,4 +239,66 @@ def create_prompts_api(system_instance=None):
             logger.error(f"Error deleting component {comp_type}.{key}: {e}")
             return jsonify({'error': str(e)}), 500
 
+    @bp.route('/reset', methods=['POST'])
+    def reset_prompts():
+        """Reset all prompt files to factory defaults (destructive)."""
+        try:
+            from core.setup import reset_prompt_files
+            
+            success = reset_prompt_files()
+            if not success:
+                return jsonify({'error': 'Failed to reset prompt files'}), 500
+            
+            # Reload prompt manager to pick up changes
+            prompts.reload()
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'All prompts reset to factory defaults',
+                'files': ['prompt_monoliths.json', 'prompt_pieces.json', 'prompt_spices.json']
+            })
+        except Exception as e:
+            logger.error(f"Error resetting prompts: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @bp.route('/merge', methods=['POST'])
+    def merge_prompts():
+        """Merge factory defaults into user prompts (core overwrites conflicts)."""
+        try:
+            from core.setup import merge_prompt_files
+            
+            results = merge_prompt_files()
+            if 'error' in results:
+                return jsonify({'error': results['error']}), 500
+            
+            # Reload prompt manager to pick up changes
+            prompts.reload()
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Factory defaults merged into user prompts',
+                'results': results
+            })
+        except Exception as e:
+            logger.error(f"Error merging prompts: {e}")
+            return jsonify({'error': str(e)}), 500
+
+    @bp.route('/reset-chat-defaults', methods=['POST'])
+    def reset_chat_defaults_endpoint():
+        """Reset chat_defaults.json to factory defaults."""
+        try:
+            from core.setup import reset_chat_defaults
+            
+            success = reset_chat_defaults()
+            if not success:
+                return jsonify({'error': 'Failed to reset chat defaults'}), 500
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Chat defaults reset to factory settings'
+            })
+        except Exception as e:
+            logger.error(f"Error resetting chat defaults: {e}")
+            return jsonify({'error': str(e)}), 500
+
     return bp

@@ -94,6 +94,18 @@ class SettingsAPI {
   async checkAvatar(role) {
     return await fetchWithTimeout(`/api/avatar/check/${encodeURIComponent(role)}`);
   }
+
+  async resetPrompts() {
+    return await fetchWithTimeout('/api/prompts/reset', { method: 'POST' });
+  }
+
+  async mergePrompts() {
+    return await fetchWithTimeout('/api/prompts/merge', { method: 'POST' });
+  }
+
+  async resetChatDefaults() {
+    return await fetchWithTimeout('/api/prompts/reset-chat-defaults', { method: 'POST' });
+  }
 }
 
 export default new SettingsAPI();

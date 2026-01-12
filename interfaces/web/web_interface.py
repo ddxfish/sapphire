@@ -675,6 +675,25 @@ def delete_prompt_component(comp_type, key):
 def load_prompt(name):
     return proxy(f'/api/prompts/{name}/load', 'POST', timeout=10)
 
+@app.route('/api/prompts/reset', methods=['POST'])
+@require_login
+def reset_prompts():
+    """Reset all prompt files to factory defaults."""
+    return proxy('/api/prompts/reset', 'POST', timeout=10)
+
+@app.route('/api/prompts/merge', methods=['POST'])
+@require_login
+def merge_prompts():
+    """Merge factory defaults into user prompts."""
+    return proxy('/api/prompts/merge', 'POST', timeout=10)
+
+@app.route('/api/prompts/reset-chat-defaults', methods=['POST'])
+@require_login
+def reset_prompts_chat_defaults():
+    """Reset chat_defaults.json to factory settings."""
+    return proxy('/api/prompts/reset-chat-defaults', 'POST', timeout=10)
+
+
 # =============================================================================
 # ABILITIES MANAGEMENT ROUTES (7 routes)
 # =============================================================================

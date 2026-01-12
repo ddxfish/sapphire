@@ -40,9 +40,28 @@ export default {
         
         <div class="system-danger-zone">
           <h4>Danger Zone</h4>
-          <p>These actions are irreversible and will affect all settings.</p>
-          <button class="btn btn-danger btn-lg" id="settings-reset-all">Reset All Settings to Defaults</button>
-          <p class="warning-text">This will delete your user/settings.json file and revert everything to default values. This action cannot be undone.</p>
+          <p>These actions are irreversible and will affect system configuration.</p>
+          
+          <div class="danger-zone-section">
+            <h5>Settings</h5>
+            <button class="btn btn-danger" id="settings-reset-all">Reset All Settings to Defaults</button>
+            <p class="warning-text">Deletes user/settings.json and reverts everything to defaults. Requires restart.</p>
+          </div>
+          
+          <div class="danger-zone-section">
+            <h5>Prompts & Personas</h5>
+            <div class="danger-zone-buttons">
+              <button class="btn btn-danger" id="prompts-reset">Reset Prompts to Defaults</button>
+              <button class="btn btn-danger" id="prompts-merge">Merge Factory Defaults</button>
+            </div>
+            <p class="warning-text">Reset: Overwrites all prompt files with factory versions. Merge: Factory values overwrite conflicts, your unique additions are preserved.</p>
+          </div>
+          
+          <div class="danger-zone-section">
+            <h5>Chat Defaults</h5>
+            <button class="btn btn-danger" id="chat-defaults-reset">Reset Chat Defaults</button>
+            <p class="warning-text">Resets default prompt, voice, and spice settings for new chats.</p>
+          </div>
         </div>
       </div>
     `;
@@ -54,6 +73,21 @@ export default {
     const resetAllBtn = contentEl.querySelector('#settings-reset-all');
     if (resetAllBtn) {
       resetAllBtn.addEventListener('click', () => modal.resetAll());
+    }
+    
+    const promptsResetBtn = contentEl.querySelector('#prompts-reset');
+    if (promptsResetBtn) {
+      promptsResetBtn.addEventListener('click', () => modal.resetPrompts());
+    }
+    
+    const promptsMergeBtn = contentEl.querySelector('#prompts-merge');
+    if (promptsMergeBtn) {
+      promptsMergeBtn.addEventListener('click', () => modal.mergePrompts());
+    }
+    
+    const chatDefaultsResetBtn = contentEl.querySelector('#chat-defaults-reset');
+    if (chatDefaultsResetBtn) {
+      chatDefaultsResetBtn.addEventListener('click', () => modal.resetChatDefaults());
     }
   }
 };

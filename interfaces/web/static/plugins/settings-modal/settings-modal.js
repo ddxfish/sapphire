@@ -472,15 +472,11 @@ class SettingsModal {
     if (!confirm('⚠️ Reset ALL settings to defaults?\n\nThis will erase all your customizations!')) return;
     
     const confirmText = prompt(
-      '🚨 FINAL WARNING 🚨\n\n' +
-      'This will:\n' +
-      '• Delete ALL your custom settings\n' +
-      '• Restore factory defaults\n' +
-      '• Require a restart to take effect\n\n' +
-      'Type "RESET" to confirm:'
+      'This will delete ALL custom settings and restore factory defaults.\n\n' +
+      'Type RESET to confirm:'
     );
     
-    if (confirmText !== 'RESET') {
+    if (!confirmText || confirmText.toUpperCase() !== 'RESET') {
       showToast('Reset cancelled', 'info');
       return;
     }
@@ -490,6 +486,69 @@ class SettingsModal {
       showToast('✓ All settings reset. Restart Sapphire to apply.', 'success');
       await this.loadData();
       this.refreshContent();
+    } catch (e) {
+      showToast('Reset failed: ' + e.message, 'error');
+    }
+  }
+
+  async resetPrompts() {
+    if (!confirm('⚠️ Reset ALL prompts to factory defaults?\n\nThis will overwrite your custom personas, scenarios, and spices!')) return;
+    
+    const confirmText = prompt(
+      'This will delete ALL custom prompts, personas, and spices.\n\n' +
+      'Type RESET to confirm:'
+    );
+    
+    if (!confirmText || confirmText.toUpperCase() !== 'RESET') {
+      showToast('Reset cancelled', 'info');
+      return;
+    }
+    
+    try {
+      await settingsAPI.resetPrompts();
+      showToast('✓ All prompts reset to factory defaults', 'success');
+    } catch (e) {
+      showToast('Reset failed: ' + e.message, 'error');
+    }
+  }
+
+  async mergePrompts() {
+    if (!confirm('⚠️ Merge factory defaults into your prompts?\n\nFactory values will OVERWRITE your customizations where they conflict!')) return;
+    
+    const confirmText = prompt(
+      'Factory defaults will overwrite conflicts. Your unique additions are preserved.\n\n' +
+      'Type MERGE to confirm:'
+    );
+    
+    if (!confirmText || confirmText.toUpperCase() !== 'MERGE') {
+      showToast('Merge cancelled', 'info');
+      return;
+    }
+    
+    try {
+      await settingsAPI.mergePrompts();
+      showToast('✓ Factory defaults merged into prompts', 'success');
+    } catch (e) {
+      showToast('Merge failed: ' + e.message, 'error');
+    }
+  }
+
+  async resetChatDefaults() {
+    if (!confirm('⚠️ Reset chat defaults to factory settings?\n\nThis affects default prompt, voice, and spice settings for new chats.')) return;
+    
+    const confirmText = prompt(
+      'This will reset default prompt, voice, and spice settings for new chats.\n\n' +
+      'Type RESET to confirm:'
+    );
+    
+    if (!confirmText || confirmText.toUpperCase() !== 'RESET') {
+      showToast('Reset cancelled', 'info');
+      return;
+    }
+    
+    try {
+      await settingsAPI.resetChatDefaults();
+      showToast('✓ Chat defaults reset to factory settings', 'success');
     } catch (e) {
       showToast('Reset failed: ' + e.message, 'error');
     }

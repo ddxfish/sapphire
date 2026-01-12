@@ -591,6 +591,36 @@ export function injectStyles() {
       font-style: italic;
     }
 
+    .system-danger-zone .danger-zone-section {
+      text-align: left;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--error-border);
+    }
+
+    .system-danger-zone .danger-zone-section:last-child {
+      margin-bottom: 0;
+      padding-bottom: 0;
+      border-bottom: none;
+    }
+
+    .system-danger-zone .danger-zone-section h5 {
+      margin: 0 0 12px 0;
+      font-size: var(--font-md);
+      color: var(--text-light);
+      font-weight: 600;
+    }
+
+    .system-danger-zone .danger-zone-buttons {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .system-danger-zone .danger-zone-section .warning-text {
+      margin: 12px 0 0 0;
+    }
+
     /* Icon buttons in settings */
     .settings-modal .btn-icon {
       width: 28px;

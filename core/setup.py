@@ -14,6 +14,7 @@ Files stored:
 """
 import os
 import sys
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -354,3 +355,131 @@ def ensure_chat_defaults() -> bool:
     except Exception as e:
         logger.error(f"Failed to ensure chat_defaults: {e}")
         return False
+
+
+def reset_prompt_files() -> bool:
+    """
+    Force-copy all prompt files from core → user (overwrite).
+    Used for recovery when user prompts are corrupted or botched.
+    Returns True on success, False on error.
+    """
+    source_dir = Path(__file__).parent / "modules" / "system" / "prompts"
+    target_dir = Path(__file__).parent.parent / "user" / "prompts"
+    
+    files = [
+        "prompt_monoliths.json",
+        "prompt_pieces.json",
+        "prompt_spices.json"
+    ]
+    
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        for filename in files:
+            source = source_dir / filename
+            target = target_dir / filename
+            
+            if not source.exists():
+                logger.warning(f"Source template missing: {source}")
+                continue
+            
+            shutil.copy2(source, target)
+            logger.info(f"Reset {filename} to factory defaults")
+        
+        return True
+    except Exception as e:
+        logger.error(f"Failed to reset prompt files: {e}")
+        return False
+
+
+def reset_chat_defaults() -> bool:
+    """
+    Force-copy chat_defaults.json from core → user/settings (overwrite).
+    Returns True on success, False on error.
+    """
+    source = Path(__file__).parent / "modules" / "system" / "prompts" / "chat_defaults.json"
+    target_dir = Path(__file__).parent.parent / "user" / "settings"
+    target = target_dir / "chat_defaults.json"
+    
+    try:
+        if not source.exists():
+            logger.warning(f"Factory chat_defaults.json not found at {source}")
+            return False
+        
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        logger.info("Reset chat_defaults.json to factory defaults")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to reset chat_defaults: {e}")
+        return False
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """
+    Deep merge two dicts. Override wins on conflicts.
+    Used for merging core prompts into user prompts.
+    """
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def merge_prompt_files() -> dict:
+    """
+    Deep merge core prompts into user prompts.
+    Core values overwrite user values at same path.
+    New user keys are preserved.
+    Returns dict with merge results per file.
+    """
+    source_dir = Path(__file__).parent / "modules" / "system" / "prompts"
+    target_dir = Path(__file__).parent.parent / "user" / "prompts"
+    
+    files = [
+        "prompt_monoliths.json",
+        "prompt_pieces.json",
+        "prompt_spices.json"
+    ]
+    
+    results = {}
+    
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        for filename in files:
+            source = source_dir / filename
+            target = target_dir / filename
+            
+            if not source.exists():
+                results[filename] = {"status": "skipped", "reason": "source missing"}
+                continue
+            
+            # Load core defaults
+            with open(source, 'r', encoding='utf-8') as f:
+                core_data = json.load(f)
+            
+            # Load user data (or empty dict if missing)
+            if target.exists():
+                with open(target, 'r', encoding='utf-8') as f:
+                    user_data = json.load(f)
+            else:
+                user_data = {}
+            
+            # Deep merge: core overwrites, user additions preserved
+            merged = _deep_merge(user_data, core_data)
+            
+            # Save merged result
+            with open(target, 'w', encoding='utf-8') as f:
+                json.dump(merged, f, indent=2)
+            
+            results[filename] = {"status": "merged", "keys": len(merged)}
+            logger.info(f"Merged {filename} - {len(merged)} top-level keys")
+        
+        return results
+    except Exception as e:
+        logger.error(f"Failed to merge prompt files: {e}")
+        return {"error": str(e)}
