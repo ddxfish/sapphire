@@ -35,6 +35,8 @@ function initAppearance() {
             root.style.setProperty('--trim-light', 'transparent');
             root.style.setProperty('--trim-border', 'transparent');
             root.style.setProperty('--trim-50', 'transparent');
+            root.style.setProperty('--accordion-header-bg', 'var(--bg-tertiary)');
+            root.style.setProperty('--accordion-header-hover', 'var(--bg-hover)');
         } else {
             root.style.setProperty('--trim', trim);
             // Generate derived colors
@@ -45,6 +47,8 @@ function initAppearance() {
             root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
             root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
             root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+            root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
+            root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
         }
     }
     

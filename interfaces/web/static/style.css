@@ -645,9 +645,9 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 
 .toolbar button {
     padding: 4px 8px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--toolbar-btn-border, var(--border));
     border-radius: var(--radius-sm);
-    background: var(--bg-tertiary);
+    background: var(--toolbar-btn-bg, var(--bg-tertiary));
     color: var(--text);
     cursor: pointer;
     font-size: var(--font-base);

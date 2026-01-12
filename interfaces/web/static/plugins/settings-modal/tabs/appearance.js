@@ -376,12 +376,14 @@ export default {
     const root = document.documentElement;
     
     if (color === 'none') {
-      // Set all trim to transparent
+      // Set all trim to transparent/fallback
       root.style.setProperty('--trim', 'transparent');
       root.style.setProperty('--trim-glow', 'transparent');
       root.style.setProperty('--trim-light', 'transparent');
       root.style.setProperty('--trim-border', 'transparent');
       root.style.setProperty('--trim-50', 'transparent');
+      root.style.setProperty('--accordion-header-bg', 'var(--bg-tertiary)');
+      root.style.setProperty('--accordion-header-hover', 'var(--bg-hover)');
     } else {
       root.style.setProperty('--trim', color);
       // Generate related colors from the trim
@@ -390,6 +392,8 @@ export default {
       root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
       root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
       root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+      root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
+      root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
     }
     
     localStorage.setItem('sapphire-trim', color);

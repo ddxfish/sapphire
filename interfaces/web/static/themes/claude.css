@@ -8,17 +8,20 @@
     --trim-light: transparent;
     --trim-border: transparent;
     --trim-50: transparent;
+    /* Accordion falls back to standard colors */
+    --accordion-header-bg: var(--bg-tertiary);
+    --accordion-header-hover: var(--bg-hover);
     
     /* Slightly larger message text */
     --font-md: 15px;
     
     /* Colors - Core - warm charcoal greys */
     --bg: #212121;
-    --bg-secondary: #2f2f2f;
-    --bg-dark: #292929;
-    --bg-tertiary: #3d3d3d;
-    --bg-hover: #4a4a4a;
-    --bg-inset: rgba(0, 0, 0, 0.2);
+    --bg-secondary: #1a1a1a;
+    --bg-dark: #161616;
+    --bg-tertiary: #2a2a2a;
+    --bg-hover: #333333;
+    --bg-inset: rgba(0, 0, 0, 0.25);
     --text: #f5f5f5;
     --text-bright: #ffffff;
     --text-light: #e8e8e8;
@@ -26,9 +29,9 @@
     --text-tertiary: #a3a3a3;
     --text-muted: #737373;
     --text-dim: #525252;
-    --border: #404040;
-    --border-light: #525252;
-    --border-hover: #636363;
+    --border: #333333;
+    --border-light: #404040;
+    --border-hover: #4a4a4a;
     
     /* Overlays & Shadows */
     --overlay-bg: rgba(0, 0, 0, 0.75);
@@ -42,15 +45,15 @@
     --scrollbar-thumb: rgba(255, 255, 255, 0.15);
     --scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
     
-    /* Inputs */
-    --input-bg: #3d3d3d;
-    --input-border: #525252;
-    --input-focus-border: #737373;
-    --input-focus-bg: #4a4a4a;
+    /* Inputs - darker */
+    --input-bg: #1a1a1a;
+    --input-border: #333333;
+    --input-focus-border: #4a4a4a;
+    --input-focus-bg: #222222;
     --placeholder-color: #737373;
     
     /* Code/Mono */
-    --code-bg: rgba(0, 0, 0, 0.25);
+    --code-bg: rgba(0, 0, 0, 0.3);
     
     /* Focus ring */
     --focus-ring: rgba(156, 163, 175, 0.4);
@@ -63,8 +66,12 @@
     --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23737373" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
     
     /* Primary - muted grey */
-    --primary: #6b7280;
-    --primary-hover: #4b5563;
+    --primary: #4a4a4a;
+    --primary-hover: #5a5a5a;
+    
+    /* Toolbar buttons - transparent to float on chat bg */
+    --toolbar-btn-bg: transparent;
+    --toolbar-btn-border: transparent;
     
     /* Success */
     --success: #4ade80;
