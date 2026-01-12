@@ -104,11 +104,10 @@ export function injectStyles() {
 
     .tab-btn.active {
       background: var(--bg-secondary);
-      color: var(--trim, var(--text-bright));
+      color: var(--text-bright);
       border-color: var(--border-light);
       border-bottom: 1px solid var(--bg-secondary);
       margin-bottom: -1px;
-      box-shadow: inset 0 2px 0 var(--trim, var(--accent-blue));
     }
 
     .tab-icon { font-size: var(--font-lg); }
@@ -625,12 +624,13 @@ export function injectStyles() {
 
     /* Color overrides for settings modal buttons */
     .settings-modal-footer .btn-primary {
-      background: var(--accent-blue);
-      border-color: var(--accent-blue);
+      background: var(--trim, var(--accent-blue));
+      border-color: var(--trim, var(--accent-blue));
     }
 
     .settings-modal-footer .btn-primary:hover {
-      background: var(--accent-blue-hover);
+      background: var(--trim-50, var(--accent-blue-hover));
+      border-color: var(--trim-50, var(--accent-blue-hover));
     }
 
     .settings-modal-footer .btn-secondary {
@@ -916,8 +916,8 @@ export function injectStyles() {
     }
     
     .toggle-switch input:checked + .toggle-slider {
-      background-color: var(--accent-blue);
-      border-color: var(--accent-blue);
+      background-color: var(--trim, var(--accent-blue));
+      border-color: var(--trim, var(--accent-blue));
     }
     
     .toggle-switch input:checked + .toggle-slider:before {

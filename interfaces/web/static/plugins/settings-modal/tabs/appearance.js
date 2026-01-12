@@ -14,6 +14,7 @@ const FONT_OPTIONS = [
 ];
 
 const TRIM_PRESETS = [
+  { value: 'none', label: 'None', class: 'trim-none' },
   { value: '#4a9eff', label: 'Blue', class: 'trim-blue' },
   { value: '#00cccc', label: 'Cyan', class: 'trim-cyan' },
   { value: '#2ecc71', label: 'Green', class: 'trim-green' },
@@ -21,7 +22,6 @@ const TRIM_PRESETS = [
   { value: '#e74c3c', label: 'Red', class: 'trim-red' },
   { value: '#9b59b6', label: 'Purple', class: 'trim-purple' },
   { value: '#ff66b2', label: 'Pink', class: 'trim-pink' },
-  { value: '#888888', label: 'Gray', class: 'trim-gray' }
 ];
 
 export default {
@@ -53,6 +53,9 @@ export default {
     const currentTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
     const trimSwatches = TRIM_PRESETS.map(preset => {
       const active = preset.value === currentTrim ? 'active' : '';
+      if (preset.value === 'none') {
+        return `<button type="button" class="trim-swatch trim-none ${active}" data-trim="none" title="None">∅</button>`;
+      }
       return `<button type="button" class="trim-swatch ${active}" data-trim="${preset.value}" style="background: ${preset.value}" title="${preset.label}"></button>`;
     }).join('');
 
@@ -291,6 +294,19 @@ export default {
           border-color: var(--text-bright);
           box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text-bright);
         }
+        .trim-swatch.trim-none {
+          background: var(--bg-tertiary);
+          border: 1px dashed var(--border-light);
+          color: var(--text-muted);
+          font-size: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .trim-swatch.trim-none.active {
+          border-style: solid;
+          border-color: var(--text-bright);
+        }
         
         @media (max-width: 600px) {
           .appearance-container {
@@ -358,14 +374,23 @@ export default {
 
   handleTrimChange(color, contentEl) {
     const root = document.documentElement;
-    root.style.setProperty('--trim', color);
     
-    // Generate related colors from the trim
-    const { r, g, b } = this.hexToRgb(color);
-    root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
-    root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
-    root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
-    root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+    if (color === 'none') {
+      // Set all trim to transparent
+      root.style.setProperty('--trim', 'transparent');
+      root.style.setProperty('--trim-glow', 'transparent');
+      root.style.setProperty('--trim-light', 'transparent');
+      root.style.setProperty('--trim-border', 'transparent');
+      root.style.setProperty('--trim-50', 'transparent');
+    } else {
+      root.style.setProperty('--trim', color);
+      // Generate related colors from the trim
+      const { r, g, b } = this.hexToRgb(color);
+      root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+      root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
+      root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
+      root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+    }
     
     localStorage.setItem('sapphire-trim', color);
 

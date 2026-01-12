@@ -1,10 +1,16 @@
 /* Claude Grey Theme - /static/themes/claude.css */
-/* Matches Claude.ai's dark interface - sophisticated charcoal */
+/* Sophisticated charcoal aesthetic */
 
 [data-theme="claude"] {
-    /* Trim - subtle warm grey */
-    --trim: #9ca3af;
-    --trim-glow: rgba(156, 163, 175, 0.25);
+    /* No trim by default - clean look */
+    --trim: transparent;
+    --trim-glow: transparent;
+    --trim-light: transparent;
+    --trim-border: transparent;
+    --trim-50: transparent;
+    
+    /* Slightly larger message text */
+    --font-md: 15px;
     
     /* Colors - Core - warm charcoal greys */
     --bg: #212121;
@@ -56,7 +62,7 @@
     /* Select dropdown arrow */
     --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23737373" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
     
-    /* Primary - muted blue-grey */
+    /* Primary - muted grey */
     --primary: #6b7280;
     --primary-hover: #4b5563;
     
@@ -91,7 +97,7 @@
     /* Info */
     --info-bg: rgba(107, 114, 128, 0.9);
     
-    /* Accent colors - neutral with subtle warmth */
+    /* Accent colors - neutral */
     --accent-blue: #9ca3af;
     --accent-blue-hover: #6b7280;
     --accent-blue-light: rgba(156, 163, 175, 0.15);
@@ -100,9 +106,12 @@
     --accent-cyan-light: rgba(103, 232, 249, 0.15);
     --accent-orange: #fb923c;
     
-    /* Chat message backgrounds */
-    --user-bg: #3d3d3d;
-    --assistant-bg: #333333;
+    /* Chat message backgrounds - assistant invisible, user semi-transparent */
+    --user-bg: rgba(50, 50, 50, 0.8);
+    --assistant-bg: #212121;
+    /* Chat area matches assistant bg so AI bubbles disappear into background */
+    --chat-area-bg: #212121;
+    --chat-area-overlay: #212121;
     
     /* Plugin-specific accents */
     --plugin-spice-bg: rgba(248, 113, 113, 0.1);

@@ -177,6 +177,8 @@
        ========================================================================= */
     --user-bg: #2a3942;
     --assistant-bg: #364135;
+    --chat-area-bg: var(--border);
+    --chat-area-overlay: var(--overlay-bg);
     
     /* =========================================================================
        PLUGIN-SPECIFIC ACCENTS (themeable)
@@ -564,7 +566,7 @@
 }
 
 .settings-nav-item.active {
-    background: var(--trim-light);
+    background: var(--trim-light, var(--accent-blue-light));
     color: var(--text-bright);
     border-left: 3px solid var(--trim, var(--accent-blue));
 }

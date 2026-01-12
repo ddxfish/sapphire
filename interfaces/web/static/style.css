@@ -23,7 +23,6 @@ body {
     width: var(--sidebar-width);
     background: var(--bg-secondary);
     border-right: 1px solid var(--border);
-    border-right-color: var(--trim, var(--border));
     display: flex;
     flex-direction: column;
     position: fixed;
@@ -253,7 +252,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 #volume-slider:focus::-webkit-slider-thumb {
-    box-shadow: 0 0 0 3px var(--focus-ring);
+    box-shadow: 0 0 0 3px var(--trim-light, var(--focus-ring));
 }
 
 /* =============================================================================
@@ -262,14 +261,14 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 
 #chatbg {
     flex: 1;
-    background-color: var(--border);
+    background-color: var(--chat-area-bg, var(--border));
     overflow: hidden;
     position: relative;
     min-height: 0; /* Critical for flex overflow */
 }
 
 #chatbg-overlay {
-    background: var(--overlay-bg);
+    background: var(--chat-area-overlay, var(--overlay-bg));
     height: 100%;
     overflow-y: auto;
     overflow-x: hidden;
@@ -787,8 +786,8 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     align-items: center;
     gap: 6px;
     padding: 5px 12px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border);
+    background: var(--trim-light, var(--bg-tertiary));
+    border: 1px solid var(--trim-border, var(--border));
     border-radius: 999px;
     color: var(--text-secondary);
     font-size: var(--font-sm);
@@ -798,8 +797,8 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 .pill:hover {
-    background: var(--bg-hover);
-    border-color: var(--border-hover);
+    background: var(--trim-light, var(--bg-hover));
+    border-color: var(--trim, var(--border-hover));
     color: var(--text);
 }
 
@@ -892,11 +891,11 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 .pill-dropdown-item:hover {
-    background: var(--bg-hover);
+    background: var(--trim-light, var(--bg-hover));
 }
 
 .pill-dropdown-item.active {
-    background: var(--trim-light);
+    background: var(--trim-light, var(--accent-blue-light));
     color: var(--trim, var(--accent-blue));
     border-left: 2px solid var(--trim, var(--accent-blue));
 }
@@ -1027,7 +1026,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     transition: background var(--transition-fast);
 }
 
-.kebab-dropdown button:hover { background: var(--bg-hover); }
+.kebab-dropdown button:hover { background: var(--trim-light, var(--bg-hover)); }
 .kebab-dropdown button.danger { color: var(--error); }
 .kebab-dropdown button.danger:hover { background: var(--error-light); }
 .kebab-dropdown hr { margin: 4px 0; border: none; border-top: 1px solid var(--border); }

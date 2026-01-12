@@ -29,15 +29,23 @@ function initAppearance() {
     // Trim color
     const trim = localStorage.getItem('sapphire-trim');
     if (trim) {
-        root.style.setProperty('--trim', trim);
-        // Generate derived colors
-        const r = parseInt(trim.slice(1, 3), 16);
-        const g = parseInt(trim.slice(3, 5), 16);
-        const b = parseInt(trim.slice(5, 7), 16);
-        root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
-        root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
-        root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
-        root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+        if (trim === 'none') {
+            root.style.setProperty('--trim', 'transparent');
+            root.style.setProperty('--trim-glow', 'transparent');
+            root.style.setProperty('--trim-light', 'transparent');
+            root.style.setProperty('--trim-border', 'transparent');
+            root.style.setProperty('--trim-50', 'transparent');
+        } else {
+            root.style.setProperty('--trim', trim);
+            // Generate derived colors
+            const r = parseInt(trim.slice(1, 3), 16);
+            const g = parseInt(trim.slice(3, 5), 16);
+            const b = parseInt(trim.slice(5, 7), 16);
+            root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+            root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
+            root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
+            root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+        }
     }
     
     // Sidebar width
