@@ -104,10 +104,11 @@ export function injectStyles() {
 
     .tab-btn.active {
       background: var(--bg-secondary);
-      color: var(--text-bright);
+      color: var(--trim, var(--text-bright));
       border-color: var(--border-light);
       border-bottom: 1px solid var(--bg-secondary);
       margin-bottom: -1px;
+      box-shadow: inset 0 2px 0 var(--trim, var(--accent-blue));
     }
 
     .tab-icon { font-size: var(--font-lg); }
@@ -177,7 +178,7 @@ export function injectStyles() {
     }
 
     .setting-row.overridden {
-      border-left: 3px solid var(--accent-blue);
+      border-left: 3px solid var(--trim, var(--accent-blue));
     }
 
     .setting-row.modified {
@@ -588,12 +589,28 @@ export function injectStyles() {
 
     /* Icon buttons in settings */
     .settings-modal .btn-icon {
-      background: var(--bg-hover);
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: var(--font-lg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-normal);
     }
 
     .settings-modal .btn-icon:hover {
-      background: var(--border-hover);
-      border-color: var(--text-dim);
+      background: var(--bg-hover);
+      color: var(--text-bright);
+    }
+    
+    .settings-modal .btn-icon.reset-btn:hover {
+      color: var(--accent-blue);
     }
 
     /* Footer */

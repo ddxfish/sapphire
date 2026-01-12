@@ -40,7 +40,10 @@
        Use for sidebar accent, active states, decorative elements
        ========================================================================= */
     --trim: var(--accent-blue);
-    --trim-glow: rgba(74, 158, 255, 0.3);
+    --trim-glow: rgba(74, 158, 255, 0.35);
+    --trim-light: rgba(74, 158, 255, 0.15);
+    --trim-border: rgba(74, 158, 255, 0.4);
+    --trim-50: rgba(74, 158, 255, 0.5);
     
     /* =========================================================================
        COLORS - CORE (dark defaults)
@@ -561,7 +564,7 @@
 }
 
 .settings-nav-item.active {
-    background: var(--trim, var(--accent-blue-light));
+    background: var(--trim-light);
     color: var(--text-bright);
     border-left: 3px solid var(--trim, var(--accent-blue));
 }

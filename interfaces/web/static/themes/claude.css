@@ -1,0 +1,117 @@
+/* Claude Grey Theme - /static/themes/claude.css */
+/* Matches Claude.ai's dark interface - sophisticated charcoal */
+
+[data-theme="claude"] {
+    /* Trim - subtle warm grey */
+    --trim: #9ca3af;
+    --trim-glow: rgba(156, 163, 175, 0.25);
+    
+    /* Colors - Core - warm charcoal greys */
+    --bg: #212121;
+    --bg-secondary: #2f2f2f;
+    --bg-dark: #292929;
+    --bg-tertiary: #3d3d3d;
+    --bg-hover: #4a4a4a;
+    --bg-inset: rgba(0, 0, 0, 0.2);
+    --text: #f5f5f5;
+    --text-bright: #ffffff;
+    --text-light: #e8e8e8;
+    --text-secondary: #d4d4d4;
+    --text-tertiary: #a3a3a3;
+    --text-muted: #737373;
+    --text-dim: #525252;
+    --border: #404040;
+    --border-light: #525252;
+    --border-hover: #636363;
+    
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(0, 0, 0, 0.75);
+    --overlay-medium: rgba(0, 0, 0, 0.6);
+    --shadow-medium: rgba(0, 0, 0, 0.35);
+    --shadow-heavy: rgba(0, 0, 0, 0.5);
+    --highlight-subtle: rgba(255, 255, 255, 0.04);
+    
+    /* Scrollbar */
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
+    
+    /* Inputs */
+    --input-bg: #3d3d3d;
+    --input-border: #525252;
+    --input-focus-border: #737373;
+    --input-focus-bg: #4a4a4a;
+    --placeholder-color: #737373;
+    
+    /* Code/Mono */
+    --code-bg: rgba(0, 0, 0, 0.25);
+    
+    /* Focus ring */
+    --focus-ring: rgba(156, 163, 175, 0.4);
+    
+    /* Selection */
+    --selection-bg: rgba(156, 163, 175, 0.35);
+    --selection-text: #fff;
+    
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%23737373" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+    
+    /* Primary - muted blue-grey */
+    --primary: #6b7280;
+    --primary-hover: #4b5563;
+    
+    /* Success */
+    --success: #4ade80;
+    --success-text: #4ade80;
+    --success-bg: rgba(74, 222, 128, 0.9);
+    --success-light: rgba(74, 222, 128, 0.12);
+    --success-border: rgba(74, 222, 128, 0.3);
+    --success-border-hover: rgba(74, 222, 128, 0.5);
+    
+    /* Warning */
+    --warning: #fbbf24;
+    --warning-text: #fcd34d;
+    --warning-bg: rgba(251, 191, 36, 0.9);
+    --warning-light: rgba(251, 191, 36, 0.12);
+    --warning-border: rgba(251, 191, 36, 0.3);
+    
+    /* Error/Danger */
+    --error: #f87171;
+    --error-text: #fca5a5;
+    --error-bg: rgba(248, 113, 113, 0.9);
+    --error-light: rgba(248, 113, 113, 0.12);
+    --error-border: rgba(248, 113, 113, 0.3);
+    --error-border-hover: rgba(248, 113, 113, 0.5);
+    --error-subtle: rgba(248, 113, 113, 0.06);
+    --danger: #dc2626;
+    --danger-hover: #b91c1c;
+    --danger-red: #ef4444;
+    --danger-glow: rgba(220, 38, 38, 0.6);
+    
+    /* Info */
+    --info-bg: rgba(107, 114, 128, 0.9);
+    
+    /* Accent colors - neutral with subtle warmth */
+    --accent-blue: #9ca3af;
+    --accent-blue-hover: #6b7280;
+    --accent-blue-light: rgba(156, 163, 175, 0.15);
+    --accent-blue-border: rgba(156, 163, 175, 0.35);
+    --accent-cyan: #67e8f9;
+    --accent-cyan-light: rgba(103, 232, 249, 0.15);
+    --accent-orange: #fb923c;
+    
+    /* Chat message backgrounds */
+    --user-bg: #3d3d3d;
+    --assistant-bg: #333333;
+    
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(248, 113, 113, 0.1);
+    --plugin-spice-bg-hover: rgba(248, 113, 113, 0.18);
+    --plugin-ability-bg: rgba(103, 232, 249, 0.08);
+    --plugin-ability-bg-hover: rgba(103, 232, 249, 0.14);
+    --plugin-prompt-bg: rgba(156, 163, 175, 0.12);
+    --plugin-prompt-bg-focus: rgba(156, 163, 175, 0.22);
+    
+    /* Tool result accent */
+    --tool-result-bg: rgba(74, 222, 128, 0.08);
+}

@@ -357,10 +357,16 @@ export default {
   },
 
   handleTrimChange(color, contentEl) {
-    document.documentElement.style.setProperty('--trim', color);
-    // Generate matching glow color
-    const glowColor = this.hexToRgba(color, 0.3);
-    document.documentElement.style.setProperty('--trim-glow', glowColor);
+    const root = document.documentElement;
+    root.style.setProperty('--trim', color);
+    
+    // Generate related colors from the trim
+    const { r, g, b } = this.hexToRgb(color);
+    root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+    root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
+    root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
+    root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+    
     localStorage.setItem('sapphire-trim', color);
 
     // Update active state in UI
@@ -370,10 +376,15 @@ export default {
     if (active) active.classList.add('active');
   },
 
-  hexToRgba(hex, alpha) {
+  hexToRgb(hex) {
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
     const b = parseInt(hex.slice(5, 7), 16);
+    return { r, g, b };
+  },
+
+  hexToRgba(hex, alpha) {
+    const { r, g, b } = this.hexToRgb(hex);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   },
 

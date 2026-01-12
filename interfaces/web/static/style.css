@@ -29,7 +29,53 @@ body {
     position: fixed;
     inset: 0 auto 0 0;
     z-index: 999;
-    transition: transform var(--transition-slow), width var(--transition-slow);
+    transition: transform var(--transition-slow);
+}
+
+/* Sidebar resize handle */
+.sidebar-resize-handle {
+    position: absolute;
+    right: -4px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: col-resize;
+    z-index: 1000;
+    background: transparent;
+    transition: background var(--transition-fast);
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.dragging {
+    background: var(--trim-50, rgba(74, 158, 255, 0.5));
+}
+
+.sidebar-resize-handle::after {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 40px;
+    background: var(--border);
+    border-radius: 1px;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.sidebar-resize-handle:hover::after {
+    opacity: 1;
+    background: var(--trim, var(--accent-blue));
+}
+
+body.sidebar-resizing {
+    cursor: col-resize;
+    user-select: none;
+}
+
+body.sidebar-resizing * {
+    cursor: col-resize !important;
 }
 
 
@@ -164,7 +210,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: linear-gradient(to right, var(--accent-blue) 0%, var(--accent-blue) 100%, var(--bg-tertiary) 100%, var(--bg-tertiary) 100%);
+    background: linear-gradient(to right, var(--trim, var(--accent-blue)) 0%, var(--trim, var(--accent-blue)) 100%, var(--bg-tertiary) 100%, var(--bg-tertiary) 100%);
     border-radius: var(--radius-sm);
     outline: none;
     cursor: pointer;
@@ -176,14 +222,14 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--accent-blue);
+    background: var(--trim, var(--accent-blue));
     cursor: pointer;
     border: 2px solid var(--bg-secondary);
     transition: background var(--transition-normal), transform var(--transition-normal);
 }
 
 #volume-slider::-webkit-slider-thumb:hover {
-    background: var(--accent-blue-hover);
+    background: var(--trim-50, var(--accent-blue-hover));
     transform: scale(1.1);
 }
 
@@ -191,7 +237,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--accent-blue);
+    background: var(--trim, var(--accent-blue));
     cursor: pointer;
     border: 2px solid var(--bg-secondary);
 }
@@ -850,8 +896,9 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 .pill-dropdown-item.active {
-    background: var(--accent-blue-light);
-    color: var(--accent-blue);
+    background: var(--trim-light);
+    color: var(--trim, var(--accent-blue));
+    border-left: 2px solid var(--trim, var(--accent-blue));
 }
 
 /* =============================================================================
