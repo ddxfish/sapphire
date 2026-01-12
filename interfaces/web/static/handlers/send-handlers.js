@@ -100,6 +100,17 @@ export async function handleSend() {
             },
             (id, name, result, error) => {
                 ui.endTool(id, name, result, error);
+            },
+            // Stream started handler
+            () => {
+                ui.updateStatus('Processing...');
+            },
+            // Iteration start handler (after tool calls)
+            (iteration) => {
+                if (iteration > 1) {
+                    ui.showStatus();
+                    ui.updateStatus('Generating...');
+                }
             }
         );
         

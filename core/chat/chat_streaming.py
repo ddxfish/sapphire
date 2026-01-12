@@ -31,13 +31,18 @@ class StreamingChat:
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
+        - {"type": "stream_started"} immediately when processing begins
         - {"type": "content", "text": "..."} for text content
         - {"type": "tool_start", "id": "...", "name": "...", "args": {...}} when tool begins
         - {"type": "tool_end", "id": "...", "result": "...", "error": bool} when tool completes
+        - {"type": "iteration_start", "iteration": N} before each LLM call
         - {"type": "reload"} for page reload signal
         - str for legacy compatibility (module responses, prefills)
         """
         logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}")
+        
+        # Immediate feedback that backend received the request
+        yield {"type": "stream_started"}
         
         try:
             self.main_chat.refresh_spice_if_needed()
@@ -104,6 +109,9 @@ class StreamingChat:
                     break
                 
                 logger.info(f"--- Streaming Iteration {iteration + 1}/{config.MAX_TOOL_ITERATIONS} ---")
+                
+                # Signal UI that we're starting a new LLM call (useful after tool completion)
+                yield {"type": "iteration_start", "iteration": iteration + 1}
                 
                 current_response = ""
                 tool_calls = []

@@ -194,7 +194,13 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                         if isinstance(event, dict):
                             event_type = event.get("type")
                             
-                            if event_type == "content":
+                            if event_type == "stream_started":
+                                yield f"data: {json.dumps({'type': 'stream_started'})}\n\n"
+                            
+                            elif event_type == "iteration_start":
+                                yield f"data: {json.dumps({'type': 'iteration_start', 'iteration': event.get('iteration', 1)})}\n\n"
+                            
+                            elif event_type == "content":
                                 yield f"data: {json.dumps({'type': 'content', 'text': event.get('text', '')})}\n\n"
                             
                             elif event_type == "tool_start":

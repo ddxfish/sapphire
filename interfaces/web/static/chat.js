@@ -150,6 +150,17 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
             },
             (id, name, result, error) => {
                 ui.endTool(id, name, result, error);
+            },
+            // Stream started handler
+            () => {
+                ui.updateStatus('Processing...');
+            },
+            // Iteration start handler (after tool calls)
+            (iteration) => {
+                if (iteration > 1) {
+                    ui.showStatus();
+                    ui.updateStatus('Generating...');
+                }
             }
         );
         
@@ -290,6 +301,17 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
             },
             (id, name, result, error) => {
                 ui.endTool(id, name, result, error);
+            },
+            // Stream started handler
+            () => {
+                ui.updateStatus('Processing...');
+            },
+            // Iteration start handler (after tool calls)
+            (iteration) => {
+                if (iteration > 1) {
+                    ui.showStatus();
+                    ui.updateStatus('Generating...');
+                }
             }
         );
         
@@ -490,6 +512,17 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             },
             (id, name, result, error) => {
                 ui.endTool(id, name, result, error);
+            },
+            // Stream started handler
+            () => {
+                ui.updateStatus('Processing...');
+            },
+            // Iteration start handler (after tool calls)
+            (iteration) => {
+                if (iteration > 1) {
+                    ui.showStatus();
+                    ui.updateStatus('Generating...');
+                }
             }
         );
         

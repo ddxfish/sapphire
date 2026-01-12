@@ -53,7 +53,17 @@ export const importChat = (messages) => fetchWithTimeout('/api/history/import', 
 
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
-    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk } = handlers;
+    const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
+    
+    if (data.type === 'stream_started') {
+        if (onStreamStarted) onStreamStarted();
+        return { gotContent: true };
+    }
+    
+    if (data.type === 'iteration_start') {
+        if (onIterationStart) onIterationStart(data.iteration);
+        return { gotContent: true };
+    }
     
     if (data.type === 'content') {
         if (onChunk) onChunk(data.text || '');
@@ -101,7 +111,7 @@ const processSSEData = (data, handlers) => {
     return {};
 };
 
-export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null) => {
+export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) => {
     let reader = null;
     try {
         const res = await fetch('/api/chat/stream', {
@@ -128,6 +138,8 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
             onChunk,
             onToolStart,
             onToolEnd,
+            onStreamStarted,
+            onIterationStart,
             onReload: () => setTimeout(() => window.location.reload(), 500),
             onDone: (ephemeral) => onComplete(ephemeral),
             onLegacyChunk: onChunk
@@ -166,7 +178,7 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
     }
 };
 
-export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null) => {
+export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) => {
     let reader = null;
     try {
         const body = prefill ? { text, prefill } : { text };
@@ -194,6 +206,8 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
             onChunk,
             onToolStart,
             onToolEnd,
+            onStreamStarted,
+            onIterationStart,
             onReload: () => setTimeout(() => window.location.reload(), 500),
             onDone: (ephemeral) => onComplete(ephemeral),
             onLegacyChunk: onChunk
