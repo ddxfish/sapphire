@@ -35,10 +35,11 @@ export async function handleChatChange() {
         setHistLen(len);
         await updateScene();
         
-        // Update send button based on this chat's primary LLM
+        // Update send button based on this chat's LLM settings
         try {
             const response = await api.getChatSettings(selectedChat);
-            updateSendButtonLLM(response?.settings?.llm_primary || 'auto');
+            const settings = response?.settings || {};
+            updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
         } catch (e) {
             updateSendButtonLLM('auto');
         }

@@ -93,13 +93,20 @@ class StreamingChat:
                 yield {"type": "content", "text": force_prefill}
             
             active_tools = self.main_chat.function_manager.enabled_tools
-            provider_key, provider = self.main_chat._select_provider()
+            provider_key, provider, model_override = self.main_chat._select_provider()
+            
+            # Determine effective model (per-chat override or provider default)
+            effective_model = model_override if model_override else provider.model
             
             gen_params = get_generation_params(
                 provider_key,
-                provider.model,
+                effective_model,
                 getattr(config, 'LLM_PROVIDERS', {})
             )
+            
+            # Pass model override to provider if set
+            if model_override:
+                gen_params['model'] = model_override
 
             tool_call_count = 0
 
@@ -118,7 +125,7 @@ class StreamingChat:
                 final_response = None
                 
                 try:
-                    logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (model={provider.model})")
+                    logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
                     self.current_stream = provider.chat_completion_stream(
                         messages,
                         tools=active_tools if active_tools else None,

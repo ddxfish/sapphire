@@ -6,6 +6,7 @@ import { closeAllKebabs } from './chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './scene.js';
 
 let llmProviders = [];
+let llmMetadata = {};
 
 export async function openSettingsModal() {
     closeAllKebabs();
@@ -56,13 +57,14 @@ export async function openSettingsModal() {
             console.warn('Could not load abilities list:', e);
         }
         
-        // Load LLM providers list
+        // Load LLM providers list with metadata
         try {
             const llmResp = await fetch('/api/llm/providers');
             if (llmResp.ok) {
                 const llmData = await llmResp.json();
                 llmProviders = llmData.providers || [];
-                populateLlmDropdowns(settings);
+                llmMetadata = llmData.metadata || {};
+                populateLlmDropdown(settings);
             }
         } catch (e) {
             console.warn('Could not load LLM providers:', e);
@@ -93,7 +95,7 @@ export async function openSettingsModal() {
         settingsModal.style.display = 'flex';
         requestAnimationFrame(() => {
             settingsModal.classList.add('active');
-            initModalSliders(); // Initialize slider fills
+            initModalSliders();
         });
         
     } catch (e) {
@@ -102,14 +104,12 @@ export async function openSettingsModal() {
     }
 }
 
-function populateLlmDropdowns(settings) {
+function populateLlmDropdown(settings) {
     const primarySelect = document.getElementById('setting-llm-primary');
-    const fallbackSelect = document.getElementById('setting-llm-fallback');
+    if (!primarySelect) return;
     
-    if (!primarySelect || !fallbackSelect) return;
-    
-    // Build options - Auto and None plus enabled providers
-    const baseOptions = '<option value="auto">Auto (follow fallback order)</option>' +
+    // Build primary options - Auto, None, plus enabled providers
+    const baseOptions = '<option value="auto">Auto</option>' +
         '<option value="none">None (disabled)</option>';
     
     const providerOptions = llmProviders
@@ -118,11 +118,82 @@ function populateLlmDropdowns(settings) {
         .join('');
     
     primarySelect.innerHTML = baseOptions + providerOptions;
-    fallbackSelect.innerHTML = baseOptions + providerOptions;
-    
-    // Set current values
     primarySelect.value = settings.llm_primary || 'auto';
-    fallbackSelect.value = settings.llm_fallback || 'auto';
+    
+    // Attach change handler for model selector
+    primarySelect.onchange = () => updateModelSelector(primarySelect.value, '');
+    
+    // Initialize model selector with current settings
+    updateModelSelector(settings.llm_primary || 'auto', settings.llm_model || '');
+}
+
+function updateModelSelector(providerKey, currentModel) {
+    const modelSelectGroup = document.getElementById('model-select-group');
+    const modelCustomGroup = document.getElementById('model-custom-group');
+    const modelSelect = document.getElementById('setting-llm-model');
+    const modelCustom = document.getElementById('setting-llm-model-custom');
+    
+    if (!modelSelectGroup || !modelSelect) return;
+    
+    // Hide both by default
+    modelSelectGroup.style.display = 'none';
+    modelCustomGroup.style.display = 'none';
+    
+    if (providerKey === 'auto' || providerKey === 'none' || !providerKey) {
+        return;
+    }
+    
+    const meta = llmMetadata[providerKey];
+    const providerConfig = llmProviders.find(p => p.key === providerKey);
+    
+    if (meta?.model_options && Object.keys(meta.model_options).length > 0) {
+        // Provider has predefined model options - show dropdown
+        const defaultModel = providerConfig?.model || '';
+        const defaultLabel = defaultModel ? 
+            `Provider default (${meta.model_options[defaultModel] || defaultModel})` : 
+            'Provider default';
+        
+        modelSelect.innerHTML = `<option value="">${defaultLabel}</option>` +
+            Object.entries(meta.model_options)
+                .map(([k, v]) => `<option value="${k}"${k === currentModel ? ' selected' : ''}>${v}</option>`)
+                .join('');
+        
+        if (currentModel && !meta.model_options[currentModel]) {
+            // Custom model not in list - add it
+            modelSelect.innerHTML += `<option value="${currentModel}" selected>${currentModel}</option>`;
+        }
+        
+        modelSelectGroup.style.display = '';
+    } else if (providerKey === 'other') {
+        // "Other" provider - free-form model input
+        modelCustom.value = currentModel || '';
+        modelCustomGroup.style.display = '';
+    }
+    // LM Studio (model_options: null, not 'other') - no model selector needed
+}
+
+function getSelectedModel() {
+    const primarySelect = document.getElementById('setting-llm-primary');
+    const modelSelect = document.getElementById('setting-llm-model');
+    const modelCustom = document.getElementById('setting-llm-model-custom');
+    const modelSelectGroup = document.getElementById('model-select-group');
+    const modelCustomGroup = document.getElementById('model-custom-group');
+    
+    const providerKey = primarySelect?.value || 'auto';
+    
+    if (providerKey === 'auto' || providerKey === 'none') {
+        return '';
+    }
+    
+    // Check which input is visible
+    if (modelSelectGroup?.style.display !== 'none' && modelSelect) {
+        return modelSelect.value || '';
+    }
+    if (modelCustomGroup?.style.display !== 'none' && modelCustom) {
+        return modelCustom.value.trim() || '';
+    }
+    
+    return '';
 }
 
 export async function saveSettings() {
@@ -143,14 +214,14 @@ export async function saveSettings() {
             inject_datetime: document.getElementById('setting-datetime').checked,
             custom_context: document.getElementById('setting-custom-context').value,
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
-            llm_fallback: document.getElementById('setting-llm-fallback')?.value || 'auto'
+            llm_model: getSelectedModel()
         };
         
         await api.updateChatSettings(chatName, settings);
         closeSettingsModal();
         ui.showToast('Settings saved', 'success');
         await updateScene();
-        updateSendButtonLLM(settings.llm_primary);
+        updateSendButtonLLM(settings.llm_primary, settings.llm_model);
         
     } catch (e) {
         console.error('Failed to save settings:', e);
@@ -167,7 +238,6 @@ export function closeSettingsModal() {
 }
 
 export async function saveAsDefaults() {
-    // Confirm before overwriting defaults
     if (!confirm('Save these settings as defaults for all new chats?')) {
         return;
     }
@@ -184,7 +254,7 @@ export async function saveAsDefaults() {
             inject_datetime: document.getElementById('setting-datetime').checked,
             custom_context: document.getElementById('setting-custom-context').value,
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
-            llm_fallback: document.getElementById('setting-llm-fallback')?.value || 'auto'
+            llm_model: getSelectedModel()
         };
         
         const res = await fetch('/api/settings/chat-defaults', {
@@ -214,29 +284,24 @@ export function handleSpeedInput(e) {
     updateRangeSliderFill(e.target);
 }
 
-// Update range slider fill color based on value
 function updateRangeSliderFill(slider) {
     const min = parseFloat(slider.min) || 0;
     const max = parseFloat(slider.max) || 100;
     const val = parseFloat(slider.value);
     const percent = ((val - min) / (max - min)) * 100;
     
-    // Get computed colors - resolve actual color values
     const styles = getComputedStyle(document.documentElement);
     let fillColor = styles.getPropertyValue('--trim').trim();
     
-    // If trim is transparent/empty/unset, use accent-blue
     if (!fillColor || fillColor === 'transparent' || fillColor.startsWith('var(')) {
         fillColor = styles.getPropertyValue('--accent-blue').trim() || '#4a9eff';
     }
     
-    // Resolve bg-tertiary to actual color
     let bgColor = styles.getPropertyValue('--bg-tertiary').trim() || '#2a2a2a';
     
     slider.style.background = `linear-gradient(to right, ${fillColor} 0%, ${fillColor} ${percent}%, ${bgColor} ${percent}%, ${bgColor} 100%)`;
 }
 
-// Initialize all range sliders in modal with fill
 export function initModalSliders() {
     const pitchSlider = document.getElementById('setting-pitch');
     const speedSlider = document.getElementById('setting-speed');

@@ -9,7 +9,7 @@ export function getHasCloudTools() {
 }
 
 // Call this when chat's primary LLM is known (from chat-manager, chat-settings)
-export function updateSendButtonLLM(primary) {
+export function updateSendButtonLLM(primary, model = '') {
     const sendBtn = document.getElementById('send-btn');
     if (!sendBtn) return;
     
@@ -19,16 +19,19 @@ export function updateSendButtonLLM(primary) {
     // Cloud providers
     const cloudProviders = ['claude', 'openai', 'fireworks', 'other'];
     
+    // Build title suffix for model
+    const modelSuffix = model ? ` (${model.split('/').pop()})` : '';
+    
     if (primary === 'auto') {
         sendBtn.classList.add('llm-auto');
         sendBtn.title = 'Send (auto LLM selection)';
     } else if (cloudProviders.includes(primary)) {
         sendBtn.classList.add('llm-cloud');
-        sendBtn.title = `Send (${primary})`;
+        sendBtn.title = `Send: ${primary}${modelSuffix}`;
     } else {
         // lmstudio, none, or unknown = local/grey
         sendBtn.classList.add('llm-local');
-        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send (${primary || 'local'})`;
+        sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send: ${primary || 'local'}${modelSuffix}`;
     }
 }
 

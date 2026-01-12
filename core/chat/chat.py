@@ -185,14 +185,21 @@ class LLMChat:
             self.session_manager.add_user_message(user_input)
             
             active_tools = self.function_manager.enabled_tools
-            provider_key, provider = self._select_provider()
+            provider_key, provider, model_override = self._select_provider()
+            
+            # Determine effective model (per-chat override or provider default)
+            effective_model = model_override if model_override else provider.model
             
             # Get generation params for this provider/model
             gen_params = get_generation_params(
                 provider_key, 
-                provider.model, 
+                effective_model, 
                 getattr(config, 'LLM_PROVIDERS', {})
             )
+            
+            # Pass model override to provider if set
+            if model_override:
+                gen_params['model'] = model_override
 
             tool_call_count = 0
             last_tool_name = None
@@ -366,7 +373,7 @@ class LLMChat:
             return error_text
 
     def _select_provider(self):
-        """Select LLM provider using per-chat settings or fallback order. Returns (provider_key, provider) tuple or raises."""
+        """Select LLM provider using per-chat settings or fallback order. Returns (provider_key, provider, model_override) tuple or raises."""
         
         if self._use_new_config:
             providers_config = config.LLM_PROVIDERS
@@ -375,39 +382,29 @@ class LLMChat:
             # Check per-chat LLM settings
             chat_settings = self.session_manager.get_chat_settings()
             chat_primary = chat_settings.get('llm_primary', 'auto')
-            chat_fallback = chat_settings.get('llm_fallback', 'auto')
+            chat_model = chat_settings.get('llm_model', '')  # Per-chat model override
             
             # Handle "none" - explicitly disabled
             if chat_primary == 'none':
                 raise ConnectionError("LLM disabled for this chat (llm_primary=none)")
             
-            # If chat has specific provider set (not "auto"), try that first
+            # If chat has specific provider set (not "auto"), use ONLY that provider - no fallback
             if chat_primary and chat_primary != 'auto':
                 provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT)
-                if provider:
-                    try:
-                        if provider.health_check():
-                            logger.info(f"Using chat-specific primary '{chat_primary}' [{provider.provider_name}]")
-                            return (chat_primary, provider)
-                    except Exception as e:
-                        logger.warning(f"Chat primary '{chat_primary}' health check failed: {e}")
+                if not provider:
+                    raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
                 
-                # Try chat-specific fallback if primary failed (unless fallback is "none")
-                if chat_fallback and chat_fallback not in ('auto', 'none'):
-                    provider = get_provider_by_key(chat_fallback, providers_config, config.LLM_REQUEST_TIMEOUT)
-                    if provider:
-                        try:
-                            if provider.health_check():
-                                logger.info(f"Using chat-specific fallback '{chat_fallback}' [{provider.provider_name}]")
-                                return (chat_fallback, provider)
-                        except Exception as e:
-                            logger.warning(f"Chat fallback '{chat_fallback}' health check failed: {e}")
+                try:
+                    if provider.health_check():
+                        logger.info(f"Using chat-specific provider '{chat_primary}'" + 
+                                   (f" with model '{chat_model}'" if chat_model else ""))
+                        return (chat_primary, provider, chat_model)
+                except Exception as e:
+                    pass  # Fall through to error
                 
-                # If chat_fallback is "none", don't try global fallback
-                if chat_fallback == 'none':
-                    raise ConnectionError(f"Chat primary '{chat_primary}' failed and fallback disabled")
+                raise ConnectionError(f"Provider '{chat_primary}' failed health check - no fallback for specific provider selection")
             
-            # Fall through to global fallback order (auto mode)
+            # Auto mode - use global fallback order
             result = get_first_available_provider(
                 providers_config,
                 fallback_order,
@@ -416,8 +413,8 @@ class LLMChat:
             
             if result:
                 provider_key, provider = result
-                logger.info(f"Using provider '{provider_key}' [{provider.provider_name}]: {provider.model}")
-                return (provider_key, provider)
+                logger.info(f"Auto mode: using '{provider_key}' ({provider.model})")
+                return (provider_key, provider, '')  # No model override in auto mode
             
             raise ConnectionError("No LLM providers available")
         
@@ -427,7 +424,7 @@ class LLMChat:
                 try:
                     if self.provider_primary.health_check():
                         logger.info(f"Using primary LLM [{self.provider_primary.provider_name}]: {self.provider_primary.model}")
-                        return ('legacy_primary', self.provider_primary)
+                        return ('legacy_primary', self.provider_primary, '')
                 except Exception as e:
                     logger.warning(f"Primary LLM health check failed: {e}")
             
@@ -435,7 +432,7 @@ class LLMChat:
                 try:
                     if self.provider_fallback.health_check():
                         logger.info(f"Using fallback LLM [{self.provider_fallback.provider_name}]: {self.provider_fallback.model}")
-                        return ('legacy_fallback', self.provider_fallback)
+                        return ('legacy_fallback', self.provider_fallback, '')
                 except Exception as e:
                     logger.error(f"Fallback LLM health check failed: {e}")
             

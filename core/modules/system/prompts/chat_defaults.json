@@ -8,5 +8,7 @@
   "spice_enabled": true,
   "spice_turns": 3,
   "inject_datetime": false,
-  "custom_context": ""
+  "custom_context": "",
+  "llm_primary": "auto",
+  "llm_model": ""
 }

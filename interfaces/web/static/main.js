@@ -137,7 +137,8 @@ async function init() {
             const { chatSelect } = getElements();
             if (chatSelect?.value) {
                 const response = await api.getChatSettings(chatSelect.value);
-                updateSendButtonLLM(response?.settings?.llm_primary || 'auto');
+                const settings = response?.settings || {};
+                updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
             }
         } catch (e) {
             updateSendButtonLLM('auto');

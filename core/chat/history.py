@@ -22,8 +22,8 @@ SYSTEM_DEFAULTS = {
     "spice_turns": 3,
     "inject_datetime": False,
     "custom_context": "",
-    "llm_primary": "auto",      # "auto" or provider key like "claude"
-    "llm_fallback": "auto"      # "auto" or provider key
+    "llm_primary": "auto",      # "auto", "none", or provider key like "claude"
+    "llm_model": ""             # Empty = use provider default, or specific model override
 }
 
 def get_user_defaults() -> Dict[str, Any]:

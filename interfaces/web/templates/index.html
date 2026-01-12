@@ -201,17 +201,20 @@
                     </div>
                     
                     <div class="form-group">
-                        <label for="setting-llm-primary">Primary LLM:</label>
+                        <label for="setting-llm-primary">LLM:</label>
                         <select id="setting-llm-primary" class="form-control">
-                            <option value="auto">Auto (follow fallback order)</option>
+                            <option value="auto">Auto</option>
                         </select>
                     </div>
                     
-                    <div class="form-group">
-                        <label for="setting-llm-fallback">Fallback LLM:</label>
-                        <select id="setting-llm-fallback" class="form-control">
-                            <option value="auto">Auto (follow fallback order)</option>
-                        </select>
+                    <div class="form-group" id="model-select-group" style="display: none;">
+                        <label for="setting-llm-model">Model:</label>
+                        <select id="setting-llm-model" class="form-control"></select>
+                    </div>
+                    
+                    <div class="form-group" id="model-custom-group" style="display: none;">
+                        <label for="setting-llm-model-custom">Model:</label>
+                        <input type="text" id="setting-llm-model-custom" class="form-control" placeholder="Model name">
                     </div>
                 </div>
             </div>
