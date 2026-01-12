@@ -93,6 +93,7 @@ export async function openSettingsModal() {
         settingsModal.style.display = 'flex';
         requestAnimationFrame(() => {
             settingsModal.classList.add('active');
+            initModalSliders(); // Initialize slider fills
         });
         
     } catch (e) {
@@ -205,10 +206,42 @@ export async function saveAsDefaults() {
 
 export function handlePitchInput(e) {
     document.getElementById('pitch-value').textContent = e.target.value;
+    updateRangeSliderFill(e.target);
 }
 
 export function handleSpeedInput(e) {
     document.getElementById('speed-value').textContent = e.target.value;
+    updateRangeSliderFill(e.target);
+}
+
+// Update range slider fill color based on value
+function updateRangeSliderFill(slider) {
+    const min = parseFloat(slider.min) || 0;
+    const max = parseFloat(slider.max) || 100;
+    const val = parseFloat(slider.value);
+    const percent = ((val - min) / (max - min)) * 100;
+    
+    // Get computed colors - resolve actual color values
+    const styles = getComputedStyle(document.documentElement);
+    let fillColor = styles.getPropertyValue('--trim').trim();
+    
+    // If trim is transparent/empty/unset, use accent-blue
+    if (!fillColor || fillColor === 'transparent' || fillColor.startsWith('var(')) {
+        fillColor = styles.getPropertyValue('--accent-blue').trim() || '#4a9eff';
+    }
+    
+    // Resolve bg-tertiary to actual color
+    let bgColor = styles.getPropertyValue('--bg-tertiary').trim() || '#2a2a2a';
+    
+    slider.style.background = `linear-gradient(to right, ${fillColor} 0%, ${fillColor} ${percent}%, ${bgColor} ${percent}%, ${bgColor} 100%)`;
+}
+
+// Initialize all range sliders in modal with fill
+export function initModalSliders() {
+    const pitchSlider = document.getElementById('setting-pitch');
+    const speedSlider = document.getElementById('setting-speed');
+    if (pitchSlider) updateRangeSliderFill(pitchSlider);
+    if (speedSlider) updateRangeSliderFill(speedSlider);
 }
 
 export function handleModalBackdropClick(e) {

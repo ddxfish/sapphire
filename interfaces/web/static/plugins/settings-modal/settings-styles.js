@@ -103,11 +103,16 @@ export function injectStyles() {
     }
 
     .tab-btn.active {
-      background: var(--bg-secondary);
+      background: var(--trim-light, var(--accent-blue-light));
       color: var(--text-bright);
-      border-color: var(--border-light);
-      border-bottom: 1px solid var(--bg-secondary);
+      border-color: var(--trim-border, var(--border-light));
+      border-bottom: 1px solid var(--trim-light, var(--accent-blue-light));
       margin-bottom: -1px;
+      box-shadow: none;
+    }
+    
+    .tab-btn.active:focus {
+      box-shadow: none;
     }
 
     .tab-icon { font-size: var(--font-lg); }

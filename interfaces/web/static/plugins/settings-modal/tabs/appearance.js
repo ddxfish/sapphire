@@ -14,7 +14,6 @@ const FONT_OPTIONS = [
 ];
 
 const TRIM_PRESETS = [
-  { value: 'none', label: 'None', class: 'trim-none' },
   { value: '#4a9eff', label: 'Blue', class: 'trim-blue' },
   { value: '#00cccc', label: 'Cyan', class: 'trim-cyan' },
   { value: '#2ecc71', label: 'Green', class: 'trim-green' },
@@ -53,9 +52,6 @@ export default {
     const currentTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
     const trimSwatches = TRIM_PRESETS.map(preset => {
       const active = preset.value === currentTrim ? 'active' : '';
-      if (preset.value === 'none') {
-        return `<button type="button" class="trim-swatch trim-none ${active}" data-trim="none" title="None">∅</button>`;
-      }
       return `<button type="button" class="trim-swatch ${active}" data-trim="${preset.value}" style="background: ${preset.value}" title="${preset.label}"></button>`;
     }).join('');
 
@@ -99,6 +95,19 @@ export default {
             </div>
             <div class="setting-input">
               <div class="trim-swatches">${trimSwatches}</div>
+            </div>
+          </div>
+          
+          <div class="setting-row">
+            <div class="setting-label">
+              <label for="send-btn-trim">Send Button</label>
+              <div class="help-text-short">Color behavior</div>
+            </div>
+            <div class="setting-input">
+              <label class="checkbox-container">
+                <input type="checkbox" id="send-btn-trim" ${localStorage.getItem('sapphire-send-btn-trim') === 'true' ? 'checked' : ''}>
+                <span class="checkbox-label">Use trim color (otherwise shows cloud/local indicator)</span>
+              </label>
             </div>
           </div>
         </div>
@@ -294,19 +303,6 @@ export default {
           border-color: var(--text-bright);
           box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text-bright);
         }
-        .trim-swatch.trim-none {
-          background: var(--bg-tertiary);
-          border: 1px dashed var(--border-light);
-          color: var(--text-muted);
-          font-size: 14px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-        .trim-swatch.trim-none.active {
-          border-style: solid;
-          border-color: var(--text-bright);
-        }
         
         @media (max-width: 600px) {
           .appearance-container {
@@ -343,6 +339,11 @@ export default {
         this.handleTrimChange(color, contentEl);
       });
     });
+    
+    const sendBtnTrim = contentEl.querySelector('#send-btn-trim');
+    if (sendBtnTrim) {
+      sendBtnTrim.addEventListener('change', (e) => this.handleSendBtnTrimChange(e.target.checked));
+    }
   },
 
   handleThemeChange(modal, themeName) {
@@ -375,27 +376,15 @@ export default {
   handleTrimChange(color, contentEl) {
     const root = document.documentElement;
     
-    if (color === 'none') {
-      // Set all trim to transparent/fallback
-      root.style.setProperty('--trim', 'transparent');
-      root.style.setProperty('--trim-glow', 'transparent');
-      root.style.setProperty('--trim-light', 'transparent');
-      root.style.setProperty('--trim-border', 'transparent');
-      root.style.setProperty('--trim-50', 'transparent');
-      root.style.setProperty('--accordion-header-bg', 'var(--bg-tertiary)');
-      root.style.setProperty('--accordion-header-hover', 'var(--bg-hover)');
-    } else {
-      root.style.setProperty('--trim', color);
-      // Generate related colors from the trim
-      const { r, g, b } = this.hexToRgb(color);
-      root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
-      root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
-      root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
-      root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
-      root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-      root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
-    }
-    
+    root.style.setProperty('--trim', color);
+    // Generate related colors from the trim
+    const { r, g, b } = this.hexToRgb(color);
+    root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+    root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
+    root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
+    root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+    root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
+    root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
     localStorage.setItem('sapphire-trim', color);
 
     // Update active state in UI
@@ -403,6 +392,25 @@ export default {
     swatches.forEach(s => s.classList.remove('active'));
     const active = contentEl.querySelector(`[data-trim="${color}"]`);
     if (active) active.classList.add('active');
+    
+    // Update volume slider fill if visible
+    const volumeSlider = document.getElementById('volume-slider');
+    if (volumeSlider) {
+      volumeSlider.dispatchEvent(new Event('input'));
+    }
+  },
+  
+  handleSendBtnTrimChange(useTrim) {
+    localStorage.setItem('sapphire-send-btn-trim', useTrim);
+    // Trigger send button update
+    const sendBtn = document.getElementById('send-btn');
+    if (sendBtn) {
+      if (useTrim) {
+        sendBtn.classList.add('use-trim');
+      } else {
+        sendBtn.classList.remove('use-trim');
+      }
+    }
   },
 
   hexToRgb(hex) {

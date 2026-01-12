@@ -39,7 +39,7 @@
        TRIM / ACCENT COLOR (new)
        Use for sidebar accent, active states, decorative elements
        ========================================================================= */
-    --trim: var(--accent-blue);
+    --trim: #4a9eff;
     --trim-glow: rgba(74, 158, 255, 0.35);
     --trim-light: rgba(74, 158, 255, 0.15);
     --trim-border: rgba(74, 158, 255, 0.4);
@@ -478,7 +478,7 @@
     overflow-y: auto;
 }
 
-.modal-overlay.open {
+.modal-overlay.active {
     display: flex;
 }
 
@@ -524,6 +524,65 @@
     gap: var(--space-sm);
     justify-content: flex-end;
     flex-shrink: 0;
+}
+
+/* Modal form fields */
+.modal-field {
+    margin-bottom: var(--space-md);
+}
+
+.modal-field:last-child {
+    margin-bottom: 0;
+}
+
+.modal-field label {
+    display: block;
+    margin-bottom: var(--space-sm);
+    color: var(--text-secondary);
+    font-size: var(--font-md);
+    font-weight: 500;
+}
+
+.modal-field input[type="text"],
+.modal-field input[type="number"],
+.modal-field textarea {
+    width: 100%;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--input-bg);
+    border: 1px solid var(--input-border);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-size: var(--font-md);
+    font-family: inherit;
+    transition: border-color var(--transition-normal), background-color var(--transition-normal), box-shadow var(--transition-normal);
+    box-sizing: border-box;
+}
+
+.modal-field textarea {
+    resize: vertical;
+    min-height: 100px;
+    font-family: var(--font-mono);
+}
+
+.modal-field input:focus,
+.modal-field textarea:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    background-color: var(--input-focus-bg);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.modal-field select {
+    width: 100%;
+}
+
+.checkbox-group {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-sm);
+    background: var(--bg-tertiary);
 }
 
 /* =============================================================================
@@ -725,14 +784,14 @@
 
 /* Button variants */
 .btn-primary {
-    background: var(--primary);
-    border-color: var(--primary);
+    background: var(--trim, var(--primary));
+    border-color: var(--trim, var(--primary));
     color: var(--text-bright);
 }
 
 .btn-primary:hover {
-    background: var(--primary-hover);
-    border-color: var(--primary-hover);
+    background: var(--trim-50, var(--primary-hover));
+    border-color: var(--trim-50, var(--primary-hover));
 }
 
 .btn-danger {
@@ -960,7 +1019,7 @@ input[type="range"] {
 
 input[type="range"]::-webkit-slider-runnable-track {
     height: 6px;
-    background: var(--bg-tertiary);
+    background: transparent;
     border-radius: var(--radius-sm);
 }
 
@@ -984,7 +1043,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 input[type="range"]::-moz-range-track {
     height: 6px;
-    background: var(--bg-tertiary);
+    background: transparent;
     border-radius: var(--radius-sm);
 }
 

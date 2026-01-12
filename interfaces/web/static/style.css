@@ -242,7 +242,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 #volume-slider::-moz-range-track {
-    background: var(--bg-tertiary);
+    background: transparent;
     border-radius: var(--radius-sm);
     height: 6px;
 }
@@ -750,6 +750,20 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 #send-btn:focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
 #send-btn:disabled { background: var(--border-light); cursor: not-allowed; }
 
+/* Send button uses trim color when enabled */
+#send-btn.use-trim { 
+    background: var(--trim, var(--primary));
+}
+#send-btn.use-trim:hover { 
+    background: var(--trim-50, var(--primary-hover));
+}
+#send-btn.use-trim.llm-local,
+#send-btn.use-trim.llm-cloud,
+#send-btn.use-trim.llm-auto {
+    background: var(--trim, var(--primary));
+    box-shadow: none;
+}
+
 /* LLM Mode indicators - subtle glow on send button */
 #send-btn.llm-local { 
     box-shadow: 0 0 6px rgba(41, 121, 255, 0.4);
@@ -987,7 +1001,32 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
-.modal-grid input[type="range"] { padding: 0; }
+.modal-grid input[type="range"] { 
+    padding: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+.modal-grid input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--trim, var(--accent-blue));
+    cursor: pointer;
+    border: 2px solid var(--bg-secondary);
+}
+.modal-grid input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--trim, var(--accent-blue));
+    cursor: pointer;
+    border: 2px solid var(--bg-secondary);
+}
 .modal-grid input[type="checkbox"] { width: auto; margin-right: 8px; }
 
 /* =============================================================================

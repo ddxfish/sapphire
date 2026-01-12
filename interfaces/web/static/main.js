@@ -26,36 +26,37 @@ function initAppearance() {
         root.setAttribute('data-font', font);
     }
     
-    // Trim color
+    // Trim color - apply if explicitly set
     const trim = localStorage.getItem('sapphire-trim');
     if (trim) {
-        if (trim === 'none') {
-            root.style.setProperty('--trim', 'transparent');
-            root.style.setProperty('--trim-glow', 'transparent');
-            root.style.setProperty('--trim-light', 'transparent');
-            root.style.setProperty('--trim-border', 'transparent');
-            root.style.setProperty('--trim-50', 'transparent');
-            root.style.setProperty('--accordion-header-bg', 'var(--bg-tertiary)');
-            root.style.setProperty('--accordion-header-hover', 'var(--bg-hover)');
-        } else {
-            root.style.setProperty('--trim', trim);
-            // Generate derived colors
-            const r = parseInt(trim.slice(1, 3), 16);
-            const g = parseInt(trim.slice(3, 5), 16);
-            const b = parseInt(trim.slice(5, 7), 16);
-            root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
-            root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
-            root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
-            root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
-            root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-            root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
-        }
+        root.style.setProperty('--trim', trim);
+        // Generate derived colors
+        const r = parseInt(trim.slice(1, 3), 16);
+        const g = parseInt(trim.slice(3, 5), 16);
+        const b = parseInt(trim.slice(5, 7), 16);
+        root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+        root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
+        root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
+        root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+        root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
+        root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
     }
+    // If trim not set, CSS defaults from shared.css apply (blue)
     
     // Sidebar width
     const sidebarWidth = localStorage.getItem('sapphire-sidebar-width');
     if (sidebarWidth) {
         root.style.setProperty('--sidebar-width', sidebarWidth + 'px');
+    }
+    
+    // Send button trim preference
+    const sendBtnTrim = localStorage.getItem('sapphire-send-btn-trim');
+    if (sendBtnTrim === 'true') {
+        // Apply after DOM ready
+        requestAnimationFrame(() => {
+            const sendBtn = document.getElementById('send-btn');
+            if (sendBtn) sendBtn.classList.add('use-trim');
+        });
     }
 }
 

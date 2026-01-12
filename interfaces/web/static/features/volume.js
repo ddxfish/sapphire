@@ -25,7 +25,19 @@ export function initVolumeControls() {
 function updateSliderFill() {
     const { volumeSlider } = getElements();
     const val = parseInt(volumeSlider.value, 10);
-    volumeSlider.style.background = `linear-gradient(to right, var(--accent-blue) 0%, var(--accent-blue) ${val}%, var(--bg-tertiary) ${val}%, var(--bg-tertiary) 100%)`;
+    // Get computed colors - resolve actual color values
+    const styles = getComputedStyle(document.documentElement);
+    let fillColor = styles.getPropertyValue('--trim').trim();
+    
+    // If trim is transparent/empty/unset, use accent-blue
+    if (!fillColor || fillColor === 'transparent' || fillColor.startsWith('var(')) {
+        fillColor = styles.getPropertyValue('--accent-blue').trim() || '#4a9eff';
+    }
+    
+    // Resolve bg-tertiary to actual color
+    let bgColor = styles.getPropertyValue('--bg-tertiary').trim() || '#2a2a2a';
+    
+    volumeSlider.style.background = `linear-gradient(to right, ${fillColor} 0%, ${fillColor} ${val}%, ${bgColor} ${val}%, ${bgColor} 100%)`;
 }
 
 export function handleVolumeChange() {
