@@ -189,8 +189,8 @@ class BaseProvider(ABC):
         """
         Convert tool definitions to provider-specific format if needed.
         
-        Default implementation passes through unchanged (OpenAI format).
-        Claude provider overrides this.
+        Default implementation strips internal fields (like 'network') that
+        aren't part of the API spec. Claude provider overrides this.
         
         Args:
             tools: Tool definitions in OpenAI format
@@ -198,4 +198,10 @@ class BaseProvider(ABC):
         Returns:
             Tools in provider-specific format
         """
-        return tools
+        # Strip internal fields that APIs don't accept
+        internal_fields = {'network'}
+        cleaned = []
+        for tool in tools:
+            clean_tool = {k: v for k, v in tool.items() if k not in internal_fields}
+            cleaned.append(clean_tool)
+        return cleaned

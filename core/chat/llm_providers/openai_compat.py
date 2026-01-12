@@ -75,7 +75,7 @@ class OpenAICompatProvider(BaseProvider):
         }
         
         if tools:
-            request_kwargs["tools"] = tools
+            request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
         
         response = self._client.chat.completions.create(**request_kwargs)
@@ -99,7 +99,7 @@ class OpenAICompatProvider(BaseProvider):
         }
         
         if tools:
-            request_kwargs["tools"] = tools
+            request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
         
         stream = self._client.chat.completions.create(**request_kwargs)

@@ -1,13 +1,14 @@
 // ui-streaming.js - Real-time streaming with typed SSE events
 
-import { createAccordion } from './ui-parsing.js';
+import { createAccordion, createCodeBlock, processMarkdown } from './ui-parsing.js';
 
 // Streaming state
 let streamMsg = null;
 let streamContent = '';
 let state = {
     inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null,
-    curPara: null, procIdx: 0,
+    inCode: false, codeLang: '', codeBuf: '', codePre: null,
+    curPara: null, paraBuf: '', procIdx: 0,
     toolAccordions: {}
 };
 
@@ -24,10 +25,17 @@ const createElem = (tag, attrs = {}, content = '') => {
 const resetState = (para = null) => {
     state = {
         inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null,
-        curPara: para, procIdx: 0,
+        inCode: false, codeLang: '', codeBuf: '', codePre: null,
+        curPara: para, paraBuf: '', procIdx: 0,
         toolAccordions: {}
     };
     pendingToolEvents = [];
+};
+
+// Update paragraph with markdown rendering
+const updatePara = () => {
+    if (!state.curPara || !state.paraBuf) return;
+    state.curPara.innerHTML = processMarkdown(state.paraBuf);
 };
 
 // Create a tool accordion with loading state
@@ -98,7 +106,91 @@ export const startStreaming = (container, messageElement, scrollCallback) => {
 // Check if streaming is ready
 export const isStreamReady = () => streamMsg !== null;
 
-// Handle content text (with think tag parsing)
+// Create streaming code block preview (unhighlighted)
+const createCodePreview = (lang) => {
+    const pre = createElem('pre');
+    pre.className = 'streaming-code';
+    
+    // Add header if language specified
+    if (lang && lang !== 'plaintext') {
+        const header = document.createElement('div');
+        header.className = 'code-block-header';
+        header.innerHTML = `<span class="code-lang">${lang}</span><span class="code-status">...</span>`;
+        pre.appendChild(header);
+    }
+    
+    const code = createElem('code');
+    code.className = `language-${lang || 'plaintext'}`;
+    pre.appendChild(code);
+    
+    return { pre, code };
+};
+
+// Update streaming code block content
+const updateCodePreview = () => {
+    if (!state.codePre) return;
+    const code = state.codePre.querySelector('code');
+    if (code) code.textContent = state.codeBuf;
+};
+
+// Finalize code block with syntax highlighting
+const finalizeCodeBlock = () => {
+    if (!state.codePre) return;
+    
+    const code = state.codePre.querySelector('code');
+    if (code && window.hljs) {
+        try {
+            window.hljs.highlightElement(code);
+        } catch (e) { /* ignore */ }
+    }
+    
+    // Update header status to copy button
+    const header = state.codePre.querySelector('.code-block-header');
+    if (header) {
+        const status = header.querySelector('.code-status');
+        if (status) {
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'code-copy';
+            copyBtn.title = 'Copy code';
+            copyBtn.textContent = 'Copy';
+            copyBtn.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(state.codeBuf.trimEnd());
+                    copyBtn.textContent = 'Copied!';
+                    setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+                } catch (e) {
+                    copyBtn.textContent = 'Failed';
+                    setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+                }
+            });
+            status.replaceWith(copyBtn);
+        }
+    }
+    
+    state.codePre.classList.remove('streaming-code');
+};
+
+// Render completed code block
+const renderCodeBlock = () => {
+    if (!streamMsg) return;
+    
+    // Finalize the streaming preview
+    finalizeCodeBlock();
+    
+    // Create new paragraph for content after code
+    const newP = createElem('p');
+    streamMsg.el.appendChild(newP);
+    state.curPara = newP;
+    state.paraBuf = '';
+    
+    // Reset code state
+    state.inCode = false;
+    state.codeLang = '';
+    state.codeBuf = '';
+    state.codePre = null;
+};
+
+// Handle content text (with think tag and code fence parsing)
 export const appendStream = (chunk, scrollCallback) => {
     if (!streamMsg) return;
     streamContent += chunk;
@@ -107,45 +199,28 @@ export const appendStream = (chunk, scrollCallback) => {
     let i = 0;
     
     while (i < newContent.length) {
-        if (!state.inThink) {
-            const thinkPos = newContent.indexOf('<think>', i);
-            const seedPos = newContent.indexOf('<seed:think>', i);
-            
-            const markers = [
-                [thinkPos, 'think', 7], 
-                [seedPos, 'seed:think', 12]
-            ].filter(m => m[0] !== -1).sort((a, b) => a[0] - b[0]);
-            
-            if (markers.length === 0) {
-                let add = newContent.slice(i);
-                if (state.curPara.textContent === '') add = add.replace(/^\s+/, '');
-                state.curPara.textContent += add;
+        // Inside code fence
+        if (state.inCode) {
+            const closePos = newContent.indexOf('```', i);
+            if (closePos === -1) {
+                // No closing fence yet, buffer and update preview
+                state.codeBuf += newContent.slice(i);
+                updateCodePreview();
                 i = newContent.length;
                 break;
             }
-            
-            const [pos, type, len] = markers[0];
-            let add = newContent.slice(i, pos);
-            if (add && state.curPara.textContent === '') add = add.replace(/^\s+/, '');
-            if (add) state.curPara.textContent += add;
-            
-            state.inThink = true;
-            state.thinkCnt++;
-            state.thinkBuf = '';
-            state.thinkType = type;
-            
-            const label = type === 'seed:think' ? 'Seed Think' : 'Think';
-            const { acc, content } = createAccordion('think', `${label} (Step ${state.thinkCnt})`, '');
-            state.thinkAcc = content;
-            
-            if (streamMsg.last.nextSibling) {
-                streamMsg.el.insertBefore(acc, streamMsg.last.nextSibling);
-            } else {
-                streamMsg.el.appendChild(acc);
-            }
-            streamMsg.last = acc;
-            i = pos + len;
-        } else {
+            // Found closing fence
+            state.codeBuf += newContent.slice(i, closePos);
+            updateCodePreview();
+            renderCodeBlock();
+            i = closePos + 3;
+            // Skip trailing newline after code block
+            if (i < newContent.length && newContent[i] === '\n') i++;
+            continue;
+        }
+        
+        // Inside think block
+        if (state.inThink) {
             let endPos = -1;
             let endTag = '';
             
@@ -178,9 +253,88 @@ export const appendStream = (chunk, scrollCallback) => {
             const newP = createElem('p');
             streamMsg.el.appendChild(newP);
             state.curPara = newP;
+            state.paraBuf = '';
             
             i = endPos + endTag.length;
             while (i < newContent.length && /\s/.test(newContent[i])) i++;
+            continue;
+        }
+        
+        // Normal content - look for code fence, think tags
+        const codePos = newContent.indexOf('```', i);
+        const thinkPos = newContent.indexOf('<think>', i);
+        const seedPos = newContent.indexOf('<seed:think>', i);
+        
+        // Find earliest marker
+        const markers = [
+            [codePos, 'code', 3],
+            [thinkPos, 'think', 7],
+            [seedPos, 'seed:think', 12]
+        ].filter(m => m[0] !== -1).sort((a, b) => a[0] - b[0]);
+        
+        if (markers.length === 0) {
+            // No markers, add all remaining content
+            let add = newContent.slice(i);
+            if (state.paraBuf === '') add = add.replace(/^\s+/, '');
+            state.paraBuf += add;
+            updatePara();
+            i = newContent.length;
+            break;
+        }
+        
+        const [pos, type, len] = markers[0];
+        
+        // Add content before marker
+        let add = newContent.slice(i, pos);
+        if (add && state.paraBuf === '') add = add.replace(/^\s+/, '');
+        if (add) {
+            state.paraBuf += add;
+            updatePara();
+        }
+        
+        if (type === 'code') {
+            // Find end of opening line to get language
+            const lineEnd = newContent.indexOf('\n', pos + 3);
+            if (lineEnd === -1) {
+                // Opening line incomplete, wait for newline
+                // Advance i to marker position so we don't reprocess content before it
+                i = pos;
+                break;
+            }
+            
+            // Start code fence - extract language
+            state.inCode = true;
+            state.codeBuf = '';
+            state.codeLang = newContent.slice(pos + 3, lineEnd).trim();
+            i = lineEnd + 1;
+            
+            // Remove empty paragraph and create code preview
+            if (state.curPara && !state.paraBuf.trim()) {
+                state.curPara.remove();
+            }
+            
+            const { pre, code } = createCodePreview(state.codeLang);
+            state.codePre = pre;
+            streamMsg.el.appendChild(pre);
+            streamMsg.last = pre;
+        } else {
+            // Think tag
+            state.inThink = true;
+            state.thinkCnt++;
+            state.thinkBuf = '';
+            state.thinkType = type;
+            
+            const label = type === 'seed:think' ? 'Seed Think' : 'Think';
+            const { acc, content } = createAccordion('think', `${label} (Step ${state.thinkCnt})`, '');
+            state.thinkAcc = content;
+            
+            if (streamMsg.last.nextSibling) {
+                streamMsg.el.insertBefore(acc, streamMsg.last.nextSibling);
+            } else {
+                streamMsg.el.appendChild(acc);
+            }
+            streamMsg.last = acc;
+            i = pos + len;
         }
     }
     
@@ -191,7 +345,7 @@ export const appendStream = (chunk, scrollCallback) => {
 // Internal function to actually create tool accordion
 const doStartTool = (toolId, toolName, args, scrollCallback) => {
     // Clean up empty current paragraph
-    if (state.curPara && !state.curPara.textContent.trim()) {
+    if (state.curPara && !state.paraBuf.trim()) {
         state.curPara.remove();
     }
     
@@ -205,6 +359,7 @@ const doStartTool = (toolId, toolName, args, scrollCallback) => {
     const newP = createElem('p');
     streamMsg.el.appendChild(newP);
     state.curPara = newP;
+    state.paraBuf = '';
     
     if (scrollCallback) scrollCallback();
 };
@@ -292,7 +447,7 @@ export const finishStreaming = (updateToolbarsCallback) => {
         
         // Clean up empty paragraphs
         contentDiv.querySelectorAll('p').forEach(p => {
-            if (!p.textContent.trim()) p.remove();
+            if (!p.textContent.trim() && !p.innerHTML.trim()) p.remove();
         });
     }
     
