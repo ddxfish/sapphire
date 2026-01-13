@@ -30,15 +30,16 @@ def create_spices_api():
         """Get all spices organized by category."""
         try:
             spices = prompts.prompt_manager.spices
+            disabled = prompts.prompt_manager.disabled_categories
             
-            # Build response with category info
             categories = {}
             total_count = 0
             
             for category_name, spice_list in spices.items():
                 categories[category_name] = {
                     'spices': spice_list,
-                    'count': len(spice_list)
+                    'count': len(spice_list),
+                    'enabled': category_name not in disabled
                 }
                 total_count += len(spice_list)
             
@@ -49,6 +50,34 @@ def create_spices_api():
             })
         except Exception as e:
             logger.error(f"Error listing spices: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    @bp.route('/category/<cat_name>/toggle', methods=['POST'])
+    def toggle_category(cat_name):
+        """Toggle a category's enabled state and pick new spice."""
+        try:
+            spices = prompts.prompt_manager.spices
+            
+            if cat_name not in spices:
+                return jsonify({'error': f"Category '{cat_name}' not found"}), 404
+            
+            currently_enabled = prompts.prompt_manager.is_category_enabled(cat_name)
+            new_state = not currently_enabled
+            prompts.prompt_manager.set_category_enabled(cat_name, new_state)
+            
+            # Force pick new spice from updated enabled categories
+            prompts.set_random_spice()
+            current_spice = prompts.get_current_spice()
+            
+            logger.info(f"Toggled category '{cat_name}' to {'enabled' if new_state else 'disabled'}")
+            return jsonify({
+                'status': 'success',
+                'category': cat_name,
+                'enabled': new_state,
+                'current_spice': current_spice
+            })
+        except Exception as e:
+            logger.error(f"Error toggling category: {e}")
             return jsonify({'error': str(e)}), 500
     
     @bp.route('', methods=['POST'])
@@ -69,11 +98,9 @@ def create_spices_api():
             
             spices = prompts.prompt_manager._spices
             
-            # Create category if it doesn't exist
             if category not in spices:
                 spices[category] = []
             
-            # Check for duplicates
             if text in spices[category]:
                 return jsonify({'error': 'Spice already exists in this category'}), 409
             
@@ -142,7 +169,6 @@ def create_spices_api():
             
             deleted_text = spices[category].pop(index)
             
-            # Remove empty categories
             if len(spices[category]) == 0:
                 del spices[category]
                 logger.info(f"Removed empty category '{category}'")
@@ -168,53 +194,53 @@ def create_spices_api():
             if not data or 'name' not in data:
                 return jsonify({'error': 'Category name required'}), 400
             
-            name = data['name'].strip()
-            if not name:
+            cat_name = data['name'].strip()
+            if not cat_name:
                 return jsonify({'error': 'Category name cannot be empty'}), 400
             
             spices = prompts.prompt_manager._spices
             
-            if name in spices:
-                return jsonify({'error': f"Category '{name}' already exists"}), 409
+            if cat_name in spices:
+                return jsonify({'error': f"Category '{cat_name}' already exists"}), 409
             
-            spices[name] = []
+            spices[cat_name] = []
             prompts.prompt_manager.save_spices()
             
-            logger.info(f"Created category '{name}'")
+            logger.info(f"Created category '{cat_name}'")
             return jsonify({
                 'status': 'success',
-                'message': f"Created category '{name}'",
-                'category': name
+                'message': f"Created category '{cat_name}'",
+                'category': cat_name
             })
         except Exception as e:
             logger.error(f"Error creating category: {e}")
             return jsonify({'error': str(e)}), 500
     
-    @bp.route('/category/<name>', methods=['DELETE'])
-    def delete_category(name):
+    @bp.route('/category/<cat_name>', methods=['DELETE'])
+    def delete_category(cat_name):
         """Delete an entire category and all its spices."""
         try:
             spices = prompts.prompt_manager._spices
             
-            if name not in spices:
-                return jsonify({'error': f"Category '{name}' not found"}), 404
+            if cat_name not in spices:
+                return jsonify({'error': f"Category '{cat_name}' not found"}), 404
             
-            spice_count = len(spices[name])
-            del spices[name]
+            spice_count = len(spices[cat_name])
+            del spices[cat_name]
             prompts.prompt_manager.save_spices()
             
-            logger.info(f"Deleted category '{name}' with {spice_count} spices")
+            logger.info(f"Deleted category '{cat_name}' with {spice_count} spices")
             return jsonify({
                 'status': 'success',
-                'message': f"Deleted category '{name}'",
+                'message': f"Deleted category '{cat_name}'",
                 'deleted_spices': spice_count
             })
         except Exception as e:
             logger.error(f"Error deleting category: {e}")
             return jsonify({'error': str(e)}), 500
     
-    @bp.route('/category/<name>', methods=['PUT'])
-    def rename_category(name):
+    @bp.route('/category/<cat_name>', methods=['PUT'])
+    def rename_category(cat_name):
         """Rename a category."""
         try:
             data = request.json
@@ -227,21 +253,20 @@ def create_spices_api():
             
             spices = prompts.prompt_manager._spices
             
-            if name not in spices:
-                return jsonify({'error': f"Category '{name}' not found"}), 404
+            if cat_name not in spices:
+                return jsonify({'error': f"Category '{cat_name}' not found"}), 404
             
             if new_name in spices:
                 return jsonify({'error': f"Category '{new_name}' already exists"}), 409
             
-            # Move spices to new category name
-            spices[new_name] = spices.pop(name)
+            spices[new_name] = spices.pop(cat_name)
             prompts.prompt_manager.save_spices()
             
-            logger.info(f"Renamed category '{name}' to '{new_name}'")
+            logger.info(f"Renamed category '{cat_name}' to '{new_name}'")
             return jsonify({
                 'status': 'success',
                 'message': f"Renamed category to '{new_name}'",
-                'old_name': name,
+                'old_name': cat_name,
                 'new_name': new_name
             })
         except Exception as e:

@@ -17,6 +17,7 @@ class PromptManager:
         self._scenario_presets = {}
         self._monoliths = {}
         self._spices = {}
+        self._disabled_categories = set()
         
         self._lock = threading.Lock()
         self._watcher_thread = None
@@ -86,19 +87,24 @@ class PromptManager:
         if not path.exists():
             logger.warning(f"prompt_spices.json not found at {path} - using empty defaults")
             self._spices = {}
+            self._disabled_categories = set()
             return
         
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                self._spices = json.load(f)
+                raw_data = json.load(f)
             
-            # Remove metadata keys
-            self._spices = {k: v for k, v in self._spices.items() if not k.startswith('_')}
+            # Extract disabled categories before filtering metadata
+            self._disabled_categories = set(raw_data.get('_disabled_categories', []))
             
-            logger.info(f"Loaded spice pool: {len(self._spices)} categories")
+            # Remove metadata keys for spices dict
+            self._spices = {k: v for k, v in raw_data.items() if not k.startswith('_')}
+            
+            logger.info(f"Loaded spice pool: {len(self._spices)} categories, {len(self._disabled_categories)} disabled")
         except Exception as e:
             logger.error(f"Failed to load spices: {e}")
             self._spices = {}
+            self._disabled_categories = set()
     
     def _replace_templates(self, text: str) -> str:
         """Replace {ai_name} and {user_name} with values from settings."""
@@ -299,11 +305,39 @@ class PromptManager:
         
         # Build data with metadata
         data = {"_comment": "User spices - managed via Spice Manager plugin"}
+        if self._disabled_categories:
+            data["_disabled_categories"] = sorted(list(self._disabled_categories))
         data.update(self._spices)
         
         with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         logger.info(f"Saved spices to {target_path}")
+    
+    def is_category_enabled(self, category: str) -> bool:
+        """Check if a spice category is enabled."""
+        return category not in self._disabled_categories
+    
+    def set_category_enabled(self, category: str, enabled: bool):
+        """Enable or disable a spice category."""
+        if enabled:
+            self._disabled_categories.discard(category)
+        else:
+            self._disabled_categories.add(category)
+        self.save_spices()
+        logger.info(f"Spice category '{category}' {'enabled' if enabled else 'disabled'}")
+    
+    def get_enabled_spices(self) -> list:
+        """Get all spices from enabled categories only."""
+        return [
+            spice 
+            for category, spices in self._spices.items() 
+            if category not in self._disabled_categories
+            for spice in spices
+        ]
+    
+    @property
+    def disabled_categories(self):
+        return self._disabled_categories
     
     @property
     def components(self):

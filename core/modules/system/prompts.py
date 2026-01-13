@@ -59,6 +59,9 @@ from .prompt_crud import (
 # Initialize user prompts on module load
 load_user_prompts()
 
+# Initialize first spice on module load
+set_random_spice()
+
 # Export everything for star imports
 __all__ = [
     # Classes

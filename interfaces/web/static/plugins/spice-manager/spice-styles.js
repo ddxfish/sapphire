@@ -81,6 +81,20 @@ export function injectStyles() {
       background: var(--plugin-spice-bg-hover);
     }
     
+    /* Category enable/disable checkbox */
+    .sm-category-checkbox {
+      width: 14px;
+      height: 14px;
+      margin: 0 4px 0 0;
+      cursor: pointer;
+      accent-color: var(--trim, var(--text-secondary));
+    }
+    
+    .sm-category-checkbox:not(:checked) + .accordion-title {
+      opacity: 0.5;
+      text-decoration: line-through;
+    }
+    
     .sm-empty-category {
       color: var(--border-hover);
       font-style: italic;

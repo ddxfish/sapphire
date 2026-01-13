@@ -43,3 +43,8 @@ export const deleteCategory = (name) =>
 
 export const reloadSpices = () =>
   fetchWithTimeout('/api/spices/reload', { method: 'POST' });
+
+export const toggleCategory = (name) =>
+  fetchWithTimeout(`/api/spices/category/${encodeURIComponent(name)}/toggle`, {
+    method: 'POST'
+  });

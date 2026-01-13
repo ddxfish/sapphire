@@ -2,6 +2,7 @@
 import { injectStyles } from './spice-styles.js';
 import { showToast } from '../../shared/toast.js';
 import { showModal, escapeHtml } from '../../shared/modal.js';
+import { updateScene } from '../../features/scene.js';
 import * as API from './spice-api.js';
 
 export default {
@@ -99,11 +100,13 @@ Tips:
     sortedCategories.forEach(categoryName => {
       const category = categories[categoryName];
       const spiceCount = category.count;
+      const isEnabled = category.enabled !== false;  // Default to enabled
       
       html += `
         <div class="accordion sm-category" data-category="${escapeHtml(categoryName)}">
           <div class="accordion-header">
             <span class="accordion-toggle collapsed"></span>
+            <input type="checkbox" class="sm-category-checkbox" ${isEnabled ? 'checked' : ''} title="${isEnabled ? 'Enabled - click to disable' : 'Disabled - click to enable'}">
             <span class="accordion-title">${escapeHtml(categoryName)}</span>
             <span class="accordion-count">(${spiceCount})</span>
             <div class="accordion-actions">
@@ -140,7 +143,7 @@ Tips:
   attachCategoryHandlers() {
     this.elements.categoriesContainer.querySelectorAll('.accordion-header').forEach(header => {
       header.addEventListener('click', (e) => {
-        if (e.target.closest('.accordion-actions')) return;
+        if (e.target.closest('.accordion-actions') || e.target.classList.contains('sm-category-checkbox')) return;
         
         const content = header.nextElementSibling;
         const toggle = header.querySelector('.accordion-toggle');
@@ -151,6 +154,24 @@ Tips:
         } else {
           content.classList.add('collapsed');
           toggle.classList.add('collapsed');
+        }
+      });
+    });
+    
+    this.elements.categoriesContainer.querySelectorAll('.sm-category-checkbox').forEach(checkbox => {
+      checkbox.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const category = checkbox.closest('.accordion').dataset.category;
+        try {
+          const result = await API.toggleCategory(category);
+          checkbox.checked = result.enabled;
+          checkbox.title = result.enabled ? 'Enabled - click to disable' : 'Disabled - click to enable';
+          showToast(`${category}: ${result.enabled ? 'enabled' : 'disabled'}`, 'success');
+          // Refresh spice indicator tooltip with new spice
+          await updateScene();
+        } catch (err) {
+          checkbox.checked = !checkbox.checked;  // Revert on error
+          showToast(`Failed: ${err.message}`, 'error');
         }
       });
     });

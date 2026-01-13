@@ -764,13 +764,19 @@ def create_spice_category():
 
 @app.route('/api/spices/category/<name>', methods=['DELETE'])
 @require_login
-def delete_spice_category(name):
-    return proxy(f'/api/spices/category/{name}', 'DELETE', timeout=10)
+def delete_spice_category(n):
+    return proxy(f'/api/spices/category/{n}', 'DELETE', timeout=10)
 
 @app.route('/api/spices/category/<name>', methods=['PUT'])
 @require_login
-def rename_spice_category(name):
-    return proxy(f'/api/spices/category/{name}', 'PUT', json=request.json, timeout=10)
+def rename_spice_category(n):
+    return proxy(f'/api/spices/category/{n}', 'PUT', json=request.json, timeout=10)
+
+
+@app.route('/api/spices/category/<n>/toggle', methods=['POST'])
+@require_login
+def toggle_spice_category(n):
+    return proxy(f'/api/spices/category/{n}/toggle', 'POST', timeout=10)
 
 @app.route('/api/spices/reload', methods=['POST'])
 @require_login

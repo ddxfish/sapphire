@@ -143,13 +143,16 @@ def reset_to_defaults():
 
 
 def set_random_spice():
-    """Set a random spice from the pool."""
+    """Set a random spice from enabled categories in the pool."""
     global _assembled_state
-    all_spices = [spice for category in prompt_manager.spices.values() for spice in category]
+    all_spices = prompt_manager.get_enabled_spices()
     
     if all_spices:
         _assembled_state["spice"] = random.choice(all_spices)
         return f"Random spice: {_assembled_state['spice']}"
+    
+    # Clear spice when no categories enabled
+    _assembled_state["spice"] = ""
     return "No spices available"
 
 
