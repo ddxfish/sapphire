@@ -85,7 +85,7 @@ export async function handleDeleteChat() {
     }
     
     const displayName = chatSelect.options[chatSelect.selectedIndex].text;
-    if (!confirm(`Delete "${displayName}" permanently?`)) return;
+    if (!confirm(`Delete "${displayName}"?\n\nThis will permanently remove the chat history AND any custom settings for this chat.`)) return;
     
     try {
         await api.activateChat('default');

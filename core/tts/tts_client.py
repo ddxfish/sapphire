@@ -194,35 +194,49 @@ class TTSClient:
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
         
-        # Strip content that shouldn't be spoken
-        # Order matters: remove larger blocks first, then inline patterns
-        strip_patterns = [
+        # Strip content that shouldn't be spoken (order matters)
+        processed_text = text
+        
+        # Remove block-level content entirely
+        block_patterns = [
             r'<think>.*?</think>',           # Think tags
             r'<reasoning>.*?</reasoning>',   # Reasoning tags
             r'<tools>.*?</tools>',           # Tools tags
             r'```[\s\S]*?```',               # Code blocks (fenced)
-            r'`[^`]+`',                       # Inline code
+            r'`[^`]+`',                      # Inline code
             r'!\[.*?\]\(.*?\)',              # Image markdown ![alt](url)
-            r'\|.*?\|(?:\n\|.*?\|)*',        # Markdown tables (pipe-delimited rows)
-            r'\[.*?\]\(.*?\)',               # Link markdown [text](url) - keep after images
-            r'\*\*.*?\*\*',                  # Bold **text**
-            r'__.*?__',                      # Bold __text__
-            r'\*',                           # Remaining asterisks
-            r'_',                            # Remaining underscores  
-            r'#+\s*',                        # Heading markers
-            r'\n',                           # Newlines
-            r'<[^>]+>',                      # HTML tags (fallback if HTML leaks through)
+            r'\|.*?\|(?:\n\|.*?\|)*',        # Markdown tables
+            r'<[^>]+>',                      # HTML tags
         ]
-        processed_text = text
-        for pattern in strip_patterns:
+        for pattern in block_patterns:
             processed_text = re.sub(pattern, ' ', processed_text, flags=re.DOTALL)
+        
+        # Transform markdown to speech-friendly punctuation
+        # Bold **text** or __text__ → period before and after for emphasis pause
+        processed_text = re.sub(r'\*\*([^*]+)\*\*', r'. \1. ', processed_text)
+        processed_text = re.sub(r'__([^_]+)__', r'. \1. ', processed_text)
+        
+        # Italic *text* or _text_ → comma for slight pause (but not mid-word apostrophes)
+        processed_text = re.sub(r'(?<!\w)\*([^*]+)\*(?!\w)', r', \1, ', processed_text)
+        processed_text = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r', \1, ', processed_text)
+        
+        # Links [anchor](url) → keep anchor text only
+        processed_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', processed_text)
+        
+        # Headers # Title → Title with period at end of line
+        processed_text = re.sub(r'^#+\s*(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
+        
+        # Clean up remaining markdown artifacts
+        processed_text = re.sub(r'[*_#]', '', processed_text)  # Stray markers
+        processed_text = re.sub(r'\n', ' ', processed_text)    # Newlines to space
         
         # Remove common UI text that shouldn't be spoken
         ui_words = ['Copy', 'Copied!', 'Failed', 'Loading...', '...']
         for word in ui_words:
             processed_text = processed_text.replace(word, '')
         
-        # Collapse multiple spaces
+        # Normalize punctuation and whitespace
+        processed_text = re.sub(r'[,\.]\s*[,\.]', '.', processed_text)  # Collapse ., or ..
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
         self.stop()

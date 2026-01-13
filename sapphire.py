@@ -400,6 +400,18 @@ def run():
         api_thread.start()
         
         logger.info(f"Sapphire is running. API is live.")
+        
+        # Display clickable URL for user
+        protocol = 'https' if config.WEB_UI_SSL_ADHOC else 'http'
+        host_display = 'localhost' if config.WEB_UI_HOST in ('0.0.0.0', '127.0.0.1') else config.WEB_UI_HOST
+        url = f"{protocol}://{host_display}:{config.WEB_UI_PORT}"
+        
+        # ANSI colors: cyan background, black text, bold
+        CYAN_BG = '\033[46m'
+        BLACK = '\033[30m'
+        BOLD = '\033[1m'
+        RESET = '\033[0m'
+        print(f"\n{CYAN_BG}{BLACK}{BOLD} ✨ SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
 
         # Main loop - check for restart/shutdown signals
         while not _restart_requested and not _shutdown_requested:
