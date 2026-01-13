@@ -28,34 +28,61 @@
 
 ## Audio Issues
 
-**Wakeword recorder does not detect when to stop (webcam mic)**
-- Change your Recorder Background Percentile in Wakeword settings higher
+**Sample rate detection error on speakers**
+- Cheap USB speakers may not support certain sample rates, so choose "auto detect" or "default" 
+- Auto detect will route through OS audio defaults, which can resample the audio to be compatible
+
+**Default audio seems to not work via TTS**
+- Gear icon > App Settings > Audio - then change your device to auto-detect
+- Selecting specific audio devices like default or a specific mic can work too
+- Auto-detect sometimes fails test due to it being open, but it may actually work so try it
+
+**Wakeword recorder does not detect when to stop recording (webcam mic)**
+- Change your Recorder Background Percentile in STT settings higher
 - This is VAD voice activity detection thinking your BG noise is speech so it keeps recording
 - Lapel/lav and headsets mics may be ~10-20, but with webcam or other weak mics, raise to ~40
 
 **No TTS audio output**
-- Verify `TTS_ENABLED: true` in settings
+- Verify TTS is enabled in Gear icon > App Settings > TTS
 - Check TTS server started: `grep "kokoro" user/logs/`
 - Test system audio: `aplay /usr/share/sounds/alsa/Front_Center.wav`
 - Check PulseAudio/PipeWire is running
 
 **STT not transcribing**
-- First run downloads models (can take minutes)
-- Check `STT_ENABLED: true`
+- Check STT is enabled in Gear icon > App Settings > STT
 - For GPU: verify CUDA is working (`nvidia-smi`)
-- Try CPU mode: set `FASTER_WHISPER_DEVICE: "cpu"`
-- Turn up your mic volume to 70%
-- Check your system default mic - it tries to read from this
+- Try CPU mode: set faster whisper device to cpu in settings
+- Turn up your mic volume to 70% or 100%
+- Check your OS/system default mic - it tries to read from this
 - If Web UI, check browser mic permissions AND windows mic permissions
 
 **Wake word not triggering**
 - Check which wakeword you are using in settings
 - Make sure you pip installed requirements-wakeword.txt
 - Check wakeword is enabled in settings, reboot app after
-- Turn your mic volume up
-- Set system mic to what you use
-- Try using Hey Mycroft
+- Turn your mic volume up to 70-100%
+- Set system mic to the mic you want wakeword on
+- Try using Hey Mycroft as a wakeword instead of Hey Sapphire
 - Reduce sensitivity threshold to 0.5
+- Test a different mic
+
+## Prompt issues
+**If you broke your default promtps**
+- Gear icon > App Settings > System tab 
+- You can reset all prompts to default, or merge the defaults back into yours
+
+## LLM issues
+**LM Studio (simple) test failing**
+- Open LM studio, click Developer in lower left to show advanced options, click green Developer tab, toggle server on, load a model
+- Go back to Sapphire: Gear icon > App Settings > LLM > LM Studio > test button
+
+**Anthropic Claude not responding**
+- conda activate sapphire && pip install anthropic
+- Check API key (some are for Claude Code only)
+- Put new API key in Gear icon > App Settings > LLM > Claude
+
+**No thinking tags in some models**
+- We can't switch between models when some use think tags. GLM, Claude do not have think.
 
 ## Tool/Function Issues
 
