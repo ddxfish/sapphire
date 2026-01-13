@@ -840,8 +840,43 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 except (ValueError, TypeError):
                     device_index = None
             
-            # Generate test tone
-            sample_rate = 44100
+            # Find a working sample rate for this device
+            # Cheap USB devices often only support 48000Hz
+            sample_rate = None
+            default_rate = 44100
+            
+            if device_index is not None:
+                try:
+                    dev_info = sd.query_devices(device_index)
+                    default_rate = int(dev_info['default_samplerate'])
+                except Exception:
+                    pass
+            
+            test_rates = [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]
+            seen = set()
+            test_rates = [r for r in test_rates if not (r in seen or seen.add(r))]
+            
+            for rate in test_rates:
+                try:
+                    stream = sd.OutputStream(
+                        device=device_index,
+                        samplerate=rate,
+                        channels=1,
+                        dtype=np.float32
+                    )
+                    stream.close()
+                    sample_rate = rate
+                    break
+                except Exception:
+                    continue
+            
+            if sample_rate is None:
+                return jsonify({
+                    'success': False,
+                    'error': f'Device does not support any common sample rate'
+                }), 400
+            
+            # Generate test tone at working rate
             t = np.linspace(0, duration, int(sample_rate * duration), False)
             
             # Sine wave with fade in/out to avoid clicks
@@ -862,6 +897,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 'duration': duration,
                 'frequency': frequency,
                 'device_index': device_index,
+                'sample_rate': sample_rate,
             })
             
         except Exception as e:
