@@ -19,4 +19,5 @@ beautifulsoup4>=4.12.0
 bcrypt>=4.0.0
 PySocks>=1.7.1
 
-#anthropic
+# Anthropic Claude API (optional - only needed if using Claude provider)
+anthropic>=0.39.0

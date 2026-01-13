@@ -152,7 +152,8 @@ class SettingsManager:
     
     def get(self, key, default=None):
         """Get a setting value"""
-        return self._config.get(key, default)
+        with self._lock:
+            return self._config.get(key, default)
     
     def set(self, key, value, persist=False):
         """
@@ -502,8 +503,9 @@ class SettingsManager:
         """Allow settings.KEY_NAME access"""
         if key.startswith('_'):
             return object.__getattribute__(self, key)
-        if key in self._config:
-            return self._config[key]
+        with self._lock:
+            if key in self._config:
+                return self._config[key]
         raise AttributeError(f"Setting '{key}' not found")
     
     def __contains__(self, key):

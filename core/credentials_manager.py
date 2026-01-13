@@ -196,8 +196,6 @@ class CredentialsManager:
         except Exception as e:
             logger.error(f"Failed to save credentials to {CREDENTIALS_FILE}: {e}")
             return False
-        except Exception as e:
-            logger.error(f"Failed to save credentials: {e}")
     
     # =========================================================================
     # LLM API Keys

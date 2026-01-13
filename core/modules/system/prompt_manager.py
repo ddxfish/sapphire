@@ -109,6 +109,9 @@ class PromptManager:
             from core.settings_manager import settings
             ai_name = settings.get('DEFAULT_AI_NAME', 'Sapphire')
             user_name = settings.get('DEFAULT_USERNAME', 'Human Protagonist')
+            # Sanitize curly brackets to prevent template injection
+            ai_name = ai_name.replace('{', '').replace('}', '')
+            user_name = user_name.replace('{', '').replace('}', '')
             return text.replace('{ai_name}', ai_name).replace('{user_name}', user_name)
         except Exception as e:
             logger.error(f"Template replacement failed: {e}")

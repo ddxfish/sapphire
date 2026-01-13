@@ -121,6 +121,9 @@ class LLMChat:
     def _get_system_prompt(self):
         username = getattr(config, 'DEFAULT_USERNAME', 'Human Scum')
         ai_name = getattr(config, 'DEFAULT_AI_NAME', 'Sapphire')
+        # Sanitize curly brackets to prevent template injection
+        username = username.replace('{', '').replace('}', '')
+        ai_name = ai_name.replace('{', '').replace('}', '')
         prompt_template = self.current_system_prompt or "System prompt not loaded."
         prompt = prompt_template.replace("{user_name}", username).replace("{ai_name}", ai_name)
         
@@ -185,6 +188,13 @@ class LLMChat:
             self.session_manager.add_user_message(user_input)
             
             active_tools = self.function_manager.enabled_tools
+            
+            # DIAGNOSTIC: Log exactly what tools are being sent
+            active_tool_names = [t['function']['name'] for t in active_tools] if active_tools else []
+            logger.info(f"[TOOLS] Sending {len(active_tool_names)} tools to LLM: {active_tool_names}")
+            logger.info(f"[TOOLS] Current ability: {self.function_manager.current_ability_name}")
+            logger.info(f"[TOOLS] Prompt mode: {self.function_manager._get_current_prompt_mode()}")
+            
             provider_key, provider, model_override = self._select_provider()
             
             # Determine effective model (per-chat override or provider default)
@@ -252,6 +262,15 @@ class LLMChat:
                 logger.info(f"Iteration {i+1} completed in {iteration_time:.1f}s")
 
                 if response_msg.has_tool_calls:
+                    called_tools = [tc.name for tc in response_msg.tool_calls]
+                    logger.info(f"[TOOLS] LLM called tools via tool_calls: {called_tools}")
+                    
+                    # Check if any called tools are NOT in active_tools
+                    active_names = set(t['function']['name'] for t in active_tools) if active_tools else set()
+                    unexpected = [t for t in called_tools if t not in active_names]
+                    if unexpected:
+                        logger.warning(f"[TOOLS] ⚠️ LLM called tools NOT in active set: {unexpected}")
+                    
                     logger.info(f"Processing {len(response_msg.tool_calls)} tool call(s) from LLM")
                     
                     # Always filter thinking content from tool call responses
@@ -298,6 +317,14 @@ class LLMChat:
                 elif response_msg.content:
                     function_call_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
                     if function_call_data and active_tools:
+                        text_tool_name = function_call_data["function_call"]["name"]
+                        logger.info(f"[TOOLS] Text-based tool call detected: {text_tool_name}")
+                        
+                        # Check if this is in active tools
+                        active_names = set(t['function']['name'] for t in active_tools)
+                        if text_tool_name not in active_names:
+                            logger.warning(f"[TOOLS] ⚠️ Text-based call for tool NOT in active set: {text_tool_name}")
+                        
                         tool_call_count += 1
                         logger.info("Processing text-based function call")
 
