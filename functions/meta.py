@@ -24,14 +24,13 @@ AVAILABLE_FUNCTIONS = [
     'change_ai_name',
     'change_username',
     'set_tts_voice',
-    'set_tts_pitch',
-    'set_tts_speed',
+    'list_tools',
 ]
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_ai_name', 'change_username', 'set_tts_voice', 'set_tts_pitch', 'set_tts_speed'],
-    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_ai_name', 'change_username', 'set_tts_voice', 'set_tts_pitch', 'set_tts_speed'],
+    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools'],
+    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools'],
 }
 
 # Available TTS voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female)
@@ -149,34 +148,18 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "set_tts_pitch",
-            "description": "Set TTS pitch. Recommended range 0.9 to 1.1.",
+            "name": "list_tools",
+            "description": "List available tools. Without scope, shows currently enabled tools. Use 'all' to see every tool including inactive ones.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "value": {
-                        "type": "number",
-                        "description": "Pitch value (0.5 to 1.5)"
+                    "scope": {
+                        "type": "string",
+                        "enum": ["enabled", "all"],
+                        "description": "Optional: 'enabled' (default) or 'all'"
                     }
                 },
-                "required": ["value"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_tts_speed",
-            "description": "Set TTS speed. Recommended range 0.9 to 1.3.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "value": {
-                        "type": "number",
-                        "description": "Speed value (0.5 to 2.0)"
-                    }
-                },
-                "required": ["value"]
+                "required": []
             }
         }
     },
@@ -616,45 +599,81 @@ def execute(function_name, arguments, config):
             logger.info(f"TTS voice changed to: {name}")
             return f"Voice changed to {name}.", True
 
-        elif function_name == "set_tts_pitch":
-            value = arguments.get('value')
-            if value is None:
-                return "Pitch value is required. Recommended range: 0.9 to 1.1.", False
+        elif function_name == "list_tools":
+            scope = arguments.get('scope', 'enabled').lower().strip()
             
             try:
-                value = float(value)
-            except (TypeError, ValueError):
-                return "Pitch must be a number.", False
-            
-            if value < 0.5 or value > 1.5:
-                return "Pitch must be between 0.5 and 1.5. Recommended range: 0.9 to 1.1.", False
-            
-            success, msg = _update_chat_setting('pitch', value, headers, main_api_url)
-            if not success:
-                return msg, False
-            
-            logger.info(f"TTS pitch changed to: {value}")
-            return f"Pitch changed to {value}.", True
-
-        elif function_name == "set_tts_speed":
-            value = arguments.get('value')
-            if value is None:
-                return "Speed value is required. Recommended range: 0.9 to 1.3.", False
-            
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                return "Speed must be a number.", False
-            
-            if value < 0.5 or value > 2.0:
-                return "Speed must be between 0.5 and 2.0. Recommended range: 0.9 to 1.3.", False
-            
-            success, msg = _update_chat_setting('speed', value, headers, main_api_url)
-            if not success:
-                return msg, False
-            
-            logger.info(f"TTS speed changed to: {value}")
-            return f"Speed changed to {value}.", True
+                if scope == 'all':
+                    # Get all functions via API
+                    response = requests.get(
+                        f"{main_api_url}/api/functions",
+                        headers=headers,
+                        timeout=5
+                    )
+                    
+                    if response.status_code != 200:
+                        return f"Failed to get functions: {response.text}", False
+                    
+                    data = response.json()
+                    modules = data.get('modules', {})
+                    
+                    lines = [f"All tools ({data.get('total_functions', 0)} total):"]
+                    
+                    for module_name, module_info in sorted(modules.items()):
+                        for func in module_info.get('functions', []):
+                            name = func['name']
+                            desc = func.get('description', '')[:60]
+                            if len(func.get('description', '')) > 60:
+                                desc += '...'
+                            status = "✓" if func.get('enabled') else "✗"
+                            lines.append(f"  [{status}] {name}: {desc}")
+                    
+                    lines.append(f"\n✓ = enabled, ✗ = inactive")
+                    return '\n'.join(lines), True
+                else:
+                    # Get current ability info via API
+                    response = requests.get(
+                        f"{main_api_url}/api/abilities/current",
+                        headers=headers,
+                        timeout=5
+                    )
+                    
+                    if response.status_code != 200:
+                        return f"Failed to get current ability: {response.text}", False
+                    
+                    data = response.json()
+                    ability_name = data.get('name', 'unknown')
+                    enabled_functions = data.get('enabled_functions', [])
+                    
+                    lines = [f"Enabled tools ({len(enabled_functions)}) - Ability: {ability_name}"]
+                    
+                    # Get full function details for descriptions
+                    func_response = requests.get(
+                        f"{main_api_url}/api/functions",
+                        headers=headers,
+                        timeout=5
+                    )
+                    
+                    desc_map = {}
+                    if func_response.status_code == 200:
+                        for module_info in func_response.json().get('modules', {}).values():
+                            for func in module_info.get('functions', []):
+                                desc_map[func['name']] = func.get('description', '')
+                    
+                    for name in enabled_functions:
+                        desc = desc_map.get(name, '')[:60]
+                        if len(desc_map.get(name, '')) > 60:
+                            desc += '...'
+                        lines.append(f"  {name}: {desc}")
+                    
+                    if not enabled_functions:
+                        lines.append("  (no tools enabled)")
+                    
+                    return '\n'.join(lines), True
+                    
+            except Exception as e:
+                logger.error(f"Error listing tools: {e}")
+                return f"Error listing tools: {e}", False
 
         # === Monolith-only tools ===
         
