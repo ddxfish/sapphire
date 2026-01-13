@@ -36,3 +36,32 @@ Note, I didn't ever use categories, they are for human eyes, any category works.
 
 - Keep snippets vague enough to fit any scene
 - Short phrases work better than sentences
+
+## Reference for AI
+
+Spices inject random prompt snippets to prevent repetitive outputs.
+
+SETUP:
+1. Open Spice Manager (sidebar or settings)
+2. Add snippets to any category (categories are cosmetic only)
+3. Enable spice in Chat Settings dropdown
+4. Set rotation interval (how many messages before new spice)
+
+HOW IT WORKS:
+- One random snippet injects into system prompt per interval
+- Categories collapse on read - all snippets are in one pool
+- Stored in user/prompts/prompt_spices.json
+
+GOOD SPICES:
+- "Something unexpected happens" (vague, fits any scene)
+- "Use 3 paragraphs" (format control)
+- "An old memory surfaces" (story catalyst)
+
+BAD SPICES:
+- "The dragon attacks" (too specific)
+- Long paragraphs (bloats prompt)
+
+TROUBLESHOOTING:
+- Spices not changing: Check rotation interval in Chat Settings
+- No effect: Verify spice is enabled in Chat Settings dropdown
+- Edit spices: Spice Manager in sidebar, or edit prompt_spices.json directly

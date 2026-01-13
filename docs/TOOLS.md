@@ -239,3 +239,40 @@ User file overrides `core/modules/system/toolsets/toolsets.json`.
 | `core/modules/system/toolsets/toolsets.json` | Default toolsets |
 | `user/toolsets/toolsets.json` | Your toolset overrides |
 | `core/chat/function_manager.py` | Tool loading system |
+
+## Reference for AI
+
+Tools are functions the AI calls to interact with systems - web search, memory, device control.
+
+CORE TOOLS AVAILABLE:
+- save_memory(content, keywords) - store info for later
+- search_memory(query) - find stored memories
+- get_recent_memories(count) - get latest memories
+- search_for_urls(query) - web search, returns URLs
+- get_website_from_url(url) - fetch webpage content
+- get_wikipedia(topic) - get Wikipedia article
+- research_topic(topic) - multi-source research
+
+META TOOLS (self-modification):
+- view_prompt() - see current system prompt
+- switch_prompt(name) - change active prompt
+- edit_prompt(content) - replace monolith prompt
+- set_piece/remove_piece/create_piece - edit assembled prompts
+- change_ai_name/change_username - update names
+- set_tts_voice/pitch/speed - adjust voice
+
+TOOL AVAILABILITY:
+- Tools filtered by active toolset (ability)
+- Check toolset in Chat Settings dropdown
+- "Tool not found" = not in current toolset
+
+HOW TOOLS WORK:
+- AI decides when to call based on context
+- Can call multiple tools per response
+- Results returned to AI to incorporate in reply
+- Yellow highlight in UI = tool uses network/cloud
+
+TROUBLESHOOTING:
+- Tool not working: Check it's in active toolset
+- "No executor": Tool file missing or has errors
+- Network tools failing: Check SOCKS proxy if enabled, or network connection

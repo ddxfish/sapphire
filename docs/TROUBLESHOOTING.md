@@ -1,3 +1,4 @@
+<!-- AI_INCLUDE_FULL: Common issues and fixes for audio, LLM, web UI, and performance -->
 # Troubleshooting
 
 ## Startup Issues

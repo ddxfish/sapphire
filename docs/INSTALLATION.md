@@ -154,3 +154,51 @@ journalctl --user -u sapphire -f
 ## Making It Yours
 
 At this point, try Sapphire. If you want to make it yours, continue with [CONFIGURATION.md](CONFIGURATION.md)
+
+## Reference for AI
+
+Help users install and run Sapphire.
+
+REQUIREMENTS:
+- Ubuntu 22.04+ or Windows 11+
+- Python 3.10+ (3.11 recommended)
+- 16GB+ RAM
+- Local LLM server (LM Studio easiest)
+- Optional: Nvidia GPU for faster TTS/STT
+
+QUICK INSTALL:
+```
+conda create -n sapphire python=3.11
+conda activate sapphire
+git clone https://github.com/ddxfish/sapphire.git
+cd sapphire
+pip install -r requirements.txt
+python main.py
+```
+
+OPTIONAL FEATURES:
+- TTS: pip install -r requirements-tts.txt
+- STT: pip install -r requirements-stt.txt
+- Wakeword: pip install -r requirements-wakeword.txt
+(Enable each in Settings after install, then restart)
+
+LLM SETUP:
+- Install LM Studio, download model (Qwen3 8B good start)
+- Enable API in LM Studio (Developer tab)
+- Sapphire connects to http://127.0.0.1:1234/v1 by default
+
+FIRST RUN:
+1. python main.py
+2. Open https://localhost:8073
+3. Accept SSL warning (self-signed cert)
+4. Complete setup wizard
+5. Send test message
+
+TROUBLESHOOTING INSTALL:
+- "No module found": pip install -r requirements.txt in conda env
+- "libportaudio": sudo apt install libportaudio2 (Linux)
+- "Connection refused": LLM server not running
+- SSL warning: Normal, accept it (or disable in settings)
+
+UPDATE:
+cd sapphire && git pull (preserves user/ directory)

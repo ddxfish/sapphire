@@ -36,3 +36,33 @@ The AI writes prompts using "me" (itself) and "you" (the human). These get repla
 ## Usage
 
 Once configured, the AI can use the `generate_scene_image` tool automatically when describing scenes. Images appear inline in the chat.
+
+## Reference for AI
+
+Generate images via SDXL server using generate_scene_image tool.
+
+REQUIREMENTS:
+- Separate image server running (sapphire-image-api)
+- Server URL configured in Settings > Plugins > Image Generation
+- generate_scene_image tool in active toolset
+
+HOW TO USE:
+- Call generate_scene_image(prompt) with scene description
+- Use "me" for AI character, "you" for user - auto-replaced with configured descriptions
+- Image appears inline in chat
+
+PROMPT TIPS:
+- Describe scene, not technical params
+- "me and you sitting by a campfire at sunset" works
+- Static keywords and negative prompt auto-appended
+
+SETTINGS (user configures, not AI):
+- Width/Height: 256-2048 pixels
+- Steps: quality vs speed (more = better, slower)
+- CFG Scale: prompt adherence (1-20)
+- Character descriptions: physical appearance for "me" and "you"
+
+TROUBLESHOOTING:
+- "Tool not found": Add generate_scene_image to toolset
+- "Connection failed": Check image server running, verify URL in settings
+- Bad images: User should adjust steps, CFG, or negative prompt in settings

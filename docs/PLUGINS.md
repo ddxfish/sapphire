@@ -215,3 +215,37 @@ The script runs as a subprocess via ProcessManager. Lower `startup_order` = star
 | `core/modules/` | Core system modules (same structure) |
 | `core/chat/module_loader.py` | Plugin loading |
 | `core/event_handler.py` | Scheduled events |
+
+## Reference for AI
+
+Plugins are keyword-triggered extensions. Different from tools (AI-called functions).
+
+PLUGIN VS TOOL:
+- Plugin: USER triggers with keyword ("backup", "time")
+- Tool: AI decides to call based on context
+
+BUILT-IN PLUGINS:
+- backup: Keyword "backup" - creates user data backup
+- stop: Keyword "stop" - halts TTS playback
+- reset: Keyword "reset" - clears chat history
+- time_date: Keyword "time" - returns current time
+
+PLUGIN LOCATIONS:
+- plugins/ - Shared plugins (git tracked)
+- user/plugins/ - Custom plugins (gitignored)
+- core/modules/ - Core system modules (same structure)
+
+ENABLE/DISABLE:
+- Settings > System > PLUGINS_ENABLED (global toggle)
+- Individual plugins: set "enabled": false in prompt_details.json
+
+CREATING PLUGINS:
+- Need: plugin_name.py + prompt_details.json in folder
+- prompt_details.json defines keywords and metadata
+- plugin.py has process(user_input) function
+- Feed PLUGINS.md to AI to generate new ones
+
+TROUBLESHOOTING:
+- Plugin not triggering: Check keyword in prompt_details.json, check PLUGINS_ENABLED=true
+- "Module not found": Check plugin folder structure, look for import errors in logs
+- Keyword conflict: Multiple plugins with same keyword - first loaded wins

@@ -271,3 +271,45 @@ See dedicated docs:
 | `core/chat/history.py` | Session management |
 | `core/event_handler.py` | Scheduled events |
 | `interfaces/web/web_interface.py` | Web proxy, auth |
+
+## Reference for AI
+
+Sapphire architecture overview for troubleshooting and development.
+
+PROCESSES:
+- main.py: Entry point, spawns subprocesses
+- sapphire.py: Core VoiceChatSystem (LLM, TTS, STT orchestration)
+- web_interface.py: Web UI proxy (port 8073, HTTPS)
+- core/api.py: Internal API (port 8071, HTTP)
+- TTS server: Kokoro (port 5012, if enabled)
+
+PORTS:
+- 8073: Web UI (HTTPS, user-facing)
+- 8071: Internal API (HTTP, localhost only)
+- 5012: TTS server (if enabled)
+- 1234: Default LLM server (LM Studio)
+
+KEY DIRECTORIES:
+- core/: Main application code
+- functions/: AI-callable tools
+- plugins/: Keyword-triggered modules
+- interfaces/web/: Web UI (Flask + static JS)
+- user/: All user data (settings, history, prompts)
+- docs/: Documentation
+
+DATA FILES:
+- user/settings.json: All settings
+- user/history/*.json: Chat sessions
+- user/prompts/*.json: Prompt definitions
+- user/memory/: Memory storage
+
+HOT RELOAD:
+- Settings: ~2s after file change
+- Prompts: ~2s after file change
+- Toolsets: ~2s after file change
+- Code changes: Require restart
+
+LOGS:
+- user/logs/sapphire.log: Main log
+- user/logs/tts.log: TTS server log
+- Check logs for errors: grep -i error user/logs/*.log

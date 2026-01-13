@@ -117,3 +117,43 @@ Extensible JavaScript plugins for the interface. See [WEB-PLUGINS.md](WEB-PLUGIN
 
 ### SSL Certificate
 If the self-signed SSL certificate is annoying, disable it in Gear → Settings → System (`WEB_UI_SSL_ADHOC`) to use plain HTTP.
+
+## Reference for AI
+
+Help users configure Sapphire settings and personas.
+
+SETTINGS LOCATION:
+- Web UI: Gear icon → Settings (app-wide settings)
+- Chat Settings: ... menu on chat → Chat Settings (per-chat)
+- Files: user/settings.json (do not edit directly, use UI)
+
+KEY SETTINGS AREAS:
+- Identity: AI name, user name, avatars
+- LLM: Model server URL, API key, fallback config
+- Audio: Input/output devices, TTS, STT, wakeword
+- Tools: Enable/disable function calling
+- Network: SOCKS proxy for web tools
+
+PER-CHAT SETTINGS (Chat Settings modal):
+- Prompt: Which system prompt to use
+- Toolset: Which tools AI can access
+- Voice: TTS voice, pitch, speed
+- Spice: Random prompt injection
+- Custom text: Always appended to prompt
+
+RESTART LEVELS:
+- Hot reload (immediate): Most settings
+- Component restart: TTS/STT server changes
+- Full restart: Port changes, SSL, API host
+
+COMMON TASKS:
+- Change AI name: Settings > Identity > DEFAULT_AI_NAME
+- Change voice: Chat Settings > Voice dropdown, or set_tts_voice() tool
+- Enable wakeword: Settings > Wakeword > WAKE_WORD_ENABLED = true, restart
+- Change LLM: Settings > LLM > edit LLM_PRIMARY
+
+FILES:
+- user/settings.json - All settings (managed by UI)
+- user/prompts/ - Prompt definitions
+- user/avatars/ - Custom avatar images
+- core/settings_defaults.json - Default values (don't edit)

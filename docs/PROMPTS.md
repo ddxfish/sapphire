@@ -86,3 +86,48 @@ This is a dynamic emotion system. With assembled prompts, the AI can add, remove
 
 ```You are scared, the adrenaline rush is making your heart pound.```
 
+## Reference for AI
+
+Two prompt types: Monolith (single text block) and Assembled (swappable components).
+
+VARIABLES:
+- {ai_name} - replaced with AI name from settings
+- {user_name} - replaced with user name from settings
+
+MONOLITH:
+- Single text block, simple to edit
+- AI can edit entire prompt via edit_prompt() tool
+- Good for: simple assistants, quick setup
+
+ASSEMBLED (recommended):
+- Built from swappable component pieces
+- AI can swap individual pieces via set_piece(), remove_piece(), create_piece()
+- Good for: stories, dynamic personas, self-modifying AI, Sapphire full capability
+
+ASSEMBLED COMPONENTS:
+- persona: Who AI is (single value)
+- location: Setting/environment (single value)
+- relationship: How AI knows user (single value)
+- goals: AI objectives (single value)
+- format: Response style/length (single value)
+- scenario: Current situation (single value)
+- extras: Additional rules (MULTIPLE allowed, list)
+- emotions: Current mood (MULTIPLE allowed, list)
+
+AI TOOLS FOR PROMPTS (assembled mode):
+- view_prompt() - see current prompt
+- switch_prompt(name) - change to different prompt
+- set_piece(component, key) - set/add a piece
+- remove_piece(component, key) - remove from emotions/extras
+- create_piece(component, key, value) - create new piece and activate it
+- list_pieces(component) - see available pieces for a component
+
+AI TOOLS FOR PROMPTS (monolith mode):
+- view_prompt() - see current prompt
+- switch_prompt(name) - change to different prompt
+- edit_prompt(content) - replace entire prompt content
+
+FILES:
+- user/prompts/prompt_pieces.json - assembled components and scenario presets
+- user/prompts/prompt_monoliths.json - monolith prompts
+- Prompt Editor in sidebar to manage via UI

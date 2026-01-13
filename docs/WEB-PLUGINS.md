@@ -243,3 +243,34 @@ Use CSS variables for theme compatibility:
 | `interfaces/web/static/plugin-loader.js` | Plugin loading system |
 | `interfaces/web/plugins_api.py` | Backend API for plugin settings |
 | `user/webui/plugins/` | User plugin settings storage |
+
+## Reference for AI
+
+Web plugins extend the browser-based UI (JavaScript, not Python).
+
+WEB PLUGIN VS BACKEND PLUGIN:
+- Web plugin: Runs in browser, modifies UI (JavaScript)
+- Backend plugin: Runs on server, keyword-triggered (Python)
+
+BUILT-IN WEB PLUGINS:
+- settings-modal: App settings UI
+- prompt-manager: Prompt editor
+- spice-manager: Spice editor
+- ability-manager: Toolset editor
+- backup: Backup management UI
+- setup-wizard: First-run configuration
+
+PLUGIN LOCATIONS:
+- interfaces/web/static/plugins/ - Built-in plugins
+- user/webui/plugins/ - Plugin settings storage
+
+CREATING WEB PLUGINS:
+- Create folder in interfaces/web/static/plugins/
+- Add index.js with default export (name, init, destroy)
+- Register in plugins.json
+- Feed WEB-PLUGINS.md to AI to generate
+
+TROUBLESHOOTING:
+- Plugin not showing: Check plugins.json, verify enabled: true
+- JavaScript errors: Check browser console (F12)
+- Settings not saving: Verify API endpoint in plugin code

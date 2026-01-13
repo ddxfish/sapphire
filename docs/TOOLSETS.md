@@ -9,3 +9,34 @@ Use the UI to edit tool sets. Look in the sidebar for Toolset Editor. You can si
 ## Quick switch
 
 You can quick-switch the active toolset below the user chat input. Each chat/persona has its own toolset saved in the chat history file, so if you switch to another chat, it activates that toolset.
+
+## Reference for AI
+
+Toolsets are named groups of tools/functions the AI can access.
+
+BUILT-IN TOOLSETS:
+- default: Core tools (memory, web search, meta)
+- memory: Just memory tools
+- web: Just web tools
+- all: Every available tool
+- none: No tools (text-only mode)
+
+HOW IT WORKS:
+- Each chat stores its active toolset in chat history
+- Switching chats switches toolsets automatically
+- Toolset Editor in sidebar to create/edit custom sets
+
+MANAGE TOOLSETS:
+- UI: Sidebar > Toolset Editor
+- Files: core/modules/system/toolsets/toolsets.json (defaults), user/toolsets/toolsets.json (custom)
+- User file completely overrides defaults if present
+
+CREATE CUSTOM TOOLSET:
+1. Open Toolset Editor in sidebar
+2. Name your toolset
+3. Check the functions you want included
+4. Save - available immediately in Chat Settings dropdown
+
+SWITCH ACTIVE TOOLSET:
+- Chat Settings dropdown below input (pill buttons)
+- Or via ability tool if available
