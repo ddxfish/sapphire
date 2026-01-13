@@ -1,17 +1,20 @@
 {
   "_comment": "Default toolsets - copy to user/toolsets/toolsets.json to customize",
-  "default": {
+  "setup": {
     "functions": [
-      "get_memories",
-      "search_memory"
-    ]
-  },
-  "work": {
-    "functions": [
-      "search_for_urls",
-      "get_website_from_url",
-      "get_wikipedia",
-      "research_topic"
+      "list_tools",
+      "search_help_docs",
+      "view_prompt",
+      "switch_prompt",
+      "reset_chat",
+      "edit_prompt",
+      "set_piece",
+      "remove_piece",
+      "create_piece",
+      "list_pieces",
+      "change_ai_name",
+      "change_username",
+      "set_tts_voice"
     ]
   }
 }

@@ -28,14 +28,12 @@ class FunctionManager:
         self._network_functions = set()  # Function names that require network access
         
         # Track what was REQUESTED, not reverse-engineered
-        self.current_ability_name = "default"
+        self.current_ability_name = "none"
         
         self._load_function_modules()
         
-        # Initialize with default toolset from toolset_manager
-        default_toolset = toolset_manager.get_toolset('default')
-        default_functions = default_toolset.get('functions', [])
-        self.update_enabled_functions(default_functions if default_functions else ['default'])
+        # Initialize with no tools - user/chat settings will override
+        self.update_enabled_functions(['none'])
 
     def _load_function_modules(self):
         """Dynamically load all function modules from functions/ and user/functions/."""
