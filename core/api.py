@@ -310,6 +310,12 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             # Check if enabled tools include network/cloud tools (uses NETWORK flag from modules)
             has_cloud_tools = system_instance.llm_chat.function_manager.has_network_tools_enabled()
             
+            # Get spice state
+            chat_settings = system_instance.llm_chat.session_manager.get_chat_settings()
+            spice_enabled = chat_settings.get('spice_enabled', True)
+            current_spice = prompts.get_current_spice()
+            is_assembled = prompts.is_assembled_mode()
+            
             return jsonify({
                 "prompt": prompt_state,
                 "prompt_name": prompts.get_active_preset_name(),
@@ -317,7 +323,12 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 "functions": function_names,
                 "ability": ability_info,
                 "tts_enabled": config.TTS_ENABLED,
-                "has_cloud_tools": has_cloud_tools
+                "has_cloud_tools": has_cloud_tools,
+                "spice": {
+                    "current": current_spice,
+                    "enabled": spice_enabled,
+                    "available": is_assembled  # Only works in assembled mode
+                }
             })
         except Exception as e:
             logger.error(f"Error getting system status: {e}")

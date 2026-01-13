@@ -32,7 +32,8 @@ import {
     showAbilityDropdown, 
     handlePillRightClick,
     handleOutsideClick,
-    closePillDropdowns
+    closePillDropdowns,
+    handleSpiceToggle
 } from '../features/pills.js';
 
 // Handlers
@@ -125,6 +126,9 @@ export function bindAllEvents() {
     el.abilityPill?.addEventListener('click', showAbilityDropdown);
     el.promptPill?.addEventListener('contextmenu', handlePillRightClick);
     el.abilityPill?.addEventListener('contextmenu', handlePillRightClick);
+    
+    // Spice indicator
+    el.spiceIndicator?.addEventListener('click', handleSpiceToggle);
     
     // Close dropdowns and sidebar on outside click
     document.addEventListener('click', e => {

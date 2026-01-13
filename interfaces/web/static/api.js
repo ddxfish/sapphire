@@ -291,3 +291,7 @@ export const updateChatSettings = (chatName, settings) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ settings })
   }, 10000);
+
+export const toggleSpice = async (chatName, enabled) => {
+  return updateChatSettings(chatName, { spice_enabled: enabled });
+};

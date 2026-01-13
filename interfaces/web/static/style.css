@@ -795,6 +795,86 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     padding: var(--space-sm) 0 0;
 }
 
+/* Spice Indicator */
+.spice-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all var(--transition-normal);
+    position: relative;
+    opacity: 0.5;
+}
+
+.spice-indicator:hover {
+    opacity: 0.8;
+    border-color: var(--border-hover);
+}
+
+.spice-indicator.active {
+    opacity: 1;
+    background: var(--trim-light, var(--bg-tertiary));
+    border-color: var(--trim, var(--border-hover));
+}
+
+.spice-indicator.active:hover {
+    background: var(--trim, var(--bg-hover));
+}
+
+.spice-indicator.unavailable {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.spice-indicator.unavailable:hover {
+    opacity: 0.4;
+    border-color: var(--border);
+}
+
+.spice-indicator:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.spice-icon {
+    font-size: 16px;
+    line-height: 1;
+}
+
+.spice-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 8px 12px;
+    font-size: var(--font-xs);
+    color: var(--text-light);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    pointer-events: none;
+    z-index: 100;
+    min-width: 180px;
+    max-width: 300px;
+    white-space: pre-wrap;
+    text-align: left;
+}
+
+.spice-indicator:hover .spice-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0.3s;
+}
+
 .pill {
     display: inline-flex;
     align-items: center;
@@ -840,12 +920,12 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     padding: 8px 12px;
     font-size: var(--font-xs);
     color: var(--text-light);
-    white-space: nowrap;
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.2s ease, visibility 0.2s ease;
     pointer-events: none;
     z-index: 100;
+    min-width: 180px;
     max-width: 300px;
     white-space: pre-wrap;
     text-align: left;
@@ -1091,6 +1171,8 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     
     .pill-bar { gap: var(--space-sm); padding: var(--space-sm) 0 0; }
     .pill { padding: var(--space-xs) var(--space-sm); font-size: 10px; }
+    .spice-indicator { width: 28px; height: 28px; }
+    .spice-icon { font-size: 14px; }
     
     /* Reduce button sizes on mobile for more text space */
     #mic-btn {

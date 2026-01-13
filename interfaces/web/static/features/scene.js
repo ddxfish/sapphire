@@ -50,7 +50,44 @@ export async function updateScene() {
         
         updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count);
         updateFuncs(status?.functions, status?.ability, hasCloudTools);
+        updateSpice(status?.spice);
     } catch {}
+}
+
+function updateSpice(spice) {
+    const { spiceIndicator } = getElements();
+    if (!spiceIndicator) return;
+    
+    const tooltipEl = spiceIndicator.querySelector('.spice-tooltip');
+    
+    // Handle missing spice data
+    if (!spice) {
+        spiceIndicator.classList.remove('active', 'unavailable');
+        spiceIndicator.title = 'Spice status unknown';
+        tooltipEl.textContent = '';
+        return;
+    }
+    
+    // Not available in monolith mode
+    if (!spice.available) {
+        spiceIndicator.classList.remove('active');
+        spiceIndicator.classList.add('unavailable');
+        spiceIndicator.title = 'Spice unavailable (monolith prompt)';
+        tooltipEl.textContent = 'Monolith mode';
+        return;
+    }
+    
+    spiceIndicator.classList.remove('unavailable');
+    
+    if (spice.enabled) {
+        spiceIndicator.classList.add('active');
+        spiceIndicator.title = 'Spice enabled (click to disable)';
+        tooltipEl.textContent = spice.current || 'No spice yet';
+    } else {
+        spiceIndicator.classList.remove('active');
+        spiceIndicator.title = 'Spice disabled (click to enable)';
+        tooltipEl.textContent = 'Spice disabled';
+    }
 }
 
 function updatePrompt(state, promptName, charCount) {

@@ -1,5 +1,6 @@
 // features/pills.js - Prompt and ability pill dropdowns
 import * as ui from '../ui.js';
+import * as api from '../api.js';
 import { getElements } from '../core/state.js';
 import { updateScene } from './scene.js';
 import { openSettingsModal } from './chat-settings.js';
@@ -8,6 +9,32 @@ export function closePillDropdowns() {
     const { promptPill, abilityPill } = getElements();
     promptPill?.classList.remove('dropdown-open');
     abilityPill?.classList.remove('dropdown-open');
+}
+
+export async function handleSpiceToggle(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const { spiceIndicator } = getElements();
+    const chatSelect = document.getElementById('chat-select');
+    if (!spiceIndicator || !chatSelect?.value) return;
+    
+    // Don't toggle if unavailable (monolith mode)
+    if (spiceIndicator.classList.contains('unavailable')) {
+        ui.showToast('Spice unavailable in monolith mode', 'info');
+        return;
+    }
+    
+    const isCurrentlyEnabled = spiceIndicator.classList.contains('active');
+    const newState = !isCurrentlyEnabled;
+    
+    try {
+        await api.toggleSpice(chatSelect.value, newState);
+        await updateScene();
+        ui.showToast(newState ? 'Spice enabled' : 'Spice disabled', 'success');
+    } catch (err) {
+        ui.showToast(`Failed: ${err.message}`, 'error');
+    }
 }
 
 export async function showPromptDropdown(e) {

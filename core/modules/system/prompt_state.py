@@ -160,6 +160,11 @@ def clear_spice():
     return "Spice cleared"
 
 
+def get_current_spice():
+    """Get the currently active spice text, or empty string if none."""
+    return _assembled_state.get("spice", "")
+
+
 def assemble_prompt():
     """Assemble prompt from pieces."""
     components = prompt_manager.components

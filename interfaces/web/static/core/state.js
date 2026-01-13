@@ -17,6 +17,7 @@ export function initElements() {
         stopTtsBtn: document.getElementById('stop-tts-btn'),
         promptPill: document.getElementById('prompt-pill'),
         abilityPill: document.getElementById('ability-pill'),
+        spiceIndicator: document.getElementById('spice-indicator'),
         container: document.getElementById('chat-container'),
         chatSelect: document.getElementById('chat-select'),
         settingsModal: document.getElementById('settings-modal'),
