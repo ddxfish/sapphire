@@ -10,10 +10,8 @@ export function buildMainUI() {
       <div class="pm-control-buttons">
         <button id="pm-new-btn" class="plugin-btn" title="New">+</button>
         <button id="pm-refresh-btn" class="plugin-btn" title="Refresh">&#x1F504;</button>
-        <button id="pm-save-btn" class="plugin-btn" title="Save">&#x1F4BE;</button>
         <button id="pm-delete-btn" class="plugin-btn" title="Delete">&#x1F5D1;</button>
         <button id="pm-preview-btn" class="plugin-btn" title="Preview">&#x1F50D;</button>
-        <button id="pm-load-btn" class="plugin-btn" title="Activate">&#x26A1;</button>
       </div>
     </div>
     <div id="pm-editor" class="pm-editor">

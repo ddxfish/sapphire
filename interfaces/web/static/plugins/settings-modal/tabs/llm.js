@@ -90,10 +90,33 @@ export default {
       lmstudio: { display_name: 'LM Studio', is_local: true, model_options: null, required_fields: ['base_url'], default_timeout: 0.3 },
       claude: { display_name: 'Claude', is_local: false, model_options: { 'claude-sonnet-4-5': 'Sonnet 4.5', 'claude-haiku-4-5': 'Haiku 4.5', 'claude-opus-4-5': 'Opus 4.5' }, required_fields: ['api_key', 'model'], api_key_env: 'ANTHROPIC_API_KEY', default_timeout: 10.0 },
       fireworks: { display_name: 'Fireworks', is_local: false, model_options: { 'accounts/fireworks/models/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking' }, required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'FIREWORKS_API_KEY', default_timeout: 10.0 },
-      openai: { display_name: 'OpenAI', is_local: false, model_options: { 'gpt-4o': 'GPT-4o', 'gpt-4o-mini': 'GPT-4o Mini' }, required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'OPENAI_API_KEY', default_timeout: 10.0 },
+      openai: { display_name: 'OpenAI', is_local: false, model_options: { 'gpt-5.2': 'GPT-5.2 (Flagship)', 'gpt-5.2-pro': 'GPT-5.2 Pro', 'gpt-5.1': 'GPT-5.1', 'gpt-5-mini': 'GPT-5 Mini', 'gpt-4o': 'GPT-4o (Legacy)' }, required_fields: ['base_url', 'api_key', 'model'], api_key_env: 'OPENAI_API_KEY', default_timeout: 10.0 },
       other: { display_name: 'Other (OpenAI Compatible)', is_local: false, model_options: null, required_fields: ['base_url', 'api_key', 'model'], default_timeout: 10.0 }
     };
     return defaults[key] || {};
+  },
+
+  refreshModelDropdowns(container) {
+    // Update model dropdowns with real metadata after API fetch
+    container.querySelectorAll('.model-select').forEach(select => {
+      const key = select.dataset.provider;
+      const meta = providerMetadata[key];
+      if (!meta?.model_options) return;
+      
+      const currentValue = select.value;
+      const modelKeys = Object.keys(meta.model_options);
+      const isCustom = currentValue === '__custom__' || (currentValue && !modelKeys.includes(currentValue));
+      
+      // Rebuild options
+      select.innerHTML = modelKeys.map(m =>
+        `<option value="${m}" ${currentValue === m ? 'selected' : ''}>${meta.model_options[m]}</option>`
+      ).join('') + `<option value="__custom__" ${isCustom ? 'selected' : ''}>Other (custom)</option>`;
+      
+      // Preserve custom selection
+      if (isCustom && currentValue !== '__custom__') {
+        select.value = '__custom__';
+      }
+    });
   },
 
   renderGeneralSettings(modal) {
@@ -110,6 +133,9 @@ export default {
     try {
       const data = await fetchProviderData();
       providerMetadata = data.metadata || {};
+      
+      // Refresh model dropdowns with real metadata (fixes race condition)
+      this.refreshModelDropdowns(container);
     } catch (e) {
       console.warn('Could not load provider metadata:', e);
     }

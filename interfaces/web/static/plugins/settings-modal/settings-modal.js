@@ -2,6 +2,7 @@
 import settingsAPI from './settings-api.js';
 import { TABS, CATEGORIES } from './settings-categories.js';
 import { showToast, showActionToast } from '../../shared/toast.js';
+import { updateScene } from '../../features/scene.js';
 
 class SettingsModal {
   constructor() {
@@ -507,6 +508,12 @@ class SettingsModal {
     try {
       await settingsAPI.resetPrompts();
       showToast('✓ All prompts reset to factory defaults', 'success');
+      
+      // Refresh pill to show new active prompt
+      await updateScene();
+      
+      // Notify prompt editor to refresh
+      window.dispatchEvent(new CustomEvent('prompts-changed'));
     } catch (e) {
       showToast('Reset failed: ' + e.message, 'error');
     }
@@ -528,6 +535,12 @@ class SettingsModal {
     try {
       await settingsAPI.mergePrompts();
       showToast('✓ Factory defaults merged into prompts', 'success');
+      
+      // Refresh pill in case active prompt changed
+      await updateScene();
+      
+      // Notify prompt editor to refresh
+      window.dispatchEvent(new CustomEvent('prompts-changed'));
     } catch (e) {
       showToast('Merge failed: ' + e.message, 'error');
     }

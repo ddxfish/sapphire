@@ -244,6 +244,7 @@ def create_prompts_api(system_instance=None):
         """Reset all prompt files to factory defaults (destructive)."""
         try:
             from core.setup import reset_prompt_files
+            from core.chat.history import get_user_defaults
             
             success = reset_prompt_files()
             if not success:
@@ -251,6 +252,32 @@ def create_prompts_api(system_instance=None):
             
             # Reload prompt manager to pick up changes
             prompts.reload()
+            
+            # Validate active prompt still exists, fallback to user's default if not
+            active_name = prompts.get_active_preset_name()
+            available = prompts.list_prompts()
+            if active_name not in available:
+                # Get user's configured default prompt (from chat_defaults.json)
+                user_defaults = get_user_defaults()
+                fallback_prompt = user_defaults.get('prompt', 'sapphire')
+                
+                # Make sure the fallback exists, otherwise use first available
+                if fallback_prompt not in available and available:
+                    fallback_prompt = available[0]
+                
+                logger.info(f"Active prompt '{active_name}' no longer exists after reset, falling back to '{fallback_prompt}'")
+                prompts.set_active_preset_name(fallback_prompt)
+                
+                # Update chat JSON if system available
+                if system_instance and hasattr(system_instance, 'llm_chat'):
+                    session_manager = system_instance.llm_chat.session_manager
+                    session_manager.update_chat_settings({'prompt': fallback_prompt})
+                    
+                    # Apply fallback prompt to LLM
+                    prompt_data = prompts.get_prompt(fallback_prompt)
+                    if prompt_data:
+                        content = prompt_data.get('content', '')
+                        system_instance.llm_chat.set_system_prompt(content)
             
             return jsonify({
                 'status': 'success',

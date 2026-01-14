@@ -59,6 +59,45 @@ class OpenAICompatProvider(BaseProvider):
             logger.debug(f"Health check failed for {self.base_url}: {e}")
             return False
     
+    def _transform_params_for_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform generation params for model compatibility.
+        
+        GPT-5+ and o1/o3 reasoning models:
+        - Use max_completion_tokens instead of max_tokens
+        - Don't support temperature, top_p, presence_penalty, frequency_penalty
+        
+        This handles conversions transparently so callers don't need to care.
+        """
+        if not params:
+            return params
+        
+        result = dict(params)
+        model_lower = (self.model or '').lower()
+        
+        # Detect reasoning models (GPT-5+, o1, o3)
+        is_reasoning_model = (
+            model_lower.startswith('gpt-5') or 
+            model_lower.startswith('o1') or 
+            model_lower.startswith('o3')
+        )
+        
+        if is_reasoning_model:
+            # max_tokens → max_completion_tokens
+            if 'max_tokens' in result:
+                result['max_completion_tokens'] = result.pop('max_tokens')
+            
+            # Remove unsupported sampling params (reasoning models don't use these)
+            removed = []
+            for unsupported in ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']:
+                if unsupported in result:
+                    result.pop(unsupported)
+                    removed.append(unsupported)
+            
+            if removed:
+                logger.debug(f"Filtered unsupported params for {self.model}: {removed}")
+        
+        return result
+    
     def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -67,7 +106,7 @@ class OpenAICompatProvider(BaseProvider):
     ) -> LLMResponse:
         """Send non-streaming chat completion request."""
         
-        params = generation_params or {}
+        params = self._transform_params_for_model(generation_params or {})
         request_kwargs = {
             "model": self.model,
             "messages": messages,
@@ -90,7 +129,7 @@ class OpenAICompatProvider(BaseProvider):
     ) -> Generator[Dict[str, Any], None, None]:
         """Send streaming chat completion request."""
         
-        params = generation_params or {}
+        params = self._transform_params_for_model(generation_params or {})
         request_kwargs = {
             "model": self.model,
             "messages": messages,

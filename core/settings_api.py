@@ -635,7 +635,16 @@ def create_settings_api():
                 "details": f"Model '{model}' not available - check model name"
             }), 404
         
-        # Rate limiting
+        # Credit/billing/quota issues (check BEFORE generic 429 rate limiting)
+        # OpenAI uses 429 with "insufficient_quota" for billing issues
+        if any(x in error_str for x in ['insufficient_quota', 'exceeded your current quota', 'insufficient', 'credit', 'billing', 'quota exceeded']):
+            return jsonify({
+                "status": "error",
+                "error": "Out of credits",
+                "details": "API credits exhausted - add credits or check billing"
+            }), 402
+        
+        # Rate limiting (actual rate limits, not quota)
         if '429' in error_str or 'rate limit' in error_str or 'too many requests' in error_str:
             return jsonify({
                 "status": "error",
@@ -658,14 +667,6 @@ def create_settings_api():
                 "error": "Server overloaded",
                 "details": "Provider is overloaded - try again in a few minutes"
             }), 503
-        
-        # Credit/billing issues
-        if any(x in error_str for x in ['insufficient', 'credit', 'billing', 'quota', 'exceeded']):
-            return jsonify({
-                "status": "error",
-                "error": "Billing issue",
-                "details": "Check account credits/billing status"
-            }), 402
         
         # Fallback - show actual error
         return jsonify({
