@@ -357,6 +357,7 @@ class TestPromptManagerSaving:
             mgr = PromptManager()
             mgr.USER_DIR = prompts_dir
             mgr._spices = {"humor": ["joke1", "joke2"]}
+            mgr._disabled_categories = set()
             
             mgr.save_spices()
             

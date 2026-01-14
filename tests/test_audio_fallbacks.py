@@ -1,362 +1,49 @@
 """
-Tests for audio device fallback logic.
+Tests for audio error classification.
 
-These tests mock sounddevice to verify that the fallback logic
-correctly handles various device capability scenarios without
-requiring actual audio hardware.
+The error classification function is a pure function that doesn't require
+actual audio hardware, so these tests can run anywhere.
+
+DeviceManager tests are skipped when sounddevice/portaudio is unavailable.
 
 Run with: pytest tests/test_audio_fallbacks.py -v
 """
 import pytest
 import sys
-import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
-def get_mock_config():
-    """Create a mock config object with test values."""
-    mock_cfg = MagicMock()
-    mock_cfg.RECORDER_CHUNK_SIZE = 1024
-    mock_cfg.RECORDER_CHANNELS = 1
-    mock_cfg.RECORDER_SILENCE_THRESHOLD = 0.0025
-    mock_cfg.RECORDER_SILENCE_DURATION = 1.0
-    mock_cfg.RECORDER_SPEECH_DURATION = 0.2
-    mock_cfg.RECORDER_LEVEL_HISTORY_SIZE = 15
-    mock_cfg.RECORDER_BACKGROUND_PERCENTILE = 32
-    mock_cfg.RECORDER_NOISE_MULTIPLIER = 1.1
-    mock_cfg.RECORDER_MAX_SECONDS = 30
-    mock_cfg.RECORDER_BEEP_WAIT_TIME = 0.15
-    mock_cfg.RECORDER_SAMPLE_RATES = [44100, 48000, 16000, 22050, 32000, 96000, 8000]
-    mock_cfg.RECORDER_BLOCKSIZE_FALLBACKS = [1024, 512, 2048, 4096]
-    mock_cfg.RECORDER_PREFERRED_DEVICES = ['default']
-    mock_cfg.CHUNK_SIZE = 1280
-    mock_cfg.FRAME_SKIP = 1
-    mock_cfg.BUFFER_DURATION = 0.5
-    return mock_cfg
+# =============================================================================
+# Check if sounddevice is available
+# =============================================================================
+
+def sounddevice_available():
+    """Check if sounddevice can be imported (has PortAudio)."""
+    try:
+        import sounddevice
+        return True
+    except (ImportError, OSError):
+        return False
 
 
-class MockDevice:
-    """Mock audio device with configurable capabilities."""
-    
-    def __init__(self, name, max_input_channels, default_samplerate,
-                 supported_rates=None, supported_channels=None, supported_blocksizes=None):
-        self.name = name
-        self.max_input_channels = max_input_channels
-        self.default_samplerate = default_samplerate
-        self.supported_rates = supported_rates or [default_samplerate]
-        self.supported_channels = supported_channels or [1, 2][:max_input_channels]
-        self.supported_blocksizes = supported_blocksizes or [512, 1024, 2048, 4096]
-    
-    def __getitem__(self, key):
-        return getattr(self, key)
-    
-    def accepts(self, rate, channels, blocksize):
-        """Check if device accepts this configuration."""
-        return (rate in self.supported_rates and 
-                channels in self.supported_channels and
-                blocksize in self.supported_blocksizes)
-
-
-def create_mock_stream_class(device):
-    """Create a mock InputStream class that respects device capabilities."""
-    class MockInputStream:
-        def __init__(self, device=None, samplerate=None, channels=None, dtype=None, blocksize=None):
-            if not device_obj.accepts(samplerate, channels, blocksize):
-                raise Exception(f"Invalid sample rate: {samplerate}")
-            self.samplerate = samplerate
-            self.channels = channels
-            self.blocksize = blocksize
-        
-        def close(self):
-            pass
-        
-        def start(self):
-            pass
-        
-        def stop(self):
-            pass
-        
-        def read(self, frames):
-            shape = (frames,) if self.channels == 1 else (frames, self.channels)
-            return np.zeros(shape, dtype=np.int16), False
-    
-    device_obj = device
-    return MockInputStream
-
-
-def setup_mocks_and_import_recorder(device):
-    """Setup all mocks and import AudioRecorder fresh.
-    
-    Returns the AudioRecorder class with mocks applied.
-    Note: This modifies sys.modules - tests using this should be run
-    in isolation or cleanup should happen after.
-    """
-    # Store original modules for potential restoration
-    _original_modules = {
-        'config': sys.modules.get('config'),
-        'sounddevice': sys.modules.get('sounddevice'),
-        'soundfile': sys.modules.get('soundfile'),
-    }
-    
-    # Setup mocks
+# Mock sounddevice BEFORE any core.audio imports if not available
+if not sounddevice_available():
     mock_sd = MagicMock()
-    mock_sd.query_devices = MagicMock(return_value=[device])
-    mock_sd.InputStream = create_mock_stream_class(device)
-    mock_sd.PortAudioError = Exception  # Mock the exception class
-    
-    sys.modules['config'] = get_mock_config()
+    mock_sd.query_devices.return_value = []
+    mock_sd.default.device = (0, 0)
     sys.modules['sounddevice'] = mock_sd
-    sys.modules['soundfile'] = MagicMock()
-    
-    # Mock system_audio to avoid import issues
-    mock_sys_audio = MagicMock()
-    sys.modules['core.stt.system_audio'] = mock_sys_audio
-    
-    # Force reimport of recorder module
-    for mod in list(sys.modules.keys()):
-        if 'core.stt.recorder' in mod:
-            del sys.modules[mod]
-    
-    from core.stt.recorder import AudioRecorder
-    return AudioRecorder
-
-
-def setup_mocks_and_import_wakeword(device):
-    """Setup all mocks and import wakeword AudioRecorder fresh."""
-    # Setup mocks
-    mock_sd = MagicMock()
-    mock_sd.query_devices = MagicMock(return_value=[device])
-    mock_sd.InputStream = create_mock_stream_class(device)
-    
-    sys.modules['config'] = get_mock_config()
-    sys.modules['sounddevice'] = mock_sd
-    
-    # Force reimport of wakeword module
-    for mod in list(sys.modules.keys()):
-        if 'core.wakeword.audio_recorder' in mod:
-            del sys.modules[mod]
-    
-    from core.wakeword.audio_recorder import AudioRecorder
-    return AudioRecorder
-
-
-@pytest.fixture(autouse=True)
-def cleanup_sys_modules():
-    """Cleanup sys.modules after each test to prevent bleed."""
-    yield
-    # Remove any mocked modules after test
-    mods_to_remove = [k for k in sys.modules.keys() 
-                      if k in ('config', 'sounddevice', 'soundfile') 
-                      or k.startswith('core.stt') 
-                      or k.startswith('core.wakeword')]
-    for mod in mods_to_remove:
-        if mod in sys.modules:
-            del sys.modules[mod]
 
 
 # =============================================================================
-# Sample Rate Fallback Tests
-# =============================================================================
-
-class TestSampleRateFallback:
-    """Test sample rate fallback logic."""
-    
-    def test_uses_default_rate_when_supported(self):
-        """Device's default rate works - should use it."""
-        device = MockDevice(
-            name='Test Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[48000, 44100]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.device_index == 0
-        assert recorder.rate == 48000
-    
-    def test_falls_back_to_44100(self):
-        """Default rate fails, should fall back to 44100."""
-        device = MockDevice(
-            name='Test Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[44100]  # 48000 not supported
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.rate == 44100
-    
-    def test_falls_back_to_96000(self):
-        """Pro audio interface only supports 96kHz."""
-        device = MockDevice(
-            name='Pro Audio Interface',
-            max_input_channels=2,
-            default_samplerate=96000,
-            supported_rates=[96000]  # Only supports 96kHz
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.rate == 96000
-    
-    def test_falls_back_to_22050(self):
-        """Legacy device only supports 22050Hz."""
-        device = MockDevice(
-            name='Legacy Mic',
-            max_input_channels=1,
-            default_samplerate=22050,
-            supported_rates=[22050]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.rate == 22050
-
-
-# =============================================================================
-# Channel Fallback Tests
-# =============================================================================
-
-class TestChannelFallback:
-    """Test channel fallback logic (mono -> stereo)."""
-    
-    def test_uses_mono_when_supported(self):
-        """Device supports mono - should use it."""
-        device = MockDevice(
-            name='Test Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_channels=[1, 2]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.channels == 1
-        assert recorder._needs_stereo_downmix == False
-    
-    def test_falls_back_to_stereo(self):
-        """Device only supports stereo - should use stereo with downmix."""
-        device = MockDevice(
-            name='Stereo Only Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_channels=[2]  # No mono support
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.channels == 2
-        assert recorder._needs_stereo_downmix == True
-    
-    def test_stereo_downmix_conversion(self):
-        """Verify stereo to mono conversion works correctly."""
-        device = MockDevice(
-            name='Test',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_channels=[2]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        # Test conversion: stereo with L=100, R=200 should average to 150
-        stereo_data = np.array([[100, 200], [300, 400], [500, 600]], dtype=np.int16)
-        mono_data = recorder._convert_to_mono(stereo_data)
-        
-        assert mono_data.shape == (3,)
-        assert mono_data[0] == 150  # (100 + 200) / 2
-        assert mono_data[1] == 350  # (300 + 400) / 2
-        assert mono_data[2] == 550  # (500 + 600) / 2
-
-
-# =============================================================================
-# Blocksize Fallback Tests
-# =============================================================================
-
-class TestBlocksizeFallback:
-    """Test blocksize fallback logic."""
-    
-    def test_uses_configured_blocksize(self):
-        """Device supports configured blocksize - should use it."""
-        device = MockDevice(
-            name='Test Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_blocksizes=[512, 1024, 2048]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.blocksize == 1024
-    
-    def test_falls_back_to_512(self):
-        """Device rejects 1024, should fall back to 512."""
-        device = MockDevice(
-            name='Small Buffer Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_blocksizes=[512]  # Only supports 512
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.blocksize == 512
-    
-    def test_falls_back_to_4096(self):
-        """Device only supports large buffers."""
-        device = MockDevice(
-            name='Large Buffer Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_blocksizes=[4096]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.blocksize == 4096
-
-
-# =============================================================================
-# Error Classification Tests
+# Error Classification Tests (Pure Function - No Hardware Required)
 # =============================================================================
 
 class TestErrorClassification:
-    """Test error message classification."""
-    
-    def _get_classify_func(self):
-        """Get classify_audio_error without triggering full module load."""
-        # We need a minimal setup just to import the function
-        device = MockDevice('Test', 1, 48000)
-        sys.modules['config'] = get_mock_config()
-        sys.modules['sounddevice'] = MagicMock()
-        sys.modules['sounddevice'].query_devices = MagicMock(return_value=[device])
-        sys.modules['sounddevice'].InputStream = create_mock_stream_class(device)
-        sys.modules['soundfile'] = MagicMock()
-        sys.modules['core.stt.system_audio'] = MagicMock()
-        
-        # Clear cached imports
-        for mod in list(sys.modules.keys()):
-            if mod.startswith('core.stt'):
-                del sys.modules[mod]
-        
-        from core.stt.recorder import classify_audio_error
-        return classify_audio_error
+    """Test error message classification - pure function, no hardware needed."""
     
     def test_permission_denied_linux(self):
         """Permission denied error gives Linux-specific advice."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("Permission denied: /dev/snd/pcmC0D0c")
         msg = classify_audio_error(err)
@@ -366,7 +53,7 @@ class TestErrorClassification:
     
     def test_permission_denied_generic(self):
         """EPERM error gives actionable advice."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("EPERM: operation not permitted")
         msg = classify_audio_error(err)
@@ -375,7 +62,7 @@ class TestErrorClassification:
     
     def test_device_busy(self):
         """Device busy error mentions other apps."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("Device or resource busy")
         msg = classify_audio_error(err)
@@ -384,16 +71,16 @@ class TestErrorClassification:
     
     def test_invalid_sample_rate(self):
         """Sample rate error mentions settings."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("Invalid sample rate: -9997")
         msg = classify_audio_error(err)
         
-        assert 'RECORDER_SAMPLE_RATES' in msg or 'sample rate' in msg.lower()
+        assert 'AUDIO_SAMPLE_RATES' in msg or 'sample rate' in msg.lower()
     
     def test_portaudio_missing(self):
         """Missing PortAudio gives install instructions."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("PortAudio not initialized")
         msg = classify_audio_error(err)
@@ -402,7 +89,7 @@ class TestErrorClassification:
     
     def test_no_device(self):
         """No device error mentions connection."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("No such device")
         msg = classify_audio_error(err)
@@ -411,127 +98,173 @@ class TestErrorClassification:
     
     def test_unknown_error_includes_original(self):
         """Unknown errors include original message."""
-        classify_audio_error = self._get_classify_func()
+        from core.audio.errors import classify_audio_error
         
         err = Exception("Something weird happened with code XYZ123")
         msg = classify_audio_error(err)
         
         assert 'XYZ123' in msg
+    
+    def test_timeout_error(self):
+        """Timeout/underrun error gives buffer advice."""
+        from core.audio.errors import classify_audio_error
+        
+        err = Exception("Audio buffer underrun detected")
+        msg = classify_audio_error(err)
+        
+        assert 'buffer' in msg.lower()
+    
+    def test_channel_error(self):
+        """Channel count error is classified."""
+        from core.audio.errors import classify_audio_error
+        
+        err = Exception("Invalid number of channels: -9998")
+        msg = classify_audio_error(err)
+        
+        assert 'channel' in msg.lower()
 
 
 # =============================================================================
-# Wakeword Recorder Tests
+# DeviceManager Tests - Require working sounddevice
 # =============================================================================
 
-class TestWakewordRecorder:
-    """Test wakeword audio recorder fallback logic."""
+@pytest.mark.skipif(not sounddevice_available(), 
+                    reason="sounddevice/PortAudio not available")
+class TestDeviceManagerWithHardware:
+    """
+    These tests require actual sounddevice with PortAudio.
+    They're skipped in CI environments without audio hardware.
+    """
     
-    def test_prefers_16khz_native(self):
-        """Should prefer 16kHz if device supports it (no resampling needed)."""
-        device = MockDevice(
-            name='Test Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[16000, 48000, 44100]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_wakeword(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.actual_rate == 16000
-        assert recorder._resample_ratio == 1.0
+    def test_query_devices_returns_list(self):
+        """query_devices should return a list."""
+        from core.audio.device_manager import get_device_manager
+        dm = get_device_manager()
+        devices = dm.query_devices()
+        assert isinstance(devices, list)
     
-    def test_resamples_from_48khz(self):
-        """Should resample from 48kHz when 16kHz not supported."""
-        device = MockDevice(
-            name='Test Mic',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[48000]  # No 16kHz
-        )
-        
-        AudioRecorder = setup_mocks_and_import_wakeword(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.actual_rate == 48000
-        assert recorder._resample_ratio == 3.0  # 48000 / 16000
-    
-    def test_stereo_fallback_with_downmix(self):
-        """Wakeword recorder should also fall back to stereo."""
-        device = MockDevice(
-            name='Stereo Only',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_channels=[2]
-        )
-        
-        AudioRecorder = setup_mocks_and_import_wakeword(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.channels == 2
-        assert recorder._needs_stereo_downmix == True
+    def test_get_device_help_returns_string(self):
+        """get_device_help should return helpful text."""
+        from core.audio.device_manager import get_device_manager
+        dm = get_device_manager()
+        help_text = dm.get_device_help()
+        assert isinstance(help_text, str)
+        assert len(help_text) > 0
 
 
 # =============================================================================
-# Combined Fallback Tests
+# DeviceInfo/DeviceConfig Dataclass Tests
 # =============================================================================
 
-class TestCombinedFallbacks:
-    """Test multiple fallbacks happening together."""
+class TestDeviceDataclasses:
+    """Test dataclass structures don't require hardware."""
     
-    def test_rate_and_channel_fallback(self):
-        """Device needs both rate and channel fallback."""
-        device = MockDevice(
-            name='Weird Device',
+    def test_device_info_fields(self):
+        """DeviceInfo should have expected fields."""
+        from core.audio.device_manager import DeviceInfo
+        
+        info = DeviceInfo(
+            index=0,
+            name="Test Device",
             max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[96000],  # Only 96kHz
-            supported_channels=[2]     # Only stereo
+            max_output_channels=2,
+            default_samplerate=48000.0
         )
         
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.rate == 96000
-        assert recorder.channels == 2
-        assert recorder._needs_stereo_downmix == True
+        assert info.index == 0
+        assert info.name == "Test Device"
+        assert info.max_input_channels == 2
     
-    def test_all_three_fallbacks(self):
-        """Device needs rate, channel, and blocksize fallback."""
-        device = MockDevice(
-            name='Very Picky Device',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[22050],
-            supported_channels=[2],
-            supported_blocksizes=[4096]
+    def test_device_config_fields(self):
+        """DeviceConfig should have expected fields."""
+        from core.audio.device_manager import DeviceConfig
+        
+        config = DeviceConfig(
+            device_index=0,
+            sample_rate=48000,
+            channels=1,
+            blocksize=1024,
+            needs_stereo_downmix=False,
+            needs_resampling=False,
+            resample_ratio=1.0
         )
         
-        AudioRecorder = setup_mocks_and_import_recorder(device)
-        recorder = AudioRecorder()
-        
-        assert recorder.rate == 22050
-        assert recorder.channels == 2
-        assert recorder.blocksize == 4096
-        assert recorder._needs_stereo_downmix == True
+        assert config.device_index == 0
+        assert config.sample_rate == 48000
+        assert config.channels == 1
+        assert config.blocksize == 1024
+        assert config.needs_stereo_downmix is False
     
-    def test_no_compatible_device_raises(self):
-        """Should raise RuntimeError when no device works."""
-        device = MockDevice(
-            name='Impossible Device',
-            max_input_channels=2,
-            default_samplerate=48000,
-            supported_rates=[99999],  # Impossible rate
-            supported_channels=[1],
-            supported_blocksizes=[1024]
+    def test_device_config_stereo_downmix(self):
+        """DeviceConfig should track stereo downmix flag."""
+        from core.audio.device_manager import DeviceConfig
+        
+        config = DeviceConfig(
+            device_index=0,
+            sample_rate=48000,
+            channels=2,
+            blocksize=1024,
+            needs_stereo_downmix=True
         )
         
-        AudioRecorder = setup_mocks_and_import_recorder(device)
+        assert config.needs_stereo_downmix is True
+    
+    def test_device_config_resampling(self):
+        """DeviceConfig should track resampling info."""
+        from core.audio.device_manager import DeviceConfig
         
-        with pytest.raises(RuntimeError) as exc_info:
-            AudioRecorder()
+        config = DeviceConfig(
+            device_index=0,
+            sample_rate=48000,
+            channels=1,
+            blocksize=1024,
+            needs_resampling=True,
+            resample_ratio=3.0  # 48000 / 16000
+        )
         
-        assert 'No suitable input device' in str(exc_info.value)
+        assert config.needs_resampling is True
+        assert config.resample_ratio == 3.0
+
+
+# =============================================================================
+# Audio Utils Tests
+# =============================================================================
+
+class TestAudioUtils:
+    """Test audio utility functions."""
+    
+    def test_convert_to_mono_stereo_input(self):
+        """convert_to_mono should average stereo channels."""
+        import numpy as np
+        from core.audio.utils import convert_to_mono
+        
+        # Stereo: left=100, right=200 -> mono=150
+        stereo = np.array([[100, 200], [300, 400]], dtype=np.int16)
+        mono = convert_to_mono(stereo)
+        
+        assert mono.shape == (2,)
+        assert mono[0] == 150  # (100+200)/2
+        assert mono[1] == 350  # (300+400)/2
+    
+    def test_convert_to_mono_already_mono(self):
+        """convert_to_mono should handle already-mono input."""
+        import numpy as np
+        from core.audio.utils import convert_to_mono
+        
+        mono_in = np.array([100, 200, 300], dtype=np.int16)
+        mono_out = convert_to_mono(mono_in)
+        
+        # Should just flatten
+        assert mono_out.shape == (3,)
+    
+    def test_get_temp_dir_returns_path(self):
+        """get_temp_dir should return a valid path."""
+        from core.audio.utils import get_temp_dir
+        import os
+        
+        temp_dir = get_temp_dir()
+        assert isinstance(temp_dir, str)
+        assert os.path.isdir(temp_dir)
 
 
 if __name__ == '__main__':

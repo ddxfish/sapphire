@@ -160,6 +160,7 @@ class TestSettingsGetSet:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"TEST_KEY": "test_value"}
             
             assert mgr.get("TEST_KEY") == "test_value"
@@ -170,6 +171,7 @@ class TestSettingsGetSet:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {}
             
             assert mgr.get("MISSING", "fallback") == "fallback"
@@ -281,15 +283,16 @@ class TestSettingsTiers:
             
             assert mgr.validate_tier("DEFAULT_USERNAME") == "hot"
     
-    def test_component_tier(self):
-        """Component-reload settings should return 'component'."""
+    def test_restart_tier_for_tts_stt(self):
+        """TTS/STT settings require restart (no component tier anymore)."""
         from core.settings_manager import SettingsManager
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             
-            assert mgr.validate_tier("TTS_ENABLED") == "component"
-            assert mgr.validate_tier("STT_ENABLED") == "component"
+            # These used to be 'component' tier but now require full restart
+            assert mgr.validate_tier("TTS_ENABLED") == "restart"
+            assert mgr.validate_tier("STT_ENABLED") == "restart"
     
     def test_restart_tier(self):
         """Unknown settings should return 'restart'."""
@@ -474,6 +477,7 @@ class TestMagicMethods:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"TEST_KEY": "test_value"}
             
             assert mgr.TEST_KEY == "test_value"
@@ -484,6 +488,7 @@ class TestMagicMethods:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {}
             
             with pytest.raises(AttributeError):
@@ -734,6 +739,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"EXISTING_KEY": "test_value"}
             
             assert mgr.EXISTING_KEY == "test_value"
@@ -744,6 +750,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {}
             
             with pytest.raises(AttributeError) as exc_info:
@@ -757,6 +764,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {}
             
             result = getattr(mgr, "MISSING_KEY", "fallback_value")
@@ -768,6 +776,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"EXISTS": "real_value"}
             
             result = getattr(mgr, "EXISTS", "fallback_value")
@@ -779,6 +788,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"PUBLIC": "value"}
             mgr._private = "private_value"
             
@@ -791,6 +801,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"NULLABLE_KEY": None}
             
             # Should return None, not raise AttributeError
@@ -802,6 +813,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"DISABLED_FEATURE": False}
             
             result = getattr(mgr, "DISABLED_FEATURE", True)
@@ -813,6 +825,7 @@ class TestGetAttrFallback:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"EMPTY_LIST": []}
             
             result = getattr(mgr, "EMPTY_LIST", ["default"])
