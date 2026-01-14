@@ -7,6 +7,10 @@ let audioChunks = [];
 let player, blobUrl, ttsCtrl;
 let isRec = false, isStreaming = false;
 
+// Local TTS state (server-side speaker playback)
+let localTtsPlaying = false;
+let localTtsPollInterval = null;
+
 // Recording settings - match what Whisper expects
 const SAMPLE_RATE = 16000;
 const NUM_CHANNELS = 1;
@@ -28,6 +32,34 @@ export const setMuted = (val) => {
 
 export const getVolume = () => volume;
 export const isMuted = () => muted;
+
+// Local TTS control
+export const isLocalTtsPlaying = () => localTtsPlaying;
+
+export const startLocalTtsPoll = () => {
+    if (localTtsPollInterval) return;
+    localTtsPollInterval = setInterval(async () => {
+        try {
+            const status = await api.getTtsStatus();
+            localTtsPlaying = status.playing;
+        } catch { localTtsPlaying = false; }
+    }, 1000);
+};
+
+export const stopLocalTtsPoll = () => {
+    if (localTtsPollInterval) {
+        clearInterval(localTtsPollInterval);
+        localTtsPollInterval = null;
+    }
+    localTtsPlaying = false;
+};
+
+export const stopLocalTts = async () => {
+    try {
+        await api.stopLocalTts();
+        localTtsPlaying = false;
+    } catch {}
+};
 
 const cleanup = () => {
     if (blobUrl) {
@@ -51,6 +83,8 @@ export const stop = (force = false) => {
     }
     isStreaming = false;
     cleanup();
+    // Also stop local TTS if playing
+    if (localTtsPlaying) stopLocalTts();
 };
 
 export const isTtsPlaying = () => isStreaming;

@@ -295,3 +295,7 @@ export const updateChatSettings = (chatName, settings) =>
 export const toggleSpice = async (chatName, enabled) => {
   return updateChatSettings(chatName, { spice_enabled: enabled });
 };
+
+// Local TTS control (server-side speaker playback)
+export const getTtsStatus = () => fetchWithTimeout('/api/tts/status', {}, 2000);
+export const stopLocalTts = () => fetchWithTimeout('/api/tts/stop', { method: 'POST' }, 2000);

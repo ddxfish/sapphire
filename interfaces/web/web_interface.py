@@ -336,6 +336,16 @@ def tts():
             backend_res.close()
         return jsonify({"error": str(e)}), 503
 
+@app.route('/api/tts/status', methods=['GET'])
+@require_login
+def tts_status():
+    return proxy('/tts/status')
+
+@app.route('/api/tts/stop', methods=['POST'])
+@require_login
+def tts_stop():
+    return proxy('/tts/stop', 'POST')
+
 @app.route('/api/transcribe', methods=['POST'])
 @require_login
 def transcribe():

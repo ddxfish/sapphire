@@ -8,7 +8,10 @@ export function updateMicButtonState() {
     const { micBtn } = getElements();
     if (!micBtn) return;
     
-    if (audio.isTtsPlaying()) {
+    // Check both browser TTS and local (server speaker) TTS
+    const ttsActive = audio.isTtsPlaying() || audio.isLocalTtsPlaying();
+    
+    if (ttsActive) {
         micBtn.classList.add('tts-playing');
         micBtn.textContent = '⏹';
         micBtn.title = 'Stop TTS';
@@ -22,6 +25,8 @@ export function updateMicButtonState() {
 export function startMicIconPolling() {
     if (micIconPollInterval) return;
     micIconPollInterval = setInterval(updateMicButtonState, 200);
+    // Also start local TTS status polling
+    audio.startLocalTtsPoll();
 }
 
 export function stopMicIconPolling() {
@@ -29,13 +34,14 @@ export function stopMicIconPolling() {
         clearInterval(micIconPollInterval);
         micIconPollInterval = null;
     }
+    audio.stopLocalTtsPoll();
 }
 
 export async function handleMicPress() {
     const { micBtn } = getElements();
     
-    // If TTS is playing, stop it instead of recording
-    if (audio.isTtsPlaying()) {
+    // If any TTS is playing (browser or local), stop it instead of recording
+    if (audio.isTtsPlaying() || audio.isLocalTtsPlaying()) {
         audio.stop(true);
         updateMicButtonState();
         return;

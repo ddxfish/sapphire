@@ -611,6 +611,18 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         else:
             return jsonify({"error": "Invalid output_mode"}), 400
 
+    @bp.route('/tts/status', methods=['GET'])
+    def tts_status():
+        """Get local TTS playback status."""
+        playing = getattr(system_instance.tts, '_is_playing', False)
+        return jsonify({"playing": playing})
+
+    @bp.route('/tts/stop', methods=['POST'])
+    def tts_stop():
+        """Stop local TTS playback."""
+        system_instance.tts.stop()
+        return jsonify({"status": "success"})
+
     @bp.route('/history/messages/edit', methods=['POST'])
     def edit_message():
         """Edit a message by timestamp."""
