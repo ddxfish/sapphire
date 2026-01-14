@@ -669,6 +669,18 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     border-top: 1px solid var(--border);
     background: var(--bg-secondary);
     flex-shrink: 0; /* Never shrink - stay visible */
+    position: relative;
+}
+
+#context-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 3px;
+    width: 0%;
+    background: var(--accent, var(--trim));
+    transition: width 0.3s ease;
+    z-index: 1;
 }
 
 #chat-form {

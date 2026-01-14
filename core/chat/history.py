@@ -123,6 +123,10 @@ class ConversationHistory:
         Args:
             reserved_tokens: Tokens to reserve for system prompt + current user message.
                             These are subtracted from the context budget before trimming.
+        
+        Note:
+            Set LLM_MAX_HISTORY to 0 to disable turn-based trimming.
+            Set CONTEXT_LIMIT to 0 to disable token-based trimming.
         """
         msgs = []
         for msg in self.messages:
@@ -137,10 +141,12 @@ class ConversationHistory:
             
             msgs.append(llm_msg)
         
-        # TRIMMING STEP 1: Turn-based trimming
-        if len(msgs) > self.max_history:
+        # TRIMMING STEP 1: Turn-based trimming (skip if max_history is 0)
+        # Read from config each time to support hot-reload
+        max_history = getattr(config, 'LLM_MAX_HISTORY', 30)
+        if max_history > 0 and len(msgs) > max_history:
             user_count = sum(1 for msg in msgs if msg["role"] == "user")
-            max_pairs = self.max_history // 2
+            max_pairs = max_history // 2
             
             if user_count > max_pairs:
                 user_turns_to_remove = user_count - max_pairs
@@ -151,18 +157,20 @@ class ConversationHistory:
                         removed_users += 1
                     msgs.pop(0)
         
-        # TRIMMING STEP 2: Token-based trimming
+        # TRIMMING STEP 2: Token-based trimming (skip if context_limit is 0)
         # Apply safety buffer: 1% + 512 tokens under limit
         # This prevents silent failures on models without context shifting (e.g., GLM)
         context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
-        safety_buffer = int(context_limit * 0.01) + 512
-        effective_limit = context_limit - safety_buffer - reserved_tokens
         
-        total_tokens = sum(count_tokens(str(m.get("content", ""))) for m in msgs)
-        
-        while total_tokens > effective_limit and len(msgs) > 1:
-            removed = msgs.pop(0)
-            total_tokens -= count_tokens(str(removed.get("content", "")))
+        if context_limit > 0:
+            safety_buffer = int(context_limit * 0.01) + 512
+            effective_limit = context_limit - safety_buffer - reserved_tokens
+            
+            total_tokens = sum(count_tokens(str(m.get("content", ""))) for m in msgs)
+            
+            while total_tokens > effective_limit and len(msgs) > 1:
+                removed = msgs.pop(0)
+                total_tokens -= count_tokens(str(removed.get("content", "")))
         
         return msgs
 

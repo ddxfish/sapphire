@@ -206,12 +206,12 @@
     "long": "How long to wait for primary TTS server before switching to fallback. 0.2 seconds (200ms) provides quick failover. Too low may not give primary server enough time. Too high causes noticeable delays when primary is down."
   },
   "LLM_MAX_HISTORY": {
-    "short": "Maximum conversation messages to send to LLM (truncate earlier)",
-    "long": "How many past messages to send to LLM to make it faster or work better. Truncates earlier chat messages. Use even numbers. "
+    "short": "Maximum conversation messages to send (0 = unlimited)",
+    "long": "How many past messages to send to LLM. Single messages count, not assistant/user pairs. Truncates earlier messages when exceeded. Set to 0 to disable message-based trimming and rely only on CONTEXT_LIMIT for token-based trimming."
   },
   "CONTEXT_LIMIT": {
-    "short": "Context window budget (tokens)",
-    "long": "Maximum tokens for the entire conversation context sent to the LLM. Sapphire trims older messages to stay under this limit, providing pseudo context-shifting for models that don't support it (like GLM). Set this to match or stay below your smallest model's context window. A safety buffer is applied automatically."
+    "short": "Context window budget in tokens (0 = unlimited)",
+    "long": "Maximum tokens for the entire conversation context sent to the LLM. Sapphire trims older messages to stay under this limit, providing pseudo context-shifting for models that don't support it (like GLM). Set to 0 to disable token-based trimming. A safety buffer is applied automatically when enabled."
   },
   "LLM_REQUEST_TIMEOUT": {
     "short": "Maximum wait time for LLM response (seconds)",

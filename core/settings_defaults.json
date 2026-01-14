@@ -100,7 +100,7 @@
   },
   
   "llm": {
-    "LLM_MAX_HISTORY": 30,
+    "LLM_MAX_HISTORY": 0,
     "CONTEXT_LIMIT": 32000,
     "LLM_REQUEST_TIMEOUT": 240.0,
     "LLM_PROVIDERS": {

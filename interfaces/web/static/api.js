@@ -3,7 +3,32 @@ import { fetchWithTimeout } from './shared/fetch.js';
 
 export { fetchWithTimeout };
 
-export const fetchHistory = () => fetchWithTimeout('/api/history');
+// Context bar update function
+const updateContextBar = (context) => {
+    const bar = document.getElementById('context-bar');
+    if (!bar || !context) return;
+    
+    // Hide bar if context limit is disabled (0)
+    if (context.limit === 0) {
+        bar.style.display = 'none';
+        return;
+    }
+    
+    bar.style.display = 'block';
+    bar.style.width = `${context.percent}%`;
+    bar.title = `Context: ${context.used.toLocaleString()} / ${context.limit.toLocaleString()} tokens (${context.percent}%)`;
+};
+
+export const fetchHistory = async () => {
+    const response = await fetchWithTimeout('/api/history');
+    // Update context bar if context info is present
+    if (response && response.context) {
+        updateContextBar(response.context);
+    }
+    // Return messages array for backward compatibility
+    return response.messages || response;
+};
+
 export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw');
 export const postReset = () => fetchWithTimeout('/api/reset', { method: 'POST' });
 export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages', { 

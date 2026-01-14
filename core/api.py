@@ -287,10 +287,36 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
 
     @bp.route('/history', methods=['GET'])
     def get_history():
-        """Get history formatted for UI display."""
+        """Get history formatted for UI display with context usage info."""
+        from core.chat.history import count_tokens
+        
         raw_messages = system_instance.llm_chat.session_manager.get_messages()
         display_messages = format_messages_for_display(raw_messages)
-        return jsonify(display_messages)
+        
+        # Calculate context usage
+        context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
+        
+        # Count tokens in raw history (what actually goes to LLM)
+        history_tokens = sum(count_tokens(str(m.get("content", ""))) for m in raw_messages)
+        
+        # Estimate system prompt tokens (use current prompt if available)
+        try:
+            prompt_content = system_instance.llm_chat.current_system_prompt or ""
+            prompt_tokens = count_tokens(prompt_content) if prompt_content else 0
+        except:
+            prompt_tokens = 0
+        
+        total_used = history_tokens + prompt_tokens
+        percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
+        
+        return jsonify({
+            "messages": display_messages,
+            "context": {
+                "used": total_used,
+                "limit": context_limit,
+                "percent": percent
+            }
+        })
 
     @bp.route('/modules', methods=['GET'])
     def get_modules():
