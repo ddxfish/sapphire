@@ -24,7 +24,7 @@ def settings_defaults():
         },
         "llm": {
             "LLM_MAX_HISTORY": 10,
-            "LLM_MAX_TOKENS": 4000,
+            "CONTEXT_LIMIT": 4000,
             "LLM_PRIMARY": {
                 "base_url": "http://test:1234",
                 "enabled": True

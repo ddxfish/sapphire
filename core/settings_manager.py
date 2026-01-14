@@ -332,7 +332,7 @@ class SettingsManager:
         # Hot-reload: These are read per-request, no restart needed
         hot_reload = {
             'DEFAULT_USERNAME', 'DEFAULT_AI_NAME',
-            'GENERATION_DEFAULTS', 'LLM_MAX_HISTORY', 'LLM_MAX_TOKENS',
+            'GENERATION_DEFAULTS', 'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',
             'FORCE_THINKING', 'THINKING_PREFILL',
             'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT'
         }

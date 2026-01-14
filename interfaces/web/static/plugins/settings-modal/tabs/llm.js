@@ -28,7 +28,7 @@ export default {
   description: 'Language model providers and fallback configuration',
   keys: [
     'LLM_MAX_HISTORY',
-    'LLM_MAX_TOKENS',
+    'CONTEXT_LIMIT',
     'LLM_REQUEST_TIMEOUT',
     'LLM_PROVIDERS',
     'LLM_FALLBACK_ORDER',
@@ -97,7 +97,7 @@ export default {
   },
 
   renderGeneralSettings(modal) {
-    const generalKeys = ['LLM_MAX_HISTORY', 'LLM_MAX_TOKENS', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL'];
+    const generalKeys = ['LLM_MAX_HISTORY', 'CONTEXT_LIMIT', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL'];
     return `
       <div class="settings-list">
         ${modal.renderCategorySettings(generalKeys)}

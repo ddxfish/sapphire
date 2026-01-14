@@ -115,10 +115,14 @@ class ConversationHistory:
         """Get ALL messages (with timestamps for storage) - NO TRIMMING."""
         return self.messages.copy()
 
-    def get_messages_for_llm(self) -> List[Dict[str, Any]]:
+    def get_messages_for_llm(self, reserved_tokens: int = 0) -> List[Dict[str, Any]]:
         """
         Get messages formatted for LLM with TRIMMING applied.
         This is the ONLY place where trimming happens - storage is never affected.
+        
+        Args:
+            reserved_tokens: Tokens to reserve for system prompt + current user message.
+                            These are subtracted from the context budget before trimming.
         """
         msgs = []
         for msg in self.messages:
@@ -148,10 +152,15 @@ class ConversationHistory:
                     msgs.pop(0)
         
         # TRIMMING STEP 2: Token-based trimming
-        max_tokens = getattr(config, 'LLM_MAX_TOKENS', 32000)
+        # Apply safety buffer: 1% + 512 tokens under limit
+        # This prevents silent failures on models without context shifting (e.g., GLM)
+        context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
+        safety_buffer = int(context_limit * 0.01) + 512
+        effective_limit = context_limit - safety_buffer - reserved_tokens
+        
         total_tokens = sum(count_tokens(str(m.get("content", ""))) for m in msgs)
         
-        while total_tokens > max_tokens and len(msgs) > 1:
+        while total_tokens > effective_limit and len(msgs) > 1:
             removed = msgs.pop(0)
             total_tokens -= count_tokens(str(removed.get("content", "")))
         
@@ -451,9 +460,9 @@ class ChatSessionManager:
     def get_messages(self) -> List[Dict[str, str]]:
         return self.current_chat.get_messages()
 
-    def get_messages_for_llm(self) -> List[Dict[str, str]]:
-        """Get messages for LLM."""
-        return self.current_chat.get_messages_for_llm()
+    def get_messages_for_llm(self, reserved_tokens: int = 0) -> List[Dict[str, str]]:
+        """Get messages for LLM with trimming applied."""
+        return self.current_chat.get_messages_for_llm(reserved_tokens)
 
     def get_turn_count(self) -> int:
         return self.current_chat.get_turn_count()

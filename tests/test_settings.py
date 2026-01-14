@@ -408,14 +408,14 @@ class TestDeepUpdate:
         
         nested = {
             "identity": {"DEFAULT_USERNAME": "test"},
-            "llm": {"LLM_MAX_TOKENS": 4000}
+            "llm": {"CONTEXT_LIMIT": 4000}
         }
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             
             assert mgr._find_category_for_key(nested, "DEFAULT_USERNAME") == "identity"
-            assert mgr._find_category_for_key(nested, "LLM_MAX_TOKENS") == "llm"
+            assert mgr._find_category_for_key(nested, "CONTEXT_LIMIT") == "llm"
             assert mgr._find_category_for_key(nested, "NONEXISTENT") is None
     
     def test_remove_from_nested(self):

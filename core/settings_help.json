@@ -209,9 +209,9 @@
     "short": "Maximum conversation messages to send to LLM (truncate earlier)",
     "long": "How many past messages to send to LLM to make it faster or work better. Truncates earlier chat messages. Use even numbers. "
   },
-  "LLM_MAX_TOKENS": {
-    "short": "Maximum tokens to send to AI (truncate earlier)",
-    "long": "The maximum length of AI input in tokens (roughly 4 characters per token). Prevents extremely long responses that could hang or timeout. Also used for models without context shift."
+  "CONTEXT_LIMIT": {
+    "short": "Context window budget (tokens)",
+    "long": "Maximum tokens for the entire conversation context sent to the LLM. Sapphire trims older messages to stay under this limit, providing pseudo context-shifting for models that don't support it (like GLM). Set this to match or stay below your smallest model's context window. A safety buffer is applied automatically."
   },
   "LLM_REQUEST_TIMEOUT": {
     "short": "Maximum wait time for LLM response (seconds)",

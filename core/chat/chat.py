@@ -7,7 +7,7 @@ import uuid
 from typing import Dict, Any, Optional, List
 
 import config
-from .history import ConversationHistory, ChatSessionManager
+from .history import ConversationHistory, ChatSessionManager, count_tokens
 from .module_loader import ModuleLoader
 from .function_manager import FunctionManager
 from .chat_streaming import StreamingChat
@@ -150,7 +150,10 @@ class LLMChat:
 
     def _build_base_messages(self, user_input: str):
         system_prompt, user_name = self._get_system_prompt()
-        history_messages = self.session_manager.get_messages_for_llm()
+        
+        # Reserve space for system prompt + current user message in context budget
+        reserved_tokens = count_tokens(system_prompt) + count_tokens(user_input)
+        history_messages = self.session_manager.get_messages_for_llm(reserved_tokens)
         
         return [
             {"role": "system", "content": system_prompt},

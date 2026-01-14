@@ -158,7 +158,7 @@ class TestHistoryTrimming:
     @patch('core.chat.history.config')
     def test_turn_based_trimming(self, mock_config, mock_count):
         """Messages should trim by turn count when exceeding max_history."""
-        mock_config.LLM_MAX_TOKENS = 999999  # No token trimming
+        mock_config.CONTEXT_LIMIT = 999999  # No token trimming
         
         from core.chat.history import ConversationHistory
         
@@ -178,7 +178,8 @@ class TestHistoryTrimming:
     @patch('core.chat.history.count_tokens')
     def test_token_based_trimming(self, mock_count, mock_config):
         """Messages should trim when exceeding max tokens."""
-        mock_config.LLM_MAX_TOKENS = 100
+        # CONTEXT_LIMIT 650 with safety buffer (1% + 512) = effective ~132 tokens
+        mock_config.CONTEXT_LIMIT = 650
         mock_count.return_value = 50  # Each message is 50 tokens
         
         from core.chat.history import ConversationHistory
