@@ -79,7 +79,7 @@ def init_app():
         logger.warning("No password hash found - using temporary secret key")
     
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=getattr(config, 'SESSION_TIMEOUT_DAYS', 30))
-    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SECURE'] = getattr(config, 'WEB_UI_SSL_ADHOC', False)
     app.config['SESSION_COOKIE_HTTPONLY'] = True
     app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
