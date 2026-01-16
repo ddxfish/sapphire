@@ -94,7 +94,7 @@
   "server": {
     "WEB_UI_HOST": "0.0.0.0",
     "WEB_UI_PORT": 8073,
-    "WEB_UI_SSL_ADHOC": false,
+    "WEB_UI_SSL_ADHOC": true,
     "API_HOST": "127.0.0.1",
     "API_PORT": 8071
   },

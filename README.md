@@ -124,7 +124,7 @@ pip install -r requirements-all.txt
 python main.py
 ```
 
-Web UI: http://localhost:8073
+Web UI: https://localhost:8073
 
 The setup wizard walks you through LLM configuration on first run.
 

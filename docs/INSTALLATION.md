@@ -128,7 +128,7 @@ Sapphire automatically falls back between enabled providers if one fails.
 python main.py
 ```
 
-1. Open http://localhost:8073
+1. Open https://localhost:8073
 2. Create a password (secures web UI and API)
 3. Complete setup wizard (LLM, voice, audio)
 4. Send a test message
@@ -249,7 +249,7 @@ LLM OPTIONS:
 
 FIRST RUN:
 1. python main.py
-2. Open http://localhost:8073
+2. Open https://localhost:8073
 3. Create password
 4. Complete setup wizard
 5. Send test message
