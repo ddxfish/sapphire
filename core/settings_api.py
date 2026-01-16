@@ -682,19 +682,18 @@ def create_settings_api():
     @bp.route('/setup/check-packages', methods=['GET'])
     def check_packages():
         """Check if optional audio packages are installed."""
-        import subprocess
-        import sys
+        import importlib.util
         
         def check_package(package_name):
-            """Check if a package is installed in current environment."""
+            """Check if a package is installed in current environment.
+            
+            Uses importlib.util.find_spec() instead of subprocess to avoid
+            Windows conda environment activation issues.
+            """
             try:
-                result = subprocess.run(
-                    [sys.executable, '-c', f'import {package_name}'],
-                    capture_output=True,
-                    timeout=5
-                )
-                return result.returncode == 0
-            except Exception:
+                spec = importlib.util.find_spec(package_name)
+                return spec is not None
+            except (ModuleNotFoundError, ImportError, ValueError):
                 return False
         
         # Package mappings: import_name -> (display_name, requirements_file)

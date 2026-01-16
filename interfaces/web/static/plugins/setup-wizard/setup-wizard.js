@@ -10,10 +10,22 @@ import identityTab from './tabs/identity.js';
 const TABS = [voiceTab, audioTab, llmTab, identityTab];
 const STEP_NAMES = ['Voice', 'Audio', 'AI Brain', 'Identity'];
 
+// Settings that require full app restart when changed
+const RESTART_TIER_KEYS = [
+  'STT_ENABLED',
+  'TTS_ENABLED',
+  'WAKE_WORD_ENABLED',
+  'WAKEWORD_MODEL',
+  'WAKEWORD_THRESHOLD',
+  'AUDIO_INPUT_DEVICE',
+  'AUDIO_OUTPUT_DEVICE'
+];
+
 class SetupWizard {
   constructor() {
     this.modal = null;
     this.settings = {};
+    this.initialSettings = {};  // Snapshot at wizard open
     this.currentStep = 0;
     this.completedStep = 0;
   }
@@ -25,9 +37,16 @@ class SetupWizard {
     try {
       this.settings = await getSettings();
       this.completedStep = await getWizardStep();
+      
+      // Snapshot restart-tier settings for change detection
+      this.initialSettings = {};
+      for (const key of RESTART_TIER_KEYS) {
+        this.initialSettings[key] = this.settings[key];
+      }
     } catch (e) {
       console.warn('Failed to load wizard state:', e);
       this.settings = {};
+      this.initialSettings = {};
       this.completedStep = 0;
     }
 
@@ -251,12 +270,172 @@ class SetupWizard {
     }
   }
 
+  /**
+   * Check if any restart-tier settings changed during wizard.
+   * Returns array of changed setting keys.
+   */
+  getRestartRequiredChanges() {
+    const changed = [];
+    for (const key of RESTART_TIER_KEYS) {
+      const initial = this.initialSettings[key];
+      const current = this.settings[key];
+      
+      // Handle undefined vs false/null comparisons
+      const initialNorm = initial === undefined ? null : initial;
+      const currentNorm = current === undefined ? null : current;
+      
+      if (initialNorm !== currentNorm) {
+        changed.push(key);
+      }
+    }
+    return changed;
+  }
+
   async finish() {
     // Mark as complete
     await setWizardStep(4);
     this.completedStep = 4;
 
-    // Show success message with celebration
+    // Check for restart-requiring changes
+    const changedKeys = this.getRestartRequiredChanges();
+    const needsRestart = changedKeys.length > 0;
+
+    if (needsRestart) {
+      // Show restart required screen
+      const content = this.modal.querySelector('.setup-wizard-content');
+      content.innerHTML = `
+        <div class="success-screen">
+          <div class="celebration">
+            <div class="sparkle s1">✦</div>
+            <div class="sparkle s2">✦</div>
+            <div class="sparkle s3">✦</div>
+            <div class="success-icon">✓</div>
+          </div>
+          <h3>Setup Complete!</h3>
+          <p style="margin-top: 1rem; color: var(--warning-color, #f0ad4e);">
+            ⚠️ Restart required to apply voice/audio changes.
+          </p>
+          <p class="restart-hint">Changed: ${this.formatChangedKeys(changedKeys)}</p>
+        </div>
+      `;
+
+      // Footer with restart button
+      this.modal.querySelector('.setup-wizard-footer').innerHTML = `
+        <button class="btn btn-secondary" id="setup-skip-restart">Skip for Now</button>
+        <button class="btn btn-primary" id="setup-restart">Restart Sapphire</button>
+      `;
+
+      this.modal.querySelector('#setup-skip-restart').addEventListener('click', () => {
+        this.close();
+      });
+
+      this.modal.querySelector('#setup-restart').addEventListener('click', async () => {
+        await this.triggerRestart();
+      });
+
+    } else {
+      // No restart needed - show normal success
+      this.showSuccessAndClose();
+    }
+  }
+
+  /**
+   * Format changed keys for display.
+   */
+  formatChangedKeys(keys) {
+    const labels = {
+      'STT_ENABLED': 'Speech Recognition',
+      'TTS_ENABLED': 'Voice Responses',
+      'WAKE_WORD_ENABLED': 'Wake Word',
+      'WAKEWORD_MODEL': 'Wake Word Model',
+      'WAKEWORD_THRESHOLD': 'Wake Sensitivity',
+      'AUDIO_INPUT_DEVICE': 'Microphone',
+      'AUDIO_OUTPUT_DEVICE': 'Speakers'
+    };
+    return keys.map(k => labels[k] || k).join(', ');
+  }
+
+  /**
+   * Trigger app restart via API.
+   */
+  async triggerRestart() {
+    const restartBtn = this.modal.querySelector('#setup-restart');
+    if (restartBtn) {
+      restartBtn.disabled = true;
+      restartBtn.textContent = 'Restarting...';
+    }
+
+    try {
+      const res = await fetch('/api/system/restart', { method: 'POST' });
+      if (res.ok) {
+        // Show restarting message
+        const content = this.modal.querySelector('.setup-wizard-content');
+        content.innerHTML = `
+          <div class="success-screen">
+            <div class="spinner-large">⏳</div>
+            <h3>Restarting Sapphire...</h3>
+            <p>Page will reload automatically.</p>
+          </div>
+        `;
+        this.modal.querySelector('.setup-wizard-footer').innerHTML = '';
+
+        // Poll for server to come back, then reload
+        this.waitForRestart();
+      } else {
+        alert('Failed to restart. Please restart Sapphire manually.');
+        this.close();
+      }
+    } catch (e) {
+      console.error('Restart request failed:', e);
+      alert('Failed to restart. Please restart Sapphire manually.');
+      this.close();
+    }
+  }
+
+  /**
+   * Poll server until it's back, then reload page.
+   */
+  async waitForRestart() {
+    const maxAttempts = 30;  // 30 seconds max
+    let attempts = 0;
+
+    const poll = async () => {
+      attempts++;
+      try {
+        const res = await fetch('/api/health', { method: 'GET' });
+        if (res.ok) {
+          // Server is back - reload page
+          window.location.reload();
+          return;
+        }
+      } catch (e) {
+        // Expected - server is restarting
+      }
+
+      if (attempts < maxAttempts) {
+        setTimeout(poll, 1000);
+      } else {
+        // Give up - let user manually reload
+        const content = this.modal.querySelector('.setup-wizard-content');
+        if (content) {
+          content.innerHTML = `
+            <div class="success-screen">
+              <h3>Restart Taking Longer Than Expected</h3>
+              <p>Please refresh the page manually.</p>
+            </div>
+          `;
+        }
+      }
+    };
+
+    // Start polling after a brief delay for server to begin shutdown
+    setTimeout(poll, 2000);
+  }
+
+  /**
+   * Show success animation and auto-close.
+   */
+  showSuccessAndClose() {
     const content = this.modal.querySelector('.setup-wizard-content');
     content.innerHTML = `
       <div class="success-screen">
