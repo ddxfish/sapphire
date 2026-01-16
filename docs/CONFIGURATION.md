@@ -1,18 +1,53 @@
 # Configuration
 
-Run the [Installation](https://github.com/ddxfish/sapphire/blob/main/docs/INSTALLATION.md) and open Sapphire before you configure. 
+Run the [Installation](INSTALLATION.md) and open Sapphire before you configure. 
 
 ![Settings Manager](screenshots/settings-manager.png)
 
 ## LLM
 
-Sapphire does not come with an AI model or AI server. You choose your own and run it locally, it's easy. If you don't know what this means, get LM Studio, put it in developer mode. Then download Qwen3 8B (Q4_K_M) in LM studio downloads, go to dev tab and enable API toggle. Sapphire by default will try to use LM Studio if it has an LLM loaded. For power users: Sapphire is OpenAI compliant.
+Your choice of LLM is the biggest factor in Sapphire's persona. Different models have different personalities, strengths, and quirks. The setup wizard configures this on first run, but you can change it anytime in Settings.
 
 <img src="screenshots/llm-settings.png" alt="LLM Settings" width="75%">
 
+Sapphire supports multiple providers with automatic fallback. If your primary LLM fails, it tries the next enabled provider.
+
+### Local LLM (Private)
+
+Run AI on your own hardware. Nothing leaves your machine.
+
+**LM Studio** is the easiest option:
+1. Download [LM Studio](https://lmstudio.ai/)
+2. Load a model (Qwen3 8B for tools, QWQ 32B for stories)
+3. Enable the API in Developer tab
+4. Sapphire connects automatically to `http://127.0.0.1:1234/v1`
+
+Local models vary wildly in personality and capability. Experiment to find what fits your persona.
+
+### Cloud LLM (Not Private)
+
+Use powerful cloud models. Your conversations go to external servers.
+
+| Provider | Best For | Notes |
+|----------|----------|-------|
+| **Claude** (Anthropic) | Complex reasoning, conversation, coding | Most capable overall |
+| **OpenAI** (GPT) | General purpose, well-documented | Widely supported |
+| **Fireworks** | Fast inference, open models | Good price/performance |
+
+Set API keys via environment variable or Settings → Credentials.
+
+### Per-Chat Model Selection
+
+Each chat can use a different LLM provider. In Chat Settings, the LLM dropdown offers:
+- **Auto** — Uses fallback order (tries each enabled provider)
+- **LM Studio** — Forces local only
+- **Claude/OpenAI/Fireworks** — Forces specific cloud provider
+
+This lets you make Einstein your coder on Claude, and Sapphire your storyteller on local LM Studio.
+
 ---
 
-## Now make your own persona
+## Make Your Persona
 
 Each chat can have completely different personas, voices, and capabilities. Switch between them instantly.
 
@@ -67,9 +102,10 @@ Note: Write prompt from first person. You should refer to yourself as "I" in pro
 </td>
 <td>
 
-### Set up your default chat settings 
+### Set Up Your Default Chat Settings 
 - Open the default chat (upper left), click **... → Chat Settings**
 - Select your preferred prompt
+- Choose which LLM provider to use (Auto, local, or specific cloud)
 - Choose which tools the AI can use
 - Set TTS voice, pitch, speed. (try: Heart, Sky, Isabella)
 - **SPICE** adds randomness to replies
@@ -92,8 +128,8 @@ Note: Set as Default is for all future chats. Save is for this chat only. Each c
 ### Make Multiple Personas
 - Click **...** next to any chat name → **New chat**
 - Configure that chat differently via **... → Chat Settings**
-- Each chat maintains its own prompt, voice, and tool configuration
-- So change the voice, toolset, prompt etc and save it
+- Each chat maintains its own prompt, voice, LLM, and tool configuration
+- Change the voice, toolset, prompt, LLM provider and save it
 
 </td>
 </tr>
@@ -104,10 +140,10 @@ Note: Set as Default is for all future chats. Save is for this chat only. Each c
 ## Advanced Personalization
 
 ### Custom Plugins
-Keyword-triggered extensions. Feed [PLUGINS.md](docs/PLUGINS.md) to an AI and drop the output in `user/plugins/`. Can run on keywords, in background, or on schedule.
+Keyword-triggered extensions. Feed [PLUGINS.md](PLUGINS.md) to an AI and drop the output in `user/plugins/`. Can run on keywords, in background, or on schedule.
 
 ### Custom Tools
-AI-callable functions. Simpler than plugins- they are one file in `user/functions/`. Control your devices, check services, simulate capabilities like email/text or even crazy sims like hire a lawyer or deceive(). Feed [TOOLS.md](docs/TOOLS.md) to an AI to generate them.
+AI-callable functions. Simpler than plugins—they are one file in `user/functions/`. Control your devices, check services, simulate capabilities like email/text. Feed [TOOLS.md](TOOLS.md) to an AI to generate them.
 
 ### Custom Wake Word
 Drop ONNX models in `user/wakeword/models/`. I trained "Hey Sapphire" in ~2 hours with synthetic data. [Community wakewords](https://github.com/fwartner/home-assistant-wakewords-collection) available.
@@ -115,45 +151,36 @@ Drop ONNX models in `user/wakeword/models/`. I trained "Hey Sapphire" in ~2 hour
 ### Custom Web UI Plugins
 Extensible JavaScript plugins for the interface. See [WEB-PLUGINS.md](WEB-PLUGINS.md).
 
-### SSL Certificate
-If the self-signed SSL certificate is annoying, disable it in Gear → Settings → System (`WEB_UI_SSL_ADHOC`) to use plain HTTP.
-
 ## Reference for AI
 
 Help users configure Sapphire settings and personas.
 
 SETTINGS LOCATION:
-- Web UI: Gear icon → Settings (app-wide settings)
-- Chat Settings: ... menu on chat → Chat Settings (per-chat)
-- Files: user/settings.json (do not edit directly, use UI)
+- Web UI: Gear icon → Settings (app-wide)
+- Chat Settings: ... menu → Chat Settings (per-chat)
+- Files: user/settings.json (use UI, not direct edit)
 
-KEY SETTINGS AREAS:
-- Identity: AI name, user name, avatars
-- LLM: Model server URL, API key, fallback config
-- Audio: Input/output devices, TTS, STT, wakeword
-- Tools: Enable/disable function calling
-- Network: SOCKS proxy for web tools
+LLM CONFIGURATION:
+- Local: LM Studio on port 1234 (private)
+- Cloud: Claude, OpenAI, Fireworks (not private)
+- Per-chat override: Chat Settings → LLM dropdown
+- Auto mode uses fallback order through enabled providers
 
-PER-CHAT SETTINGS (Chat Settings modal):
+PER-CHAT SETTINGS:
 - Prompt: Which system prompt to use
+- LLM: Auto, local, or specific cloud provider
 - Toolset: Which tools AI can access
 - Voice: TTS voice, pitch, speed
 - Spice: Random prompt injection
-- Custom text: Always appended to prompt
-
-RESTART LEVELS:
-- Hot reload (immediate): Most settings
-- Component restart: TTS/STT server changes
-- Full restart: Port changes, SSL, API host
 
 COMMON TASKS:
-- Change AI name: Settings > Identity > DEFAULT_AI_NAME
-- Change voice: Chat Settings > Voice dropdown, or set_tts_voice() tool
-- Enable wakeword: Settings > Wakeword > WAKE_WORD_ENABLED = true, restart
-- Change LLM: Settings > LLM > edit LLM_PRIMARY
+- Change AI name: Settings → Identity
+- Change voice: Chat Settings → Voice dropdown
+- Change LLM: Settings → LLM tab, or Chat Settings for per-chat
+- Enable wakeword: Settings → Wakeword → enable, restart
 
 FILES:
-- user/settings.json - All settings (managed by UI)
+- user/settings.json - All settings
 - user/prompts/ - Prompt definitions
-- user/avatars/ - Custom avatar images
-- core/settings_defaults.json - Default values (don't edit)
+- user/avatars/ - Custom avatars
+- ~/.config/sapphire/credentials.json - API keys (not in backups)

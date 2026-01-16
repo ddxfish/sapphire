@@ -1,15 +1,16 @@
 # Technical Reference
 
-System architecture and internals for developers.
+System architecture and internals for developers and power users.
 
 ---
 
 ## Architecture Overview
 
 ```
-main.py
-└── VoiceChatSystem
+main.py (runner with restart loop)
+└── sapphire.py (VoiceChatSystem)
     ├── LLMChat (core/chat/)
+    │   ├── llm_providers → Claude, OpenAI, Fireworks, LM Studio
     │   ├── module_loader → plugins/*, core/modules/*
     │   ├── function_manager → functions/*
     │   └── session_manager → chat history
@@ -20,11 +21,11 @@ main.py
     └── Event Scheduler (core/event_handler.py)
 
 Web Interface (interfaces/web/web_interface.py)
-└── HTTPS proxy → 0.0.0.0:8073
+└── HTTP proxy → 0.0.0.0:8073
     └── Proxies to Internal API
 ```
 
-**Process model:** `main.py` spawns the web interface and TTS server as subprocesses via `ProcessManager`. STT runs as a thread. Everything else runs in the main process.
+**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the web interface and TTS server as subprocesses via `ProcessManager`. STT runs as a thread. Everything else runs in the main process.
 
 ---
 
@@ -34,8 +35,8 @@ Sapphire has two API layers:
 
 | Layer | Binds To | Purpose |
 |-------|----------|---------|
-| Internal API | `127.0.0.1:8071` | Backend logic, no auth UI |
-| Web Interface | `0.0.0.0:8073` | HTTPS proxy with sessions, CSRF, rate limiting |
+| Internal API | `127.0.0.1:8071` | Backend logic, no auth |
+| Web Interface | `0.0.0.0:8073` | HTTP proxy with sessions, CSRF, rate limiting |
 
 **Flow:** Browser → Web Interface (8073) → Internal API (8071) → VoiceChatSystem
 
@@ -71,7 +72,7 @@ user/
 ├── public/
 │   └── avatars/            # Custom user/assistant avatars
 ├── memory.db               # SQLite memory storage
-└── .socks_config           # SOCKS5 credentials (legacy)
+└── logs/                   # Application logs
 ```
 
 **Bootstrap:** On first run, `core/setup.py` copies factory defaults from `core/modules/system/prompts/` to `user/prompts/`.
@@ -92,7 +93,7 @@ user/settings.json           ← Your overrides
 Runtime config
 ```
 
-**Access pattern:** `import config` then `config.TTS_ENABLED`, `config.LLM_PRIMARY`, etc.
+**Access pattern:** `import config` then `config.TTS_ENABLED`, `config.LLM_PROVIDERS`, etc.
 
 **File watcher:** Settings reload automatically when `user/settings.json` changes (~2 second delay).
 
@@ -106,9 +107,26 @@ Runtime config
 | wakeword | `WAKE_WORD_ENABLED`, `WAKEWORD_MODEL`, `WAKEWORD_THRESHOLD` |
 | stt | `STT_ENABLED`, `STT_MODEL_SIZE`, `STT_ENGINE` |
 | tts | `TTS_ENABLED`, `TTS_VOICE_NAME`, `TTS_SPEED`, `TTS_PITCH_SHIFT` |
-| llm | `LLM_PRIMARY`, `LLM_FALLBACK`, `LLM_MAX_HISTORY`, `GENERATION_DEFAULTS` |
+| llm | `LLM_PROVIDERS`, `LLM_FALLBACK_ORDER`, `LLM_MAX_HISTORY` |
+| audio | `AUDIO_INPUT_DEVICE`, `AUDIO_OUTPUT_DEVICE` |
 | tools | `MAX_TOOL_ITERATIONS`, `MAX_PARALLEL_TOOLS` |
 | backups | `BACKUPS_ENABLED`, `BACKUPS_KEEP_DAILY`, etc. |
+
+### LLM Configuration
+
+```json
+{
+  "LLM_PROVIDERS": {
+    "lmstudio": { "provider": "openai", "base_url": "http://127.0.0.1:1234/v1", "enabled": true },
+    "claude": { "provider": "claude", "model": "claude-sonnet-4-5", "enabled": false },
+    "fireworks": { "provider": "fireworks", "base_url": "...", "model": "...", "enabled": false },
+    "openai": { "provider": "openai", "base_url": "...", "model": "gpt-4o", "enabled": false }
+  },
+  "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "fireworks", "openai"]
+}
+```
+
+Providers are tried in fallback order. Each chat can override to use a specific provider.
 
 ### Reload Behavior
 
@@ -120,14 +138,14 @@ Runtime config
 
 ---
 
-## Authentication
+## Authentication & Credentials
+
+### Password / API Key
 
 One bcrypt hash serves as:
 - Login password
 - API key (`X-API-Key` header)
 - Flask session secret
-
-### Secret Key Location
 
 | OS | Path |
 |----|------|
@@ -137,16 +155,21 @@ One bcrypt hash serves as:
 
 **Reset password:** Delete the `secret_key` file and restart. Setup wizard will reappear.
 
-**Permissions:** On Unix, file is chmod 600.
+### Credential Manager
 
-### Other Secrets
+API keys and SOCKS credentials are stored separately from settings via `core/credentials_manager.py`.
 
-| File | Purpose | Env Var Override |
-|------|---------|------------------|
-| `socks_config` | SOCKS5 proxy creds (line 1: user, line 2: pass) | `SAPPHIRE_SOCKS_USERNAME`, `SAPPHIRE_SOCKS_PASSWORD` |
-| `claude_api_key` | Anthropic API key | `ANTHROPIC_API_KEY` |
+| OS | Path |
+|----|------|
+| Linux | `~/.config/sapphire/credentials.json` |
+| macOS | `~/Library/Application Support/Sapphire/credentials.json` |
+| Windows | `%APPDATA%\Sapphire\credentials.json` |
 
-Legacy location for SOCKS: `user/.socks_config`
+**Not included in backups** for security.
+
+**Priority order:**
+1. Stored credential in `credentials.json` (set via Sapphire UI)
+2. Environment variable fallback (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `FIREWORKS_API_KEY`, `SAPPHIRE_SOCKS_USERNAME`, `SAPPHIRE_SOCKS_PASSWORD`)
 
 ---
 
@@ -154,10 +177,11 @@ Legacy location for SOCKS: `user/.socks_config`
 
 | Service | Port | Binding |
 |---------|------|---------|
-| Web Interface | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
+| Web Interface | 8073 | `0.0.0.0` (all interfaces, HTTP) |
 | Internal API | 8071 | `127.0.0.1` (localhost only) |
 | TTS Server | 5012 | `localhost` |
 | STT Server | 5050 | `localhost` |
+| LM Studio (default) | 1234 | External |
 
 ---
 
@@ -187,6 +211,12 @@ Runs as thread in main process if `STT_ENABLED=true`.
 
 Downloads models on first run via `core/setup.py`.
 
+### Audio Device Manager
+
+- Manager: `core/audio/device_manager.py`
+- Handles device enumeration, sample rate detection, fallback logic
+- Shared by STT and wakeword systems
+
 ---
 
 ## File Watchers
@@ -199,7 +229,7 @@ These auto-reload on file changes:
 | Prompts | `user/prompts/*.json` | ~2s |
 | Toolsets | `user/toolsets/toolsets.json` | ~2s |
 
-Started in `main.py`, stopped on shutdown.
+Started in `sapphire.py`, stopped on shutdown.
 
 ---
 
@@ -216,7 +246,7 @@ user/history/
 
 Each session has:
 - Message history (user, assistant, tool messages)
-- Settings (prompt, voice, ability, spice config)
+- Settings (prompt, voice, toolset, LLM provider, spice config)
 - Metadata (created, updated timestamps)
 
 Managed by `core/chat/history.py` via `SessionManager`.
@@ -234,24 +264,29 @@ Key endpoints (all require `X-API-Key` header):
 | `/history` | GET | Get chat history |
 | `/api/settings` | GET/PUT | Read/write settings |
 | `/api/prompts` | GET | List prompts |
-| `/api/prompts/<name>` | GET/PUT/DELETE | CRUD prompts |
+| `/api/prompts/<n>` | GET/PUT/DELETE | CRUD prompts |
+| `/api/llm/providers` | GET | List LLM providers |
+| `/api/llm/providers/<key>` | PUT | Update provider config |
+| `/api/llm/test/<key>` | POST | Test provider connection |
 | `/api/functions` | GET | List available tools |
-| `/api/functions/enable` | POST | Set active toolset |
-| `/api/abilities/custom` | POST | Save custom toolset |
+| `/api/abilities` | GET | List toolsets |
 | `/api/chats` | GET | List chat sessions |
-| `/api/chats/<name>` | GET/PUT/DELETE | CRUD sessions |
+| `/api/chats/<n>` | GET/PUT/DELETE | CRUD sessions |
+| `/api/credentials/llm/<provider>` | PUT/DELETE | Manage API keys |
 | `/backup/create` | POST | Create backup |
 | `/backup/list` | GET | List backups |
 
-Full routes in `core/api.py` and `interfaces/web/web_interface.py`.
+Full routes in `core/api.py`, `core/settings_api.py`, and `interfaces/web/web_interface.py`.
 
 ---
 
 ## Extensions
 
 See dedicated docs:
-- **Tools/Functions/Abilities:** [TOOLS.md](TOOLS.md)
-- **Plugins/Modules:** [PLUGINS.md](PLUGINS.md)
+- **Tools/Functions:** [TOOLS.md](TOOLS.md)
+- **Toolsets:** [TOOLSETS.md](TOOLSETS.md)
+- **Backend Plugins:** [PLUGINS.md](PLUGINS.md)
+- **Web UI Plugins:** [WEB-PLUGINS.md](WEB-PLUGINS.md)
 - **Prompts:** [PROMPTS.md](PROMPTS.md)
 
 ---
@@ -260,48 +295,61 @@ See dedicated docs:
 
 | Path | Purpose |
 |------|---------|
-| `main.py` | Entry point, VoiceChatSystem |
+| `main.py` | Runner with restart loop |
+| `sapphire.py` | VoiceChatSystem entry point |
 | `config.py` | Settings proxy |
 | `core/api.py` | Internal API routes |
+| `core/settings_api.py` | Settings and LLM API routes |
 | `core/settings_manager.py` | Settings merge logic |
-| `core/setup.py` | Bootstrap, auth, secrets |
+| `core/credentials_manager.py` | API keys and secrets |
+| `core/setup.py` | Bootstrap, auth, first-run |
 | `core/chat/chat.py` | LLM interaction |
+| `core/chat/llm_providers/` | Provider abstraction (Claude, OpenAI, etc.) |
 | `core/chat/module_loader.py` | Plugin loading |
 | `core/chat/function_manager.py` | Tool loading |
 | `core/chat/history.py` | Session management |
+| `core/audio/device_manager.py` | Audio device handling |
 | `core/event_handler.py` | Scheduled events |
 | `interfaces/web/web_interface.py` | Web proxy, auth |
 
+---
+
 ## Reference for AI
 
-Sapphire architecture overview for troubleshooting and development.
+Sapphire architecture for troubleshooting and development.
 
 PROCESSES:
-- main.py: Entry point, spawns subprocesses
-- sapphire.py: Core VoiceChatSystem (LLM, TTS, STT orchestration)
-- web_interface.py: Web UI proxy (port 8073, HTTPS)
+- main.py: Runner with restart loop (exit 42 = restart)
+- sapphire.py: Core VoiceChatSystem
+- web_interface.py: Web UI proxy (port 8073, HTTP)
 - core/api.py: Internal API (port 8071, HTTP)
 - TTS server: Kokoro (port 5012, if enabled)
 
 PORTS:
-- 8073: Web UI (HTTPS, user-facing)
-- 8071: Internal API (HTTP, localhost only)
+- 8073: Web UI (HTTP, user-facing)
+- 8071: Internal API (localhost only)
 - 5012: TTS server (if enabled)
-- 1234: Default LLM server (LM Studio)
+- 5050: STT server (if enabled)
+- 1234: Default LLM (LM Studio)
+
+LLM PROVIDERS:
+- LLM_PROVIDERS dict with lmstudio, claude, fireworks, openai, other
+- LLM_FALLBACK_ORDER controls Auto mode priority
+- Per-chat override via session settings
+- API keys in ~/.config/sapphire/credentials.json or env vars
 
 KEY DIRECTORIES:
 - core/: Main application code
+- core/chat/llm_providers/: LLM abstraction
 - functions/: AI-callable tools
 - plugins/: Keyword-triggered modules
-- interfaces/web/: Web UI (Flask + static JS)
-- user/: All user data (settings, history, prompts)
-- docs/: Documentation
+- interfaces/web/: Web UI
+- user/: All user data
 
-DATA FILES:
-- user/settings.json: All settings
-- user/history/*.json: Chat sessions
-- user/prompts/*.json: Prompt definitions
-- user/memory/: Memory storage
+CREDENTIALS:
+- ~/.config/sapphire/secret_key: Password/API key hash
+- ~/.config/sapphire/credentials.json: LLM and SOCKS credentials
+- Not in user/ directory, not in backups
 
 HOT RELOAD:
 - Settings: ~2s after file change
@@ -312,4 +360,4 @@ HOT RELOAD:
 LOGS:
 - user/logs/sapphire.log: Main log
 - user/logs/tts.log: TTS server log
-- Check logs for errors: grep -i error user/logs/*.log
+- Check errors: grep -i error user/logs/*.log

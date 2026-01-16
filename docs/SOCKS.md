@@ -1,69 +1,62 @@
 # SOCKS Proxy Configuration
 
-A proxy is not a VPN. This just routes functions like the AI doing a web_search, get_website or research_topic through the proxy. If you add functions, you must code them to use the proxy. Only functions use the proxy, things like model downloads for STT does not use the proxy.
+Route web tool traffic through a SOCKS proxy for privacy. Only AI tools use the proxy (web_search, get_website, research_topic). LLM connections, model downloads, and TTS/STT do not use the proxy.
 
-If the proxy is enabled but broken, functions that use the proxy will fail for security. 
+If the proxy is enabled but broken, tools fail-secure rather than leaking to direct connections.
 
-## Enable in Settings
+## Configuration
 
-Use the web UI: Settings → Network → Enable SOCKS.
-<img src="screenshots/socks-proxy.png" alt="socks proxy in Sapphire settings" width="100%">
+Open Settings → Network tab.
 
+<img src="screenshots/socks-proxy.png" alt="SOCKS proxy settings" width="100%">
 
-### Configure Credentials
+1. Enable SOCKS proxy toggle
+2. Set host and port (e.g., `127.0.0.1:9050` for Tor)
+3. Click **Test Connection** to verify
+4. Enter credentials if your proxy requires authentication
 
-SOCKS credentials are stored separately from settings for security. Choose one method:
+## Credentials
 
-**Option A: Environment Variables**
+Sapphire checks for SOCKS credentials in this order:
 
-```bash
-export SAPPHIRE_SOCKS_USERNAME="your_username"
-export SAPPHIRE_SOCKS_PASSWORD="your_password"
-```
+1. **Environment variables** (checked first)
+   - `SAPPHIRE_SOCKS_USERNAME`
+   - `SAPPHIRE_SOCKS_PASSWORD`
 
-Add to your shell profile (`~/.bashrc`) or systemd service file.
-
-**Option B: Config File**
-
-Create `user/.socks_config`:
-
-```
-username=your_username
-password=your_password
-```
-
-### Restart Sapphire
-
-The proxy applies on startup. Restart to activate.
+2. **Credential Manager** (override if set in Sapphire)
+   - Enter in Settings → Network
+   - Stored in `~/.config/sapphire/credentials.json` (not in Sapphire's user directory)
+   - Not included in backups for security
+   - Use the **Clear** button to remove stored credentials
 
 ## Verify It Works
 
-1. Enable web tools in a chat
-2. Ask the AI to get your IP via https://icanhazip.com/
-3. Check logs for proxy connection: `grep SOCKS user/logs/sapphire.log`
+1. Enable web tools in a chat's toolset
+2. Ask the AI to fetch your IP via https://icanhazip.com/
+3. Should show your proxy's IP, not your real IP
 
 ## Reference for AI
 
-Route web tools (search, fetch) through SOCKS5 proxy for privacy.
+Route web tools through SOCKS5 proxy for privacy.
 
 WHAT IT DOES:
-- Only affects functions: web_search, get_website_from_url, research_topic
+- Only affects tools: web_search, get_website_from_url, research_topic
 - Does NOT affect: LLM connections, model downloads, TTS/STT
-- If proxy enabled but broken, web functions fail-secure (won't leak)
+- Fail-secure: if proxy broken, tools error instead of leaking
 
 SETUP:
-1. Settings > Network > Enable SOCKS
-2. Set SOCKS_HOST (e.g., 127.0.0.1 for Tor)
-3. Set SOCKS_PORT (e.g., 9050 for Tor)
-4. If auth needed: set env vars SAPPHIRE_SOCKS_USERNAME/PASSWORD or create user/.socks_config
-5. Restart Sapphire
+1. Settings → Network → Enable SOCKS
+2. Set host/port (e.g., 127.0.0.1:9050 for Tor)
+3. Click Test Connection
+4. Add credentials if needed (env vars or in Settings)
 
-VERIFY:
-- Ask AI to fetch https://icanhazip.com/ - should show proxy IP
-- Check logs: grep SOCKS user/logs/sapphire.log
+CREDENTIALS PRIORITY:
+1. Env vars: SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD
+2. Credential Manager in Settings (stored in ~/.config/sapphire/)
+
+VERIFY: Ask AI to fetch https://icanhazip.com/ - should show proxy IP
 
 TROUBLESHOOTING:
-- Web tools failing: Check proxy is running, verify host/port
-- "Connection refused": Proxy server not running or wrong port
-- Auth errors: Check credentials in env vars or user/.socks_config
+- Tools failing: Check proxy is running, verify host/port
+- Auth errors: Check credentials in env vars or Settings
 - Tor: Use port 9050 (SOCKS) not 9051 (control)

@@ -142,6 +142,7 @@ def execute(function_name, arguments, config):
 ```python
 {
     "type": "function",
+    "network": True,  # Optional: marks tool as using network (highlighted in UI)
     "function": {
         "name": "function_name",
         "description": "What it does and WHEN to use it",
@@ -157,6 +158,11 @@ def execute(function_name, arguments, config):
         }
     }
 }
+```
+
+### Network Flag
+
+Add `"network": True` to tool definitions that access external services (web, APIs, cloud). These tools are highlighted orange in the UI so users know data may leave the machine. SOCKS proxy routing also uses this flag.
 ```
 
 **No parameters:**

@@ -20,6 +20,11 @@ You are {ai_name}. You help {user_name} with tasks. Be concise.
 
 Prompt built from swappable pieces. Mix and match. Ideal for stories where the AI needs to swap locations, or for swapping emotions dynamically, or just seeing what custom weird prompts your AI cooks up. This is Sapphire's unique ability and pairs with self-modifying prompts. The meta functions work with assembled prompts, giving the AI the ability to edit prompt pieces itself.
 
+**Editor features:**
+- Edits auto-save as you type
+- Changes activate immediately
+- Prompt pill and editor stay synced — switching either updates both
+
 ![Prompt editor in Sapphire](screenshots/prompt-editor-assembled.png)
 
 
