@@ -7,7 +7,7 @@ You talk to it, but it's her that talks back. Customize your own virtual persona
 
 
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-blue)
-![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 ![Windows 11+](https://img.shields.io/badge/Windows_11+-0078D6?logo=windows&logoColor=white)
 ![Waifu Compatible](https://img.shields.io/badge/Waifu-Compatible-ff69b4)
@@ -32,6 +32,10 @@ You talk to it, but it's her that talks back. Customize your own virtual persona
 <tr>
 <td><a href="docs/screenshots/per-chat-settings.png"><img src="docs/screenshots/per-chat-settings.png" alt="Per-chat Settings"/></a></td>
 <td><strong>Per-chat Persona</strong><br/>Each chat holds its own prompt, voice, speed, pitch, spice, and toolset. Switch chat = switch persona. See <a href="docs/CONFIGURATION.md">Configuration</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/setup-wizard.png"><img src="docs/screenshots/setup-wizard.png" alt="Setup Wizard"/></a></td>
+<td><strong>Setup Wizard</strong><br/>First run walks you through LLM, voice, and audio configuration. Supports LM Studio (local), Claude, OpenAI, and Fireworks with automatic fallback between providers.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/settings-manager.png"><img src="docs/screenshots/settings-manager.png" alt="Settings Manager"/></a></td>
@@ -83,53 +87,66 @@ You talk to it, but it's her that talks back. Customize your own virtual persona
 
 ## Quick Start
 
+### Prerequisites
+
+#### Linux
+
 ```bash
-#Linux (skip for Windows)
 sudo apt-get install libportaudio2
-
-#Conda env (requires miniconda)
-conda create -n sapphire python=3.11
-conda activate sapphire
-
-#Clone and run 
-git clone https://github.com/ddxfish/sapphire.git
-cd sapphire
-pip install -r requirements.txt
-python main.py
-
-#Optional TTS, STT, Wakeword
-pip install -r requirements-tts.txt
-pip install -r requirements-stt.txt
-pip install -r requirements-wakeword.txt
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b
+~/miniconda3/bin/conda init
+# Close and reopen terminal
 ```
 
-Web UI: https://localhost:8073 (self-signed SSL)
+#### Windows
+
+```powershell
+winget install Anaconda.Miniconda3
+winget install Git.Git
+# Close and reopen PowerShell
+```
+
+Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html)
+
+### Sapphire
+
+```bash
+conda create -n sapphire python=3.11 -y
+conda activate sapphire
+git clone https://github.com/ddxfish/sapphire.git
+cd sapphire
+pip install -r requirements-all.txt
+python main.py
+```
+
+Web UI: http://localhost:8073
+
+The setup wizard walks you through LLM configuration on first run.
 
 ## Requirements
 
 - Ubuntu 22.04+ or Windows 11+
-- Python 3.10+ 
-- Local LLM (LM Studio)
+- Python 3.11+ (via conda)
 - 16GB+ system RAM
-- (recommended) miniconda
-- (recommended) Nvidia graphics card
+- (recommended) Nvidia GPU for TTS/STT
 
 ## Documentation
 
 | Guide | Description |
 |-------|-------------|
-| [Installation](https://github.com/ddxfish/sapphire/blob/main/docs/INSTALLATION.md) | Installation, systemd service |
-| [Configuration](https://github.com/ddxfish/sapphire/blob/main/docs/CONFIGURATION.md) | How to make it yours |
-| [Prompts](https://github.com/ddxfish/sapphire/blob/main/docs/PROMPTS.md) | Monolith vs assembled prompts |
-| [Spice](https://github.com/ddxfish/sapphire/blob/main/docs/SPICE.md) | Random personality injection system |
-| [Tools](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLS.md) | Creating AI-callable functions (web search, memory, etc.) |
-| [Toolsets](https://github.com/ddxfish/sapphire/blob/main/docs/TOOLSETS.md) | Grouping tools into switchable ability sets |
-| [Plugins](https://github.com/ddxfish/sapphire/blob/main/docs/PLUGINS.md) | Keyword-triggered UI/voice extensions |
-| [Web UI Plugins](https://github.com/ddxfish/sapphire/blob/main/docs/WEB-PLUGINS.md) | JavaScript extensions for the web interface |
-| [Image Generation](https://github.com/ddxfish/sapphire/blob/main/docs/IMAGE-GEN.md) | SDXL integration with character consistency |
-| [SOCKS Proxy](https://github.com/ddxfish/sapphire/blob/main/docs/SOCKS.md) | Privacy proxy for web scraping functions |
-| [Troubleshooting](https://github.com/ddxfish/sapphire/blob/main/docs/TROUBLESHOOTING.md) | Common issues and fixes |
-| [Technical](https://github.com/ddxfish/sapphire/blob/main/docs/TECHNICAL.md) | For nerds |
+| [Installation](docs/INSTALLATION.md) | Full installation guide, systemd service |
+| [Configuration](docs/CONFIGURATION.md) | How to make it yours |
+| [Prompts](docs/PROMPTS.md) | Monolith vs assembled prompts |
+| [Spice](docs/SPICE.md) | Random personality injection system |
+| [Tools](docs/TOOLS.md) | Creating AI-callable functions (web search, memory, etc.) |
+| [Toolsets](docs/TOOLSETS.md) | Grouping tools into switchable ability sets |
+| [Plugins](docs/PLUGINS.md) | Keyword-triggered UI/voice extensions |
+| [Web UI Plugins](docs/WEB-PLUGINS.md) | JavaScript extensions for the web interface |
+| [Image Generation](docs/IMAGE-GEN.md) | SDXL integration with character consistency |
+| [SOCKS Proxy](docs/SOCKS.md) | Privacy proxy for web scraping functions |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |
+| [Technical](docs/TECHNICAL.md) | For nerds |
 
 ## Contributions
 
