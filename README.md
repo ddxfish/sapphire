@@ -89,22 +89,26 @@ You talk to it, but it's her that talks back. Customize your own virtual persona
 
 ### Prerequisites
 
-#### Linux
+#### Linux (bash)
 
 ```bash
 sudo apt-get install libportaudio2
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 bash Miniconda3-latest-Linux-x86_64.sh -b
-~/miniconda3/bin/conda init
+# Make conda automatic
+~/miniconda3/bin/conda init bash
 # Close and reopen terminal
 ```
 
-#### Windows
+#### Windows (cmd)
 
-```powershell
+```bat
 winget install Anaconda.Miniconda3
 winget install Git.Git
-# Close and reopen PowerShell
+REM Make conda automatic
+%USERPROFILE%\miniconda3\condabin\conda init powershell
+%USERPROFILE%\miniconda3\condabin\conda init cmd.exe
+REM Close and reopen terminal
 ```
 
 Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html)
