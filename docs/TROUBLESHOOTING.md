@@ -14,6 +14,13 @@
 
 ## Web UI Issues
 
+**403 Forbidden**
+- Try http:// and https://
+- Delete cookies for this site
+- Test in private browsing window
+- Detele secret key `~/.config/sapphire/secret_key` 
+- Restart Sapphire app
+
 **Blank page or "Unauthorized"**
 - Clear browser cookies for localhost:8073
 - Try incognito window
