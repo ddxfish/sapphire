@@ -469,3 +469,15 @@ export const cancelStreaming = () => {
 export const isStreaming = () => {
     return streamMsg !== null;
 };
+
+export const hasVisibleContent = () => {
+    if (!streamMsg) return false;
+    // Check if paragraph buffer has content
+    if (state.paraBuf.trim().length > 0) return true;
+    // Check if any <p> elements have visible text (not in accordions)
+    const paragraphs = streamMsg.el.querySelectorAll('p');
+    for (const p of paragraphs) {
+        if (p.textContent.trim().length > 0) return true;
+    }
+    return false;
+};

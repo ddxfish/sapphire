@@ -289,6 +289,10 @@ export const cancelStreaming = () => {
     Streaming.cancelStreaming();
 };
 
+export const hasVisibleContent = () => {
+    return Streaming.hasVisibleContent();
+};
+
 // =============================================================================
 // CHAT MANAGEMENT
 // =============================================================================

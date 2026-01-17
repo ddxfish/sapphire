@@ -49,6 +49,8 @@ Editing:
     this.components = {};
     this.lastLoadedContentHash = null;
     this._monolithSaveTimeout = null;
+    this._loadInProgress = false;
+    this._lastLoadTime = 0;
     
     this.bindEvents();
     await this.loadComponents();
@@ -93,6 +95,10 @@ Editing:
   
   startStatusWatcher() {
     this.statusCheckInterval = setInterval(async () => {
+      // Skip if a load is already in progress or was recent
+      if (this._loadInProgress) return;
+      if (Date.now() - this._lastLoadTime < 1500) return;
+      
       try {
         // Check if pill prompt changed externally
         const pillText = document.querySelector('#prompt-pill .pill-text');
@@ -103,21 +109,33 @@ Editing:
         
         // If pill shows different prompt than editor, sync editor to pill
         if (pillPromptName && pillPromptName !== 'Loading...' && pillPromptName !== this.currentPrompt) {
-          this.elements.select.value = pillPromptName;
-          await this.loadComponents();
-          await this.loadPromptIntoEditor(pillPromptName);
+          this._loadInProgress = true;
+          try {
+            this.elements.select.value = pillPromptName;
+            await this.loadComponents();
+            await this.loadPromptIntoEditor(pillPromptName);
+          } finally {
+            this._loadInProgress = false;
+            this._lastLoadTime = Date.now();
+          }
         }
         
         // Auto-refresh: check if currently loaded prompt changed on disk (external edit)
-        if (this.currentPrompt && !this._userIsEditing()) {
+        if (this.currentPrompt && !this._userIsEditing() && !this._loadInProgress) {
           const freshData = await API.getPrompt(this.currentPrompt);
           const freshHash = this._hashPromptData(freshData);
           if (freshHash !== this.lastLoadedContentHash) {
-            await this.loadComponents();
-            this.currentData = freshData;
-            this.lastLoadedContentHash = freshHash;
-            this.elements.editor.innerHTML = buildEditor(freshData, this.components);
-            this.bindEditorEvents();
+            this._loadInProgress = true;
+            try {
+              await this.loadComponents();
+              this.currentData = freshData;
+              this.lastLoadedContentHash = freshHash;
+              this.elements.editor.innerHTML = buildEditor(freshData, this.components);
+              this.bindEditorEvents();
+            } finally {
+              this._loadInProgress = false;
+              this._lastLoadTime = Date.now();
+            }
           }
         }
       } catch (e) {}
@@ -226,6 +244,9 @@ Editing:
   },
   
   async loadPromptIntoEditor(name) {
+    // Skip if already loading this prompt or if load in progress
+    if (this._loadInProgress && this.currentPrompt === name) return;
+    
     try {
       const data = await API.getPrompt(name);
       this.currentPrompt = name;

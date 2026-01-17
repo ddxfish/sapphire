@@ -43,11 +43,15 @@ export async function handleSend() {
             txt,
             chunk => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
                 ui.appendStream(chunk);
+                // Hide status once actual visible content appears
+                if (ui.hasVisibleContent()) {
+                    ui.hideStatus();
+                }
             },
             async (ephemeral) => {
                 if (getIsCancelling()) {
@@ -92,7 +96,7 @@ export async function handleSend() {
             // Tool event handlers
             (id, name, args) => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }

@@ -93,11 +93,14 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
             txt,
             chunk => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
                 ui.appendStream(chunk);
+                if (ui.hasVisibleContent()) {
+                    ui.hideStatus();
+                }
             },
             async (ephemeral) => {
                 if (isCancellingGetter && isCancellingGetter()) {
@@ -142,7 +145,7 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
             // Tool event handlers
             (id, name, args) => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
@@ -242,12 +245,15 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
             userMessage,
             chunk => {
                 if (!streamOk) {
-                    console.log('[REGEN DEBUG] First chunk, hiding status');
-                    ui.hideStatus();
+                    console.log('[REGEN DEBUG] First chunk, starting stream');
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
                 ui.appendStream(chunk);
+                if (ui.hasVisibleContent()) {
+                    ui.hideStatus();
+                }
             },
             async (ephemeral) => {
                 if (isCancellingGetter && isCancellingGetter()) {
@@ -293,7 +299,7 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
             // Tool event handlers
             (id, name, args) => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
@@ -455,11 +461,14 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             prefillContent,
             chunk => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
                 ui.appendStream(chunk);
+                if (ui.hasVisibleContent()) {
+                    ui.hideStatus();
+                }
             },
             async (ephemeral) => {
                 if (isCancellingGetter && isCancellingGetter()) {
@@ -504,7 +513,7 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
             // Tool event handlers
             (id, name, args) => {
                 if (!streamOk) {
-                    ui.hideStatus();
+                    ui.updateStatus('Generating...');
                     ui.startStreaming();
                     streamOk = true;
                 }
