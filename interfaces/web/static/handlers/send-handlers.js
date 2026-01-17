@@ -68,7 +68,7 @@ export async function handleSend() {
                 
                 if (streamOk) {
                     await ui.finishStreaming();
-                    await refresh(false);
+                    // Note: finishStreaming already syncs with history - no refresh needed
                     
                     setTimeout(() => {
                         if (audioFn) {

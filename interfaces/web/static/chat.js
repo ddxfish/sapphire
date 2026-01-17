@@ -118,11 +118,8 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 
                 if (streamOk) {
                     await ui.finishStreaming();
+                    // Note: finishStreaming already syncs with history - no refresh needed
                     
-                    // Refresh history to sync UI with backend (handles save_to_history: false)
-                    if (refreshFn) {
-                        await refreshFn(false);
-                    }
                     setTimeout(() => {
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
@@ -272,11 +269,8 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
                 console.log('[REGEN DEBUG] Stream complete');
                 if (streamOk) {
                     await ui.finishStreaming();
+                    // Note: finishStreaming already syncs with history - no refresh needed
                     
-                    // Refresh history to sync UI with backend
-                    if (refreshFn) {
-                        await refreshFn(false);
-                    }
                     setTimeout(() => {
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
@@ -487,11 +481,8 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 console.log('[CONTINUE DEBUG] Stream complete');
                 if (streamOk) {
                     await ui.finishStreaming();
+                    // Note: finishStreaming already syncs with history - no refresh needed
                     
-                    // Refresh history to sync UI with backend
-                    if (refreshFn) {
-                        await refreshFn(false);
-                    }
                     setTimeout(() => {
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
