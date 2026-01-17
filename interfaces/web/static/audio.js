@@ -116,7 +116,8 @@ export const playText = async (txt) => {
         return;
     }
     
-    ui.updateStatus('Generating audio...');
+    ui.showStatus();
+    ui.updateStatus('Generating TTS...');
     
     try {
         const blob = await api.fetchAudio(clean, null);
