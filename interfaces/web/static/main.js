@@ -2,13 +2,14 @@
 import * as audio from './audio.js';
 import * as ui from './ui.js';
 import * as api from './api.js';
-import { initElements, initAvatar, refresh, setHistLen, getElements } from './core/state.js';
+import { initElements, initAvatar, refresh, setHistLen, getElements, getIsProc } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
-import { startMicIconPolling, stopMicIconPolling } from './features/mic.js';
+import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
+import * as eventBus from './core/event-bus.js';
 
 // Initialize appearance settings from localStorage (theme, density, font, trim)
 function initAppearance() {
@@ -150,6 +151,9 @@ async function init() {
         startMicIconPolling();
         bindAllEvents();
         
+        // Connect to event bus for real-time updates
+        initEventBus();
+        
         // Scroll to bottom after render
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -157,8 +161,8 @@ async function init() {
             });
         });
         
-        // Start auto-refresh interval
-        setInterval(handleAutoRefresh, 3000);
+        // Start auto-refresh interval (reduced frequency since event bus handles most updates)
+        setInterval(handleAutoRefresh, 5000);
         
         console.log(`[Init] Complete in ${(performance.now() - t0).toFixed(0)}ms`);
         
@@ -167,8 +171,67 @@ async function init() {
     }
 }
 
+function initEventBus() {
+    // Register event handlers
+    eventBus.on(eventBus.Events.AI_TYPING_START, () => {
+        console.log('[EventBus] AI typing started');
+        // Could show typing indicator here
+    });
+    
+    eventBus.on(eventBus.Events.AI_TYPING_END, () => {
+        console.log('[EventBus] AI typing ended');
+        // Refresh if not currently processing (might have new messages)
+        if (!getIsProc()) {
+            refresh(false);
+        }
+    });
+    
+    eventBus.on(eventBus.Events.TTS_PLAYING, () => {
+        console.log('[EventBus] TTS playing');
+        audio.setLocalTtsPlaying(true);
+        updateMicButtonState();
+    });
+    
+    eventBus.on(eventBus.Events.TTS_STOPPED, () => {
+        console.log('[EventBus] TTS stopped');
+        audio.setLocalTtsPlaying(false);
+        updateMicButtonState();
+    });
+    
+    eventBus.on(eventBus.Events.MESSAGE_ADDED, () => {
+        console.log('[EventBus] Message added');
+        if (!getIsProc()) {
+            refresh(false);
+        }
+    });
+    
+    eventBus.on(eventBus.Events.PROMPT_CHANGED, () => {
+        console.log('[EventBus] Prompt changed');
+        updateScene();
+    });
+    
+    eventBus.on(eventBus.Events.ABILITY_CHANGED, () => {
+        console.log('[EventBus] Ability changed');
+        updateScene();
+    });
+    
+    eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
+        console.log('[EventBus] Chat switched');
+        populateChatDropdown();
+        refresh(false);
+        updateScene();
+    });
+    
+    // Connect to server
+    eventBus.connect(false);
+    
+    // Expose for debugging
+    window.eventBus = eventBus;
+}
+
 function cleanup() {
     stopMicIconPolling();
+    eventBus.disconnect();
     audio.stop();
 }
 

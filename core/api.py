@@ -7,6 +7,7 @@ import json
 import time
 from flask import Flask, Blueprint, request, jsonify, send_file, Response
 from core.modules.system import prompts
+from core.event_bus import publish, Events
 import config
 
 logger = logging.getLogger(__name__)
@@ -63,12 +64,14 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                         logger.info(f"Applied scenario state '{prompt_name}'")
                     
                     logger.info(f"Applied prompt: {prompt_name}")
+                    publish(Events.PROMPT_CHANGED, {"name": prompt_name})
             
             # Apply ability
             if "ability" in settings:
                 ability_name = settings["ability"]
                 system_instance.llm_chat.function_manager.update_enabled_functions([ability_name])
                 logger.info(f"Applied ability: {ability_name}")
+                publish(Events.ABILITY_CHANGED, {"name": ability_name})
             
             logger.info(f"Applied chat settings: voice={settings.get('voice')}, prompt={settings.get('prompt')}, ability={settings.get('ability')}")
             
@@ -397,6 +400,30 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             logger.error(f"Error getting unified status: {e}")
             return jsonify({"error": "Failed to get status"}), 500
 
+    @bp.route('/events', methods=['GET'])
+    def event_stream():
+        """SSE endpoint for real-time event streaming."""
+        from core.event_bus import get_event_bus
+        
+        # Capture request args BEFORE entering generator (request context ends after return)
+        replay = request.args.get('replay', 'false').lower() == 'true'
+        
+        def generate():
+            bus = get_event_bus()
+            
+            for event in bus.subscribe(replay=replay):
+                yield f"data: {json.dumps(event)}\n\n"
+        
+        return Response(
+            generate(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no'
+            }
+        )
+
     @bp.route('/system/status', methods=['GET'])
     def get_system_status():
         try:
@@ -591,6 +618,8 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 # Apply settings from the newly activated chat
                 settings = system_instance.llm_chat.session_manager.get_chat_settings()
                 _apply_chat_settings(settings)
+                
+                publish(Events.CHAT_SWITCHED, {"name": chat_name})
                 
                 return jsonify({
                     "status": "success", 

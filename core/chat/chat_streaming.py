@@ -5,6 +5,7 @@ from typing import Generator, Union, Dict, Any
 import config
 from .chat_tool_calling import strip_ui_markers, wrap_tool_result
 from .llm_providers import LLMResponse, get_generation_params
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ class StreamingChat:
         self.cancel_flag = False
         self.current_stream = None
         self.ephemeral = False
+        self.is_streaming = False
 
     def _cleanup_stream(self):
         """Safely close current stream if it exists."""
@@ -40,6 +42,10 @@ class StreamingChat:
         - str for legacy compatibility (module responses, prefills)
         """
         logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}")
+        
+        # Publish typing start event
+        self.is_streaming = True
+        publish(Events.AI_TYPING_START)
         
         # Immediate feedback that backend received the request
         yield {"type": "stream_started"}
@@ -356,3 +362,5 @@ class StreamingChat:
             logger.info(f"[CLEANUP] [STREAMING FINALLY] Cleaning up, cancel_flag={self.cancel_flag}")
             self._cleanup_stream()
             self.cancel_flag = False
+            self.is_streaming = False
+            publish(Events.AI_TYPING_END)

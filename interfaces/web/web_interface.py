@@ -388,6 +388,42 @@ def unified_status():
     """Unified status - single endpoint for all UI state."""
     return proxy('/status')
 
+@app.route('/api/events', methods=['GET'])
+@require_login
+def event_stream():
+    """SSE proxy for real-time events."""
+    replay = request.args.get('replay', 'false')
+    backend_res = None
+    
+    def generate():
+        nonlocal backend_res
+        try:
+            backend_res = requests.get(
+                f"{API_BASE}/events?replay={replay}",
+                stream=True,
+                timeout=None,
+                headers=get_api_headers()
+            )
+            backend_res.raise_for_status()
+            for line in backend_res.iter_lines(decode_unicode=True):
+                if line:
+                    yield f"{line}\n\n"
+        except Exception as e:
+            yield f"data: {{\"type\": \"error\", \"data\": {{\"message\": \"{str(e)}\"}}}}\n\n"
+        finally:
+            if backend_res:
+                backend_res.close()
+    
+    return Response(
+        generate(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
+
 @app.route('/api/history/messages', methods=['DELETE'])
 @require_login
 def del_msgs():

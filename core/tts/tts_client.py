@@ -10,6 +10,7 @@ import gc
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +339,7 @@ class TTSClient:
                 if self.should_stop.is_set():
                     return
                 self._is_playing = True
+                publish(Events.TTS_PLAYING)
             
             # Convert stereo to mono if needed
             if len(audio_data.shape) > 1:
@@ -365,6 +367,7 @@ class TTSClient:
         finally:
             with self.lock:
                 self._is_playing = False
+                publish(Events.TTS_STOPPED)
             gc.collect()
 
     def stop(self):
