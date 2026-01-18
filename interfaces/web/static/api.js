@@ -19,6 +19,16 @@ const updateContextBar = (context) => {
     bar.title = `Context: ${context.used.toLocaleString()} / ${context.limit.toLocaleString()} tokens (${context.percent}%)`;
 };
 
+// Unified status endpoint - single call for all UI state
+export const fetchStatus = async () => {
+    const status = await fetchWithTimeout('/api/status', {}, 5000);
+    // Update context bar if present
+    if (status?.context) {
+        updateContextBar(status.context);
+    }
+    return status;
+};
+
 export const fetchHistory = async () => {
     const response = await fetchWithTimeout('/api/history');
     // Update context bar if context info is present
@@ -46,6 +56,7 @@ export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
+// Legacy - kept for backwards compatibility, prefer fetchStatus
 export const fetchSystemStatus = () => fetchWithTimeout('/api/system/status', {}, 5000);
 
 // Chat management

@@ -8,8 +8,8 @@ let player, blobUrl, ttsCtrl;
 let isRec = false, isStreaming = false;
 
 // Local TTS state (server-side speaker playback)
+// Now sourced from unified status via scene.js
 let localTtsPlaying = false;
-let localTtsPollInterval = null;
 
 // Recording settings - match what Whisper expects
 const SAMPLE_RATE = 16000;
@@ -33,24 +33,21 @@ export const setMuted = (val) => {
 export const getVolume = () => volume;
 export const isMuted = () => muted;
 
-// Local TTS control
+// Local TTS control - now updated by unified status poll
 export const isLocalTtsPlaying = () => localTtsPlaying;
 
+// Called by scene.js updateScene when unified status returns tts_playing
+export const setLocalTtsPlaying = (playing) => {
+    localTtsPlaying = playing;
+};
+
+// Legacy polling functions - now no-ops since unified status handles this
 export const startLocalTtsPoll = () => {
-    if (localTtsPollInterval) return;
-    localTtsPollInterval = setInterval(async () => {
-        try {
-            const status = await api.getTtsStatus();
-            localTtsPlaying = status.playing;
-        } catch { localTtsPlaying = false; }
-    }, 1000);
+    // No longer needed - unified status provides tts_playing
 };
 
 export const stopLocalTtsPoll = () => {
-    if (localTtsPollInterval) {
-        clearInterval(localTtsPollInterval);
-        localTtsPollInterval = null;
-    }
+    // No longer needed
     localTtsPlaying = false;
 };
 

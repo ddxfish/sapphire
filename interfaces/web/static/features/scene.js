@@ -1,11 +1,17 @@
 // features/scene.js - Scene state, prompt display, functions display
 import * as api from '../api.js';
+import * as audio from '../audio.js';
 import { getElements, setTtsEnabled } from '../core/state.js';
 
 let hasCloudTools = false;
+let ttsPlaying = false;
 
 export function getHasCloudTools() {
     return hasCloudTools;
+}
+
+export function getTtsPlaying() {
+    return ttsPlaying;
 }
 
 // Call this when chat's primary LLM is known (from chat-manager, chat-settings)
@@ -37,7 +43,8 @@ export function updateSendButtonLLM(primary, model = '') {
 
 export async function updateScene() {
     try {
-        const status = await api.fetchSystemStatus();
+        // Use unified status endpoint - single call for all state
+        const status = await api.fetchStatus();
         
         if (status?.tts_enabled !== undefined) {
             setTtsEnabled(status.tts_enabled);
@@ -48,10 +55,19 @@ export async function updateScene() {
         // Track cloud tools status
         hasCloudTools = status?.has_cloud_tools || false;
         
+        // Track TTS playing status (from unified endpoint)
+        // Update both local state and audio.js
+        ttsPlaying = status?.tts_playing || false;
+        audio.setLocalTtsPlaying(ttsPlaying);
+        
         updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count);
         updateFuncs(status?.functions, status?.ability, hasCloudTools);
         updateSpice(status?.spice);
-    } catch {}
+        
+        return status;
+    } catch {
+        return null;
+    }
 }
 
 function updateSpice(spice) {

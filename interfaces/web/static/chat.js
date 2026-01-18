@@ -341,13 +341,24 @@ export const handleRegen = async (idx, setProc, audioFn, refreshFn, abortControl
 export const autoRefresh = async (isProc, lastLen, sceneUpdateFn) => {
     if (isProc) return lastLen;
     try {
+        // Single call to unified status - gets message_count, updates scene
+        if (sceneUpdateFn) {
+            const status = await sceneUpdateFn();
+            // Check if message count changed
+            const messageCount = status?.message_count ?? lastLen;
+            if (messageCount > lastLen) {
+                // New messages - fetch full history for rendering
+                const { len } = await fetchAndRender(false);
+                return len;
+            }
+            return messageCount;
+        }
+        // Fallback if no scene function
         const hist = await api.fetchHistory();
         if (hist.length > lastLen) {
             const { len } = await fetchAndRender(false);
-            if (sceneUpdateFn) await sceneUpdateFn();
             return len;
         }
-        if (sceneUpdateFn) await sceneUpdateFn();
         return lastLen;
     } catch {
         return lastLen;

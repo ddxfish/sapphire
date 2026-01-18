@@ -382,6 +382,12 @@ def reset():
 def sys_status():
     return proxy('/system/status')
 
+@app.route('/api/status', methods=['GET'])
+@require_login
+def unified_status():
+    """Unified status - single endpoint for all UI state."""
+    return proxy('/status')
+
 @app.route('/api/history/messages', methods=['DELETE'])
 @require_login
 def del_msgs():

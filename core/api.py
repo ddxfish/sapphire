@@ -326,6 +326,77 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     def health_check():
         return jsonify({"status": "ok"})
 
+    @bp.route('/status', methods=['GET'])
+    def get_unified_status():
+        """Unified status endpoint - single call for all UI state needs."""
+        try:
+            from core.chat.history import count_tokens
+            
+            # Prompt state
+            prompt_state = prompts.get_current_state()
+            prompt_name = prompts.get_active_preset_name()
+            prompt_char_count = prompts.get_prompt_char_count()
+            is_assembled = prompts.is_assembled_mode()
+            
+            # Ability/function state
+            function_names = system_instance.llm_chat.function_manager.get_enabled_function_names()
+            ability_info = system_instance.llm_chat.function_manager.get_current_ability_info()
+            has_cloud_tools = system_instance.llm_chat.function_manager.has_network_tools_enabled()
+            
+            # Spice state
+            chat_settings = system_instance.llm_chat.session_manager.get_chat_settings()
+            spice_enabled = chat_settings.get('spice_enabled', True)
+            current_spice = prompts.get_current_spice()
+            
+            # TTS state
+            tts_playing = getattr(system_instance.tts, '_is_playing', False)
+            
+            # Chat state
+            active_chat = system_instance.llm_chat.get_active_chat()
+            
+            # Streaming state
+            is_streaming = getattr(system_instance.llm_chat.streaming_chat, 'is_streaming', False)
+            
+            # Context usage (lightweight calculation)
+            context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
+            raw_messages = system_instance.llm_chat.session_manager.get_messages()
+            message_count = len(raw_messages)
+            history_tokens = sum(count_tokens(str(m.get("content", ""))) for m in raw_messages)
+            try:
+                prompt_content = system_instance.llm_chat.current_system_prompt or ""
+                prompt_tokens = count_tokens(prompt_content) if prompt_content else 0
+            except:
+                prompt_tokens = 0
+            total_used = history_tokens + prompt_tokens
+            context_percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
+            
+            return jsonify({
+                "prompt_name": prompt_name,
+                "prompt_char_count": prompt_char_count,
+                "prompt": prompt_state,
+                "ability": ability_info,
+                "functions": function_names,
+                "has_cloud_tools": has_cloud_tools,
+                "tts_enabled": config.TTS_ENABLED,
+                "tts_playing": tts_playing,
+                "active_chat": active_chat,
+                "is_streaming": is_streaming,
+                "message_count": message_count,
+                "spice": {
+                    "current": current_spice,
+                    "enabled": spice_enabled,
+                    "available": is_assembled
+                },
+                "context": {
+                    "used": total_used,
+                    "limit": context_limit,
+                    "percent": context_percent
+                }
+            })
+        except Exception as e:
+            logger.error(f"Error getting unified status: {e}")
+            return jsonify({"error": "Failed to get status"}), 500
+
     @bp.route('/system/status', methods=['GET'])
     def get_system_status():
         try:

@@ -17,6 +17,15 @@ from flask import Flask
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Mock tiktoken before any imports that might need it
+mock_tiktoken = MagicMock()
+mock_tiktoken.encoding_for_model.return_value.encode.return_value = []
+sys.modules['tiktoken'] = mock_tiktoken
+
+# Mock openai before any imports that might need it
+mock_openai = MagicMock()
+sys.modules['openai'] = mock_openai
+
 
 # =============================================================================
 # Fixtures
@@ -142,30 +151,54 @@ class TestHealthEndpoint:
 class TestHistoryEndpoints:
     """Test /history endpoints."""
     
-    def test_get_history_returns_list(self, client, mock_system):
-        """GET /history should return message list."""
+    def test_get_history_returns_messages_and_context(self, client, mock_system):
+        """GET /history should return messages array and context info."""
         mock_system.llm_chat.session_manager.get_messages.return_value = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Hi there!'}
         ]
         
         with patch('core.setup.get_password_hash', return_value="test"):
-            response = client.get('/api/history', headers={'X-API-Key': 'test'})
-            
-            assert response.status_code == 200
-            data = json.loads(response.data)
-            assert isinstance(data, list)
+            with patch('core.api.config') as mock_config:
+                mock_config.CONTEXT_LIMIT = 32000
+                response = client.get('/api/history', headers={'X-API-Key': 'test'})
+                
+                assert response.status_code == 200
+                data = json.loads(response.data)
+                assert 'messages' in data
+                assert 'context' in data
+                assert isinstance(data['messages'], list)
+                assert len(data['messages']) == 2
     
     def test_get_history_empty(self, client, mock_system):
-        """GET /history with no messages should return empty list."""
+        """GET /history with no messages should return empty messages list."""
         mock_system.llm_chat.session_manager.get_messages.return_value = []
         
         with patch('core.setup.get_password_hash', return_value="test"):
-            response = client.get('/api/history', headers={'X-API-Key': 'test'})
-            
-            assert response.status_code == 200
-            data = json.loads(response.data)
-            assert data == []
+            with patch('core.api.config') as mock_config:
+                mock_config.CONTEXT_LIMIT = 32000
+                response = client.get('/api/history', headers={'X-API-Key': 'test'})
+                
+                assert response.status_code == 200
+                data = json.loads(response.data)
+                assert 'messages' in data
+                assert data['messages'] == []
+    
+    def test_get_history_context_has_required_fields(self, client, mock_system):
+        """GET /history context should have used, limit, percent."""
+        mock_system.llm_chat.session_manager.get_messages.return_value = []
+        
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.config') as mock_config:
+                mock_config.CONTEXT_LIMIT = 32000
+                response = client.get('/api/history', headers={'X-API-Key': 'test'})
+                
+                assert response.status_code == 200
+                data = json.loads(response.data)
+                context = data['context']
+                assert 'used' in context
+                assert 'limit' in context
+                assert 'percent' in context
 
 
 # =============================================================================
@@ -197,6 +230,174 @@ class TestSystemStatusEndpoint:
             assert 'prompt' in data
             assert 'functions' in data
             assert 'ability' in data
+
+
+# =============================================================================
+# Unified Status Endpoint Tests
+# =============================================================================
+
+class TestUnifiedStatusEndpoint:
+    """Test /status unified endpoint."""
+    
+    def test_unified_status_returns_all_fields(self, client, mock_system):
+        """GET /status should return all expected fields."""
+        mock_system.llm_chat.get_active_chat.return_value = 'General'
+        mock_system.llm_chat.streaming_chat = MagicMock()
+        mock_system.llm_chat.streaming_chat.is_streaming = False
+        mock_system.llm_chat.current_system_prompt = "Test prompt"
+        mock_system.tts._is_playing = False
+        
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.get_current_state.return_value = {'mode': 'monolith'}
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.get_prompt_char_count.return_value = 100
+                mock_prompts.get_current_spice.return_value = None
+                mock_prompts.is_assembled_mode.return_value = False
+                
+                with patch('core.api.config') as mock_config:
+                    mock_config.TTS_ENABLED = True
+                    mock_config.CONTEXT_LIMIT = 32000
+                    
+                    response = client.get('/api/status', headers={'X-API-Key': 'test'})
+        
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        
+        # Check all unified status fields exist
+        assert 'prompt_name' in data
+        assert 'prompt_char_count' in data
+        assert 'prompt' in data
+        assert 'ability' in data
+        assert 'functions' in data
+        assert 'has_cloud_tools' in data
+        assert 'tts_enabled' in data
+        assert 'tts_playing' in data
+        assert 'active_chat' in data
+        assert 'is_streaming' in data
+        assert 'message_count' in data
+        assert 'spice' in data
+        assert 'context' in data
+    
+    def test_unified_status_context_fields(self, client, mock_system):
+        """GET /status context should have used, limit, percent."""
+        mock_system.llm_chat.get_active_chat.return_value = 'General'
+        mock_system.llm_chat.streaming_chat = MagicMock()
+        mock_system.llm_chat.streaming_chat.is_streaming = False
+        mock_system.llm_chat.current_system_prompt = ""
+        mock_system.tts._is_playing = False
+        
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.get_current_state.return_value = {}
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.get_prompt_char_count.return_value = 0
+                mock_prompts.get_current_spice.return_value = None
+                mock_prompts.is_assembled_mode.return_value = False
+                
+                with patch('core.api.config') as mock_config:
+                    mock_config.TTS_ENABLED = True
+                    mock_config.CONTEXT_LIMIT = 32000
+                    
+                    response = client.get('/api/status', headers={'X-API-Key': 'test'})
+        
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        
+        context = data['context']
+        assert 'used' in context
+        assert 'limit' in context
+        assert 'percent' in context
+        assert context['limit'] == 32000
+    
+    def test_unified_status_spice_fields(self, client, mock_system):
+        """GET /status spice should have current, enabled, available."""
+        mock_system.llm_chat.get_active_chat.return_value = 'General'
+        mock_system.llm_chat.streaming_chat = MagicMock()
+        mock_system.llm_chat.streaming_chat.is_streaming = False
+        mock_system.llm_chat.current_system_prompt = ""
+        mock_system.tts._is_playing = False
+        
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.get_current_state.return_value = {}
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.get_prompt_char_count.return_value = 0
+                mock_prompts.get_current_spice.return_value = 'playful'
+                mock_prompts.is_assembled_mode.return_value = True
+                
+                with patch('core.api.config') as mock_config:
+                    mock_config.TTS_ENABLED = True
+                    mock_config.CONTEXT_LIMIT = 32000
+                    
+                    response = client.get('/api/status', headers={'X-API-Key': 'test'})
+        
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        
+        spice = data['spice']
+        assert 'current' in spice
+        assert 'enabled' in spice
+        assert 'available' in spice
+        assert spice['current'] == 'playful'
+        assert spice['available'] == True
+    
+    def test_unified_status_message_count(self, client, mock_system):
+        """GET /status should return correct message_count."""
+        mock_system.llm_chat.session_manager.get_messages.return_value = [
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi!'},
+            {'role': 'user', 'content': 'How are you?'},
+        ]
+        mock_system.llm_chat.get_active_chat.return_value = 'General'
+        mock_system.llm_chat.streaming_chat = MagicMock()
+        mock_system.llm_chat.streaming_chat.is_streaming = False
+        mock_system.llm_chat.current_system_prompt = ""
+        mock_system.tts._is_playing = False
+        
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.get_current_state.return_value = {}
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.get_prompt_char_count.return_value = 0
+                mock_prompts.get_current_spice.return_value = None
+                mock_prompts.is_assembled_mode.return_value = False
+                
+                with patch('core.api.config') as mock_config:
+                    mock_config.TTS_ENABLED = True
+                    mock_config.CONTEXT_LIMIT = 32000
+                    
+                    response = client.get('/api/status', headers={'X-API-Key': 'test'})
+        
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['message_count'] == 3
+    
+    def test_unified_status_tts_playing(self, client, mock_system):
+        """GET /status should return tts_playing state."""
+        mock_system.llm_chat.get_active_chat.return_value = 'General'
+        mock_system.llm_chat.streaming_chat = MagicMock()
+        mock_system.llm_chat.streaming_chat.is_streaming = False
+        mock_system.llm_chat.current_system_prompt = ""
+        mock_system.tts._is_playing = True  # TTS is playing
+        
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.get_current_state.return_value = {}
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.get_prompt_char_count.return_value = 0
+                mock_prompts.get_current_spice.return_value = None
+                mock_prompts.is_assembled_mode.return_value = False
+                
+                with patch('core.api.config') as mock_config:
+                    mock_config.TTS_ENABLED = True
+                    mock_config.CONTEXT_LIMIT = 32000
+                    
+                    response = client.get('/api/status', headers={'X-API-Key': 'test'})
+        
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['tts_playing'] == True
 
 
 # =============================================================================
