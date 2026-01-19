@@ -314,7 +314,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         try:
             prompt_content = system_instance.llm_chat.current_system_prompt or ""
             prompt_tokens = count_tokens(prompt_content) if prompt_content else 0
-        except:
+        except Exception:
             prompt_tokens = 0
         
         total_used = history_tokens + prompt_tokens
@@ -377,7 +377,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             try:
                 prompt_content = system_instance.llm_chat.current_system_prompt or ""
                 prompt_tokens = count_tokens(prompt_content) if prompt_content else 0
-            except:
+            except Exception:
                 prompt_tokens = 0
             total_used = history_tokens + prompt_tokens
             context_percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0

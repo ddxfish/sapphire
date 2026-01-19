@@ -232,7 +232,7 @@ class SettingsManager:
         try:
             with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults_nested = json.load(f)
-        except:
+        except Exception:
             return nested
         
         # Find which category each flat key belongs to
@@ -510,7 +510,8 @@ class SettingsManager:
     
     def __contains__(self, key):
         """Allow 'key in settings' checks"""
-        return key in self._config
+        with self._lock:
+            return key in self._config
     
     def __repr__(self):
         return f"<SettingsManager: {len(self._config)} settings>"
