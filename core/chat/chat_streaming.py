@@ -229,10 +229,15 @@ class StreamingChat:
                             "args": function_args
                         }
                         
+                        # Publish to event bus for avatar/plugins
+                        publish(Events.TOOL_EXECUTING, {"name": function_name})
+                        
                         try:
                             function_result = self.main_chat.function_manager.execute_function(function_name, function_args)
                             result_str = str(function_result)
                             clean_result = strip_ui_markers(result_str)
+                            
+                            publish(Events.TOOL_COMPLETE, {"name": function_name, "success": True})
                             
                             # Emit typed tool_end event
                             yield {
@@ -267,6 +272,8 @@ class StreamingChat:
                         except Exception as tool_error:
                             logger.error(f"Tool execution error: {tool_error}", exc_info=True)
                             error_result = f"Error: {str(tool_error)}"
+                            
+                            publish(Events.TOOL_COMPLETE, {"name": function_name, "success": False})
                             
                             yield {
                                 "type": "tool_end",

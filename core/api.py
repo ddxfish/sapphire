@@ -291,16 +291,24 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     @bp.route('/history', methods=['GET'])
     def get_history():
         """Get history formatted for UI display with context usage info."""
+        import time as _time
+        start = _time.time()
+        logger.info(f"[TIMING] Backend /history request received")
+        
         from core.chat.history import count_tokens
         
         raw_messages = system_instance.llm_chat.session_manager.get_messages()
+        logger.info(f"[TIMING] get_messages done at {_time.time() - start:.3f}s, {len(raw_messages)} messages")
+        
         display_messages = format_messages_for_display(raw_messages)
+        logger.info(f"[TIMING] format_messages done at {_time.time() - start:.3f}s")
         
         # Calculate context usage
         context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
         
         # Count tokens in raw history (what actually goes to LLM)
         history_tokens = sum(count_tokens(str(m.get("content", ""))) for m in raw_messages)
+        logger.info(f"[TIMING] count_tokens done at {_time.time() - start:.3f}s")
         
         # Estimate system prompt tokens (use current prompt if available)
         try:
@@ -312,6 +320,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         total_used = history_tokens + prompt_tokens
         percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
         
+        logger.info(f"[TIMING] Backend /history complete at {_time.time() - start:.3f}s")
         return jsonify({
             "messages": display_messages,
             "context": {
@@ -712,14 +721,20 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
 
     @bp.route('/tts/speak', methods=['POST'])
     def handle_tts_speak():
+        import time as _time
+        tts_start = _time.time()
+        logger.info(f"[TIMING] /tts/speak received request")
         data = request.json
         text = data.get('text')
         output_mode = data.get('output_mode', 'play')
         if not text: 
             return jsonify({"error": "No text provided"}), 400
         
+        logger.info(f"[TIMING] /tts/speak processing {len(text)} chars, mode={output_mode}")
+        
         # Check if TTS is enabled
         if not config.TTS_ENABLED:
+            logger.info(f"[TIMING] TTS disabled, returning early")
             if output_mode == 'play':
                 return jsonify({"status": "success", "message": "TTS disabled"})
             elif output_mode == 'file':
@@ -729,7 +744,9 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             system_instance.tts.speak(text)
             return jsonify({"status": "success", "message": "Playback started."})
         elif output_mode == 'file':
+            logger.info(f"[TIMING] Starting TTS generation at {_time.time() - tts_start:.2f}s")
             audio_data = system_instance.tts.generate_audio_data(text)
+            logger.info(f"[TIMING] TTS generation complete at {_time.time() - tts_start:.2f}s, got {len(audio_data) if audio_data else 0} bytes")
             if audio_data:
                 return send_file(io.BytesIO(audio_data), mimetype='audio/wav', as_attachment=True, download_name='output.wav')
             else:

@@ -251,6 +251,7 @@ export const endTool = (toolId, toolName, result, isError) => {
 };
 
 export const finishStreaming = async (ephemeral = false) => {
+    console.log('[FINISH TIMING] finishStreaming called, ephemeral=', ephemeral, performance.now());
     const streamingMsg = document.getElementById('streaming-message');
     
     Streaming.finishStreaming(updateToolbars);
@@ -266,11 +267,13 @@ export const finishStreaming = async (ephemeral = false) => {
     }
     
     if (streamingMsg) {
-        console.log('[SWAP] Waiting for backend to save...');
+        console.log('[FINISH TIMING] Starting 500ms wait', performance.now());
         await new Promise(resolve => setTimeout(resolve, 500));
+        console.log('[FINISH TIMING] 500ms wait done, fetching history', performance.now());
         
         try {
             const hist = await api.fetchHistory();
+            console.log('[FINISH TIMING] history fetched', performance.now());
             if (hist && hist.length > 0) {
                 const lastMsg = hist[hist.length - 1];
                 const { clone } = createMessage(lastMsg, hist.length - 1, hist.length, true);
@@ -282,6 +285,7 @@ export const finishStreaming = async (ephemeral = false) => {
         }
     }
     
+    console.log('[FINISH TIMING] finishStreaming complete', performance.now());
     scrollToBottomIfSticky(true);
 };
 

@@ -161,8 +161,8 @@ async function init() {
             });
         });
         
-        // Start auto-refresh interval (reduced frequency since event bus handles most updates)
-        setInterval(handleAutoRefresh, 5000);
+        // Start auto-refresh interval (fallback sync - events handle most updates)
+        setInterval(handleAutoRefresh, 30000);
         
         console.log(`[Init] Complete in ${(performance.now() - t0).toFixed(0)}ms`);
         
@@ -173,19 +173,20 @@ async function init() {
 
 function initEventBus() {
     // Register event handlers
+    
+    // AI typing events
     eventBus.on(eventBus.Events.AI_TYPING_START, () => {
         console.log('[EventBus] AI typing started');
-        // Could show typing indicator here
     });
     
     eventBus.on(eventBus.Events.AI_TYPING_END, () => {
         console.log('[EventBus] AI typing ended');
-        // Refresh if not currently processing (might have new messages)
         if (!getIsProc()) {
             refresh(false);
         }
     });
     
+    // TTS events
     eventBus.on(eventBus.Events.TTS_PLAYING, () => {
         console.log('[EventBus] TTS playing');
         audio.setLocalTtsPlaying(true);
@@ -198,13 +199,25 @@ function initEventBus() {
         updateMicButtonState();
     });
     
-    eventBus.on(eventBus.Events.MESSAGE_ADDED, () => {
-        console.log('[EventBus] Message added');
+    // Message events - instant refresh on changes
+    eventBus.on(eventBus.Events.MESSAGE_ADDED, (data) => {
+        console.log('[EventBus] Message added:', data?.role);
         if (!getIsProc()) {
             refresh(false);
         }
     });
     
+    eventBus.on(eventBus.Events.MESSAGE_REMOVED, () => {
+        console.log('[EventBus] Message removed');
+        refresh(false);
+    });
+    
+    eventBus.on(eventBus.Events.CHAT_CLEARED, () => {
+        console.log('[EventBus] Chat cleared');
+        refresh(false);
+    });
+    
+    // System state events
     eventBus.on(eventBus.Events.PROMPT_CHANGED, () => {
         console.log('[EventBus] Prompt changed');
         updateScene();
@@ -220,6 +233,42 @@ function initEventBus() {
         populateChatDropdown();
         refresh(false);
         updateScene();
+    });
+    
+    // STT events (for avatar/UI feedback)
+    eventBus.on(eventBus.Events.STT_RECORDING_START, () => {
+        console.log('[EventBus] STT recording started');
+    });
+    
+    eventBus.on(eventBus.Events.STT_RECORDING_END, () => {
+        console.log('[EventBus] STT recording ended');
+    });
+    
+    eventBus.on(eventBus.Events.STT_PROCESSING, () => {
+        console.log('[EventBus] STT processing');
+    });
+    
+    // Wakeword event
+    eventBus.on(eventBus.Events.WAKEWORD_DETECTED, () => {
+        console.log('[EventBus] Wakeword detected');
+    });
+    
+    // Tool events (for avatar "working" state)
+    eventBus.on(eventBus.Events.TOOL_EXECUTING, (data) => {
+        console.log('[EventBus] Tool executing:', data?.name);
+    });
+    
+    eventBus.on(eventBus.Events.TOOL_COMPLETE, (data) => {
+        console.log('[EventBus] Tool complete:', data?.name, data?.success);
+    });
+    
+    // Error events
+    eventBus.on(eventBus.Events.LLM_ERROR, (data) => {
+        console.warn('[EventBus] LLM error:', data);
+    });
+    
+    eventBus.on(eventBus.Events.STT_ERROR, (data) => {
+        console.warn('[EventBus] STT error:', data);
     });
     
     // Connect to server

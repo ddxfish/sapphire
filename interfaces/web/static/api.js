@@ -92,6 +92,7 @@ const processSSEData = (data, handlers) => {
     const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;
     
     if (data.type === 'stream_started') {
+        console.log('[SSE TIMING] stream_started received', performance.now());
         if (onStreamStarted) onStreamStarted();
         return { gotContent: true };
     }
@@ -140,6 +141,7 @@ const processSSEData = (data, handlers) => {
     }
     
     if (data.done) {
+        console.log('[SSE TIMING] done received', performance.now());
         if (onDone) onDone(data.ephemeral || false);
         return { shouldReturn: true, isDone: true };
     }
@@ -283,14 +285,18 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
 };
 
 export const fetchAudio = async (text, signal = null) => {
+    console.log('[TTS TIMING] fetchAudio called, POSTing to /api/tts', performance.now());
     try {
-        return await fetchWithTimeout('/api/tts', {
+        const result = await fetchWithTimeout('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text }),
             signal
         }, 120000);
+        console.log('[TTS TIMING] fetchAudio response received', performance.now());
+        return result;
     } catch (e) {
+        console.log('[TTS TIMING] fetchAudio error', e.message, performance.now());
         if (e.message.includes('timeout') && text.length > 500) {
             throw new Error(`TTS timeout (${text.length} chars)`);
         }

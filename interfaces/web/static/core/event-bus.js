@@ -175,14 +175,31 @@ export const Events = {
     TTS_PLAYING: 'tts_playing',
     TTS_STOPPED: 'tts_stopped',
     
+    // STT events
+    STT_RECORDING_START: 'stt_recording_start',
+    STT_RECORDING_END: 'stt_recording_end',
+    STT_PROCESSING: 'stt_processing',
+    
+    // Wakeword events
+    WAKEWORD_DETECTED: 'wakeword_detected',
+    
+    // Tool events
+    TOOL_EXECUTING: 'tool_executing',
+    TOOL_COMPLETE: 'tool_complete',
+    
     // System events
     PROMPT_CHANGED: 'prompt_changed',
     ABILITY_CHANGED: 'ability_changed',
     SPICE_CHANGED: 'spice_changed',
     
-    // Context events
+    // Context threshold events
     CONTEXT_WARNING: 'context_warning',
     CONTEXT_CRITICAL: 'context_critical',
+    
+    // Error events
+    LLM_ERROR: 'llm_error',
+    TTS_ERROR: 'tts_error',
+    STT_ERROR: 'stt_error',
     
     // Connection events (client-side only)
     BUS_CONNECTED: 'bus_connected',

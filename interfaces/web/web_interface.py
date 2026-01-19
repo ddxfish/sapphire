@@ -1,6 +1,8 @@
 # web_interface.py - Flask proxy to main API
 from flask import Flask, render_template, request, jsonify, Response, send_file, session, redirect, url_for, abort
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import os
 import time
 import sys
@@ -29,6 +31,19 @@ from interfaces.web.plugins_api import plugins_bp, load_plugin_settings
 # Construct API base URL from config
 API_BASE = f"http://{config.API_HOST}:{config.API_PORT}"
 SDXL_DEFAULT = "http://127.0.0.1:5153"
+
+# Separate sessions for different request types to prevent connection pool blocking
+# Regular API calls - short-lived, pooled
+_api_session = requests.Session()
+_api_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10, max_retries=Retry(total=0))
+_api_session.mount('http://', _api_adapter)
+_api_session.mount('https://', _api_adapter)
+
+# SSE streams - long-lived, separate pool to avoid blocking regular requests
+_sse_session = requests.Session()
+_sse_adapter = HTTPAdapter(pool_connections=5, pool_maxsize=5, max_retries=Retry(total=0))
+_sse_session.mount('http://', _sse_adapter)
+_sse_session.mount('https://', _sse_adapter)
 
 def get_sdxl_url():
     """Get SDXL API URL from image-gen settings or use default."""
@@ -121,10 +136,15 @@ def get_api_headers():
 
 def proxy(endpoint, method='GET', **kwargs):
     """Proxy request to backend API."""
+    import time as _time
+    start = _time.time()
     try:
         headers = kwargs.pop('headers', {})
         headers.update(get_api_headers())
-        res = requests.request(method, f"{API_BASE}{endpoint}", headers=headers, **kwargs)
+        logger.info(f"[PROXY TIMING] {method} {endpoint} starting, timeout={kwargs.get('timeout', 'None')}")
+        logger.info(f"[PROXY TIMING] {method} {endpoint} pool status: {_api_session.adapters}")
+        res = _api_session.request(method, f"{API_BASE}{endpoint}", headers=headers, **kwargs)
+        logger.info(f"[PROXY TIMING] {method} {endpoint} response received at {_time.time() - start:.2f}s, status={res.status_code}")
         res.raise_for_status()
         return jsonify(res.json()) if res.headers.get('Content-Type', '').startswith('application/json') else res
     except requests.exceptions.HTTPError as e:
@@ -135,7 +155,7 @@ def proxy(endpoint, method='GET', **kwargs):
         except:
             return jsonify({"error": str(e)}), e.response.status_code
     except Exception as e:
-        logger.error(f"Proxy failed: {method} {endpoint} - {e}")
+        logger.error(f"Proxy failed: {method} {endpoint} at {_time.time() - start:.2f}s - {e}")
         return jsonify({"error": str(e)}), 503
 
 # =============================================================================
@@ -228,7 +248,12 @@ def logout():
 @app.route('/api/history', methods=['GET'])
 @require_login
 def get_history():
-    return proxy('/history')
+    import time as _time
+    start = _time.time()
+    logger.info(f"[TIMING] /api/history Flask received request at {_time.strftime('%H:%M:%S', _time.localtime())}.{int((start % 1) * 1000):03d}")
+    result = proxy('/history', timeout=10)  # Add 10 second timeout
+    logger.info(f"[TIMING] /api/history completed in {_time.time() - start:.2f}s")
+    return result
 
 @app.route('/api/chat', methods=['POST'])
 @require_login
@@ -238,13 +263,15 @@ def post_chat():
 @app.route('/api/chat/stream', methods=['POST'])
 @require_login
 def stream_chat():
+    import time as _time
     data = request.json
     backend_res = None
+    stream_start = _time.time()
     logger.info("Stream chat started")
     def generate():
         nonlocal backend_res
         try:
-            backend_res = requests.post(
+            backend_res = _sse_session.post(
                 f"{API_BASE}/chat/stream", 
                 json=data, 
                 stream=True, 
@@ -254,15 +281,19 @@ def stream_chat():
             backend_res.raise_for_status()
             for line in backend_res.iter_lines(decode_unicode=True):
                 if line:
+                    # Log done event timing
+                    if '"done"' in line or '"done": true' in line:
+                        logger.info(f"[TIMING] SSE done event forwarding at {_time.time() - stream_start:.2f}s")
                     yield f"{line}\n\n"
         except Exception as e:
             yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
         finally:
+            logger.info(f"[TIMING] Stream generator finished at {_time.time() - stream_start:.2f}s")
             if backend_res:
                 backend_res.close()
     return Response(generate(), mimetype='text/event-stream', headers={
         'Cache-Control': 'no-cache', 
-        'Connection': 'keep-alive',
+        'Connection': 'close',  # Force close to release connection pool immediately
         'X-Accel-Buffering': 'no'
     })
 
@@ -306,15 +337,21 @@ def proxy_sdxl_image(image_id):
 @app.route('/api/tts', methods=['POST'])
 @require_login
 def tts():
+    import time as _time
+    tts_start = _time.time()
+    logger.info(f"[TIMING] TTS request received at web_interface")
     backend_res = None
     try:
-        backend_res = requests.post(
+        text = request.json.get("text", "")
+        logger.info(f"[TIMING] TTS requesting {len(text)} chars to backend")
+        backend_res = _api_session.post(
             f"{API_BASE}/tts/speak", 
-            json={"text": request.json.get("text"), "output_mode": "file"}, 
+            json={"text": text, "output_mode": "file"}, 
             stream=True, 
             timeout=120,
             headers=get_api_headers()
         )
+        logger.info(f"[TIMING] TTS backend responded status={backend_res.status_code} at {_time.time() - tts_start:.2f}s")
         backend_res.raise_for_status()
         
         def generate():
@@ -332,6 +369,7 @@ def tts():
             headers={'Cache-Control': 'no-cache'}
         )
     except Exception as e:
+        logger.error(f"[TIMING] TTS error at {_time.time() - tts_start:.2f}s: {e}")
         if backend_res:
             backend_res.close()
         return jsonify({"error": str(e)}), 503
@@ -356,7 +394,7 @@ def transcribe():
     files = {'audio': (request.files['audio'].filename, request.files['audio'].stream, request.files['audio'].mimetype)}
     
     try:
-        t_res = requests.post(f"{API_BASE}/transcribe", files=files, timeout=180, headers=get_api_headers())
+        t_res = _api_session.post(f"{API_BASE}/transcribe", files=files, timeout=180, headers=get_api_headers())
         t_res.raise_for_status()
         text = t_res.json().get("text")
         if not text:
@@ -369,10 +407,10 @@ def transcribe():
 @require_login
 def reset():
     try:
-        h = requests.get(f"{API_BASE}/history", timeout=5, headers=get_api_headers()).json()
+        h = _api_session.get(f"{API_BASE}/history", timeout=5, headers=get_api_headers()).json()
         if not h:
             return jsonify({"status": "success", "message": "Already empty"})
-        requests.delete(f"{API_BASE}/history/messages", json={"count": len(h)}, timeout=10, headers=get_api_headers()).raise_for_status()
+        _api_session.delete(f"{API_BASE}/history/messages", json={"count": len(h)}, timeout=10, headers=get_api_headers()).raise_for_status()
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 503
@@ -398,7 +436,8 @@ def event_stream():
     def generate():
         nonlocal backend_res
         try:
-            backend_res = requests.get(
+            # Use separate SSE session to avoid blocking regular API requests
+            backend_res = _sse_session.get(
                 f"{API_BASE}/events?replay={replay}",
                 stream=True,
                 timeout=None,
@@ -966,7 +1005,7 @@ def delete_backup(filename):
 def download_backup(filename):
     """Stream backup file from backend."""
     try:
-        response = requests.get(
+        response = _api_session.get(
             f"{API_BASE}/backup/download/{filename}",
             headers=get_api_headers(),
             stream=True,
@@ -1066,4 +1105,4 @@ def security_headers(response):
 if __name__ == '__main__':
     ssl_ctx = 'adhoc' if config.WEB_UI_SSL_ADHOC else None
     logger.info(f"Starting web interface on {config.WEB_UI_HOST}:{config.WEB_UI_PORT} (SSL: {ssl_ctx})")
-    app.run(host=config.WEB_UI_HOST, port=config.WEB_UI_PORT, debug=False, ssl_context=ssl_ctx)
+    app.run(host=config.WEB_UI_HOST, port=config.WEB_UI_PORT, debug=False, threaded=True, ssl_context=ssl_ctx)

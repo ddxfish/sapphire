@@ -6,6 +6,7 @@ import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import config
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,7 @@ class WakeWordDetector:
     def _on_activation(self):
         """Handle wake word activation."""
         self.callback_pool.submit(self._play_tone)
+        publish(Events.WAKEWORD_DETECTED)
         
         if self.system:
             self.wake_word_detected()

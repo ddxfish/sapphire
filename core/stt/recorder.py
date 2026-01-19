@@ -20,6 +20,7 @@ from core.audio import (
     get_temp_dir
 )
 from . import system_audio
+from core.event_bus import publish, Events
 import config
 
 logger = logging.getLogger(__name__)
@@ -140,9 +141,11 @@ class AudioRecorder:
         # Try to open the audio stream
         if not self._open_stream():
             system_audio.restore_system_volume()
+            publish(Events.STT_ERROR, {"reason": "failed_to_open_stream"})
             return None
         
         self._recording = True
+        publish(Events.STT_RECORDING_START)
         
         frames = []
         silent_chunks = speech_chunks = 0
@@ -205,9 +208,12 @@ class AudioRecorder:
         
         # Close stream and reset state
         self.stop()
+        publish(Events.STT_RECORDING_END)
         
         if not has_speech:
             return None
+        
+        publish(Events.STT_PROCESSING)
         
         try:
             # Combine all frames into single array
@@ -222,6 +228,7 @@ class AudioRecorder:
             
         except Exception as e:
             logger.error(f"Error saving audio: {e}")
+            publish(Events.STT_ERROR, {"reason": "save_failed"})
             return None
 
     def stop(self) -> None:

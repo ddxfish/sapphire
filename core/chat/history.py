@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any
 from pathlib import Path
 import tiktoken
 import config
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -448,6 +449,7 @@ class ChatSessionManager:
     def add_user_message(self, content: str):
         self.current_chat.add_user_message(content)
         self._save_current_chat()
+        publish(Events.MESSAGE_ADDED, {"role": "user"})
 
     def add_assistant_with_tool_calls(self, content: Optional[str], tool_calls: List[Dict]):
         self.current_chat.add_assistant_with_tool_calls(content, tool_calls)
@@ -460,10 +462,12 @@ class ChatSessionManager:
     def add_assistant_final(self, content: str):
         self.current_chat.add_assistant_final(content)
         self._save_current_chat()
+        publish(Events.MESSAGE_ADDED, {"role": "assistant"})
 
     def add_message_pair(self, user_content: str, assistant_content: str):
         self.current_chat.add_message_pair(user_content, assistant_content)
         self._save_current_chat()
+        publish(Events.MESSAGE_ADDED, {"role": "pair"})
 
     def get_messages(self) -> List[Dict[str, str]]:
         return self.current_chat.get_messages()
@@ -479,23 +483,27 @@ class ChatSessionManager:
         result = self.current_chat.remove_last_messages(count)
         if result:
             self._save_current_chat()
+            publish(Events.MESSAGE_REMOVED, {"count": count})
         return result
 
     def remove_from_user_message(self, user_content: str) -> bool:
         result = self.current_chat.remove_from_user_message(user_content)
         if result:
             self._save_current_chat()
+            publish(Events.MESSAGE_REMOVED, {"from": "user_message"})
         return result
 
     def remove_from_assistant_timestamp(self, timestamp: str) -> bool:
         result = self.current_chat.remove_from_assistant_timestamp(timestamp)
         if result:
             self._save_current_chat()
+            publish(Events.MESSAGE_REMOVED, {"from": "assistant_timestamp"})
         return result
 
     def clear(self):
         self.current_chat.clear()
         self._save_current_chat()
+        publish(Events.CHAT_CLEARED)
 
     def edit_message_by_content(self, role: str, original_content: str, new_content: str) -> bool:
         """Edit message and save."""
