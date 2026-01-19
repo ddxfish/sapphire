@@ -87,7 +87,6 @@ export const stop = (force = false) => {
 export const isTtsPlaying = () => isStreaming;
 
 export const playText = async (txt) => {
-    console.log('[TTS TIMING] playText called', performance.now());
     stop(true);
     isStreaming = true;
     
@@ -116,11 +115,9 @@ export const playText = async (txt) => {
     
     ui.showStatus();
     ui.updateStatus('Generating TTS...');
-    console.log('[TTS TIMING] Fetching audio for', clean.length, 'chars', performance.now());
     
     try {
         const blob = await api.fetchAudio(clean, null);
-        console.log('[TTS TIMING] Audio blob received', blob.size, 'bytes', performance.now());
         blobUrl = URL.createObjectURL(blob);
         player = new Audio(blobUrl);
         
@@ -140,7 +137,6 @@ export const playText = async (txt) => {
         };
         
         await player.play();
-        console.log('[TTS TIMING] Audio playing', performance.now());
         ui.hideStatus();
     } catch (e) {
         isStreaming = false;

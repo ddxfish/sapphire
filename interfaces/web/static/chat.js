@@ -103,7 +103,6 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 }
             },
             async (ephemeral) => {
-                console.log('[SSE TIMING] onComplete called', performance.now());
                 if (isCancellingGetter && isCancellingGetter()) {
                     console.log('Stream completed but cancellation in progress - skipping finishStreaming');
                     return;
@@ -118,18 +117,14 @@ export const handleSend = async (input, btn, setProc, audioFn, refreshFn, abortC
                 }
                 
                 if (streamOk) {
-                    console.log('[SSE TIMING] calling finishStreaming', performance.now());
                     await ui.finishStreaming();
-                    console.log('[SSE TIMING] finishStreaming complete', performance.now());
                     // Note: finishStreaming already syncs with history - no refresh needed
                     
                     setTimeout(() => {
-                        console.log('[SSE TIMING] setTimeout fired, calling audioFn', performance.now());
                         if (audioFn) {
                             const el = document.querySelector('.message.assistant:last-child .message-content');
                             if (el) {
                                 const prose = ui.extractProseText(el);
-                                console.log('[SSE TIMING] calling audioFn with', prose.length, 'chars', performance.now());
                                 audioFn(prose);
                             }
                         }

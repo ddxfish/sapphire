@@ -136,15 +136,10 @@ def get_api_headers():
 
 def proxy(endpoint, method='GET', **kwargs):
     """Proxy request to backend API."""
-    import time as _time
-    start = _time.time()
     try:
         headers = kwargs.pop('headers', {})
         headers.update(get_api_headers())
-        logger.info(f"[PROXY TIMING] {method} {endpoint} starting, timeout={kwargs.get('timeout', 'None')}")
-        logger.info(f"[PROXY TIMING] {method} {endpoint} pool status: {_api_session.adapters}")
         res = _api_session.request(method, f"{API_BASE}{endpoint}", headers=headers, **kwargs)
-        logger.info(f"[PROXY TIMING] {method} {endpoint} response received at {_time.time() - start:.2f}s, status={res.status_code}")
         res.raise_for_status()
         return jsonify(res.json()) if res.headers.get('Content-Type', '').startswith('application/json') else res
     except requests.exceptions.HTTPError as e:
@@ -155,7 +150,7 @@ def proxy(endpoint, method='GET', **kwargs):
         except:
             return jsonify({"error": str(e)}), e.response.status_code
     except Exception as e:
-        logger.error(f"Proxy failed: {method} {endpoint} at {_time.time() - start:.2f}s - {e}")
+        logger.error(f"Proxy failed: {method} {endpoint} - {e}")
         return jsonify({"error": str(e)}), 503
 
 # =============================================================================
@@ -248,12 +243,7 @@ def logout():
 @app.route('/api/history', methods=['GET'])
 @require_login
 def get_history():
-    import time as _time
-    start = _time.time()
-    logger.info(f"[TIMING] /api/history Flask received request at {_time.strftime('%H:%M:%S', _time.localtime())}.{int((start % 1) * 1000):03d}")
-    result = proxy('/history', timeout=10)  # Add 10 second timeout
-    logger.info(f"[TIMING] /api/history completed in {_time.time() - start:.2f}s")
-    return result
+    return proxy('/history', timeout=10)
 
 @app.route('/api/chat', methods=['POST'])
 @require_login
@@ -263,13 +253,11 @@ def post_chat():
 @app.route('/api/chat/stream', methods=['POST'])
 @require_login
 def stream_chat():
-    import time as _time
     data = request.json
     backend_res = None
-    stream_start = _time.time()
-    logger.info("Stream chat started")
+    chunk_count = 0
     def generate():
-        nonlocal backend_res
+        nonlocal backend_res, chunk_count
         try:
             backend_res = _sse_session.post(
                 f"{API_BASE}/chat/stream", 
@@ -281,14 +269,12 @@ def stream_chat():
             backend_res.raise_for_status()
             for line in backend_res.iter_lines(decode_unicode=True):
                 if line:
-                    # Log done event timing
-                    if '"done"' in line or '"done": true' in line:
-                        logger.info(f"[TIMING] SSE done event forwarding at {_time.time() - stream_start:.2f}s")
+                    chunk_count += 1
                     yield f"{line}\n\n"
         except Exception as e:
             yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
         finally:
-            logger.info(f"[TIMING] Stream generator finished at {_time.time() - stream_start:.2f}s")
+            logger.info(f"Stream complete: {chunk_count} chunks")
             if backend_res:
                 backend_res.close()
     return Response(generate(), mimetype='text/event-stream', headers={
@@ -337,13 +323,9 @@ def proxy_sdxl_image(image_id):
 @app.route('/api/tts', methods=['POST'])
 @require_login
 def tts():
-    import time as _time
-    tts_start = _time.time()
-    logger.info(f"[TIMING] TTS request received at web_interface")
     backend_res = None
     try:
         text = request.json.get("text", "")
-        logger.info(f"[TIMING] TTS requesting {len(text)} chars to backend")
         backend_res = _api_session.post(
             f"{API_BASE}/tts/speak", 
             json={"text": text, "output_mode": "file"}, 
@@ -351,7 +333,6 @@ def tts():
             timeout=120,
             headers=get_api_headers()
         )
-        logger.info(f"[TIMING] TTS backend responded status={backend_res.status_code} at {_time.time() - tts_start:.2f}s")
         backend_res.raise_for_status()
         
         def generate():
@@ -369,7 +350,7 @@ def tts():
             headers={'Cache-Control': 'no-cache'}
         )
     except Exception as e:
-        logger.error(f"[TIMING] TTS error at {_time.time() - tts_start:.2f}s: {e}")
+        logger.error(f"TTS error: {e}")
         if backend_res:
             backend_res.close()
         return jsonify({"error": str(e)}), 503
