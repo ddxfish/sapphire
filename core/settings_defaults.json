@@ -119,7 +119,9 @@
         "model": "claude-sonnet-4-5",
         "timeout": 10.0,
         "enabled": false,
-        "use_as_fallback": true
+        "use_as_fallback": true,
+        "thinking_enabled": true,
+        "thinking_budget": 10000
       },
       "fireworks": {
         "provider": "fireworks",

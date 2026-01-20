@@ -114,8 +114,13 @@ class ClaudeProvider(BaseProvider):
             request_kwargs["temperature"] = params["temperature"]
         
         # Add extended thinking if enabled (unless explicitly disabled)
-        thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
-        thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
+        # Read from provider config first, fall back to global config
+        thinking_enabled = self.config.get('thinking_enabled')
+        if thinking_enabled is None:
+            thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
+        thinking_budget = self.config.get('thinking_budget')
+        if thinking_budget is None:
+            thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
         disable_thinking = params.get('disable_thinking', False)
         
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
@@ -178,8 +183,13 @@ class ClaudeProvider(BaseProvider):
             request_kwargs["temperature"] = params["temperature"]
         
         # Add extended thinking if enabled (unless explicitly disabled for this request)
-        thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
-        thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
+        # Read from provider config first, fall back to global config
+        thinking_enabled = self.config.get('thinking_enabled')
+        if thinking_enabled is None:
+            thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
+        thinking_budget = self.config.get('thinking_budget')
+        if thinking_budget is None:
+            thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
         disable_thinking = params.get('disable_thinking', False)
         
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)

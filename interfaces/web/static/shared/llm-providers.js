@@ -219,6 +219,28 @@ export function renderProviderFields(key, config, meta) {
     </div>
   `);
 
+  // Claude-specific: Extended thinking settings
+  if (key === 'claude') {
+    const thinkingEnabled = config.thinking_enabled !== false;
+    const thinkingBudget = config.thinking_budget || 10000;
+    
+    fields.push(`
+      <div class="field-row claude-thinking-row">
+        <label class="checkbox-inline">
+          <input type="checkbox" class="provider-field thinking-toggle" data-provider="${key}" data-field="thinking_enabled" 
+                 ${thinkingEnabled ? 'checked' : ''}>
+          <span>Extended Thinking</span>
+        </label>
+      </div>
+      <div class="field-row thinking-budget-row" data-provider="${key}" ${thinkingEnabled ? '' : 'style="display:none"'}>
+        <label>Thinking Budget (tokens)</label>
+        <input type="number" class="provider-field thinking-budget" data-provider="${key}" data-field="thinking_budget" 
+               value="${thinkingBudget}" step="1000" min="1024" max="32000">
+        <small class="field-hint">Higher = deeper reasoning, slower responses</small>
+      </div>
+    `);
+  }
+
   return fields.join('');
 }
 

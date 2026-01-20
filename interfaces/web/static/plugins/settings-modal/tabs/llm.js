@@ -167,6 +167,17 @@ export default {
       input.addEventListener('change', (e) => this.handleFieldChange(e, container));
     });
 
+    // Claude thinking toggle - show/hide budget field
+    container.querySelectorAll('.thinking-toggle').forEach(toggle => {
+      toggle.addEventListener('change', (e) => {
+        const key = e.target.dataset.provider;
+        const budgetRow = container.querySelector(`.thinking-budget-row[data-provider="${key}"]`);
+        if (budgetRow) {
+          budgetRow.style.display = e.target.checked ? '' : 'none';
+        }
+      });
+    });
+
     // Generation param changes
     container.querySelectorAll('.gen-param-input').forEach(input => {
       input.addEventListener('change', (e) => this.handleGenParamChange(e));
@@ -237,8 +248,13 @@ export default {
     }
 
     // Handle checkbox fields
-    if (field === 'use_as_fallback') {
+    if (field === 'use_as_fallback' || field === 'thinking_enabled') {
       value = e.target.checked;
+    }
+
+    // Handle thinking budget as integer
+    if (field === 'thinking_budget') {
+      value = parseInt(value) || 10000;
     }
 
     await updateProvider(key, { [field]: value });

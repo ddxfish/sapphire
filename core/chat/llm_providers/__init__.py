@@ -232,6 +232,9 @@ def get_provider_by_key(
         'model': config.get('model', ''),
         'timeout': config.get('timeout', PROVIDER_METADATA.get(provider_key, {}).get('default_timeout', 5.0)),
         'enabled': True,
+        # Claude-specific settings
+        'thinking_enabled': config.get('thinking_enabled'),
+        'thinking_budget': config.get('thinking_budget'),
     }
     
     try:

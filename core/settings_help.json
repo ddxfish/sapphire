@@ -237,6 +237,14 @@
     "short": "Text to prepend for thinking mode",
     "long": "Opening text that triggers the model's chain-of-thought reasoning. Only used if FORCE_THINKING is enabled. Should start with a <think> tag or similar, then an INCOMPLETE sentence so the AI finishes it."
   },
+  "CLAUDE_THINKING_ENABLED": {
+    "short": "Enable Claude extended thinking",
+    "long": "When enabled, Claude uses extended thinking mode with a dedicated token budget for reasoning before responding. Shows thinking process in collapsible accordions. Only applies to Claude models, ignored by other providers."
+  },
+  "CLAUDE_THINKING_BUDGET": {
+    "short": "Claude thinking token budget",
+    "long": "Maximum tokens Claude can use for internal reasoning before responding. Higher values allow deeper thinking but increase response time and cost. Typical range: 5000-32000. Only used when CLAUDE_THINKING_ENABLED is true."
+  },
   
   "MAX_TOOL_ITERATIONS": {
     "short": "how many total tool iterations can be called (these can be parallel)",

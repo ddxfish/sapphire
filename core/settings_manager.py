@@ -121,8 +121,23 @@ class SettingsManager:
             self._user = {}
     
     def _merge_settings(self):
-        """Merge defaults with user overrides"""
+        """Merge defaults with user overrides, deep-merging LLM_PROVIDERS"""
         self._config = {**self._defaults, **self._user}
+        
+        # Deep-merge LLM_PROVIDERS so new provider fields from defaults aren't lost
+        if 'LLM_PROVIDERS' in self._defaults and 'LLM_PROVIDERS' in self._user:
+            merged_providers = {}
+            for key, default_config in self._defaults['LLM_PROVIDERS'].items():
+                if key in self._user['LLM_PROVIDERS']:
+                    # Merge: defaults first, then user overrides
+                    merged_providers[key] = {**default_config, **self._user['LLM_PROVIDERS'][key]}
+                else:
+                    merged_providers[key] = default_config
+            # Include any user-added providers not in defaults
+            for key, user_config in self._user['LLM_PROVIDERS'].items():
+                if key not in merged_providers:
+                    merged_providers[key] = user_config
+            self._config['LLM_PROVIDERS'] = merged_providers
     
     def _ensure_example_file(self):
         """Create user/settings.example.json if it doesn't exist"""
