@@ -113,10 +113,18 @@ class ClaudeProvider(BaseProvider):
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
         
-        # Add extended thinking if enabled
+        # Add extended thinking if enabled (unless explicitly disabled)
         thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
         thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
-        if thinking_enabled:
+        disable_thinking = params.get('disable_thinking', False)
+        
+        # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
+        if claude_messages and claude_messages[-1].get("role") == "assistant":
+            if thinking_enabled and not disable_thinking:
+                logger.info("[THINK] Auto-disabling thinking: last message is assistant (continue mode)")
+            disable_thinking = True
+        
+        if thinking_enabled and not disable_thinking:
             if request_kwargs["max_tokens"] <= thinking_budget:
                 request_kwargs["max_tokens"] = thinking_budget + 8000
                 logger.info(f"[THINK] Bumped max_tokens to {request_kwargs['max_tokens']} (must exceed budget)")
@@ -169,10 +177,19 @@ class ClaudeProvider(BaseProvider):
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
         
-        # Add extended thinking if enabled
+        # Add extended thinking if enabled (unless explicitly disabled for this request)
         thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
         thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
-        if thinking_enabled:
+        disable_thinking = params.get('disable_thinking', False)
+        
+        # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
+        # Claude requires thinking blocks at start - can't inject into existing prefill
+        if claude_messages and claude_messages[-1].get("role") == "assistant":
+            if thinking_enabled and not disable_thinking:
+                logger.info("[THINK] Auto-disabling thinking: last message is assistant (continue mode)")
+            disable_thinking = True
+        
+        if thinking_enabled and not disable_thinking:
             if request_kwargs["max_tokens"] <= thinking_budget:
                 request_kwargs["max_tokens"] = thinking_budget + 8000
                 logger.info(f"[THINK] Bumped max_tokens to {request_kwargs['max_tokens']} (must exceed budget)")
@@ -183,6 +200,8 @@ class ClaudeProvider(BaseProvider):
             }
             request_kwargs.pop("temperature", None)
             logger.info(f"[THINK] Claude extended thinking enabled (budget: {thinking_budget})")
+        elif thinking_enabled and disable_thinking:
+            logger.info(f"[THINK] Extended thinking disabled for this request")
         
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
@@ -403,11 +422,11 @@ class ClaudeProvider(BaseProvider):
                         for think_block in msg["thinking_raw"]:
                             content_blocks.append(think_block)
                     
-                    # Add text content if present
+                    # Add text content if present (strip trailing whitespace)
                     if content and content.strip():
                         content_blocks.append({
                             "type": "text",
-                            "text": content
+                            "text": content.rstrip()
                         })
                     
                     # Add tool_use blocks
@@ -430,11 +449,11 @@ class ClaudeProvider(BaseProvider):
                         "content": content_blocks
                     })
                 else:
-                    # Plain assistant message
+                    # Plain assistant message - strip trailing whitespace (Claude rejects it)
                     if content and content.strip():
                         claude_messages.append({
                             "role": "assistant",
-                            "content": content
+                            "content": content.rstrip()
                         })
             
             elif role == "tool":

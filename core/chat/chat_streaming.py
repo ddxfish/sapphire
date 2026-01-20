@@ -94,7 +94,7 @@ class StreamingChat:
                 logger.info(f"[CONTINUE] Continuing with {len(clean_prefill)} char prefill")
                 yield {"type": "content", "text": prefill}  # Show original to user
             
-            # Handle forced thinking prefill
+            # Handle forced thinking prefill - disabled when continuing
             force_prefill = None
             if getattr(config, 'FORCE_THINKING', False) and not has_prefill:
                 force_prefill = getattr(config, 'THINKING_PREFILL', '<think>')
@@ -118,6 +118,12 @@ class StreamingChat:
             # Pass model override to provider if set
             if model_override:
                 gen_params['model'] = model_override
+            
+            # CRITICAL: Disable thinking for continue operations
+            # Claude requires thinking blocks with signatures - we can't fake them
+            if has_prefill:
+                gen_params['disable_thinking'] = True
+                logger.info("[CONTINUE] Disabled thinking for continue (can't replay signatures)")
 
             tool_call_count = 0
 

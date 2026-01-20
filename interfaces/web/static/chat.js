@@ -445,13 +445,19 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
         console.log('[CONTINUE DEBUG] User confirmed, setting proc...');
         setProc(true);
         
+        // Store backup before deletion (in case API fails)
+        const backupPrefill = prefillContent;
+        const backupTimestamp = timestamp;
+        
         console.log('[CONTINUE DEBUG] Removing last assistant message from history...');
         await api.removeLastAssistant(timestamp);
         
         console.log('[CONTINUE DEBUG] Removing message element from DOM...');
         const messages = document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
+        let removedElement = null;
         if (idx < messages.length) {
-            messages[idx].remove();
+            removedElement = messages[idx];
+            removedElement.remove();
             console.log('[CONTINUE DEBUG] Message element removed from DOM');
         }
         
@@ -509,6 +515,11 @@ export const handleContinue = async (idx, setProc, audioFn, refreshFn, abortCont
                 if (e.message === 'Cancelled') return (console.log('[CONTINUE DEBUG] Stream cancelled by user'), streamOk && ui.cancelStreaming());
                 console.error('[CONTINUE DEBUG] Stream failed:', e.message);
                 streamOk && ui.cancelStreaming();
+                
+                // RECOVERY: Refresh to restore state from backend
+                console.log('[CONTINUE DEBUG] Attempting recovery - refreshing history...');
+                if (refreshFn) await refreshFn(true);
+                
                 handleError(e, 'continue');
             },
             abortController ? abortController.signal : null,
