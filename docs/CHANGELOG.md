@@ -1,3 +1,8 @@
+# 1.1.8 - Thinking and Tokens
+- Added thinking option to Claude
+- Formatted JSON tool/history so all providers can switch mid-chat
+- Added tokens/sec and provider to UI
+- Added Continue ability to Claude
 # 1.1.7 - Web UI Event Bus, SSE
 - Shifted to SSE instead of polling
 - Made single status endpoint instead of multiple
