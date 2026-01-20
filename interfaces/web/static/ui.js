@@ -154,6 +154,27 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     
     Parsing.parseContent(contentDiv, msg, isHistoryRender, scrollToBottomIfSticky);
     
+    // Add metadata footer for assistant messages
+    if (role === 'assistant' && msg.metadata) {
+        const meta = msg.metadata;
+        const parts = [];
+        
+        if (meta.duration_seconds) {
+            parts.push(`${meta.duration_seconds}s`);
+        }
+        if (meta.tokens_per_second) {
+            parts.push(`${meta.tokens_per_second} tok/s`);
+        }
+        if (meta.model) {
+            parts.push(meta.model);
+        }
+        
+        if (parts.length > 0) {
+            const metaDiv = createElem('div', { class: 'message-metadata' }, parts.join(' • '));
+            contentDiv.appendChild(metaDiv);
+        }
+    }
+    
     return { clone, contentDiv, msg: msgEl };
 };
 

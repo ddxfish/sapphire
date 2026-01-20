@@ -341,6 +341,15 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 .message-content p { margin: 0; }
 .message-content p:not(:last-child) { margin-bottom: 0.5em; }
 
+.message-metadata {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    margin-top: 0.75em;
+    padding-top: 0.5em;
+    border-top: 1px solid var(--border);
+    opacity: 0.7;
+}
+
 .message-content .inline-image {
     max-width: 100%;
     max-height: 600px;

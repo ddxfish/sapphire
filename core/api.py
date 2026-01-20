@@ -115,6 +115,10 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                         "text": content
                     })
                 
+                # Capture metadata from the last assistant message in a turn
+                if msg.get("metadata"):
+                    current_block["metadata"] = msg["metadata"]
+                
                 if msg.get("tool_calls"):
                     for tc in msg.get("tool_calls", []):
                         current_block["parts"].append({
@@ -150,11 +154,14 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
 
     def finalize_block(block):
         """Return block with ordered parts array - preserves rendering order."""
-        return {
+        result = {
             "role": "assistant",
             "parts": block.get("parts", []),
             "timestamp": block.get("timestamp")
         }
+        if block.get("metadata"):
+            result["metadata"] = block["metadata"]
+        return result
 
     @bp.route('/chat', methods=['POST'])
     def handle_chat():

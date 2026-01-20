@@ -68,6 +68,7 @@ export const extractProseText = (el) => {
     clone.querySelectorAll('.tool-accordion').forEach(t => t.remove());    // Tool accordions
     clone.querySelectorAll('.accordion-tool').forEach(t => t.remove());    // Tool accordions alt
     clone.querySelectorAll('[class*="code"]').forEach(c => c.remove());    // Any code-related class
+    clone.querySelectorAll('.message-metadata').forEach(m => m.remove()); // Metadata footer
     
     let txt = clone.textContent.trim();
     
