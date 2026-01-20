@@ -8,13 +8,16 @@ Handles Claude-specific API differences:
 - Different streaming event format
 - System prompt handling
 - Tool result format differences
+- Extended thinking with proper separation for cross-provider compatibility
 """
 
 import json
 import logging
+import time
 import uuid
 from typing import Dict, Any, List, Optional, Generator
 
+import config
 from .base import BaseProvider, LLMResponse, ToolCall
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,7 @@ class ClaudeProvider(BaseProvider):
     - Tool calls come as content blocks, not separate field
     - Tool results use role: "user" with tool_result block
     - Streaming uses different event types
+    - Extended thinking uses structured blocks, not text tags
     """
     
     def __init__(self, llm_config: Dict[str, Any], request_timeout: float = 240.0):
@@ -76,8 +80,6 @@ class ClaudeProvider(BaseProvider):
             )
             return True
         except anthropic.APIStatusError as e:
-            # 400/401/etc means API is reachable, just rejected our minimal request
-            # That's fine for health check - we know it's up
             if e.status_code in (400, 401, 403):
                 return True
             logger.debug(f"Claude health check failed: {e}")
@@ -108,11 +110,24 @@ class ClaudeProvider(BaseProvider):
         if system_prompt:
             request_kwargs["system"] = system_prompt
         
-        # Add optional params (Claude doesn't allow both temperature and top_p)
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
         
-        # Convert and add tools
+        # Add extended thinking if enabled
+        thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
+        thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
+        if thinking_enabled:
+            if request_kwargs["max_tokens"] <= thinking_budget:
+                request_kwargs["max_tokens"] = thinking_budget + 8000
+                logger.info(f"[THINK] Bumped max_tokens to {request_kwargs['max_tokens']} (must exceed budget)")
+            
+            request_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget
+            }
+            request_kwargs.pop("temperature", None)
+            logger.info(f"[THINK] Claude extended thinking enabled (budget: {thinking_budget})")
+        
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
         
@@ -126,9 +141,18 @@ class ClaudeProvider(BaseProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         generation_params: Optional[Dict[str, Any]] = None
     ) -> Generator[Dict[str, Any], None, None]:
-        """Send streaming chat completion to Claude."""
+        """
+        Send streaming chat completion to Claude.
+        
+        Yields events:
+            - {"type": "thinking", "text": "..."} - Thinking content (for UI)
+            - {"type": "content", "text": "..."} - Visible response content
+            - {"type": "tool_call", ...} - Tool call info
+            - {"type": "done", "response": LLMResponse, "thinking": "...", "thinking_raw": [...]}
+        """
         
         params = generation_params or {}
+        start_time = time.time()
         
         # Extract system prompt from messages
         system_prompt, claude_messages = self._convert_messages(messages)
@@ -142,31 +166,48 @@ class ClaudeProvider(BaseProvider):
         if system_prompt:
             request_kwargs["system"] = system_prompt
         
-        # Add optional params (Claude doesn't allow both temperature and top_p)
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
+        
+        # Add extended thinking if enabled
+        thinking_enabled = getattr(config, 'CLAUDE_THINKING_ENABLED', False)
+        thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
+        if thinking_enabled:
+            if request_kwargs["max_tokens"] <= thinking_budget:
+                request_kwargs["max_tokens"] = thinking_budget + 8000
+                logger.info(f"[THINK] Bumped max_tokens to {request_kwargs['max_tokens']} (must exceed budget)")
+            
+            request_kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": thinking_budget
+            }
+            request_kwargs.pop("temperature", None)
+            logger.info(f"[THINK] Claude extended thinking enabled (budget: {thinking_budget})")
         
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
         
         # Track state for building response
         full_content = ""
-        tool_calls_acc = {}  # id -> {name, arguments}
+        full_thinking = ""
+        thinking_raw = []  # Store raw thinking blocks for tool cycle continuity
+        current_thinking_block = None
+        
+        tool_calls_acc = {}
         current_tool_id = None
         current_tool_name = None
         finish_reason = None
         usage = None
         
-        import time
-        stream_start = time.time()
+        in_thinking_block = False
         first_chunk_time = None
         
         with self._client.messages.stream(**request_kwargs) as stream:
-            logger.debug(f"[STREAM] Context entered, waiting for events... (elapsed: {time.time() - stream_start:.2f}s)")
+            logger.debug(f"[STREAM] Context entered, waiting for events...")
             for event in stream:
                 if first_chunk_time is None:
                     first_chunk_time = time.time()
-                    logger.info(f"[STREAM] First event received after {first_chunk_time - stream_start:.2f}s")
+                    logger.info(f"[STREAM] First event received after {first_chunk_time - start_time:.2f}s")
                 
                 event_type = event.type
                 
@@ -186,6 +227,10 @@ class ClaudeProvider(BaseProvider):
                             "name": current_tool_name,
                             "arguments": ""
                         }
+                    elif block.type == "thinking":
+                        in_thinking_block = True
+                        current_thinking_block = {"type": "thinking", "thinking": ""}
+                        logger.debug("[THINK] Thinking block started")
                 
                 elif event_type == "content_block_delta":
                     delta = event.delta
@@ -194,8 +239,15 @@ class ClaudeProvider(BaseProvider):
                         full_content += delta.text
                         yield {"type": "content", "text": delta.text}
                     
+                    elif delta.type == "thinking_delta":
+                        thinking_text = delta.thinking
+                        full_thinking += thinking_text
+                        if current_thinking_block:
+                            current_thinking_block["thinking"] += thinking_text
+                        # Emit thinking as separate event type
+                        yield {"type": "thinking", "text": thinking_text}
+                    
                     elif delta.type == "input_json_delta":
-                        # Tool argument chunk
                         if current_tool_id and current_tool_id in tool_calls_acc:
                             tool_calls_acc[current_tool_id]["arguments"] += delta.partial_json
                             yield {
@@ -207,6 +259,12 @@ class ClaudeProvider(BaseProvider):
                             }
                 
                 elif event_type == "content_block_stop":
+                    if in_thinking_block and current_thinking_block:
+                        # Store raw thinking block for tool cycle continuity
+                        thinking_raw.append(current_thinking_block)
+                        current_thinking_block = None
+                        in_thinking_block = False
+                        logger.debug("[THINK] Thinking block ended")
                     current_tool_id = None
                     current_tool_name = None
                 
@@ -221,9 +279,33 @@ class ClaudeProvider(BaseProvider):
                         }
                 
                 elif event_type == "message_stop":
-                    logger.debug(f"[STREAM] message_stop received (elapsed: {time.time() - stream_start:.2f}s)")
+                    logger.debug(f"[STREAM] message_stop received")
+            
+            # Get the complete message with signatures for thinking blocks
+            try:
+                final_message = stream.get_final_message()
+                # Extract complete thinking blocks (with signatures) for tool cycle continuity
+                thinking_raw = []
+                for block in final_message.content:
+                    if block.type == "thinking":
+                        # This has the signature - convert to dict
+                        thinking_raw.append({
+                            "type": "thinking",
+                            "thinking": block.thinking,
+                            "signature": block.signature
+                        })
+                    elif block.type == "redacted_thinking":
+                        thinking_raw.append({
+                            "type": "redacted_thinking",
+                            "data": block.data
+                        })
+                if thinking_raw:
+                    logger.debug(f"[THINK] Captured {len(thinking_raw)} thinking blocks with signatures")
+            except Exception as e:
+                logger.warning(f"[THINK] Could not get final message for signatures: {e}")
         
-        logger.info(f"[STREAM] Stream complete, total time: {time.time() - stream_start:.2f}s")
+        end_time = time.time()
+        logger.info(f"[STREAM] Stream complete, total time: {end_time - start_time:.2f}s")
         
         # Build final response
         final_tool_calls = [
@@ -238,7 +320,32 @@ class ClaudeProvider(BaseProvider):
             usage=usage
         )
         
-        yield {"type": "done", "response": final_response}
+        # Build metadata
+        duration = round(end_time - start_time, 2)
+        completion_tokens = usage.get("completion_tokens", 0) if usage else 0
+        
+        metadata = {
+            "provider": "claude",
+            "model": self.model,
+            "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start_time)),
+            "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_time)),
+            "duration_seconds": duration,
+            "tokens": {
+                "thinking": len(full_thinking.split()) if full_thinking else 0,  # Rough estimate
+                "content": completion_tokens,
+                "total": usage.get("total_tokens", 0) if usage else 0,
+                "prompt": usage.get("prompt_tokens", 0) if usage else 0
+            },
+            "tokens_per_second": round(completion_tokens / duration, 1) if duration > 0 else 0
+        }
+        
+        yield {
+            "type": "done", 
+            "response": final_response,
+            "thinking": full_thinking if full_thinking else None,
+            "thinking_raw": thinking_raw if thinking_raw else None,
+            "metadata": metadata
+        }
     
     def format_tool_result(
         self,
@@ -266,10 +373,10 @@ class ClaudeProvider(BaseProvider):
         """
         Convert OpenAI-format messages to Claude format.
         
-        Handles cross-provider compatibility issues:
-        - Empty assistant content (from providers that return null/empty with tool_calls)
+        Handles:
+        - Empty assistant content
         - Empty tool results
-        - Ensures all non-final messages have content
+        - thinking_raw blocks for tool cycle continuity
         
         Returns:
             (system_prompt, claude_messages)
@@ -279,20 +386,24 @@ class ClaudeProvider(BaseProvider):
         
         for msg in messages:
             role = msg.get("role")
-            content = msg.get("content", "") or ""  # Normalize None to empty string
+            content = msg.get("content", "") or ""
             
             if role == "system":
-                # Claude uses system as separate parameter
                 system_prompt = content
                 continue
             
             if role == "assistant":
-                # Check for tool calls
                 if "tool_calls" in msg and msg["tool_calls"]:
                     # Build content blocks for Claude
                     content_blocks = []
                     
-                    # Add text content if present (skip empty)
+                    # Include thinking_raw blocks if present (required for tool cycles)
+                    # These contain signatures from the original response
+                    if msg.get("thinking_raw"):
+                        for think_block in msg["thinking_raw"]:
+                            content_blocks.append(think_block)
+                    
+                    # Add text content if present
                     if content and content.strip():
                         content_blocks.append({
                             "type": "text",
@@ -319,7 +430,7 @@ class ClaudeProvider(BaseProvider):
                         "content": content_blocks
                     })
                 else:
-                    # Plain assistant message - skip if empty (can happen from other providers)
+                    # Plain assistant message
                     if content and content.strip():
                         claude_messages.append({
                             "role": "assistant",
@@ -327,9 +438,6 @@ class ClaudeProvider(BaseProvider):
                         })
             
             elif role == "tool":
-                # Convert tool result to Claude format
-                # Claude expects tool results as user messages
-                # Ensure content is never empty
                 tool_content = content if content and content.strip() else "(empty result)"
                 claude_messages.append({
                     "role": "user",
@@ -343,13 +451,10 @@ class ClaudeProvider(BaseProvider):
                 })
             
             elif role == "user":
-                # Check if content is already structured (list of blocks)
                 if isinstance(content, list):
-                    # Structured content - pass through if not empty
                     if content:
                         claude_messages.append({"role": "user", "content": content})
                 else:
-                    # Plain text - skip if empty
                     if content and content.strip():
                         claude_messages.append({"role": "user", "content": content})
         
@@ -358,9 +463,6 @@ class ClaudeProvider(BaseProvider):
     def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Convert OpenAI tool format to Claude format.
-        
-        OpenAI: {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
-        Claude: {"name": ..., "description": ..., "input_schema": ...}
         """
         claude_tools = []
         
@@ -382,10 +484,15 @@ class ClaudeProvider(BaseProvider):
         """Parse Claude response into normalized LLMResponse."""
         
         content_text = ""
+        thinking_text = ""
+        thinking_raw = []
         tool_calls = []
         
         for block in response.content:
-            if block.type == "text":
+            if block.type == "thinking":
+                thinking_text += block.thinking
+                thinking_raw.append({"type": "thinking", "thinking": block.thinking})
+            elif block.type == "text":
                 content_text += block.text
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(
@@ -402,6 +509,8 @@ class ClaudeProvider(BaseProvider):
                 "total_tokens": response.usage.input_tokens + response.usage.output_tokens
             }
         
+        # Note: For non-streaming, thinking is not returned separately
+        # The caller would need to handle this differently if needed
         return LLMResponse(
             content=content_text if content_text else None,
             tool_calls=tool_calls,

@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from typing import Generator, Union, Dict, Any
 import config
 from .chat_tool_calling import strip_ui_markers, wrap_tool_result
@@ -35,6 +36,7 @@ class StreamingChat:
         Stream chat responses. Yields typed events:
         - {"type": "stream_started"} immediately when processing begins
         - {"type": "content", "text": "..."} for text content
+        - {"type": "thinking", "text": "..."} for thinking content (rendered with tags by UI)
         - {"type": "tool_start", "id": "...", "name": "...", "args": {...}} when tool begins
         - {"type": "tool_end", "id": "...", "result": "...", "error": bool} when tool completes
         - {"type": "iteration_start", "iteration": N} before each LLM call
@@ -86,15 +88,18 @@ class StreamingChat:
             # Handle manual continue prefill
             has_prefill = bool(prefill)
             if has_prefill:
-                messages.append({"role": "assistant", "content": prefill})
-                logger.info(f"[CONTINUE] Continuing with {len(prefill)} char prefill")
-                yield {"type": "content", "text": prefill}
+                # Strip trailing whitespace - Claude API rejects it
+                clean_prefill = prefill.rstrip()
+                messages.append({"role": "assistant", "content": clean_prefill})
+                logger.info(f"[CONTINUE] Continuing with {len(clean_prefill)} char prefill")
+                yield {"type": "content", "text": prefill}  # Show original to user
             
             # Handle forced thinking prefill
             force_prefill = None
             if getattr(config, 'FORCE_THINKING', False) and not has_prefill:
                 force_prefill = getattr(config, 'THINKING_PREFILL', '<think>')
-                messages.append({"role": "assistant", "content": force_prefill})
+                # Strip trailing whitespace for Claude compatibility
+                messages.append({"role": "assistant", "content": force_prefill.rstrip()})
                 logger.info(f"[THINK] Forced thinking prefill: {force_prefill}")
                 yield {"type": "content", "text": force_prefill}
             
@@ -126,9 +131,16 @@ class StreamingChat:
                 # Signal UI that we're starting a new LLM call (useful after tool completion)
                 yield {"type": "iteration_start", "iteration": iteration + 1}
                 
-                current_response = ""
+                # Track content and thinking separately
+                current_content = ""
+                current_thinking = ""
+                thinking_raw = None
+                metadata = None
+                in_thinking = False
+                
                 tool_calls = []
                 final_response = None
+                iteration_start_time = time.time()
                 
                 try:
                     logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
@@ -151,10 +163,26 @@ class StreamingChat:
                         
                         if event_type == "content":
                             text = event.get("text", "")
-                            current_response += text
+                            current_content += text
+                            yield {"type": "content", "text": text}
+                        
+                        elif event_type == "thinking":
+                            # Thinking from Claude - emit as content with tags for UI
+                            text = event.get("text", "")
+                            current_thinking += text
+                            
+                            # Emit thinking wrapped in tags for UI rendering
+                            if not in_thinking:
+                                yield {"type": "content", "text": "<think>"}
+                                in_thinking = True
                             yield {"type": "content", "text": text}
                         
                         elif event_type == "tool_call":
+                            # Close thinking tag if open before tool calls
+                            if in_thinking:
+                                yield {"type": "content", "text": "</think>\n\n"}
+                                in_thinking = False
+                            
                             idx = event.get("index", 0)
                             while len(tool_calls) <= idx:
                                 tool_calls.append({
@@ -171,7 +199,19 @@ class StreamingChat:
                                 tool_calls[idx]["function"]["arguments"] = event["arguments"]
                         
                         elif event_type == "done":
+                            # Close thinking tag if still open
+                            if in_thinking:
+                                yield {"type": "content", "text": "</think>\n\n"}
+                                in_thinking = False
+                            
                             final_response = event.get("response")
+                            # Capture thinking data from done event
+                            if event.get("thinking"):
+                                current_thinking = event["thinking"]
+                            if event.get("thinking_raw"):
+                                thinking_raw = event["thinking_raw"]
+                            if event.get("metadata"):
+                                metadata = event["metadata"]
                     
                     logger.info(f"[STREAM] Stream iteration complete ({chunk_count} chunks)")
                     self._cleanup_stream()
@@ -184,21 +224,53 @@ class StreamingChat:
                     self._cleanup_stream()
                     raise
                 
+                # Build metadata if not provided by provider
+                if not metadata:
+                    iteration_end_time = time.time()
+                    duration = round(iteration_end_time - iteration_start_time, 2)
+                    # Rough token estimate: ~4 chars per token
+                    est_content_tokens = len(current_content) // 4 if current_content else 0
+                    est_thinking_tokens = len(current_thinking) // 4 if current_thinking else 0
+                    
+                    metadata = {
+                        "provider": provider_key,
+                        "model": effective_model,
+                        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(iteration_start_time)),
+                        "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(iteration_end_time)),
+                        "duration_seconds": duration,
+                        "tokens": {
+                            "content": est_content_tokens,
+                            "thinking": est_thinking_tokens,
+                            "total": est_content_tokens + est_thinking_tokens,
+                            "estimated": True  # Flag that these are estimates
+                        },
+                        "tokens_per_second": round(est_content_tokens / duration, 1) if duration > 0 else 0
+                    }
+                
                 if tool_calls and any(tc.get("id") and tc.get("function", {}).get("name") for tc in tool_calls):
                     logger.info(f"[TOOL] Processing {len(tool_calls)} tool call(s)")
                     
                     tool_calls_to_execute = tool_calls[:config.MAX_PARALLEL_TOOLS]
                     
-                    # Combine prefill with current response for history
-                    full_content = prefill + current_response if has_prefill else current_response
+                    # Combine prefill with current content for history
+                    full_content = prefill + current_content if has_prefill else current_content
                     
-                    # Store the actual content (no filtering/wrapping)
+                    # Store message with tool calls - include thinking_raw for Claude tool cycles
                     messages.append({
                         "role": "assistant",
                         "content": full_content,
-                        "tool_calls": tool_calls_to_execute
+                        "tool_calls": tool_calls_to_execute,
+                        "thinking_raw": thinking_raw  # Has signatures for Claude API
                     })
-                    self.main_chat.session_manager.add_assistant_with_tool_calls(full_content, tool_calls_to_execute)
+                    
+                    # Save to history with new schema
+                    self.main_chat.session_manager.add_assistant_with_tool_calls(
+                        content=full_content,
+                        tool_calls=tool_calls_to_execute,
+                        thinking=current_thinking if current_thinking else None,
+                        thinking_raw=thinking_raw,
+                        metadata=metadata
+                    )
                     
                     for tool_call in tool_calls_to_execute:
                         if self.cancel_flag:
@@ -211,10 +283,6 @@ class StreamingChat:
                         tool_call_count += 1
                         function_name = tool_call["function"]["name"]
                         tool_call_id = tool_call["id"]
-                        
-                        # Close any open think tag in streamed content
-                        if '<think>' in current_response and current_response.rfind('<think>') > current_response.rfind('</think>'):
-                            yield {"type": "content", "text": "</think>\n\n"}
                         
                         try:
                             function_args = json.loads(tool_call["function"]["arguments"])
@@ -306,15 +374,20 @@ class StreamingChat:
                 else:
                     logger.info(f"[OK] Final response received after {iteration + 1} iteration(s)")
                     
-                    full_response = current_response
+                    full_content = current_content
                     
                     if has_prefill:
-                        full_response = prefill + full_response
+                        full_content = prefill + full_content
                     
                     if force_prefill:
-                        full_response = force_prefill + full_response
+                        full_content = force_prefill + full_content
                     
-                    self.main_chat.session_manager.add_assistant_final(full_response)
+                    # Save final response with thinking separated
+                    self.main_chat.session_manager.add_assistant_final(
+                        content=full_content,
+                        thinking=current_thinking if current_thinking else None,
+                        metadata=metadata
+                    )
                     return
             
             # Loop exhausted - force final response
@@ -334,25 +407,75 @@ class StreamingChat:
                     generation_params=gen_params
                 )
                 
-                final_response = ""
+                final_content = ""
+                final_thinking = ""
+                final_metadata = None
+                in_thinking = False
+                final_start_time = time.time()
+                
                 for event in final_stream:
                     if self.cancel_flag:
                         break
                     
-                    if event.get("type") == "content":
+                    event_type = event.get("type")
+                    
+                    if event_type == "content":
                         chunk = event.get("text", "")
-                        final_response += chunk
+                        final_content += chunk
                         yield {"type": "content", "text": chunk}
-                    elif event.get("type") == "done":
+                    
+                    elif event_type == "thinking":
+                        text = event.get("text", "")
+                        final_thinking += text
+                        if not in_thinking:
+                            yield {"type": "content", "text": "<think>"}
+                            in_thinking = True
+                        yield {"type": "content", "text": text}
+                    
+                    elif event_type == "done":
+                        if in_thinking:
+                            yield {"type": "content", "text": "</think>\n\n"}
+                        if event.get("thinking"):
+                            final_thinking = event["thinking"]
+                        if event.get("metadata"):
+                            final_metadata = event["metadata"]
                         break
                 
-                if final_response:
-                    full_final = (force_prefill or "") + final_response
-                    self.main_chat.session_manager.add_assistant_final(full_final)
+                if not final_metadata:
+                    final_end_time = time.time()
+                    duration = round(final_end_time - final_start_time, 2)
+                    est_content_tokens = len(final_content) // 4 if final_content else 0
+                    est_thinking_tokens = len(final_thinking) // 4 if final_thinking else 0
+                    
+                    final_metadata = {
+                        "provider": provider_key,
+                        "model": effective_model,
+                        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(final_start_time)),
+                        "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(final_end_time)),
+                        "duration_seconds": duration,
+                        "tokens": {
+                            "content": est_content_tokens,
+                            "thinking": est_thinking_tokens,
+                            "total": est_content_tokens + est_thinking_tokens,
+                            "estimated": True
+                        },
+                        "tokens_per_second": round(est_content_tokens / duration, 1) if duration > 0 else 0
+                    }
+                
+                if final_content:
+                    full_final = (force_prefill or "") + final_content
+                    self.main_chat.session_manager.add_assistant_final(
+                        content=full_final,
+                        thinking=final_thinking if final_thinking else None,
+                        metadata=final_metadata
+                    )
                 else:
                     fallback = f"I used {tool_call_count} tools and gathered information."
                     yield {"type": "content", "text": fallback}
-                    self.main_chat.session_manager.add_assistant_final(fallback)
+                    self.main_chat.session_manager.add_assistant_final(
+                        content=fallback,
+                        metadata=final_metadata
+                    )
                     
             except Exception as final_error:
                 logger.error(f"[STREAMING] Forced final response failed: {final_error}")

@@ -98,6 +98,30 @@ class OpenAICompatProvider(BaseProvider):
         
         return result
     
+    def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Sanitize messages to only include fields the OpenAI API understands.
+        
+        Strips provider-specific fields like thinking_raw, thinking, metadata
+        that may have been added by other providers (e.g. Claude).
+        """
+        # Fields allowed in OpenAI message format
+        ALLOWED_FIELDS = {
+            'role', 'content', 'name', 'tool_calls', 'tool_call_id', 'function_call'
+        }
+        
+        clean = []
+        for msg in messages:
+            clean_msg = {k: v for k, v in msg.items() if k in ALLOWED_FIELDS}
+            
+            # Ensure content is not None (some providers don't like null content)
+            if clean_msg.get('content') is None and 'tool_calls' in clean_msg:
+                clean_msg['content'] = ""
+            
+            clean.append(clean_msg)
+        
+        return clean
+    
     def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -107,9 +131,13 @@ class OpenAICompatProvider(BaseProvider):
         """Send non-streaming chat completion request."""
         
         params = self._transform_params_for_model(generation_params or {})
+        
+        # Sanitize messages - only keep fields the OpenAI API understands
+        clean_messages = self._sanitize_messages(messages)
+        
         request_kwargs = {
             "model": self.model,
-            "messages": messages,
+            "messages": clean_messages,
             **params
         }
         
@@ -130,9 +158,13 @@ class OpenAICompatProvider(BaseProvider):
         """Send streaming chat completion request."""
         
         params = self._transform_params_for_model(generation_params or {})
+        
+        # Sanitize messages - only keep fields the OpenAI API understands
+        clean_messages = self._sanitize_messages(messages)
+        
         request_kwargs = {
             "model": self.model,
-            "messages": messages,
+            "messages": clean_messages,
             "stream": True,
             **params
         }

@@ -297,8 +297,8 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         
         from core.chat.history import count_tokens
         
-        raw_messages = system_instance.llm_chat.session_manager.get_messages()
-        logger.info(f"[TIMING] get_messages done at {_time.time() - start:.3f}s, {len(raw_messages)} messages")
+        raw_messages = system_instance.llm_chat.session_manager.get_messages_for_display()
+        logger.info(f"[TIMING] get_messages_for_display done at {_time.time() - start:.3f}s, {len(raw_messages)} messages")
         
         display_messages = format_messages_for_display(raw_messages)
         logger.info(f"[TIMING] format_messages done at {_time.time() - start:.3f}s")

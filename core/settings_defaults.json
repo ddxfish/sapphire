@@ -157,9 +157,9 @@
       "_comment": "Balanced generation params per model. Edit values here to tune.",
       "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       
-      "claude-sonnet-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "claude-haiku-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
-      "claude-opus-4-5": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 8192, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "claude-sonnet-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "claude-haiku-4-5": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
+      "claude-opus-4-5": { "temperature": 0.65, "top_p": 0.85, "max_tokens": 16000, "presence_penalty": 0.0, "frequency_penalty": 0.0 },
       
       "gpt-4o": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "gpt-4o-mini": { "temperature": 0.8, "top_p": 0.95, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
@@ -178,7 +178,9 @@
       "accounts/fireworks/models/minimax-m2p1": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
     },
     "FORCE_THINKING": false,
-    "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that"
+    "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",
+    "CLAUDE_THINKING_ENABLED": true,
+    "CLAUDE_THINKING_BUDGET": 10000
   },
   
   "tools": {

@@ -500,6 +500,7 @@ class TestMagicMethods:
         
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
+            mgr._lock = threading.Lock()
             mgr._config = {"EXISTS": "yes"}
             
             assert "EXISTS" in mgr

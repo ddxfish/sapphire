@@ -19,7 +19,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Mock tiktoken before any imports that might need it
 mock_tiktoken = MagicMock()
-mock_tiktoken.encoding_for_model.return_value.encode.return_value = []
+mock_encoding = MagicMock()
+mock_encoding.encode.return_value = []  # Empty list for token counting
+mock_tiktoken.get_encoding.return_value = mock_encoding
+mock_tiktoken.encoding_for_model.return_value = mock_encoding
 sys.modules['tiktoken'] = mock_tiktoken
 
 # Mock openai before any imports that might need it
@@ -40,6 +43,8 @@ def mock_system():
     system.llm_chat = MagicMock()
     system.llm_chat.session_manager = MagicMock()
     system.llm_chat.session_manager.get_messages.return_value = []
+    system.llm_chat.session_manager.get_messages_for_display.return_value = []
+    system.llm_chat.session_manager.get_messages_for_llm.return_value = []
     system.llm_chat.session_manager.get_chat_settings.return_value = {'spice_enabled': True}
     system.llm_chat.function_manager = MagicMock()
     system.llm_chat.function_manager.get_enabled_function_names.return_value = ['test_func']
@@ -153,10 +158,12 @@ class TestHistoryEndpoints:
     
     def test_get_history_returns_messages_and_context(self, client, mock_system):
         """GET /history should return messages array and context info."""
-        mock_system.llm_chat.session_manager.get_messages.return_value = [
+        test_messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Hi there!'}
         ]
+        mock_system.llm_chat.session_manager.get_messages_for_display.return_value = test_messages
+        mock_system.llm_chat.session_manager.get_messages_for_llm.return_value = test_messages
         
         with patch('core.setup.get_password_hash', return_value="test"):
             with patch('core.api.config') as mock_config:
@@ -172,7 +179,8 @@ class TestHistoryEndpoints:
     
     def test_get_history_empty(self, client, mock_system):
         """GET /history with no messages should return empty messages list."""
-        mock_system.llm_chat.session_manager.get_messages.return_value = []
+        mock_system.llm_chat.session_manager.get_messages_for_display.return_value = []
+        mock_system.llm_chat.session_manager.get_messages_for_llm.return_value = []
         
         with patch('core.setup.get_password_hash', return_value="test"):
             with patch('core.api.config') as mock_config:
@@ -186,7 +194,8 @@ class TestHistoryEndpoints:
     
     def test_get_history_context_has_required_fields(self, client, mock_system):
         """GET /history context should have used, limit, percent."""
-        mock_system.llm_chat.session_manager.get_messages.return_value = []
+        mock_system.llm_chat.session_manager.get_messages_for_display.return_value = []
+        mock_system.llm_chat.session_manager.get_messages_for_llm.return_value = []
         
         with patch('core.setup.get_password_hash', return_value="test"):
             with patch('core.api.config') as mock_config:
@@ -344,11 +353,13 @@ class TestUnifiedStatusEndpoint:
     
     def test_unified_status_message_count(self, client, mock_system):
         """GET /status should return correct message_count."""
-        mock_system.llm_chat.session_manager.get_messages.return_value = [
+        test_messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Hi!'},
             {'role': 'user', 'content': 'How are you?'},
         ]
+        mock_system.llm_chat.session_manager.get_messages.return_value = test_messages
+        mock_system.llm_chat.session_manager.get_messages_for_llm.return_value = test_messages
         mock_system.llm_chat.get_active_chat.return_value = 'General'
         mock_system.llm_chat.streaming_chat = MagicMock()
         mock_system.llm_chat.streaming_chat.is_streaming = False

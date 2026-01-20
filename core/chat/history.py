@@ -2,6 +2,7 @@
 import logging
 import json
 import os
+import re
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 from pathlib import Path
@@ -60,7 +61,68 @@ def get_tokenizer():
 
 def count_tokens(text: str) -> int:
     """Accurate token count."""
+    if not text:
+        return 0
     return len(get_tokenizer().encode(text))
+
+
+def _extract_thinking_from_content(content: str) -> tuple:
+    """
+    Extract thinking from content that uses <think> tags.
+    Used for backward compatibility with old messages and non-Claude providers.
+    
+    Returns:
+        (clean_content, thinking_text) - thinking_text is empty if none found
+    """
+    if not content:
+        return content, ""
+    
+    thinking_parts = []
+    
+    # Extract all think blocks (standard and seed variants)
+    pattern = r'<(?:seed:)?think[^>]*>(.*?)</(?:seed:think|seed:cot_budget_reflect|think)>'
+    
+    def extract_match(match):
+        thinking_parts.append(match.group(1))
+        return ''
+    
+    clean = re.sub(pattern, extract_match, content, flags=re.DOTALL | re.IGNORECASE)
+    
+    # Handle orphan close tags - content before them is thinking
+    orphan_close = re.search(
+        r'^(.*?)</(?:seed:think|seed:cot_budget_reflect|think)>',
+        clean, flags=re.DOTALL | re.IGNORECASE
+    )
+    if orphan_close:
+        thinking_parts.append(orphan_close.group(1))
+        clean = clean[orphan_close.end():]
+    
+    # Handle orphan open tags - content after them is thinking
+    orphan_open = re.search(
+        r'<(?:seed:)?think[^>]*>(.*)$',
+        clean, flags=re.DOTALL | re.IGNORECASE
+    )
+    if orphan_open:
+        thinking_parts.append(orphan_open.group(1))
+        clean = clean[:orphan_open.start()]
+    
+    clean = clean.strip()
+    thinking = "\n\n".join(thinking_parts).strip()
+    
+    return clean, thinking
+
+
+def _reconstruct_thinking_content(content: str, thinking: str) -> str:
+    """
+    Reconstruct content with <think> tags for UI display.
+    """
+    if not thinking:
+        return content or ""
+    
+    think_block = f"<think>{thinking}</think>"
+    if content:
+        return f"{think_block}\n\n{content}"
+    return think_block
 
 
 class ConversationHistory:
@@ -76,14 +138,39 @@ class ConversationHistory:
             "timestamp": datetime.now().isoformat()
         })
 
-    def add_assistant_with_tool_calls(self, content: Optional[str], tool_calls: List[Dict]):
-        """Add assistant message that includes tool calls - NO TRIMMING."""
-        self.messages.append({
+    def add_assistant_with_tool_calls(
+        self, 
+        content: Optional[str], 
+        tool_calls: List[Dict],
+        thinking: Optional[str] = None,
+        thinking_raw: Optional[List[Dict]] = None,
+        metadata: Optional[Dict] = None
+    ):
+        """
+        Add assistant message that includes tool calls.
+        
+        Args:
+            content: The visible response content (no thinking tags)
+            tool_calls: List of tool call dicts
+            thinking: Extracted thinking text (for UI display)
+            thinking_raw: Original structured thinking blocks (for Claude continuity)
+            metadata: Provider info, timing, tokens
+        """
+        msg = {
             "role": "assistant",
             "content": content or "",
             "tool_calls": tool_calls,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        
+        if thinking:
+            msg["thinking"] = thinking
+        if thinking_raw:
+            msg["thinking_raw"] = thinking_raw
+        if metadata:
+            msg["metadata"] = metadata
+            
+        self.messages.append(msg)
 
     def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None):
         """Add tool result message with optional inputs - NO TRIMMING."""
@@ -95,16 +182,35 @@ class ConversationHistory:
             "timestamp": datetime.now().isoformat()
         }
         if inputs:
-            msg["tool_inputs"] = inputs  # NEW: Store inputs as structured data
+            msg["tool_inputs"] = inputs
         self.messages.append(msg)
 
-    def add_assistant_final(self, content: str):
-        """Add final assistant message (no tool calls) - NO TRIMMING."""
-        self.messages.append({
+    def add_assistant_final(
+        self, 
+        content: str,
+        thinking: Optional[str] = None,
+        metadata: Optional[Dict] = None
+    ):
+        """
+        Add final assistant message (no tool calls).
+        
+        Args:
+            content: The visible response content (no thinking tags)
+            thinking: Extracted thinking text (for UI display)
+            metadata: Provider info, timing, tokens
+        """
+        msg = {
             "role": "assistant",
             "content": content,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        
+        if thinking:
+            msg["thinking"] = thinking
+        if metadata:
+            msg["metadata"] = metadata
+            
+        self.messages.append(msg)
 
     def add_message_pair(self, user_content: str, assistant_content: str):
         """Legacy method for adding simple user/assistant pairs - NO TRIMMING."""
@@ -116,37 +222,94 @@ class ConversationHistory:
         """Get ALL messages (with timestamps for storage) - NO TRIMMING."""
         return self.messages.copy()
 
-    def get_messages_for_llm(self, reserved_tokens: int = 0) -> List[Dict[str, Any]]:
+    def get_messages_for_display(self) -> List[Dict[str, Any]]:
+        """
+        Get messages formatted for UI display.
+        Reconstructs <think> tags from separate thinking field for rendering.
+        """
+        display_msgs = []
+        
+        for msg in self.messages:
+            display_msg = msg.copy()
+            
+            if msg["role"] == "assistant":
+                content = msg.get("content", "")
+                thinking = msg.get("thinking", "")
+                
+                # If we have separate thinking, reconstruct with tags for UI
+                if thinking:
+                    display_msg["content"] = _reconstruct_thinking_content(content, thinking)
+                # Backward compat: if content has <think> tags but no thinking field, leave as-is
+                # (old messages before this schema change)
+            
+            display_msgs.append(display_msg)
+        
+        return display_msgs
+
+    def get_messages_for_llm(
+        self, 
+        reserved_tokens: int = 0,
+        provider: str = None,
+        in_tool_cycle: bool = False
+    ) -> List[Dict[str, Any]]:
         """
         Get messages formatted for LLM with TRIMMING applied.
-        This is the ONLY place where trimming happens - storage is never affected.
         
         Args:
             reserved_tokens: Tokens to reserve for system prompt + current user message.
-                            These are subtracted from the context budget before trimming.
+            provider: Target provider ('claude', 'lmstudio', etc) for format decisions.
+            in_tool_cycle: True if we're mid-tool-cycle and need thinking_raw for Claude.
         
-        Note:
-            Set LLM_MAX_HISTORY to 0 to disable turn-based trimming.
-            Set CONTEXT_LIMIT to 0 to disable token-based trimming.
+        Notes:
+            - Thinking is NEVER sent to LLMs (they don't need previous reasoning)
+            - Exception: Claude needs thinking_raw during active tool cycles
+            - Set LLM_MAX_HISTORY to 0 to disable turn-based trimming
+            - Set CONTEXT_LIMIT to 0 to disable token-based trimming
         """
         msgs = []
+        
         for msg in self.messages:
-            llm_msg = {"role": msg["role"], "content": msg["content"]}
+            role = msg["role"]
             
-            if "tool_calls" in msg and msg["tool_calls"]:
-                llm_msg["tool_calls"] = msg["tool_calls"]
-            
-            if msg["role"] == "tool":
-                llm_msg["tool_call_id"] = msg["tool_call_id"]
-                llm_msg["name"] = msg["name"]
+            if role == "assistant":
+                # Get clean content (no thinking)
+                content = msg.get("content", "")
+                
+                # Backward compat: extract thinking from old messages with embedded tags
+                if not msg.get("thinking") and content and '<think' in content.lower():
+                    content, _ = _extract_thinking_from_content(content)
+                
+                llm_msg = {"role": "assistant", "content": content}
+                
+                # Include tool_calls if present
+                if msg.get("tool_calls"):
+                    llm_msg["tool_calls"] = msg["tool_calls"]
+                    
+                    # Claude needs thinking_raw during tool cycles (has signatures)
+                    if provider == "claude" and in_tool_cycle and msg.get("thinking_raw"):
+                        llm_msg["thinking_raw"] = msg["thinking_raw"]
+                
+            elif role == "tool":
+                llm_msg = {
+                    "role": "tool",
+                    "tool_call_id": msg["tool_call_id"],
+                    "name": msg["name"],
+                    "content": msg.get("content", "")
+                }
+                
+            elif role == "user":
+                llm_msg = {"role": "user", "content": msg.get("content", "")}
+                
+            else:
+                # System or other - pass through
+                llm_msg = {"role": role, "content": msg.get("content", "")}
             
             msgs.append(llm_msg)
         
         # TRIMMING STEP 1: Turn-based trimming (skip if max_history is 0)
-        # Read from config each time to support hot-reload
         max_history = getattr(config, 'LLM_MAX_HISTORY', 30)
         if max_history > 0 and len(msgs) > max_history:
-            user_count = sum(1 for msg in msgs if msg["role"] == "user")
+            user_count = sum(1 for m in msgs if m["role"] == "user")
             max_pairs = max_history // 2
             
             if user_count > max_pairs:
@@ -159,8 +322,6 @@ class ConversationHistory:
                     msgs.pop(0)
         
         # TRIMMING STEP 2: Token-based trimming (skip if context_limit is 0)
-        # Apply safety buffer: 1% + 512 tokens under limit
-        # This prevents silent failures on models without context shifting (e.g., GLM)
         context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
         
         if context_limit > 0:
@@ -174,6 +335,15 @@ class ConversationHistory:
                 total_tokens -= count_tokens(str(removed.get("content", "")))
         
         return msgs
+
+    def clear_thinking_raw(self):
+        """
+        Clear thinking_raw from all messages.
+        Called after tool cycle completes - we don't need raw blocks anymore.
+        """
+        for msg in self.messages:
+            if "thinking_raw" in msg:
+                del msg["thinking_raw"]
 
     def get_turn_count(self) -> int:
         """Count user messages (turns) in full storage."""
@@ -232,6 +402,14 @@ class ConversationHistory:
 
     def __len__(self):
         return len(self.messages)
+
+    def edit_message_by_content(self, role: str, original_content: str, new_content: str) -> bool:
+        """Edit a message by matching content."""
+        for msg in self.messages:
+            if msg.get("role") == role and msg.get("content") == original_content:
+                msg["content"] = new_content
+                return True
+        return False
     
 
 class ChatSessionManager:
@@ -242,9 +420,10 @@ class ChatSessionManager:
         
         self.current_chat = ConversationHistory(max_history=max_history)
         self.active_chat_name = "default"
-        self.current_settings = SYSTEM_DEFAULTS.copy()  # NEW: Track current chat settings
+        self.current_settings = SYSTEM_DEFAULTS.copy()
         
-        #self._init_predefined_chats()  # Now a no-op but kept for structure
+        # Track if we're in an active tool cycle (for Claude thinking_raw)
+        self._in_tool_cycle = False
         
         # Create default.json if it doesn't exist
         default_path = self.history_dir / "default.json"
@@ -268,8 +447,6 @@ class ChatSessionManager:
 
     def _init_predefined_chats(self):
         """Create predefined chat files if they don't exist - removed, no longer needed."""
-        # NOTE: We no longer have predefined chats - just create default.json on first load
-        # This method kept for compatibility but does nothing now
         pass
 
     def _get_chat_path(self, chat_name: str) -> Path:
@@ -292,17 +469,16 @@ class ChatSessionManager:
             # Handle new format: {"settings": {}, "messages": []}
             if isinstance(data, dict) and "messages" in data:
                 self.current_chat.messages = data["messages"]
-                # Load settings, merge with defaults for any missing keys
                 file_settings = data.get("settings", {})
                 self.current_settings = SYSTEM_DEFAULTS.copy()
                 self.current_settings.update(file_settings)
                 logger.info(f"Loaded chat '{chat_name}' with {len(data['messages'])} messages and settings")
                 return True
             
-            # Handle old format: just array of messages (backward compat - fresh install won't hit this)
+            # Handle old format: just array of messages
             elif isinstance(data, list):
                 self.current_chat.messages = data
-                self.current_settings = SYSTEM_DEFAULTS.copy()  # Use defaults for old chats
+                self.current_settings = SYSTEM_DEFAULTS.copy()
                 logger.info(f"Loaded legacy chat '{chat_name}' with {len(data)} messages, using default settings")
                 return True
             else:
@@ -336,11 +512,9 @@ class ChatSessionManager:
                 
                 display_name = path.stem.replace('_', ' ').title()
                 
-                # Handle new format
                 if isinstance(data, dict) and "messages" in data:
                     message_count = len(data["messages"])
                     settings = data.get("settings", {})
-                # Handle old format (legacy, shouldn't see on fresh install)
                 elif isinstance(data, list):
                     message_count = len(data)
                     settings = {}
@@ -354,7 +528,7 @@ class ChatSessionManager:
                     "message_count": message_count,
                     "is_active": path.stem == self.active_chat_name,
                     "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
-                    "settings": settings  # NEW: Include settings in metadata
+                    "settings": settings
                 })
             except Exception as e:
                 logger.error(f"Error reading chat file {path}: {e}")
@@ -374,7 +548,6 @@ class ChatSessionManager:
             return False
         
         try:
-            # Create new chat with user defaults (or system defaults if not set)
             new_chat_data = {
                 "settings": get_user_defaults(),
                 "messages": []
@@ -400,10 +573,8 @@ class ChatSessionManager:
             path.unlink()
             logger.info(f"Deleted chat: {chat_name}")
             
-            # Always ensure default exists
             self._ensure_default_exists()
             
-            # If we deleted the active chat, switch to default
             if was_active:
                 self._load_chat("default")
                 self.active_chat_name = "default"
@@ -435,7 +606,7 @@ class ChatSessionManager:
         
         if self._load_chat(chat_name):
             self.active_chat_name = chat_name
-            # Settings are loaded by _load_chat now
+            self._in_tool_cycle = False  # Reset tool cycle state on chat switch
             logger.info(f"Switched to chat: {chat_name}")
             return True
         else:
@@ -451,16 +622,39 @@ class ChatSessionManager:
         self._save_current_chat()
         publish(Events.MESSAGE_ADDED, {"role": "user"})
 
-    def add_assistant_with_tool_calls(self, content: Optional[str], tool_calls: List[Dict]):
-        self.current_chat.add_assistant_with_tool_calls(content, tool_calls)
+    def add_assistant_with_tool_calls(
+        self, 
+        content: Optional[str], 
+        tool_calls: List[Dict],
+        thinking: Optional[str] = None,
+        thinking_raw: Optional[List[Dict]] = None,
+        metadata: Optional[Dict] = None
+    ):
+        """Add assistant message with tool calls. Marks start of tool cycle."""
+        self._in_tool_cycle = True
+        self.current_chat.add_assistant_with_tool_calls(
+            content, tool_calls, thinking, thinking_raw, metadata
+        )
         self._save_current_chat()
 
     def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None):
         self.current_chat.add_tool_result(tool_call_id, name, content, inputs)
         self._save_current_chat()
 
-    def add_assistant_final(self, content: str):
-        self.current_chat.add_assistant_final(content)
+    def add_assistant_final(
+        self, 
+        content: str,
+        thinking: Optional[str] = None,
+        metadata: Optional[Dict] = None
+    ):
+        """Add final assistant message. Ends tool cycle and clears thinking_raw."""
+        self.current_chat.add_assistant_final(content, thinking, metadata)
+        
+        # Tool cycle complete - clear thinking_raw from previous messages
+        if self._in_tool_cycle:
+            self.current_chat.clear_thinking_raw()
+            self._in_tool_cycle = False
+            
         self._save_current_chat()
         publish(Events.MESSAGE_ADDED, {"role": "assistant"})
 
@@ -470,11 +664,20 @@ class ChatSessionManager:
         publish(Events.MESSAGE_ADDED, {"role": "pair"})
 
     def get_messages(self) -> List[Dict[str, str]]:
+        """Get raw messages (for storage/debugging)."""
         return self.current_chat.get_messages()
 
-    def get_messages_for_llm(self, reserved_tokens: int = 0) -> List[Dict[str, str]]:
+    def get_messages_for_display(self) -> List[Dict[str, Any]]:
+        """Get messages formatted for UI with <think> tags reconstructed."""
+        return self.current_chat.get_messages_for_display()
+
+    def get_messages_for_llm(self, reserved_tokens: int = 0, provider: str = None) -> List[Dict[str, str]]:
         """Get messages for LLM with trimming applied."""
-        return self.current_chat.get_messages_for_llm(reserved_tokens)
+        return self.current_chat.get_messages_for_llm(
+            reserved_tokens, 
+            provider=provider,
+            in_tool_cycle=self._in_tool_cycle
+        )
 
     def get_turn_count(self) -> int:
         return self.current_chat.get_turn_count()
@@ -502,6 +705,7 @@ class ChatSessionManager:
 
     def clear(self):
         self.current_chat.clear()
+        self._in_tool_cycle = False
         self._save_current_chat()
         publish(Events.CHAT_CLEARED)
 
@@ -519,7 +723,6 @@ class ChatSessionManager:
     def update_chat_settings(self, settings: Dict[str, Any]) -> bool:
         """Update current chat's settings and save."""
         try:
-            # Merge new settings with current (allows partial updates)
             self.current_settings.update(settings)
             self._save_current_chat()
             logger.info(f"Updated settings for chat '{self.active_chat_name}'")
@@ -535,11 +738,7 @@ class ChatSessionManager:
         """
         Remove only the LAST assistant message in a turn.
         Preserves user message, first assistant with tools, and tool results.
-        
-        Used for continue functionality - keeps the tool execution history
-        but removes the final prose to regenerate.
         """
-        # Find the assistant message with this timestamp (turn start)
         start_idx = -1
         for i, msg in enumerate(self.current_chat.messages):
             if msg.get('role') == 'assistant' and msg.get('timestamp') == timestamp:
@@ -550,15 +749,13 @@ class ChatSessionManager:
             logger.warning(f"Assistant turn not found at {timestamp}")
             return False
         
-        # Find the last assistant message in this turn
         last_assistant_idx = start_idx
         for i in range(start_idx + 1, len(self.current_chat.messages)):
             if self.current_chat.messages[i].get('role') == 'user':
-                break  # Next turn started
+                break
             if self.current_chat.messages[i].get('role') == 'assistant':
                 last_assistant_idx = i
         
-        # Only remove if there's a final assistant after tools
         if last_assistant_idx > start_idx:
             removed = self.current_chat.messages.pop(last_assistant_idx)
             self._save_current_chat()
@@ -566,7 +763,6 @@ class ChatSessionManager:
             logger.debug(f"Removed content preview: {removed.get('content', '')[:100]}")
             return True
         else:
-            # Only one assistant message (no final prose), remove it
             removed = self.current_chat.messages.pop(start_idx)
             self._save_current_chat()
             logger.info(f"Removed only assistant message at index {start_idx}")
@@ -581,7 +777,6 @@ class ChatSessionManager:
             logger.warning("No timestamp provided")
             return False
         
-        # For user messages, simple match
         if role == 'user':
             for msg in self.current_chat.messages:
                 if msg.get('role') == 'user' and msg.get('timestamp') == timestamp:
@@ -591,9 +786,7 @@ class ChatSessionManager:
                     return True
             return False
         
-        # For assistant messages, find the turn and edit the LAST assistant message
         if role == 'assistant':
-            # Find the assistant message with this timestamp
             start_idx = -1
             for i, msg in enumerate(self.current_chat.messages):
                 if msg.get('role') == 'assistant' and msg.get('timestamp') == timestamp:
@@ -604,15 +797,13 @@ class ChatSessionManager:
                 logger.warning(f"Assistant message not found at {timestamp}")
                 return False
             
-            # Find the last assistant message in this turn (before next user message or end)
             last_assistant_idx = start_idx
             for i in range(start_idx + 1, len(self.current_chat.messages)):
                 if self.current_chat.messages[i].get('role') == 'user':
-                    break  # Next turn started
+                    break
                 if self.current_chat.messages[i].get('role') == 'assistant':
                     last_assistant_idx = i
             
-            # Edit the LAST assistant message in this turn
             self.current_chat.messages[last_assistant_idx]['content'] = new_content
             self._save_current_chat()
             logger.info(f"Edited assistant message at index {last_assistant_idx} (turn started at {start_idx})")
