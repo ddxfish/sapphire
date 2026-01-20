@@ -21,7 +21,7 @@ main.py (runner with restart loop)
     └── Event Scheduler (core/event_handler.py)
 
 Web Interface (interfaces/web/web_interface.py)
-└── HTTP proxy → 0.0.0.0:8073
+└── HTTPS proxy → 0.0.0.0:8073
     └── Proxies to Internal API
 ```
 
@@ -36,7 +36,7 @@ Sapphire has two API layers:
 | Layer | Binds To | Purpose |
 |-------|----------|---------|
 | Internal API | `127.0.0.1:8071` | Backend logic, no auth |
-| Web Interface | `0.0.0.0:8073` | HTTP proxy with sessions, CSRF, rate limiting |
+| Web Interface | `0.0.0.0:8073` | HTTPS proxy with sessions, CSRF, rate limiting |
 
 **Flow:** Browser → Web Interface (8073) → Internal API (8071) → VoiceChatSystem
 
@@ -177,7 +177,7 @@ API keys and SOCKS credentials are stored separately from settings via `core/cre
 
 | Service | Port | Binding |
 |---------|------|---------|
-| Web Interface | 8073 | `0.0.0.0` (all interfaces, HTTP) |
+| Web Interface | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
 | Internal API | 8071 | `127.0.0.1` (localhost only) |
 | TTS Server | 5012 | `localhost` |
 | STT Server | 5050 | `localhost` |
@@ -233,6 +233,20 @@ Started in `sapphire.py`, stopped on shutdown.
 
 ---
 
+## Event Bus & SSE
+
+Real-time UI updates use Server-Sent Events (SSE) via the event bus.
+
+**Backend:** `core/event_bus.py` publishes events. Subscribe via `/events` endpoint.
+
+**Frontend:** `interfaces/web/static/core/event-bus.js` manages SSE connection and dispatches to UI components.
+
+**Event types:** `tts_state`, `llm_state`, `chat_switch`, `settings_change`, `prompt_change`
+
+The `/status` endpoint provides a unified polling fallback with context usage (token count and percent bar), prompt state, spice info, and streaming status.
+
+---
+
 ## Chat Sessions
 
 Sessions stored as JSON in `user/history/`:
@@ -261,6 +275,8 @@ Key endpoints (all require `X-API-Key` header):
 |----------|--------|---------|
 | `/chat` | POST | Send message, get response |
 | `/chat/stream` | POST | Streaming response |
+| `/status` | GET | Unified UI state (prompt, context, spice, TTS) |
+| `/events` | GET | SSE stream for real-time events |
 | `/history` | GET | Get chat history |
 | `/api/settings` | GET/PUT | Read/write settings |
 | `/api/prompts` | GET | List prompts |
@@ -310,6 +326,7 @@ See dedicated docs:
 | `core/chat/history.py` | Session management |
 | `core/audio/device_manager.py` | Audio device handling |
 | `core/event_handler.py` | Scheduled events |
+| `core/event_bus.py` | Real-time event pub/sub for SSE |
 | `interfaces/web/web_interface.py` | Web proxy, auth |
 
 ---
@@ -321,12 +338,12 @@ Sapphire architecture for troubleshooting and development.
 PROCESSES:
 - main.py: Runner with restart loop (exit 42 = restart)
 - sapphire.py: Core VoiceChatSystem
-- web_interface.py: Web UI proxy (port 8073, HTTP)
+- web_interface.py: Web UI proxy (port 8073, HTTPS)
 - core/api.py: Internal API (port 8071, HTTP)
 - TTS server: Kokoro (port 5012, if enabled)
 
 PORTS:
-- 8073: Web UI (HTTP, user-facing)
+- 8073: Web UI (HTTPS, user-facing)
 - 8071: Internal API (localhost only)
 - 5012: TTS server (if enabled)
 - 5050: STT server (if enabled)
