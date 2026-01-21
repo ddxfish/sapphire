@@ -106,7 +106,7 @@ class ClaudeProvider(BaseProvider):
         system_prompt, claude_messages = self._convert_messages(messages)
         
         request_kwargs = {
-            "model": self.model,
+            "model": params.get('model') or self.model,
             "messages": claude_messages,
             "max_tokens": params.get("max_tokens", 4096),
         }
@@ -179,7 +179,7 @@ class ClaudeProvider(BaseProvider):
         system_prompt, claude_messages = self._convert_messages(messages)
         
         request_kwargs = {
-            "model": self.model,
+            "model": params.get('model') or self.model,
             "messages": claude_messages,
             "max_tokens": params.get("max_tokens", 4096),
         }
@@ -370,7 +370,7 @@ class ClaudeProvider(BaseProvider):
         
         metadata = {
             "provider": "claude",
-            "model": self.model,
+            "model": params.get('model') or self.model,
             "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start_time)),
             "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_time)),
             "duration_seconds": duration,
