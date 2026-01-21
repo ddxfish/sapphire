@@ -91,10 +91,13 @@
         </div>
         <div class="form-wrapper">
             <div id="context-bar"></div>
+            <div id="image-preview-area" style="display: none;"></div>
             <form id="chat-form">
+                <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">📎</button>
+                <input type="file" id="image-upload-input" accept="image/*" multiple style="display: none;">
                 <button type="button" id="mic-btn" title="Hold to record">🎤</button>
                 <div class="textarea-wrapper">
-                    <textarea id="prompt-input" placeholder="Type message..." rows="1"></textarea>
+                    <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
                 </div>
                 <button type="submit" id="send-btn">Send</button>
                 <button type="button" id="stop-btn" style="display: none;">Stop</button>

@@ -9,6 +9,7 @@ import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from '.
 import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
+import { setupImageHandlers } from './handlers/send-handlers.js';
 import * as eventBus from './core/event-bus.js';
 
 // Initialize appearance settings from localStorage (theme, density, font, trim)
@@ -150,6 +151,7 @@ async function init() {
         initSidebarResize();
         startMicIconPolling();
         bindAllEvents();
+        setupImageHandlers();
         
         // Connect to event bus for real-time updates
         initEventBus();

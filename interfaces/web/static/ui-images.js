@@ -4,6 +4,9 @@
 let pendingImages = new Set();
 let scrollAfterImagesTimeout = null;
 
+// Track pending upload images (before send)
+let pendingUploadImages = [];
+
 export const hasPendingImages = () => {
     return pendingImages.size > 0;
 };
@@ -14,6 +17,90 @@ export const clearPendingImages = () => {
         clearTimeout(scrollAfterImagesTimeout);
         scrollAfterImagesTimeout = null;
     }
+};
+
+// ============================================================================
+// UPLOAD IMAGE MANAGEMENT
+// ============================================================================
+
+export const getPendingUploadImages = () => [...pendingUploadImages];
+
+export const addPendingUploadImage = (imageData) => {
+    // imageData: {data: base64, media_type: string, filename: string, previewUrl: string}
+    pendingUploadImages.push(imageData);
+    return pendingUploadImages.length - 1;
+};
+
+export const removePendingUploadImage = (index) => {
+    if (index >= 0 && index < pendingUploadImages.length) {
+        const removed = pendingUploadImages.splice(index, 1)[0];
+        if (removed.previewUrl) {
+            URL.revokeObjectURL(removed.previewUrl);
+        }
+    }
+};
+
+export const clearPendingUploadImages = () => {
+    pendingUploadImages.forEach(img => {
+        if (img.previewUrl) URL.revokeObjectURL(img.previewUrl);
+    });
+    pendingUploadImages = [];
+};
+
+export const hasPendingUploadImages = () => pendingUploadImages.length > 0;
+
+// Convert pending uploads to format for API
+export const getImagesForApi = () => {
+    return pendingUploadImages.map(img => ({
+        data: img.data,
+        media_type: img.media_type
+    }));
+};
+
+// Create preview element for upload zone
+export const createUploadPreview = (imageData, index, onRemove) => {
+    const container = document.createElement('div');
+    container.className = 'upload-preview-item';
+    container.dataset.index = index;
+    
+    const img = document.createElement('img');
+    img.src = imageData.previewUrl || `data:${imageData.media_type};base64,${imageData.data}`;
+    img.alt = imageData.filename || 'Uploaded image';
+    
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'upload-preview-remove';
+    removeBtn.innerHTML = '×';
+    removeBtn.title = 'Remove image';
+    removeBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onRemove(index);
+    };
+    
+    container.appendChild(img);
+    container.appendChild(removeBtn);
+    return container;
+};
+
+// Render user message images (thumbnails in history)
+export const createUserImageThumbnails = (images) => {
+    const container = document.createElement('div');
+    container.className = 'user-images';
+    
+    images.forEach(img => {
+        const imgEl = document.createElement('img');
+        imgEl.src = `data:${img.media_type};base64,${img.data}`;
+        imgEl.className = 'user-image-thumb';
+        imgEl.alt = 'Attached image';
+        imgEl.onclick = () => {
+            // Open full size in modal or new tab
+            const win = window.open();
+            win.document.write(`<img src="${imgEl.src}" style="max-width:100%">`);
+        };
+        container.appendChild(imgEl);
+    });
+    
+    return container;
 };
 
 export const scheduleScrollAfterImages = (scrollCallback, force = false) => {

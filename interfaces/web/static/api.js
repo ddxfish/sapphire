@@ -215,10 +215,13 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
     }
 };
 
-export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) => {
+export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null) => {
     let reader = null;
     try {
-        const body = prefill ? { text, prefill } : { text };
+        const body = { text };
+        if (prefill) body.prefill = prefill;
+        if (images && images.length > 0) body.images = images;
+        
         const res = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -336,3 +339,21 @@ export const toggleSpice = async (chatName, enabled) => {
 // Local TTS control (server-side speaker playback)
 export const getTtsStatus = () => fetchWithTimeout('/api/tts/status', {}, 2000);
 export const stopLocalTts = () => fetchWithTimeout('/api/tts/stop', { method: 'POST' }, 2000);
+
+// Image upload
+export const uploadImage = async (file) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    
+    const res = await fetch('/api/upload/image', {
+        method: 'POST',
+        body: formData
+    });
+    
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Upload failed: ${res.status}`);
+    }
+    
+    return res.json();
+};

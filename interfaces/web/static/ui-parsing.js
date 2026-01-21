@@ -403,13 +403,20 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
     
     const txt = typeof msg === 'string' ? msg : (msg.content || '');
     const parts = (typeof msg === 'object' && msg.parts) ? msg.parts : [];
+    const userImages = (typeof msg === 'object' && msg.images) ? msg.images : [];
     
-    if (!txt && parts.length === 0) {
+    if (!txt && parts.length === 0 && userImages.length === 0) {
         el.textContent = '';
         return;
     }
     
     el.innerHTML = '';
+    
+    // Render user-attached images first (for user messages)
+    if (userImages.length > 0) {
+        const thumbs = Images.createUserImageThumbnails(userImages);
+        el.appendChild(thumbs);
+    }
     
     if (parts.length > 0) {
         let thinkCnt = 0;

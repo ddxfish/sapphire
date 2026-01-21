@@ -3,6 +3,7 @@ import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
+import * as Images from '../ui-images.js';
 import { 
     getElements, 
     getIsProc, 
@@ -19,7 +20,7 @@ import {
 export async function handleSend() {
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
-    if (!txt) return;
+    if (!txt && !Images.hasPendingUploadImages()) return;
     
     const abortController = new AbortController();
     setAbortController(abortController);
@@ -31,7 +32,14 @@ export async function handleSend() {
     sendBtn.textContent = '...';
     input.dispatchEvent(new Event('input'));
     
-    ui.addUserMessage(txt);
+    // Get pending images and clear them
+    const pendingImages = Images.getImagesForApi();
+    const hasImages = pendingImages.length > 0;
+    
+    ui.addUserMessage(txt, hasImages ? Images.getPendingUploadImages() : null);
+    Images.clearPendingUploadImages();
+    updateImagePreviewArea();
+    
     ui.showStatus();
     ui.updateStatus('Connecting...');
     
@@ -115,7 +123,9 @@ export async function handleSend() {
                     ui.showStatus();
                     ui.updateStatus('Generating...');
                 }
-            }
+            },
+            // Images
+            hasImages ? pendingImages : null
         );
         
         if (streamOk) return null;
@@ -131,6 +141,129 @@ export async function handleSend() {
         sendBtn.textContent = 'Send';
         input.focus();
         setProc(false);
+    }
+}
+
+// Update image preview area in DOM
+function updateImagePreviewArea() {
+    const previewArea = document.getElementById('image-preview-area');
+    if (!previewArea) return;
+    
+    previewArea.innerHTML = '';
+    const pending = Images.getPendingUploadImages();
+    
+    if (pending.length === 0) {
+        previewArea.style.display = 'none';
+        return;
+    }
+    
+    previewArea.style.display = 'flex';
+    pending.forEach((img, idx) => {
+        const preview = Images.createUploadPreview(img, idx, (index) => {
+            Images.removePendingUploadImage(index);
+            updateImagePreviewArea();
+        });
+        previewArea.appendChild(preview);
+    });
+}
+
+// Handle image file selection/paste/drop
+export async function handleImageUpload(file) {
+    if (!file.type.startsWith('image/')) {
+        ui.showToast('Only image files are supported', 'error');
+        return;
+    }
+    
+    // Check size (10MB max)
+    if (file.size > 10 * 1024 * 1024) {
+        ui.showToast('Image too large (max 10MB)', 'error');
+        return;
+    }
+    
+    try {
+        const result = await api.uploadImage(file);
+        
+        // Create preview URL from file
+        const previewUrl = URL.createObjectURL(file);
+        
+        Images.addPendingUploadImage({
+            data: result.data,
+            media_type: result.media_type,
+            filename: result.filename,
+            previewUrl: previewUrl
+        });
+        
+        updateImagePreviewArea();
+        ui.showToast('Image attached', 'success', 2000);
+    } catch (e) {
+        console.error('Image upload failed:', e);
+        ui.showToast(e.message, 'error');
+    }
+}
+
+// Setup paste and drag-drop handlers
+export function setupImageHandlers() {
+    const input = document.getElementById('prompt-input');
+    const form = document.getElementById('chat-form');
+    const uploadBtn = document.getElementById('image-upload-btn');
+    const fileInput = document.getElementById('image-upload-input');
+    
+    // Upload button click -> trigger file input
+    if (uploadBtn && fileInput) {
+        uploadBtn.addEventListener('click', () => fileInput.click());
+    }
+    
+    // File input handler
+    if (fileInput) {
+        fileInput.addEventListener('change', async (e) => {
+            const files = e.target.files;
+            for (const file of files) {
+                await handleImageUpload(file);
+            }
+            fileInput.value = '';
+        });
+    }
+    
+    // Paste handler
+    document.addEventListener('paste', async (e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        
+        for (const item of items) {
+            if (item.type.startsWith('image/')) {
+                e.preventDefault();
+                const file = item.getAsFile();
+                if (file) await handleImageUpload(file);
+                return;
+            }
+        }
+    });
+    
+    // Drag-drop handlers on form
+    if (form) {
+        form.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            form.classList.add('drag-over');
+        });
+        
+        form.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            form.classList.remove('drag-over');
+        });
+        
+        form.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            form.classList.remove('drag-over');
+            
+            const files = e.dataTransfer?.files;
+            if (!files) return;
+            
+            for (const file of files) {
+                if (file.type.startsWith('image/')) {
+                    await handleImageUpload(file);
+                }
+            }
+        });
     }
 }
 

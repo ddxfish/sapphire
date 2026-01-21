@@ -182,9 +182,19 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
 // PUBLIC API - MESSAGE OPERATIONS
 // =============================================================================
 
-export const addUserMessage = (txt) => {
+export const addUserMessage = (txt, images = null) => {
     const cnt = chat.querySelectorAll('.message').length;
-    const { clone } = createMessage({ role: 'user', content: txt }, cnt, cnt + 1, false);
+    const msgData = { role: 'user', content: txt };
+    
+    // Add images for display if present
+    if (images && images.length > 0) {
+        msgData.images = images.map(img => ({
+            data: img.data,
+            media_type: img.media_type
+        }));
+    }
+    
+    const { clone } = createMessage(msgData, cnt, cnt + 1, false);
     chat.appendChild(clone);
     scrollToBottomIfSticky(true);
 };
