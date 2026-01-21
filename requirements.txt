@@ -21,3 +21,6 @@ PySocks>=1.7.1
 
 # Anthropic Claude API (optional - only needed if using Claude provider)
 anthropic>=0.39.0
+
+# Image resize for LLM
+Pillow>=10.0.0
