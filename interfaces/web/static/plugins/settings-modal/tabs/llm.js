@@ -34,7 +34,8 @@ export default {
     'LLM_FALLBACK_ORDER',
     'MODEL_GENERATION_PROFILES',
     'FORCE_THINKING',
-    'THINKING_PREFILL'
+    'THINKING_PREFILL',
+    'IMAGE_UPLOAD_MAX_WIDTH'
   ],
 
   render(modal) {
@@ -120,7 +121,7 @@ export default {
   },
 
   renderGeneralSettings(modal) {
-    const generalKeys = ['LLM_MAX_HISTORY', 'CONTEXT_LIMIT', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL'];
+    const generalKeys = ['LLM_MAX_HISTORY', 'CONTEXT_LIMIT', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL', 'IMAGE_UPLOAD_MAX_WIDTH'];
     return `
       <div class="settings-list">
         ${modal.renderCategorySettings(generalKeys)}

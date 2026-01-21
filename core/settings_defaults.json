@@ -182,7 +182,8 @@
     "FORCE_THINKING": false,
     "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",
     "CLAUDE_THINKING_ENABLED": true,
-    "CLAUDE_THINKING_BUDGET": 10000
+    "CLAUDE_THINKING_BUDGET": 10000,
+    "IMAGE_UPLOAD_MAX_WIDTH": 1920
   },
   
   "tools": {

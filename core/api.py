@@ -324,8 +324,56 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
 
     @bp.route('/upload/image', methods=['POST'])
     def handle_image_upload():
-        """Upload an image and return base64 data for chat."""
+        """Upload an image, optionally optimize it, and return base64 data for chat."""
         import base64
+        from io import BytesIO
+        from core.settings_manager import settings
+        
+        def optimize_image(image_data: bytes, max_width: int) -> tuple:
+            """
+            Optimize image: resize to max width @ 85% JPEG quality.
+            Returns (optimized_data, media_type) or original if optimization makes it bigger.
+            """
+            try:
+                from PIL import Image
+            except ImportError:
+                logger.warning("Pillow not installed, skipping image optimization")
+                return image_data, None
+            
+            original_size = len(image_data)
+            
+            try:
+                img = Image.open(BytesIO(image_data))
+                
+                # Convert RGBA/P to RGB for JPEG (no alpha channel)
+                if img.mode in ('RGBA', 'P'):
+                    img = img.convert('RGB')
+                elif img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Resize if wider than max_width
+                if img.width > max_width:
+                    ratio = max_width / img.width
+                    new_height = int(img.height * ratio)
+                    img = img.resize((max_width, new_height), Image.LANCZOS)
+                
+                # Compress to JPEG @ 85%
+                buffer = BytesIO()
+                img.save(buffer, format='JPEG', quality=85, optimize=True)
+                optimized_data = buffer.getvalue()
+                optimized_size = len(optimized_data)
+                
+                # Use smaller version
+                if optimized_size < original_size:
+                    logger.info(f"Image optimized: {original_size} -> {optimized_size} bytes ({100 - (optimized_size * 100 // original_size)}% reduction)")
+                    return optimized_data, 'image/jpeg'
+                else:
+                    logger.info(f"Image optimization skipped: {optimized_size} >= {original_size} (would be larger)")
+                    return image_data, None
+                    
+            except Exception as e:
+                logger.warning(f"Image optimization failed, using original: {e}")
+                return image_data, None
         
         if 'image' not in request.files:
             return jsonify({"error": "No image file provided"}), 400
@@ -358,19 +406,30 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         }
         media_type = media_types.get(ext, 'image/jpeg')
         
-        # Read and encode
+        # Read and optionally optimize
         try:
             image_data = image_file.read()
-            base64_data = base64.b64encode(image_data).decode('utf-8')
+            original_size = len(image_data)
             
-            logger.info(f"Image uploaded: {image_file.filename}, {len(image_data)} bytes, {media_type}")
+            # Check if optimization is enabled
+            max_width = settings.get('IMAGE_UPLOAD_MAX_WIDTH', 0)
+            if max_width > 0:
+                optimized_data, optimized_type = optimize_image(image_data, max_width)
+                if optimized_type:
+                    image_data = optimized_data
+                    media_type = optimized_type
+            
+            base64_data = base64.b64encode(image_data).decode('utf-8')
+            final_size = len(image_data)
+            
+            logger.info(f"Image uploaded: {image_file.filename}, {original_size} -> {final_size} bytes, {media_type}")
             
             return jsonify({
                 "status": "success",
                 "data": base64_data,
                 "media_type": media_type,
                 "filename": image_file.filename,
-                "size": len(image_data)
+                "size": final_size
             })
         except Exception as e:
             logger.error(f"Image upload error: {e}", exc_info=True)

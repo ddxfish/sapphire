@@ -245,6 +245,10 @@
     "short": "Claude thinking token budget",
     "long": "Maximum tokens Claude can use for internal reasoning before responding. Higher values allow deeper thinking but increase response time and cost. Typical range: 5000-32000. Only used when CLAUDE_THINKING_ENABLED is true."
   },
+  "IMAGE_UPLOAD_MAX_WIDTH": {
+    "short": "Max width for uploaded images (0 = disabled)",
+    "long": "Images wider than this are resized and compressed to JPEG 85% quality before storing in chat history. Reduces storage and speeds up LLM processing. Set to 0 to disable optimization and keep original images. Only applies if compression actually makes the image smaller."
+  },
   
   "MAX_TOOL_ITERATIONS": {
     "short": "how many total tool iterations can be called (these can be parallel)",
