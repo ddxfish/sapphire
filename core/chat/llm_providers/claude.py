@@ -64,6 +64,10 @@ class ClaudeProvider(BaseProvider):
     def provider_name(self) -> str:
         return 'claude'
     
+    @property
+    def supports_images(self) -> bool:
+        return True
+    
     def health_check(self) -> bool:
         """
         Check Claude endpoint health.
@@ -493,7 +497,24 @@ class ClaudeProvider(BaseProvider):
             elif role == "user":
                 if isinstance(content, list):
                     if content:
-                        claude_messages.append({"role": "user", "content": content})
+                        # Convert internal image format to Claude format
+                        claude_content = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "image":
+                                # Internal: {"type": "image", "data": "...", "media_type": "..."}
+                                # Claude:   {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+                                claude_content.append({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": block.get("media_type", "image/jpeg"),
+                                        "data": block.get("data", "")
+                                    }
+                                })
+                            else:
+                                # Pass through text blocks and other content as-is
+                                claude_content.append(block)
+                        claude_messages.append({"role": "user", "content": claude_content})
                 else:
                     if content and content.strip():
                         claude_messages.append({"role": "user", "content": content})

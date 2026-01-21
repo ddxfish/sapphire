@@ -4,7 +4,7 @@ import json
 import os
 import re
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from pathlib import Path
 import tiktoken
 import config
@@ -130,8 +130,8 @@ class ConversationHistory:
         self.max_history = max_history
         self.messages = []
 
-    def add_user_message(self, content: str):
-        """Add user message - NO TRIMMING."""
+    def add_user_message(self, content: Union[str, List[Dict[str, Any]]]):
+        """Add user message - accepts string or content list with images."""
         self.messages.append({
             "role": "user", 
             "content": content,
@@ -637,7 +637,7 @@ class ChatSessionManager:
         """Get active chat name."""
         return self.active_chat_name
 
-    def add_user_message(self, content: str):
+    def add_user_message(self, content: Union[str, List[Dict[str, Any]]]):
         self.current_chat.add_user_message(content)
         self._save_current_chat()
         publish(Events.MESSAGE_ADDED, {"role": "user"})

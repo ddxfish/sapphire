@@ -384,6 +384,24 @@ def transcribe():
     except requests.exceptions.RequestException as e:
         return jsonify({"error": f"Transcription failed: {str(e)}"}), 500
 
+@app.route('/api/upload/image', methods=['POST'])
+@require_login
+def upload_image():
+    """Upload an image for chat."""
+    if 'image' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
+    
+    image_file = request.files['image']
+    files = {'image': (image_file.filename, image_file.stream, image_file.mimetype)}
+    
+    try:
+        res = _api_session.post(f"{API_BASE}/upload/image", files=files, timeout=30, headers=get_api_headers())
+        res.raise_for_status()
+        return jsonify(res.json())
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Image upload proxy error: {e}")
+        return jsonify({"error": f"Upload failed: {str(e)}"}), 500
+
 @app.route('/api/reset', methods=['POST'])
 @require_login
 def reset():

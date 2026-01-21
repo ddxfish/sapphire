@@ -46,6 +46,54 @@ class OpenAICompatProvider(BaseProvider):
         return self.config.get('provider', 'openai')
     
     @property
+    def supports_images(self) -> bool:
+        """Whether this provider instance supports vision/image inputs."""
+        return self._supports_multimodal()
+    
+    def _supports_multimodal(self) -> bool:
+        """
+        Check if this specific provider instance supports multimodal (image) inputs.
+        
+        Conservative approach: only enable for known vision-capable endpoints.
+        Local models (LM Studio, llama.cpp) typically don't support multimodal
+        unless running specific VLM models.
+        """
+        base_url = (self.base_url or '').lower()
+        model = (self.model or '').lower()
+        
+        # OpenAI official API - supports vision with gpt-4-vision, gpt-4o, etc.
+        if 'api.openai.com' in base_url:
+            logger.debug(f"[MULTIMODAL] OpenAI API detected, enabling multimodal")
+            return True
+        
+        # Fireworks - supports vision with specific VLM models
+        if 'fireworks.ai' in base_url:
+            # Check for known vision models
+            vision_indicators = ['llava', 'vision', 'vl', 'pixtral', 'qwen2-vl']
+            supported = any(ind in model for ind in vision_indicators)
+            logger.debug(f"[MULTIMODAL] Fireworks: model={model}, multimodal={supported}")
+            return supported
+        
+        # OpenRouter - check model name for vision capability
+        if 'openrouter.ai' in base_url:
+            vision_indicators = ['vision', 'vl', 'llava', 'pixtral', 'gpt-4o']
+            supported = any(ind in model for ind in vision_indicators)
+            logger.debug(f"[MULTIMODAL] OpenRouter: model={model}, multimodal={supported}")
+            return supported
+        
+        # Local endpoints (LM Studio, llama.cpp, etc.) - check model name
+        if any(local in base_url for local in ['localhost', '127.0.0.1', '0.0.0.0']):
+            # Only enable if model name suggests vision capability
+            vision_indicators = ['llava', 'vision', 'vl', 'bakllava', 'cogvlm', 'minicpm-v']
+            supported = any(ind in model for ind in vision_indicators)
+            logger.debug(f"[MULTIMODAL] Local endpoint: model={model}, multimodal={supported}")
+            return supported
+        
+        # Unknown endpoint - be conservative, disable multimodal
+        logger.debug(f"[MULTIMODAL] Unknown endpoint {base_url}, disabling multimodal")
+        return False
+    
+    @property
     def client(self) -> OpenAI:
         """Access the underlying OpenAI client if needed."""
         return self._client
@@ -119,9 +167,13 @@ class OpenAICompatProvider(BaseProvider):
             if role == 'user' and isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get('type') == 'tool_result':
+                        tool_use_id = block.get('tool_use_id', '')
+                        # Convert Claude tool ID format if needed
+                        if tool_use_id.startswith('toolu_'):
+                            tool_use_id = 'call_' + tool_use_id[6:]
                         clean.append({
                             'role': 'tool',
-                            'tool_call_id': block.get('tool_use_id', ''),
+                            'tool_call_id': tool_use_id,
                             'name': block.get('name', 'unknown'),
                             'content': block.get('content', '')
                         })
@@ -129,30 +181,65 @@ class OpenAICompatProvider(BaseProvider):
                 if any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in content):
                     continue
             
-            # Normalize content - ensure it's a string, not a list
+            # Normalize content - handle multimodal content lists
             if isinstance(content, list):
-                # Extract text from content blocks (Claude format)
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get('type') == 'text':
-                            text_parts.append(block.get('text', ''))
-                        elif block.get('type') == 'thinking':
-                            # Skip thinking blocks - they shouldn't be sent to other providers
-                            continue
-                        elif block.get('type') == 'tool_use':
-                            # Tool use blocks are handled via tool_calls field
-                            continue
-                    elif isinstance(block, str):
-                        text_parts.append(block)
-                content = ' '.join(text_parts).strip()
+                # Check if content has images
+                has_images = any(
+                    isinstance(b, dict) and b.get('type') == 'image' 
+                    for b in content
+                )
+                
+                if has_images and self._supports_multimodal():
+                    # Convert to OpenAI multimodal format for capable providers
+                    openai_content = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get('type') == 'text':
+                                openai_content.append({"type": "text", "text": block.get('text', '')})
+                            elif block.get('type') == 'image':
+                                # Internal: {"type": "image", "data": "...", "media_type": "..."}
+                                # OpenAI:   {"type": "image_url", "image_url": {"url": "data:...;base64,..."}}
+                                media_type = block.get('media_type', 'image/jpeg')
+                                data = block.get('data', '')
+                                openai_content.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{media_type};base64,{data}"}
+                                })
+                            elif block.get('type') in ('thinking', 'tool_use'):
+                                # Skip thinking and tool_use blocks
+                                continue
+                        elif isinstance(block, str):
+                            openai_content.append({"type": "text", "text": block})
+                    content = openai_content if openai_content else ""
+                else:
+                    # No images OR provider doesn't support multimodal - flatten to string
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get('type') == 'text':
+                                text_parts.append(block.get('text', ''))
+                            elif block.get('type') == 'thinking':
+                                # Skip thinking blocks - they shouldn't be sent to other providers
+                                continue
+                            elif block.get('type') == 'tool_use':
+                                # Tool use blocks are handled via tool_calls field
+                                continue
+                            elif block.get('type') == 'image':
+                                # Provider doesn't support images - add placeholder
+                                text_parts.append('[image]')
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    content = ' '.join(text_parts).strip()
             
             # Build clean message with only allowed fields
             clean_msg = {'role': role}
             
-            # Handle content
+            # Handle content - preserve list for multimodal, stringify otherwise
             if content is not None:
-                clean_msg['content'] = str(content) if content else ''
+                if isinstance(content, list):
+                    clean_msg['content'] = content  # Keep list for multimodal
+                else:
+                    clean_msg['content'] = str(content) if content else ''
             elif 'tool_calls' in msg:
                 # OpenAI requires content field, use empty string if tool_calls present
                 clean_msg['content'] = ''
@@ -161,29 +248,42 @@ class OpenAICompatProvider(BaseProvider):
             
             # Handle tool_calls (assistant messages)
             if msg.get('tool_calls'):
-                # Normalize tool_calls format
+                # Normalize tool_calls format for OpenAI-compat APIs
                 normalized_calls = []
                 for tc in msg['tool_calls']:
                     if isinstance(tc, dict):
-                        # Ensure proper structure
+                        func = tc.get('function', {})
+                        
+                        # Get arguments - ensure it's valid JSON
+                        args = func.get('arguments', '{}')
+                        if not args or args == '':
+                            args = '{}'
+                        
+                        # Get tool ID - convert Claude format if needed
+                        tool_id = tc.get('id', '')
+                        if tool_id.startswith('toolu_'):
+                            # Convert Claude ID to OpenAI-compatible format
+                            tool_id = 'call_' + tool_id[6:]
+                        
                         normalized_tc = {
-                            'id': tc.get('id', ''),
+                            'id': tool_id,
                             'type': 'function',
-                            'function': tc.get('function', {})
-                        }
-                        # Ensure function has name and arguments
-                        if 'name' in tc and 'function' not in tc:
-                            normalized_tc['function'] = {
-                                'name': tc.get('name', ''),
-                                'arguments': tc.get('arguments', '{}')
+                            'function': {
+                                'name': func.get('name', ''),
+                                'arguments': args
                             }
+                        }
                         normalized_calls.append(normalized_tc)
                 if normalized_calls:
                     clean_msg['tool_calls'] = normalized_calls
             
             # Handle tool results (tool messages)
             if role == 'tool':
-                clean_msg['tool_call_id'] = msg.get('tool_call_id', '')
+                tool_call_id = msg.get('tool_call_id', '')
+                # Convert Claude tool ID format if needed
+                if tool_call_id.startswith('toolu_'):
+                    tool_call_id = 'call_' + tool_call_id[6:]
+                clean_msg['tool_call_id'] = tool_call_id
                 clean_msg['name'] = msg.get('name', 'unknown')
             
             # Include name field for function calls if present
@@ -205,6 +305,9 @@ class OpenAICompatProvider(BaseProvider):
         params = self._transform_params_for_model(generation_params or {})
         
         # Sanitize messages - only keep fields the OpenAI API understands
+        clean_messages = self._sanitize_messages(messages)
+        
+        logger.debug(f"[OPENAI-COMPAT] Non-streaming: {len(clean_messages)} messages to {self.model}")
         clean_messages = self._sanitize_messages(messages)
         
         request_kwargs = {
@@ -238,6 +341,24 @@ class OpenAICompatProvider(BaseProvider):
         # Sanitize messages - only keep fields the OpenAI API understands
         clean_messages = self._sanitize_messages(messages)
         
+        # DEBUG: Log message structure (reduced verbosity)
+        logger.info(f"[OPENAI-COMPAT] Sending {len(clean_messages)} messages to {self.base_url} model={self.model}")
+        logger.debug(f"[OPENAI-COMPAT] Multimodal supported: {self._supports_multimodal()}")
+        for i, msg in enumerate(clean_messages):
+            role = msg.get('role')
+            content = msg.get('content')
+            content_type = type(content).__name__
+            has_tc = 'tool_calls' in msg
+            
+            if isinstance(content, str):
+                preview = content[:60] + '...' if len(content) > 60 else content
+            elif isinstance(content, list):
+                preview = f"[list with {len(content)} items]"
+            else:
+                preview = str(content)[:60]
+            
+            logger.debug(f"[OPENAI-COMPAT]   [{i}] role={role}, content_type={content_type}, has_tool_calls={has_tc}, preview={preview}")
+        
         request_kwargs = {
             "model": self.model,
             "messages": clean_messages,
@@ -249,17 +370,19 @@ class OpenAICompatProvider(BaseProvider):
             request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
         
-        # Debug log message count and structure
-        logger.debug(f"[SANITIZE] Sending {len(clean_messages)} messages to {self.model}")
-        for i, msg in enumerate(clean_messages[:3]):  # Log first 3 for brevity
-            logger.debug(f"  [{i}] role={msg.get('role')}, content_type={type(msg.get('content')).__name__}, "
-                        f"has_tool_calls={'tool_calls' in msg}")
+        logger.info(f"[OPENAI-COMPAT] Request params: model={request_kwargs.get('model')}, tools={len(request_kwargs.get('tools', []))}")
         
         # Wrap in retry for rate limiting
-        stream = retry_on_rate_limit(
-            self._client.chat.completions.create,
-            **request_kwargs
-        )
+        try:
+            stream = retry_on_rate_limit(
+                self._client.chat.completions.create,
+                **request_kwargs
+            )
+        except Exception as e:
+            # Log summary of what failed
+            logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
+            logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
+            raise
         
         # Track accumulated state for final response
         full_content = ""

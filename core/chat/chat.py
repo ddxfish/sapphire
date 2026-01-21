@@ -148,21 +148,33 @@ class LLMChat:
         
         return prompt, username
 
-    def _build_base_messages(self, user_input: str):
+    def _build_base_messages(self, user_input: str, images: list = None):
         system_prompt, user_name = self._get_system_prompt()
         
         # Reserve space for system prompt + current user message in context budget
         reserved_tokens = count_tokens(system_prompt) + count_tokens(user_input)
         history_messages = self.session_manager.get_messages_for_llm(reserved_tokens)
         
+        # Build user message content - list if images, string otherwise
+        if images:
+            user_content = [{"type": "text", "text": user_input}]
+            for img in images:
+                user_content.append({
+                    "type": "image",
+                    "data": img.get("data", ""),
+                    "media_type": img.get("media_type", "image/jpeg")
+                })
+        else:
+            user_content = user_input
+        
         return [
             {"role": "system", "content": system_prompt},
             *history_messages,
-            {"role": "user", "content": user_input}
+            {"role": "user", "content": user_content}
         ]
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False):
-        return self.streaming_chat.chat_stream(user_input, prefill=prefill, skip_user_message=skip_user_message)
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None):
+        return self.streaming_chat.chat_stream(user_input, prefill=prefill, skip_user_message=skip_user_message, images=images)
 
     def chat(self, user_input: str):
         try:

@@ -82,6 +82,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         """
         Transform proper message structure into display format for UI.
         Groups assistant + tool sequences into single display blocks.
+        Extracts images from user messages for display.
         """
         display_messages = []
         current_block = None
@@ -94,11 +95,34 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                     display_messages.append(finalize_block(current_block))
                     current_block = None
                 
-                display_messages.append({
+                content = msg.get("content", "")
+                user_msg = {
                     "role": "user",
-                    "content": msg.get("content", ""),
                     "timestamp": msg.get("timestamp")
-                })
+                }
+                
+                # Handle multimodal content (list with text and images)
+                if isinstance(content, list):
+                    text_parts = []
+                    images = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                            elif block.get("type") == "image":
+                                images.append({
+                                    "data": block.get("data", ""),
+                                    "media_type": block.get("media_type", "image/jpeg")
+                                })
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    user_msg["content"] = " ".join(text_parts)
+                    if images:
+                        user_msg["images"] = images
+                else:
+                    user_msg["content"] = content
+                
+                display_messages.append(user_msg)
             
             elif role == "assistant":
                 if current_block is None:
@@ -180,18 +204,21 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         
         prefill = data.get('prefill')
         skip_user_message = data.get('skip_user_message', False)
+        images = data.get('images', [])  # List of {data: "...", media_type: "..."}
         
         if prefill:
             logger.info(f"STREAMING WITH PREFILL: {len(prefill)} chars")
         if skip_user_message:
             logger.info(f"STREAMING IN CONTINUE MODE: skip_user_message=True")
+        if images:
+            logger.info(f"STREAMING WITH {len(images)} IMAGES")
         
         system_instance.llm_chat.streaming_chat.cancel_flag = False
         
         def generate():
             try:
                 chunk_count = 0
-                for event in system_instance.llm_chat.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message):
+                for event in system_instance.llm_chat.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images):
                     if system_instance.llm_chat.streaming_chat.cancel_flag:
                         logger.info(f"STREAMING CANCELLED at chunk {chunk_count}")
                         yield f"data: {json.dumps({'cancelled': True})}\n\n"
@@ -294,6 +321,60 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 except Exception as cleanup_err:
                     logger.warning(f"Could not clean up temp file {temp_path}: {cleanup_err}")
         return jsonify({"text": transcribed_text})
+
+    @bp.route('/upload/image', methods=['POST'])
+    def handle_image_upload():
+        """Upload an image and return base64 data for chat."""
+        import base64
+        
+        if 'image' not in request.files:
+            return jsonify({"error": "No image file provided"}), 400
+        
+        image_file = request.files['image']
+        if not image_file.filename:
+            return jsonify({"error": "No file selected"}), 400
+        
+        # Validate extension
+        allowed_ext = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
+        ext = os.path.splitext(image_file.filename)[1].lower()
+        if ext not in allowed_ext:
+            return jsonify({"error": f"Invalid file type. Allowed: {', '.join(allowed_ext)}"}), 400
+        
+        # Check file size (10MB max for images going to LLM)
+        image_file.seek(0, 2)
+        size = image_file.tell()
+        image_file.seek(0)
+        max_size = 10 * 1024 * 1024  # 10MB
+        if size > max_size:
+            return jsonify({"error": f"File too large. Max {max_size // (1024*1024)}MB"}), 400
+        
+        # Determine media type
+        media_types = {
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp'
+        }
+        media_type = media_types.get(ext, 'image/jpeg')
+        
+        # Read and encode
+        try:
+            image_data = image_file.read()
+            base64_data = base64.b64encode(image_data).decode('utf-8')
+            
+            logger.info(f"Image uploaded: {image_file.filename}, {len(image_data)} bytes, {media_type}")
+            
+            return jsonify({
+                "status": "success",
+                "data": base64_data,
+                "media_type": media_type,
+                "filename": image_file.filename,
+                "size": len(image_data)
+            })
+        except Exception as e:
+            logger.error(f"Image upload error: {e}", exc_info=True)
+            return jsonify({"error": "Failed to process image"}), 500
 
     @bp.route('/history', methods=['GET'])
     def get_history():

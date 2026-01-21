@@ -167,6 +167,11 @@ class BaseProvider(ABC):
         """Return provider identifier string."""
         return self.config.get('provider', 'unknown')
     
+    @property
+    def supports_images(self) -> bool:
+        """Whether this provider supports image inputs. Override in subclasses."""
+        return False
+    
     @abstractmethod
     def health_check(self) -> bool:
         """

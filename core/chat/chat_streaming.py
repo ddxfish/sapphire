@@ -31,7 +31,7 @@ class StreamingChat:
             finally:
                 self.current_stream = None
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False) -> Generator[Union[str, Dict[str, Any]], None, None]:
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
         - {"type": "stream_started"} immediately when processing begins
@@ -42,8 +42,14 @@ class StreamingChat:
         - {"type": "iteration_start", "iteration": N} before each LLM call
         - {"type": "reload"} for page reload signal
         - str for legacy compatibility (module responses, prefills)
+        
+        Args:
+            user_input: Text input from user
+            prefill: Optional assistant prefill for continue mode
+            skip_user_message: Don't add user message to history (continue mode)
+            images: Optional list of {"type": "image", "data": "...", "media_type": "..."} 
         """
-        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}")
+        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, images={len(images) if images else 0}")
         
         # Publish typing start event
         self.is_streaming = True
@@ -78,10 +84,21 @@ class StreamingChat:
                 yield {"type": "content", "text": response_text}
                 return
 
-            messages = self.main_chat._build_base_messages(user_input)
+            messages = self.main_chat._build_base_messages(user_input, images=images)
             
             if not skip_user_message:
-                self.main_chat.session_manager.add_user_message(user_input)
+                # Build content list if images present, otherwise just text
+                if images:
+                    user_content = [{"type": "text", "text": user_input}]
+                    for img in images:
+                        user_content.append({
+                            "type": "image",
+                            "data": img.get("data", ""),
+                            "media_type": img.get("media_type", "image/jpeg")
+                        })
+                    self.main_chat.session_manager.add_user_message(user_content)
+                else:
+                    self.main_chat.session_manager.add_user_message(user_input)
             else:
                 logger.info("[CONTINUE] Skipping user message addition (continuing from existing)")
             
