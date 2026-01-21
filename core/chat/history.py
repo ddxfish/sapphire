@@ -275,6 +275,16 @@ class ConversationHistory:
                 # Get clean content (no thinking)
                 content = msg.get("content", "")
                 
+                # Handle content stored as list (shouldn't happen but be safe)
+                if isinstance(content, list):
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get('type') == 'text':
+                            text_parts.append(block.get('text', ''))
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    content = ' '.join(text_parts).strip()
+                
                 # Backward compat: extract thinking from old messages with embedded tags
                 if not msg.get("thinking") and content and '<think' in content.lower():
                     content, _ = _extract_thinking_from_content(content)
@@ -298,7 +308,17 @@ class ConversationHistory:
                 }
                 
             elif role == "user":
-                llm_msg = {"role": "user", "content": msg.get("content", "")}
+                content = msg.get("content", "")
+                # Handle content stored as list (for multimodal or edge cases)
+                if isinstance(content, list):
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get('type') == 'text':
+                            text_parts.append(block.get('text', ''))
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    content = ' '.join(text_parts).strip()
+                llm_msg = {"role": "user", "content": content}
                 
             else:
                 # System or other - pass through
