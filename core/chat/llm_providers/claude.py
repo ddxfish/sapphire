@@ -18,7 +18,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Generator
 
 import config
-from .base import BaseProvider, LLMResponse, ToolCall
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,11 @@ class ClaudeProvider(BaseProvider):
         if tools:
             request_kwargs["tools"] = self._convert_tools(tools)
         
-        response = self._client.messages.create(**request_kwargs)
+        # Wrap in retry for rate limiting
+        response = retry_on_rate_limit(
+            self._client.messages.create,
+            **request_kwargs
+        )
         
         return self._parse_response(response)
     
@@ -231,7 +235,14 @@ class ClaudeProvider(BaseProvider):
         in_thinking_block = False
         first_chunk_time = None
         
-        with self._client.messages.stream(**request_kwargs) as stream:
+        # Create stream with retry logic for rate limiting
+        # Rate limit errors occur at stream creation, not during iteration
+        def _create_stream():
+            return self._client.messages.stream(**request_kwargs)
+        
+        stream_ctx = retry_on_rate_limit(_create_stream)
+        
+        with stream_ctx as stream:
             logger.debug(f"[STREAM] Context entered, waiting for events...")
             for event in stream:
                 if first_chunk_time is None:

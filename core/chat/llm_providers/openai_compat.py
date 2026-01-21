@@ -17,7 +17,7 @@ from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
 
-from .base import BaseProvider, LLMResponse, ToolCall
+from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +217,11 @@ class OpenAICompatProvider(BaseProvider):
             request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
         
-        response = self._client.chat.completions.create(**request_kwargs)
+        # Wrap in retry for rate limiting
+        response = retry_on_rate_limit(
+            self._client.chat.completions.create,
+            **request_kwargs
+        )
         
         return self._parse_response(response)
     
@@ -251,7 +255,11 @@ class OpenAICompatProvider(BaseProvider):
             logger.debug(f"  [{i}] role={msg.get('role')}, content_type={type(msg.get('content')).__name__}, "
                         f"has_tool_calls={'tool_calls' in msg}")
         
-        stream = self._client.chat.completions.create(**request_kwargs)
+        # Wrap in retry for rate limiting
+        stream = retry_on_rate_limit(
+            self._client.chat.completions.create,
+            **request_kwargs
+        )
         
         # Track accumulated state for final response
         full_content = ""

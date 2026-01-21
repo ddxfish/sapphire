@@ -7,11 +7,94 @@ across OpenAI-compatible APIs, Claude, and others.
 """
 
 import logging
+import time
+import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Generator
+from typing import Dict, Any, List, Optional, Generator, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration
+RETRY_MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.0  # seconds
+RETRY_MAX_DELAY = 10.0  # seconds
+RETRY_STATUS_CODES = {429, 529}  # Rate limit codes (429 standard, 529 Anthropic overload)
+
+T = TypeVar('T')
+
+
+def retry_on_rate_limit(func: Callable[..., T], *args, **kwargs) -> T:
+    """
+    Execute a function with exponential backoff retry on rate limit errors.
+    
+    Handles:
+    - HTTP 429 Too Many Requests
+    - HTTP 529 Overloaded (Anthropic-specific)
+    
+    Args:
+        func: The function to execute
+        *args, **kwargs: Arguments to pass to the function
+    
+    Returns:
+        The function's return value
+    
+    Raises:
+        The original exception after max retries exhausted
+    """
+    last_exception = None
+    
+    for attempt in range(RETRY_MAX_ATTEMPTS):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Check if this is a rate limit error
+            status_code = _extract_status_code(e)
+            
+            if status_code not in RETRY_STATUS_CODES:
+                # Not a rate limit error, re-raise immediately
+                raise
+            
+            last_exception = e
+            
+            if attempt == RETRY_MAX_ATTEMPTS - 1:
+                # Last attempt, give up
+                logger.warning(f"[RETRY] Rate limit: max retries ({RETRY_MAX_ATTEMPTS}) exhausted")
+                raise
+            
+            # Calculate delay with exponential backoff + jitter
+            delay = min(
+                RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1),
+                RETRY_MAX_DELAY
+            )
+            
+            logger.info(f"[RETRY] Rate limited (HTTP {status_code}), attempt {attempt + 1}/{RETRY_MAX_ATTEMPTS}, "
+                       f"waiting {delay:.1f}s before retry")
+            time.sleep(delay)
+    
+    # Should not reach here, but just in case
+    if last_exception:
+        raise last_exception
+
+
+def _extract_status_code(exception: Exception) -> Optional[int]:
+    """Extract HTTP status code from various exception types."""
+    # OpenAI/Anthropic SDK exceptions
+    if hasattr(exception, 'status_code'):
+        return exception.status_code
+    
+    # httpx/requests style
+    if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'):
+        return exception.response.status_code
+    
+    # Check exception message for status codes
+    error_str = str(exception).lower()
+    if '429' in error_str or 'rate limit' in error_str:
+        return 429
+    if '529' in error_str or 'overloaded' in error_str:
+        return 529
+    
+    return None
 
 
 @dataclass
