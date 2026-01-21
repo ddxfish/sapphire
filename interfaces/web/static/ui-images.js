@@ -82,6 +82,44 @@ export const createUploadPreview = (imageData, index, onRemove) => {
     return container;
 };
 
+// Image modal functions (defined before createUserImageThumbnails which uses them)
+export const closeImageModal = () => {
+    const modal = document.getElementById('image-modal');
+    if (!modal) return;
+    
+    modal.style.display = 'none';
+    document.body.style.overflow = '';
+};
+
+export const openImageModal = (src) => {
+    console.log('[ImageModal] Opening modal with src length:', src?.length);
+    const modal = document.getElementById('image-modal');
+    const modalImg = document.getElementById('image-modal-img');
+    console.log('[ImageModal] modal:', !!modal, 'modalImg:', !!modalImg);
+    if (!modal || !modalImg) return;
+    
+    modalImg.src = src;
+    modal.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+};
+
+// Setup modal event listeners (call once on init)
+export const setupImageModal = () => {
+    const modal = document.getElementById('image-modal');
+    const backdrop = modal?.querySelector('.image-modal-backdrop');
+    const closeBtn = document.getElementById('image-modal-close');
+    
+    if (backdrop) backdrop.addEventListener('click', closeImageModal);
+    if (closeBtn) closeBtn.addEventListener('click', closeImageModal);
+    
+    // Close on escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && modal?.style.display === 'flex') {
+            closeImageModal();
+        }
+    });
+};
+
 // Render user message images (thumbnails in history)
 export const createUserImageThumbnails = (images) => {
     const container = document.createElement('div');
@@ -92,10 +130,10 @@ export const createUserImageThumbnails = (images) => {
         imgEl.src = `data:${img.media_type};base64,${img.data}`;
         imgEl.className = 'user-image-thumb';
         imgEl.alt = 'Attached image';
-        imgEl.onclick = () => {
-            // Open full size in modal or new tab
-            const win = window.open();
-            win.document.write(`<img src="${imgEl.src}" style="max-width:100%">`);
+        imgEl.onclick = (e) => {
+            console.log('[ImageModal] Thumbnail clicked');
+            e.stopPropagation();
+            openImageModal(imgEl.src);
         };
         container.appendChild(imgEl);
     });

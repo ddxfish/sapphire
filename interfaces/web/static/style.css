@@ -710,7 +710,33 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     align-items: flex-end;
 }
 
-.textarea-wrapper { flex: 1; display: grid; }
+.textarea-wrapper { flex: 1; display: grid; position: relative; }
+
+/* Paperclip button inside textarea */
+#image-upload-btn {
+    position: absolute;
+    left: 8px;
+    bottom: 8px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 1.1em;
+    opacity: 0.5;
+    transition: opacity var(--transition-fast), background var(--transition-fast);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#image-upload-btn:hover {
+    opacity: 1;
+    background: var(--bg-hover);
+}
 
 .textarea-wrapper::after {
     content: attr(data-replicated-value) " ";
@@ -724,7 +750,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     width: 100%;
     min-height: 1.4em;
     grid-area: 1 / 1 / 2 / 2;
-    padding: 10px;
+    padding: 10px 10px 10px 42px; /* Extra left padding for paperclip */
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     font-size: var(--font-md);
@@ -1451,21 +1477,6 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
    IMAGE UPLOAD
    ============================================================================= */
 
-#image-upload-btn {
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: 1.1em;
-    transition: background var(--transition-fast), border-color var(--transition-fast);
-}
-
-#image-upload-btn:hover {
-    background: var(--bg-hover);
-    border-color: var(--trim);
-}
-
 #image-preview-area {
     display: flex;
     flex-wrap: wrap;
@@ -1542,12 +1553,8 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     border-color: var(--trim);
 }
 
-/* Mobile adjustments */
+/* Mobile adjustments for image upload */
 @media (max-width: 768px) {
-    #image-upload-btn {
-        padding: 6px 10px;
-    }
-    
     .upload-preview-item {
         width: 50px;
         height: 50px;
@@ -1557,4 +1564,61 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
         max-width: 100px;
         max-height: 100px;
     }
+}
+
+/* =============================================================================
+   IMAGE MODAL
+   ============================================================================= */
+
+.image-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.image-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    cursor: pointer;
+}
+
+.image-modal-content {
+    position: relative;
+    max-width: 90vw;
+    max-height: 90vh;
+    z-index: 1;
+}
+
+.image-modal-content img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: var(--radius-md);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.image-modal-close {
+    position: absolute;
+    top: -40px;
+    right: 0;
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 24px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--transition-fast);
+}
+
+.image-modal-close:hover {
+    background: rgba(255, 255, 255, 0.2);
 }

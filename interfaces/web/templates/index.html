@@ -93,12 +93,12 @@
             <div id="context-bar"></div>
             <div id="image-preview-area" style="display: none;"></div>
             <form id="chat-form">
-                <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">📎</button>
-                <input type="file" id="image-upload-input" accept="image/*" multiple style="display: none;">
                 <button type="button" id="mic-btn" title="Hold to record">🎤</button>
                 <div class="textarea-wrapper">
+                    <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">📎</button>
                     <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
                 </div>
+                <input type="file" id="image-upload-input" accept="image/*" multiple style="display: none;">
                 <button type="submit" id="send-btn">Send</button>
                 <button type="button" id="stop-btn" style="display: none;">Stop</button>
             </form>
@@ -256,6 +256,15 @@
             </div>
         </div>
     </template>
+
+    <!-- Image viewer modal -->
+    <div id="image-modal" class="image-modal" style="display: none;">
+        <div class="image-modal-backdrop"></div>
+        <div class="image-modal-content">
+            <img id="image-modal-img" src="" alt="Full size image">
+            <button id="image-modal-close" class="image-modal-close">&times;</button>
+        </div>
+    </div>
 
     <script type="module" src="/static/main.js"></script>
 </body>
