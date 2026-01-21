@@ -66,6 +66,45 @@ def count_tokens(text: str) -> int:
     return len(get_tokenizer().encode(text))
 
 
+def count_message_tokens(content, include_images: bool = False) -> int:
+    """
+    Count tokens in message content, handling multimodal content correctly.
+    
+    Args:
+        content: String or list (multimodal content with text and images)
+        include_images: If True, estimate tokens for images (~1 token per 750 pixels).
+                       If False, images are ignored (matching LLM history behavior).
+    
+    Returns:
+        Token count for the content
+    """
+    if not content:
+        return 0
+    
+    # Simple string content
+    if isinstance(content, str):
+        return count_tokens(content)
+    
+    # Multimodal content (list of blocks)
+    if isinstance(content, list):
+        total = 0
+        for block in content:
+            if isinstance(block, dict):
+                if block.get('type') == 'text':
+                    total += count_tokens(block.get('text', ''))
+                elif block.get('type') == 'image' and include_images:
+                    # Estimate image tokens: Claude uses ~1 token per 750 pixels
+                    # A 1920x1080 image ≈ 2700 tokens, 1024x1024 ≈ 1400 tokens
+                    # Without dimensions, estimate conservatively at 1500 tokens
+                    total += 1500
+            elif isinstance(block, str):
+                total += count_tokens(block)
+        return total
+    
+    # Fallback: stringify and count
+    return count_tokens(str(content))
+
+
 def _extract_thinking_from_content(content: str) -> tuple:
     """
     Extract thinking from content that uses <think> tags.

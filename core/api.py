@@ -442,7 +442,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         start = _time.time()
         logger.debug(f"[TIMING] Backend /history request received")
         
-        from core.chat.history import count_tokens
+        from core.chat.history import count_tokens, count_message_tokens
         
         raw_messages = system_instance.llm_chat.session_manager.get_messages_for_display()
         logger.debug(f"[TIMING] get_messages_for_display done at {_time.time() - start:.3f}s, {len(raw_messages)} messages")
@@ -453,8 +453,9 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         # Calculate context usage
         context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
         
-        # Count tokens in raw history (what actually goes to LLM)
-        history_tokens = sum(count_tokens(str(m.get("content", ""))) for m in raw_messages)
+        # Count tokens in history (images stripped from all but wouldn't be sent anyway)
+        # LLM only receives text from historical messages, images are stripped
+        history_tokens = sum(count_message_tokens(m.get("content", ""), include_images=False) for m in raw_messages)
         logger.debug(f"[TIMING] count_tokens done at {_time.time() - start:.3f}s")
         
         # Estimate system prompt tokens (use current prompt if available)
@@ -489,7 +490,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     def get_unified_status():
         """Unified status endpoint - single call for all UI state needs."""
         try:
-            from core.chat.history import count_tokens
+            from core.chat.history import count_tokens, count_message_tokens
             
             # Prompt state
             prompt_state = prompts.get_current_state()
@@ -517,10 +518,11 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             is_streaming = getattr(system_instance.llm_chat.streaming_chat, 'is_streaming', False)
             
             # Context usage (lightweight calculation)
+            # Images are stripped from history for LLM, so don't count them
             context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
             raw_messages = system_instance.llm_chat.session_manager.get_messages()
             message_count = len(raw_messages)
-            history_tokens = sum(count_tokens(str(m.get("content", ""))) for m in raw_messages)
+            history_tokens = sum(count_message_tokens(m.get("content", ""), include_images=False) for m in raw_messages)
             try:
                 prompt_content = system_instance.llm_chat.current_system_prompt or ""
                 prompt_tokens = count_tokens(prompt_content) if prompt_content else 0
