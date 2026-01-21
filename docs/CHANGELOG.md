@@ -1,3 +1,6 @@
+# 1.1.9 - Image upload
+- Added ability to upload images to LLMs
+- Added upload image resize optional
 # 1.1.8 - Thinking and Tokens
 - Added thinking option to Claude
 - Formatted JSON tool/history so all providers can switch mid-chat
