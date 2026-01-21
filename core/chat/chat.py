@@ -178,6 +178,7 @@ class LLMChat:
 
     def chat(self, user_input: str):
         try:
+            chat_start_time = time.time()
             self.refresh_spice_if_needed()
             logger.info(f"[CHAT] CHAT: user said something here")
 
@@ -261,7 +262,17 @@ class LLMChat:
                     timeout_text = f"I completed {tool_call_count} tool calls but got stuck during processing (timeout after {iteration_time:.1f}s)."
                     if force_prefill:
                         timeout_text = force_prefill + timeout_text
-                    self.session_manager.add_assistant_final(timeout_text)
+                    
+                    # Build error metadata
+                    chat_end_time = time.time()
+                    duration = round(chat_end_time - chat_start_time, 2)
+                    metadata = {
+                        "provider": provider_key,
+                        "model": effective_model,
+                        "duration_seconds": duration,
+                        "error": True
+                    }
+                    self.session_manager.add_assistant_final(timeout_text, metadata=metadata)
                     return timeout_text
 
                 iteration_time = time.time() - iteration_start_time
@@ -271,7 +282,17 @@ class LLMChat:
                     timeout_text = f"I completed {tool_call_count} tool calls but processing got stuck (iteration timeout)."
                     if force_prefill:
                         timeout_text = force_prefill + timeout_text
-                    self.session_manager.add_assistant_final(timeout_text)
+                    
+                    # Build error metadata
+                    chat_end_time = time.time()
+                    duration = round(chat_end_time - chat_start_time, 2)
+                    metadata = {
+                        "provider": provider_key,
+                        "model": effective_model,
+                        "duration_seconds": duration,
+                        "error": True
+                    }
+                    self.session_manager.add_assistant_final(timeout_text, metadata=metadata)
                     return timeout_text
 
                 logger.info(f"Iteration {i+1} completed in {iteration_time:.1f}s")
@@ -367,7 +388,34 @@ class LLMChat:
                     final_response_content = force_prefill + final_response_content
                     logger.info(f"[THINK] Combined response: {len(force_prefill)} prefill + {len(response_msg.content or '')} response")
                 
-                self.session_manager.add_assistant_final(final_response_content)
+                # Build metadata for UI display
+                chat_end_time = time.time()
+                duration = round(chat_end_time - chat_start_time, 2)
+                
+                # Get token counts from response if available
+                tokens_info = {}
+                if response_msg.usage:
+                    tokens_info = {
+                        "prompt": response_msg.usage.get("prompt_tokens", 0),
+                        "content": response_msg.usage.get("completion_tokens", 0),
+                        "total": response_msg.usage.get("total_tokens", 0),
+                    }
+                else:
+                    # Estimate from content length
+                    est_tokens = len(final_response_content) // 4
+                    tokens_info = {"content": est_tokens, "total": est_tokens, "estimated": True}
+                
+                metadata = {
+                    "provider": provider_key,
+                    "model": effective_model,
+                    "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(chat_start_time)),
+                    "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(chat_end_time)),
+                    "duration_seconds": duration,
+                    "tokens": tokens_info,
+                    "tokens_per_second": round(tokens_info.get("content", 0) / duration, 1) if duration > 0 else 0
+                }
+                
+                self.session_manager.add_assistant_final(final_response_content, metadata=metadata)
                 return final_response_content
 
             logger.warning(f"Exceeded max iterations ({config.MAX_TOOL_ITERATIONS}). Forcing final answer.")
@@ -377,6 +425,7 @@ class LLMChat:
                 "content": "You've used tools multiple times. Stop using tools now and provide your final answer based on the information you gathered."
             })
 
+            final_response_msg = None
             try:
                 final_response_msg = self.tool_engine.call_llm_with_metrics(
                     provider, messages, gen_params, tools=None
@@ -393,7 +442,32 @@ class LLMChat:
                 if force_prefill:
                     final_response_content = force_prefill + final_response_content
 
-            self.session_manager.add_assistant_final(final_response_content)
+            # Build metadata for UI display
+            chat_end_time = time.time()
+            duration = round(chat_end_time - chat_start_time, 2)
+            
+            tokens_info = {}
+            if final_response_msg and final_response_msg.usage:
+                tokens_info = {
+                    "prompt": final_response_msg.usage.get("prompt_tokens", 0),
+                    "content": final_response_msg.usage.get("completion_tokens", 0),
+                    "total": final_response_msg.usage.get("total_tokens", 0),
+                }
+            else:
+                est_tokens = len(final_response_content) // 4
+                tokens_info = {"content": est_tokens, "total": est_tokens, "estimated": True}
+            
+            metadata = {
+                "provider": provider_key,
+                "model": effective_model,
+                "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(chat_start_time)),
+                "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(chat_end_time)),
+                "duration_seconds": duration,
+                "tokens": tokens_info,
+                "tokens_per_second": round(tokens_info.get("content", 0) / duration, 1) if duration > 0 else 0
+            }
+
+            self.session_manager.add_assistant_final(final_response_content, metadata=metadata)
             return final_response_content
 
         except Exception as e:
@@ -410,8 +484,16 @@ class LLMChat:
             else:
                 error_text = f"I encountered an unexpected technical issue. Error: {str(e)[:200]}"
 
+            # Build error metadata (may not have provider info if error was early)
+            chat_end_time = time.time()
+            duration = round(chat_end_time - chat_start_time, 2)
+            metadata = {
+                "duration_seconds": duration,
+                "error": True
+            }
+            
             self.session_manager.add_user_message(user_input)
-            self.session_manager.add_assistant_final(error_text)
+            self.session_manager.add_assistant_final(error_text, metadata=metadata)
             return error_text
 
     def _select_provider(self):
