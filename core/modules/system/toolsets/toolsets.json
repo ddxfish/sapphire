@@ -16,5 +16,9 @@
       "change_username",
       "set_tts_voice"
     ]
+  },
+  "user_new": {
+    "functions": [
+    ]
   }
 }

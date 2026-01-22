@@ -43,12 +43,31 @@ export function injectStyles() {
       color: var(--text-light);
     }
     
+    .am-readonly-hint {
+      color: var(--warning-text);
+      font-size: var(--font-xs);
+      font-style: italic;
+    }
+    
+    .am-modified {
+      color: var(--warning-text);
+      font-style: italic;
+    }
+    
     .am-functions {
       max-height: 300px;
       overflow-y: auto;
       background: var(--bg-inset);
       border-radius: var(--radius-sm);
       padding: 4px;
+    }
+    
+    .am-functions.am-readonly {
+      opacity: 0.7;
+    }
+    
+    .am-functions.am-readonly input[type="checkbox"] {
+      cursor: not-allowed;
     }
     
     /* Module header customizations (extends .accordion-header) */
@@ -58,6 +77,12 @@ export function injectStyles() {
     
     .am-module .accordion-header:hover {
       background: var(--plugin-ability-bg-hover);
+    }
+    
+    .am-module-checkbox {
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-right: 4px;
     }
     
     /* Function items */
