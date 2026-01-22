@@ -113,10 +113,11 @@ class ToolCallingEngine:
         return response
 
     def extract_function_call_from_text(self, text: str) -> Optional[Dict]:
-        """Extract function calls from text (LM Studio compatibility)."""
+        """Extract function calls from text (LM Studio, Qwen3, etc compatibility)."""
         if not text:
             return None
         
+        # Format 1: {"function_call": {"name": "...", "arguments": {...}}}
         pattern = r'(\{"function_call":\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
         match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
         
@@ -126,7 +127,20 @@ class ToolCallingEngine:
                 if "function_call" in parsed and "name" in parsed["function_call"]:
                     return parsed
             except json.JSONDecodeError as e:
-                logger.info(f"JSON parse failed: {e}")
+                logger.debug(f"JSON parse failed for format 1: {e}")
+        
+        # Format 2: <function_call>{"name": "...", "arguments": {...}}</function_call> (Qwen3, etc)
+        xml_pattern = r'<function_call>\s*(\{.*?\})\s*</function_call>'
+        xml_match = re.search(xml_pattern, text, re.IGNORECASE | re.DOTALL)
+        
+        if xml_match:
+            try:
+                inner = json.loads(xml_match.group(1))
+                if "name" in inner:
+                    # Wrap in expected format
+                    return {"function_call": inner}
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON parse failed for XML format: {e}")
         
         return None
 
