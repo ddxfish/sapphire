@@ -418,6 +418,23 @@ Editing:
         await API.saveComponent(type, key, value);
         showToast(`${type} added!`, 'success');
         await this.loadComponents();
+        
+        // Auto-select new extras/emotions in current prompt
+        if ((type === 'extras' || type === 'emotions') && 
+            this.currentData?.type === 'assembled' && 
+            this.currentData.components) {
+          const arr = this.currentData.components[type] || [];
+          if (!arr.includes(key)) {
+            this.currentData.components[type] = [...arr, key];
+            const promptData = this.collectData();
+            if (promptData) {
+              await API.savePrompt(this.currentPrompt, promptData);
+              await API.loadPrompt(this.currentPrompt);
+              await updateScene();
+            }
+          }
+        }
+        
         await this.loadPromptIntoEditor(this.currentPrompt);
       } catch (e) {
         showToast(`Failed: ${e.message}`, 'error');
@@ -605,6 +622,23 @@ Editing:
       
       showToast(`Deleted ${deleted} extra(s)`, 'success');
       await this.loadComponents();
+      
+      // Clean stale refs from current prompt
+      if (this.currentData?.type === 'assembled' && this.currentData.components?.extras) {
+        const validKeys = Object.keys(this.components.extras || {});
+        const before = this.currentData.components.extras.length;
+        this.currentData.components.extras = this.currentData.components.extras.filter(k => validKeys.includes(k));
+        
+        if (this.currentData.components.extras.length < before) {
+          const promptData = this.collectData();
+          if (promptData) {
+            await API.savePrompt(this.currentPrompt, promptData);
+            await API.loadPrompt(this.currentPrompt);
+            await updateScene();
+          }
+        }
+      }
+      
       await this.loadPromptIntoEditor(this.currentPrompt);
     }, { wide: true });
   },
@@ -654,6 +688,23 @@ Editing:
       
       showToast(`Deleted ${deleted} emotion(s)`, 'success');
       await this.loadComponents();
+      
+      // Clean stale refs from current prompt
+      if (this.currentData?.type === 'assembled' && this.currentData.components?.emotions) {
+        const validKeys = Object.keys(this.components.emotions || {});
+        const before = this.currentData.components.emotions.length;
+        this.currentData.components.emotions = this.currentData.components.emotions.filter(k => validKeys.includes(k));
+        
+        if (this.currentData.components.emotions.length < before) {
+          const promptData = this.collectData();
+          if (promptData) {
+            await API.savePrompt(this.currentPrompt, promptData);
+            await API.loadPrompt(this.currentPrompt);
+            await updateScene();
+          }
+        }
+      }
+      
       await this.loadPromptIntoEditor(this.currentPrompt);
     }, { wide: true });
   },
