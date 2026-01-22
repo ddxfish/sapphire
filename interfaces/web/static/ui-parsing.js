@@ -21,15 +21,19 @@ const escapeHtml = (text) => {
 export const createAccordion = (type, title, content = '') => {
     const details = createElem('details');
     const summary = createElem('summary');
-    const div = createElem('div');
+    const wrapper = createElem('div');        // Outer wrapper for grid animation
+    const inner = createElem('div');          // Inner content div
     
     details.className = type === 'think' ? 'accordion-think' : 'accordion-tool';
+    wrapper.className = 'accordion-body';
+    inner.className = 'accordion-inner';
     
     summary.textContent = title;
-    div.textContent = content;
+    inner.textContent = content;
+    wrapper.appendChild(inner);
     details.appendChild(summary);
-    details.appendChild(div);
-    return { acc: details, content: div };
+    details.appendChild(wrapper);
+    return { acc: details, content: inner };
 };
 
 export const cloneImagesInline = (contentEl) => {

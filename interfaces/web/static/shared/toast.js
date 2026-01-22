@@ -15,6 +15,15 @@ export function showToast(message, type = 'info', duration = 4000) {
     document.body.appendChild(toast);
   }
   
+  // Shake chat area on error
+  if (type === 'error') {
+    const chatbg = document.getElementById('chatbg');
+    if (chatbg) {
+      chatbg.classList.add('shake');
+      setTimeout(() => chatbg.classList.remove('shake'), 500);
+    }
+  }
+  
   setTimeout(() => toast.remove(), duration);
 }
 

@@ -196,8 +196,10 @@ class SettingsModal {
           <h4>${title}</h4>
         </div>
         <div class="accordion-content collapsed" data-accordion-content="${id}">
-          <div class="settings-list">
-            ${this.renderCategorySettings(keys)}
+          <div class="accordion-inner">
+            <div class="settings-list">
+              ${this.renderCategorySettings(keys)}
+            </div>
           </div>
         </div>
       </div>

@@ -1583,12 +1583,11 @@ export function injectStyles() {
     }
     
     .advanced-accordion-section .accordion-content {
-      padding: 16px;
       border-top: 1px solid var(--border);
     }
     
-    .advanced-accordion-section .accordion-content.collapsed {
-      display: none;
+    .advanced-accordion-section .accordion-inner {
+      padding: 16px;
     }
     
     /* Accordion toggle arrow indicator - scoped to advanced sections only */

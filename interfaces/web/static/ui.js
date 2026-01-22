@@ -401,5 +401,15 @@ export const showToast = (msg, type = 'error', duration = 4000) => {
     
     const toast = createElem('div', { class: `toast ${type}` }, msg);
     container.appendChild(toast);
+    
+    // Shake chat area on error
+    if (type === 'error') {
+        const chatbg = document.getElementById('chatbg');
+        if (chatbg) {
+            chatbg.classList.add('shake');
+            setTimeout(() => chatbg.classList.remove('shake'), 500);
+        }
+    }
+    
     setTimeout(() => toast.remove(), duration);
 };

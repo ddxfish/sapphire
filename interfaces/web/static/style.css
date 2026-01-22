@@ -393,7 +393,22 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     user-select: none;
 }
 
-.accordion-think > div {
+/* Override native details content hiding for animation */
+.accordion-think > .accordion-body {
+    display: grid !important;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition: grid-template-rows var(--transition-normal), opacity var(--transition-normal);
+    content-visibility: visible !important;
+}
+
+.accordion-think[open] > .accordion-body {
+    grid-template-rows: 1fr;
+    opacity: 1;
+}
+
+.accordion-think .accordion-inner {
+    overflow: hidden;
     padding-top: 8px;
     white-space: pre-wrap;
     word-break: break-word;
@@ -601,7 +616,21 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     color: var(--success);
 }
 
-.accordion-tool > div {
+.accordion-tool .accordion-body {
+    display: grid !important;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition: grid-template-rows var(--transition-normal), opacity var(--transition-normal);
+    content-visibility: visible !important;
+}
+
+.accordion-tool[open] > .accordion-body {
+    grid-template-rows: 1fr;
+    opacity: 1;
+}
+
+.accordion-tool .accordion-inner {
+    overflow: hidden;
     padding-top: 8px;
     white-space: pre-wrap;
     word-break: break-word;

@@ -114,7 +114,7 @@ Tips:
               <button class="inline-btn delete sm-delete-cat-btn" title="Delete Category">×</button>
             </div>
           </div>
-          <div class="accordion-content collapsed">
+          <div class="accordion-content collapsed"><div class="accordion-inner">
       `;
       
       category.spices.forEach((spice, index) => {
@@ -133,7 +133,7 @@ Tips:
         html += '<div class="sm-empty-category">Empty</div>';
       }
       
-      html += `</div></div>`;
+      html += `</div></div></div>`;
     });
     
     this.elements.categoriesContainer.innerHTML = html;

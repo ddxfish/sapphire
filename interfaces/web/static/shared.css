@@ -400,6 +400,16 @@
 @keyframes toastIn { to { opacity: 1; transform: translateX(0); } }
 @keyframes toastOut { to { opacity: 0; transform: translateX(100px); } }
 
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+    20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+.shake {
+    animation: shake 0.5s ease-in-out;
+}
+
 /* =============================================================================
    ACCORDION / COLLAPSIBLE (Unified)
    ============================================================================= */
@@ -456,11 +466,18 @@
 }
 
 .accordion-content {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows var(--transition-normal);
     background: var(--bg-secondary);
 }
 
 .accordion-content.collapsed {
-    display: none;
+    grid-template-rows: 0fr;
+}
+
+.accordion-content > .accordion-inner {
+    overflow: hidden;
 }
 
 /* =============================================================================

@@ -194,7 +194,7 @@ Using Toolsets:
             <span class="accordion-title">📦 ${moduleName}</span>
             <span class="accordion-count">(${enabledCount}/${module.count})</span>
           </div>
-          <div class="accordion-content collapsed">
+          <div class="accordion-content collapsed"><div class="accordion-inner">
       `;
       
       module.functions.forEach(func => {
@@ -212,7 +212,7 @@ Using Toolsets:
         `;
       });
       
-      html += `</div></div>`;
+      html += `</div></div></div>`;
     });
     
     this.elements.functionsContainer.innerHTML = html;

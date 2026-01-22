@@ -75,7 +75,11 @@ const createToolAccordionElement = (toolName, toolId, args) => {
         summary.appendChild(deleteBtn);
     }
     
+    const wrapper = createElem('div');
+    wrapper.className = 'accordion-body';
     const contentDiv = createElem('div');
+    contentDiv.className = 'accordion-inner';
+    
     if (args && Object.keys(args).length > 0) {
         try {
             contentDiv.textContent = 'Inputs:\n' + JSON.stringify(args, null, 2);
@@ -86,8 +90,9 @@ const createToolAccordionElement = (toolName, toolId, args) => {
         contentDiv.textContent = 'Running...';
     }
     
+    wrapper.appendChild(contentDiv);
     details.appendChild(summary);
-    details.appendChild(contentDiv);
+    details.appendChild(wrapper);
     
     return { acc: details, content: contentDiv, summary, toolName };
 };
@@ -349,7 +354,9 @@ export const appendStream = (chunk, scrollCallback) => {
             streamMsg.el.appendChild(pre);
             streamMsg.last = pre;
         } else {
-            // Think tag
+            // Think tag - hide "Generating..." status since we now have visible output
+            import('./ui.js').then(ui => ui.hideStatus());
+            
             state.inThink = true;
             state.thinkCnt++;
             state.thinkBuf = '';

@@ -199,6 +199,11 @@ class PluginLoader {
 
           const content = document.createElement('div');
           content.className = 'accordion-content collapsed';
+          
+          // Inner wrapper for proper grid collapse (padding must be inside overflow:hidden)
+          const inner = document.createElement('div');
+          inner.className = 'accordion-inner';
+          content.appendChild(inner);
 
           wrapper.appendChild(header);
           wrapper.appendChild(content);
@@ -206,7 +211,7 @@ class PluginLoader {
 
           // Phase 4: Initialize plugin (most likely to fail)
           try {
-            await plugin.init(content);
+            await plugin.init(inner);
           } catch (initErr) {
             console.error(`[Plugin:${name}] init() failed:`, initErr);
             wrapper.remove();
