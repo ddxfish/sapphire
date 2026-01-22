@@ -311,6 +311,9 @@ export const finishStreaming = async (ephemeral = false) => {
     }
     
     scrollToBottomIfSticky(true);
+    
+    // Update scene state (spice tooltip, etc.) after generation completes
+    import('./features/scene.js').then(scene => scene.updateScene());
 };
 
 export const cancelStreaming = () => {

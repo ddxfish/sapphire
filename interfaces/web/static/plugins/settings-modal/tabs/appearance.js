@@ -351,6 +351,12 @@ export default {
     localStorage.setItem('sapphire-theme', themeName);
     document.documentElement.setAttribute('data-theme', themeName);
     this.loadThemeCSS(themeName);
+    
+    // Update volume slider fill for new theme colors
+    const volumeSlider = document.getElementById('volume-slider');
+    if (volumeSlider) {
+      volumeSlider.dispatchEvent(new Event('input'));
+    }
   },
 
   handleDensityChange(density) {
