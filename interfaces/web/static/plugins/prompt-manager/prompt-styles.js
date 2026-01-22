@@ -130,6 +130,49 @@ export function injectStyles() {
       font-family: var(--font-mono);
       min-height: 20px;
     }
+    
+    /* Edit Definitions Modal */
+    .edit-def-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: 450px;
+      overflow-y: auto;
+      padding-right: 8px;
+    }
+    
+    .edit-def-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    .edit-def-item label {
+      color: var(--text-light);
+      font-size: var(--font-sm);
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+    
+    .edit-def-item textarea {
+      width: 100%;
+      padding: 8px;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-md);
+      color: var(--text);
+      font-size: var(--font-sm);
+      font-family: var(--font-mono);
+      resize: vertical;
+      min-height: 60px;
+      transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
+    }
+    
+    .edit-def-item textarea:focus {
+      outline: none;
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 2px var(--focus-ring);
+    }
   `;
   document.head.appendChild(style);
 }

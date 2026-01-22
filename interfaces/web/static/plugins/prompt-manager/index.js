@@ -376,16 +376,28 @@ Editing:
       });
     });
     
-    this.elements.editor.querySelector('.pm-extras-btn')?.addEventListener('click', (e) => {
+    this.elements.editor.querySelector('.pm-extras-select-btn')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       this.handleExtrasModal();
     });
     
-    this.elements.editor.querySelector('.pm-emotions-btn')?.addEventListener('click', (e) => {
+    this.elements.editor.querySelector('.pm-emotions-select-btn')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
       this.handleEmotionsModal();
+    });
+    
+    this.elements.editor.querySelector('.pm-extras-edit-btn')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleEditExtrasDefinitions();
+    });
+    
+    this.elements.editor.querySelector('.pm-emotions-edit-btn')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.handleEditEmotionsDefinitions();
     });
     
     this.elements.editor.querySelector('.pm-extras-delete-btn')?.addEventListener('click', (e) => {
@@ -707,6 +719,148 @@ Editing:
       
       await this.loadPromptIntoEditor(this.currentPrompt);
     }, { wide: true });
+  },
+  
+  handleEditExtrasDefinitions() {
+    const availableExtras = this.components.extras || {};
+    const keys = Object.keys(availableExtras);
+    
+    if (keys.length === 0) {
+      showToast('No extras to edit. Add one first.', 'info');
+      return;
+    }
+    
+    this._showEditDefinitionsModal('extras', availableExtras, async (changes) => {
+      let saved = 0;
+      for (const [key, value] of Object.entries(changes)) {
+        try {
+          await API.saveComponent('extras', key, value);
+          saved++;
+        } catch (e) {
+          console.error(`Failed to save extras.${key}:`, e);
+        }
+      }
+      
+      if (saved > 0) {
+        showToast(`Updated ${saved} extra(s)`, 'success');
+        await this.loadComponents();
+        
+        // Re-apply prompt to LLM since content changed
+        if (this.currentPrompt) {
+          await API.loadPrompt(this.currentPrompt);
+          await updateScene();
+        }
+        
+        await this.loadPromptIntoEditor(this.currentPrompt);
+      }
+    });
+  },
+  
+  handleEditEmotionsDefinitions() {
+    const availableEmotions = this.components.emotions || {};
+    const keys = Object.keys(availableEmotions);
+    
+    if (keys.length === 0) {
+      showToast('No emotions to edit. Add one first.', 'info');
+      return;
+    }
+    
+    this._showEditDefinitionsModal('emotions', availableEmotions, async (changes) => {
+      let saved = 0;
+      for (const [key, value] of Object.entries(changes)) {
+        try {
+          await API.saveComponent('emotions', key, value);
+          saved++;
+        } catch (e) {
+          console.error(`Failed to save emotions.${key}:`, e);
+        }
+      }
+      
+      if (saved > 0) {
+        showToast(`Updated ${saved} emotion(s)`, 'success');
+        await this.loadComponents();
+        
+        // Re-apply prompt to LLM since content changed
+        if (this.currentPrompt) {
+          await API.loadPrompt(this.currentPrompt);
+          await updateScene();
+        }
+        
+        await this.loadPromptIntoEditor(this.currentPrompt);
+      }
+    });
+  },
+  
+  _showEditDefinitionsModal(type, items, onSave) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay modal-wide';
+    
+    const itemsHTML = Object.entries(items).map(([key, value]) => `
+      <div class="edit-def-item">
+        <label for="edit-def-${key}">${key}</label>
+        <textarea id="edit-def-${key}" data-key="${key}" rows="3">${value.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
+      </div>
+    `).join('');
+    
+    overlay.innerHTML = `
+      <div class="modal-base">
+        <div class="modal-header">
+          <h3>Edit ${type.charAt(0).toUpperCase() + type.slice(1)} Definitions</h3>
+          <button class="close-btn modal-x">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin:0 0 12px;color:var(--text-muted);font-size:var(--font-sm);">
+            Edit the text for each ${type.slice(0, -1)}. Changes are saved when you click Save.
+          </p>
+          <div class="edit-def-list">${itemsHTML}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-cancel">Cancel</button>
+          <button class="btn btn-primary modal-save">Save Changes</button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('active'));
+    
+    const close = () => {
+      overlay.classList.remove('active');
+      setTimeout(() => overlay.remove(), 300);
+    };
+    
+    overlay.querySelector('.modal-x')?.addEventListener('click', close);
+    overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    
+    const escHandler = e => {
+      if (e.key === 'Escape') {
+        close();
+        document.removeEventListener('keydown', escHandler);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+    
+    overlay.querySelector('.modal-save')?.addEventListener('click', () => {
+      const changes = {};
+      overlay.querySelectorAll('.edit-def-list textarea').forEach(textarea => {
+        const key = textarea.dataset.key;
+        const newValue = textarea.value.trim();
+        const originalValue = items[key];
+        
+        if (newValue && newValue !== originalValue) {
+          changes[key] = newValue;
+        }
+      });
+      
+      close();
+      
+      if (Object.keys(changes).length > 0) {
+        onSave(changes);
+      } else {
+        showToast('No changes to save', 'info');
+      }
+    });
   },
   
   handleNew() {
