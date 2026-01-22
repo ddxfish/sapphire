@@ -147,6 +147,15 @@ def _ensure_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_keywords ON memories(keywords)')
         
+        # Migration: add scope column if not exists
+        cursor.execute("PRAGMA table_info(memories)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if 'scope' not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
+            logger.info("Migrated memories table: added scope column")
+        
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
+        
         conn.commit()
         conn.close()
         
@@ -157,6 +166,41 @@ def _ensure_db():
     except Exception as e:
         logger.error(f"Failed to initialize memory database: {e}")
         return False
+
+
+def _get_current_scope():
+    """Get current memory scope from FunctionManager. Returns None if disabled."""
+    try:
+        from core.chat.function_manager import FunctionManager
+        return FunctionManager._current_memory_scope
+    except Exception as e:
+        logger.warning(f"Could not get memory scope: {e}, using 'default'")
+        return 'default'
+
+
+def get_scopes():
+    """Get list of memory scopes with counts."""
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT scope, COUNT(*) as count 
+            FROM memories 
+            GROUP BY scope 
+            ORDER BY scope
+        ''')
+        rows = cursor.fetchall()
+        conn.close()
+        
+        # Always include 'default' even if empty
+        scopes = {row[0]: row[1] for row in rows}
+        if 'default' not in scopes:
+            scopes['default'] = 0
+        
+        return [{"name": name, "count": count} for name, count in sorted(scopes.items())]
+    except Exception as e:
+        logger.error(f"Error getting scopes: {e}")
+        return [{"name": "default", "count": 0}]
 
 
 def _get_connection():
@@ -195,8 +239,8 @@ def _format_time_ago(timestamp_str: str) -> str:
         return ""
 
 
-def _save_memory(content: str, importance: int = 5) -> tuple:
-    """Store a new memory."""
+def _save_memory(content: str, importance: int = 5, scope: str = 'default') -> tuple:
+    """Store a new memory in the given scope."""
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
@@ -208,15 +252,15 @@ def _save_memory(content: str, importance: int = 5) -> tuple:
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO memories (content, importance, keywords)
-            VALUES (?, ?, ?)
-        ''', (content.strip(), importance, keywords))
+            INSERT INTO memories (content, importance, keywords, scope)
+            VALUES (?, ?, ?, ?)
+        ''', (content.strip(), importance, keywords, scope))
         
         memory_id = cursor.lastrowid
         conn.commit()
         conn.close()
         
-        logger.info(f"Stored memory ID {memory_id} with importance {importance}")
+        logger.info(f"Stored memory ID {memory_id} with importance {importance} in scope '{scope}'")
         return f"Memory saved (ID: {memory_id}, importance: {importance})", True
         
     except Exception as e:
@@ -224,8 +268,8 @@ def _save_memory(content: str, importance: int = 5) -> tuple:
         return f"Failed to save memory: {e}", False
 
 
-def _search_memory(query: str, limit: int = 10) -> tuple:
-    """Search memories by query string. Multiple terms use AND logic."""
+def _search_memory(query: str, limit: int = 10, scope: str = 'default') -> tuple:
+    """Search memories by query string within scope. Multiple terms use AND logic."""
     try:
         if not query or not query.strip():
             return "Search query cannot be empty.", False
@@ -240,7 +284,7 @@ def _search_memory(query: str, limit: int = 10) -> tuple:
         conn = _get_connection()
         cursor = conn.cursor()
         
-        # Build AND query - all terms must match
+        # Build AND query - all terms must match, within scope
         like_conditions = ' AND '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in search_terms])
         like_params = []
         for term in search_terms:
@@ -249,10 +293,10 @@ def _search_memory(query: str, limit: int = 10) -> tuple:
         cursor.execute(f'''
             SELECT id, content, timestamp, importance
             FROM memories
-            WHERE {like_conditions}
+            WHERE scope = ? AND ({like_conditions})
             ORDER BY importance DESC, timestamp DESC
             LIMIT ?
-        ''', like_params + [limit])
+        ''', [scope] + like_params + [limit])
         
         rows = cursor.fetchall()
         conn.close()
@@ -274,8 +318,8 @@ def _search_memory(query: str, limit: int = 10) -> tuple:
         return f"Search failed: {e}", False
 
 
-def _get_recent_memories(count: int = 10) -> tuple:
-    """Get most recent memories."""
+def _get_recent_memories(count: int = 10, scope: str = 'default') -> tuple:
+    """Get most recent memories within scope."""
     try:
         conn = _get_connection()
         cursor = conn.cursor()
@@ -283,9 +327,10 @@ def _get_recent_memories(count: int = 10) -> tuple:
         cursor.execute('''
             SELECT id, content, timestamp, importance
             FROM memories
+            WHERE scope = ?
             ORDER BY timestamp DESC
             LIMIT ?
-        ''', (count,))
+        ''', (scope, count))
         
         rows = cursor.fetchall()
         conn.close()
@@ -307,8 +352,8 @@ def _get_recent_memories(count: int = 10) -> tuple:
         return f"Failed to retrieve memories: {e}", False
 
 
-def _delete_memory(memory_id: int) -> tuple:
-    """Delete a memory by ID."""
+def _delete_memory(memory_id: int, scope: str = 'default') -> tuple:
+    """Delete a memory by ID within scope."""
     try:
         if not isinstance(memory_id, int) or memory_id < 1:
             return "Invalid memory ID. Use the number shown in brackets [N].", False
@@ -316,21 +361,21 @@ def _delete_memory(memory_id: int) -> tuple:
         conn = _get_connection()
         cursor = conn.cursor()
         
-        # Check if memory exists first
-        cursor.execute('SELECT id, content FROM memories WHERE id = ?', (memory_id,))
+        # Check if memory exists in this scope
+        cursor.execute('SELECT id, content FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
         row = cursor.fetchone()
         
         if not row:
             conn.close()
-            return f"Memory [{memory_id}] not found.", False
+            return f"Memory [{memory_id}] not found in current memory slot.", False
         
         # Delete it
-        cursor.execute('DELETE FROM memories WHERE id = ?', (memory_id,))
+        cursor.execute('DELETE FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
         conn.commit()
         conn.close()
         
         preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
-        logger.info(f"Deleted memory ID {memory_id}")
+        logger.info(f"Deleted memory ID {memory_id} from scope '{scope}'")
         return f"Deleted memory [{memory_id}]: {preview}", True
         
     except Exception as e:
@@ -341,25 +386,32 @@ def _delete_memory(memory_id: int) -> tuple:
 def execute(function_name: str, arguments: dict, config) -> tuple:
     """Execute memory function. Returns (result_string, success_bool)."""
     try:
+        # Get current memory scope from FunctionManager
+        scope = _get_current_scope()
+        
+        # If scope is None, memory is disabled for this chat
+        if scope is None:
+            return "Memory is disabled for this chat.", False
+        
         if function_name == "save_memory":
             content = arguments.get("content", "")
             importance = arguments.get("importance", 5)
-            return _save_memory(content, importance)
+            return _save_memory(content, importance, scope)
         
         elif function_name == "search_memory":
             query = arguments.get("query", "")
             limit = arguments.get("limit", 10)
-            return _search_memory(query, limit)
+            return _search_memory(query, limit, scope)
         
         elif function_name == "get_recent_memories":
             count = arguments.get("count", 10)
-            return _get_recent_memories(count)
+            return _get_recent_memories(count, scope)
         
         elif function_name == "delete_memory":
             memory_id = arguments.get("memory_id")
             if memory_id is None:
                 return "Missing memory_id parameter.", False
-            return _delete_memory(int(memory_id))
+            return _delete_memory(int(memory_id), scope)
         
         else:
             return f"Unknown memory function: {function_name}", False

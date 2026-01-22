@@ -878,6 +878,20 @@ def toggle_spice_category(n):
 def reload_spices():
     return proxy('/api/spices/reload', 'POST', timeout=10)
 
+# =============================================================================
+# MEMORY SCOPE ROUTES
+# =============================================================================
+
+@app.route('/api/memory/scopes', methods=['GET'])
+@require_login
+def get_memory_scopes():
+    return proxy('/api/memory/scopes')
+
+@app.route('/api/memory/scopes', methods=['POST'])
+@require_login
+def create_memory_scope():
+    return proxy('/api/memory/scopes', 'POST', json=request.json, timeout=10)
+
 @app.route('/user-assets/<path:filename>')
 @require_login
 def user_assets(filename):

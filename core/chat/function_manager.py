@@ -13,6 +13,9 @@ from core.modules.system.toolsets import toolset_manager
 logger = logging.getLogger(__name__)
 
 class FunctionManager:
+    # Class-level memory scope - accessible from memory module
+    _current_memory_scope = 'default'
+    
     def __init__(self):
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
         self.tool_history = []
@@ -26,6 +29,9 @@ class FunctionManager:
         self._enabled_tools = []  # Internal storage (ability-filtered)
         self._mode_filters = {}   # module_name -> MODE_FILTER dict
         self._network_functions = set()  # Function names that require network access
+        
+        # Memory scope for current execution context (None = disabled)
+        self._memory_scope = 'default'
         
         # Track what was REQUESTED, not reverse-engineered
         self.current_ability_name = "none"
@@ -278,6 +284,16 @@ class FunctionManager:
             "prompt_mode": mode,
             "status": "ok" if base_count == expected_count else "partial"
         }
+
+    def set_memory_scope(self, scope: str):
+        """Set memory scope for current execution context. None = disabled."""
+        self._memory_scope = scope
+        FunctionManager._current_memory_scope = scope  # Update class-level for cross-module access
+        logger.debug(f"Memory scope set to: {scope}")
+
+    def get_memory_scope(self) -> str:
+        """Get current memory scope. Returns None if memory disabled."""
+        return self._memory_scope
 
     def execute_function(self, function_name, arguments):
         """Execute a function using the mapped executor."""

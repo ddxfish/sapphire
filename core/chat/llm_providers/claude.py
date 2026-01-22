@@ -103,7 +103,7 @@ class ClaudeProvider(BaseProvider):
         params = generation_params or {}
         
         # Extract system prompt from messages
-        system_prompt, claude_messages = self._convert_messages(messages)
+        system_prompt, claude_messages, needs_thinking_disabled = self._convert_messages(messages)
         
         request_kwargs = {
             "model": params.get('model') or self.model,
@@ -126,6 +126,12 @@ class ClaudeProvider(BaseProvider):
         if thinking_budget is None:
             thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
         disable_thinking = params.get('disable_thinking', False)
+        
+        # SAFETY: Auto-disable thinking if message history has tool_calls without thinking_raw
+        if needs_thinking_disabled:
+            if thinking_enabled and not disable_thinking:
+                logger.info("[THINK] Auto-disabling thinking: message history has tool_calls without thinking blocks")
+            disable_thinking = True
         
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
         if claude_messages and claude_messages[-1].get("role") == "assistant":
@@ -176,7 +182,7 @@ class ClaudeProvider(BaseProvider):
         start_time = time.time()
         
         # Extract system prompt from messages
-        system_prompt, claude_messages = self._convert_messages(messages)
+        system_prompt, claude_messages, needs_thinking_disabled = self._convert_messages(messages)
         
         request_kwargs = {
             "model": params.get('model') or self.model,
@@ -199,6 +205,12 @@ class ClaudeProvider(BaseProvider):
         if thinking_budget is None:
             thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
         disable_thinking = params.get('disable_thinking', False)
+        
+        # SAFETY: Auto-disable thinking if message history has tool_calls without thinking_raw
+        if needs_thinking_disabled:
+            if thinking_enabled and not disable_thinking:
+                logger.info("[THINK] Auto-disabling thinking: message history has tool_calls without thinking blocks")
+            disable_thinking = True
         
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
         # Claude requires thinking blocks at start - can't inject into existing prefill
@@ -423,10 +435,15 @@ class ClaudeProvider(BaseProvider):
         - thinking_raw blocks for tool cycle continuity
         
         Returns:
-            (system_prompt, claude_messages)
+            (system_prompt, claude_messages, needs_thinking_disabled)
+            
+        needs_thinking_disabled is True if we found assistant messages with tool_calls
+        but no thinking_raw - these would violate Claude's requirement that thinking
+        blocks precede tool_use blocks.
         """
         system_prompt = None
         claude_messages = []
+        needs_thinking_disabled = False
         
         for msg in messages:
             role = msg.get("role")
@@ -446,6 +463,11 @@ class ClaudeProvider(BaseProvider):
                     if msg.get("thinking_raw"):
                         for think_block in msg["thinking_raw"]:
                             content_blocks.append(think_block)
+                    else:
+                        # No thinking_raw but we have tool_calls - this will violate
+                        # Claude's requirement that thinking precedes tool_use
+                        needs_thinking_disabled = True
+                        logger.warning("[THINK] Assistant message has tool_calls but no thinking_raw - thinking must be disabled")
                     
                     # Add text content if present (strip trailing whitespace)
                     if content and content.strip():
@@ -519,7 +541,7 @@ class ClaudeProvider(BaseProvider):
                     if content and content.strip():
                         claude_messages.append({"role": "user", "content": content})
         
-        return system_prompt, claude_messages
+        return system_prompt, claude_messages, needs_thinking_disabled
     
     def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

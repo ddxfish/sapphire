@@ -10,5 +10,6 @@
   "inject_datetime": false,
   "custom_context": "",
   "llm_primary": "auto",
-  "llm_model": ""
+  "llm_model": "",
+  "memory_scope": "default"
 }

@@ -70,6 +70,25 @@ export async function openSettingsModal() {
             console.warn('Could not load LLM providers:', e);
         }
         
+        // Load memory scopes
+        try {
+            const scopesResp = await fetch('/api/memory/scopes');
+            if (scopesResp.ok) {
+                const scopesData = await scopesResp.json();
+                const scopeSelect = document.getElementById('setting-memory-scope');
+                scopeSelect.innerHTML = '<option value="none">None (disabled)</option>';
+                (scopesData.scopes || []).forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = `${s.name} (${s.count})`;
+                    scopeSelect.appendChild(opt);
+                });
+                scopeSelect.value = settings.memory_scope || 'default';
+            }
+        } catch (e) {
+            console.warn('Could not load memory scopes:', e);
+        }
+        
         // Populate form
         document.getElementById('setting-prompt').value = settings.prompt || 'sapphire';
         document.getElementById('setting-ability').value = settings.ability || 'default';
@@ -110,6 +129,43 @@ export async function openSettingsModal() {
         trimColorInput.addEventListener('input', () => {
             trimColorInput.dataset.cleared = 'false';
         });
+        
+        // New memory scope button
+        const newScopeBtn = document.getElementById('new-memory-scope-btn');
+        if (newScopeBtn) {
+            newScopeBtn.onclick = async () => {
+                const name = prompt('New memory slot name (lowercase, no spaces):');
+                if (!name) return;
+                
+                const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+                if (!clean || clean.length > 32) {
+                    ui.showToast('Invalid name (use lowercase, numbers, underscore)', 'error');
+                    return;
+                }
+                
+                try {
+                    const res = await fetch('/api/memory/scopes', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: clean })
+                    });
+                    if (res.ok) {
+                        const scopeSelect = document.getElementById('setting-memory-scope');
+                        const opt = document.createElement('option');
+                        opt.value = clean;
+                        opt.textContent = `${clean} (0)`;
+                        scopeSelect.appendChild(opt);
+                        scopeSelect.value = clean;
+                        ui.showToast(`Created: ${clean}`, 'success');
+                    } else {
+                        const err = await res.json();
+                        ui.showToast(err.error || 'Failed to create', 'error');
+                    }
+                } catch (e) {
+                    ui.showToast('Failed to create scope', 'error');
+                }
+            };
+        }
         
         document.getElementById('pitch-value').textContent = settings.pitch || 0.94;
         document.getElementById('speed-value').textContent = settings.speed || 1.3;
@@ -249,7 +305,8 @@ export async function saveSettings() {
             custom_context: document.getElementById('setting-custom-context').value,
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
             llm_model: getSelectedModel(),
-            trim_color: trimColor
+            trim_color: trimColor,
+            memory_scope: document.getElementById('setting-memory-scope')?.value || 'default'
         };
         
         await api.updateChatSettings(chatName, settings);
@@ -334,7 +391,8 @@ export async function saveAsDefaults() {
             custom_context: document.getElementById('setting-custom-context').value,
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
             llm_model: getSelectedModel(),
-            trim_color: trimColor
+            trim_color: trimColor,
+            memory_scope: document.getElementById('setting-memory-scope')?.value || 'default'
         };
         
         const res = await fetch('/api/settings/chat-defaults', {

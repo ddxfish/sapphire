@@ -203,6 +203,11 @@ class LLMChat:
             messages = self._build_base_messages(user_input)
             self.session_manager.add_user_message(user_input)
             
+            # Set memory scope for this chat context
+            chat_settings = self.session_manager.get_chat_settings()
+            memory_scope = chat_settings.get('memory_scope', 'default')
+            self.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
+            
             active_tools = self.function_manager.enabled_tools
             
             # DIAGNOSTIC: Log exactly what tools are being sent

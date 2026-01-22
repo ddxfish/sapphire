@@ -1237,6 +1237,39 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             }), 500
 
     # =============================================================================
+    # MEMORY SCOPE ROUTES
+    # =============================================================================
+    
+    @bp.route('/api/memory/scopes', methods=['GET'])
+    def get_memory_scopes():
+        """Get list of memory scopes with counts."""
+        try:
+            from functions import memory
+            scopes = memory.get_scopes()
+            return jsonify({"scopes": scopes})
+        except Exception as e:
+            logger.error(f"Failed to get memory scopes: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @bp.route('/api/memory/scopes', methods=['POST'])
+    def create_memory_scope():
+        """Create/validate a new memory scope name."""
+        try:
+            import re
+            data = request.get_json() or {}
+            name = data.get('name', '').strip().lower()
+            
+            # Validate: alphanumeric + underscore, 1-32 chars
+            if not name or not re.match(r'^[a-z0-9_]{1,32}$', name):
+                return jsonify({"error": "Invalid scope name. Use lowercase letters, numbers, underscore, max 32 chars."}), 400
+            
+            # Scope auto-creates on first write, just validate here
+            return jsonify({"created": name})
+        except Exception as e:
+            logger.error(f"Failed to create memory scope: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    # =============================================================================
     # SYSTEM MANAGEMENT ROUTES
     # =============================================================================
     

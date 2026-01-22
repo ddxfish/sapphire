@@ -120,6 +120,11 @@ class StreamingChat:
                 logger.info(f"[THINK] Forced thinking prefill: {force_prefill}")
                 yield {"type": "content", "text": force_prefill}
             
+            # Set memory scope for this chat context
+            chat_settings = self.main_chat.session_manager.get_chat_settings()
+            memory_scope = chat_settings.get('memory_scope', 'default')
+            self.main_chat.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
+            
             active_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider, model_override = self.main_chat._select_provider()
             

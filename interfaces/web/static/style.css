@@ -1250,6 +1250,22 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     font-size: var(--font-sm);
 }
 
+.memory-scope-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.memory-scope-row select {
+    flex: 1;
+}
+
+.memory-scope-row .btn-small {
+    padding: 6px 12px;
+    font-size: var(--font-sm);
+    min-width: 36px;
+}
+
 /* =============================================================================
    KEBAB MENUS
    ============================================================================= */
