@@ -15,6 +15,7 @@ export function escapeHtml(text) {
  * @param {string} title - Modal title
  * @param {Array} fields - Array of field configs
  * @param {Function|null} onSave - Callback with form data, null for close-only mode
+ * @param {Object} options - Optional settings: { wide: bool }
  * @returns {Object} - { close: Function, element: HTMLElement }
  * 
  * Field types:
@@ -24,9 +25,12 @@ export function escapeHtml(text) {
  * - { id, label, type: 'checkboxes', options: {key: label}, selected: [] }
  * - { type: 'html', value: 'raw html' }
  */
-export function showModal(title, fields, onSave = null) {
+export function showModal(title, fields, onSave = null, options = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  if (options.wide) overlay.classList.add('modal-wide');
+  
+  const checkboxGroupClass = options.wide ? 'checkbox-group checkbox-group-tall' : 'checkbox-group';
   
   let fieldsHTML = fields.map(field => {
     if (field.type === 'html') {
@@ -73,7 +77,7 @@ export function showModal(title, fields, onSave = null) {
       return `
         <div class="modal-field">
           <label>${field.label}</label>
-          <div class="checkbox-group">${checkboxes}</div>
+          <div class="${checkboxGroupClass}">${checkboxes}</div>
         </div>
       `;
     }

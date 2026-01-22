@@ -585,6 +585,15 @@
     background: var(--bg-tertiary);
 }
 
+.checkbox-group-tall {
+    max-height: 450px;
+}
+
+/* Wide modal variant for extras/emotions */
+.modal-wide .modal-base {
+    max-width: 750px;
+}
+
 /* =============================================================================
    SETTINGS MODAL SPECIFIC
    ============================================================================= */

@@ -519,7 +519,7 @@ Editing:
       } catch (e) {
         showToast(`Failed: ${e.message}`, 'error');
       }
-    });
+    }, { wide: true });
   },
   
   handleEmotionsModal() {
@@ -557,7 +557,7 @@ Editing:
       } catch (e) {
         showToast(`Failed: ${e.message}`, 'error');
       }
-    });
+    }, { wide: true });
   },
   
   handleDeleteExtrasModal() {
@@ -606,7 +606,7 @@ Editing:
       showToast(`Deleted ${deleted} extra(s)`, 'success');
       await this.loadComponents();
       await this.loadPromptIntoEditor(this.currentPrompt);
-    });
+    }, { wide: true });
   },
   
   handleDeleteEmotionsModal() {
@@ -655,7 +655,7 @@ Editing:
       showToast(`Deleted ${deleted} emotion(s)`, 'success');
       await this.loadComponents();
       await this.loadPromptIntoEditor(this.currentPrompt);
-    });
+    }, { wide: true });
   },
   
   handleNew() {
