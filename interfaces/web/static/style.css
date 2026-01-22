@@ -178,6 +178,10 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 .sidebar-row-2 button:hover, .kebab-btn:hover { background: var(--bg-hover); }
+.sidebar-row-2 button:active, .kebab-btn:active { 
+    transform: scale(0.92); 
+    box-shadow: 0 0 0 2px var(--trim, var(--accent-blue)); 
+}
 .kebab-btn { font-size: var(--font-xl); font-weight: bold; }
 #delete-chat-btn:hover { background: var(--error-light); border-color: var(--error); color: var(--error); }
 
@@ -204,6 +208,7 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 
 #mute-btn:hover { background: var(--bg-hover); }
 #mute-btn:focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+#mute-btn:active { transform: scale(0.9); }
 #mute-btn.muted { color: var(--error); }
 
 #volume-slider {
@@ -738,6 +743,10 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     transition: all var(--transition-normal);
 }
 
+.toolbar button:active {
+    transform: scale(0.9);
+}
+
 .toolbar button:hover { background: var(--bg-hover); border-color: var(--text); }
 .toolbar .trash-btn:hover { background: var(--error-light); border-color: var(--error); color: var(--error); }
 .toolbar .regen-btn:hover, .toolbar .continue-btn:hover { background: var(--accent-blue-light); border-color: var(--accent-blue); color: var(--accent-blue); }
@@ -853,9 +862,27 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 
 #mic-btn:hover { background: var(--bg-hover); border-color: var(--text); }
 #mic-btn:focus { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+#mic-btn:active { transform: scale(0.92); }
 #mic-btn.recording { background: var(--danger); border-color: var(--danger); color: var(--text-bright); animation: pulse 1.5s infinite; }
-#mic-btn.tts-playing { background: var(--danger-red); border-color: var(--danger-red); color: var(--text-bright); }
+#mic-btn.tts-playing { 
+    background: var(--danger-red); 
+    border-color: var(--danger-red); 
+    color: var(--text-bright); 
+    animation: tts-pulse 2.5s ease-in-out infinite;
+}
 #mic-btn.tts-playing:hover { background: var(--danger); border-color: var(--danger); }
+
+/* Peaceful slow pulse for TTS stop button */
+@keyframes tts-pulse {
+    0%, 100% { 
+        transform: scale(1);
+        box-shadow: 0 0 0 0 var(--danger-glow, rgba(220, 38, 38, 0.4));
+    }
+    50% { 
+        transform: scale(1.05);
+        box-shadow: 0 0 12px 2px var(--danger-glow, rgba(220, 38, 38, 0.3));
+    }
+}
 
 #send-btn, #stop-btn {
     padding: 10px 20px;
@@ -865,6 +892,10 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     cursor: pointer;
     color: var(--text-bright);
     transition: all var(--transition-normal);
+}
+
+#send-btn:active, #stop-btn:active {
+    transform: scale(0.95);
 }
 
 #send-btn { background: var(--primary); }
@@ -964,6 +995,10 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+.spice-indicator:active:not(.unavailable) {
+    transform: scale(0.9);
+}
+
 .spice-icon {
     font-size: 16px;
     line-height: 1;
@@ -1023,6 +1058,10 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     box-shadow: 0 0 0 3px var(--focus-ring);
 }
 
+.pill:active {
+    transform: scale(0.95);
+}
+
 .pill.cloud-tools {
     border-color: var(--warning);
     background: var(--warning-light);
@@ -1073,11 +1112,10 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 }
 
 .pill-dropdown {
-    display: none;
     position: absolute;
     bottom: calc(100% + 4px);
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) scale(0.95);
     min-width: 160px;
     max-height: 300px;
     overflow-y: auto;
@@ -1086,10 +1124,16 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     border-radius: var(--radius-md);
     box-shadow: 0 4px 12px var(--shadow-medium);
     z-index: 1000;
+    /* Animation: hidden by default */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
 }
 
 .pill.dropdown-open .pill-dropdown {
-    display: block;
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) scale(1);
 }
 
 .pill-dropdown-item {
@@ -1273,7 +1317,6 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 .kebab-menu { position: relative; }
 
 .kebab-dropdown {
-    display: none;
     position: absolute;
     top: 100%;
     right: 0;
@@ -1285,9 +1328,18 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     box-shadow: 0 4px 12px var(--shadow-medium);
     z-index: 1000;
     overflow: hidden;
+    /* Animation: hidden by default */
+    opacity: 0;
+    visibility: hidden;
+    transform: scale(0.95) translateY(-4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
 }
 
-.kebab-menu.open .kebab-dropdown { display: block; }
+.kebab-menu.open .kebab-dropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: scale(1) translateY(0);
+}
 
 .kebab-dropdown button {
     display: block;
