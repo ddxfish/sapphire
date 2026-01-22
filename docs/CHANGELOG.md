@@ -1,7 +1,12 @@
+# 1.1.10 - Memory and Toolset upgrades
+- Memory system now has named slots
+- Memory slot can be set per-chat, auto swapped
+- Toolset editor Auto-switch, auto-save
+- Toolset editor redesign on extras and emotions 
 # 1.1.9 - Image upload
 - Added ability to upload images to LLMs
 - Added upload image resize optional
-# 1.1.8 - Thinking and Tokens
+# 1.1.8 - Thinking and Tokens UI
 - Added thinking option to Claude
 - Formatted JSON tool/history so all providers can switch mid-chat
 - Added tokens/sec and provider to UI
