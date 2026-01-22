@@ -637,6 +637,71 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     color: var(--danger);
 }
 
+/* Tool accordion delete button */
+.tool-delete-btn {
+    margin-left: auto;
+    padding: 0 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--transition-fast);
+    line-height: 1;
+}
+
+.accordion-tool:hover .tool-delete-btn,
+.accordion-tool summary:focus .tool-delete-btn {
+    opacity: 0.6;
+}
+
+.tool-delete-btn:hover {
+    opacity: 1 !important;
+    color: var(--danger);
+}
+
+/* Ensure summary has flex layout for delete button positioning */
+.accordion-tool summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Think accordion streaming state */
+.accordion-think.streaming {
+    border-color: var(--accent-blue);
+    animation: think-pulse 2s ease-in-out infinite;
+}
+
+@keyframes think-pulse {
+    0%, 100% { 
+        border-color: var(--border);
+        box-shadow: none;
+    }
+    50% { 
+        border-color: var(--accent-blue);
+        box-shadow: 0 0 8px rgba(74, 158, 255, 0.2);
+    }
+}
+
+/* Enhanced tool loading animation */
+.accordion-tool.loading {
+    animation: tool-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes tool-glow {
+    0%, 100% {
+        border-color: var(--accent-blue);
+        box-shadow: none;
+    }
+    50% {
+        border-color: var(--accent-blue);
+        box-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
+    }
+}
+
 /* Image inside tool results */
 .tool-result-image {
     max-width: 100%;
@@ -1165,6 +1230,25 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     border: 2px solid var(--bg-secondary);
 }
 .modal-grid input[type="checkbox"] { width: auto; margin-right: 8px; }
+
+/* Color picker row */
+.color-picker-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.color-picker-row .color-input {
+    flex: 0 0 60px;
+    height: 36px;
+    padding: 2px;
+    cursor: pointer;
+}
+
+.color-picker-row .btn-small {
+    padding: 6px 10px;
+    font-size: var(--font-sm);
+}
 
 /* =============================================================================
    KEBAB MENUS

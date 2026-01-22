@@ -6,7 +6,7 @@ import { createAccordion, createCodeBlock, processMarkdown } from './ui-parsing.
 let streamMsg = null;
 let streamContent = '';
 let state = {
-    inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null,
+    inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null, thinkAccEl: null,
     inCode: false, codeLang: '', codeBuf: '', codePre: null,
     curPara: null, paraBuf: '', procIdx: 0,
     toolAccordions: {}
@@ -24,7 +24,7 @@ const createElem = (tag, attrs = {}, content = '') => {
 
 const resetState = (para = null) => {
     state = {
-        inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null,
+        inThink: false, thinkBuf: '', thinkCnt: 0, thinkType: null, thinkAcc: null, thinkAccEl: null,
         inCode: false, codeLang: '', codeBuf: '', codePre: null,
         curPara: para, paraBuf: '', procIdx: 0,
         toolAccordions: {}
@@ -47,6 +47,33 @@ const createToolAccordionElement = (toolName, toolId, args) => {
     
     const summary = createElem('summary');
     summary.innerHTML = `<span class="tool-spinner"></span> Running: ${toolName}`;
+    
+    // Add delete button
+    if (toolId) {
+        const deleteBtn = createElem('button', { 
+            class: 'tool-delete-btn',
+            title: 'Remove from history'
+        }, '×');
+        
+        deleteBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            if (!confirm('Remove this tool call from history?')) return;
+            
+            try {
+                const { removeToolCall } = await import('./api.js');
+                await removeToolCall(toolId);
+                details.remove();
+            } catch (err) {
+                console.error('Failed to remove tool call:', err);
+                const { showToast } = await import('./ui.js');
+                showToast('Failed to remove tool call', 'error');
+            }
+        });
+        
+        summary.appendChild(deleteBtn);
+    }
     
     const contentDiv = createElem('div');
     if (args && Object.keys(args).length > 0) {
@@ -246,8 +273,12 @@ export const appendStream = (chunk, scrollCallback) => {
             state.thinkBuf += newContent.slice(i, endPos);
             if (state.thinkAcc) state.thinkAcc.textContent = state.thinkBuf;
             
+            // Remove streaming class when think block completes
+            if (state.thinkAccEl) state.thinkAccEl.classList.remove('streaming');
+            
             state.inThink = false;
             state.thinkAcc = null;
+            state.thinkAccEl = null;
             state.thinkType = null;
             
             const newP = createElem('p');
@@ -326,7 +357,9 @@ export const appendStream = (chunk, scrollCallback) => {
             
             const label = type === 'seed:think' ? 'Seed Think' : 'Think';
             const { acc, content } = createAccordion('think', `${label} (Step ${state.thinkCnt})`, '');
+            acc.classList.add('streaming');
             state.thinkAcc = content;
+            state.thinkAccEl = acc;
             
             if (streamMsg.last.nextSibling) {
                 streamMsg.el.insertBefore(acc, streamMsg.last.nextSibling);
@@ -448,6 +481,11 @@ export const finishStreaming = (updateToolbarsCallback) => {
         // Clean up empty paragraphs
         contentDiv.querySelectorAll('p').forEach(p => {
             if (!p.textContent.trim() && !p.innerHTML.trim()) p.remove();
+        });
+        
+        // Remove streaming class from any think accordions that didn't complete
+        contentDiv.querySelectorAll('.accordion-think.streaming').forEach(acc => {
+            acc.classList.remove('streaming');
         });
     }
     

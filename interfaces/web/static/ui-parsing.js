@@ -435,8 +435,40 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
     cloneImagesInline(el);
 };
 
+const addToolDeleteButton = (acc, toolCallId) => {
+    if (!toolCallId) return;
+    
+    const summary = acc.querySelector('summary');
+    if (!summary) return;
+    
+    const deleteBtn = createElem('button', { 
+        class: 'tool-delete-btn',
+        title: 'Remove from history'
+    }, '×');
+    
+    deleteBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        if (!confirm('Remove this tool call from history?')) return;
+        
+        try {
+            const { removeToolCall } = await import('./api.js');
+            await removeToolCall(toolCallId);
+            acc.remove();
+        } catch (err) {
+            console.error('Failed to remove tool call:', err);
+            const { showToast } = await import('./ui.js');
+            showToast('Failed to remove tool call', 'error');
+        }
+    });
+    
+    summary.appendChild(deleteBtn);
+};
+
 const renderToolResult = (el, part) => {
     const toolName = part.name || 'Unknown Tool';
+    const toolCallId = part.tool_call_id;
     let resultContent = part.content || part.result || '';
     
     // Check for image markers
@@ -466,6 +498,7 @@ const renderToolResult = (el, part) => {
         accordionContent += 'Result:\n' + displayText;
         
         const { acc, content } = createAccordion('tool', `Tool Result: ${toolName}`, accordionContent);
+        addToolDeleteButton(acc, toolCallId);
         
         const img = Images.createImageElement(imageId, false, null);
         img.className = 'tool-result-image';
@@ -498,6 +531,7 @@ const renderToolResult = (el, part) => {
     }
     
     const { acc } = createAccordion('tool', `Tool Result: ${toolName}`, inputsStr + 'Result:\n' + resultContent);
+    addToolDeleteButton(acc, toolCallId);
     el.appendChild(acc);
 };
 

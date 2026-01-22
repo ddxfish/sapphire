@@ -163,7 +163,8 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 tool_part = {
                     "type": "tool_result",
                     "name": msg.get("name"),
-                    "result": msg.get("content", "")
+                    "result": msg.get("content", ""),
+                    "tool_call_id": msg.get("tool_call_id")
                 }
                 
                 if "tool_inputs" in msg:
@@ -720,6 +721,18 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 return jsonify({"error": "Assistant message not found"}), 404
         except Exception as e:
             logger.error(f"Error removing from assistant: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
+    @bp.route('/history/tool-call/<tool_call_id>', methods=['DELETE'])
+    def remove_tool_call(tool_call_id):
+        """Remove a specific tool call and its result from history."""
+        try:
+            if system_instance.llm_chat.session_manager.remove_tool_call(tool_call_id):
+                return jsonify({"status": "success", "message": "Tool call removed"})
+            else:
+                return jsonify({"error": "Tool call not found"}), 404
+        except Exception as e:
+            logger.error(f"Error removing tool call: {e}", exc_info=True)
             return jsonify({"error": str(e)}), 500
 
     @bp.route('/chats', methods=['GET'])

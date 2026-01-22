@@ -81,6 +81,36 @@ export async function openSettingsModal() {
         document.getElementById('setting-datetime').checked = settings.inject_datetime === true;
         document.getElementById('setting-custom-context').value = settings.custom_context || '';
         
+        // Trim color - get current computed value as fallback
+        const trimColorInput = document.getElementById('setting-trim-color');
+        const currentTrim = getComputedStyle(document.documentElement).getPropertyValue('--trim').trim();
+        const defaultTrim = getComputedStyle(document.documentElement).getPropertyValue('--accent-blue').trim() || '#4a9eff';
+        
+        // If chat has custom trim_color, use it; otherwise show current (may be global)
+        if (settings.trim_color) {
+            trimColorInput.value = settings.trim_color;
+            trimColorInput.dataset.cleared = 'false';
+        } else {
+            trimColorInput.value = currentTrim || defaultTrim;
+            trimColorInput.dataset.cleared = 'true';  // No custom color = use global
+        }
+        
+        // Reset button clears the per-chat override (lets global take over)
+        const resetBtn = document.getElementById('reset-trim-color');
+        if (resetBtn) {
+            resetBtn.onclick = () => {
+                // Get current global trim to display (visual feedback)
+                const globalTrim = localStorage.getItem('sapphire-trim') || defaultTrim;
+                trimColorInput.value = globalTrim;
+                trimColorInput.dataset.cleared = 'true';  // Mark as cleared
+            };
+        }
+        
+        // When user picks a color, mark as not cleared
+        trimColorInput.addEventListener('input', () => {
+            trimColorInput.dataset.cleared = 'false';
+        });
+        
         document.getElementById('pitch-value').textContent = settings.pitch || 0.94;
         document.getElementById('speed-value').textContent = settings.speed || 1.3;
         
@@ -203,6 +233,10 @@ export async function saveSettings() {
         const chatName = chatSelect.value;
         if (!chatName) return;
         
+        const trimColorInput = document.getElementById('setting-trim-color');
+        // If cleared (reset clicked), save empty to use global; otherwise save the value
+        const trimColor = trimColorInput?.dataset.cleared === 'true' ? '' : (trimColorInput?.value || '');
+        
         const settings = {
             prompt: document.getElementById('setting-prompt').value,
             ability: document.getElementById('setting-ability').value,
@@ -214,7 +248,8 @@ export async function saveSettings() {
             inject_datetime: document.getElementById('setting-datetime').checked,
             custom_context: document.getElementById('setting-custom-context').value,
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
-            llm_model: getSelectedModel()
+            llm_model: getSelectedModel(),
+            trim_color: trimColor
         };
         
         await api.updateChatSettings(chatName, settings);
@@ -222,6 +257,9 @@ export async function saveSettings() {
         ui.showToast('Settings saved', 'success');
         await updateScene();
         updateSendButtonLLM(settings.llm_primary, settings.llm_model);
+        
+        // Apply trim color immediately
+        applyTrimColor(trimColor);
         
     } catch (e) {
         console.error('Failed to save settings:', e);
@@ -237,12 +275,53 @@ export function closeSettingsModal() {
     }, 300);
 }
 
+// Apply trim color to CSS variable and derived colors
+export function applyTrimColor(color) {
+    const root = document.documentElement;
+    
+    // If no per-chat color, check for global trim in localStorage
+    if (!color || !color.match(/^#[0-9a-f]{6}$/i)) {
+        color = localStorage.getItem('sapphire-trim') || '';
+    }
+    
+    if (color && color.match(/^#[0-9a-f]{6}$/i)) {
+        // Set main trim color
+        root.style.setProperty('--trim', color);
+        
+        // Generate derived colors (same logic as main.js initAppearance)
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
+        root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
+        root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
+        root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
+        root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
+        root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
+    } else {
+        // No global trim either - reset to CSS defaults from shared.css
+        root.style.removeProperty('--trim');
+        root.style.removeProperty('--trim-glow');
+        root.style.removeProperty('--trim-light');
+        root.style.removeProperty('--trim-border');
+        root.style.removeProperty('--trim-50');
+        root.style.removeProperty('--accordion-header-bg');
+        root.style.removeProperty('--accordion-header-hover');
+    }
+    
+    // Update volume slider fill (uses inline style that needs refresh)
+    import('./volume.js').then(vol => vol.updateSliderFill()).catch(() => {});
+}
+
 export async function saveAsDefaults() {
     if (!confirm('Save these settings as defaults for all new chats?')) {
         return;
     }
     
     try {
+        const trimColorInput = document.getElementById('setting-trim-color');
+        const trimColor = trimColorInput?.value || '';
+        
         const settings = {
             prompt: document.getElementById('setting-prompt').value,
             ability: document.getElementById('setting-ability').value,
@@ -254,7 +333,8 @@ export async function saveAsDefaults() {
             inject_datetime: document.getElementById('setting-datetime').checked,
             custom_context: document.getElementById('setting-custom-context').value,
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
-            llm_model: getSelectedModel()
+            llm_model: getSelectedModel(),
+            trim_color: trimColor
         };
         
         const res = await fetch('/api/settings/chat-defaults', {

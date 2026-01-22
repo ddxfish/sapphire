@@ -8,6 +8,7 @@ import { initVolumeControls } from './features/volume.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
+import { applyTrimColor } from './features/chat-settings.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
 import { setupImageModal } from './ui-images.js';
@@ -142,6 +143,7 @@ async function init() {
                 const response = await api.getChatSettings(chatSelect.value);
                 const settings = response?.settings || {};
                 updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
+                applyTrimColor(settings.trim_color || '');
             }
         } catch (e) {
             updateSendButtonLLM('auto');

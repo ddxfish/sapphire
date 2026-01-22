@@ -4,6 +4,7 @@ import * as audio from '../audio.js';
 import * as ui from '../ui.js';
 import { getElements, getIsProc, setHistLen, refresh } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from './scene.js';
+import { applyTrimColor } from './chat-settings.js';
 
 export async function populateChatDropdown() {
     const { chatSelect } = getElements();
@@ -40,8 +41,10 @@ export async function handleChatChange() {
             const response = await api.getChatSettings(selectedChat);
             const settings = response?.settings || {};
             updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
+            applyTrimColor(settings.trim_color || '');
         } catch (e) {
             updateSendButtonLLM('auto');
+            applyTrimColor('');
         }
     } catch (e) {
         console.error('Failed to switch chat:', e);

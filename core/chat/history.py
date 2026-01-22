@@ -455,6 +455,48 @@ class ConversationHistory:
         logger.info(f"Deleted {messages_to_delete} messages from assistant at index {assistant_index}")
         return True
 
+    def remove_tool_call(self, tool_call_id: str) -> bool:
+        """
+        Remove a specific tool call and its result from history.
+        
+        Finds the assistant message containing the tool_call_id, removes that call.
+        If no calls remain in the assistant message, removes the whole message.
+        Also removes the corresponding tool result message.
+        """
+        if not tool_call_id:
+            return False
+        
+        # Find and remove the tool result message
+        tool_result_idx = -1
+        for i, msg in enumerate(self.messages):
+            if msg.get("role") == "tool" and msg.get("tool_call_id") == tool_call_id:
+                tool_result_idx = i
+                break
+        
+        if tool_result_idx != -1:
+            self.messages.pop(tool_result_idx)
+            logger.info(f"Removed tool result for {tool_call_id}")
+        
+        # Find assistant message with this tool call
+        for i, msg in enumerate(self.messages):
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                tool_calls = msg["tool_calls"]
+                for j, tc in enumerate(tool_calls):
+                    if tc.get("id") == tool_call_id:
+                        # Found it - remove this specific call
+                        tool_calls.pop(j)
+                        logger.info(f"Removed tool call {tool_call_id} from assistant message")
+                        
+                        # If no tool calls remain and no content, remove the whole message
+                        if not tool_calls and not msg.get("content", "").strip():
+                            self.messages.pop(i)
+                            logger.info(f"Removed empty assistant message at index {i}")
+                        
+                        return True
+        
+        logger.warning(f"Tool call not found: {tool_call_id}")
+        return tool_result_idx != -1  # Return True if at least the result was removed
+
     def clear(self):
         """Clear all messages from storage."""
         self.messages = []
@@ -760,6 +802,14 @@ class ChatSessionManager:
         if result:
             self._save_current_chat()
             publish(Events.MESSAGE_REMOVED, {"from": "assistant_timestamp"})
+        return result
+
+    def remove_tool_call(self, tool_call_id: str) -> bool:
+        """Remove a specific tool call and its result from history."""
+        result = self.current_chat.remove_tool_call(tool_call_id)
+        if result:
+            self._save_current_chat()
+            publish(Events.MESSAGE_REMOVED, {"tool_call_id": tool_call_id})
         return result
 
     def clear(self):

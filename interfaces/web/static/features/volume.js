@@ -22,8 +22,10 @@ export function initVolumeControls() {
     }
 }
 
-function updateSliderFill() {
+export function updateSliderFill() {
     const { volumeSlider } = getElements();
+    if (!volumeSlider) return;
+    
     const val = parseInt(volumeSlider.value, 10);
     // Get computed colors - resolve actual color values
     const styles = getComputedStyle(document.documentElement);
@@ -38,6 +40,7 @@ function updateSliderFill() {
     let bgColor = styles.getPropertyValue('--bg-tertiary').trim() || '#2a2a2a';
     
     volumeSlider.style.background = `linear-gradient(to right, ${fillColor} 0%, ${fillColor} ${val}%, ${bgColor} ${val}%, ${bgColor} 100%)`;
+
 }
 
 export function handleVolumeChange() {

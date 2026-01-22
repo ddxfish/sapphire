@@ -497,6 +497,11 @@ def remove_last_assistant():
 def remove_from_assistant():
     return proxy('/history/messages/remove-from-assistant', 'POST', json=request.json, timeout=10)
 
+@app.route('/api/history/tool-call/<tool_call_id>', methods=['DELETE'])
+@require_login
+def remove_tool_call(tool_call_id):
+    return proxy(f'/history/tool-call/{tool_call_id}', 'DELETE', timeout=10)
+
 # =============================================================================
 # CHAT MANAGEMENT ROUTES (7 routes)
 # =============================================================================

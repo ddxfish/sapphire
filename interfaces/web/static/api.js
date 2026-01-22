@@ -56,6 +56,9 @@ export const removeFromAssistant = (timestamp) => fetchWithTimeout('/api/history
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ timestamp })
 }, 10000);
+export const removeToolCall = (toolCallId) => fetchWithTimeout(`/api/history/tool-call/${encodeURIComponent(toolCallId)}`, {
+    method: 'DELETE'
+}, 10000);
 // Legacy - kept for backwards compatibility, prefer fetchStatus
 export const fetchSystemStatus = () => fetchWithTimeout('/api/system/status', {}, 5000);
 
