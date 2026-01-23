@@ -7,7 +7,8 @@
     "plugins-modal",
     "spice-manager",
     "backup",
-    "image-gen"
+    "image-gen",
+    "continuity"
   ],
   "plugins": {
     "setup-wizard": {
@@ -42,6 +43,11 @@
     "spice-manager": { "title": "Spice Editor", "collapsible": true },
     "image-gen": {
       "title": "Image Generation",
+      "collapsible": true,
+      "showInSidebar": false
+    },
+    "continuity": {
+      "title": "Continuity",
       "collapsible": true,
       "showInSidebar": false
     }

@@ -1,0 +1,157 @@
+# core/modules/continuity/executor.py
+"""
+Continuity Executor - Runs scheduled tasks with proper context isolation.
+Switches chat context, applies settings, runs LLM, restores original state.
+"""
+
+import logging
+from datetime import datetime
+from typing import Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class ContinuityExecutor:
+    """Executes continuity tasks with context isolation."""
+    
+    def __init__(self, system):
+        """
+        Args:
+            system: VoiceChatSystem instance with llm_chat, tts, etc.
+        """
+        self.system = system
+    
+    def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute a continuity task.
+        
+        Switches to task's chat context, applies settings, runs iterations,
+        then restores original context.
+        
+        Args:
+            task: Task definition dict
+            
+        Returns:
+            Result dict with success, responses, errors
+        """
+        result = {
+            "success": False,
+            "task_id": task.get("id"),
+            "task_name": task.get("name"),
+            "started_at": datetime.now().isoformat(),
+            "responses": [],
+            "errors": []
+        }
+        
+        session_manager = self.system.llm_chat.session_manager
+        original_chat = session_manager.get_active_chat_name()
+        
+        try:
+            # Determine target chat
+            target_chat = self._resolve_target_chat(task)
+            logger.info(f"[Continuity] Executing '{task.get('name')}' in chat '{target_chat}'")
+            
+            # Create chat if it doesn't exist
+            existing_chats = [c["name"] for c in session_manager.list_chat_files()]
+            if target_chat not in existing_chats:
+                logger.info(f"[Continuity] Creating new chat: {target_chat}")
+                if not session_manager.create_chat(target_chat):
+                    raise RuntimeError(f"Failed to create chat: {target_chat}")
+            
+            # Switch to target chat
+            if not session_manager.set_active_chat(target_chat):
+                raise RuntimeError(f"Failed to switch to chat: {target_chat}")
+            
+            # Apply task settings to chat
+            self._apply_task_settings(task, session_manager)
+            
+            # Run iterations
+            iterations = max(1, task.get("iterations", 1))
+            tts_enabled = task.get("tts_enabled", True)
+            initial_message = task.get("initial_message", "Hello.")
+            
+            for i in range(iterations):
+                msg = initial_message if i == 0 else "[continue]"
+                
+                try:
+                    response = self.system.process_llm_query(msg, skip_tts=not tts_enabled)
+                    result["responses"].append({
+                        "iteration": i + 1,
+                        "input": msg,
+                        "output": response[:500] if response else None  # Truncate for logging
+                    })
+                except Exception as e:
+                    error_msg = f"Iteration {i+1} failed: {e}"
+                    logger.error(f"[Continuity] {error_msg}")
+                    result["errors"].append(error_msg)
+            
+            result["success"] = len(result["errors"]) == 0
+            
+        except Exception as e:
+            error_msg = f"Task execution failed: {e}"
+            logger.error(f"[Continuity] {error_msg}", exc_info=True)
+            result["errors"].append(error_msg)
+            
+        finally:
+            # Always restore original chat context
+            try:
+                if session_manager.get_active_chat_name() != original_chat:
+                    session_manager.set_active_chat(original_chat)
+                    logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
+            except Exception as e:
+                logger.error(f"[Continuity] Failed to restore chat context: {e}")
+                result["errors"].append(f"Context restore failed: {e}")
+        
+        result["completed_at"] = datetime.now().isoformat()
+        return result
+    
+    def _resolve_target_chat(self, task: Dict[str, Any]) -> str:
+        """
+        Determine which chat to use for the task.
+        
+        chat_mode options:
+            - "dated": Create new chat with timestamp (default)
+            - "fixed": Use chat_target as-is (reuses same chat)
+            - "single": Use task name as chat (one chat per task)
+        """
+        chat_mode = task.get("chat_mode", "dated")
+        chat_target = task.get("chat_target", "").strip()
+        task_name = task.get("name", "Unnamed Task")
+        
+        if chat_mode == "fixed" and chat_target:
+            return chat_target
+        elif chat_mode == "single":
+            return f"Continuity: {task_name}"
+        else:  # dated (default)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            return f"Continuity: {task_name} - {timestamp}"
+    
+    def _apply_task_settings(self, task: Dict[str, Any], session_manager) -> None:
+        """Apply task's prompt/ability/LLM settings to current chat."""
+        settings = {}
+        
+        if task.get("prompt"):
+            settings["prompt"] = task["prompt"]
+            
+            # Also apply to live LLM
+            from core.modules.system import prompts
+            prompt_data = prompts.get_prompt(task["prompt"])
+            if prompt_data:
+                content = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
+                self.system.llm_chat.set_system_prompt(content)
+                prompts.set_active_preset_name(task["prompt"])
+        
+        if task.get("toolset"):
+            settings["ability"] = task["toolset"]
+            # Apply to function manager
+            self.system.llm_chat.function_manager.update_enabled_functions([task["toolset"]])
+        
+        if task.get("provider") and task["provider"] != "auto":
+            settings["llm_primary"] = task["provider"]
+        
+        if task.get("model"):
+            settings["llm_model"] = task["model"]
+        
+        if settings:
+            session_manager.update_chat_settings(settings)
+            logger.debug(f"[Continuity] Applied settings: {settings}")

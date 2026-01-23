@@ -142,3 +142,9 @@ class Events:
     LLM_ERROR = "llm_error"
     TTS_ERROR = "tts_error"
     STT_ERROR = "stt_error"
+    
+    # Continuity events
+    CONTINUITY_TASK_STARTING = "continuity_task_starting"
+    CONTINUITY_TASK_COMPLETE = "continuity_task_complete"
+    CONTINUITY_TASK_SKIPPED = "continuity_task_skipped"
+    CONTINUITY_TASK_ERROR = "continuity_task_error"

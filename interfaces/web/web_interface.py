@@ -1043,6 +1043,65 @@ def download_backup(filename):
 
 
 # =============================================================================
+# CONTINUITY ROUTES (9 routes) - Scheduled autonomous tasks
+# =============================================================================
+
+@app.route('/api/continuity/tasks', methods=['GET'])
+@require_login
+def list_continuity_tasks():
+    """List all continuity tasks."""
+    return proxy('/api/continuity/tasks')
+
+@app.route('/api/continuity/tasks', methods=['POST'])
+@require_login
+def create_continuity_task():
+    """Create a new continuity task."""
+    return proxy('/api/continuity/tasks', 'POST', json=request.json, timeout=10)
+
+@app.route('/api/continuity/tasks/<task_id>', methods=['GET'])
+@require_login
+def get_continuity_task(task_id):
+    """Get single continuity task."""
+    return proxy(f'/api/continuity/tasks/{task_id}')
+
+@app.route('/api/continuity/tasks/<task_id>', methods=['PUT'])
+@require_login
+def update_continuity_task(task_id):
+    """Update continuity task."""
+    return proxy(f'/api/continuity/tasks/{task_id}', 'PUT', json=request.json, timeout=10)
+
+@app.route('/api/continuity/tasks/<task_id>', methods=['DELETE'])
+@require_login
+def delete_continuity_task(task_id):
+    """Delete continuity task."""
+    return proxy(f'/api/continuity/tasks/{task_id}', 'DELETE', timeout=10)
+
+@app.route('/api/continuity/tasks/<task_id>/run', methods=['POST'])
+@require_login
+def run_continuity_task(task_id):
+    """Manually run a continuity task (for testing)."""
+    return proxy(f'/api/continuity/tasks/{task_id}/run', 'POST', timeout=120)
+
+@app.route('/api/continuity/status', methods=['GET'])
+@require_login
+def get_continuity_status():
+    """Get continuity scheduler status."""
+    return proxy('/api/continuity/status')
+
+@app.route('/api/continuity/activity', methods=['GET'])
+@require_login
+def get_continuity_activity():
+    """Get recent continuity activity log."""
+    return proxy('/api/continuity/activity')
+
+@app.route('/api/continuity/timeline', methods=['GET'])
+@require_login
+def get_continuity_timeline():
+    """Get upcoming task timeline."""
+    return proxy('/api/continuity/timeline')
+
+
+# =============================================================================
 # AUDIO DEVICE ROUTES (3 routes)
 # =============================================================================
 

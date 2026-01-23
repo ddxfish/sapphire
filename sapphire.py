@@ -316,6 +316,7 @@ class VoiceChatSystem:
         
         stop_actions = [
             ("voice components", self.stop_components),
+            ("continuity scheduler", lambda: hasattr(self, 'continuity_scheduler') and self.continuity_scheduler and self.continuity_scheduler.stop()),
             ("web interface", lambda: self.web_interface_manager and self.web_interface_manager.stop()),
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
             ("settings watcher", settings.stop_file_watcher),
@@ -386,6 +387,17 @@ def run():
         from core.modules.system.spices_api import create_spices_api
         spices_api_blueprint = create_spices_api()
         app.register_blueprint(spices_api_blueprint)
+        
+        # Continuity - scheduled autonomous tasks
+        from core.modules.continuity import ContinuityScheduler, ContinuityExecutor
+        from core.modules.continuity.continuity_api import create_continuity_api
+        continuity_executor = ContinuityExecutor(voice_chat)
+        continuity_scheduler = ContinuityScheduler(voice_chat, continuity_executor)
+        voice_chat.continuity_scheduler = continuity_scheduler  # Attach for stop()
+        continuity_api_blueprint = create_continuity_api(continuity_scheduler)
+        app.register_blueprint(continuity_api_blueprint, url_prefix='/api/continuity')
+        continuity_scheduler.start()
+        logger.info("Continuity scheduler started")
         
         settings.start_file_watcher()
 
