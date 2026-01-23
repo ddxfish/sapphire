@@ -15,6 +15,16 @@ def create_settings_api():
     """Create and return a Blueprint with settings API routes."""
     bp = Blueprint('settings_api', __name__)
     
+    def _clear_socks_cache_if_needed(keys):
+        """Clear SOCKS session cache if any SOCKS settings changed."""
+        socks_keys = {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'}
+        if isinstance(keys, str):
+            keys = {keys}
+        if socks_keys & set(keys):
+            from core.socks_proxy import clear_session_cache
+            clear_session_cache()
+            logger.info("Cleared SOCKS session cache due to settings change")
+    
     @bp.before_request
     def check_api_key():
         """Require API key for all routes in this blueprint (fail-secure)."""
@@ -78,6 +88,9 @@ def create_settings_api():
             
             tier = settings.validate_tier(key)
             settings.set(key, value, persist=persist)
+            
+            # Clear SOCKS session cache if SOCKS settings changed (hot reload)
+            _clear_socks_cache_if_needed(key)
             
             logger.info(f"Updated setting '{key}' to {value} (tier: {tier}, persist: {persist})")
             
@@ -217,6 +230,9 @@ def create_settings_api():
                 }), 400
             
             settings.set_many(settings_dict, persist=True)
+            
+            # Clear SOCKS session cache if any SOCKS settings changed (hot reload)
+            _clear_socks_cache_if_needed(settings_dict.keys())
             
             results = {}
             restart_required = False

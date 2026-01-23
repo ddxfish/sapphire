@@ -127,10 +127,10 @@ class ClaudeProvider(BaseProvider):
             thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
         disable_thinking = params.get('disable_thinking', False)
         
-        # SAFETY: Auto-disable thinking if message history has tool_calls without thinking_raw
+        # SAFETY: Auto-disable thinking if active tool cycle lacks thinking_raw
         if needs_thinking_disabled:
             if thinking_enabled and not disable_thinking:
-                logger.info("[THINK] Auto-disabling thinking: message history has tool_calls without thinking blocks")
+                logger.info("[THINK] Auto-disabling thinking for this request: active tool cycle started without thinking")
             disable_thinking = True
         
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
@@ -138,6 +138,12 @@ class ClaudeProvider(BaseProvider):
             if thinking_enabled and not disable_thinking:
                 logger.info("[THINK] Auto-disabling thinking: last message is assistant (continue mode)")
             disable_thinking = True
+        
+        # CRITICAL: Strip thinking blocks from messages if thinking is disabled
+        # Claude rejects thinking blocks in messages when thinking param is disabled
+        if disable_thinking:
+            claude_messages = self._strip_thinking_blocks(claude_messages)
+            request_kwargs["messages"] = claude_messages  # Update reference!
         
         if thinking_enabled and not disable_thinking:
             if request_kwargs["max_tokens"] <= thinking_budget:
@@ -206,10 +212,10 @@ class ClaudeProvider(BaseProvider):
             thinking_budget = getattr(config, 'CLAUDE_THINKING_BUDGET', 10000)
         disable_thinking = params.get('disable_thinking', False)
         
-        # SAFETY: Auto-disable thinking if message history has tool_calls without thinking_raw
+        # SAFETY: Auto-disable thinking if active tool cycle lacks thinking_raw
         if needs_thinking_disabled:
             if thinking_enabled and not disable_thinking:
-                logger.info("[THINK] Auto-disabling thinking: message history has tool_calls without thinking blocks")
+                logger.info("[THINK] Auto-disabling thinking for this request: active tool cycle started without thinking")
             disable_thinking = True
         
         # SAFETY: Auto-disable thinking if last message is assistant (continue mode)
@@ -218,6 +224,12 @@ class ClaudeProvider(BaseProvider):
             if thinking_enabled and not disable_thinking:
                 logger.info("[THINK] Auto-disabling thinking: last message is assistant (continue mode)")
             disable_thinking = True
+        
+        # CRITICAL: Strip thinking blocks from messages if thinking is disabled
+        # Claude rejects thinking blocks in messages when thinking param is disabled
+        if disable_thinking:
+            claude_messages = self._strip_thinking_blocks(claude_messages)
+            request_kwargs["messages"] = claude_messages  # Update reference!
         
         if thinking_enabled and not disable_thinking:
             if request_kwargs["max_tokens"] <= thinking_budget:
@@ -425,6 +437,41 @@ class ClaudeProvider(BaseProvider):
             ]
         }
     
+    def _strip_thinking_blocks(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Strip thinking blocks from converted Claude messages.
+        
+        Required when thinking is disabled but history contains thinking_raw blocks.
+        Claude API rejects thinking blocks in messages when thinking param is disabled.
+        """
+        result = []
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                result.append(msg)
+                continue
+            
+            content = msg.get("content")
+            if not isinstance(content, list):
+                result.append(msg)
+                continue
+            
+            # Filter out thinking blocks
+            filtered_content = [
+                block for block in content 
+                if not (isinstance(block, dict) and block.get("type") == "thinking")
+            ]
+            
+            stripped_count = len(content) - len(filtered_content)
+            if stripped_count > 0:
+                logger.info(f"[THINK] Stripped {stripped_count} thinking block(s) from assistant message (thinking disabled)")
+            
+            if filtered_content:
+                result.append({**msg, "content": filtered_content})
+            elif content:  # Had content but all was thinking - skip empty message
+                logger.debug("[THINK] Stripped assistant message that only contained thinking blocks")
+        
+        return result
+    
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple:
         """
         Convert OpenAI-format messages to Claude format.
@@ -437,15 +484,18 @@ class ClaudeProvider(BaseProvider):
         Returns:
             (system_prompt, claude_messages, needs_thinking_disabled)
             
-        needs_thinking_disabled is True if we found assistant messages with tool_calls
-        but no thinking_raw - these would violate Claude's requirement that thinking
-        blocks precede tool_use blocks.
+        needs_thinking_disabled is True if the LAST assistant message with tool_calls
+        has no thinking_raw AND tool results haven't been provided yet. This indicates
+        an active tool cycle that started without thinking.
+        
+        Completed tool cycles (where tool results exist) don't require thinking_raw
+        because Claude won't continue from that point.
         """
         system_prompt = None
         claude_messages = []
         needs_thinking_disabled = False
         
-        for msg in messages:
+        for i, msg in enumerate(messages):
             role = msg.get("role")
             content = msg.get("content", "") or ""
             
@@ -464,10 +514,15 @@ class ClaudeProvider(BaseProvider):
                         for think_block in msg["thinking_raw"]:
                             content_blocks.append(think_block)
                     else:
-                        # No thinking_raw but we have tool_calls - this will violate
-                        # Claude's requirement that thinking precedes tool_use
-                        needs_thinking_disabled = True
-                        logger.warning("[THINK] Assistant message has tool_calls but no thinking_raw - thinking must be disabled")
+                        # No thinking_raw but we have tool_calls
+                        # Only disable thinking if this is an ACTIVE tool cycle
+                        # (no tool results following this message yet)
+                        has_tool_result_after = any(
+                            m.get("role") == "tool" for m in messages[i+1:]
+                        )
+                        if not has_tool_result_after:
+                            needs_thinking_disabled = True
+                            logger.warning("[THINK] Active tool cycle has no thinking_raw - thinking must be disabled for this request")
                     
                     # Add text content if present (strip trailing whitespace)
                     if content and content.strip():

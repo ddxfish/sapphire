@@ -349,7 +349,9 @@ class SettingsManager:
             'DEFAULT_USERNAME', 'DEFAULT_AI_NAME',
             'GENERATION_DEFAULTS', 'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',
             'FORCE_THINKING', 'THINKING_PREFILL',
-            'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT'
+            'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
+            # SOCKS can be hot-reloaded - session cache is cleared on change
+            'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'
         }
         
         # Everything else requires restart (TTS, STT, modules, etc. are initialized at startup)
