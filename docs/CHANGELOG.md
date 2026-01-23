@@ -1,3 +1,6 @@
+# 1.1.11 - Cleanup and bug fixes
+- Improved TTS pauses on weird formatting
+- Added UI animations (shake, button click, accordions)
 # 1.1.10 - Memory and Toolset upgrades
 - Memory system now has named slots
 - Memory slot can be set per-chat, auto swapped
