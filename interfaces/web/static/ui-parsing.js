@@ -74,6 +74,36 @@ export const extractProseText = (el) => {
     clone.querySelectorAll('[class*="code"]').forEach(c => c.remove());    // Any code-related class
     clone.querySelectorAll('.message-metadata').forEach(m => m.remove()); // Metadata footer
     
+    // Add periods after list items for TTS pauses (before textContent extraction)
+    clone.querySelectorAll('li').forEach(li => {
+        // Only add period if the item doesn't already end with sentence-ending punctuation
+        const text = li.textContent.trim();
+        if (text && !/[.!?]$/.test(text)) {
+            li.appendChild(document.createTextNode('. '));
+        }
+    });
+    
+    // Add periods after headers for TTS pauses
+    clone.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+        const text = h.textContent.trim();
+        if (text && !/[.!?]$/.test(text)) {
+            h.appendChild(document.createTextNode('. '));
+        }
+    });
+    
+    // Add periods after paragraphs for TTS pauses
+    clone.querySelectorAll('p').forEach(p => {
+        const text = p.textContent.trim();
+        if (text && !/[.!?]$/.test(text)) {
+            p.appendChild(document.createTextNode('. '));
+        }
+    });
+    
+    // Replace <br> with period-space for pauses between lines
+    clone.querySelectorAll('br').forEach(br => {
+        br.replaceWith(document.createTextNode('. '));
+    });
+    
     let txt = clone.textContent.trim();
     
     // Strip any remaining think tags
@@ -81,6 +111,9 @@ export const extractProseText = (el) => {
     
     // Strip any HTML tags that leaked through
     txt = txt.replace(/<[^>]+>/g, '');
+    
+    // Clean up multiple periods/punctuation (.. or ., or ,. etc) → single period
+    txt = txt.replace(/[.!?,]+\s*[.!?,]+/g, '. ');
     
     // Clean up whitespace
     txt = txt.replace(/\s+/g, ' ').trim();

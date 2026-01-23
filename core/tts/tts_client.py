@@ -227,17 +227,29 @@ class TTSClient:
         # Headers # Title → Title with period at end of line
         processed_text = re.sub(r'^#+\s*(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
         
+        # LIST HANDLING - convert list items to sentences with pauses
+        # Bullet lists: - item or * item (at line start) → item.
+        processed_text = re.sub(r'^[\-\*]\s+(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
+        
+        # Numbered lists: 1. item or 1) item → item. (strip the number, keep content with pause)
+        processed_text = re.sub(r'^\d+[\.\)]\s+(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
+        
         # Clean up remaining markdown artifacts
         processed_text = re.sub(r'[*_#]', '', processed_text)  # Stray markers
-        processed_text = re.sub(r'\n', ' ', processed_text)    # Newlines to space
+        
+        # Convert newlines to periods for TTS pauses (before collapsing to spaces)
+        # Multiple newlines (paragraph breaks) → period
+        processed_text = re.sub(r'\n{2,}', '. ', processed_text)
+        # Single newlines → period (line breaks need pauses too)
+        processed_text = re.sub(r'\n', '. ', processed_text)
         
         # Remove common UI text that shouldn't be spoken
         ui_words = ['Copy', 'Copied!', 'Failed', 'Loading...', '...']
         for word in ui_words:
             processed_text = processed_text.replace(word, '')
         
-        # Normalize punctuation and whitespace
-        processed_text = re.sub(r'[,\.]\s*[,\.]', '.', processed_text)  # Collapse ., or ..
+        # Normalize punctuation - collapse multiple/mixed punctuation to single period
+        processed_text = re.sub(r'[.!?,]+\s*[.!?,]+', '. ', processed_text)
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
         
         self.stop()
