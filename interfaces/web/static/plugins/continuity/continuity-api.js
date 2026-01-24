@@ -92,3 +92,22 @@ export async function fetchAbilities() {
   const data = await res.json();
   return data.abilities || [];
 }
+
+// Fetch LLM providers with metadata
+export async function fetchLLMProviders() {
+  const res = await fetch('/api/llm/providers');
+  if (!res.ok) return { providers: [], metadata: {} };
+  const data = await res.json();
+  return {
+    providers: data.providers || [],
+    metadata: data.metadata || {}
+  };
+}
+
+// Fetch memory scopes
+export async function fetchMemoryScopes() {
+  const res = await fetch('/api/memory/scopes');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.scopes || [];
+}

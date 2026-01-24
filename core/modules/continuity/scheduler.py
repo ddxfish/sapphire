@@ -170,11 +170,11 @@ class ContinuityScheduler:
             "model": data.get("model", ""),
             "prompt": data.get("prompt", "default"),
             "toolset": data.get("toolset", "none"),
-            "chat_mode": data.get("chat_mode", "dated"),
-            "chat_target": data.get("chat_target", ""),
+            "chat_target": data.get("chat_target", ""),  # blank = dated, filled = use that name
             "initial_message": data.get("initial_message", "Hello."),
             "tts_enabled": data.get("tts_enabled", True),
-            "cooldown_minutes": data.get("cooldown_minutes", 60),
+            "memory_scope": data.get("memory_scope", "default"),
+            "cooldown_minutes": data.get("cooldown_minutes", 1),
             "last_run": None,
             "created": datetime.now().isoformat()
         }
@@ -210,8 +210,8 @@ class ContinuityScheduler:
             # Update allowed fields
             allowed = {
                 "name", "enabled", "schedule", "chance", "iterations",
-                "provider", "model", "prompt", "toolset", "chat_mode",
-                "chat_target", "initial_message", "tts_enabled", "cooldown_minutes"
+                "provider", "model", "prompt", "toolset", "chat_target",
+                "initial_message", "tts_enabled", "memory_scope", "cooldown_minutes"
             }
             for key in allowed:
                 if key in data:

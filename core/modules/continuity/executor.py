@@ -98,6 +98,10 @@ class ContinuityExecutor:
                 if session_manager.get_active_chat_name() != original_chat:
                     session_manager.set_active_chat(original_chat)
                     logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
+                    
+                    # Publish chat switch event so UI updates
+                    from core.event_bus import publish, Events
+                    publish(Events.CHAT_SWITCHED, {"chat": original_chat})
             except Exception as e:
                 logger.error(f"[Continuity] Failed to restore chat context: {e}")
                 result["errors"].append(f"Context restore failed: {e}")
@@ -109,25 +113,21 @@ class ContinuityExecutor:
         """
         Determine which chat to use for the task.
         
-        chat_mode options:
-            - "dated": Create new chat with timestamp (default)
-            - "fixed": Use chat_target as-is (reuses same chat)
-            - "single": Use task name as chat (one chat per task)
+        If chat_target is set: use that name (reuses same chat)
+        If chat_target is blank: create dated chat name
         """
-        chat_mode = task.get("chat_mode", "dated")
         chat_target = task.get("chat_target", "").strip()
         task_name = task.get("name", "Unnamed Task")
         
-        if chat_mode == "fixed" and chat_target:
+        if chat_target:
             return chat_target
-        elif chat_mode == "single":
-            return f"Continuity: {task_name}"
-        else:  # dated (default)
+        else:
+            # Dated chat name
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             return f"Continuity: {task_name} - {timestamp}"
     
     def _apply_task_settings(self, task: Dict[str, Any], session_manager) -> None:
-        """Apply task's prompt/ability/LLM settings to current chat."""
+        """Apply task's prompt/ability/LLM/memory settings to current chat."""
         settings = {}
         
         if task.get("prompt"):
@@ -152,6 +152,13 @@ class ContinuityExecutor:
         if task.get("model"):
             settings["llm_model"] = task["model"]
         
+        if task.get("memory_scope"):
+            settings["memory_scope"] = task["memory_scope"]
+        
         if settings:
             session_manager.update_chat_settings(settings)
             logger.debug(f"[Continuity] Applied settings: {settings}")
+        
+        # Publish chat switch event so UI updates
+        from core.event_bus import publish, Events
+        publish(Events.CHAT_SWITCHED, {"chat": session_manager.get_active_chat_name()})

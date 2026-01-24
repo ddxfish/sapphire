@@ -176,6 +176,7 @@ export default class ContinuityModal {
 
   renderTaskCard(task) {
     const lastRun = task.last_run ? this.formatTime(task.last_run) : 'Never';
+    const memoryInfo = task.memory_scope && task.memory_scope !== 'none' ? `💾 ${task.memory_scope}` : '';
     return `
       <div class="continuity-task-card">
         <button class="continuity-task-toggle ${task.enabled ? 'enabled' : ''}" 
@@ -187,6 +188,7 @@ export default class ContinuityModal {
           <div class="continuity-task-meta">
             ${task.chance < 100 ? `${task.chance}% chance • ` : ''}
             ${task.iterations > 1 ? `${task.iterations} iterations • ` : ''}
+            ${memoryInfo ? `${memoryInfo} • ` : ''}
             Last: ${lastRun}
           </div>
         </div>
