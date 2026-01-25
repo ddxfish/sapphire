@@ -146,9 +146,8 @@ async function init() {
         ui.showStatus();
         ui.updateStatus('Loading...');
         
-        // Parallel initialization - these are all independent operations
-        const [, , historyLen] = await Promise.all([
-            initAvatar(),           // Load plugins (can be slow)
+        // Parallel initialization - critical path only (no plugins yet)
+        const [, historyLen] = await Promise.all([
             populateChatDropdown(), // Fetch chat list
             refresh(false),         // Fetch chat history
             updateScene()           // Fetch system status (prompts, abilities, TTS)
@@ -197,6 +196,16 @@ async function init() {
                 ui.forceScrollToBottom();
             });
         });
+        
+        // LAZY: Load plugins in background AFTER UI is interactive
+        // This prevents plugin loading from blocking the main UI
+        setTimeout(() => {
+            initAvatar().then(() => {
+                console.log('[Init] Plugins loaded in background');
+            }).catch(e => {
+                console.warn('[Init] Plugin loading failed:', e);
+            });
+        }, 100);
         
         // Start auto-refresh interval (fallback sync - events handle most updates)
         setInterval(handleAutoRefresh, 30000);

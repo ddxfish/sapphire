@@ -258,7 +258,7 @@
 
     <template id="message-template">
         <div class="message">
-            <img src="" alt="Avatar" class="msg-avatar">
+            <img src="" alt="Avatar" class="msg-avatar" loading="lazy">
             <div class="message-wrapper">
                 <div class="message-content"></div>
                 <div class="toolbar"></div>
@@ -268,7 +268,7 @@
 
     <template id="status-template">
         <div class="message status" id="status-message">
-            <img src="/static/users/assistant.png" alt="Avatar" class="msg-avatar" onerror="this.style.display='none'">
+            <img src="/static/users/assistant.png" alt="Avatar" class="msg-avatar" loading="lazy" onerror="this.style.display='none'">
             <div class="message-content">
                 <div class="spinner"></div>
                 <span class="status-text">Thinking...</span>
@@ -285,6 +285,31 @@
         </div>
     </div>
 
+    <!-- Modulepreload: tells browser to fetch these in parallel instead of waterfall -->
+    <link rel="modulepreload" href="/static/main.js">
+    <link rel="modulepreload" href="/static/ui.js">
+    <link rel="modulepreload" href="/static/api.js">
+    <link rel="modulepreload" href="/static/audio.js">
+    <link rel="modulepreload" href="/static/chat.js">
+    <link rel="modulepreload" href="/static/ui-parsing.js">
+    <link rel="modulepreload" href="/static/ui-streaming.js">
+    <link rel="modulepreload" href="/static/ui-images.js">
+    <link rel="modulepreload" href="/static/plugin-loader.js">
+    <link rel="modulepreload" href="/static/core/state.js">
+    <link rel="modulepreload" href="/static/core/events.js">
+    <link rel="modulepreload" href="/static/core/event-bus.js">
+    <link rel="modulepreload" href="/static/shared/fetch.js">
+    <link rel="modulepreload" href="/static/shared/modal.js">
+    <link rel="modulepreload" href="/static/shared/toast.js">
+    <link rel="modulepreload" href="/static/features/volume.js">
+    <link rel="modulepreload" href="/static/features/mic.js">
+    <link rel="modulepreload" href="/static/features/scene.js">
+    <link rel="modulepreload" href="/static/features/pills.js">
+    <link rel="modulepreload" href="/static/features/chat-manager.js">
+    <link rel="modulepreload" href="/static/features/chat-settings.js">
+    <link rel="modulepreload" href="/static/handlers/send-handlers.js">
+    <link rel="modulepreload" href="/static/handlers/message-handlers.js">
+    
     <script type="module" src="/static/main.js"></script>
 </body>
 </html>

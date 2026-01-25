@@ -30,10 +30,16 @@ let avatarsInChat = true;
 // Export setter for immediate updates from settings modal
 export const setAvatarsInChat = (val) => { avatarsInChat = val; };
 
-// Avatar paths: user overrides first, then static fallbacks (try png then jpg in each)
+// Avatar paths: webp first (smallest), then png, then jpg. User overrides before static fallbacks.
 const AVATARS = {
-    user: ['/user-assets/avatars/user.png', '/user-assets/avatars/user.jpg', '/static/users/user.png', '/static/users/user.jpg'],
-    assistant: ['/user-assets/avatars/assistant.png', '/user-assets/avatars/assistant.jpg', '/static/users/assistant.png', '/static/users/assistant.jpg']
+    user: [
+        '/user-assets/avatars/user.webp', '/user-assets/avatars/user.png', '/user-assets/avatars/user.jpg',
+        '/static/users/user.webp', '/static/users/user.png', '/static/users/user.jpg'
+    ],
+    assistant: [
+        '/user-assets/avatars/assistant.webp', '/user-assets/avatars/assistant.png', '/user-assets/avatars/assistant.jpg',
+        '/static/users/assistant.webp', '/static/users/assistant.png', '/static/users/assistant.jpg'
+    ]
 };
 
 // =============================================================================
@@ -74,6 +80,9 @@ const setAvatarWithFallback = (img, role) => {
         img.style.display = 'none';
         return;
     }
+    
+    // Lazy load avatars for performance
+    img.loading = 'lazy';
     
     const paths = AVATARS[role] || AVATARS.user;
     let idx = 0;
