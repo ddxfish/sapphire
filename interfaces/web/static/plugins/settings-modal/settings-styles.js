@@ -1588,6 +1588,11 @@ export function injectStyles() {
     
     .advanced-accordion-section .accordion-inner {
       padding: 16px;
+      transition: padding var(--transition-normal);
+    }
+    
+    .advanced-accordion-section .accordion-content.collapsed .accordion-inner {
+      padding: 0;
     }
     
     /* Accordion toggle arrow indicator - scoped to advanced sections only */
