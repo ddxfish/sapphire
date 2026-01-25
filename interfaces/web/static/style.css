@@ -138,15 +138,20 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
     z-index: 1001;
     background: transparent;
     border: none;
-    font-size: var(--font-xl);
+    font-size: var(--font-2xl);
     cursor: pointer;
-    padding: 4px;
+    padding: 4px 8px;
     color: var(--text-bright);
     opacity: 0.9;
-    transition: opacity var(--transition-normal);
+    transition: opacity var(--transition-normal), transform var(--transition-normal);
 }
 
 #toggle-sidebar:hover { opacity: 1; }
+
+/* Chevron points right when collapsed (click to open), left when open (click to close) */
+body:not(.sidebar-collapsed) #toggle-sidebar {
+    transform: rotate(180deg);
+}
 
 .sidebar-row-2 select {
     flex: 1;

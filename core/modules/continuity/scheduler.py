@@ -416,8 +416,8 @@ class ContinuityScheduler:
                 self._check_and_run()
                 check_count += 1
                 
-                # Heartbeat every 10 checks (~5 minutes)
-                if check_count % 10 == 0:
+                # Heartbeat every 120 checks (~1 hour)
+                if check_count % 120 == 0:
                     with self._lock:
                         enabled = sum(1 for t in self._tasks.values() if t.get("enabled"))
                     logger.info(f"[Continuity] Heartbeat: {enabled} enabled tasks, {check_count} checks since start")
