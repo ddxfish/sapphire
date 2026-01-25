@@ -46,7 +46,7 @@
     "WAKEWORD_THRESHOLD": 0.70,
     "WAKEWORD_FRAMEWORK": "onnx",
     "WAKE_TONE_DURATION": 0.150,
-    "WAKE_TONE_FREQUENCY": 880
+    "WAKE_TONE_FREQUENCY": 440
   },
   
   "stt": {

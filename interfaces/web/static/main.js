@@ -121,9 +121,9 @@ async function init() {
         // Initialize DOM references (sync, instant)
         initElements();
         
-        // Collapse sidebar on mobile FIRST so loading indicator is visible
-        if (window.innerWidth <= 768) {
-            document.body.classList.add('sidebar-collapsed');
+        // Sidebar starts collapsed (in HTML). Open on desktop.
+        if (window.innerWidth > 768) {
+            document.body.classList.remove('sidebar-collapsed');
         }
         
         const { form, sendBtn, micBtn, input } = getElements();

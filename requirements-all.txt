@@ -36,3 +36,6 @@ openwakeword>=0.6.0
 
 # Image resize for LLM
 Pillow>=10.0.0
+
+# Scheduled events
+cronitor
