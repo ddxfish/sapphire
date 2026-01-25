@@ -249,7 +249,7 @@ export default class ContinuityEditor {
       name: this.el.querySelector('#task-name').value.trim(),
       schedule: this.el.querySelector('#task-schedule').value.trim(),
       chance: parseInt(this.el.querySelector('#task-chance').value) || 100,
-      cooldown_minutes: parseInt(this.el.querySelector('#task-cooldown').value) || 1,
+      cooldown_minutes: (v => isNaN(v) ? 1 : v)(parseInt(this.el.querySelector('#task-cooldown').value)),
       iterations: parseInt(this.el.querySelector('#task-iterations').value) || 1,
       initial_message: this.el.querySelector('#task-initial-message').value.trim() || 'Hello.',
       chat_target: this.el.querySelector('#task-chat-target').value.trim(),
