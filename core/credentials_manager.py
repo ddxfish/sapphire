@@ -33,6 +33,9 @@ DEFAULT_CREDENTIALS = {
     "socks": {
         "username": "",
         "password": ""
+    },
+    "homeassistant": {
+        "token": ""
     }
 }
 
@@ -330,6 +333,58 @@ class CredentialsManager:
         return bool(username and password)
     
     # =========================================================================
+    # Home Assistant
+    # =========================================================================
+    
+    def get_ha_token(self) -> str:
+        """
+        Get Home Assistant long-lived access token.
+        
+        Priority:
+        1. Stored credential in credentials.json
+        2. HA_TOKEN environment variable
+        """
+        # Check stored credential first
+        ha = self._credentials.get('homeassistant', {})
+        stored_token = ha.get('token', '').strip()
+        if stored_token:
+            return stored_token
+        
+        # Fall back to environment variable
+        env_token = os.environ.get('HA_TOKEN', '').strip()
+        if env_token:
+            logger.debug("Using HA token from HA_TOKEN env var")
+            return env_token
+        
+        return ''
+    
+    def set_ha_token(self, token: str) -> bool:
+        """Set Home Assistant token."""
+        try:
+            if 'homeassistant' not in self._credentials:
+                self._credentials['homeassistant'] = {}
+            
+            self._credentials['homeassistant']['token'] = token
+            
+            if not self._save():
+                logger.error("Failed to persist HA token to disk")
+                return False
+            
+            logger.info("Set Home Assistant token")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set HA token: {e}")
+            return False
+    
+    def clear_ha_token(self) -> bool:
+        """Clear Home Assistant token."""
+        return self.set_ha_token('')
+    
+    def has_ha_token(self) -> bool:
+        """Check if Home Assistant token is available."""
+        return bool(self.get_ha_token())
+    
+    # =========================================================================
     # Utility
     # =========================================================================
     
@@ -343,6 +398,9 @@ class CredentialsManager:
             "llm": {},
             "socks": {
                 "has_credentials": self.has_socks_credentials()
+            },
+            "homeassistant": {
+                "has_token": self.has_ha_token()
             }
         }
         

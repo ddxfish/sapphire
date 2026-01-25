@@ -304,3 +304,257 @@ def get_image_gen_defaults():
     except ImportError as e:
         logger.error(f"Failed to import image.py DEFAULTS: {e}")
         return jsonify({"error": "Could not load defaults"}), 500
+
+
+# =============================================================================
+# HOME ASSISTANT PLUGIN ROUTES
+# =============================================================================
+
+@plugins_bp.route('/api/webui/plugins/homeassistant/defaults', methods=['GET'])
+@require_login
+def get_ha_defaults():
+    """Get default settings for Home Assistant plugin."""
+    return jsonify({
+        "url": "http://homeassistant.local:8123",
+        "blacklist": ["cover.*", "lock.*"]
+    })
+
+
+@plugins_bp.route('/api/webui/plugins/homeassistant/test-connection', methods=['POST'])
+@require_login
+def test_ha_connection():
+    """Test connection to Home Assistant with token validation."""
+    import requests as req
+    from core.credentials_manager import credentials
+    
+    data = request.json or {}
+    url = data.get('url', '').strip().rstrip('/')
+    token = data.get('token', '').strip()
+    
+    logger.info(f"HA test-connection: url={url}, token_from_request={bool(token)}, token_len={len(token) if token else 0}")
+    
+    # Use provided token or fall back to stored
+    if not token:
+        token = credentials.get_ha_token()
+        logger.info(f"HA test-connection: fetched from credentials, found={bool(token)}, len={len(token) if token else 0}")
+        # Debug: check raw credentials state
+        raw_ha = credentials._credentials.get('homeassistant', {})
+        logger.info(f"HA test-connection: raw credentials homeassistant section exists={bool(raw_ha)}, has_token_key={'token' in raw_ha}")
+    
+    if not url:
+        return jsonify({"success": False, "error": "No URL provided"}), 400
+    
+    if not token:
+        return jsonify({"success": False, "error": "No API token found. Enter token in form or check stored credentials."}), 400
+    
+    # Validate token length - HA LLA tokens are typically 180+ chars
+    if len(token) < 100:
+        logger.warning(f"HA test-connection: token seems too short ({len(token)} chars), HA tokens are usually 180+")
+        return jsonify({"success": False, "error": f"Token too short ({len(token)} chars). HA Long-Lived Access Tokens are ~180+ characters. Did you copy the full token?"}), 400
+    
+    if not url.startswith(('http://', 'https://')):
+        return jsonify({"success": False, "error": "URL must start with http:// or https://"}), 400
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        logger.info(f"HA test-connection: calling {url}/api/")
+        response = req.get(f"{url}/api/", headers=headers, timeout=10)
+        
+        logger.info(f"HA test-connection: response status={response.status_code}")
+        
+        if response.status_code == 200:
+            resp_data = response.json()
+            # HA /api/ returns {"message": "API running."} - no version
+            message = resp_data.get('message', 'Connected')
+            return jsonify({
+                "success": True,
+                "message": message
+            })
+        elif response.status_code == 401:
+            return jsonify({"success": False, "error": "Invalid API token (401 Unauthorized). Regenerate token in HA."}), 200
+        elif response.status_code == 403:
+            return jsonify({"success": False, "error": "Access forbidden (403) - check token permissions"}), 200
+        else:
+            return jsonify({"success": False, "error": f"HTTP {response.status_code}"}), 200
+            
+    except req.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Connection timed out (10s)"}), 200
+    except req.exceptions.ConnectionError as e:
+        error_msg = str(e)
+        if 'getaddrinfo failed' in error_msg or 'Name or service not known' in error_msg:
+            return jsonify({"success": False, "error": f"Cannot resolve hostname. Check URL."}), 200
+        return jsonify({"success": False, "error": f"Cannot connect: {error_msg[:100]}"}), 200
+    except Exception as e:
+        logger.error(f"HA test-connection error: {e}")
+        return jsonify({"success": False, "error": f"Error: {str(e)[:100]}"}), 200
+
+
+@plugins_bp.route('/api/webui/plugins/homeassistant/entities', methods=['POST'])
+@require_login
+def get_ha_entities():
+    """Fetch entities from Home Assistant with blacklist filtering."""
+    import requests as req
+    from core.credentials_manager import credentials
+    import fnmatch
+    
+    data = request.json or {}
+    url = data.get('url', '').strip().rstrip('/')
+    token = data.get('token', '').strip()
+    blacklist = data.get('blacklist', [])
+    
+    if not token:
+        token = credentials.get_ha_token()
+    
+    if not url or not token:
+        return jsonify({"error": "URL and token required"}), 400
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        response = req.get(f"{url}/api/states", headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            return jsonify({"error": f"HA API error: HTTP {response.status_code}"}), 200
+        
+        all_entities = response.json()
+        
+        # Get areas using template API (works on all HA versions)
+        areas_list = []
+        entity_areas = {}
+        
+        try:
+            # Get all area names
+            template_resp = req.post(
+                f"{url}/api/template",
+                headers=headers,
+                json={"template": "{% for area in areas() %}{{ area_name(area) }}||{% endfor %}"},
+                timeout=10
+            )
+            if template_resp.status_code == 200:
+                area_text = template_resp.text.strip()
+                areas_list = [a.strip() for a in area_text.split('||') if a.strip()]
+                logger.info(f"HA entities preview - areas: {areas_list}")
+        except Exception as e:
+            logger.warning(f"HA areas template error: {e}")
+        
+        # Get area for each relevant entity using template API
+        relevant_entities = [
+            e.get('entity_id') for e in all_entities 
+            if e.get('entity_id', '').startswith(('light.', 'switch.', 'scene.', 'script.', 'climate.'))
+        ]
+        
+        if relevant_entities and areas_list:
+            try:
+                # Process in batches
+                batch_size = 50
+                for i in range(0, len(relevant_entities), batch_size):
+                    batch = relevant_entities[i:i+batch_size]
+                    template_parts = []
+                    for eid in batch:
+                        template_parts.append(f"{eid}:{{{{ area_name(area_id('{eid}')) or '' }}}}")
+                    
+                    template = "||".join(template_parts)
+                    
+                    resp = req.post(
+                        f"{url}/api/template",
+                        headers=headers,
+                        json={"template": template},
+                        timeout=15
+                    )
+                    
+                    if resp.status_code == 200:
+                        pairs = resp.text.strip().split('||')
+                        for pair in pairs:
+                            if ':' in pair:
+                                eid, area = pair.split(':', 1)
+                                if area.strip():
+                                    entity_areas[eid.strip()] = area.strip()
+            except Exception as e:
+                logger.warning(f"HA entity areas template error: {e}")
+        
+        # Filter entities
+        filtered = {"lights": [], "switches": [], "scenes": [], "scripts": [], "climate": [], "areas": areas_list}
+        
+        for entity in all_entities:
+            entity_id = entity.get('entity_id', '')
+            friendly_name = entity.get('attributes', {}).get('friendly_name', entity_id)
+            domain = entity_id.split('.')[0] if '.' in entity_id else ''
+            entity_area = entity_areas.get(entity_id, '')
+            
+            # Check blacklist
+            blocked = False
+            for pattern in blacklist:
+                if pattern.startswith('area:'):
+                    area_name = pattern[5:]
+                    if entity_area.lower() == area_name.lower():
+                        blocked = True
+                        break
+                elif fnmatch.fnmatch(entity_id, pattern):
+                    blocked = True
+                    break
+            
+            if blocked:
+                continue
+            
+            entry = {"id": entity_id, "name": friendly_name, "area": entity_area}
+            
+            if domain == 'light':
+                filtered['lights'].append(entry)
+            elif domain == 'switch':
+                filtered['switches'].append(entry)
+            elif domain == 'scene':
+                filtered['scenes'].append(entry)
+            elif domain == 'script':
+                filtered['scripts'].append(entry)
+            elif domain == 'climate':
+                filtered['climate'].append(entry)
+        
+        return jsonify({
+            "success": True,
+            "entities": filtered,
+            "counts": {k: len(v) for k, v in filtered.items() if k != 'areas'},
+            "areas": areas_list
+        })
+        
+    except req.exceptions.Timeout:
+        return jsonify({"error": "Connection timed out"}), 200
+    except Exception as e:
+        logger.error(f"HA entities fetch error: {e}")
+        return jsonify({"error": str(e)[:200]}), 200
+
+
+@plugins_bp.route('/api/webui/plugins/homeassistant/token', methods=['PUT'])
+@require_login
+def set_ha_token():
+    """Store Home Assistant token via credentials manager."""
+    from core.credentials_manager import credentials
+    
+    data = request.json or {}
+    token = data.get('token', '').strip()
+    
+    logger.info(f"HA token PUT: received token len={len(token) if token else 0}")
+    
+    if credentials.set_ha_token(token):
+        # Verify it was saved
+        verify = credentials.get_ha_token()
+        logger.info(f"HA token PUT: saved, verify len={len(verify) if verify else 0}")
+        return jsonify({"success": True, "has_token": bool(token), "saved_len": len(token)})
+    else:
+        logger.error("HA token PUT: save failed")
+        return jsonify({"error": "Failed to save token"}), 500
+
+
+@plugins_bp.route('/api/webui/plugins/homeassistant/token', methods=['GET'])
+@require_login
+def get_ha_token_status():
+    """Check if HA token is stored (doesn't return actual token)."""
+    from core.credentials_manager import credentials
+    has_token = credentials.has_ha_token()
+    token_len = len(credentials.get_ha_token()) if has_token else 0
+    logger.info(f"HA token GET: has_token={has_token}, len={token_len}")
+    return jsonify({"has_token": has_token, "token_length": token_len})
