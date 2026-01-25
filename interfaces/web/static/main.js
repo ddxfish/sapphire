@@ -121,6 +121,11 @@ async function init() {
         // Initialize DOM references (sync, instant)
         initElements();
         
+        // Collapse sidebar on mobile FIRST so loading indicator is visible
+        if (window.innerWidth <= 768) {
+            document.body.classList.add('sidebar-collapsed');
+        }
+        
         const { form, sendBtn, micBtn, input } = getElements();
         
         // CRITICAL: Prevent form submission immediately before any async work
@@ -140,11 +145,6 @@ async function init() {
         // Show loading status in chat area
         ui.showStatus();
         ui.updateStatus('Loading...');
-        
-        // Start with sidebar collapsed on mobile
-        if (window.innerWidth <= 768) {
-            document.body.classList.add('sidebar-collapsed');
-        }
         
         // Parallel initialization - these are all independent operations
         const [, , historyLen] = await Promise.all([
