@@ -134,7 +134,8 @@ async function init() {
             micBtn.disabled = true;
             micBtn.style.opacity = '0.5';
         }
-        input.placeholder = 'Loading...';
+        input.placeholder = 'Loading Web UI...';
+        input.classList.add('loading');
         
         // Show loading status in chat area
         ui.showStatus();
@@ -187,6 +188,7 @@ async function init() {
             micBtn.style.opacity = '1';
         }
         input.placeholder = 'Type message... (paste or drop images)';
+        input.classList.remove('loading');
         ui.hideStatus();
         
         // Scroll to bottom after render
@@ -215,6 +217,7 @@ async function init() {
         }
         if (input) {
             input.placeholder = 'Type message... (paste or drop images)';
+            input.classList.remove('loading');
         }
         ui.hideStatus();
     }

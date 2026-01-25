@@ -872,6 +872,30 @@ body.sidebar-collapsed .sidebar-overlay { display: none; }
 
 .textarea-wrapper > textarea { overflow: auto; max-height: 200px; }
 
+/* Loading state - pulsing glow while UI initializes */
+.textarea-wrapper > textarea.loading {
+    background: var(--trim-light, rgba(74, 158, 255, 0.15));
+    border-color: var(--trim, #4a9eff);
+    animation: input-loading-pulse 1.5s ease-in-out infinite;
+}
+
+.textarea-wrapper > textarea.loading::placeholder {
+    color: var(--trim, #4a9eff);
+    opacity: 1;
+}
+
+@keyframes input-loading-pulse {
+    0%, 100% { 
+        box-shadow: 0 0 5px var(--trim-glow, rgba(74, 158, 255, 0.35)),
+                    0 0 15px var(--trim-glow, rgba(74, 158, 255, 0.35));
+    }
+    50% { 
+        box-shadow: 0 0 10px var(--trim-glow, rgba(74, 158, 255, 0.35)),
+                    0 0 30px var(--trim-glow, rgba(74, 158, 255, 0.35)),
+                    0 0 45px var(--trim-light, rgba(74, 158, 255, 0.15));
+    }
+}
+
 #mic-btn {
     padding: 10px 20px;
     min-width: 60px;
