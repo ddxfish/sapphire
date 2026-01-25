@@ -121,6 +121,25 @@ async function init() {
         // Initialize DOM references (sync, instant)
         initElements();
         
+        const { form, sendBtn, micBtn, input } = getElements();
+        
+        // CRITICAL: Prevent form submission immediately before any async work
+        // This prevents page reload if user clicks Send before handlers are bound
+        form.addEventListener('submit', e => e.preventDefault());
+        
+        // Disable interactive input elements until fully loaded
+        sendBtn.disabled = true;
+        sendBtn.textContent = '⏳';
+        if (micBtn) {
+            micBtn.disabled = true;
+            micBtn.style.opacity = '0.5';
+        }
+        input.placeholder = 'Loading...';
+        
+        // Show loading status in chat area
+        ui.showStatus();
+        ui.updateStatus('Loading...');
+        
         // Start with sidebar collapsed on mobile
         if (window.innerWidth <= 768) {
             document.body.classList.add('sidebar-collapsed');
@@ -160,6 +179,16 @@ async function init() {
         // Connect to event bus for real-time updates
         initEventBus();
         
+        // Re-enable input elements now that everything is loaded
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Send';
+        if (micBtn) {
+            micBtn.disabled = false;
+            micBtn.style.opacity = '1';
+        }
+        input.placeholder = 'Type message... (paste or drop images)';
+        ui.hideStatus();
+        
         // Scroll to bottom after render
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -174,6 +203,20 @@ async function init() {
         
     } catch (e) {
         console.error('Init error:', e);
+        // Re-enable on error so user isn't stuck
+        const { sendBtn, micBtn, input } = getElements();
+        if (sendBtn) {
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send';
+        }
+        if (micBtn) {
+            micBtn.disabled = false;
+            micBtn.style.opacity = '1';
+        }
+        if (input) {
+            input.placeholder = 'Type message... (paste or drop images)';
+        }
+        ui.hideStatus();
     }
 }
 
