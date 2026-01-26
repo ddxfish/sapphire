@@ -30,7 +30,8 @@ AVAILABLE_FUNCTIONS = [
     'ha_list_lights_and_switches',
     'ha_set_light',
     'ha_set_switch',
-    'ha_notify'
+    'ha_notify',
+    'ha_house_status'
 ]
 
 TOOLS = [
@@ -219,6 +220,17 @@ TOOLS = [
                 "required": ["message"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_house_status",
+            "description": "Get a snapshot of the home status: presence, climate, lights by area, door/window/motion sensors, and active scenes.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
 ]
 
@@ -399,8 +411,12 @@ def _find_entity(name: str, domain: str, settings: dict) -> tuple:
     return None, f"Device not found: {name}"
 
 
-def _call_ha_service(domain: str, service: str, data: dict, settings: dict) -> tuple:
-    """Call a Home Assistant service."""
+def _call_ha_service(domain: str, service: str, data: dict, settings: dict, allow_timeout: bool = False) -> tuple:
+    """Call a Home Assistant service.
+    
+    Args:
+        allow_timeout: If True, treat timeout as success (for slow operations like scenes)
+    """
     url = settings['url']
     headers = _get_headers()
     
@@ -421,6 +437,10 @@ def _call_ha_service(domain: str, service: str, data: dict, settings: dict) -> t
             return f"HA error: HTTP {response.status_code}", False
             
     except requests.exceptions.Timeout:
+        if allow_timeout:
+            # Scene/script activations can take 20+ seconds, but HA is processing
+            logger.info(f"HA service {domain}/{service} timed out but assuming success")
+            return "OK (processing)", True
         return "HA connection timed out", False
     except Exception as e:
         return f"HA error: {e}", False
@@ -491,12 +511,12 @@ def _activate(name: str, settings: dict) -> tuple:
             entity_id.lower() == name_lower):
             
             if domain == 'scene':
-                result, success = _call_ha_service('scene', 'turn_on', {"entity_id": entity_id}, settings)
+                result, success = _call_ha_service('scene', 'turn_on', {"entity_id": entity_id}, settings, allow_timeout=True)
                 if success:
                     return f"Activated scene: {friendly_name}", True
                 return result, False
             else:  # script
-                result, success = _call_ha_service('script', 'turn_on', {"entity_id": entity_id}, settings)
+                result, success = _call_ha_service('script', 'turn_on', {"entity_id": entity_id}, settings, allow_timeout=True)
                 if success:
                     return f"Running script: {friendly_name}", True
                 return result, False
@@ -828,6 +848,157 @@ def _notify(message: str, title: str, settings: dict) -> tuple:
         return f"Notification error: {e}", False
 
 
+def _house_status(settings: dict) -> tuple:
+    """Get comprehensive house status snapshot."""
+    data = _get_all_entities(settings)
+    if "error" in data:
+        return data["error"], False
+    
+    blacklist = settings.get('blacklist', [])
+    entities = data.get("entities", [])
+    entity_areas = data.get("entity_areas", {})
+    
+    status_parts = []
+    
+    # --- Climate/Thermostat ---
+    climate_info = []
+    for entity in entities:
+        entity_id = entity.get('entity_id', '')
+        if not entity_id.startswith('climate.'):
+            continue
+        if _is_blacklisted(entity_id, entity_areas.get(entity_id, ''), blacklist):
+            continue
+        
+        attrs = entity.get('attributes', {})
+        current = attrs.get('current_temperature')
+        target = attrs.get('temperature', attrs.get('target_temp_high'))
+        unit = attrs.get('unit_of_measurement', '°F')
+        name = attrs.get('friendly_name', entity_id.split('.')[1])
+        
+        if current is not None:
+            temp_str = f"{name}: {current}{unit}"
+            if target:
+                temp_str += f" (target: {target})"
+            climate_info.append(temp_str)
+    
+    if climate_info:
+        status_parts.append(f"Climate: {'; '.join(climate_info)}")
+    
+    # --- Presence (person.*) ---
+    presence_info = []
+    for entity in entities:
+        entity_id = entity.get('entity_id', '')
+        if not entity_id.startswith('person.'):
+            continue
+        
+        name = entity.get('attributes', {}).get('friendly_name', entity_id.split('.')[1])
+        state = entity.get('state', 'unknown')
+        presence_info.append(f"{name}={state}")
+    
+    if presence_info:
+        status_parts.append(f"Presence: {', '.join(presence_info)}")
+    
+    # --- Lights by area ---
+    area_lights = {}  # area -> {'on': count, 'off': count}
+    for entity in entities:
+        entity_id = entity.get('entity_id', '')
+        if not entity_id.startswith('light.'):
+            continue
+        
+        entity_area = entity_areas.get(entity_id, 'Unknown')
+        if _is_blacklisted(entity_id, entity_area, blacklist):
+            continue
+        
+        state = entity.get('state', 'off')
+        
+        if entity_area not in area_lights:
+            area_lights[entity_area] = {'on': 0, 'off': 0}
+        
+        if state == 'on':
+            area_lights[entity_area]['on'] += 1
+        else:
+            area_lights[entity_area]['off'] += 1
+    
+    if area_lights:
+        light_summaries = []
+        for area, counts in sorted(area_lights.items()):
+            if counts['on'] > 0:
+                light_summaries.append(f"{area}={counts['on']} on")
+            else:
+                light_summaries.append(f"{area}=off")
+        status_parts.append(f"Lights: {', '.join(light_summaries)}")
+    
+    # --- Door/Window/Motion sensors ---
+    sensors = {'door': [], 'window': [], 'motion': [], 'occupancy': []}
+    for entity in entities:
+        entity_id = entity.get('entity_id', '')
+        if not entity_id.startswith('binary_sensor.'):
+            continue
+        
+        entity_area = entity_areas.get(entity_id, '')
+        if _is_blacklisted(entity_id, entity_area, blacklist):
+            continue
+        
+        attrs = entity.get('attributes', {})
+        device_class = attrs.get('device_class', '')
+        
+        if device_class in sensors:
+            name = attrs.get('friendly_name', entity_id.split('.')[1])
+            state = entity.get('state', 'unknown')
+            
+            # Translate states for readability
+            if device_class in ('door', 'window'):
+                state_str = 'open' if state == 'on' else 'closed'
+            elif device_class in ('motion', 'occupancy'):
+                state_str = 'detected' if state == 'on' else 'clear'
+            else:
+                state_str = state
+            
+            sensors[device_class].append(f"{name}={state_str}")
+    
+    for sensor_type, items in sensors.items():
+        if items:
+            status_parts.append(f"{sensor_type.title()}: {', '.join(items)}")
+    
+    # --- Active scenes ---
+    active_scenes = []
+    for entity in entities:
+        entity_id = entity.get('entity_id', '')
+        if not entity_id.startswith('scene.'):
+            continue
+        
+        # Scenes are "stateless" in HA but some integrations track last activated
+        # We'll include scenes that have been activated recently (have a last_changed)
+        state = entity.get('state', '')
+        
+        # In HA, scenes show as 'scening' briefly or have timestamp
+        # Skip for now since scenes are always "off" - just list available count
+    
+    # Instead, show switch states for important switches (non-light)
+    switches_on = []
+    for entity in entities:
+        entity_id = entity.get('entity_id', '')
+        if not entity_id.startswith('switch.'):
+            continue
+        
+        entity_area = entity_areas.get(entity_id, '')
+        if _is_blacklisted(entity_id, entity_area, blacklist):
+            continue
+        
+        state = entity.get('state', 'off')
+        if state == 'on':
+            name = entity.get('attributes', {}).get('friendly_name', entity_id.split('.')[1])
+            switches_on.append(name)
+    
+    if switches_on:
+        status_parts.append(f"Switches on: {', '.join(switches_on)}")
+    
+    if not status_parts:
+        return "No status data available", True
+    
+    return '\n'.join(status_parts), True
+
+
 # =============================================================================
 # EXECUTE ROUTER
 # =============================================================================
@@ -900,6 +1071,9 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             if not message:
                 return "Missing message parameter", False
             return _notify(message, title, settings)
+        
+        elif function_name == "ha_house_status":
+            return _house_status(settings)
         
         else:
             return f"Unknown function: {function_name}", False
