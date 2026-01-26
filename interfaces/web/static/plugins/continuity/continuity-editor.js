@@ -164,6 +164,16 @@ export default class ContinuityEditor {
             <input type="checkbox" id="task-tts" ${t.tts_enabled !== false ? 'checked' : ''} />
             <label for="task-tts">Enable TTS (speak responses)</label>
           </div>
+
+          <div class="continuity-checkbox">
+            <input type="checkbox" id="task-background" ${t.background ? 'checked' : ''} />
+            <label for="task-background">Background task (no UI switching, ephemeral)</label>
+          </div>
+
+          <div class="continuity-checkbox">
+            <input type="checkbox" id="task-inject-datetime" ${t.inject_datetime ? 'checked' : ''} />
+            <label for="task-inject-datetime">Inject date/time in system prompt</label>
+          </div>
         </div>
         <div class="continuity-editor-footer">
           <button class="cancel-btn" data-action="close">Cancel</button>
@@ -258,7 +268,9 @@ export default class ContinuityEditor {
       provider: this.el.querySelector('#task-provider').value,
       model: modelValue,
       memory_scope: this.el.querySelector('#task-memory-scope').value,
-      tts_enabled: this.el.querySelector('#task-tts').checked
+      tts_enabled: this.el.querySelector('#task-tts').checked,
+      background: this.el.querySelector('#task-background').checked,
+      inject_datetime: this.el.querySelector('#task-inject-datetime').checked
     };
 
     if (!data.name) {

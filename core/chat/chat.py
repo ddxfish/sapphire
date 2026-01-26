@@ -585,3 +585,95 @@ class LLMChat:
 
     def get_active_chat(self) -> str:
         return self.session_manager.get_active_chat_name()
+
+    def isolated_chat(self, user_input: str, task_settings: Dict[str, Any] = None) -> str:
+        """
+        Run a chat in complete isolation - no session state changes.
+        Used for background continuity tasks that shouldn't affect UI.
+        
+        Args:
+            user_input: The user message
+            task_settings: Dict with prompt, toolset, provider, model, inject_datetime, memory_scope
+            
+        Returns:
+            The assistant's response text
+        """
+        import time
+        from datetime import datetime
+        
+        task_settings = task_settings or {}
+        logger.info(f"[ISOLATED] Starting isolated chat with settings: {list(task_settings.keys())}")
+        
+        try:
+            # Build system prompt from task settings
+            prompt_name = task_settings.get("prompt", "default")
+            from core.modules.system import prompts
+            prompt_data = prompts.get_prompt(prompt_name)
+            if prompt_data:
+                system_prompt = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
+            else:
+                system_prompt = "You are a helpful assistant."
+            
+            # Apply name substitutions
+            username = getattr(config, 'DEFAULT_USERNAME', 'Human')
+            ai_name = getattr(config, 'DEFAULT_AI_NAME', 'Sapphire')
+            system_prompt = system_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
+            
+            # Inject datetime if enabled
+            if task_settings.get("inject_datetime"):
+                now = datetime.now()
+                system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}"
+            
+            # Build messages - just system + user, no history for ephemeral
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_input}
+            ]
+            
+            # Get tools if toolset specified
+            tools = None
+            toolset = task_settings.get("toolset")
+            if toolset and toolset not in ("none", ""):
+                # Temporarily set memory scope for tool execution
+                memory_scope = task_settings.get("memory_scope", "default")
+                self.function_manager.set_memory_scope(memory_scope if memory_scope != "none" else None)
+                self.function_manager.update_enabled_functions([toolset])
+                tools = self.function_manager.enabled_tools
+                logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")
+            
+            # Select provider
+            provider_key = task_settings.get("provider", "auto")
+            model_override = task_settings.get("model", "")
+            
+            if provider_key and provider_key not in ("auto", ""):
+                providers_config = getattr(config, 'LLM_PROVIDERS', {})
+                provider = get_provider_by_key(provider_key, providers_config, config.LLM_REQUEST_TIMEOUT)
+                if not provider:
+                    raise ConnectionError(f"Provider '{provider_key}' not available")
+            else:
+                provider_key, provider, model_override = self._select_provider()
+            
+            effective_model = model_override if model_override else provider.model
+            gen_params = get_generation_params(
+                provider_key, 
+                effective_model, 
+                getattr(config, 'LLM_PROVIDERS', {})
+            )
+            if model_override:
+                gen_params['model'] = model_override
+            
+            logger.info(f"[ISOLATED] Using provider '{provider_key}', model '{effective_model}'")
+            
+            # Simple single-shot call (no tool loop for now - keep it simple)
+            response = provider.chat_completion(messages, tools=tools, generation_params=gen_params)
+            
+            if response and response.content:
+                logger.info(f"[ISOLATED] Got response: {len(response.content)} chars")
+                return response.content
+            else:
+                logger.warning("[ISOLATED] Empty response from provider")
+                return "No response received."
+                
+        except Exception as e:
+            logger.error(f"[ISOLATED] Chat failed: {e}", exc_info=True)
+            return f"Error: {e}"

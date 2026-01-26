@@ -170,9 +170,11 @@ class ContinuityScheduler:
             "model": data.get("model", ""),
             "prompt": data.get("prompt", "default"),
             "toolset": data.get("toolset", "none"),
-            "chat_target": data.get("chat_target", ""),  # blank = dated, filled = use that name
+            "chat_target": data.get("chat_target", ""),  # blank = ephemeral (no save)
             "initial_message": data.get("initial_message", "Hello."),
             "tts_enabled": data.get("tts_enabled", True),
+            "background": data.get("background", False),  # run in background, no UI switching
+            "inject_datetime": data.get("inject_datetime", False),
             "memory_scope": data.get("memory_scope", "default"),
             "cooldown_minutes": data.get("cooldown_minutes", 1),
             "last_run": None,
@@ -211,7 +213,7 @@ class ContinuityScheduler:
             allowed = {
                 "name", "enabled", "schedule", "chance", "iterations",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "tts_enabled", "memory_scope", "cooldown_minutes"
+                "initial_message", "tts_enabled", "background", "inject_datetime", "memory_scope", "cooldown_minutes"
             }
             for key in allowed:
                 if key in data:
@@ -262,12 +264,15 @@ class ContinuityScheduler:
             return False
     
     def _cooldown_passed(self, task: Dict) -> bool:
-        """Check if enough time has passed since last run."""
+        """Check if enough time has passed since last run. 0 = no cooldown."""
+        cooldown = task.get("cooldown_minutes", 60)
+        if cooldown == 0:
+            return True  # 0 means no cooldown
+        
         last_run = task.get("last_run")
         if not last_run:
             return True
         
-        cooldown = task.get("cooldown_minutes", 60)
         try:
             last_dt = datetime.fromisoformat(last_run)
             elapsed = (datetime.now() - last_dt).total_seconds() / 60

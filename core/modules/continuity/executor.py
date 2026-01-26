@@ -25,8 +25,8 @@ class ContinuityExecutor:
         """
         Execute a continuity task.
         
-        Switches to task's chat context, applies settings, runs iterations,
-        then restores original context.
+        For background tasks: Uses isolated_chat() - no session state changes, no UI impact.
+        For foreground tasks: Switches chat context, runs normally, restores original.
         
         Args:
             task: Task definition dict
@@ -43,13 +43,84 @@ class ContinuityExecutor:
             "errors": []
         }
         
+        background = task.get("background", False)
+        
+        # Background mode: completely isolated, no session/UI impact
+        if background:
+            return self._run_background(task, result)
+        
+        # Foreground mode: switches chat context (original behavior)
+        return self._run_foreground(task, result)
+    
+    def _run_background(self, task: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        """Run task in background mode - completely isolated, no session state changes."""
+        task_name = task.get("name", "Unknown")
+        logger.info(f"[Continuity] Running '{task_name}' in BACKGROUND mode (isolated)")
+        
+        try:
+            # Build task settings for isolated_chat
+            task_settings = {
+                "prompt": task.get("prompt", "default"),
+                "toolset": task.get("toolset", "none"),
+                "provider": task.get("provider", "auto"),
+                "model": task.get("model", ""),
+                "inject_datetime": task.get("inject_datetime", False),
+                "memory_scope": task.get("memory_scope", "default"),
+            }
+            
+            iterations = max(1, task.get("iterations", 1))
+            tts_enabled = task.get("tts_enabled", True)
+            initial_message = task.get("initial_message", "Hello.")
+            
+            for i in range(iterations):
+                msg = initial_message if i == 0 else "[continue]"
+                
+                try:
+                    # Use isolated_chat - no session state changes
+                    response = self.system.llm_chat.isolated_chat(msg, task_settings)
+                    
+                    # TTS if enabled
+                    if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
+                        try:
+                            self.system.tts.speak(response)
+                        except Exception as tts_err:
+                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                    
+                    result["responses"].append({
+                        "iteration": i + 1,
+                        "input": msg,
+                        "output": response[:500] if response else None
+                    })
+                except Exception as e:
+                    error_msg = f"Iteration {i+1} failed: {e}"
+                    logger.error(f"[Continuity] {error_msg}")
+                    result["errors"].append(error_msg)
+            
+            result["success"] = len(result["errors"]) == 0
+            
+        except Exception as e:
+            error_msg = f"Background task failed: {e}"
+            logger.error(f"[Continuity] {error_msg}", exc_info=True)
+            result["errors"].append(error_msg)
+        
+        result["completed_at"] = datetime.now().isoformat()
+        return result
+    
+    def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        """Run task in foreground mode - switches chat context."""
         session_manager = self.system.llm_chat.session_manager
         original_chat = session_manager.get_active_chat_name()
         
+        # Determine target chat - None means ephemeral
+        target_chat = self._resolve_target_chat(task)
+        ephemeral = target_chat is None
+        
+        if ephemeral:
+            # Ephemeral mode: use temp chat that will be deleted after
+            target_chat = f"_continuity_tmp_{task.get('id', 'unknown')}"
+        
         try:
-            # Determine target chat
-            target_chat = self._resolve_target_chat(task)
-            logger.info(f"[Continuity] Executing '{task.get('name')}' in chat '{target_chat}'")
+            logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}' (ephemeral={ephemeral})")
             
             # Create chat if it doesn't exist
             existing_chats = [c["name"] for c in session_manager.list_chat_files()]
@@ -78,7 +149,7 @@ class ContinuityExecutor:
                     result["responses"].append({
                         "iteration": i + 1,
                         "input": msg,
-                        "output": response[:500] if response else None  # Truncate for logging
+                        "output": response[:500] if response else None
                     })
                 except Exception as e:
                     error_msg = f"Iteration {i+1} failed: {e}"
@@ -88,7 +159,7 @@ class ContinuityExecutor:
             result["success"] = len(result["errors"]) == 0
             
         except Exception as e:
-            error_msg = f"Task execution failed: {e}"
+            error_msg = f"Foreground task failed: {e}"
             logger.error(f"[Continuity] {error_msg}", exc_info=True)
             result["errors"].append(error_msg)
             
@@ -105,29 +176,35 @@ class ContinuityExecutor:
             except Exception as e:
                 logger.error(f"[Continuity] Failed to restore chat context: {e}")
                 result["errors"].append(f"Context restore failed: {e}")
+            
+            # Delete ephemeral chat
+            if ephemeral:
+                try:
+                    session_manager.delete_chat(target_chat)
+                    logger.debug(f"[Continuity] Deleted ephemeral chat: {target_chat}")
+                except Exception as e:
+                    logger.warning(f"[Continuity] Failed to delete ephemeral chat: {e}")
         
         result["completed_at"] = datetime.now().isoformat()
         return result
     
-    def _resolve_target_chat(self, task: Dict[str, Any]) -> str:
+    def _resolve_target_chat(self, task: Dict[str, Any]) -> Optional[str]:
         """
         Determine which chat to use for the task.
         
         If chat_target is set: use that name (reuses same chat)
-        If chat_target is blank: create dated chat name
+        If chat_target is blank: return None for ephemeral mode (no save)
         """
         chat_target = task.get("chat_target", "").strip()
-        task_name = task.get("name", "Unnamed Task")
         
         if chat_target:
             return chat_target
         else:
-            # Dated chat name
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-            return f"Continuity: {task_name} - {timestamp}"
+            # Blank = ephemeral, no persistence
+            return None
     
     def _apply_task_settings(self, task: Dict[str, Any], session_manager) -> None:
-        """Apply task's prompt/ability/LLM/memory settings to current chat."""
+        """Apply task's prompt/ability/LLM/memory/datetime settings to current chat."""
         settings = {}
         
         if task.get("prompt"):
@@ -154,6 +231,10 @@ class ContinuityExecutor:
         
         if task.get("memory_scope"):
             settings["memory_scope"] = task["memory_scope"]
+        
+        # Inject datetime into system prompt if enabled
+        if task.get("inject_datetime"):
+            settings["inject_datetime"] = True
         
         if settings:
             session_manager.update_chat_settings(settings)
