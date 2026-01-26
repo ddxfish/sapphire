@@ -103,6 +103,62 @@
 - If using SOCKS proxy, verify it's working (see SOCKS.md)
 - Enable verbose tool debugging in settings for more logging
 
+## Continuity Issues
+
+**Task not running at scheduled time**
+- Check enabled toggle is on (green) in the Tasks tab
+- Verify cron syntax is correct (minute hour day month weekday)
+- Check cooldown hasn't blocked it (see Activity tab for "skipped - cooldown")
+- Low chance % may have rolled unfavorably (see Activity tab for "skipped - chance")
+
+**"Invalid cron schedule" error**
+- Cron format: `minute hour day month weekday`
+- Use `*` for any, `*/N` for every N, `1-5` for ranges
+- Example: `0 9 * * *` = 9:00 AM daily
+- Weekday: 0 or 7 = Sunday, 1-6 = Mon-Sat
+
+**Task runs but no TTS audio**
+- Check "Enable TTS" is checked in task editor
+- Verify TTS is working for regular chat first
+- Background tasks still use TTS if enabled
+
+**croniter not installed**
+- Run: `pip install croniter`
+- Continuity requires this package for cron parsing
+
+## Home Assistant Issues
+
+**Connection test failing**
+- Verify URL includes port (e.g., `http://192.168.1.50:8123`)
+- Check Home Assistant is running and accessible from this machine
+- Try the URL in a browser first
+
+**"401 Unauthorized" error**
+- Token is invalid or expired
+- Create a new Long-Lived Access Token in HA profile
+- Make sure you copied the full token (~180+ characters)
+
+**Token shows "too short" warning**
+- HA tokens are typically 180+ characters
+- If shorter, you may have copied it incorrectly
+- Create a new token and copy the entire string
+
+**Entity not found**
+- Check exact spelling (entity_id or friendly name)
+- Entity may be blacklisted - check blacklist patterns
+- Use `ha_list_lights_and_switches` to see available entities
+
+**Notifications not sending**
+- Find your service in HA: Developer Tools → Actions → search "notify"
+- Enter just the service name without "notify." prefix
+- Example: `mobile_app_pixel_7` not `notify.mobile_app_pixel_7`
+- Make sure HA companion app is installed on your phone
+
+**HA tools not available**
+- Add Home Assistant functions to your active toolset
+- Check Settings → Plugins → Home Assistant is configured
+- Test connection before trying to use tools
+
 ## Performance Issues
 
 **Slow responses**

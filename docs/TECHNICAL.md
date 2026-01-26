@@ -14,6 +14,9 @@ main.py (runner with restart loop)
     │   ├── module_loader → plugins/*, core/modules/*
     │   ├── function_manager → functions/*
     │   └── session_manager → chat history
+    ├── Continuity (core/modules/continuity/)
+    │   ├── scheduler → cron-based task runner
+    │   └── executor → context isolation, task execution
     ├── TTS Server (core/tts/) → port 5012
     ├── STT Server (core/stt/) → port 5050
     ├── Wake Word (core/wakeword/)
@@ -66,6 +69,12 @@ user/
 │   └── prompt_spices.json
 ├── toolsets/
 │   └── toolsets.json       # Custom toolsets
+├── continuity/
+│   ├── tasks.json          # Scheduled task definitions
+│   └── activity.json       # Task execution log
+├── webui/
+│   └── plugins/
+│       └── homeassistant.json  # HA settings (URL, blacklist)
 ├── functions/              # Your custom tools
 ├── plugins/                # Your private plugins
 ├── history/                # Chat session files
@@ -111,6 +120,7 @@ Runtime config
 | audio | `AUDIO_INPUT_DEVICE`, `AUDIO_OUTPUT_DEVICE` |
 | tools | `MAX_TOOL_ITERATIONS`, `MAX_PARALLEL_TOOLS` |
 | backups | `BACKUPS_ENABLED`, `BACKUPS_KEEP_DAILY`, etc. |
+| continuity | Task schedules stored in `user/continuity/tasks.json` |
 
 ### LLM Configuration
 
@@ -291,6 +301,16 @@ Key endpoints (all require `X-API-Key` header):
 | `/api/credentials/llm/<provider>` | PUT/DELETE | Manage API keys |
 | `/backup/create` | POST | Create backup |
 | `/backup/list` | GET | List backups |
+| `/api/continuity/tasks` | GET/POST | List or create tasks |
+| `/api/continuity/tasks/<id>` | GET/PUT/DELETE | CRUD single task |
+| `/api/continuity/tasks/<id>/run` | POST | Manually trigger task |
+| `/api/continuity/status` | GET | Scheduler status |
+| `/api/continuity/timeline` | GET | Upcoming task schedule |
+| `/api/continuity/activity` | GET | Recent task activity log |
+| `/api/webui/plugins/homeassistant` | GET/POST | HA settings |
+| `/api/webui/plugins/homeassistant/test-connection` | POST | Test HA connection |
+| `/api/webui/plugins/homeassistant/token` | GET/PUT | HA token status/save |
+| `/api/webui/plugins/homeassistant/entities` | POST | Preview HA entities |
 
 Full routes in `core/api.py`, `core/settings_api.py`, and `interfaces/web/web_interface.py`.
 
@@ -327,6 +347,9 @@ See dedicated docs:
 | `core/audio/device_manager.py` | Audio device handling |
 | `core/event_handler.py` | Scheduled events |
 | `core/event_bus.py` | Real-time event pub/sub for SSE |
+| `core/modules/continuity/scheduler.py` | Cron-based task scheduler |
+| `core/modules/continuity/executor.py` | Task execution with context isolation |
+| `functions/homeassistant.py` | Home Assistant tools (12 functions) |
 | `interfaces/web/web_interface.py` | Web proxy, auth |
 
 ---
@@ -372,7 +395,22 @@ HOT RELOAD:
 - Settings: ~2s after file change
 - Prompts: ~2s after file change
 - Toolsets: ~2s after file change
+- Continuity tasks: immediate on save
 - Code changes: Require restart
+
+CONTINUITY:
+- Scheduler: core/modules/continuity/scheduler.py
+- Executor: core/modules/continuity/executor.py
+- Tasks stored: user/continuity/tasks.json
+- Activity log: user/continuity/activity.json
+- Cron format: minute hour day month weekday
+- Background mode: isolated execution, no UI switching
+
+HOME ASSISTANT:
+- Tools: functions/homeassistant.py (12 functions)
+- Settings: user/webui/plugins/homeassistant.json
+- Token: ~/.config/sapphire/credentials.json (key: homeassistant_token)
+- Blacklist patterns: exact entity, domain.*, area:Name
 
 LOGS:
 - user/logs/sapphire.log: Main log
