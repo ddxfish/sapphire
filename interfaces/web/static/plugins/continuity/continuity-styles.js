@@ -452,6 +452,31 @@ export function injectStyles() {
       flex: 1;
     }
 
+    .continuity-memory-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .continuity-memory-row select {
+      flex: 1;
+    }
+
+    .continuity-add-scope-btn {
+      padding: 8px 14px;
+      background: var(--trim, var(--accent-blue));
+      border: none;
+      border-radius: 6px;
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+
+    .continuity-add-scope-btn:hover {
+      filter: brightness(1.1);
+    }
+
     .continuity-editor-footer {
       display: flex;
       justify-content: flex-end;

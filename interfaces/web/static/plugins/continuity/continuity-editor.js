@@ -153,11 +153,14 @@ export default class ContinuityEditor {
 
           <div class="continuity-field">
             <label for="task-memory-scope">Memory Scope</label>
-            <select id="task-memory-scope">
-              <option value="none" ${t.memory_scope === 'none' ? 'selected' : ''}>None (disabled)</option>
-              <option value="default" ${!t.memory_scope || t.memory_scope === 'default' ? 'selected' : ''}>default</option>
-              ${memoryScopeOptions}
-            </select>
+            <div class="continuity-memory-row">
+              <select id="task-memory-scope">
+                <option value="none" ${t.memory_scope === 'none' ? 'selected' : ''}>None (disabled)</option>
+                <option value="default" ${!t.memory_scope || t.memory_scope === 'default' ? 'selected' : ''}>default</option>
+                ${memoryScopeOptions}
+              </select>
+              <button type="button" class="continuity-add-scope-btn" data-action="add-scope" title="New scope">+</button>
+            </div>
           </div>
 
           <div class="continuity-checkbox">
@@ -240,6 +243,39 @@ export default class ContinuityEditor {
     const action = e.target.dataset.action;
     if (action === 'close') this.close();
     if (action === 'save') this.save();
+    if (action === 'add-scope') this.addScope();
+  }
+
+  async addScope() {
+    const name = prompt('New memory slot name (lowercase, no spaces):');
+    if (!name) return;
+    
+    const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (!clean || clean.length > 32) {
+      alert('Invalid name (use lowercase, numbers, underscore, max 32 chars)');
+      return;
+    }
+    
+    try {
+      const res = await fetch('/api/memory/scopes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: clean })
+      });
+      if (res.ok) {
+        const scopeSelect = this.el.querySelector('#task-memory-scope');
+        const opt = document.createElement('option');
+        opt.value = clean;
+        opt.textContent = `${clean} (0)`;
+        scopeSelect.appendChild(opt);
+        scopeSelect.value = clean;
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Failed to create');
+      }
+    } catch (e) {
+      alert('Failed to create scope');
+    }
   }
 
   async save() {

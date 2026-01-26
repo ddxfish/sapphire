@@ -156,6 +156,17 @@ def _ensure_db():
         
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
         
+        # Registry table for empty scopes (so they persist before first write)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS memory_scopes (
+                name TEXT PRIMARY KEY,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # Ensure 'default' scope exists in registry
+        cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES ('default')")
+        
         conn.commit()
         conn.close()
         
@@ -179,28 +190,56 @@ def _get_current_scope():
 
 
 def get_scopes():
-    """Get list of memory scopes with counts."""
+    """Get list of memory scopes with counts (includes registered empty scopes)."""
     try:
         conn = _get_connection()
         cursor = conn.cursor()
+        
+        # Get counts from memories table
         cursor.execute('''
             SELECT scope, COUNT(*) as count 
             FROM memories 
             GROUP BY scope 
             ORDER BY scope
         ''')
-        rows = cursor.fetchall()
+        memory_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # Get all registered scopes (including empty ones)
+        cursor.execute('SELECT name FROM memory_scopes ORDER BY name')
+        registered = [row[0] for row in cursor.fetchall()]
+        
         conn.close()
         
-        # Always include 'default' even if empty
-        scopes = {row[0]: row[1] for row in rows}
-        if 'default' not in scopes:
-            scopes['default'] = 0
+        # Merge: all registered scopes + any scopes with data
+        all_scopes = set(registered) | set(memory_counts.keys())
         
-        return [{"name": name, "count": count} for name, count in sorted(scopes.items())]
+        # Always include 'default'
+        all_scopes.add('default')
+        
+        return [{"name": name, "count": memory_counts.get(name, 0)} for name in sorted(all_scopes)]
     except Exception as e:
         logger.error(f"Error getting scopes: {e}")
         return [{"name": "default", "count": 0}]
+
+
+def create_scope(name: str) -> bool:
+    """Register a new memory scope (persists even when empty)."""
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES (?)", (name,))
+        conn.commit()
+        inserted = cursor.rowcount > 0
+        conn.close()
+        
+        if inserted:
+            logger.info(f"Created memory scope: {name}")
+        else:
+            logger.debug(f"Memory scope already exists: {name}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create scope '{name}': {e}")
+        return False
 
 
 def _get_connection():
