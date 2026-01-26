@@ -56,7 +56,7 @@ DOCS_DIR = Path(__file__).parent.parent / "docs"
 
 
 def _get_available_docs() -> dict:
-    """Scan docs/ for .md files. Returns {name: path} dict."""
+    """Scan docs/ for .md files and include README. Returns {name: path} dict."""
     docs = {}
     if not DOCS_DIR.exists():
         logger.warning(f"Docs directory not found: {DOCS_DIR}")
@@ -66,6 +66,11 @@ def _get_available_docs() -> dict:
         # Normalize name: INSTALLATION.md -> installation
         name = md_file.stem.lower().replace("_", "-")
         docs[name] = md_file
+    
+    # Include README.md from project root
+    readme_path = DOCS_DIR.parent / "README.md"
+    if readme_path.exists():
+        docs["readme"] = readme_path
     
     return docs
 

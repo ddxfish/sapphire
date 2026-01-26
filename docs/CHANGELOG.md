@@ -1,3 +1,9 @@
+# 1.2.0 - Continuity and Home Assistant
+## Jan 26, 2026
+- Continuity mode is scheduled LLM tasks and actions
+- Continuity mode has memory slots, background run, and skip tts
+- Home assistant takes token, then uses tool calls to control house
+- Home assistant has notifications, allowing AI to send notifications
 # 1.1.11 - Cleanup and bug fixes
 - Improved TTS pauses on weird formatting
 - Added UI animations (shake, button click, accordions)

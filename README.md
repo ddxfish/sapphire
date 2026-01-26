@@ -81,6 +81,14 @@ You talk to it, but it's her that talks back. Customize your own virtual persona
 <td><a href="docs/screenshots/toolset-editor.png"><img src="docs/screenshots/toolset-editor.png" alt="Toolset Editor"/></a></td>
 <td><strong>Tools and Toolsets</strong><br/>Mix and match tool sets per persona. Easy to create, easy to have the AI make more for you. See <a href="docs/TOOLS.md">Tools</a> and <a href="docs/TOOLSETS.md">Toolsets</a>.</td>
 </tr>
+<tr>
+<td><a href="docs/screenshots/continuity-scheduling.png"><img src="docs/screenshots/continuity-scheduling.png" alt="Continuity Mode"/></a></td>
+<td><strong>Continuity Mode</strong><br/>Scheduled autonomous AI tasks. Morning greetings, dream mode, alarm clock actions, random hellos. Cron timing with probability gates. See <a href="docs/CONTINUITY.md">Continuity</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/home-assistant-integration.png"><img src="docs/screenshots/home-assistant-integration.png" alt="Home Assistant"/></a></td>
+<td><strong>Home Assistant</strong><br/>Smart home control via voice or text. Lights, scenes, thermostats, switches, phone notifications. See <a href="docs/HOME-ASSISTANT.md">Home Assistant</a>.</td>
+</tr>
 </table>
 
 **Uses**: AI companion, work autopilot, sentient house, storytelling, research, ethics testing, or just a plain web UI.
@@ -147,6 +155,8 @@ The setup wizard walks you through LLM configuration on first run.
 | [Toolsets](docs/TOOLSETS.md) | Grouping tools into switchable ability sets |
 | [Plugins](docs/PLUGINS.md) | Keyword-triggered UI/voice extensions |
 | [Web UI Plugins](docs/WEB-PLUGINS.md) | JavaScript extensions for the web interface |
+| [Continuity](docs/CONTINUITY.md) | Scheduled autonomous AI tasks |
+| [Home Assistant](docs/HOME-ASSISTANT.md) | Smart home integration |
 | [Image Generation](docs/IMAGE-GEN.md) | SDXL integration with character consistency |
 | [SOCKS Proxy](docs/SOCKS.md) | Privacy proxy for web scraping functions |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |
