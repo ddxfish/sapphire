@@ -285,6 +285,73 @@ async function testConnection(container) {
   }, 5000);
 }
 
+async function testNotify(container) {
+  const getEl = (id) => container.querySelector(`#${id}`) || document.getElementById(id);
+  
+  const btn = getEl('ha-test-notify-btn');
+  const urlInput = getEl('ha-url');
+  const tokenInput = getEl('ha-token');
+  const notifyInput = getEl('ha-notify-service');
+  
+  const url = urlInput?.value?.trim() || '';
+  const token = tokenInput?.value?.trim() || '';
+  const notifyService = notifyInput?.value?.trim() || '';
+  
+  if (!url) {
+    btn.textContent = 'No URL';
+    btn.className = 'ha-test-btn error';
+    setTimeout(() => { btn.textContent = 'Test'; btn.className = 'ha-test-btn'; }, 3000);
+    return;
+  }
+  
+  if (!notifyService) {
+    btn.textContent = 'No Service';
+    btn.className = 'ha-test-btn error';
+    setTimeout(() => { btn.textContent = 'Test'; btn.className = 'ha-test-btn'; }, 3000);
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  btn.className = 'ha-test-btn';
+  
+  try {
+    const payload = { url, notify_service: notifyService };
+    if (token) payload.token = token;
+    
+    const res = await fetch('/api/webui/plugins/homeassistant/test-notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    
+    console.log('HA test-notify response:', data);
+    
+    if (data.success) {
+      btn.textContent = '✓ Sent!';
+      btn.className = 'ha-test-btn success';
+    } else {
+      btn.textContent = '✗ Failed';
+      btn.className = 'ha-test-btn error';
+      btn.title = data.error || 'Failed to send';
+    }
+  } catch (e) {
+    console.error('HA test-notify error:', e);
+    btn.textContent = '✗ Error';
+    btn.className = 'ha-test-btn error';
+    btn.title = e.message;
+  }
+  
+  btn.disabled = false;
+  
+  setTimeout(() => {
+    btn.textContent = 'Test';
+    btn.className = 'ha-test-btn';
+    btn.title = '';
+  }, 5000);
+}
+
 async function fetchEntities(container) {
   const getEl = (id) => container.querySelector(`#${id}`) || document.getElementById(id);
   
@@ -317,12 +384,14 @@ async function fetchEntities(container) {
     
     if (data.success) {
       const counts = data.counts;
+      const areas = data.areas || [];
       preview.innerHTML = `
         <div class="ha-count-item">Lights: <span>${counts.lights}</span></div>
         <div class="ha-count-item">Switches: <span>${counts.switches}</span></div>
         <div class="ha-count-item">Scenes: <span>${counts.scenes}</span></div>
         <div class="ha-count-item">Scripts: <span>${counts.scripts}</span></div>
         <div class="ha-count-item">Climate: <span>${counts.climate}</span></div>
+        <div class="ha-count-item" style="width:100%; margin-top:8px;">Areas: <span>${areas.length ? areas.join(', ') : 'None detected'}</span></div>
       `;
     } else {
       preview.innerHTML = `<em style="color: var(--error)">${data.error || 'Failed to fetch'}</em>`;
@@ -400,6 +469,18 @@ function renderForm(container, settings) {
         </div>
       </div>
       
+      <div class="ha-group">
+        <label for="ha-notify-service">Mobile App Notify Service</label>
+        <div class="ha-url-row">
+          <input type="text" id="ha-notify-service" value="${s.notify_service || ''}" placeholder="mobile_app_your_phone">
+          <button type="button" class="ha-test-btn" id="ha-test-notify-btn">Test</button>
+        </div>
+        <div class="ha-hint">
+          Service name for phone notifications (with or without "notify." prefix).<br>
+          Find yours in HA: Developer Tools → Actions → search "notify.mobile_app"
+        </div>
+      </div>
+      
       <div class="ha-section">
         <div class="ha-section-title">Blacklist</div>
         <div class="ha-group">
@@ -427,6 +508,7 @@ area:Server Room">${blacklistText}</textarea>
   
   // Event listeners
   container.querySelector('#ha-test-btn').addEventListener('click', () => testConnection(container));
+  container.querySelector('#ha-test-notify-btn').addEventListener('click', () => testNotify(container));
   container.querySelector('#ha-fetch-entities').addEventListener('click', () => fetchEntities(container));
   
   // Check token status on load
@@ -467,10 +549,12 @@ function getFormSettings(container) {
   const blacklistText = getVal('ha-blacklist');
   const blacklist = blacklistText.split('\n').map(s => s.trim()).filter(Boolean);
   const token = getVal('ha-token').trim();
+  const notifyService = getVal('ha-notify-service').trim();
   
   const settings = {
     url: getVal('ha-url').trim() || 'http://homeassistant.local:8123',
-    blacklist: blacklist
+    blacklist: blacklist,
+    notify_service: notifyService
   };
   
   // Include token with underscore prefix - saveSettings will extract and handle separately

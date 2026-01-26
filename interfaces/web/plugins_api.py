@@ -316,7 +316,8 @@ def get_ha_defaults():
     """Get default settings for Home Assistant plugin."""
     return jsonify({
         "url": "http://homeassistant.local:8123",
-        "blacklist": ["cover.*", "lock.*"]
+        "blacklist": ["cover.*", "lock.*"],
+        "notify_service": ""
     })
 
 
@@ -558,3 +559,66 @@ def get_ha_token_status():
     token_len = len(credentials.get_ha_token()) if has_token else 0
     logger.info(f"HA token GET: has_token={has_token}, len={token_len}")
     return jsonify({"has_token": has_token, "token_length": token_len})
+
+
+@plugins_bp.route('/api/webui/plugins/homeassistant/test-notify', methods=['POST'])
+@require_login
+def test_ha_notify():
+    """Test notification to mobile app."""
+    import requests as req
+    from core.credentials_manager import credentials
+    
+    data = request.json or {}
+    url = data.get('url', '').strip().rstrip('/')
+    token = data.get('token', '').strip()
+    notify_service = data.get('notify_service', '').strip()
+    
+    # Use stored token if not provided
+    if not token:
+        token = credentials.get_ha_token()
+    
+    if not url:
+        return jsonify({"success": False, "error": "No URL configured"}), 400
+    
+    if not token:
+        return jsonify({"success": False, "error": "No token configured"}), 400
+    
+    if not notify_service:
+        return jsonify({"success": False, "error": "No notify service configured"}), 400
+    
+    # Strip notify. prefix if included
+    if notify_service.startswith('notify.'):
+        notify_service = notify_service[7:]
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    service_data = {
+        "message": "Test notification from Sapphire 🔮",
+        "title": "Sapphire Test"
+    }
+    
+    try:
+        endpoint = f"{url}/api/services/notify/{notify_service}"
+        logger.info(f"HA test-notify: calling {endpoint}")
+        
+        response = req.post(endpoint, headers=headers, json=service_data, timeout=10)
+        
+        logger.info(f"HA test-notify: status={response.status_code}")
+        
+        if response.status_code == 200:
+            return jsonify({"success": True, "message": "Notification sent! Check your phone."})
+        elif response.status_code == 404:
+            return jsonify({"success": False, "error": f"Service 'notify.{notify_service}' not found"}), 200
+        elif response.status_code == 401:
+            return jsonify({"success": False, "error": "Invalid token"}), 200
+        else:
+            return jsonify({"success": False, "error": f"HTTP {response.status_code}"}), 200
+            
+    except req.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Connection timed out"}), 200
+    except Exception as e:
+        logger.error(f"HA test-notify error: {e}")
+        return jsonify({"success": False, "error": str(e)[:100]}), 200

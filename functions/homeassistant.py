@@ -13,7 +13,8 @@ SETTINGS_FILE = os.path.join(PROJECT_ROOT, 'user', 'webui', 'plugins', 'homeassi
 
 DEFAULTS = {
     'url': 'http://homeassistant.local:8123',
-    'blacklist': ['cover.*', 'lock.*']
+    'blacklist': ['cover.*', 'lock.*'],
+    'notify_service': ''  # e.g., 'mobile_app_pixel_7'
 }
 
 ENABLED = True
@@ -28,7 +29,8 @@ AVAILABLE_FUNCTIONS = [
     'ha_set_thermostat',
     'ha_list_lights_and_switches',
     'ha_set_light',
-    'ha_set_switch'
+    'ha_set_switch',
+    'ha_notify'
 ]
 
 TOOLS = [
@@ -196,6 +198,27 @@ TOOLS = [
                 "required": ["name", "state"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_notify",
+            "description": "Send a notification to the user's phone via Home Assistant mobile app.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Notification message body"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional notification title"
+                    }
+                },
+                "required": ["message"]
+            }
+        }
     }
 ]
 
@@ -212,6 +235,7 @@ def _load_settings():
         settings = DEFAULTS.copy()
         settings['url'] = user_settings.get('url', DEFAULTS['url']).rstrip('/')
         settings['blacklist'] = user_settings.get('blacklist', DEFAULTS['blacklist'])
+        settings['notify_service'] = user_settings.get('notify_service', DEFAULTS.get('notify_service', ''))
         return settings
     except Exception as e:
         logger.warning(f"Failed to load HA settings: {e}")
@@ -751,6 +775,59 @@ def _set_switch(name: str, state: str, settings: dict) -> tuple:
     return result, False
 
 
+def _notify(message: str, title: str, settings: dict) -> tuple:
+    """Send notification to user's phone via HA mobile app."""
+    notify_service = settings.get('notify_service', '').strip()
+    
+    if not notify_service:
+        return "Notify service not configured. Set it in Plugins > Home Assistant settings.", False
+    
+    # Strip 'notify.' prefix if user included it
+    if notify_service.startswith('notify.'):
+        notify_service = notify_service[7:]
+    
+    # Build service data
+    service_data = {"message": message}
+    if title:
+        service_data["title"] = title
+    
+    # Call notify service
+    url = settings['url']
+    headers = _get_headers()
+    
+    if not headers:
+        return "No HA token configured", False
+    
+    try:
+        endpoint = f"{url}/api/services/notify/{notify_service}"
+        logger.info(f"HA notify: calling {endpoint} with message: {message[:50]}...")
+        
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=service_data,
+            timeout=10
+        )
+        
+        logger.info(f"HA notify: response status={response.status_code}")
+        
+        if response.status_code == 200:
+            return f"Notification sent: {message[:50]}{'...' if len(message) > 50 else ''}", True
+        elif response.status_code == 404:
+            return f"Notify service 'notify.{notify_service}' not found. Check service name in HA Developer Tools > Actions.", False
+        elif response.status_code == 401:
+            return "HA token invalid or expired", False
+        else:
+            logger.warning(f"HA notify failed: {response.status_code} - {response.text[:200]}")
+            return f"HA notification error: HTTP {response.status_code}", False
+            
+    except requests.exceptions.Timeout:
+        return "HA connection timed out", False
+    except Exception as e:
+        logger.error(f"HA notify error: {e}")
+        return f"Notification error: {e}", False
+
+
 # =============================================================================
 # EXECUTE ROUTER
 # =============================================================================
@@ -816,6 +893,13 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             if not name or not state:
                 return "Missing name or state parameter", False
             return _set_switch(name, state, settings)
+        
+        elif function_name == "ha_notify":
+            message = arguments.get("message", "")
+            title = arguments.get("title", "")
+            if not message:
+                return "Missing message parameter", False
+            return _notify(message, title, settings)
         
         else:
             return f"Unknown function: {function_name}", False
