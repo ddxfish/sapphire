@@ -429,6 +429,41 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def ensure_chat_database() -> bool:
+    """
+    Ensure SQLite chat database exists and is initialized.
+    Called at startup to bootstrap the database.
+    Returns True if database is ready, False on error.
+    """
+    import sqlite3
+    
+    db_dir = Path(__file__).parent.parent / 'user' / 'history'
+    db_path = db_dir / 'sapphire_history.db'
+    
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+        
+        conn = sqlite3.connect(str(db_path), timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS chats (
+                name TEXT PRIMARY KEY,
+                settings TEXT NOT NULL,
+                messages TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Chat database ready at {db_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure chat database: {e}")
+        return False
+
+
 def merge_prompt_files() -> dict:
     """
     Deep merge core prompts into user prompts.

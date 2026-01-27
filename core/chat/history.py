@@ -1,8 +1,10 @@
-# history.py
+# history.py - Chat history with SQLite storage for atomic writes
 import logging
 import json
 import os
 import re
+import sqlite3
+import threading
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
 from pathlib import Path
@@ -38,7 +40,6 @@ def get_user_defaults() -> Dict[str, Any]:
     if user_defaults_path.exists():
         try:
             with open(user_defaults_path, 'r', encoding='utf-8') as f:
-
                 user_defaults = json.load(f)
             # Merge: start with system defaults, override with user settings
             merged = SYSTEM_DEFAULTS.copy()
@@ -514,10 +515,25 @@ class ConversationHistory:
     
 
 class ChatSessionManager:
+    """
+    Manages chat sessions with SQLite storage for atomic writes.
+    
+    Storage: user/history/sapphire_history.db (WAL mode)
+    Schema: chats(name TEXT PRIMARY KEY, settings JSON, messages JSON, updated_at TEXT)
+    
+    Features:
+    - Atomic writes via SQLite transactions
+    - Auto-recovery if DB deleted while running
+    - One-time migration from legacy JSON files
+    """
+    
     def __init__(self, max_history: int = 30, history_dir: str = "user/history"):
         self.max_history = max_history
         self.history_dir = Path(history_dir)
         self.history_dir.mkdir(parents=True, exist_ok=True)
+        
+        self._db_path = self.history_dir / "sapphire_history.db"
+        self._lock = threading.Lock()
         
         self.current_chat = ConversationHistory(max_history=max_history)
         self.active_chat_name = "default"
@@ -526,115 +542,194 @@ class ChatSessionManager:
         # Track if we're in an active tool cycle (for Claude thinking_raw)
         self._in_tool_cycle = False
         
-        # Create default.json if it doesn't exist
-        default_path = self.history_dir / "default.json"
-        if not default_path.exists():
-            logger.info("Creating default chat with user defaults")
-            new_chat_data = {
-                "settings": get_user_defaults(),
-                "messages": []
-            }
+        # Initialize database
+        self._init_db()
+        
+        # Migrate any existing JSON files
+        self._migrate_json_files()
+        
+        # Ensure default chat exists and load it
+        self._ensure_default_exists()
+        self._load_chat("default")
+        
+        logger.info(f"ChatSessionManager initialized with SQLite storage")
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get a database connection with WAL mode."""
+        conn = sqlite3.connect(str(self._db_path), timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _init_db(self):
+        """Initialize SQLite database with schema."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS chats (
+                        name TEXT PRIMARY KEY,
+                        settings TEXT NOT NULL,
+                        messages TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                conn.commit()
+            logger.debug(f"Database initialized at {self._db_path}")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            raise
+
+    def _ensure_db(self):
+        """Ensure database exists - recreate if deleted while running."""
+        if not self._db_path.exists():
+            logger.warning("Database file missing - recreating")
+            self._init_db()
+            self._ensure_default_exists()
+
+    def _migrate_json_files(self):
+        """One-time migration from legacy JSON files to SQLite."""
+        json_files = list(self.history_dir.glob("*.json"))
+        if not json_files:
+            return
+        
+        migrated = 0
+        for json_path in json_files:
+            chat_name = json_path.stem
+            
+            # Check if already in DB
             try:
-                with open(default_path, 'w', encoding='utf-8') as f:
-                    json.dump(new_chat_data, f, indent=2)
+                with self._get_connection() as conn:
+                    cursor = conn.execute(
+                        "SELECT 1 FROM chats WHERE name = ?", 
+                        (chat_name,)
+                    )
+                    if cursor.fetchone():
+                        # Already migrated, remove JSON file
+                        json_path.unlink()
+                        logger.debug(f"Removed already-migrated JSON: {chat_name}")
+                        continue
             except Exception as e:
-                logger.error(f"Failed to create default chat: {e}")
+                logger.error(f"Error checking migration status for {chat_name}: {e}")
+                continue
+            
+            # Load JSON and migrate
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                # Handle both formats
+                if isinstance(data, dict) and "messages" in data:
+                    messages = data["messages"]
+                    settings = data.get("settings", SYSTEM_DEFAULTS.copy())
+                elif isinstance(data, list):
+                    messages = data
+                    settings = SYSTEM_DEFAULTS.copy()
+                else:
+                    logger.warning(f"Unknown JSON format in {json_path}, skipping")
+                    continue
+                
+                # Insert into SQLite
+                with self._get_connection() as conn:
+                    conn.execute(
+                        """INSERT INTO chats (name, settings, messages, updated_at) 
+                           VALUES (?, ?, ?, ?)""",
+                        (
+                            chat_name,
+                            json.dumps(settings),
+                            json.dumps(messages),
+                            datetime.now().isoformat()
+                        )
+                    )
+                    conn.commit()
+                
+                # Remove JSON file after successful migration
+                json_path.unlink()
+                migrated += 1
+                logger.info(f"Migrated chat '{chat_name}' from JSON to SQLite")
+                
+            except Exception as e:
+                logger.error(f"Failed to migrate {json_path}: {e}")
         
-        # Load default chat
-        if default_path.exists():
-            self._load_chat("default")
-        
-        logger.info(f"ChatSessionManager initialized")
-
-    def _init_predefined_chats(self):
-        """Create predefined chat files if they don't exist - removed, no longer needed."""
-        pass
-
-    def _get_chat_path(self, chat_name: str) -> Path:
-        """Get path for chat file."""
-        safe_name = "".join(c for c in chat_name if c.isalnum() or c in (' ', '-', '_')).strip()
-        safe_name = safe_name.replace(' ', '_').lower()
-        return self.history_dir / f"{safe_name}.json"
+        if migrated:
+            logger.info(f"Migration complete: {migrated} chats migrated to SQLite")
 
     def _load_chat(self, chat_name: str) -> bool:
-        """Load chat from file - loads messages AND settings."""
-        path = self._get_chat_path(chat_name)
-        if not path.exists():
-            logger.warning(f"Chat file not found: {path}")
-            return False
+        """Load chat from SQLite database."""
+        self._ensure_db()
         
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Handle new format: {"settings": {}, "messages": []}
-            if isinstance(data, dict) and "messages" in data:
-                self.current_chat.messages = data["messages"]
-                file_settings = data.get("settings", {})
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT settings, messages FROM chats WHERE name = ?",
+                    (chat_name,)
+                )
+                row = cursor.fetchone()
+                
+                if not row:
+                    logger.warning(f"Chat not found in database: {chat_name}")
+                    return False
+                
+                self.current_chat.messages = json.loads(row["messages"])
+                file_settings = json.loads(row["settings"])
                 self.current_settings = SYSTEM_DEFAULTS.copy()
                 self.current_settings.update(file_settings)
-                logger.info(f"Loaded chat '{chat_name}' with {len(data['messages'])} messages and settings")
+                
+                logger.info(f"Loaded chat '{chat_name}' with {len(self.current_chat.messages)} messages")
                 return True
-            
-            # Handle old format: just array of messages
-            elif isinstance(data, list):
-                self.current_chat.messages = data
-                self.current_settings = SYSTEM_DEFAULTS.copy()
-                logger.info(f"Loaded legacy chat '{chat_name}' with {len(data)} messages, using default settings")
-                return True
-            else:
-                logger.error(f"Invalid chat file format: {path}")
-                return False
+                
         except Exception as e:
             logger.error(f"Failed to load chat '{chat_name}': {e}")
             return False
 
     def _save_current_chat(self):
-        """Save current chat to disk - saves settings AND messages."""
-        path = self._get_chat_path(self.active_chat_name)
-        try:
-            save_data = {
-                "settings": self.current_settings,
-                "messages": self.current_chat.messages
-            }
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(save_data, f, indent=2, ensure_ascii=False)
-            logger.debug(f"Saved chat '{self.active_chat_name}' ({len(self.current_chat.messages)} messages, settings included)")
-        except Exception as e:
-            logger.error(f"Failed to save chat '{self.active_chat_name}': {e}")
+        """Save current chat to SQLite atomically."""
+        self._ensure_db()
+        
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    conn.execute(
+                        """INSERT OR REPLACE INTO chats (name, settings, messages, updated_at)
+                           VALUES (?, ?, ?, ?)""",
+                        (
+                            self.active_chat_name,
+                            json.dumps(self.current_settings),
+                            json.dumps(self.current_chat.messages),
+                            datetime.now().isoformat()
+                        )
+                    )
+                    conn.commit()
+                logger.debug(f"Saved chat '{self.active_chat_name}' ({len(self.current_chat.messages)} messages)")
+            except Exception as e:
+                logger.error(f"Failed to save chat '{self.active_chat_name}': {e}")
 
     def list_chat_files(self) -> List[Dict[str, Any]]:
         """List all available chats with metadata."""
-        chats = []
-        for path in self.history_dir.glob("*.json"):
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                display_name = path.stem.replace('_', ' ').title()
-                
-                if isinstance(data, dict) and "messages" in data:
-                    message_count = len(data["messages"])
-                    settings = data.get("settings", {})
-                elif isinstance(data, list):
-                    message_count = len(data)
-                    settings = {}
-                else:
-                    message_count = 0
-                    settings = {}
-                
-                chats.append({
-                    "name": path.stem,
-                    "display_name": display_name,
-                    "message_count": message_count,
-                    "is_active": path.stem == self.active_chat_name,
-                    "modified": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
-                    "settings": settings
-                })
-            except Exception as e:
-                logger.error(f"Error reading chat file {path}: {e}")
+        self._ensure_db()
         
-        chats.sort(key=lambda x: x["modified"], reverse=True)
+        chats = []
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    """SELECT name, settings, messages, updated_at FROM chats 
+                       ORDER BY updated_at DESC"""
+                )
+                for row in cursor:
+                    messages = json.loads(row["messages"])
+                    settings = json.loads(row["settings"])
+                    
+                    chats.append({
+                        "name": row["name"],
+                        "display_name": row["name"].replace('_', ' ').title(),
+                        "message_count": len(messages),
+                        "is_active": row["name"] == self.active_chat_name,
+                        "modified": row["updated_at"],
+                        "settings": settings
+                    })
+        except Exception as e:
+            logger.error(f"Error listing chats: {e}")
+        
         return chats
 
     def create_chat(self, chat_name: str) -> bool:
@@ -643,60 +738,103 @@ class ChatSessionManager:
             logger.error("Cannot create chat with empty name")
             return False
         
-        path = self._get_chat_path(chat_name)
-        if path.exists():
-            logger.warning(f"Chat already exists: {chat_name}")
-            return False
+        # Sanitize name
+        safe_name = "".join(c for c in chat_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = safe_name.replace(' ', '_').lower()
+        
+        self._ensure_db()
         
         try:
-            new_chat_data = {
-                "settings": get_user_defaults(),
-                "messages": []
-            }
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(new_chat_data, f, indent=2)
-            logger.info(f"Created new chat: {chat_name} with default settings")
-            return True
+            with self._get_connection() as conn:
+                # Check if exists
+                cursor = conn.execute(
+                    "SELECT 1 FROM chats WHERE name = ?", 
+                    (safe_name,)
+                )
+                if cursor.fetchone():
+                    logger.warning(f"Chat already exists: {safe_name}")
+                    return False
+                
+                # Create new chat
+                conn.execute(
+                    """INSERT INTO chats (name, settings, messages, updated_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        safe_name,
+                        json.dumps(get_user_defaults()),
+                        json.dumps([]),
+                        datetime.now().isoformat()
+                    )
+                )
+                conn.commit()
+                logger.info(f"Created new chat: {safe_name}")
+                return True
+                
         except Exception as e:
             logger.error(f"Failed to create chat '{chat_name}': {e}")
             return False
 
     def delete_chat(self, chat_name: str) -> bool:
-        """Delete chat file. Recreates default if deleted, switches active if needed."""
-        path = self._get_chat_path(chat_name)
+        """Delete chat. Recreates default if deleted, switches active if needed."""
+        self._ensure_db()
         
         try:
-            if not path.exists():
-                logger.warning(f"Chat file not found: {chat_name}")
-                return False
-            
-            was_active = (chat_name == self.active_chat_name)
-            path.unlink()
-            logger.info(f"Deleted chat: {chat_name}")
-            
-            self._ensure_default_exists()
-            
-            if was_active:
-                self._load_chat("default")
-                self.active_chat_name = "default"
-                logger.info("Switched to default after deleting active chat")
-            
-            return True
+            with self._get_connection() as conn:
+                # Check if exists
+                cursor = conn.execute(
+                    "SELECT 1 FROM chats WHERE name = ?", 
+                    (chat_name,)
+                )
+                if not cursor.fetchone():
+                    logger.warning(f"Chat not found: {chat_name}")
+                    return False
+                
+                was_active = (chat_name == self.active_chat_name)
+                
+                # Delete
+                conn.execute("DELETE FROM chats WHERE name = ?", (chat_name,))
+                conn.commit()
+                logger.info(f"Deleted chat: {chat_name}")
+                
+                # Ensure default exists
+                self._ensure_default_exists()
+                
+                # Switch to default if we deleted active
+                if was_active:
+                    self._load_chat("default")
+                    self.active_chat_name = "default"
+                    logger.info("Switched to default after deleting active chat")
+                
+                return True
+                
         except Exception as e:
             logger.error(f"Failed to delete chat '{chat_name}': {e}")
             return False
-    
+
     def _ensure_default_exists(self):
-        """Ensure default.json always exists."""
-        default_path = self.history_dir / "default.json"
-        if not default_path.exists():
-            new_chat_data = {
-                "settings": get_user_defaults(),
-                "messages": []
-            }
-            with open(default_path, 'w', encoding='utf-8') as f:
-                json.dump(new_chat_data, f, indent=2)
-            logger.info("Recreated default chat")
+        """Ensure default chat always exists."""
+        self._ensure_db()
+        
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT 1 FROM chats WHERE name = 'default'"
+                )
+                if not cursor.fetchone():
+                    conn.execute(
+                        """INSERT INTO chats (name, settings, messages, updated_at)
+                           VALUES (?, ?, ?, ?)""",
+                        (
+                            "default",
+                            json.dumps(get_user_defaults()),
+                            json.dumps([]),
+                            datetime.now().isoformat()
+                        )
+                    )
+                    conn.commit()
+                    logger.info("Created default chat")
+        except Exception as e:
+            logger.error(f"Failed to ensure default chat: {e}")
 
     def set_active_chat(self, chat_name: str) -> bool:
         """Switch to a different chat - loads messages AND settings."""
@@ -919,3 +1057,9 @@ class ChatSessionManager:
             return True
         
         return False
+
+    def _get_chat_path(self, chat_name: str) -> Path:
+        """Legacy method - only used for migration detection."""
+        safe_name = "".join(c for c in chat_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = safe_name.replace(' ', '_').lower()
+        return self.history_dir / f"{safe_name}.json"
