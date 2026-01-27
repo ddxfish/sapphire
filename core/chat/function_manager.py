@@ -33,6 +33,10 @@ class FunctionManager:
         # Memory scope for current execution context (None = disabled)
         self._memory_scope = 'default'
         
+        # State engine for games/simulations (None = disabled)
+        self._state_engine = None
+        self._turn_getter = None  # Callable that returns current turn number
+        
         # Track what was REQUESTED, not reverse-engineered
         self.current_ability_name = "none"
         
@@ -169,8 +173,15 @@ class FunctionManager:
 
     @property
     def enabled_tools(self) -> list:
-        """Get enabled tools filtered by current prompt mode."""
-        return self._apply_mode_filter(self._enabled_tools)
+        """Get enabled tools filtered by current prompt mode, plus state tools if active."""
+        tools = self._apply_mode_filter(self._enabled_tools)
+        
+        # Add state tools if state engine is active
+        if self._state_engine:
+            from .state_tools import TOOLS as STATE_TOOLS
+            tools = tools + STATE_TOOLS
+        
+        return tools
 
     def update_enabled_functions(self, enabled_names: list):
         """Update enabled tools based on function names from config or ability name."""
@@ -295,6 +306,25 @@ class FunctionManager:
         """Get current memory scope. Returns None if memory disabled."""
         return self._memory_scope
 
+    def set_state_engine(self, engine, turn_getter=None):
+        """
+        Set state engine for current chat context.
+        
+        Args:
+            engine: StateEngine instance, or None to disable
+            turn_getter: Callable that returns current turn number
+        """
+        self._state_engine = engine
+        self._turn_getter = turn_getter
+        if engine:
+            logger.info(f"State engine enabled for chat '{engine.chat_name}'")
+        else:
+            logger.debug("State engine disabled")
+
+    def get_state_engine(self):
+        """Get current state engine. Returns None if disabled."""
+        return self._state_engine
+
     def execute_function(self, function_name, arguments):
         """Execute a function using the mapped executor."""
         start_time = time.time()
@@ -309,6 +339,29 @@ class FunctionManager:
         
         logger.info(f"Executing function: {function_name}")
         
+        # Check if this is a state tool
+        from .state_tools import STATE_TOOL_NAMES, execute as state_execute
+        if function_name in STATE_TOOL_NAMES:
+            if not self._state_engine:
+                result = f"Error: State engine not active for tool '{function_name}'"
+                self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
+                return result
+            
+            # Get current turn number
+            turn = self._turn_getter() if self._turn_getter else 0
+            
+            try:
+                result, success = state_execute(function_name, arguments, self._state_engine, turn)
+                execution_time = time.time() - start_time
+                self._log_tool_call(function_name, arguments, result, execution_time, success)
+                return result
+            except Exception as e:
+                logger.error(f"Error executing state tool {function_name}: {e}")
+                execution_time = time.time() - start_time
+                self._log_tool_call(function_name, arguments, f"Error: {e}", execution_time, False)
+                return f"Error executing {function_name}: {str(e)}"
+        
+        # Standard function execution
         executor = self.execution_map.get(function_name)
         if not executor:
             logger.error(f"No executor found for function '{function_name}'")

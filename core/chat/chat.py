@@ -142,11 +142,58 @@ class LLMChat:
         if custom_ctx:
             context_parts.append(custom_ctx)
         
+        # Inject state engine block if enabled
+        if chat_settings.get('state_engine_enabled', False):
+            state_engine = self.function_manager.get_state_engine()
+            if state_engine and chat_settings.get('state_in_prompt', True):
+                turn = self.session_manager.get_turn_count()
+                state_block = state_engine.format_for_prompt()
+                context_parts.append(f"<state turn=\"{turn}\">\n{state_block}\n</state>")
+        
         # Combine all context
         if context_parts:
             prompt = f"{prompt}\n\n{chr(10).join(context_parts)}"
         
         return prompt, username
+
+    def _update_state_engine(self):
+        """Initialize or update state engine based on chat settings."""
+        chat_settings = self.session_manager.get_chat_settings()
+        
+        if chat_settings.get('state_engine_enabled', False):
+            # Lazy import to avoid circular dependency
+            from .state_engine import StateEngine
+            
+            chat_name = self.session_manager.get_active_chat_name()
+            db_path = self.session_manager._db_path
+            
+            # Check if we need to create/update state engine
+            current_engine = self.function_manager.get_state_engine()
+            if not current_engine or current_engine.chat_name != chat_name:
+                # Create new state engine for this chat
+                engine = StateEngine(chat_name, db_path)
+                
+                # Load preset if specified and state is empty
+                preset = chat_settings.get('state_preset')
+                if preset and engine.is_empty():
+                    turn = self.session_manager.get_turn_count()
+                    success, msg = engine.load_preset(preset, turn)
+                    if success:
+                        logger.info(f"[STATE] Loaded preset '{preset}' for chat '{chat_name}'")
+                    else:
+                        logger.warning(f"[STATE] Failed to load preset '{preset}': {msg}")
+                
+                # Set on function manager with turn getter
+                self.function_manager.set_state_engine(
+                    engine, 
+                    lambda: self.session_manager.get_turn_count()
+                )
+                logger.info(f"[STATE] State engine enabled for chat '{chat_name}'")
+        else:
+            # Disable state engine if not enabled for this chat
+            if self.function_manager.get_state_engine():
+                self.function_manager.set_state_engine(None)
+                logger.debug("[STATE] State engine disabled")
 
     def _build_base_messages(self, user_input: str, images: list = None):
         system_prompt, user_name = self._get_system_prompt()
@@ -207,6 +254,9 @@ class LLMChat:
             chat_settings = self.session_manager.get_chat_settings()
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
+            
+            # Update state engine for this chat context
+            self._update_state_engine()
             
             active_tools = self.function_manager.enabled_tools
             

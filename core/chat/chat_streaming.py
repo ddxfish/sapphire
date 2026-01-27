@@ -125,6 +125,9 @@ class StreamingChat:
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.main_chat.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
             
+            # Update state engine for this chat context
+            self.main_chat._update_state_engine()
+            
             active_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider, model_override = self.main_chat._select_provider()
             

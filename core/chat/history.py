@@ -27,7 +27,10 @@ SYSTEM_DEFAULTS = {
     "inject_datetime": False,
     "custom_context": "",
     "llm_primary": "auto",      # "auto", "none", or provider key like "claude"
-    "llm_model": ""             # Empty = use provider default, or specific model override
+    "llm_model": "",            # Empty = use provider default, or specific model override
+    "state_engine_enabled": False,  # State engine for games/simulations
+    "state_preset": None,           # Preset to load (e.g., "five_rooms")
+    "state_in_prompt": True         # Include state block in system prompt
 }
 
 def get_user_defaults() -> Dict[str, Any]:
