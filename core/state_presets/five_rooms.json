@@ -1,0 +1,43 @@
+{
+  "name": "Five Rooms",
+  "description": "Navigate 5 rooms, kill monster, get treasure. A simple test game for state engine.",
+  "initial_state": {
+    "player_room": {
+      "value": 1,
+      "type": "integer",
+      "min": 1,
+      "max": 5,
+      "label": "Room"
+    },
+    "player_health": {
+      "value": 20,
+      "type": "integer",
+      "min": 0,
+      "max": 20,
+      "label": "HP"
+    },
+    "inventory": {
+      "value": [],
+      "type": "array",
+      "label": "Inventory"
+    },
+    "monster_alive": {
+      "value": true,
+      "type": "boolean",
+      "label": "Monster Alive"
+    },
+    "monster_health": {
+      "value": 10,
+      "type": "integer",
+      "min": 0,
+      "max": 10,
+      "label": "Monster HP"
+    },
+    "treasure_collected": {
+      "value": false,
+      "type": "boolean",
+      "label": "Victory"
+    }
+  },
+  "prompt_injection": "You are running Five Rooms, a simple dungeon crawl. Use state tools for ALL game state changes - never track state in your head.\n\nMap: [1:Start] → [2:Empty] → [3:Monster] → [4:Key] → [5:Treasure🔒]\n\nRules:\n- Player can move to adjacent rooms only (room ±1)\n- Room 3: Monster blocks passage until dead. Combat: roll_dice(1,6) for player damage, monster deals 3 damage per turn.\n- Room 4: Key auto-pickup when entering (add to inventory)\n- Room 5: Locked until 'key' in inventory\n- Win: set treasure_collected=true when player reaches room 5 with key\n- Lose: player_health reaches 0\n\nAlways use set_state() with a reason. Describe the scene vividly after each action."
+}

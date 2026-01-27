@@ -574,6 +574,42 @@ class ChatSessionManager:
                         updated_at TEXT NOT NULL
                     )
                 """)
+                
+                # State engine tables
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS state_current (
+                        chat_name TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        value TEXT NOT NULL,
+                        value_type TEXT,
+                        label TEXT,
+                        constraints TEXT,
+                        updated_at TEXT NOT NULL,
+                        updated_by TEXT NOT NULL,
+                        turn_number INTEGER NOT NULL,
+                        PRIMARY KEY (chat_name, key)
+                    )
+                """)
+                
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS state_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_name TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        old_value TEXT,
+                        new_value TEXT NOT NULL,
+                        changed_by TEXT NOT NULL,
+                        turn_number INTEGER NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        reason TEXT
+                    )
+                """)
+                
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_state_log_chat_turn 
+                    ON state_log(chat_name, turn_number)
+                """)
+                
                 conn.commit()
             logger.debug(f"Database initialized at {self._db_path}")
         except Exception as e:
