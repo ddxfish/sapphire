@@ -89,6 +89,27 @@ export async function openSettingsModal() {
             console.warn('Could not load memory scopes:', e);
         }
         
+        // Load state presets
+        try {
+            const presetsResp = await fetch('/api/state/presets');
+            if (presetsResp.ok) {
+                const presetsData = await presetsResp.json();
+                const presetSelect = document.getElementById('setting-state-preset');
+                presetSelect.innerHTML = '<option value="">None</option>';
+                (presetsData.presets || []).forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.name;
+                    opt.textContent = `${p.display_name} (${p.key_count} keys)`;
+                    presetSelect.appendChild(opt);
+                });
+            }
+        } catch (e) {
+            console.warn('Could not load state presets:', e);
+        }
+        
+        // Load current state info if enabled
+        await loadStateInfo(chatName, settings);
+        
         // Populate form
         document.getElementById('setting-prompt').value = settings.prompt || 'sapphire';
         document.getElementById('setting-ability').value = settings.ability || 'default';
@@ -166,6 +187,27 @@ export async function openSettingsModal() {
                 }
             };
         }
+        
+        // State engine settings
+        document.getElementById('setting-state-enabled').checked = settings.state_engine_enabled === true;
+        document.getElementById('setting-state-preset').value = settings.state_preset || '';
+        document.getElementById('setting-state-in-prompt').checked = settings.state_in_prompt !== false;
+        
+        // State engine accordion toggle
+        const stateHeader = document.getElementById('state-engine-header');
+        const stateContent = document.getElementById('state-engine-content');
+        if (stateHeader) {
+            stateHeader.onclick = () => {
+                const isOpen = stateHeader.classList.toggle('open');
+                stateContent.style.display = isOpen ? 'block' : 'none';
+            };
+        }
+        
+        // Update state badge
+        updateStateBadge(settings.state_engine_enabled);
+        
+        // State action buttons
+        setupStateActionButtons(chatName);
         
         document.getElementById('pitch-value').textContent = settings.pitch || 0.94;
         document.getElementById('speed-value').textContent = settings.speed || 1.3;
@@ -306,7 +348,10 @@ export async function saveSettings() {
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
             llm_model: getSelectedModel(),
             trim_color: trimColor,
-            memory_scope: document.getElementById('setting-memory-scope')?.value || 'default'
+            memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
+            state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
+            state_preset: document.getElementById('setting-state-preset')?.value || null,
+            state_in_prompt: document.getElementById('setting-state-in-prompt')?.checked !== false
         };
         
         await api.updateChatSettings(chatName, settings);
@@ -392,7 +437,10 @@ export async function saveAsDefaults() {
             llm_primary: document.getElementById('setting-llm-primary')?.value || 'auto',
             llm_model: getSelectedModel(),
             trim_color: trimColor,
-            memory_scope: document.getElementById('setting-memory-scope')?.value || 'default'
+            memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
+            state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
+            state_preset: document.getElementById('setting-state-preset')?.value || null,
+            state_in_prompt: document.getElementById('setting-state-in-prompt')?.checked !== false
         };
         
         const res = await fetch('/api/settings/chat-defaults', {
@@ -450,4 +498,121 @@ export function initModalSliders() {
 export function handleModalBackdropClick(e) {
     const { settingsModal } = getElements();
     if (e.target === settingsModal) closeSettingsModal();
+}
+
+// =============================================================================
+// STATE ENGINE HELPERS
+// =============================================================================
+
+async function loadStateInfo(chatName, settings) {
+    const stateInfo = document.getElementById('state-info');
+    const stateActions = document.getElementById('state-actions');
+    const turnInfo = document.getElementById('state-turn-info');
+    const keyInfo = document.getElementById('state-key-info');
+    
+    if (!settings.state_engine_enabled) {
+        if (stateInfo) stateInfo.style.display = 'none';
+        if (stateActions) stateActions.style.display = 'none';
+        return;
+    }
+    
+    try {
+        const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`);
+        if (resp.ok) {
+            const data = await resp.json();
+            if (turnInfo) turnInfo.textContent = `Turn: ${Object.values(data.state || {})[0]?.turn || 0}`;
+            if (keyInfo) keyInfo.textContent = `Keys: ${data.key_count || 0}`;
+            if (stateInfo) stateInfo.style.display = 'flex';
+            if (stateActions) stateActions.style.display = 'flex';
+        }
+    } catch (e) {
+        console.warn('Could not load state info:', e);
+    }
+}
+
+function updateStateBadge(enabled) {
+    const badge = document.getElementById('state-badge');
+    if (badge) {
+        badge.style.display = enabled ? 'inline-block' : 'none';
+    }
+    
+    // Also update checkbox change handler
+    const checkbox = document.getElementById('setting-state-enabled');
+    if (checkbox) {
+        checkbox.onchange = () => {
+            updateStateBadge(checkbox.checked);
+            const stateInfo = document.getElementById('state-info');
+            const stateActions = document.getElementById('state-actions');
+            if (!checkbox.checked) {
+                if (stateInfo) stateInfo.style.display = 'none';
+                if (stateActions) stateActions.style.display = 'none';
+            }
+        };
+    }
+}
+
+function setupStateActionButtons(chatName) {
+    const viewBtn = document.getElementById('state-view-btn');
+    const resetBtn = document.getElementById('state-reset-btn');
+    const historyBtn = document.getElementById('state-history-btn');
+    
+    if (viewBtn) {
+        viewBtn.onclick = async () => {
+            try {
+                const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const stateStr = Object.entries(data.state || {})
+                        .map(([k, v]) => `${v.label || k}: ${JSON.stringify(v.value)}`)
+                        .join('\n');
+                    alert(`State for ${chatName}:\n\n${stateStr || '(empty)'}`);
+                }
+            } catch (e) {
+                ui.showToast('Failed to load state', 'error');
+            }
+        };
+    }
+    
+    if (resetBtn) {
+        resetBtn.onclick = async () => {
+            const preset = document.getElementById('setting-state-preset')?.value;
+            if (!confirm(`Reset state${preset ? ` to preset "${preset}"` : ''}?`)) return;
+            
+            try {
+                const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ preset: preset || null })
+                });
+                if (resp.ok) {
+                    ui.showToast('State reset', 'success');
+                    // Refresh state info
+                    const settings = { state_engine_enabled: true };
+                    await loadStateInfo(chatName, settings);
+                } else {
+                    const err = await resp.json();
+                    ui.showToast(err.error || 'Reset failed', 'error');
+                }
+            } catch (e) {
+                ui.showToast('Failed to reset state', 'error');
+            }
+        };
+    }
+    
+    if (historyBtn) {
+        historyBtn.onclick = async () => {
+            try {
+                const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}/history?limit=20`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    const histStr = (data.history || [])
+                        .map(h => `[T${h.turn}] ${h.key}: ${JSON.stringify(h.old_value)} → ${JSON.stringify(h.new_value)} (${h.changed_by})`)
+                        .join('\n');
+                    alert(`Recent state history:\n\n${histStr || '(no history)'}`);
+                }
+            } catch (e) {
+                ui.showToast('Failed to load history', 'error');
+            }
+        };
+    }
 }

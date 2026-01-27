@@ -1274,6 +1274,174 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             return jsonify({"error": str(e)}), 500
 
     # =============================================================================
+    # STATE ENGINE ROUTES
+    # =============================================================================
+    
+    @bp.route('/api/state/presets', methods=['GET'])
+    def list_state_presets():
+        """List available state presets from core and user directories."""
+        try:
+            from pathlib import Path
+            presets = []
+            
+            # Search paths: user first (can override), then core
+            search_paths = [
+                Path("user/state_presets"),
+                Path("core/state_presets"),
+            ]
+            
+            seen = set()
+            for search_dir in search_paths:
+                if not search_dir.exists():
+                    continue
+                for preset_file in search_dir.glob("*.json"):
+                    name = preset_file.stem
+                    if name in seen:
+                        continue  # User preset overrides core
+                    seen.add(name)
+                    
+                    try:
+                        with open(preset_file, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        presets.append({
+                            "name": name,
+                            "display_name": data.get("name", name),
+                            "description": data.get("description", ""),
+                            "key_count": len(data.get("initial_state", {})),
+                            "source": "user" if "user" in str(search_dir) else "core"
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to load preset {preset_file}: {e}")
+            
+            return jsonify({"presets": presets})
+        except Exception as e:
+            logger.error(f"Failed to list state presets: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/api/state/<chat_name>', methods=['GET'])
+    def get_chat_state(chat_name):
+        """Get current state for a chat."""
+        try:
+            from pathlib import Path
+            from core.chat.state_engine import StateEngine
+            
+            db_path = Path("user/history/sapphire_history.db")
+            if not db_path.exists():
+                return jsonify({"error": "Database not found"}), 404
+            
+            engine = StateEngine(chat_name, db_path)
+            state = engine.get_state_full()
+            
+            # Format for API response
+            formatted = {}
+            for key, entry in state.items():
+                formatted[key] = {
+                    "value": entry["value"],
+                    "type": entry.get("type"),
+                    "label": entry.get("label"),
+                    "turn": entry.get("turn")
+                }
+            
+            return jsonify({
+                "chat_name": chat_name,
+                "state": formatted,
+                "key_count": len(formatted),
+                "preset": engine.preset_name
+            })
+        except Exception as e:
+            logger.error(f"Failed to get state for {chat_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/api/state/<chat_name>/history', methods=['GET'])
+    def get_chat_state_history(chat_name):
+        """Get state change history for a chat."""
+        try:
+            from pathlib import Path
+            from core.chat.state_engine import StateEngine
+            
+            db_path = Path("user/history/sapphire_history.db")
+            if not db_path.exists():
+                return jsonify({"error": "Database not found"}), 404
+            
+            limit = request.args.get('limit', 100, type=int)
+            key = request.args.get('key')
+            
+            engine = StateEngine(chat_name, db_path)
+            history = engine.get_history(key=key, limit=limit)
+            
+            return jsonify({
+                "chat_name": chat_name,
+                "history": history,
+                "count": len(history)
+            })
+        except Exception as e:
+            logger.error(f"Failed to get state history for {chat_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/api/state/<chat_name>/reset', methods=['POST'])
+    def reset_chat_state(chat_name):
+        """Reset state to preset or clear all."""
+        try:
+            from pathlib import Path
+            from core.chat.state_engine import StateEngine
+            
+            db_path = Path("user/history/sapphire_history.db")
+            if not db_path.exists():
+                return jsonify({"error": "Database not found"}), 404
+            
+            data = request.get_json() or {}
+            preset = data.get('preset')
+            
+            engine = StateEngine(chat_name, db_path)
+            
+            if preset:
+                # Get current turn from chat
+                turn = system_instance.llm_chat.session_manager.get_turn_count() if system_instance else 0
+                success, msg = engine.load_preset(preset, turn)
+                if success:
+                    return jsonify({"status": "reset", "preset": preset, "message": msg})
+                else:
+                    return jsonify({"error": msg}), 400
+            else:
+                # Clear all state
+                engine.clear_all()
+                return jsonify({"status": "cleared", "message": "State cleared"})
+        except Exception as e:
+            logger.error(f"Failed to reset state for {chat_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    @bp.route('/api/state/<chat_name>/set', methods=['POST'])
+    def set_chat_state_value(chat_name):
+        """Set a state value directly (user/admin action)."""
+        try:
+            from pathlib import Path
+            from core.chat.state_engine import StateEngine
+            
+            db_path = Path("user/history/sapphire_history.db")
+            if not db_path.exists():
+                return jsonify({"error": "Database not found"}), 404
+            
+            data = request.get_json() or {}
+            key = data.get('key')
+            value = data.get('value')
+            
+            if not key:
+                return jsonify({"error": "Key required"}), 400
+            
+            engine = StateEngine(chat_name, db_path)
+            turn = system_instance.llm_chat.session_manager.get_turn_count() if system_instance else 0
+            
+            success, msg = engine.set_state(key, value, "user", turn, "Manual edit via UI")
+            
+            if success:
+                return jsonify({"status": "set", "key": key, "value": value})
+            else:
+                return jsonify({"error": msg}), 400
+        except Exception as e:
+            logger.error(f"Failed to set state for {chat_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    # =============================================================================
     # SYSTEM MANAGEMENT ROUTES
     # =============================================================================
     

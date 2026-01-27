@@ -243,6 +243,50 @@
                             <button type="button" id="reset-trim-color" class="btn btn-small" title="Reset to theme default">Reset</button>
                         </div>
                     </div>
+                    
+                    <!-- State Engine Accordion -->
+                    <div class="form-group full-width accordion-section">
+                        <div class="accordion-header" id="state-engine-header">
+                            <span class="accordion-arrow">▶</span>
+                            <span>State Engine</span>
+                            <span class="accordion-badge" id="state-badge" style="display: none;">Active</span>
+                        </div>
+                        <div class="accordion-content" id="state-engine-content" style="display: none;">
+                            <div class="accordion-inner">
+                                <div class="form-group">
+                                    <label>
+                                        <input type="checkbox" id="setting-state-enabled">
+                                        Enable State Engine
+                                    </label>
+                                </div>
+                                
+                                <div class="form-group" id="state-preset-group">
+                                    <label for="setting-state-preset">Preset:</label>
+                                    <select id="setting-state-preset" class="form-control">
+                                        <option value="">None</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>
+                                        <input type="checkbox" id="setting-state-in-prompt" checked>
+                                        Include in system prompt
+                                    </label>
+                                </div>
+                                
+                                <div class="state-info" id="state-info" style="display: none;">
+                                    <span id="state-turn-info">Turn: 0</span>
+                                    <span id="state-key-info">Keys: 0</span>
+                                </div>
+                                
+                                <div class="state-actions" id="state-actions" style="display: none;">
+                                    <button type="button" id="state-view-btn" class="btn btn-small">View</button>
+                                    <button type="button" id="state-reset-btn" class="btn btn-small">Reset</button>
+                                    <button type="button" id="state-history-btn" class="btn btn-small">History</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
             

@@ -1230,3 +1230,80 @@ input[type="range"]:focus::-webkit-slider-thumb {
 .trim-bg {
     background: var(--trim, var(--accent-blue));
 }
+
+/* =============================================================================
+   ACCORDION SECTIONS
+   Used in modals for collapsible advanced options
+   ============================================================================= */
+.accordion-section {
+    margin-top: var(--space-md);
+}
+
+.accordion-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--accordion-header-bg, rgba(74, 158, 255, 0.08));
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s ease;
+}
+
+.accordion-header:hover {
+    background: var(--accordion-header-hover, rgba(74, 158, 255, 0.12));
+}
+
+.accordion-arrow {
+    font-size: 10px;
+    transition: transform 0.2s ease;
+    color: var(--text-muted);
+}
+
+.accordion-header.open .accordion-arrow {
+    transform: rotate(90deg);
+}
+
+.accordion-badge {
+    margin-left: auto;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--trim, var(--accent-blue));
+    color: var(--bg-primary);
+    font-weight: 500;
+}
+
+.accordion-content {
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+}
+
+.accordion-inner {
+    padding: var(--space-md);
+    padding-top: var(--space-sm);
+}
+
+.accordion-inner .form-group {
+    margin-bottom: var(--space-sm);
+}
+
+.accordion-inner .form-group:last-child {
+    margin-bottom: 0;
+}
+
+/* State engine specific */
+.state-info {
+    display: flex;
+    gap: var(--space-lg);
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: var(--space-sm);
+}
+
+.state-actions {
+    display: flex;
+    gap: var(--space-sm);
+    margin-top: var(--space-sm);
+}
