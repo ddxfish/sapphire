@@ -234,10 +234,13 @@ class StateEngine:
         Returns:
             (success, message)
         """
+        # Get project root from state_engine.py location (core/chat/state_engine.py -> project root)
+        project_root = Path(__file__).parent.parent.parent
+        
         # Search paths: user first, then core
         search_paths = [
-            Path("user/state_presets") / f"{preset_name}.json",
-            Path("core/state_presets") / f"{preset_name}.json",
+            project_root / "user" / "state_presets" / f"{preset_name}.json",
+            project_root / "core" / "state_presets" / f"{preset_name}.json",
         ]
         
         preset_path = None

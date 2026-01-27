@@ -960,10 +960,27 @@ class ChatSessionManager:
     def get_turn_count(self) -> int:
         return self.current_chat.get_turn_count()
 
+    def _rollback_state_if_needed(self):
+        """Rollback state engine to current turn count if enabled."""
+        if not self.current_settings.get('state_engine_enabled', False):
+            return
+        
+        try:
+            from .state_engine import StateEngine
+            new_turn = self.get_turn_count()
+            engine = StateEngine(self.active_chat_name, self._db_path)
+            
+            if not engine.is_empty():
+                engine.rollback_to_turn(new_turn)
+                logger.info(f"[STATE] Rolled back state to turn {new_turn} after message removal")
+        except Exception as e:
+            logger.error(f"[STATE] Failed to rollback state: {e}")
+
     def remove_last_messages(self, count: int) -> bool:
         result = self.current_chat.remove_last_messages(count)
         if result:
             self._save_current_chat()
+            self._rollback_state_if_needed()
             publish(Events.MESSAGE_REMOVED, {"count": count})
         return result
 
@@ -971,6 +988,7 @@ class ChatSessionManager:
         result = self.current_chat.remove_from_user_message(user_content)
         if result:
             self._save_current_chat()
+            self._rollback_state_if_needed()
             publish(Events.MESSAGE_REMOVED, {"from": "user_message"})
         return result
 
@@ -978,6 +996,7 @@ class ChatSessionManager:
         result = self.current_chat.remove_from_assistant_timestamp(timestamp)
         if result:
             self._save_current_chat()
+            self._rollback_state_if_needed()
             publish(Events.MESSAGE_REMOVED, {"from": "assistant_timestamp"})
         return result
 
@@ -986,6 +1005,7 @@ class ChatSessionManager:
         result = self.current_chat.remove_tool_call(tool_call_id)
         if result:
             self._save_current_chat()
+            # Note: tool call removal doesn't change turn count, no state rollback needed
             publish(Events.MESSAGE_REMOVED, {"tool_call_id": tool_call_id})
         return result
 
@@ -993,6 +1013,17 @@ class ChatSessionManager:
         self.current_chat.clear()
         self._in_tool_cycle = False
         self._save_current_chat()
+        
+        # Clear state if enabled
+        if self.current_settings.get('state_engine_enabled', False):
+            try:
+                from .state_engine import StateEngine
+                engine = StateEngine(self.active_chat_name, self._db_path)
+                engine.clear_all()
+                logger.info(f"[STATE] Cleared state for chat '{self.active_chat_name}'")
+            except Exception as e:
+                logger.error(f"[STATE] Failed to clear state: {e}")
+        
         publish(Events.CHAT_CLEARED)
 
     def edit_message_by_content(self, role: str, original_content: str, new_content: str) -> bool:

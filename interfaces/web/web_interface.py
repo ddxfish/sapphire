@@ -892,6 +892,41 @@ def get_memory_scopes():
 def create_memory_scope():
     return proxy('/api/memory/scopes', 'POST', json=request.json, timeout=10)
 
+# =============================================================================
+# STATE ENGINE ROUTES
+# =============================================================================
+
+@app.route('/api/state/presets', methods=['GET'])
+@require_login
+def get_state_presets():
+    return proxy('/api/state/presets')
+
+@app.route('/api/state/<chat_name>', methods=['GET'])
+@require_login
+def get_chat_state(chat_name):
+    return proxy(f'/api/state/{chat_name}')
+
+@app.route('/api/state/<chat_name>/history', methods=['GET'])
+@require_login
+def get_chat_state_history(chat_name):
+    # Forward query params
+    limit = request.args.get('limit', 100)
+    key = request.args.get('key', '')
+    url = f'/api/state/{chat_name}/history?limit={limit}'
+    if key:
+        url += f'&key={key}'
+    return proxy(url)
+
+@app.route('/api/state/<chat_name>/reset', methods=['POST'])
+@require_login
+def reset_chat_state(chat_name):
+    return proxy(f'/api/state/{chat_name}/reset', 'POST', json=request.json, timeout=10)
+
+@app.route('/api/state/<chat_name>/set', methods=['POST'])
+@require_login
+def set_chat_state_value(chat_name):
+    return proxy(f'/api/state/{chat_name}/set', 'POST', json=request.json, timeout=10)
+
 @app.route('/user-assets/<path:filename>')
 @require_login
 def user_assets(filename):

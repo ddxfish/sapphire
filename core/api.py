@@ -1284,10 +1284,13 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             from pathlib import Path
             presets = []
             
+            # Get project root from api.py location
+            project_root = Path(__file__).parent.parent
+            
             # Search paths: user first (can override), then core
             search_paths = [
-                Path("user/state_presets"),
-                Path("core/state_presets"),
+                project_root / "user" / "state_presets",
+                project_root / "core" / "state_presets",
             ]
             
             seen = set()
