@@ -132,7 +132,7 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
                     return f"Key '{key}' not found in state", False
                 return f"{key} = {_format_value(value)}", True
             else:
-                state = state_engine.get_state()
+                state = state_engine.get_visible_state()
                 if not state:
                     return "(no state set)", True
                 lines = [f"{k}: {_format_value(v)}" for k, v in sorted(state.items())]

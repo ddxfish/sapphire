@@ -1347,6 +1347,28 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 return jsonify({"error": "Database not found"}), 404
             
             engine = StateEngine(chat_name, db_path)
+            
+            # Check if settings preset differs from DB - sync if needed
+            session_manager = system_instance.llm_chat.session_manager
+            if chat_name == session_manager.get_active_chat_name():
+                chat_settings = session_manager.get_chat_settings()
+                
+                if chat_settings.get('state_engine_enabled', False):
+                    settings_preset = chat_settings.get('state_preset')
+                    db_preset = engine.preset_name
+                    
+                    if settings_preset and settings_preset != db_preset:
+                        if engine.is_empty():
+                            # No state yet - load full preset
+                            turn = session_manager.get_turn_count()
+                            success, msg = engine.load_preset(settings_preset, turn)
+                            if success:
+                                logger.info(f"[STATE] API loaded preset '{settings_preset}' for empty state")
+                        else:
+                            # State exists - just reload config (don't wipe progress!)
+                            engine.reload_preset_config(settings_preset)
+                            logger.info(f"[STATE] API synced config for '{settings_preset}' (preserving state)")
+            
             state = engine.get_state_full()
             
             # Format for API response

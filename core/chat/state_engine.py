@@ -46,15 +46,27 @@ class StateEngine:
                     (self.chat_name,)
                 )
                 self._current_state = {}
+                preset_name_from_db = None
                 for row in cursor:
-                    self._current_state[row["key"]] = {
+                    key = row["key"]
+                    # Extract preset name from system key
+                    if key == "_preset":
+                        preset_name_from_db = json.loads(row["value"])
+                        continue  # Don't add to visible state
+                    self._current_state[key] = {
                         "value": json.loads(row["value"]),
                         "type": row["value_type"],
                         "label": row["label"],
                         "constraints": json.loads(row["constraints"]) if row["constraints"] else None,
                         "turn": row["turn_number"]
                     }
-                logger.debug(f"Loaded {len(self._current_state)} state keys for '{self.chat_name}'")
+                
+                # Reload preset config if we found one in DB
+                if preset_name_from_db:
+                    self.reload_preset_config(preset_name_from_db)
+                
+                logger.debug(f"Loaded {len(self._current_state)} state keys for '{self.chat_name}'" +
+                            (f" (preset: {self._preset_name})" if self._preset_name else ""))
         except Exception as e:
             logger.error(f"Failed to load state for '{self.chat_name}': {e}")
             self._current_state = {}
@@ -140,6 +152,35 @@ class StateEngine:
         if key:
             return self._current_state.get(key)
         return self._current_state.copy()
+    
+    def get_visible_state(self) -> dict:
+        """
+        Get state filtered by visible_from constraints.
+        Used by AI tools to prevent seeing future-gated variables.
+        """
+        # Get iterator value for visibility checks
+        iterator_value = None
+        if self._progressive_config:
+            iterator_key = self._progressive_config.get("iterator")
+            if iterator_key:
+                val = self.get_state(iterator_key)
+                if isinstance(val, (int, float)):
+                    iterator_value = int(val)
+        
+        result = {}
+        for key, entry in self._current_state.items():
+            if key.startswith("_"):
+                continue
+            
+            constraints = entry.get("constraints", {}) or {}
+            visible_from = constraints.get("visible_from")
+            if visible_from is not None and iterator_value is not None:
+                if iterator_value < visible_from:
+                    continue
+            
+            result[key] = entry["value"]
+        
+        return result
     
     def set_state(self, key: str, value: Any, changed_by: str, 
                   turn_number: int, reason: str = None) -> tuple[bool, str]:
@@ -365,6 +406,24 @@ class StateEngine:
                             f"Preset: {preset_name}"
                         )
                     )
+                
+                # Store preset name as system key for later retrieval
+                conn.execute(
+                    """INSERT OR REPLACE INTO state_current 
+                       (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        self.chat_name,
+                        "_preset",
+                        json.dumps(preset_name),
+                        "string",
+                        "System: Active Preset",
+                        None,
+                        datetime.now().isoformat(),
+                        "system",
+                        turn_number
+                    )
+                )
                 conn.commit()
             
             self._preset_name = preset_name
@@ -533,8 +592,28 @@ class StateEngine:
         if not self._current_state:
             return "(no state)"
         
+        # Get iterator value for visibility checks
+        iterator_value = None
+        if self._progressive_config:
+            iterator_key = self._progressive_config.get("iterator")
+            if iterator_key:
+                val = self.get_state(iterator_key)
+                if isinstance(val, (int, float)):
+                    iterator_value = int(val)
+        
         lines = []
         for key, entry in sorted(self._current_state.items()):
+            # Skip system keys (internal use only)
+            if key.startswith("_"):
+                continue
+            
+            # Check visibility constraint
+            constraints = entry.get("constraints", {}) or {}
+            visible_from = constraints.get("visible_from")
+            if visible_from is not None and iterator_value is not None:
+                if iterator_value < visible_from:
+                    continue  # Hide this variable until iterator reaches visible_from
+            
             value = entry["value"]
             label = entry.get("label")
             
@@ -648,6 +727,27 @@ class StateEngine:
             
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            
+            # Persist preset name to DB for future restarts
+            with self._get_connection() as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO state_current 
+                       (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        self.chat_name,
+                        "_preset",
+                        json.dumps(preset_name),
+                        "string",
+                        "System: Active Preset",
+                        None,
+                        datetime.now().isoformat(),
+                        "system",
+                        0  # System key, turn doesn't matter
+                    )
+                )
+                conn.commit()
+            
             logger.debug(f"Reloaded config for preset '{preset_name}'")
             return True
         except Exception as e:
