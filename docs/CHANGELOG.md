@@ -1,6 +1,8 @@
 # 1.2.2 - State Engine
 - Added state engine to track story elements and games
 - Added simple stories for game engine demo (action, romance, technical)
+- Added Claude prompt caching to show miss, or hit which reduced costs
+- UX - Collapsed advanced settings in chat settings modal
 # 1.2.1 - SQLite 
 - Converting JSON history to SQLite to prevent corruption
 # 1.2.0 - Continuity and Home Assistant
@@ -52,9 +54,11 @@
 - Sapphire SDXL server is separate but integrates
 - Plugin system now managed extra settings like image gen
 # 1.1.0 - Cross platform Win/Linux
+## December 2025
 - pip installs are cross platform now
 - changed audio system to allow windows
 # 1.0.4 - OpenWakeword
 - Switched from Mycroft Precise to OWW
 # 1.0 - Public release
+## December 2025
 - first release after a year of development
