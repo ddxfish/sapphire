@@ -7,7 +7,21 @@
       "type": "integer",
       "min": 1,
       "max": 5,
-      "label": "Room"
+      "adjacent": 1,
+      "label": "Room",
+      "blockers": [
+        {
+          "target": 4,
+          "from": 3,
+          "requires": {"monster_alive": false},
+          "message": "The monster blocks your path! You must defeat it first."
+        },
+        {
+          "target": 5,
+          "requires": {"has_key": true},
+          "message": "The door to room 5 is locked. You need a key."
+        }
+      ]
     },
     "player_health": {
       "value": 20,
@@ -16,10 +30,10 @@
       "max": 20,
       "label": "HP"
     },
-    "inventory": {
-      "value": [],
-      "type": "array",
-      "label": "Inventory"
+    "has_key": {
+      "value": false,
+      "type": "boolean",
+      "label": "Has Key"
     },
     "monster_alive": {
       "value": true,
@@ -39,5 +53,16 @@
       "label": "Victory"
     }
   },
-  "prompt_injection": "You are running Five Rooms, a simple dungeon crawl. Use state tools for ALL game state changes - never track state in your head.\n\nMap: [1:Start] → [2:Empty] → [3:Monster] → [4:Key] → [5:Treasure🔒]\n\nRules:\n- Player can move to adjacent rooms only (room ±1)\n- Room 3: Monster blocks passage until dead. Combat: roll_dice(1,6) for player damage, monster deals 3 damage per turn.\n- Room 4: Key auto-pickup when entering (add to inventory)\n- Room 5: Locked until 'key' in inventory\n- Win: set treasure_collected=true when player reaches room 5 with key\n- Lose: player_health reaches 0\n\nAlways use set_state() with a reason. Describe the scene vividly after each action."
+  "progressive_prompt": {
+    "iterator": "player_room",
+    "mode": "cumulative",
+    "base": "You are running Five Rooms, a dungeon crawl. Use state tools for ALL game state changes - never track state in memory.\n\nRules:\n- Player can move to adjacent rooms only (room ±1) - the state engine enforces this\n- The state engine enforces blockers automatically. If set_state fails, narrate the failure.\n- Always call set_state() for movement with a reason. Describe the scene vividly after each action.\n- If player_health reaches 0, they die. Game over.",
+    "segments": {
+      "1": "ROOM 1 - THE ENTRANCE\nA torch-lit stone chamber. Dust motes drift in stale air. A dark corridor leads forward to room 2.",
+      "2": "ROOM 2 - THE EMPTY HALL\nAn eerily quiet passage. Faded murals line the walls. You sense danger ahead. Corridors lead back to room 1 or forward to room 3.",
+      "3": "ROOM 3 - THE MONSTER'S LAIR\nA hulking beast blocks the path! Combat rules: roll_dice(1,6) for player damage each attack. Monster deals 3 damage per turn. When monster_health hits 0, set monster_alive=false. Only then can player proceed to room 4.",
+      "4": "ROOM 4 - THE KEY CHAMBER\nA gleaming brass key rests on a stone pedestal. When player enters, set has_key=true automatically. A heavy locked door leads to room 5.",
+      "5": "ROOM 5 - THE TREASURE VAULT\nGold and jewels sparkle in torchlight! Set treasure_collected=true. VICTORY! Congratulate the player on completing Five Rooms."
+    }
+  }
 }

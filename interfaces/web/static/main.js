@@ -233,6 +233,16 @@ async function init() {
 }
 
 function initEventBus() {
+    // Debounced refresh - prevents multiple /api/history calls from racing
+    let refreshTimer = null;
+    const debouncedRefresh = () => {
+        if (refreshTimer) clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(() => {
+            refreshTimer = null;
+            if (!getIsProc()) refresh(false);
+        }, 100);  // 100ms debounce
+    };
+    
     // Register event handlers
     
     // AI typing events
@@ -242,9 +252,7 @@ function initEventBus() {
     
     eventBus.on(eventBus.Events.AI_TYPING_END, () => {
         console.log('[EventBus] AI typing ended');
-        if (!getIsProc()) {
-            refresh(false);
-        }
+        debouncedRefresh();
     });
     
     // TTS events
@@ -260,22 +268,20 @@ function initEventBus() {
         updateMicButtonState();
     });
     
-    // Message events - instant refresh on changes
+    // Message events - debounced to prevent multiple /api/history calls
     eventBus.on(eventBus.Events.MESSAGE_ADDED, (data) => {
         console.log('[EventBus] Message added:', data?.role);
-        if (!getIsProc()) {
-            refresh(false);
-        }
+        debouncedRefresh();
     });
     
     eventBus.on(eventBus.Events.MESSAGE_REMOVED, () => {
         console.log('[EventBus] Message removed');
-        refresh(false);
+        debouncedRefresh();
     });
     
     eventBus.on(eventBus.Events.CHAT_CLEARED, () => {
         console.log('[EventBus] Chat cleared');
-        refresh(false);
+        debouncedRefresh();
     });
     
     // System state events

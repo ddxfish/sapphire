@@ -173,15 +173,20 @@ class LLMChat:
                 # Create new state engine for this chat
                 engine = StateEngine(chat_name, db_path)
                 
-                # Load preset if specified and state is empty
                 preset = chat_settings.get('state_preset')
-                if preset and engine.is_empty():
-                    turn = self.session_manager.get_turn_count()
-                    success, msg = engine.load_preset(preset, turn)
-                    if success:
-                        logger.info(f"[STATE] Loaded preset '{preset}' for chat '{chat_name}'")
+                if preset:
+                    if engine.is_empty():
+                        # Fresh start - load full preset with initial state
+                        turn = self.session_manager.get_turn_count()
+                        success, msg = engine.load_preset(preset, turn)
+                        if success:
+                            logger.info(f"[STATE] Loaded preset '{preset}' for chat '{chat_name}'")
+                        else:
+                            logger.warning(f"[STATE] Failed to load preset '{preset}': {msg}")
                     else:
-                        logger.warning(f"[STATE] Failed to load preset '{preset}': {msg}")
+                        # State exists - just reload the prompt config (not state values)
+                        engine.reload_preset_config(preset)
+                        logger.info(f"[STATE] Reloaded config for existing state in '{chat_name}'")
                 
                 # Set on function manager with turn getter
                 self.function_manager.set_state_engine(

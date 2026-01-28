@@ -2,6 +2,9 @@
 """
 State Engine - Per-chat state management with full history for rollback.
 Enables games, simulations, and interactive stories where AI reads/writes state via tools.
+
+Progressive Prompts: Reveal prompt segments based on iterator state (room #, turn, etc.)
+to prevent AI from seeing future content.
 """
 
 import json
@@ -22,7 +25,7 @@ class StateEngine:
         self._db_path = db_path
         self._current_state = {}  # Cache: key -> {value, type, label, constraints, turn}
         self._preset_name = None
-        self._preset_prompt = None
+        self._progressive_config = None  # {iterator, mode, base, segments}
         self._load_state()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -73,10 +76,45 @@ class StateEngine:
             if value > constraints["max"]:
                 return False, f"{key} must be <= {constraints['max']}"
         
+        # Adjacency - new value must be within ±N of current value
+        if "adjacent" in constraints and isinstance(value, (int, float)):
+            current = self.get_state(key)
+            if current is not None:
+                max_step = constraints["adjacent"]
+                if abs(value - current) > max_step:
+                    return False, f"Can only move ±{max_step} at a time (current: {current}, attempted: {value})"
+        
         # Enum options
         if "options" in constraints:
             if value not in constraints["options"]:
                 return False, f"{key} must be one of: {constraints['options']}"
+        
+        # Blockers - conditions that must be met before allowing this value
+        if "blockers" in constraints:
+            for blocker in constraints["blockers"]:
+                # Check if this blocker applies to the target value
+                target = blocker.get("target")
+                if target is not None:
+                    # target can be single value or list
+                    targets = target if isinstance(target, list) else [target]
+                    if value not in targets:
+                        continue  # This blocker doesn't apply
+                
+                # Check if blocker has a "from" condition (only block when coming from certain values)
+                from_values = blocker.get("from")
+                if from_values is not None:
+                    current = self.get_state(key)
+                    from_list = from_values if isinstance(from_values, list) else [from_values]
+                    if current not in from_list:
+                        continue  # Not coming from a blocked origin
+                
+                # Check required conditions
+                requires = blocker.get("requires", {})
+                for req_key, req_value in requires.items():
+                    actual = self.get_state(req_key)
+                    if actual != req_value:
+                        message = blocker.get("message", f"Cannot set {key} to {value}: requires {req_key}={req_value}")
+                        return False, message
         
         return True, ""
     
@@ -311,9 +349,11 @@ class StateEngine:
                 conn.commit()
             
             self._preset_name = preset_name
-            self._preset_prompt = preset.get("prompt_injection", "")
+            self._progressive_config = preset.get("progressive_prompt")
             
-            logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys")
+            logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys" +
+                       (f", progressive iterator: {self._progressive_config.get('iterator')}" 
+                        if self._progressive_config else ""))
             return True, f"Loaded preset: {preset_name}"
             
         except Exception as e:
@@ -336,7 +376,7 @@ class StateEngine:
             
             self._current_state = {}
             self._preset_name = None
-            self._preset_prompt = None
+            self._progressive_config = None
             logger.info(f"Cleared all state for '{self.chat_name}'")
             return True
         except Exception as e:
@@ -470,7 +510,7 @@ class StateEngine:
             return []
     
     def format_for_prompt(self) -> str:
-        """Format current state for system prompt injection."""
+        """Format current state for system prompt injection with progressive reveal."""
         if not self._current_state:
             return "(no state)"
         
@@ -494,19 +534,62 @@ class StateEngine:
         # Add tools hint
         state_block += "\n\nTools: get_state(), set_state(key, value, reason), roll_dice(count, sides), increment_counter(key, amount)"
         
-        # Add preset prompt injection if present
-        if self._preset_prompt:
-            state_block += f"\n\n{self._preset_prompt}"
+        # Add progressive prompt content (only revealed segments)
+        prompt_content = self._build_progressive_prompt()
+        if prompt_content:
+            state_block += f"\n\n{prompt_content}"
         
         return state_block
+    
+    def _build_progressive_prompt(self) -> str:
+        """Build prompt from progressive config, revealing only appropriate segments."""
+        if not self._progressive_config:
+            return ""
+        
+        config = self._progressive_config
+        base = config.get("base", "")
+        segments = config.get("segments", {})
+        iterator_key = config.get("iterator")
+        mode = config.get("mode", "cumulative")  # cumulative or current_only
+        
+        if not iterator_key or not segments:
+            return base
+        
+        # Get current iterator value
+        iterator_value = self.get_state(iterator_key)
+        if iterator_value is None or not isinstance(iterator_value, (int, float)):
+            return base  # Can't evaluate, just return base
+        
+        iterator_value = int(iterator_value)
+        
+        # Collect revealed segments
+        revealed = []
+        segment_keys = sorted([int(k) for k in segments.keys()])
+        
+        for seg_key in segment_keys:
+            if mode == "cumulative":
+                # Reveal all segments <= current iterator
+                if seg_key <= iterator_value:
+                    revealed.append(segments[str(seg_key)])
+            else:  # current_only
+                # Only reveal exact match
+                if seg_key == iterator_value:
+                    revealed.append(segments[str(seg_key)])
+                    break
+        
+        # Assemble final prompt
+        parts = [base] if base else []
+        parts.extend(revealed)
+        
+        return "\n\n".join(parts)
     
     @property
     def preset_name(self) -> Optional[str]:
         return self._preset_name
     
     @property
-    def preset_prompt(self) -> Optional[str]:
-        return self._preset_prompt
+    def progressive_config(self) -> Optional[dict]:
+        return self._progressive_config
     
     @property
     def key_count(self) -> int:
@@ -514,3 +597,36 @@ class StateEngine:
     
     def is_empty(self) -> bool:
         return len(self._current_state) == 0
+    
+    def reload_preset_config(self, preset_name: str) -> bool:
+        """
+        Reload progressive_config from preset WITHOUT resetting state.
+        Used when state already exists in DB but we need the prompt config.
+        """
+        project_root = Path(__file__).parent.parent.parent
+        search_paths = [
+            project_root / "user" / "state_presets" / f"{preset_name}.json",
+            project_root / "core" / "state_presets" / f"{preset_name}.json",
+        ]
+        
+        preset_path = None
+        for path in search_paths:
+            if path.exists():
+                preset_path = path
+                break
+        
+        if not preset_path:
+            logger.warning(f"Preset not found for config reload: {preset_name}")
+            return False
+        
+        try:
+            with open(preset_path, 'r', encoding='utf-8') as f:
+                preset = json.load(f)
+            
+            self._preset_name = preset_name
+            self._progressive_config = preset.get("progressive_prompt")
+            logger.debug(f"Reloaded config for preset '{preset_name}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reload preset config: {e}")
+            return False

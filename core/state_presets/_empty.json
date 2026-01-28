@@ -2,5 +2,10 @@
   "name": "Empty",
   "description": "Blank state preset - define your own keys during gameplay.",
   "initial_state": {},
-  "prompt_injection": "State engine is active. Use set_state(key, value, reason) to track any game state."
+  "progressive_prompt": {
+    "iterator": null,
+    "mode": "cumulative",
+    "base": "State engine is active. Use set_state(key, value, reason) to track any game state.",
+    "segments": {}
+  }
 }

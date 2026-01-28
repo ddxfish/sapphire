@@ -1034,6 +1034,36 @@ def check_avatar(role):
     
     return jsonify({"exists": False, "path": None})
 
+
+@app.route('/api/avatars', methods=['GET'])
+@require_login
+def get_avatars():
+    """Get resolved avatar paths for both roles in one call. Reduces 6+ requests to 1."""
+    import os
+    import glob
+    
+    avatar_dir = os.path.join(project_root, 'user', 'public', 'avatars')
+    static_dir = os.path.join(os.path.dirname(__file__), 'static', 'users')
+    
+    result = {}
+    for role in ('user', 'assistant'):
+        # Check user custom avatars first
+        custom = glob.glob(os.path.join(avatar_dir, f'{role}.*'))
+        if custom:
+            ext = os.path.splitext(custom[0])[1]
+            result[role] = f"/user-assets/avatars/{role}{ext}"
+        else:
+            # Fall back to static defaults
+            for ext in ('.webp', '.png', '.jpg'):
+                static_path = os.path.join(static_dir, f'{role}{ext}')
+                if os.path.exists(static_path):
+                    result[role] = f"/static/users/{role}{ext}"
+                    break
+            else:
+                result[role] = None  # No avatar found
+    
+    return jsonify(result)
+
 # =============================================================================
 # BACKUP MANAGEMENT ROUTES (4 routes)
 # =============================================================================
@@ -1208,6 +1238,14 @@ def security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
+    
+    # Cache static files to reduce connection pressure on hard refresh
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'public, max-age=3600'  # 1 hour
+    
+    # Encourage connection reuse
+    response.headers['Connection'] = 'keep-alive'
+    
     return response
 
 # =============================================================================

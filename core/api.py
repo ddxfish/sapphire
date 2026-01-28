@@ -38,7 +38,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             return jsonify({"error": "Unauthorized"}), 401
     
     def _apply_chat_settings(settings: dict):
-        """Apply chat settings to the system (TTS, prompt, ability)."""
+        """Apply chat settings to the system (TTS, prompt, ability, state engine)."""
         try:
             # Apply TTS settings
             if "voice" in settings:
@@ -73,7 +73,12 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 logger.info(f"Applied ability: {ability_name}")
                 publish(Events.ABILITY_CHANGED, {"name": ability_name})
             
-            logger.info(f"Applied chat settings: voice={settings.get('voice')}, prompt={settings.get('prompt')}, ability={settings.get('ability')}")
+            # State engine: only update if explicitly enabled in settings
+            # This is lightweight - just checks if engine needs init, doesn't block
+            if settings.get('state_engine_enabled'):
+                system_instance.llm_chat._update_state_engine()
+            
+            logger.debug(f"Applied chat settings: voice={settings.get('voice')}, prompt={settings.get('prompt')}, ability={settings.get('ability')}")
             
         except Exception as e:
             logger.error(f"Error applying chat settings: {e}", exc_info=True)

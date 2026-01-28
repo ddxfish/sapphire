@@ -30,17 +30,35 @@ let avatarsInChat = true;
 // Export setter for immediate updates from settings modal
 export const setAvatarsInChat = (val) => { avatarsInChat = val; };
 
-// Avatar paths: webp first (smallest), then png, then jpg. User overrides before static fallbacks.
-const AVATARS = {
-    user: [
-        '/user-assets/avatars/user.webp', '/user-assets/avatars/user.png', '/user-assets/avatars/user.jpg',
-        '/static/users/user.webp', '/static/users/user.png', '/static/users/user.jpg'
-    ],
-    assistant: [
-        '/user-assets/avatars/assistant.webp', '/user-assets/avatars/assistant.png', '/user-assets/avatars/assistant.jpg',
-        '/static/users/assistant.webp', '/static/users/assistant.png', '/static/users/assistant.jpg'
-    ]
+// Avatar path cache - populated once via API, eliminates 404 cascades
+let avatarPaths = null;
+let avatarPathsLoading = null;
+
+const loadAvatarPaths = async () => {
+    if (avatarPaths) return avatarPaths;
+    if (avatarPathsLoading) return avatarPathsLoading;
+    
+    avatarPathsLoading = fetch('/api/avatars')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            avatarPaths = data || { user: null, assistant: null };
+            avatarPathsLoading = null;
+            return avatarPaths;
+        })
+        .catch(() => {
+            avatarPaths = { user: null, assistant: null };
+            avatarPathsLoading = null;
+            return avatarPaths;
+        });
+    
+    return avatarPathsLoading;
 };
+
+// Pre-fetch avatars on module load
+loadAvatarPaths();
+
+// Export for cache invalidation after avatar upload
+export const refreshAvatarPaths = () => { avatarPaths = null; loadAvatarPaths(); };
 
 // =============================================================================
 // SCROLL MANAGEMENT
@@ -75,7 +93,7 @@ const createElem = (tag, attrs = {}, content = '') => {
     return el;
 };
 
-const setAvatarWithFallback = (img, role) => {
+const setAvatarWithFallback = async (img, role) => {
     if (!avatarsInChat) {
         img.style.display = 'none';
         return;
@@ -84,19 +102,16 @@ const setAvatarWithFallback = (img, role) => {
     // Lazy load avatars for performance
     img.loading = 'lazy';
     
-    const paths = AVATARS[role] || AVATARS.user;
-    let idx = 0;
+    // Get cached path (or wait for it to load)
+    const paths = await loadAvatarPaths();
+    const src = paths[role];
     
-    const tryNext = () => {
-        if (idx < paths.length) {
-            img.src = paths[idx++];
-        } else {
-            img.style.display = 'none';
-        }
-    };
-    
-    img.onerror = tryNext;
-    tryNext();
+    if (src) {
+        img.src = src;
+        img.onerror = () => { img.style.display = 'none'; };
+    } else {
+        img.style.display = 'none';
+    }
 };
 
 const createToolbar = (idx, total) => {
