@@ -160,12 +160,22 @@ class StateEngine:
         """
         # Get iterator value for visibility checks
         iterator_value = None
+        iterator_key = None
+        
         if self._progressive_config:
             iterator_key = self._progressive_config.get("iterator")
-            if iterator_key:
-                val = self.get_state(iterator_key)
-                if isinstance(val, (int, float)):
-                    iterator_value = int(val)
+        
+        # Fallback: check for common iterator keys if no config
+        if not iterator_key:
+            for candidate in ("scene", "player_room", "turn", "chapter", "room"):
+                if candidate in self._current_state:
+                    iterator_key = candidate
+                    break
+        
+        if iterator_key:
+            val = self.get_state(iterator_key)
+            if isinstance(val, (int, float)):
+                iterator_value = int(val)
         
         result = {}
         for key, entry in self._current_state.items():
@@ -174,8 +184,10 @@ class StateEngine:
             
             constraints = entry.get("constraints", {}) or {}
             visible_from = constraints.get("visible_from")
-            if visible_from is not None and iterator_value is not None:
-                if iterator_value < visible_from:
+            
+            # If key has visible_from, only show if iterator >= threshold
+            if visible_from is not None:
+                if iterator_value is None or iterator_value < visible_from:
                     continue
             
             result[key] = entry["value"]
@@ -730,6 +742,7 @@ class StateEngine:
     def reload_preset_config(self, preset_name: str) -> bool:
         """
         Reload progressive_config from preset WITHOUT resetting state.
+        Also refreshes constraints on existing keys from preset definition.
         Used when state already exists in DB but we need the prompt config.
         """
         project_root = Path(__file__).parent.parent.parent
@@ -754,6 +767,15 @@ class StateEngine:
             
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            
+            # Refresh constraints on existing keys from preset definition
+            initial_state = preset.get("initial_state", {})
+            for key, spec in initial_state.items():
+                if key in self._current_state:
+                    # Extract constraints (everything except value/type/label)
+                    constraints = {k: v for k, v in spec.items() 
+                                  if k not in ("value", "type", "label")}
+                    self._current_state[key]["constraints"] = constraints if constraints else None
             
             # Persist preset name to DB for future restarts
             with self._get_connection() as conn:
