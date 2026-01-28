@@ -654,13 +654,36 @@ class StateEngine:
         iterator_key = config.get("iterator")
         mode = config.get("mode", "cumulative")  # cumulative or current_only
         
+        # Load universal base instructions (cached after first load)
+        if not hasattr(self, '_base_instructions'):
+            self._base_instructions = ""
+            base_path = Path(__file__).parent.parent / "state_presets" / "_base.json"
+            if base_path.exists():
+                try:
+                    with open(base_path, 'r', encoding='utf-8') as f:
+                        base_data = json.load(f)
+                    self._base_instructions = base_data.get("instructions", "")
+                except Exception as e:
+                    logger.warning(f"Could not load _base.json: {e}")
+        
         if not iterator_key or not segments:
-            return base
+            # No progressive reveal, just return base instructions + preset base
+            parts = []
+            if self._base_instructions:
+                parts.append(self._base_instructions)
+            if base:
+                parts.append(base)
+            return "\n\n".join(parts) if parts else ""
         
         # Get current iterator value
         iterator_value = self.get_state(iterator_key)
         if iterator_value is None or not isinstance(iterator_value, (int, float)):
-            return base  # Can't evaluate, just return base
+            parts = []
+            if self._base_instructions:
+                parts.append(self._base_instructions)
+            if base:
+                parts.append(base)
+            return "\n\n".join(parts) if parts else ""
         
         iterator_value = int(iterator_value)
         
@@ -679,8 +702,12 @@ class StateEngine:
                     revealed.append(segments[str(seg_key)])
                     break
         
-        # Assemble final prompt
-        parts = [base] if base else []
+        # Assemble final prompt: base_instructions + preset_base + segments
+        parts = []
+        if self._base_instructions:
+            parts.append(self._base_instructions)
+        if base:
+            parts.append(base)
         parts.extend(revealed)
         
         return "\n\n".join(parts)
