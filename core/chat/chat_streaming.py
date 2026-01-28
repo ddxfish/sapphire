@@ -171,7 +171,7 @@ class StreamingChat:
                 
                 tool_calls = []
                 final_response = None
-                iteration_start_time = time.time()
+                first_chunk_time = None  # Track when generation actually starts
                 
                 try:
                     logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
@@ -184,6 +184,10 @@ class StreamingChat:
                     chunk_count = 0
                     for event in self.current_stream:
                         chunk_count += 1
+                        
+                        # Start timing from first actual chunk (not stream creation)
+                        if first_chunk_time is None:
+                            first_chunk_time = time.time()
                         
                         if self.cancel_flag:
                             logger.info(f"[STOP] [STREAMING] Cancelled at chunk {chunk_count}")
@@ -258,24 +262,27 @@ class StreamingChat:
                 # Build metadata if not provided by provider
                 if not metadata:
                     iteration_end_time = time.time()
-                    duration = round(iteration_end_time - iteration_start_time, 2)
+                    # Use first chunk time if available, else end time (edge case: no chunks)
+                    gen_start = first_chunk_time or iteration_end_time
+                    duration = round(iteration_end_time - gen_start, 2)
                     # Rough token estimate: ~4 chars per token
                     est_content_tokens = len(current_content) // 4 if current_content else 0
                     est_thinking_tokens = len(current_thinking) // 4 if current_thinking else 0
+                    total_tokens = est_content_tokens + est_thinking_tokens
                     
                     metadata = {
                         "provider": provider_key,
                         "model": effective_model,
-                        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(iteration_start_time)),
+                        "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(gen_start)),
                         "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(iteration_end_time)),
                         "duration_seconds": duration,
                         "tokens": {
                             "content": est_content_tokens,
                             "thinking": est_thinking_tokens,
-                            "total": est_content_tokens + est_thinking_tokens,
+                            "total": total_tokens,
                             "estimated": True  # Flag that these are estimates
                         },
-                        "tokens_per_second": round(est_content_tokens / duration, 1) if duration > 0 else 0
+                        "tokens_per_second": round(total_tokens / duration, 1) if duration > 0 else 0
                     }
                 
                 if tool_calls and any(tc.get("id") and tc.get("function", {}).get("name") for tc in tool_calls):

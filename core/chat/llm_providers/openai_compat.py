@@ -93,6 +93,29 @@ class OpenAICompatProvider(BaseProvider):
         logger.debug(f"[MULTIMODAL] Unknown endpoint {base_url}, disabling multimodal")
         return False
     
+    def _is_fireworks_reasoning_model(self) -> bool:
+        """
+        Check if this is a Fireworks reasoning model that needs reasoning_effort param.
+        
+        These models output thinking in reasoning_content field when reasoning_effort is set.
+        """
+        base_url = (self.base_url or '').lower()
+        model = (self.model or '').lower()
+        
+        if 'fireworks.ai' not in base_url:
+            return False
+        
+        # Models known to support reasoning_effort parameter
+        reasoning_indicators = [
+            'deepseek',      # DeepSeek V3
+            'glm',           # GLM 4.7
+            'kimi',          # Kimi K2
+            'thinking',      # Any model with "thinking" in name
+            'qwq',           # QwQ
+        ]
+        
+        return any(ind in model for ind in reasoning_indicators)
+    
     @property
     def client(self) -> OpenAI:
         """Access the underlying OpenAI client if needed."""
@@ -308,13 +331,16 @@ class OpenAICompatProvider(BaseProvider):
         clean_messages = self._sanitize_messages(messages)
         
         logger.debug(f"[OPENAI-COMPAT] Non-streaming: {len(clean_messages)} messages to {self.model}")
-        clean_messages = self._sanitize_messages(messages)
         
         request_kwargs = {
             "model": self.model,
             "messages": clean_messages,
             **params
         }
+        
+        # Add reasoning_effort for Fireworks reasoning models
+        if self._is_fireworks_reasoning_model():
+            request_kwargs["reasoning_effort"] = params.get("reasoning_effort", "medium")
         
         if tools:
             request_kwargs["tools"] = self.convert_tools_for_api(tools)
@@ -366,6 +392,11 @@ class OpenAICompatProvider(BaseProvider):
             **params
         }
         
+        # Add reasoning_effort for Fireworks reasoning models to enable thinking output
+        if self._is_fireworks_reasoning_model():
+            request_kwargs["reasoning_effort"] = params.get("reasoning_effort", "medium")
+            logger.info(f"[REASONING] Enabled reasoning_effort={request_kwargs['reasoning_effort']} for {self.model}")
+        
         if tools:
             request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
@@ -386,6 +417,7 @@ class OpenAICompatProvider(BaseProvider):
         
         # Track accumulated state for final response
         full_content = ""
+        full_thinking = ""
         tool_calls_acc = []  # List of dicts being built
         finish_reason = None
         
@@ -398,6 +430,23 @@ class OpenAICompatProvider(BaseProvider):
             
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+            
+            # Reasoning content (Fireworks GLM, DeepSeek, etc.)
+            # These models return thinking in reasoning_content field instead of <think> tags
+            reasoning = getattr(delta, 'reasoning_content', None)
+            if reasoning:
+                full_thinking += reasoning
+                yield {"type": "thinking", "text": reasoning}
+            
+            # Debug: log all delta attributes on first content chunk to diagnose missing reasoning
+            if delta.content and not full_content:
+                delta_attrs = [a for a in dir(delta) if not a.startswith('_')]
+                logger.debug(f"[REASONING] Delta attributes: {delta_attrs}")
+                # Check for alternative reasoning field names
+                for attr in ['reasoning', 'reasoning_content', 'thought', 'thinking']:
+                    val = getattr(delta, attr, None)
+                    if val:
+                        logger.info(f"[REASONING] Found {attr}: {val[:100]}...")
             
             # Content chunk
             if delta.content:
@@ -445,13 +494,21 @@ class OpenAICompatProvider(BaseProvider):
             finish_reason=finish_reason
         )
         
-        yield {"type": "done", "response": final_response}
+        done_event = {"type": "done", "response": final_response}
+        if full_thinking:
+            done_event["thinking"] = full_thinking
+        yield done_event
     
     def _parse_response(self, response) -> LLMResponse:
         """Parse OpenAI response into normalized LLMResponse."""
         
         choice = response.choices[0]
         message = choice.message
+        
+        # Check for reasoning_content (Fireworks reasoning models)
+        reasoning = getattr(message, 'reasoning_content', None)
+        if reasoning:
+            logger.info(f"[REASONING] Non-stream response has reasoning_content ({len(reasoning)} chars)")
         
         # Parse tool calls if present
         tool_calls = []
