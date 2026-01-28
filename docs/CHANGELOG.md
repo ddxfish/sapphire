@@ -1,5 +1,6 @@
 # 1.2.2 - State Engine
 - Added state engine to track story elements and games
+- Added simple stories for game engine demo (action, romance, technical)
 # 1.2.1 - SQLite 
 - Converting JSON history to SQLite to prevent corruption
 # 1.2.0 - Continuity and Home Assistant

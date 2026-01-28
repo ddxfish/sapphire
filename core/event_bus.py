@@ -136,6 +136,7 @@ class Events:
     ABILITY_CHANGED = "ability_changed"
     SPICE_CHANGED = "spice_changed"
     SETTINGS_CHANGED = "settings_changed"
+    CHAT_SETTINGS_CHANGED = "chat_settings_changed"
     
     # Context threshold events
     CONTEXT_WARNING = "context_warning"    # 80% threshold

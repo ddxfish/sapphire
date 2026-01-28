@@ -166,26 +166,36 @@ class LLMChat:
             
             chat_name = self.session_manager.get_active_chat_name()
             db_path = self.session_manager._db_path
+            new_preset = chat_settings.get('state_preset')
             
             # Check if we need to create/update state engine
             current_engine = self.function_manager.get_state_engine()
-            if not current_engine or current_engine.chat_name != chat_name:
+            
+            # Detect preset change - need to reload if preset differs from current
+            preset_changed = False
+            if current_engine:
+                current_preset = current_engine.preset_name
+                if current_preset != new_preset:
+                    preset_changed = True
+                    logger.info(f"[STATE] Preset changed: '{current_preset}' → '{new_preset}'")
+            
+            if not current_engine or current_engine.chat_name != chat_name or preset_changed:
                 # Create new state engine for this chat
                 engine = StateEngine(chat_name, db_path)
                 
-                preset = chat_settings.get('state_preset')
-                if preset:
-                    if engine.is_empty():
+                if new_preset:
+                    # Always load fresh when preset changed, otherwise check if empty
+                    if preset_changed or engine.is_empty():
                         # Fresh start - load full preset with initial state
                         turn = self.session_manager.get_turn_count()
-                        success, msg = engine.load_preset(preset, turn)
+                        success, msg = engine.load_preset(new_preset, turn)
                         if success:
-                            logger.info(f"[STATE] Loaded preset '{preset}' for chat '{chat_name}'")
+                            logger.info(f"[STATE] Loaded preset '{new_preset}' for chat '{chat_name}'")
                         else:
-                            logger.warning(f"[STATE] Failed to load preset '{preset}': {msg}")
+                            logger.warning(f"[STATE] Failed to load preset '{new_preset}': {msg}")
                     else:
-                        # State exists - just reload the prompt config (not state values)
-                        engine.reload_preset_config(preset)
+                        # State exists, same preset - just reload the prompt config (not state values)
+                        engine.reload_preset_config(new_preset)
                         logger.info(f"[STATE] Reloaded config for existing state in '{chat_name}'")
                 
                 # Set on function manager with turn getter

@@ -179,6 +179,17 @@ export default {
       });
     });
 
+    // Claude cache toggle - show/hide TTL field
+    container.querySelectorAll('.cache-toggle').forEach(toggle => {
+      toggle.addEventListener('change', (e) => {
+        const key = e.target.dataset.provider;
+        const ttlRow = container.querySelector(`.cache-ttl-row[data-provider="${key}"]`);
+        if (ttlRow) {
+          ttlRow.style.display = e.target.checked ? '' : 'none';
+        }
+      });
+    });
+
     // Generation param changes
     container.querySelectorAll('.gen-param-input').forEach(input => {
       input.addEventListener('change', (e) => this.handleGenParamChange(e));
@@ -249,7 +260,7 @@ export default {
     }
 
     // Handle checkbox fields
-    if (field === 'use_as_fallback' || field === 'thinking_enabled') {
+    if (field === 'use_as_fallback' || field === 'thinking_enabled' || field === 'cache_enabled') {
       value = e.target.checked;
     }
 
@@ -257,6 +268,8 @@ export default {
     if (field === 'thinking_budget') {
       value = parseInt(value) || 10000;
     }
+
+    // cache_ttl is a string, no conversion needed
 
     await updateProvider(key, { [field]: value });
   },

@@ -326,6 +326,12 @@ function initEventBus() {
         debouncedUpdateScene();
     });
     
+    eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, (data) => {
+        console.log('[EventBus] Chat settings changed:', data?.chat);
+        // Chat settings affect ability/prompt pills
+        debouncedUpdateScene();
+    });
+    
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
         console.log('[EventBus] Chat switched');
         // Only update dropdown - refresh/scene handled by initiator (handleChatChange)

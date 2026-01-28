@@ -73,9 +73,9 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 logger.info(f"Applied ability: {ability_name}")
                 publish(Events.ABILITY_CHANGED, {"name": ability_name})
             
-            # State engine: only update if explicitly enabled in settings
-            # This is lightweight - just checks if engine needs init, doesn't block
-            if settings.get('state_engine_enabled'):
+            # State engine: always update to handle both enable and disable
+            # The method checks settings internally and enables/disables accordingly
+            if 'state_engine_enabled' in settings:
                 system_instance.llm_chat._update_state_engine()
             
             logger.debug(f"Applied chat settings: voice={settings.get('voice')}, prompt={settings.get('prompt')}, ability={settings.get('ability')}")
@@ -881,6 +881,12 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             
             # Apply settings to system immediately
             _apply_chat_settings(session_manager.get_chat_settings())
+            
+            # Publish SSE event for UI updates
+            publish(Events.CHAT_SETTINGS_CHANGED, {
+                "chat": chat_name,
+                "settings": new_settings
+            })
             
             logger.info(f"Updated and applied settings for chat '{chat_name}'")
             return jsonify({"status": "success", "message": f"Settings updated for '{chat_name}'"})

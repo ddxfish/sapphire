@@ -92,6 +92,53 @@ class ClaudeProvider(BaseProvider):
             logger.debug(f"Claude health check failed: {e}")
             return False
     
+    def _get_cache_config(self) -> tuple:
+        """
+        Get cache settings dynamically from settings manager.
+        
+        Provider instances are cached, so we read from settings_manager
+        at request time to support hot-reload of cache settings.
+        
+        System prompt caching is skipped when dynamic content is detected:
+        - Spice: randomizes injections each request
+        - Datetime injection: changes every minute
+        - State-in-prompt: includes turn count that changes each message
+        
+        Tools are always cached (they don't change with these features).
+        Skipping avoids 25% write penalty on guaranteed cache misses.
+        
+        Returns:
+            (cache_enabled, cache_ttl, cache_system_prompt)
+        """
+        from core.settings_manager import settings
+        providers_config = settings.get('LLM_PROVIDERS', {})
+        claude_config = providers_config.get('claude', {})
+        cache_enabled = claude_config.get('cache_enabled', False)
+        cache_ttl = claude_config.get('cache_ttl', '5m')
+        
+        # Check if spice, datetime, or state injection is enabled for active chat
+        # All cause guaranteed cache misses on system prompt (25% penalty)
+        cache_system_prompt = True
+        if cache_enabled:
+            try:
+                # Import here to avoid circular dependency
+                from core import system as sys_module
+                if hasattr(sys_module, 'system_instance') and sys_module.system_instance:
+                    chat_settings = sys_module.system_instance.llm_chat.session_manager.get_chat_settings()
+                    if chat_settings.get('spice_enabled', False):
+                        cache_system_prompt = False
+                        logger.debug("[CACHE] Spice enabled - skipping system prompt cache")
+                    elif chat_settings.get('inject_datetime', False):
+                        cache_system_prompt = False
+                        logger.debug("[CACHE] Datetime injection enabled - skipping system prompt cache")
+                    elif chat_settings.get('state_engine_enabled', False) and chat_settings.get('state_in_prompt', True):
+                        cache_system_prompt = False
+                        logger.debug("[CACHE] State-in-prompt enabled - skipping system prompt cache")
+            except Exception as e:
+                logger.debug(f"[CACHE] Could not check chat settings: {e}")
+        
+        return cache_enabled, cache_ttl, cache_system_prompt
+    
     def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -111,8 +158,23 @@ class ClaudeProvider(BaseProvider):
             "max_tokens": params.get("max_tokens", 4096),
         }
         
+        # Prompt caching configuration (read dynamically for hot-reload)
+        cache_enabled, cache_ttl, cache_system_prompt = self._get_cache_config()
+        
         if system_prompt:
-            request_kwargs["system"] = system_prompt
+            if cache_enabled and cache_system_prompt:
+                # Use list format with cache_control for caching
+                cache_control = {"type": "ephemeral"}
+                if cache_ttl == '1h':
+                    cache_control["ttl"] = "1h"
+                request_kwargs["system"] = [
+                    {"type": "text", "text": system_prompt, "cache_control": cache_control}
+                ]
+                logger.info(f"[CACHE] Prompt caching active (TTL: {cache_ttl})")
+            else:
+                request_kwargs["system"] = system_prompt
+                if cache_enabled and not cache_system_prompt:
+                    logger.info("[CACHE] Dynamic content detected - tools only, system prompt not cached")
         
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
@@ -158,7 +220,7 @@ class ClaudeProvider(BaseProvider):
             logger.info(f"[THINK] Claude extended thinking enabled (budget: {thinking_budget})")
         
         if tools:
-            request_kwargs["tools"] = self._convert_tools(tools)
+            request_kwargs["tools"] = self._convert_tools(tools, cache_enabled, cache_ttl)
         
         # Wrap in retry for rate limiting
         response = retry_on_rate_limit(
@@ -196,8 +258,23 @@ class ClaudeProvider(BaseProvider):
             "max_tokens": params.get("max_tokens", 4096),
         }
         
+        # Prompt caching configuration (read dynamically for hot-reload)
+        cache_enabled, cache_ttl, cache_system_prompt = self._get_cache_config()
+        
         if system_prompt:
-            request_kwargs["system"] = system_prompt
+            if cache_enabled and cache_system_prompt:
+                # Use list format with cache_control for caching
+                cache_control = {"type": "ephemeral"}
+                if cache_ttl == '1h':
+                    cache_control["ttl"] = "1h"
+                request_kwargs["system"] = [
+                    {"type": "text", "text": system_prompt, "cache_control": cache_control}
+                ]
+                logger.info(f"[CACHE] Prompt caching active (TTL: {cache_ttl})")
+            else:
+                request_kwargs["system"] = system_prompt
+                if cache_enabled and not cache_system_prompt:
+                    logger.info("[CACHE] Dynamic content detected - tools only, system prompt not cached")
         
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
@@ -246,7 +323,7 @@ class ClaudeProvider(BaseProvider):
             logger.info(f"[THINK] Extended thinking disabled for this request")
         
         if tools:
-            request_kwargs["tools"] = self._convert_tools(tools)
+            request_kwargs["tools"] = self._convert_tools(tools, cache_enabled, cache_ttl)
         
         # Track state for building response
         full_content = ""
@@ -345,6 +422,18 @@ class ClaudeProvider(BaseProvider):
                             "completion_tokens": getattr(event.usage, 'output_tokens', 0),
                             "total_tokens": getattr(event.usage, 'input_tokens', 0) + getattr(event.usage, 'output_tokens', 0)
                         }
+                        # Check for cache statistics
+                        cache_read = getattr(event.usage, 'cache_read_input_tokens', 0) or 0
+                        cache_write = getattr(event.usage, 'cache_creation_input_tokens', 0) or 0
+                        if cache_read > 0 or cache_write > 0:
+                            if cache_read > 0 and cache_write == 0:
+                                logger.info(f"[CACHE] ✓ HIT - {cache_read} tokens read from cache (90% savings)")
+                            elif cache_write > 0 and cache_read == 0:
+                                logger.info(f"[CACHE] ✗ MISS - {cache_write} tokens written to cache")
+                            else:
+                                logger.info(f"[CACHE] PARTIAL - {cache_read} read, {cache_write} written")
+                            usage["cache_read_tokens"] = cache_read
+                            usage["cache_write_tokens"] = cache_write
                 
                 elif event_type == "message_stop":
                     logger.debug(f"[STREAM] message_stop received")
@@ -598,9 +687,13 @@ class ClaudeProvider(BaseProvider):
         
         return system_prompt, claude_messages, needs_thinking_disabled
     
-    def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _convert_tools(self, tools: List[Dict[str, Any]], cache_enabled: bool = False, cache_ttl: str = '5m') -> List[Dict[str, Any]]:
         """
         Convert OpenAI tool format to Claude format.
+        
+        If cache_enabled, adds cache_control to the last tool.
+        Cache order is: tools → system → messages, so caching tools
+        creates a cache breakpoint that includes all tools.
         """
         claude_tools = []
         
@@ -615,6 +708,14 @@ class ClaudeProvider(BaseProvider):
                 "description": func.get("description", ""),
                 "input_schema": func.get("parameters", {"type": "object", "properties": {}})
             })
+        
+        # Add cache_control to the last tool if caching enabled
+        if cache_enabled and claude_tools:
+            cache_control = {"type": "ephemeral"}
+            if cache_ttl == '1h':
+                cache_control["ttl"] = "1h"
+            claude_tools[-1]["cache_control"] = cache_control
+            logger.info(f"[CACHE] Tool caching active on last tool (TTL: {cache_ttl})")
         
         return claude_tools
     
@@ -646,6 +747,22 @@ class ClaudeProvider(BaseProvider):
                 "completion_tokens": response.usage.output_tokens,
                 "total_tokens": response.usage.input_tokens + response.usage.output_tokens
             }
+            
+            # Log cache statistics if present
+            cache_read = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+            cache_write = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+            
+            if cache_read > 0 or cache_write > 0:
+                if cache_read > 0 and cache_write == 0:
+                    logger.info(f"[CACHE] ✓ HIT - {cache_read} tokens read from cache (90% savings)")
+                elif cache_write > 0 and cache_read == 0:
+                    logger.info(f"[CACHE] ✗ MISS - {cache_write} tokens written to cache")
+                else:
+                    logger.info(f"[CACHE] PARTIAL - {cache_read} read, {cache_write} written")
+                
+                # Add to usage dict for potential UI display
+                usage["cache_read_tokens"] = cache_read
+                usage["cache_write_tokens"] = cache_write
         
         # Note: For non-streaming, thinking is not returned separately
         # The caller would need to handle this differently if needed

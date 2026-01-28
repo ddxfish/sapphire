@@ -235,6 +235,8 @@ def get_provider_by_key(
         # Claude-specific settings
         'thinking_enabled': config.get('thinking_enabled'),
         'thinking_budget': config.get('thinking_budget'),
+        'cache_enabled': config.get('cache_enabled', False),
+        'cache_ttl': config.get('cache_ttl', '5m'),
     }
     
     try:

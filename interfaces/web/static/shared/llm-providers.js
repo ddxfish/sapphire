@@ -223,6 +223,8 @@ export function renderProviderFields(key, config, meta) {
   if (key === 'claude') {
     const thinkingEnabled = config.thinking_enabled !== false;
     const thinkingBudget = config.thinking_budget || 10000;
+    const cacheEnabled = config.cache_enabled || false;
+    const cacheTtl = config.cache_ttl || '5m';
     
     fields.push(`
       <div class="field-row claude-thinking-row">
@@ -237,6 +239,22 @@ export function renderProviderFields(key, config, meta) {
         <input type="number" class="provider-field thinking-budget" data-provider="${key}" data-field="thinking_budget" 
                value="${thinkingBudget}" step="1000" min="1024" max="32000">
         <small class="field-hint">Higher = deeper reasoning, slower responses</small>
+      </div>
+      <div class="field-row claude-cache-row">
+        <label class="checkbox-inline">
+          <input type="checkbox" class="provider-field cache-toggle" data-provider="${key}" data-field="cache_enabled" 
+                 ${cacheEnabled ? 'checked' : ''}>
+          <span>Prompt Caching</span>
+        </label>
+        <small class="field-hint">90% cheaper on repeated prompts (cache reads)</small>
+      </div>
+      <div class="field-row cache-ttl-row" data-provider="${key}" ${cacheEnabled ? '' : 'style="display:none"'}>
+        <label>Cache TTL</label>
+        <select class="provider-field cache-ttl" data-provider="${key}" data-field="cache_ttl">
+          <option value="5m" ${cacheTtl === '5m' ? 'selected' : ''}>5 minutes (cheaper writes)</option>
+          <option value="1h" ${cacheTtl === '1h' ? 'selected' : ''}>1 hour (2x write cost)</option>
+        </select>
+        <small class="field-hint">Cache persists between requests within TTL</small>
       </div>
     `);
   }
