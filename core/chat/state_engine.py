@@ -283,10 +283,10 @@ class StateEngine:
             
             if is_new_key:
                 # Warn AI they created a new key (might be a typo)
-                # Show existing user keys (exclude system keys and the new key itself)
-                existing_keys = [k for k in self._current_state.keys() 
-                               if not k.startswith('_') and k != key]
-                msg = f"⚠️ CREATED NEW KEY '{key}' = {value}. This key did not exist! Did you mean one of these? {existing_keys}"
+                # Only show VISIBLE keys to avoid spoilers
+                visible_keys = list(self.get_visible_state().keys())
+                visible_keys = [k for k in visible_keys if k != key]
+                msg = f"⚠️ CREATED NEW KEY '{key}' = {value}. This key did not exist! Did you mean one of these? {visible_keys}"
             elif is_iterator:
                 # Special message for iterator changes
                 msg = f"✓ Updated {key}: {old_value} → {value} (iterator: new content now visible)"
