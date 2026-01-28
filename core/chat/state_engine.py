@@ -235,7 +235,26 @@ class StateEngine:
             }
             
             logger.debug(f"State set: {key}={value} by {changed_by} at turn {turn_number}")
-            return True, f"{key} = {value}"
+            
+            # Build informative message for AI
+            is_new_key = old_value is None
+            is_iterator = self._progressive_config and self._progressive_config.get("iterator") == key
+            
+            if is_new_key:
+                # Warn AI they created a new key (might be a typo)
+                # Show existing user keys (exclude system keys and the new key itself)
+                existing_keys = [k for k in self._current_state.keys() 
+                               if not k.startswith('_') and k != key]
+                msg = f"⚠️ CREATED NEW KEY '{key}' = {value}. This key did not exist! Did you mean one of these? {existing_keys}"
+            elif is_iterator:
+                # Special message for iterator changes
+                msg = f"✓ Updated {key}: {old_value} → {value} (iterator: new content now visible)"
+            elif old_value == value:
+                msg = f"✓ {key} unchanged (already {value})"
+            else:
+                msg = f"✓ Updated {key}: {old_value} → {value}"
+            
+            return True, msg
             
         except Exception as e:
             logger.error(f"Failed to set state {key}: {e}")
@@ -517,7 +536,7 @@ class StateEngine:
         lines = []
         for key, entry in sorted(self._current_state.items()):
             value = entry["value"]
-            label = entry.get("label", key)
+            label = entry.get("label")
             
             # Format value for readability
             if isinstance(value, list):
@@ -527,7 +546,11 @@ class StateEngine:
             else:
                 value_str = str(value)
             
-            lines.append(f"{label}: {value_str}")
+            # Show key (required for set_state) with optional label for readability
+            if label and label != key:
+                lines.append(f"{key} ({label}): {value_str}")
+            else:
+                lines.append(f"{key}: {value_str}")
         
         state_block = "\n".join(lines)
         

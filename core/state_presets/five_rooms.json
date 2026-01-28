@@ -56,7 +56,7 @@
   "progressive_prompt": {
     "iterator": "player_room",
     "mode": "cumulative",
-    "base": "You are running Five Rooms, a dungeon crawl. Use state tools for ALL game state changes - never track state in memory.\n\nRules:\n- Player can move to adjacent rooms only (room ±1) - the state engine enforces this\n- The state engine enforces blockers automatically. If set_state fails, narrate the failure.\n- Always call set_state() for movement with a reason. Describe the scene vividly after each action.\n- If player_health reaches 0, they die. Game over.",
+    "base": "You are running Five Rooms, a dungeon crawl. Use state tools for ALL game state changes - never track state in memory.\n\nRules:\n- State shows 'key (Label): value' - always use the KEY (e.g., player_room not Room) with set_state()\n- Player can move to adjacent rooms only (room ±1) - the state engine enforces this\n- The state engine enforces blockers automatically. If set_state fails, narrate the failure.\n- Always call set_state() for movement with a reason. Describe the scene vividly after each action.\n- If player_health reaches 0, they die. Game over.",
     "segments": {
       "1": "ROOM 1 - THE ENTRANCE\nA torch-lit stone chamber. Dust motes drift in stale air. A dark corridor leads forward to room 2.",
       "2": "ROOM 2 - THE EMPTY HALL\nAn eerily quiet passage. Faded murals line the walls. You sense danger ahead. Corridors lead back to room 1 or forward to room 3.",

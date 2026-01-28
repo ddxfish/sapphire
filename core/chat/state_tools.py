@@ -193,6 +193,7 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
                 return f"Error: '{key}' is not numeric (value: {current})", False
             
             new_value = current + int(amount)
+            clamped = False
             
             # Check constraints
             entry = state_engine.get_state_full(key)
@@ -200,12 +201,17 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
                 constraints = entry["constraints"]
                 if "min" in constraints and new_value < constraints["min"]:
                     new_value = constraints["min"]
+                    clamped = True
                 if "max" in constraints and new_value > constraints["max"]:
                     new_value = constraints["max"]
+                    clamped = True
             
             success, msg = state_engine.set_state(key, new_value, "ai", turn_number, reason)
             if success:
-                return f"{key}: {current} → {new_value}", True
+                label = entry.get("label", key) if entry else key
+                if clamped:
+                    return f"✓ {label}: {current} → {new_value} (clamped to bounds)", True
+                return f"✓ {label}: {current} → {new_value}", True
             return msg, False
         
         else:
