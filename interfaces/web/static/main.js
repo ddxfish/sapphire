@@ -146,27 +146,27 @@ async function init() {
         ui.showStatus();
         ui.updateStatus('Loading...');
         
-        // Parallel initialization - critical path only (no plugins yet)
-        const [, historyLen] = await Promise.all([
-            populateChatDropdown(), // Fetch chat list
-            refresh(false),         // Fetch chat history
-            updateScene()           // Fetch system status (prompts, abilities, TTS)
+        // Parallel initialization - use combined status endpoint
+        // updateScene() now returns chats and settings too, reducing API calls
+        const [status, historyLen] = await Promise.all([
+            updateScene(),           // Fetch system status (includes chats + settings now)
+            refresh(false)           // Fetch chat history
         ]);
         
         setHistLen(historyLen);
         
-        // Update send button based on active chat's LLM setting
-        try {
-            const { chatSelect } = getElements();
-            if (chatSelect?.value) {
-                const response = await api.getChatSettings(chatSelect.value);
-                const settings = response?.settings || {};
-                updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
-                applyTrimColor(settings.trim_color || '');
-            }
-        } catch (e) {
-            updateSendButtonLLM('auto');
+        // Use chats from combined status response
+        if (status?.chats) {
+            ui.renderChatDropdown(status.chats, status.active_chat);
+        } else {
+            // Fallback to separate call if status doesn't include chats
+            await populateChatDropdown();
         }
+        
+        // Use settings from combined status response
+        const settings = status?.chat_settings || {};
+        updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
+        applyTrimColor(settings.trim_color || '');
         
         // These are fast sync operations
         initVolumeControls();
@@ -284,22 +284,32 @@ function initEventBus() {
         debouncedRefresh();
     });
     
-    // System state events
+    // Debounced updateScene - prevents multiple /api/status calls from racing
+    let sceneTimer = null;
+    const debouncedUpdateScene = () => {
+        if (sceneTimer) clearTimeout(sceneTimer);
+        sceneTimer = setTimeout(() => {
+            sceneTimer = null;
+            updateScene();
+        }, 100);  // 100ms debounce
+    };
+    
+    // System state events - debounced to prevent duplicate updateScene calls
     eventBus.on(eventBus.Events.PROMPT_CHANGED, () => {
         console.log('[EventBus] Prompt changed');
-        updateScene();
+        debouncedUpdateScene();
     });
     
     eventBus.on(eventBus.Events.ABILITY_CHANGED, () => {
         console.log('[EventBus] Ability changed');
-        updateScene();
+        debouncedUpdateScene();
     });
     
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
         console.log('[EventBus] Chat switched');
+        // Only update dropdown - refresh/scene handled by initiator (handleChatChange)
+        // This event is mainly for syncing OTHER browser tabs
         populateChatDropdown();
-        refresh(false);
-        updateScene();
     });
     
     // STT events (for avatar/UI feedback)

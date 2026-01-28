@@ -1,3 +1,7 @@
+# 1.2.2 - State Engine
+- Added state engine to track story elements and games
+# 1.2.1 - SQLite 
+- Converting JSON history to SQLite to prevent corruption
 # 1.2.0 - Continuity and Home Assistant
 ## Jan 26, 2026
 - Continuity mode is scheduled LLM tasks and actions

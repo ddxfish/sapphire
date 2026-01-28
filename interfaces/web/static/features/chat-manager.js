@@ -31,21 +31,17 @@ export async function handleChatChange() {
     
     try {
         audio.stop();
-        await api.activateChat(selectedChat);
+        // activateChat already returns settings - no need for separate getChatSettings call
+        const result = await api.activateChat(selectedChat);
+        const settings = result?.settings || {};
+        
         const len = await refresh(false);
         setHistLen(len);
         await updateScene();
         
-        // Update send button based on this chat's LLM settings
-        try {
-            const response = await api.getChatSettings(selectedChat);
-            const settings = response?.settings || {};
-            updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
-            applyTrimColor(settings.trim_color || '');
-        } catch (e) {
-            updateSendButtonLLM('auto');
-            applyTrimColor('');
-        }
+        // Use settings from activate response
+        updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
+        applyTrimColor(settings.trim_color || '');
     } catch (e) {
         console.error('Failed to switch chat:', e);
         ui.showToast(`Failed to switch chat: ${e.message}`, 'error');

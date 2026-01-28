@@ -558,7 +558,10 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                     "used": total_used,
                     "limit": context_limit,
                     "percent": context_percent
-                }
+                },
+                # Combined init data - reduces startup API calls
+                "chats": system_instance.llm_chat.list_chats(),
+                "chat_settings": chat_settings
             })
         except Exception as e:
             logger.error(f"Error getting unified status: {e}")
