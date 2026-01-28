@@ -30,9 +30,10 @@ def request_shutdown():
     logger.info("Shutdown requested")
 
 # Bootstrap user files before any modules try to load them
-from core.setup import ensure_prompt_files, ensure_chat_defaults
+from core.setup import ensure_prompt_files, ensure_chat_defaults, ensure_state_presets
 ensure_prompt_files()
 ensure_chat_defaults()
+ensure_state_presets()
 
 # Wrap all further imports to catch errors
 try:

@@ -415,6 +415,70 @@ def reset_chat_defaults() -> bool:
         return False
 
 
+def ensure_state_presets() -> bool:
+    """
+    Create user/state_presets/ directory for custom simulations/games.
+    Copies _template.json as a starting point if directory is new.
+    Returns True on success, False on error.
+    """
+    target_dir = Path(__file__).parent.parent / "user" / "state_presets"
+    template_file = target_dir / "_template.json"
+    
+    try:
+        created = not target_dir.exists()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create template only on first run
+        if created or not template_file.exists():
+            template = {
+                "_comment": "Template for custom state presets. Copy and modify.",
+                "name": "My Custom Story",
+                "description": "Brief description shown in preset list",
+                "initial_state": {
+                    "scene": {
+                        "value": 1,
+                        "type": "integer",
+                        "min": 1,
+                        "max": 5,
+                        "adjacent": 1,
+                        "label": "Chapter"
+                    },
+                    "example_stat": {
+                        "value": 50,
+                        "type": "integer",
+                        "min": 0,
+                        "max": 100,
+                        "label": "Example Stat"
+                    },
+                    "hidden_until_ch2": {
+                        "value": False,
+                        "type": "boolean",
+                        "label": "Secret Thing",
+                        "visible_from": 2
+                    }
+                },
+                "progressive_prompt": {
+                    "iterator": "scene",
+                    "mode": "cumulative",
+                    "base": "Your story premise and character descriptions go here.\n\nKEY VARIABLES:\n- scene: Chapter number\n- example_stat: Describe what this tracks",
+                    "segments": {
+                        "1": "CHAPTER 1\n\nOpening scene description.\n\nOBJECTIVES:\n- What player needs to do\n- When to advance: set_state(\"scene\", 2, \"reason\")",
+                        "2": "CHAPTER 2\n\nNext chapter content..."
+                    }
+                }
+            }
+            with open(template_file, 'w', encoding='utf-8') as f:
+                json.dump(template, f, indent=2)
+            logger.info("Created state preset template at user/state_presets/_template.json")
+        
+        if created:
+            logger.info("Created user/state_presets/ for custom simulations")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure state_presets directory: {e}")
+        return False
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """
     Deep merge two dicts. Override wins on conflicts.
