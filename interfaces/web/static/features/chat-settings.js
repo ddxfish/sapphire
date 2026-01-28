@@ -193,6 +193,26 @@ export async function openSettingsModal() {
         document.getElementById('setting-state-preset').value = settings.state_preset || '';
         document.getElementById('setting-state-in-prompt').checked = settings.state_in_prompt !== false;
         
+        // TTS accordion toggle
+        const ttsHeader = document.getElementById('tts-header');
+        const ttsContent = document.getElementById('tts-content');
+        if (ttsHeader) {
+            ttsHeader.onclick = () => {
+                const isOpen = ttsHeader.classList.toggle('open');
+                ttsContent.style.display = isOpen ? 'block' : 'none';
+            };
+        }
+        
+        // System Prompt accordion toggle
+        const sysPromptHeader = document.getElementById('system-prompt-header');
+        const sysPromptContent = document.getElementById('system-prompt-content');
+        if (sysPromptHeader) {
+            sysPromptHeader.onclick = () => {
+                const isOpen = sysPromptHeader.classList.toggle('open');
+                sysPromptContent.style.display = isOpen ? 'block' : 'none';
+            };
+        }
+        
         // State engine accordion toggle
         const stateHeader = document.getElementById('state-engine-header');
         const stateContent = document.getElementById('state-engine-content');
@@ -212,12 +232,10 @@ export async function openSettingsModal() {
         document.getElementById('pitch-value').textContent = settings.pitch || 0.94;
         document.getElementById('speed-value').textContent = settings.speed || 1.3;
         
-        // Hide TTS fields if TTS disabled
+        // Hide TTS accordion if TTS disabled
         const ttsEnabled = getTtsEnabled();
-        ['setting-voice', 'setting-pitch', 'setting-speed'].forEach(id => {
-            const el = document.getElementById(id)?.closest('.form-group');
-            if (el) el.style.display = ttsEnabled ? '' : 'none';
-        });
+        const ttsSection = document.getElementById('tts-accordion-section');
+        if (ttsSection) ttsSection.style.display = ttsEnabled ? '' : 'none';
         
         // Show modal with animation
         settingsModal.style.display = 'flex';

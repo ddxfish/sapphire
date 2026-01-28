@@ -139,6 +139,7 @@
             
             <div class="modal-body">
                 <div class="modal-grid">
+                    <!-- Primary Options (always visible) -->
                     <div class="form-group">
                         <label for="setting-prompt">Prompt:</label>
                         <select id="setting-prompt" class="form-control">
@@ -155,61 +156,8 @@
                         </select>
                     </div>
                     
-                    <div class="form-group full-width">
-                        <label for="setting-voice">Voice:</label>
-                        <select id="setting-voice" class="form-control">
-                            <option value="am_adam">🇺🇸👨 Adam</option>
-                            <option value="am_eric">🇺🇸👨 Eric</option>
-                            <option value="am_liam">🇺🇸👨 Liam</option>
-                            <option value="am_michael">🇺🇸👨 Michael</option>
-                            <option value="af_bella">🇺🇸👩 Bella</option>
-                            <option value="af_nicole">🇺🇸👩 Nicole</option>
-                            <option value="af_heart">🇺🇸👩 Heart</option>
-                            <option value="af_jessica">🇺🇸👩 Jessica</option>
-                            <option value="af_sarah">🇺🇸👩 Sarah</option>
-                            <option value="af_river">🇺🇸👩 River</option>
-                            <option value="af_sky">🇺🇸👩 Sky</option>
-                            <option value="bf_emma">🇬🇧👩 Emma</option>
-                            <option value="bf_isabella">🇬🇧👩 Isabella</option>
-                            <option value="bf_alice">🇬🇧👩 Alice</option>
-                            <option value="bf_lily">🇬🇧👩 Lily</option>
-                            <option value="bm_george">🇬🇧👨 George</option>
-                            <option value="bm_daniel">🇬🇧👨 Daniel</option>
-                            <option value="bm_lewis">🇬🇧👨 Lewis</option>
-                        </select>
-                    </div>
-                    
                     <div class="form-group">
-                        <label for="setting-pitch">Pitch: <span id="pitch-value">0.94</span></label>
-                        <input type="range" id="setting-pitch" class="form-control" min="0.5" max="1.5" step="0.02" value="0.94">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="setting-speed">Speed: <span id="speed-value">1.3</span></label>
-                        <input type="range" id="setting-speed" class="form-control" min="0.5" max="2.5" step="0.1" value="1.3">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="setting-spice" checked>
-                            Spice every <input type="number" id="setting-spice-turns" min="1" max="20" value="3" style="width: 3em;"> turns
-                        </label>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="setting-datetime">
-                            Inject Date/Time
-                        </label>
-                    </div>
-                    
-                    <div class="form-group full-width">
-                        <label for="setting-custom-context">Custom Context:</label>
-                        <textarea id="setting-custom-context" class="form-control" rows="3" placeholder="Custom text injected into system prompt..."></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="setting-llm-primary">LLM:</label>
+                        <label for="setting-llm-primary">Provider:</label>
                         <select id="setting-llm-primary" class="form-control">
                             <option value="auto">Auto</option>
                         </select>
@@ -241,6 +189,81 @@
                         <div class="color-picker-row">
                             <input type="color" id="setting-trim-color" class="form-control color-input" value="#4a9eff">
                             <button type="button" id="reset-trim-color" class="btn btn-small" title="Reset to theme default">Reset</button>
+                        </div>
+                    </div>
+                    
+                    <!-- TTS Accordion -->
+                    <div class="form-group full-width accordion-section" id="tts-accordion-section">
+                        <div class="accordion-header" id="tts-header">
+                            <span class="accordion-arrow">▶</span>
+                            <span>Text-to-Speech</span>
+                        </div>
+                        <div class="accordion-content" id="tts-content" style="display: none;">
+                            <div class="accordion-inner">
+                                <div class="form-group">
+                                    <label for="setting-voice">Voice:</label>
+                                    <select id="setting-voice" class="form-control">
+                                        <option value="am_adam">🇺🇸👨 Adam</option>
+                                        <option value="am_eric">🇺🇸👨 Eric</option>
+                                        <option value="am_liam">🇺🇸👨 Liam</option>
+                                        <option value="am_michael">🇺🇸👨 Michael</option>
+                                        <option value="af_bella">🇺🇸👩 Bella</option>
+                                        <option value="af_nicole">🇺🇸👩 Nicole</option>
+                                        <option value="af_heart">🇺🇸👩 Heart</option>
+                                        <option value="af_jessica">🇺🇸👩 Jessica</option>
+                                        <option value="af_sarah">🇺🇸👩 Sarah</option>
+                                        <option value="af_river">🇺🇸👩 River</option>
+                                        <option value="af_sky">🇺🇸👩 Sky</option>
+                                        <option value="bf_emma">🇬🇧👩 Emma</option>
+                                        <option value="bf_isabella">🇬🇧👩 Isabella</option>
+                                        <option value="bf_alice">🇬🇧👩 Alice</option>
+                                        <option value="bf_lily">🇬🇧👩 Lily</option>
+                                        <option value="bm_george">🇬🇧👨 George</option>
+                                        <option value="bm_daniel">🇬🇧👨 Daniel</option>
+                                        <option value="bm_lewis">🇬🇧👨 Lewis</option>
+                                    </select>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="setting-pitch">Pitch: <span id="pitch-value">0.94</span></label>
+                                    <input type="range" id="setting-pitch" class="form-control" min="0.5" max="1.5" step="0.02" value="0.94">
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="setting-speed">Speed: <span id="speed-value">1.3</span></label>
+                                    <input type="range" id="setting-speed" class="form-control" min="0.5" max="2.5" step="0.1" value="1.3">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- System Prompt Accordion -->
+                    <div class="form-group full-width accordion-section">
+                        <div class="accordion-header" id="system-prompt-header">
+                            <span class="accordion-arrow">▶</span>
+                            <span>System Prompt</span>
+                        </div>
+                        <div class="accordion-content" id="system-prompt-content" style="display: none;">
+                            <div class="accordion-inner">
+                                <div class="form-group">
+                                    <label>
+                                        <input type="checkbox" id="setting-spice" checked>
+                                        Spice every <input type="number" id="setting-spice-turns" min="1" max="20" value="3" style="width: 3em;"> turns
+                                    </label>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label>
+                                        <input type="checkbox" id="setting-datetime">
+                                        Inject Date/Time
+                                    </label>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label for="setting-custom-context">Custom Context:</label>
+                                    <textarea id="setting-custom-context" class="form-control" rows="3" placeholder="Custom text injected into system prompt..."></textarea>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     

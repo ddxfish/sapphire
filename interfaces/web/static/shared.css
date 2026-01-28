@@ -1239,7 +1239,11 @@ input[type="range"]:focus::-webkit-slider-thumb {
     margin-top: var(--space-md);
 }
 
-.accordion-header {
+#settings-modal .accordion-section {
+    margin-top: 0;
+}
+
+.accordion-section .accordion-header {
     display: flex;
     align-items: center;
     gap: var(--space-sm);
@@ -1251,7 +1255,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
     transition: background 0.15s ease;
 }
 
-.accordion-header:hover {
+.accordion-section .accordion-header:hover {
     background: var(--accordion-header-hover, rgba(74, 158, 255, 0.12));
 }
 
@@ -1280,16 +1284,16 @@ input[type="range"]:focus::-webkit-slider-thumb {
     transition: max-height 0.2s ease;
 }
 
-.accordion-inner {
+.accordion-section .accordion-inner {
     padding: var(--space-md);
     padding-top: var(--space-sm);
 }
 
-.accordion-inner .form-group {
+.accordion-section .accordion-inner .form-group {
     margin-bottom: var(--space-sm);
 }
 
-.accordion-inner .form-group:last-child {
+.accordion-section .accordion-inner .form-group:last-child {
     margin-bottom: 0;
 }
 
