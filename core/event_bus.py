@@ -131,8 +131,11 @@ class Events:
     
     # System events
     PROMPT_CHANGED = "prompt_changed"
+    PROMPT_DELETED = "prompt_deleted"
+    COMPONENTS_CHANGED = "components_changed"
     ABILITY_CHANGED = "ability_changed"
     SPICE_CHANGED = "spice_changed"
+    SETTINGS_CHANGED = "settings_changed"
     
     # Context threshold events
     CONTEXT_WARNING = "context_warning"    # 80% threshold

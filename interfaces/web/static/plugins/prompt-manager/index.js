@@ -64,6 +64,51 @@ Editing:
     // Listen for external prompt changes (reset/merge from settings)
     this._promptsChangedHandler = () => this.handleExternalPromptsChange();
     window.addEventListener('prompts-changed', this._promptsChangedHandler);
+    
+    // Listen for SSE events for real-time updates
+    this._setupSSEHandlers();
+  },
+  
+  _setupSSEHandlers() {
+    // Dynamically import eventBus to avoid circular dependencies
+    import('../../core/event-bus.js').then(eventBus => {
+      // Components changed - refresh components and editor
+      this._componentsChangedUnsub = eventBus.on('components_changed', async (data) => {
+        console.log('[PromptManager] SSE: components_changed', data);
+        if (!this._loadInProgress) {
+          await this.loadComponents();
+          if (this.currentPrompt && this.currentData?.type === 'assembled') {
+            await this.loadPromptIntoEditor(this.currentPrompt);
+          }
+        }
+      });
+      
+      // Prompt changed - refresh list and potentially editor
+      this._promptChangedUnsub = eventBus.on('prompt_changed', async (data) => {
+        console.log('[PromptManager] SSE: prompt_changed', data);
+        if (!this._loadInProgress) {
+          await this.loadPromptList();
+          // If bulk change, refresh everything
+          if (data?.bulk) {
+            await this.loadComponents();
+            await this.syncToActivePill();
+          }
+        }
+      });
+      
+      // Prompt deleted - refresh list and clear editor if viewing deleted prompt
+      this._promptDeletedUnsub = eventBus.on('prompt_deleted', async (data) => {
+        console.log('[PromptManager] SSE: prompt_deleted', data);
+        if (!this._loadInProgress) {
+          await this.loadPromptList();
+          if (this.currentPrompt === data?.name) {
+            this.elements.editor.innerHTML = '<div class="pm-placeholder">Prompt was deleted</div>';
+            this.currentPrompt = null;
+            this.currentData = null;
+          }
+        }
+      });
+    });
   },
   
   async handleExternalPromptsChange() {
@@ -163,6 +208,10 @@ Editing:
     if (this._promptsChangedHandler) {
       window.removeEventListener('prompts-changed', this._promptsChangedHandler);
     }
+    // Clean up SSE handlers
+    if (this._componentsChangedUnsub) this._componentsChangedUnsub();
+    if (this._promptChangedUnsub) this._promptChangedUnsub();
+    if (this._promptDeletedUnsub) this._promptDeletedUnsub();
   },
   
   bindEvents() {

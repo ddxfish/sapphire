@@ -305,6 +305,27 @@ function initEventBus() {
         debouncedUpdateScene();
     });
     
+    eventBus.on(eventBus.Events.SPICE_CHANGED, () => {
+        console.log('[EventBus] Spice changed');
+        debouncedUpdateScene();
+    });
+    
+    eventBus.on(eventBus.Events.COMPONENTS_CHANGED, () => {
+        console.log('[EventBus] Components changed');
+        debouncedUpdateScene();
+    });
+    
+    eventBus.on(eventBus.Events.PROMPT_DELETED, () => {
+        console.log('[EventBus] Prompt deleted');
+        debouncedUpdateScene();
+    });
+    
+    eventBus.on(eventBus.Events.SETTINGS_CHANGED, (data) => {
+        console.log('[EventBus] Settings changed:', data?.key);
+        // Settings changes may affect display
+        debouncedUpdateScene();
+    });
+    
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
         console.log('[EventBus] Chat switched');
         // Only update dropdown - refresh/scene handled by initiator (handleChatChange)

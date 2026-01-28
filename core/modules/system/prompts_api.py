@@ -8,6 +8,7 @@ import json
 import logging
 from flask import Blueprint, request, jsonify
 from . import prompts
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,7 @@ def create_prompts_api(system_instance=None):
                 message = f"Prompt '{name}' saved" if success else "Failed to save prompt"
             
             if success:
+                publish(Events.PROMPT_CHANGED, {"name": name, "type": prompt_type, "action": "saved"})
                 return jsonify({'status': 'success', 'message': message})
             else:
                 return jsonify({'error': message}), 409
@@ -120,6 +122,7 @@ def create_prompts_api(system_instance=None):
         try:
             success = prompts.delete_prompt(name)
             if success:
+                publish(Events.PROMPT_DELETED, {"name": name})
                 return jsonify({'status': 'success', 'message': f"Prompt '{name}' deleted"})
             else:
                 return jsonify({'error': f"Prompt '{name}' not found or cannot be deleted"}), 404
@@ -209,6 +212,7 @@ def create_prompts_api(system_instance=None):
             prompts.prompt_manager.components[comp_type][key] = value
             prompts.prompt_manager.save_components()
             
+            publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "saved"})
             logger.info(f"Saved component {comp_type}.{key}")
             return jsonify({'status': 'success', 'message': f'Component {comp_type}.{key} saved'})
             
@@ -232,6 +236,7 @@ def create_prompts_api(system_instance=None):
             del prompts.prompt_manager.components[comp_type][key]
             prompts.prompt_manager.save_components()
             
+            publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
             logger.info(f"Deleted component {comp_type}.{key}")
             return jsonify({'status': 'success', 'message': f'Component {comp_type}.{key} deleted'})
             
@@ -279,6 +284,9 @@ def create_prompts_api(system_instance=None):
                         content = prompt_data.get('content', '')
                         system_instance.llm_chat.set_system_prompt(content)
             
+            publish(Events.PROMPT_CHANGED, {"action": "reset", "bulk": True})
+            publish(Events.COMPONENTS_CHANGED, {"action": "reset", "bulk": True})
+            publish(Events.SPICE_CHANGED, {"action": "reset", "bulk": True})
             return jsonify({
                 'status': 'success',
                 'message': 'All prompts reset to factory defaults',
@@ -301,6 +309,8 @@ def create_prompts_api(system_instance=None):
             # Reload prompt manager to pick up changes
             prompts.reload()
             
+            publish(Events.PROMPT_CHANGED, {"action": "merge", "bulk": True})
+            publish(Events.COMPONENTS_CHANGED, {"action": "merge", "bulk": True})
             return jsonify({
                 'status': 'success',
                 'message': 'Factory defaults merged into user prompts',

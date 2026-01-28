@@ -6,6 +6,7 @@ Provides API endpoints for managing prompt spices.
 import logging
 from flask import Blueprint, request, jsonify
 from . import prompts
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def create_spices_api():
             current_spice = prompts.get_current_spice()
             
             logger.info(f"Toggled category '{cat_name}' to {'enabled' if new_state else 'disabled'}")
+            publish(Events.SPICE_CHANGED, {"category": cat_name, "enabled": new_state, "action": "toggled"})
             return jsonify({
                 'status': 'success',
                 'category': cat_name,
@@ -108,6 +110,7 @@ def create_spices_api():
             prompts.prompt_manager.save_spices()
             
             logger.info(f"Added spice to '{category}': {text[:50]}...")
+            publish(Events.SPICE_CHANGED, {"category": category, "action": "added"})
             return jsonify({
                 'status': 'success',
                 'message': f'Added spice to {category}',
@@ -143,6 +146,7 @@ def create_spices_api():
             prompts.prompt_manager.save_spices()
             
             logger.info(f"Updated spice in '{category}' at index {index}")
+            publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "updated"})
             return jsonify({
                 'status': 'success',
                 'message': 'Spice updated',
@@ -176,6 +180,7 @@ def create_spices_api():
             prompts.prompt_manager.save_spices()
             
             logger.info(f"Deleted spice from '{category}' at index {index}")
+            publish(Events.SPICE_CHANGED, {"category": category, "action": "deleted"})
             return jsonify({
                 'status': 'success',
                 'message': 'Spice deleted',
@@ -207,6 +212,7 @@ def create_spices_api():
             prompts.prompt_manager.save_spices()
             
             logger.info(f"Created category '{cat_name}'")
+            publish(Events.SPICE_CHANGED, {"category": cat_name, "action": "category_created"})
             return jsonify({
                 'status': 'success',
                 'message': f"Created category '{cat_name}'",
@@ -230,6 +236,7 @@ def create_spices_api():
             prompts.prompt_manager.save_spices()
             
             logger.info(f"Deleted category '{cat_name}' with {spice_count} spices")
+            publish(Events.SPICE_CHANGED, {"category": cat_name, "action": "category_deleted"})
             return jsonify({
                 'status': 'success',
                 'message': f"Deleted category '{cat_name}'",
@@ -263,6 +270,7 @@ def create_spices_api():
             prompts.prompt_manager.save_spices()
             
             logger.info(f"Renamed category '{cat_name}' to '{new_name}'")
+            publish(Events.SPICE_CHANGED, {"old_name": cat_name, "new_name": new_name, "action": "category_renamed"})
             return jsonify({
                 'status': 'success',
                 'message': f"Renamed category to '{new_name}'",

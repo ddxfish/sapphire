@@ -3,6 +3,7 @@ import os
 import logging
 from flask import Blueprint, request, jsonify
 from core.modules.system.toolsets import toolset_manager
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,7 @@ def create_abilities_api(system_instance):
             ability_info = function_manager.get_current_ability_info()
             
             logger.info(f"Activated ability: {ability_name}")
+            publish(Events.ABILITY_CHANGED, {"name": ability_name, "action": "activated"})
             return jsonify({
                 "status": "success",
                 "message": f"Activated ability: {ability_name}",
@@ -223,6 +225,7 @@ def create_abilities_api(system_instance):
             
             if toolset_manager.save_toolset(name, functions):
                 logger.info(f"Saved custom toolset '{name}' with {len(functions)} functions")
+                publish(Events.ABILITY_CHANGED, {"name": name, "action": "created"})
                 return jsonify({
                     "status": "success",
                     "message": f"Saved custom ability: {name}",
@@ -252,6 +255,7 @@ def create_abilities_api(system_instance):
             
             if toolset_manager.delete_toolset(ability_name):
                 logger.info(f"Deleted custom toolset: {ability_name}")
+                publish(Events.ABILITY_CHANGED, {"name": ability_name, "action": "deleted"})
                 return jsonify({
                     "status": "success",
                     "message": f"Deleted ability: {ability_name}"

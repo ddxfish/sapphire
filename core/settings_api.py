@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from flask import Blueprint, request, jsonify
 from core.settings_manager import settings
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ def create_settings_api():
             
             logger.info(f"Updated setting '{key}' to {value} (tier: {tier}, persist: {persist})")
             
+            publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
             return jsonify({
                 "status": "success",
                 "key": key,
