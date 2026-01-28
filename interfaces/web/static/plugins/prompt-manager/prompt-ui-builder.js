@@ -12,6 +12,7 @@ export function buildMainUI() {
         <button id="pm-refresh-btn" class="plugin-btn" title="Refresh">&#x1F504;</button>
         <button id="pm-delete-btn" class="plugin-btn" title="Delete">&#x1F5D1;</button>
         <button id="pm-preview-btn" class="plugin-btn" title="Preview">&#x1F50D;</button>
+        <button id="pm-export-btn" class="plugin-btn" title="Import/Export">&#x1F4E4;</button>
       </div>
     </div>
     <div id="pm-editor" class="pm-editor">

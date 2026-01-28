@@ -29,8 +29,10 @@ export function showModal(title, fields, onSave = null, options = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   if (options.wide) overlay.classList.add('modal-wide');
+  if (options.large) overlay.classList.add('modal-large');
   
   const checkboxGroupClass = options.wide ? 'checkbox-group checkbox-group-tall' : 'checkbox-group';
+  const defaultTextareaRows = options.large ? 12 : 6;
   
   let fieldsHTML = fields.map(field => {
     if (field.type === 'html') {
@@ -43,7 +45,7 @@ export function showModal(title, fields, onSave = null, options = {}) {
           <label for="${field.id}">${field.label}</label>
           <textarea 
             id="${field.id}" 
-            rows="${field.rows || 6}"
+            rows="${field.rows || defaultTextareaRows}"
             ${field.readonly ? 'readonly' : ''}
           >${escapeHtml(field.value || '')}</textarea>
         </div>

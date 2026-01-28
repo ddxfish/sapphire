@@ -611,6 +611,15 @@
     max-width: 750px;
 }
 
+/* Large modal variant for component editing */
+.modal-large .modal-base {
+    max-width: 700px;
+}
+
+.modal-large textarea {
+    min-height: 280px;
+}
+
 /* =============================================================================
    SETTINGS MODAL SPECIFIC
    ============================================================================= */

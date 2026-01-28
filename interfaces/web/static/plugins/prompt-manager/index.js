@@ -41,7 +41,8 @@ Editing:
       refreshBtn: wrapper.querySelector('#pm-refresh-btn'),
       deleteBtn: wrapper.querySelector('#pm-delete-btn'),
       editor: wrapper.querySelector('#pm-editor'),
-      previewBtn: wrapper.querySelector('#pm-preview-btn')
+      previewBtn: wrapper.querySelector('#pm-preview-btn'),
+      exportBtn: wrapper.querySelector('#pm-export-btn')
     };
     
     this.currentPrompt = null;
@@ -50,6 +51,8 @@ Editing:
     this.lastLoadedContentHash = null;
     this._monolithSaveTimeout = null;
     this._loadInProgress = false;
+    this._listLoadInProgress = false;
+    this._listLoadStarted = 0;
     this._lastLoadTime = 0;
     
     this.bindEvents();
@@ -220,6 +223,7 @@ Editing:
     this.elements.refreshBtn.addEventListener('click', () => this.handleRefresh());
     this.elements.deleteBtn.addEventListener('click', () => this.handleDelete());
     this.elements.previewBtn.addEventListener('click', () => this.handlePreview());
+    this.elements.exportBtn.addEventListener('click', () => this.handleImportExport());
   },
   
   async loadComponents() {
@@ -232,25 +236,35 @@ Editing:
   },
   
   async loadPromptList() {
+    // Prevent concurrent list loads - hard 5s timeout
+    const now = Date.now();
+    if (this._listLoadInProgress) {
+      if ((now - this._listLoadStarted) < 5000) {
+        console.log('[PromptManager] loadPromptList skipped - already in progress');
+        return;
+      } else {
+        console.warn('[PromptManager] loadPromptList timeout - forcing restart');
+      }
+    }
+    this._listLoadInProgress = true;
+    this._listLoadStarted = now;
+    
+    console.log('[PromptManager] loadPromptList starting...');
+    
     try {
       const prompts = await API.listPrompts();
+      console.log(`[PromptManager] Got ${prompts.length} prompts from API`);
+      
       const previousValue = this.elements.select.value;
       
+      // Clear and rebuild - NO per-prompt API calls (they can hang)
       this.elements.select.innerHTML = '<option value="">-- Select Prompt --</option>';
       
       for (const p of prompts) {
         const opt = document.createElement('option');
         opt.value = p.name;
         const typeLabel = p.type === 'assembled' ? '(A)' : '(M)';
-        
-        let charInfo = '';
-        try {
-          const data = await API.getPrompt(p.name);
-          const charCount = data.content?.length || 0;
-          charInfo = ` ${charCount}`;
-        } catch (e) {}
-        
-        opt.textContent = `${p.name} ${typeLabel}${charInfo}`;
+        opt.textContent = `${p.name} ${typeLabel}`;
         this.elements.select.appendChild(opt);
       }
       
@@ -260,10 +274,14 @@ Editing:
           this.elements.select.value = previousValue;
         }
       }
+      
+      console.log('[PromptManager] loadPromptList complete');
     } catch (e) {
       console.error('Failed to load prompt list:', e);
       this.elements.select.innerHTML = '<option value="">Error loading prompts</option>';
       showToast('Failed to load prompts', 'error');
+    } finally {
+      this._listLoadInProgress = false;
     }
   },
   
@@ -304,6 +322,15 @@ Editing:
       this.elements.editor.innerHTML = buildEditor(data, this.components);
       this.bindEditorEvents();
     } catch (e) {
+      // If 404, prompt was deleted - try to sync to active pill
+      if (e.message.includes('404')) {
+        console.warn(`Prompt '${name}' not found, syncing to active`);
+        this.currentPrompt = null;
+        this.currentData = null;
+        this.elements.editor.innerHTML = '<div class="pm-placeholder">Prompt not found</div>';
+        // Let the status watcher or pill sync handle finding the right prompt
+        return;
+      }
       console.error('Failed to load prompt:', e);
       this.elements.editor.innerHTML = `<div class="pm-error">Error: ${e.message}</div>`;
     }
@@ -381,6 +408,10 @@ Editing:
   
   async handleRefresh() {
     try {
+      // Force reset guards - user explicitly requested refresh
+      this._listLoadInProgress = false;
+      this._loadInProgress = false;
+      
       await this.loadComponents();
       await this.loadPromptList();
       await this.syncToActivePill();
@@ -538,7 +569,7 @@ Editing:
       } catch (e) {
         showToast(`Failed: ${e.message}`, 'error');
       }
-    });
+    }, { large: true });
   },
   
   handleDeleteComponent(type) {
@@ -933,14 +964,25 @@ Editing:
       };
       
       try {
+        console.log(`[PromptManager] Creating prompt: ${name}`);
         await API.savePrompt(name, promptData);
-        showToast('Prompt created!', 'success');
+        
+        // Force-reset guard and refresh list
+        this._listLoadInProgress = false;
         await this.loadPromptList();
         
-        // Select and activate the new prompt
+        // Select the new prompt in dropdown
         this.elements.select.value = name;
-        await this.handleSelect();
+        
+        // Activate it (loads into backend + editor)
+        console.log(`[PromptManager] Activating new prompt: ${name}`);
+        await API.loadPrompt(name);
+        await this.loadPromptIntoEditor(name);
+        await updateScene();
+        
+        showToast(`Created & activated: ${name}`, 'success');
       } catch (e) {
+        console.error('[PromptManager] Create failed:', e);
         showToast(`Failed: ${e.message}`, 'error');
       }
     });
@@ -985,17 +1027,68 @@ Editing:
     
     if (!confirm(`Delete prompt "${this.currentPrompt}"?`)) return;
     
+    const deletedName = this.currentPrompt;
+    console.log(`[PromptManager] Deleting prompt: ${deletedName}`);
+    
     try {
-      await API.deletePrompt(this.currentPrompt);
-      showToast('Prompt deleted', 'success');
-      await this.loadPromptList();
-      this.elements.editor.innerHTML = '<div class="pm-placeholder">Select a prompt to edit</div>';
+      // Get fallback BEFORE deleting
+      const promptsBefore = await API.listPrompts();
+      const fallbackName = promptsBefore.find(p => p.name !== deletedName)?.name;
+      
+      if (!fallbackName) {
+        showToast('Cannot delete the only prompt', 'error');
+        return;
+      }
+      
+      console.log(`[PromptManager] Fallback will be: ${fallbackName}`);
+      
+      // Prevent status watcher from running during delete
+      this._loadInProgress = true;
+      
+      // Delete the prompt
+      console.log('[PromptManager] Calling deletePrompt API...');
+      await API.deletePrompt(deletedName);
+      console.log('[PromptManager] Delete API complete');
+      
+      // IMMEDIATELY switch backend to fallback (before any UI refresh)
+      console.log('[PromptManager] Switching backend to fallback...');
+      await API.loadPrompt(fallbackName);
+      console.log('[PromptManager] Backend switched');
+      
+      // Clear local state
       this.currentPrompt = null;
       this.currentData = null;
+      this.elements.editor.innerHTML = '<div class="pm-placeholder">Loading...</div>';
       
-      // Sync to whatever prompt is now active
-      await this.syncToActivePill();
+      // Force-reset list guard and refresh
+      this._listLoadInProgress = false;
+      console.log('[PromptManager] Refreshing prompt list...');
+      await this.loadPromptList();
+      console.log('[PromptManager] List refresh complete');
+      
+      // DEFENSIVE: Remove deleted prompt from dropdown if still present
+      const staleOption = Array.from(this.elements.select.options).find(o => o.value === deletedName);
+      if (staleOption) {
+        console.log(`[PromptManager] Removing stale option: ${deletedName}`);
+        staleOption.remove();
+      }
+      
+      // Force select to fallback
+      this.elements.select.value = fallbackName;
+      
+      console.log('[PromptManager] Loading fallback into editor...');
+      await this.loadPromptIntoEditor(fallbackName);
+      console.log('[PromptManager] Editor loaded');
+      
+      await updateScene();
+      
+      this._loadInProgress = false;
+      showToast('Prompt deleted', 'success');
+      console.log('[PromptManager] Delete complete');
     } catch (e) {
+      console.error('[PromptManager] Delete failed:', e);
+      this._loadInProgress = false;
+      this._listLoadInProgress = false;
       showToast(`Delete failed: ${e.message}`, 'error');
     }
   },
@@ -1041,5 +1134,207 @@ Editing:
         `
       }
     ], null);
+  },
+  
+  handleImportExport() {
+    if (!this.currentPrompt || !this.currentData) {
+      showToast('No prompt selected', 'info');
+      return;
+    }
+    
+    // Build comprehensive export data
+    const exportData = {
+      name: this.currentPrompt,
+      prompt: this.currentData,
+      components: {}
+    };
+    
+    // For assembled prompts, include referenced component definitions
+    if (this.currentData.type === 'assembled' && this.currentData.components) {
+      const comp = this.currentData.components;
+      const types = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+      
+      types.forEach(type => {
+        const key = comp[type];
+        if (key && this.components[type]?.[key]) {
+          if (!exportData.components[type]) exportData.components[type] = {};
+          exportData.components[type][key] = this.components[type][key];
+        }
+      });
+      
+      // Extras and emotions (arrays)
+      ['extras', 'emotions'].forEach(type => {
+        const keys = comp[type] || [];
+        keys.forEach(key => {
+          if (this.components[type]?.[key]) {
+            if (!exportData.components[type]) exportData.components[type] = {};
+            exportData.components[type][key] = this.components[type][key];
+          }
+        });
+      });
+    }
+    
+    const jsonData = JSON.stringify(exportData, null, 2);
+    
+    const modalHtml = `
+      <div style="display: flex; flex-direction: column; gap: 16px;">
+        <div style="color: var(--text-muted); font-size: var(--font-sm); line-height: 1.4;">
+          <strong>Export</strong> saves prompt definition + all referenced components.<br>
+          <strong>Import</strong> merges into your prompts. Check "overwrite" to replace existing items.
+        </div>
+        
+        <fieldset style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px;">
+          <legend style="color: var(--text-secondary); padding: 0 8px;">Export</legend>
+          <div style="display: flex; gap: 8px;">
+            <button id="pm-export-clipboard" class="btn btn-secondary" style="flex: 1;">📋 Copy to Clipboard</button>
+            <button id="pm-export-file" class="btn btn-secondary" style="flex: 1;">💾 Save as File</button>
+          </div>
+        </fieldset>
+        
+        <fieldset style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px;">
+          <legend style="color: var(--text-secondary); padding: 0 8px;">Import</legend>
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--text-secondary); font-size: var(--font-sm);">
+            <input type="checkbox" id="pm-import-overwrite">
+            Overwrite existing prompts and components
+          </label>
+          <div style="display: flex; gap: 8px;">
+            <button id="pm-import-clipboard" class="btn btn-secondary" style="flex: 1;">📋 Paste from Clipboard</button>
+            <button id="pm-import-file" class="btn btn-secondary" style="flex: 1;">📂 Load from File</button>
+          </div>
+        </fieldset>
+      </div>
+    `;
+    
+    const { close, element } = showModal(`Import/Export: ${this.currentPrompt}`, [
+      { type: 'html', value: modalHtml }
+    ], null);
+    
+    // Export to clipboard
+    element.querySelector('#pm-export-clipboard')?.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(jsonData);
+        showToast('Copied to clipboard!', 'success');
+      } catch (e) {
+        showToast('Failed to copy', 'error');
+      }
+    });
+    
+    // Export to file
+    element.querySelector('#pm-export-file')?.addEventListener('click', () => {
+      const blob = new Blob([jsonData], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${this.currentPrompt}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('Downloaded!', 'success');
+    });
+    
+    // Import from clipboard - show modal with textarea
+    element.querySelector('#pm-import-clipboard')?.addEventListener('click', () => {
+      const overwrite = element.querySelector('#pm-import-overwrite')?.checked || false;
+      
+      const { close: closeImport, element: importEl } = showModal('Paste JSON', [
+        { id: 'import-json', label: 'Paste exported prompt JSON below:', type: 'textarea', value: '', rows: 12 }
+      ], async (data) => {
+        const text = data['import-json']?.trim();
+        if (!text) {
+          showToast('No JSON provided', 'error');
+          return;
+        }
+        try {
+          await this._importPromptData(text, overwrite);
+          close(); // Close main import/export modal
+        } catch (e) {
+          showToast(`Import failed: ${e.message}`, 'error');
+        }
+      }, { large: true });
+    });
+    
+    // Import from file
+    element.querySelector('#pm-import-file')?.addEventListener('click', () => {
+      const overwrite = element.querySelector('#pm-import-overwrite')?.checked || false;
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          await this._importPromptData(text, overwrite);
+          close();
+        } catch (e) {
+          showToast(`Import failed: ${e.message}`, 'error');
+        }
+      };
+      input.click();
+    });
+  },
+  
+  async _importPromptData(jsonText, overwrite = false) {
+    const data = JSON.parse(jsonText);
+    
+    // Validate structure
+    if (!data.prompt || !data.prompt.type || !['monolith', 'assembled'].includes(data.prompt.type)) {
+      throw new Error('Invalid prompt format: missing or invalid prompt.type');
+    }
+    
+    const promptName = data.name || this.currentPrompt;
+    const existingPrompts = await API.listPrompts();
+    const promptExists = existingPrompts.some(p => p.name === promptName);
+    
+    // Import components first (if any)
+    if (data.components) {
+      let imported = 0, skipped = 0;
+      
+      for (const [type, items] of Object.entries(data.components)) {
+        for (const [key, value] of Object.entries(items)) {
+          const exists = this.components[type]?.[key];
+          if (exists && !overwrite) {
+            skipped++;
+            continue;
+          }
+          try {
+            await API.saveComponent(type, key, value);
+            imported++;
+          } catch (e) {
+            console.warn(`Failed to import ${type}.${key}:`, e);
+          }
+        }
+      }
+      
+      if (imported > 0 || skipped > 0) {
+        showToast(`Components: ${imported} imported, ${skipped} skipped`, 'info');
+      }
+    }
+    
+    // Import prompt
+    let promptImported = false;
+    if (promptExists && !overwrite) {
+      showToast(`Prompt "${promptName}" exists - check overwrite to replace`, 'warning');
+    } else {
+      await API.savePrompt(promptName, data.prompt);
+      promptImported = true;
+      showToast(`Prompt "${promptName}" ${promptExists ? 'updated' : 'created'}!`, 'success');
+    }
+    
+    // Force-reset guards before reloading
+    this._listLoadInProgress = false;
+    this._loadInProgress = false;
+    
+    // Reload everything
+    await this.loadComponents();
+    await this.loadPromptList();
+    
+    // Always activate and load the imported prompt
+    if (promptImported) {
+      console.log(`[PromptManager] Activating imported prompt: ${promptName}`);
+      await API.loadPrompt(promptName);
+      await this.loadPromptIntoEditor(promptName);
+      this.elements.select.value = promptName;
+      await updateScene();
+    }
   }
 };
