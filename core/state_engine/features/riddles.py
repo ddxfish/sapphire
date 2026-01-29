@@ -2,6 +2,10 @@
 """
 Riddles - Collaborative puzzles with hidden answers.
 
+Riddles are now state keys that AI sets directly via set_state().
+The key is defined in initial_state with type="riddle_answer".
+When AI sets the value, this handler validates the answer.
+
 The answer is generated deterministically from a seed but neither AI nor player
 knows it. Clues are revealed progressively based on scene_turns.
 """
@@ -31,15 +35,94 @@ class RiddleManager:
         self._set_state = state_setter
         self._get_scene_turns = scene_turns_getter
         self._chat_name = chat_name
+        
+        # Build mapping from state key -> riddle config
+        self._key_to_riddle = {}
+        for riddle in self._riddles:
+            state_key = riddle.get("state_key")
+            if state_key:
+                self._key_to_riddle[state_key] = riddle
     
     @property
     def riddles(self) -> list:
         """Raw riddle configs."""
         return self._riddles
     
+    def get_riddle_keys(self) -> set:
+        """Get all state keys that are riddle answer keys."""
+        return set(self._key_to_riddle.keys())
+    
+    def is_riddle_key(self, key: str) -> bool:
+        """Check if a state key is a riddle answer key."""
+        return key in self._key_to_riddle
+    
     def set_chat_name(self, chat_name: str):
         """Set chat name for seeding (called by engine after init)."""
         self._chat_name = chat_name
+    
+    def handle_set_state(self, key: str, value: Any, turn_number: int, reason: str = "") -> tuple[bool, str]:
+        """
+        Handle set_state for a riddle answer key.
+        
+        Validates the answer and applies success/fail effects.
+        
+        Returns:
+            (success, message) - success means answer was correct
+        """
+        riddle = self._key_to_riddle.get(key)
+        if not riddle:
+            return False, f"Unknown riddle key: {key}"
+        
+        riddle_id = riddle.get("id", key)
+        
+        # Check if already solved
+        if self._get_state(f"_riddle_{riddle_id}_solved") == True:
+            return False, "This riddle has already been solved."
+        
+        # Check if locked out
+        if self._get_state(f"_riddle_{riddle_id}_locked") == True:
+            return False, "Too many failed attempts. The riddle is locked."
+        
+        # Get attempt count
+        attempts_key = f"_riddle_{riddle_id}_attempts"
+        attempts = self._get_state(attempts_key) or 0
+        max_attempts = riddle.get("max_attempts", 999)
+        
+        # Check answer
+        stored_hash = self._get_state(f"_riddle_{riddle_id}_hash")
+        answer_hash = hashlib.sha256(str(value).encode()).hexdigest()
+        
+        if answer_hash == stored_hash:
+            # Success!
+            self._set_state(f"_riddle_{riddle_id}_solved", True, "system", turn_number, "Riddle solved")
+            
+            # Apply success state changes
+            success_sets = riddle.get("success_sets", {})
+            for set_key, set_value in success_sets.items():
+                self._set_state(set_key, set_value, "ai", turn_number, f"Riddle '{riddle_id}' solved")
+            
+            success_msg = riddle.get("success_message", "Correct! The riddle is solved.")
+            # Return True so engine knows to actually set the value
+            return True, f"✓ {success_msg}"
+        
+        # Wrong answer
+        attempts += 1
+        self._set_state(attempts_key, attempts, "system", turn_number, "Failed attempt")
+        
+        remaining = max_attempts - attempts
+        if remaining <= 0:
+            # Lockout
+            self._set_state(f"_riddle_{riddle_id}_locked", True, "system", turn_number, "Riddle locked")
+            
+            lockout_sets = riddle.get("lockout_sets", {})
+            for set_key, set_value in lockout_sets.items():
+                self._set_state(set_key, set_value, "ai", turn_number, f"Riddle '{riddle_id}' locked")
+            
+            lockout_msg = riddle.get("lockout_message", "Too many wrong answers. The riddle is now locked.")
+            return False, f"✗ {lockout_msg}"
+        
+        fail_msg = riddle.get("fail_message", "That's not correct.")
+        return False, f"✗ {fail_msg} ({remaining} attempts remaining)"
     
     def initialize(self, turn_number: int):
         """Initialize all riddles (answer hashes, attempt counters)."""
@@ -133,9 +216,13 @@ class RiddleManager:
         
         return None
     
-    def get_clues(self, riddle_id: str) -> list:
+    def get_clues(self, riddle_id: str, scene_turns_override: int = None) -> list:
         """
         Get revealed clues for a riddle based on scene_turns.
+        
+        Args:
+            riddle_id: The riddle ID
+            scene_turns_override: If provided, use this value instead of calling the getter
         
         Returns list of clue strings that should be visible.
         """
@@ -145,6 +232,12 @@ class RiddleManager:
         
         clues_config = riddle.get("clues", {})
         revealed = []
+        
+        # Create scene_turns getter - use override if provided
+        if scene_turns_override is not None:
+            scene_turns_getter = lambda: scene_turns_override
+        else:
+            scene_turns_getter = self._get_scene_turns
         
         # Parse clue keys like "1", "2?scene_turns>=2", etc.
         clue_items = []
@@ -163,7 +256,7 @@ class RiddleManager:
             if not conditions:
                 # Unconditional clue - always show
                 revealed.append(clue_text)
-            elif match_conditions(conditions, self._get_state, self._get_scene_turns):
+            elif match_conditions(conditions, self._get_state, scene_turns_getter):
                 revealed.append(clue_text)
         
         return revealed
@@ -174,67 +267,6 @@ class RiddleManager:
             if riddle.get("id") == riddle_id:
                 return riddle
         return None
-    
-    def attempt(self, riddle_id: str, answer: str, turn_number: int) -> tuple[bool, str]:
-        """
-        Attempt to solve a riddle.
-        
-        Returns:
-            (success, message)
-        """
-        riddle = self.get_by_id(riddle_id)
-        if not riddle:
-            return False, f"Unknown riddle: {riddle_id}"
-        
-        # Check if already solved
-        solved_key = f"_riddle_{riddle_id}_solved"
-        if self._get_state(solved_key) == True:
-            return False, "This riddle has already been solved."
-        
-        # Check if locked out
-        locked_key = f"_riddle_{riddle_id}_locked"
-        if self._get_state(locked_key) == True:
-            return False, "Too many failed attempts. The riddle is locked."
-        
-        # Get attempt count
-        attempts_key = f"_riddle_{riddle_id}_attempts"
-        attempts = self._get_state(attempts_key) or 0
-        max_attempts = riddle.get("max_attempts", 999)
-        
-        # Check answer
-        stored_hash = self._get_state(f"_riddle_{riddle_id}_hash")
-        answer_hash = hashlib.sha256(str(answer).encode()).hexdigest()
-        
-        if answer_hash == stored_hash:
-            # Success!
-            self._set_state(solved_key, True, "system", turn_number, "Riddle solved")
-            
-            # Apply success state changes
-            success_sets = riddle.get("success_sets", {})
-            for key, value in success_sets.items():
-                self._set_state(key, value, "ai", turn_number, f"Riddle '{riddle_id}' solved")
-            
-            success_msg = riddle.get("success_message", "Correct! The riddle is solved.")
-            return True, f"✓ {success_msg}"
-        
-        # Wrong answer
-        attempts += 1
-        self._set_state(attempts_key, attempts, "system", turn_number, "Failed attempt")
-        
-        remaining = max_attempts - attempts
-        if remaining <= 0:
-            # Lockout
-            self._set_state(locked_key, True, "system", turn_number, "Riddle locked")
-            
-            lockout_sets = riddle.get("lockout_sets", {})
-            for key, value in lockout_sets.items():
-                self._set_state(key, value, "ai", turn_number, f"Riddle '{riddle_id}' locked")
-            
-            lockout_msg = riddle.get("lockout_message", "Too many wrong answers. The riddle is now locked.")
-            return False, f"✗ {lockout_msg}"
-        
-        fail_msg = riddle.get("fail_message", "That's not correct.")
-        return False, f"✗ {fail_msg} ({remaining} attempts remaining)"
     
     def get_status(self, riddle_id: str) -> dict:
         """Get status of a riddle (for AI reference)."""

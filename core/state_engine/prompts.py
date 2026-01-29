@@ -267,13 +267,14 @@ class PromptBuilder:
         
         lines = ["", "⚠️ DECISION REQUIRED:"]
         for choice in pending:
+            state_key = choice.get("state_key", choice.get("id"))
             lines.append(f"\n**{choice.get('prompt', 'Make a choice')}**")
-            lines.append(f"Choice ID: {choice['id']}")
+            lines.append(f"Set: {state_key}")
             lines.append("Options:")
             for opt_key, opt_config in choice.get("options", {}).items():
                 desc = opt_config.get("description", opt_key)
-                lines.append(f"  • {opt_key}: {desc}")
-            lines.append(f"Use: make_choice(\"{choice['id']}\", \"<option>\", \"reason\")")
+                lines.append(f"  • \"{opt_key}\": {desc}")
+            lines.append(f"Use: set_state(\"{state_key}\", \"<option>\", \"reason\")")
             if choice.get("required_for_scene"):
                 lines.append(f"(Must choose before advancing to scene {choice['required_for_scene']})")
         
@@ -300,15 +301,15 @@ class PromptBuilder:
             
             clues = self._riddles.get_clues(riddle_id)
             if clues:
+                state_key = riddle.get("state_key", f"riddle_{riddle_id}")
                 lines = [f"\n🔐 RIDDLE: {riddle.get('name', riddle_id)}"]
-                lines.append(f"Type: {riddle.get('type', 'unknown')}")
                 if riddle.get("digits"):
                     lines.append(f"Format: {riddle['digits']} digits")
                 lines.append(f"Attempts: {status['attempts']}/{status['max_attempts']}")
                 lines.append("Clues revealed:")
                 for i, clue in enumerate(clues, 1):
                     lines.append(f"  {i}. {clue}")
-                lines.append(f"Use: attempt_riddle(\"{riddle_id}\", \"<answer>\")")
+                lines.append(f"Use: set_state(\"{state_key}\", \"<answer>\", \"reason\")")
                 sections.append("\n".join(lines))
         
         return "\n".join(sections)

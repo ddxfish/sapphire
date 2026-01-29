@@ -143,6 +143,228 @@ class StateEngine:
             return entry["value"] if entry else None
         return {k: v["value"] for k, v in self._current_state.items()}
     
+    def get_context_block(self, current_turn: int, action_summary: str = "") -> str:
+        """
+        Build rich context block for tool returns.
+        
+        Includes:
+        - Action result summary
+        - Current scene description  
+        - State table (NEW/CURRENT/READ-ONLY sections)
+        - Active riddle clues
+        - Available exits
+        - Tools reminder
+        """
+        lines = []
+        
+        # Action summary (passed in by tool)
+        if action_summary:
+            lines.append(action_summary)
+            lines.append("")
+        
+        # Scene description from prompt builder
+        if self._prompt_builder:
+            scene_content = self._get_current_scene_content(current_turn)
+            if scene_content:
+                lines.append(scene_content)
+                lines.append("")
+        
+        # State table
+        state_block = self._format_state_table(current_turn)
+        if state_block:
+            lines.append("## State")
+            lines.append(state_block)
+            lines.append("")
+        
+        # Riddle clues
+        if self._riddles:
+            clues_block = self._format_riddle_clues(current_turn)
+            if clues_block:
+                lines.append(clues_block)
+                lines.append("")
+        
+        # Navigation exits
+        if self._navigation and self._navigation.is_enabled:
+            exits = self._navigation.get_available_exits()
+            if exits:
+                lines.append(f"**Exits:** {', '.join(exits)}")
+                lines.append("")
+        
+        # Tools reminder
+        tools_list = self._get_available_tools_list()
+        if tools_list:
+            lines.append(f"**Tools:** {', '.join(tools_list)}")
+        
+        return "\n".join(lines).strip()
+    
+    def _get_current_scene_content(self, current_turn: int) -> str:
+        """Extract just the current scene segment (not cumulative history)."""
+        if not self._progressive_config:
+            return ""
+        
+        iterator_key = self._progressive_config.get("iterator")
+        if not iterator_key:
+            return ""
+        
+        iterator_value = self.get_state(iterator_key)
+        if iterator_value is None:
+            return ""
+        
+        segments = self._progressive_config.get("segments", {})
+        if not segments:
+            return ""
+        
+        # Import here to avoid circular dependency
+        from .prompts import select_segment
+        
+        # Get just the current scene's segment (not cumulative)
+        content = select_segment(
+            str(int(iterator_value) if isinstance(iterator_value, (int, float)) else iterator_value),
+            segments,
+            self.get_state,
+            lambda: self.get_scene_turns(current_turn)
+        )
+        
+        return content.strip() if content else ""
+    
+    def _format_state_table(self, current_turn: int) -> str:
+        """Format state into NEW/CURRENT/READ-ONLY sections."""
+        iterator_key = self._progressive_config.get("iterator") if self._progressive_config else None
+        iterator_value = self._get_iterator_value()
+        
+        new_keys = []
+        current_keys = []
+        readonly_keys = []
+        
+        for key, entry in sorted(self._current_state.items()):
+            if key.startswith("_"):
+                continue
+            
+            constraints = entry.get("constraints", {}) or {}
+            visible_from = constraints.get("visible_from")
+            
+            # Check visibility
+            if visible_from is not None and isinstance(iterator_value, int):
+                if iterator_value < visible_from:
+                    continue
+                # Just became visible this scene
+                if iterator_value == visible_from:
+                    new_keys.append((key, entry))
+                    continue
+            
+            # Check if readonly (iterator or derived)
+            is_readonly = (key == iterator_key) or constraints.get("readonly", False)
+            
+            if is_readonly:
+                readonly_keys.append((key, entry))
+            else:
+                current_keys.append((key, entry))
+        
+        lines = []
+        
+        if new_keys:
+            lines.append("NEW KEYS (just revealed):")
+            for key, entry in new_keys:
+                lines.append(self._format_state_line(key, entry))
+        
+        if current_keys:
+            if new_keys:
+                lines.append("")
+            lines.append("CURRENT KEYS:")
+            for key, entry in current_keys:
+                lines.append(self._format_state_line(key, entry))
+        
+        if readonly_keys:
+            if new_keys or current_keys:
+                lines.append("")
+            lines.append("READ-ONLY:")
+            for key, entry in readonly_keys:
+                hint = "use advance_scene()" if key == iterator_key else "derived"
+                lines.append(self._format_state_line(key, entry, hint))
+        
+        return "\n".join(lines)
+    
+    def _format_state_line(self, key: str, entry: dict, hint: str = None) -> str:
+        """Format a single state line with value and comment."""
+        value = entry.get("value")
+        constraints = entry.get("constraints", {}) or {}
+        label = entry.get("label", "")
+        key_type = constraints.get("type") or entry.get("type", "")
+        
+        # Format value
+        if value is None or value == "":
+            value_str = "[not set]"
+        elif isinstance(value, bool):
+            value_str = "true" if value else "false"
+        elif isinstance(value, list):
+            value_str = json.dumps(value)
+        else:
+            value_str = str(value)
+        
+        # Build comment
+        comments = []
+        
+        # For choice keys, show valid options
+        if key_type == "choice" and self._choices:
+            options = self._choices.get_options_for_key(key)
+            if options:
+                comments.append(f"options: {', '.join(options)}")
+        elif key_type == "riddle_answer":
+            comments.append("answer key")
+        
+        if label and label != key:
+            comments.append(label)
+        if hint:
+            comments.append(hint)
+        
+        comment = f"  # {', '.join(comments)}" if comments else ""
+        
+        return f"  {key} = {value_str}{comment}"
+    
+    def _format_riddle_clues(self, current_turn: int) -> str:
+        """Format revealed clues for active riddles."""
+        if not self._riddles or not self._riddles.riddles:
+            return ""
+        
+        iterator_value = self._get_iterator_value()
+        scene_turns = self.get_scene_turns(current_turn)
+        sections = []
+        
+        for riddle in self._riddles.riddles:
+            riddle_id = riddle.get("id")
+            
+            # Check scene visibility
+            visible_from = riddle.get("visible_from_scene")
+            if visible_from is not None:
+                if isinstance(iterator_value, (int, float)) and iterator_value < visible_from:
+                    continue
+            
+            status = self._riddles.get_status(riddle_id)
+            if status.get("solved") or status.get("locked"):
+                continue
+            
+            # Pass actual scene_turns to get correct clues
+            clues = self._riddles.get_clues(riddle_id, scene_turns_override=scene_turns)
+            if clues:
+                lines = [f"**Clues for {riddle.get('name', riddle_id)}:**"]
+                for i, clue in enumerate(clues, 1):
+                    lines.append(f"  {i}. {clue}")
+                
+                remaining = status['max_attempts'] - status['attempts']
+                lines.append(f"  ({remaining} attempts remaining)")
+                sections.append("\n".join(lines))
+        
+        return "\n\n".join(sections)
+    
+    def _get_available_tools_list(self) -> list:
+        """Get list of currently available tool names."""
+        tools = ["get_state()", "set_state(key, value, reason)", "advance_scene(reason)", "roll_dice(count, sides)"]
+        
+        if self._navigation and self._navigation.is_enabled:
+            tools.append("move(direction, reason)")
+        
+        return tools
+    
     def get_state_full(self, key: str = None) -> Any:
         """Get full state entry with metadata (type, label, constraints)."""
         if key:
@@ -196,10 +418,32 @@ class StateEngine:
     
     def set_state(self, key: str, value: Any, changed_by: str, 
                   turn_number: int, reason: str = None) -> tuple[bool, str]:
-        """Set state value with validation and logging."""
+        """Set state value with validation and logging.
+        
+        Routes choice and riddle keys to their specialized handlers.
+        """
         # Block AI writes to system keys
         if changed_by == "ai" and is_system_key(key):
             return False, f"Cannot modify system key: {key}"
+        
+        # Track special handler messages
+        handler_result_msg = None
+        
+        # Route choice keys to ChoiceManager
+        if changed_by == "ai" and self._choices and self._choices.is_choice_key(key):
+            success, msg = self._choices.handle_set_state(key, value, turn_number, reason)
+            if not success:
+                return False, msg
+            handler_result_msg = msg
+            # Continue to actually store the value
+        
+        # Route riddle answer keys to RiddleManager
+        if changed_by == "ai" and self._riddles and self._riddles.is_riddle_key(key):
+            success, msg = self._riddles.handle_set_state(key, value, turn_number, reason)
+            if not success:
+                return False, msg
+            handler_result_msg = msg
+            # Continue to actually store the value
         
         existing = self._current_state.get(key, {})
         old_value = existing.get("value")
@@ -257,9 +501,14 @@ class StateEngine:
                 self._persist_system_key("_scene_entered_at", turn_number, turn_number)
                 logger.info(f"[STATE] Iterator changed: scene_turns reset at turn {turn_number}")
             
+            # Return choice/riddle handler message if we have one
+            if handler_result_msg:
+                return True, handler_result_msg
+            
             # Build response message
-            is_new_key = old_value is None
-            if is_new_key:
+            # Check if key existed before (empty dict means truly new, not just null value)
+            is_truly_new_key = not existing  # existing is {} if key wasn't in _current_state
+            if is_truly_new_key:
                 visible_keys = [k for k in self.get_visible_state().keys() if k != key]
                 return True, f"⚠️ CREATED NEW KEY '{key}' = {value}. Did you mean one of these? {visible_keys}"
             elif is_iterator:
@@ -267,7 +516,7 @@ class StateEngine:
             elif old_value == value:
                 return True, f"✓ {key} unchanged (already {value})"
             else:
-                return True, f"✓ Updated {key}: {old_value} → {value}"
+                return True, f"✓ Set {key} = {value}"
             
         except Exception as e:
             logger.error(f"Failed to set state {key}: {e}")
