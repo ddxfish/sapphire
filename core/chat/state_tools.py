@@ -11,7 +11,7 @@ from typing import Any, Tuple
 logger = logging.getLogger(__name__)
 
 # Tool names for detection
-STATE_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'increment_counter', 'move'}
+STATE_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'increment_counter', 'move', 'make_choice', 'attempt_riddle'}
 
 TOOLS = [
     {
@@ -124,6 +124,52 @@ TOOLS = [
                     }
                 },
                 "required": ["key"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "make_choice",
+            "description": "Make a binary choice when presented with mutually exclusive options. This is used for critical story decisions that block progression until resolved.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "choice_id": {
+                        "type": "string",
+                        "description": "ID of the choice (from the prompt)"
+                    },
+                    "option": {
+                        "type": "string",
+                        "description": "Which option to select"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for this choice"
+                    }
+                },
+                "required": ["choice_id", "option"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "attempt_riddle",
+            "description": "Attempt to solve a riddle/puzzle. Neither you nor the player knows the answer - use revealed clues to deduce it together.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "riddle_id": {
+                        "type": "string",
+                        "description": "ID of the riddle to attempt"
+                    },
+                    "answer": {
+                        "type": "string",
+                        "description": "The proposed answer/code/password"
+                    }
+                },
+                "required": ["riddle_id", "answer"]
             }
         }
     }
@@ -268,6 +314,31 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
                 exits_str = f" | Exits: {', '.join(exits)}" if exits else ""
                 return f"✓ Moved {direction}: {current_room} → {destination}{exits_str}", True
             return msg, False
+        
+        elif function_name == "make_choice":
+            choice_id = arguments.get("choice_id", "").strip()
+            option = arguments.get("option", "").strip()
+            reason = arguments.get("reason", "")
+            
+            if not choice_id:
+                return "Error: choice_id is required", False
+            if not option:
+                return "Error: option is required", False
+            
+            success, msg = state_engine.make_choice(choice_id, option, turn_number, reason)
+            return msg, success
+        
+        elif function_name == "attempt_riddle":
+            riddle_id = arguments.get("riddle_id", "").strip()
+            answer = arguments.get("answer", "").strip()
+            
+            if not riddle_id:
+                return "Error: riddle_id is required", False
+            if not answer:
+                return "Error: answer is required", False
+            
+            success, msg = state_engine.attempt_riddle(riddle_id, answer, turn_number)
+            return msg, success
         
         else:
             return f"Unknown state tool: {function_name}", False

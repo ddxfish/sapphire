@@ -36,6 +36,8 @@ class StateEngine:
         self._current_state = {}  # Cache: key -> {value, type, label, constraints, turn}
         self._preset_name = None
         self._progressive_config = None  # {iterator, mode, base, segments}
+        self._binary_choices = []  # [{id, trigger_turn, prompt, options, required_for_scene}]
+        self._riddles = []  # [{id, type, clues, success_sets, max_attempts, ...}]
         self._scene_entered_at_turn = 0  # Turn when current scene/iterator started
         self._current_turn_for_matching = None  # Temp storage for condition matching
         self._load_state()
@@ -97,6 +99,8 @@ class StateEngine:
         self._current_state = {}
         self._preset_name = None
         self._progressive_config = None
+        self._binary_choices = []
+        self._riddles = []
         self._scene_entered_at_turn = 0
         self._load_state()
     
@@ -319,6 +323,11 @@ class StateEngine:
         if not valid:
             return False, error
         
+        # Check binary choice blockers (for iterator changes)
+        valid, error = self._check_choice_blockers(key, value)
+        if not valid:
+            return False, error
+        
         try:
             with self._get_connection() as conn:
                 # Log the change
@@ -525,6 +534,11 @@ class StateEngine:
             
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            self._binary_choices = preset.get("binary_choices", [])
+            self._riddles = preset.get("riddles", [])
+            
+            # Initialize riddle state (attempts tracking, answer hashes)
+            self._init_riddles(turn_number)
             
             # Initialize scene_turns tracking
             self._scene_entered_at_turn = turn_number
@@ -754,10 +768,14 @@ class StateEngine:
         
         # Add tools hint
         nav_config = self._get_navigation_config()
+        tools = ["get_state()", "set_state(key, value, reason)", "roll_dice(count, sides)", "increment_counter(key, amount)"]
         if nav_config and nav_config.get("connections"):
-            parts.append("Tools: get_state(), set_state(key, value, reason), move(direction, reason), roll_dice(count, sides), increment_counter(key, amount)")
-        else:
-            parts.append("Tools: get_state(), set_state(key, value, reason), roll_dice(count, sides), increment_counter(key, amount)")
+            tools.insert(2, "move(direction, reason)")
+        if self._binary_choices:
+            tools.append("make_choice(choice_id, option, reason)")
+        if self._riddles:
+            tools.append("attempt_riddle(riddle_id, answer)")
+        parts.append("Tools: " + ", ".join(tools))
         
         # Add progressive prompt content (story segments) if requested
         if include_story:
@@ -865,6 +883,350 @@ class StateEngine:
         
         return True
     
+    # ========== BINARY CHOICES ==========
+    
+    def get_pending_choices(self, current_turn: int) -> list:
+        """
+        Get binary choices that should be presented at current turn.
+        
+        Returns list of choices where:
+        - scene_turns >= trigger_turn
+        - No option has been selected yet
+        """
+        if not self._binary_choices:
+            return []
+        
+        scene_turns = self.get_scene_turns(current_turn)
+        pending = []
+        
+        for choice in self._binary_choices:
+            trigger = choice.get("trigger_turn", 0)
+            if scene_turns < trigger:
+                continue
+            
+            # Check if any option has been selected
+            choice_made = False
+            for option_key in choice.get("options", {}).keys():
+                # Check if the option's primary state key is set to true
+                state_key = f"_choice_{choice['id']}_{option_key}"
+                if self.get_state(state_key) == True:
+                    choice_made = True
+                    break
+            
+            if not choice_made:
+                pending.append(choice)
+        
+        return pending
+    
+    def get_choice_by_id(self, choice_id: str) -> dict:
+        """Get a binary choice config by its ID."""
+        for choice in self._binary_choices:
+            if choice.get("id") == choice_id:
+                return choice
+        return None
+    
+    def make_choice(self, choice_id: str, option_key: str, turn_number: int, reason: str = None) -> tuple[bool, str]:
+        """
+        Make a binary choice, setting the option's state values.
+        
+        Args:
+            choice_id: ID of the choice from preset
+            option_key: Which option was selected
+            turn_number: Current turn
+            reason: Optional reason for the choice
+            
+        Returns:
+            (success, message)
+        """
+        choice = self.get_choice_by_id(choice_id)
+        if not choice:
+            return False, f"Unknown choice: {choice_id}"
+        
+        options = choice.get("options", {})
+        if option_key not in options:
+            available = list(options.keys())
+            return False, f"Invalid option '{option_key}'. Must be one of: {available}"
+        
+        # Check if choice already made
+        for opt in options.keys():
+            state_key = f"_choice_{choice_id}_{opt}"
+            if self.get_state(state_key) == True:
+                return False, f"Choice '{choice_id}' already made (selected: {opt})"
+        
+        # Mark this option as chosen
+        choice_state_key = f"_choice_{choice_id}_{option_key}"
+        self.set_state(choice_state_key, True, "system", turn_number, 
+                      reason or f"Player chose {option_key}")
+        
+        # Apply the option's state changes
+        option_config = options[option_key]
+        state_changes = option_config.get("set", {})
+        results = [f"✓ Choice made: {option_key}"]
+        
+        for key, value in state_changes.items():
+            # Handle relative values like "+10" or "-20"
+            if isinstance(value, str) and (value.startswith("+") or value.startswith("-")):
+                current = self.get_state(key) or 0
+                delta = int(value)
+                value = current + delta
+            
+            success, msg = self.set_state(key, value, "ai", turn_number, 
+                                         f"Choice consequence: {option_key}")
+            results.append(f"  {msg}")
+        
+        return True, "\n".join(results)
+    
+    def get_choice_blockers(self) -> list:
+        """
+        Generate dynamic blockers for unresolved binary choices.
+        These prevent scene advancement until choices are made.
+        """
+        blockers = []
+        for choice in self._binary_choices:
+            required_scene = choice.get("required_for_scene")
+            if not required_scene:
+                continue
+            
+            choice_id = choice["id"]
+            options = choice.get("options", {})
+            
+            # Build OR condition: at least one option must be true
+            option_keys = [f"_choice_{choice_id}_{opt}" for opt in options.keys()]
+            
+            blockers.append({
+                "target": required_scene,
+                "choice_id": choice_id,
+                "requires_any": option_keys,
+                "message": choice.get("block_message", 
+                    f"You must make a choice before proceeding: {choice.get('prompt', choice_id)}")
+            })
+        
+        return blockers
+    
+    def _check_choice_blockers(self, key: str, new_value: Any) -> tuple[bool, str]:
+        """Check if a state change is blocked by an unresolved binary choice."""
+        if not self._progressive_config:
+            return True, ""
+        
+        iterator_key = self._progressive_config.get("iterator")
+        if key != iterator_key:
+            return True, ""  # Only iterator changes can be blocked
+        
+        for blocker in self.get_choice_blockers():
+            if blocker["target"] != new_value:
+                continue
+            
+            # Check if ANY of the required options is true
+            any_chosen = False
+            for opt_key in blocker["requires_any"]:
+                if self.get_state(opt_key) == True:
+                    any_chosen = True
+                    break
+            
+            if not any_chosen:
+                return False, blocker["message"]
+        
+        return True, ""
+    
+    # ========== RIDDLE SYSTEM ==========
+    
+    def _init_riddles(self, turn_number: int):
+        """Initialize riddle state (answer hashes, attempt counters)."""
+        import hashlib
+        
+        for riddle in self._riddles:
+            riddle_id = riddle.get("id")
+            if not riddle_id:
+                continue
+            
+            # Generate deterministic answer from seed
+            answer = self._generate_riddle_answer(riddle)
+            if answer is None:
+                continue
+            
+            # Store hashed answer (AI can't see plaintext)
+            answer_hash = hashlib.sha256(str(answer).encode()).hexdigest()
+            self.set_state(f"_riddle_{riddle_id}_hash", answer_hash, "system", turn_number,
+                          "Riddle initialized")
+            
+            # Initialize attempt counter
+            self.set_state(f"_riddle_{riddle_id}_attempts", 0, "system", turn_number,
+                          "Riddle attempts initialized")
+            
+            logger.debug(f"[RIDDLE] Initialized '{riddle_id}', answer_hash={answer_hash[:16]}...")
+    
+    def _generate_riddle_answer(self, riddle: dict) -> str:
+        """
+        Generate riddle answer deterministically.
+        
+        For 'numeric' type: uses seed to generate digits
+        For 'word' type: uses seed to select from wordlist
+        For 'fixed' type: answer is in config (for author-defined puzzles)
+        """
+        import hashlib
+        
+        riddle_type = riddle.get("type", "fixed")
+        riddle_id = riddle.get("id", "unknown")
+        
+        if riddle_type == "fixed":
+            return riddle.get("answer")
+        
+        # Generate seed from chat_name + riddle_id for determinism
+        seed_source = riddle.get("seed_from", "chat_name")
+        if seed_source == "chat_name":
+            seed = f"{self.chat_name}:{riddle_id}"
+        else:
+            seed = f"{seed_source}:{riddle_id}"
+        
+        seed_hash = hashlib.md5(seed.encode()).hexdigest()
+        
+        if riddle_type == "numeric":
+            digits = riddle.get("digits", 4)
+            # Extract digits from hash
+            answer = ""
+            for i in range(digits):
+                answer += str(int(seed_hash[i*2:i*2+2], 16) % 10)
+            return answer
+        
+        elif riddle_type == "word":
+            wordlist = riddle.get("wordlist", ["XYZZY", "PLUGH", "PLOVER"])
+            idx = int(seed_hash[:8], 16) % len(wordlist)
+            return wordlist[idx]
+        
+        return None
+    
+    def get_riddle_clues(self, riddle_id: str, current_turn: int) -> list:
+        """
+        Get revealed clues for a riddle based on scene_turns.
+        
+        Returns list of clue strings that should be visible.
+        """
+        riddle = None
+        for r in self._riddles:
+            if r.get("id") == riddle_id:
+                riddle = r
+                break
+        
+        if not riddle:
+            return []
+        
+        clues_config = riddle.get("clues", {})
+        scene_turns = self.get_scene_turns(current_turn)
+        revealed = []
+        
+        # Parse clue keys like "1", "2?scene_turns>=2", etc.
+        clue_items = []
+        for clue_key, clue_text in clues_config.items():
+            base_key, conditions = self._parse_segment_key(clue_key)
+            try:
+                order = int(base_key)
+            except ValueError:
+                order = 999
+            clue_items.append((order, conditions, clue_text))
+        
+        # Sort by order
+        clue_items.sort(key=lambda x: x[0])
+        
+        # Temporarily set turn for condition matching
+        self._current_turn_for_matching = current_turn
+        
+        for order, conditions, clue_text in clue_items:
+            if not conditions:
+                # Unconditional clue - always show
+                revealed.append(clue_text)
+            elif self._match_conditions(conditions):
+                revealed.append(clue_text)
+        
+        self._current_turn_for_matching = None
+        return revealed
+    
+    def attempt_riddle(self, riddle_id: str, answer: str, turn_number: int) -> tuple[bool, str]:
+        """
+        Attempt to solve a riddle.
+        
+        Returns:
+            (success, message)
+        """
+        import hashlib
+        
+        riddle = None
+        for r in self._riddles:
+            if r.get("id") == riddle_id:
+                riddle = r
+                break
+        
+        if not riddle:
+            return False, f"Unknown riddle: {riddle_id}"
+        
+        # Check if already solved
+        solved_key = f"_riddle_{riddle_id}_solved"
+        if self.get_state(solved_key) == True:
+            return False, "This riddle has already been solved."
+        
+        # Check if locked out
+        locked_key = f"_riddle_{riddle_id}_locked"
+        if self.get_state(locked_key) == True:
+            return False, "Too many failed attempts. The riddle is locked."
+        
+        # Get attempt count
+        attempts_key = f"_riddle_{riddle_id}_attempts"
+        attempts = self.get_state(attempts_key) or 0
+        max_attempts = riddle.get("max_attempts", 999)
+        
+        # Check answer
+        stored_hash = self.get_state(f"_riddle_{riddle_id}_hash")
+        answer_hash = hashlib.sha256(str(answer).encode()).hexdigest()
+        
+        if answer_hash == stored_hash:
+            # Success!
+            self.set_state(solved_key, True, "system", turn_number, "Riddle solved")
+            
+            # Apply success state changes
+            success_sets = riddle.get("success_sets", {})
+            for key, value in success_sets.items():
+                self.set_state(key, value, "ai", turn_number, f"Riddle '{riddle_id}' solved")
+            
+            success_msg = riddle.get("success_message", "Correct! The riddle is solved.")
+            return True, f"✓ {success_msg}"
+        
+        # Wrong answer
+        attempts += 1
+        self.set_state(attempts_key, attempts, "system", turn_number, "Failed attempt")
+        
+        remaining = max_attempts - attempts
+        if remaining <= 0:
+            # Lockout
+            self.set_state(locked_key, True, "system", turn_number, "Riddle locked")
+            
+            lockout_sets = riddle.get("lockout_sets", {})
+            for key, value in lockout_sets.items():
+                self.set_state(key, value, "ai", turn_number, f"Riddle '{riddle_id}' locked")
+            
+            lockout_msg = riddle.get("lockout_message", "Too many wrong answers. The riddle is now locked.")
+            return False, f"✗ {lockout_msg}"
+        
+        fail_msg = riddle.get("fail_message", "That's not correct.")
+        return False, f"✗ {fail_msg} ({remaining} attempts remaining)"
+    
+    def get_riddle_status(self, riddle_id: str) -> dict:
+        """Get status of a riddle (for AI reference)."""
+        riddle = None
+        for r in self._riddles:
+            if r.get("id") == riddle_id:
+                riddle = r
+                break
+        
+        if not riddle:
+            return {"error": f"Unknown riddle: {riddle_id}"}
+        
+        return {
+            "id": riddle_id,
+            "solved": self.get_state(f"_riddle_{riddle_id}_solved") == True,
+            "locked": self.get_state(f"_riddle_{riddle_id}_locked") == True,
+            "attempts": self.get_state(f"_riddle_{riddle_id}_attempts") or 0,
+            "max_attempts": riddle.get("max_attempts", 999)
+        }
+
     def _select_segment(self, base_key: str, segments: dict) -> str:
         """
         Select and stack all matching segments for a base key.
@@ -1100,6 +1462,44 @@ class StateEngine:
             parts.append(base)
         parts.extend(revealed)
         
+        # Inject pending binary choices
+        current_turn = self._current_turn_for_matching or 0
+        pending_choices = self.get_pending_choices(current_turn)
+        if pending_choices:
+            choice_section = ["", "⚠️ DECISION REQUIRED:"]
+            for choice in pending_choices:
+                choice_section.append(f"\n**{choice.get('prompt', 'Make a choice')}**")
+                choice_section.append(f"Choice ID: {choice['id']}")
+                choice_section.append("Options:")
+                for opt_key, opt_config in choice.get("options", {}).items():
+                    desc = opt_config.get("description", opt_key)
+                    choice_section.append(f"  • {opt_key}: {desc}")
+                choice_section.append(f"Use: make_choice(\"{choice['id']}\", \"<option>\", \"reason\")")
+                if choice.get("required_for_scene"):
+                    choice_section.append(f"(Must choose before advancing to scene {choice['required_for_scene']})")
+            parts.append("\n".join(choice_section))
+        
+        # Inject riddle clues
+        for riddle in self._riddles:
+            riddle_id = riddle.get("id")
+            status = self.get_riddle_status(riddle_id)
+            
+            if status.get("solved") or status.get("locked"):
+                continue  # Don't show clues for resolved riddles
+            
+            clues = self.get_riddle_clues(riddle_id, current_turn)
+            if clues:
+                riddle_section = [f"\n🔐 RIDDLE: {riddle.get('name', riddle_id)}"]
+                riddle_section.append(f"Type: {riddle.get('type', 'unknown')}")
+                if riddle.get("digits"):
+                    riddle_section.append(f"Format: {riddle['digits']} digits")
+                riddle_section.append(f"Attempts: {status['attempts']}/{status['max_attempts']}")
+                riddle_section.append("Clues revealed:")
+                for i, clue in enumerate(clues, 1):
+                    riddle_section.append(f"  {i}. {clue}")
+                riddle_section.append(f"Use: attempt_riddle(\"{riddle_id}\", \"<answer>\")")
+                parts.append("\n".join(riddle_section))
+        
         # Add navigation hints if in graph mode
         if nav_config and nav_config.get("connections"):
             exits = self._get_available_exits()
@@ -1151,8 +1551,10 @@ class StateEngine:
             
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            self._binary_choices = preset.get("binary_choices", [])
+            self._riddles = preset.get("riddles", [])
             
-            logger.info(f"[STATE] reload_preset_config: preset={preset_name}, has_progressive={self._progressive_config is not None}, segments={len(self._progressive_config.get('segments', {})) if self._progressive_config else 0}")
+            logger.info(f"[STATE] reload_preset_config: preset={preset_name}, has_progressive={self._progressive_config is not None}, segments={len(self._progressive_config.get('segments', {})) if self._progressive_config else 0}, choices={len(self._binary_choices)}, riddles={len(self._riddles)}")
             
             # Refresh constraints on existing keys from preset definition
             initial_state = preset.get("initial_state", {})
