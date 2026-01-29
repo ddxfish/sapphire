@@ -148,12 +148,16 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
             key = arguments.get("key")
             
             if key:
+                # Special handling for scene_turns pseudo-variable
+                if key == "scene_turns":
+                    scene_turns = state_engine.get_scene_turns(turn_number)
+                    return f"scene_turns = {scene_turns}", True
                 value = state_engine.get_state(key)
                 if value is None:
                     return f"Key '{key}' not found in state", False
                 return f"{key} = {_format_value(value)}", True
             else:
-                state = state_engine.get_visible_state()
+                state = state_engine.get_visible_state(current_turn=turn_number)
                 if not state:
                     return "(no state set)", True
                 lines = [f"{k}: {_format_value(v)}" for k, v in sorted(state.items())]

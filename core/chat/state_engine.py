@@ -14,7 +14,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+# Set up dedicated state engine logger
 logger = logging.getLogger(__name__)
+
+# Create dedicated file handler for state engine debugging
+_state_log_path = Path(__file__).parent.parent.parent / "user" / "logs" / "state_engine.log"
+_state_log_path.parent.mkdir(parents=True, exist_ok=True)
+_state_file_handler = logging.FileHandler(_state_log_path, mode='a')
+_state_file_handler.setLevel(logging.DEBUG)
+_state_file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(_state_file_handler)
+logger.setLevel(logging.DEBUG)
 
 
 class StateEngine:
@@ -26,6 +36,8 @@ class StateEngine:
         self._current_state = {}  # Cache: key -> {value, type, label, constraints, turn}
         self._preset_name = None
         self._progressive_config = None  # {iterator, mode, base, segments}
+        self._scene_entered_at_turn = 0  # Turn when current scene/iterator started
+        self._current_turn_for_matching = None  # Temp storage for condition matching
         self._load_state()
     
     def _get_connection(self) -> sqlite3.Connection:
@@ -47,12 +59,16 @@ class StateEngine:
                 )
                 self._current_state = {}
                 preset_name_from_db = None
+                scene_entered_at = None
                 for row in cursor:
                     key = row["key"]
-                    # Extract preset name from system key
+                    # Extract system keys
                     if key == "_preset":
                         preset_name_from_db = json.loads(row["value"])
-                        continue  # Don't add to visible state
+                        continue
+                    if key == "_scene_entered_at":
+                        scene_entered_at = json.loads(row["value"])
+                        continue
                     self._current_state[key] = {
                         "value": json.loads(row["value"]),
                         "type": row["value_type"],
@@ -60,6 +76,10 @@ class StateEngine:
                         "constraints": json.loads(row["constraints"]) if row["constraints"] else None,
                         "turn": row["turn_number"]
                     }
+                
+                # Restore scene entry tracking
+                if scene_entered_at is not None:
+                    self._scene_entered_at_turn = scene_entered_at
                 
                 # Reload preset config if we found one in DB
                 if preset_name_from_db:
@@ -77,11 +97,36 @@ class StateEngine:
         self._current_state = {}
         self._preset_name = None
         self._progressive_config = None
+        self._scene_entered_at_turn = 0
         self._load_state()
     
     def _is_system_key(self, key: str) -> bool:
         """Check if key is system-managed (starts with _)."""
         return key.startswith("_")
+    
+    def _persist_scene_entered_at(self, turn_number: int):
+        """Persist scene entry turn to database."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO state_current 
+                       (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        self.chat_name,
+                        "_scene_entered_at",
+                        json.dumps(turn_number),
+                        "integer",
+                        "System: Scene Entry Turn",
+                        None,
+                        datetime.now().isoformat(),
+                        "system",
+                        turn_number
+                    )
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to persist scene_entered_at: {e}")
     
     def _validate_value(self, key: str, value: Any, constraints: Optional[dict]) -> tuple[bool, str]:
         """Validate value against constraints. Returns (valid, error_message)."""
@@ -161,10 +206,32 @@ class StateEngine:
             return self._current_state.get(key)
         return self._current_state.copy()
     
-    def get_visible_state(self) -> dict:
+    def get_scene_turns(self, current_turn: int) -> int:
+        """
+        Get number of turns spent in current scene/iterator value.
+        
+        Args:
+            current_turn: Current global turn number
+            
+        Returns:
+            Number of turns in current scene (0 if just entered)
+        """
+        # Safety check: if scene_entered_at is ahead of current_turn, something's wrong
+        # (e.g., chat was cleared but state persisted) - reset to current turn
+        if self._scene_entered_at_turn > current_turn:
+            logger.warning(f"[STATE] scene_entered_at ({self._scene_entered_at_turn}) > current_turn ({current_turn}), resetting")
+            self._scene_entered_at_turn = current_turn
+            self._persist_scene_entered_at(current_turn)
+        
+        return current_turn - self._scene_entered_at_turn
+    
+    def get_visible_state(self, current_turn: int = None) -> dict:
         """
         Get state filtered by visible_from constraints.
         Used by AI tools to prevent seeing future-gated variables.
+        
+        Args:
+            current_turn: Current turn number (for scene_turns calculation)
         """
         # Get iterator value for visibility checks
         iterator_value = None
@@ -199,6 +266,10 @@ class StateEngine:
                     continue
             
             result[key] = entry["value"]
+        
+        # Add computed scene_turns if we have an iterator and turn info
+        if current_turn is not None and iterator_key:
+            result["scene_turns"] = self.get_scene_turns(current_turn)
         
         return result
     
@@ -300,6 +371,12 @@ class StateEngine:
             # Build informative message for AI
             is_new_key = old_value is None
             is_iterator = self._progressive_config and self._progressive_config.get("iterator") == key
+            
+            # Detect iterator change - reset scene_turns tracking
+            if is_iterator and old_value != value:
+                self._scene_entered_at_turn = turn_number
+                self._persist_scene_entered_at(turn_number)
+                logger.info(f"[STATE] Iterator changed: scene_turns reset at turn {turn_number}")
             
             if is_new_key:
                 # Warn AI they created a new key (might be a typo)
@@ -449,6 +526,10 @@ class StateEngine:
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
             
+            # Initialize scene_turns tracking
+            self._scene_entered_at_turn = turn_number
+            self._persist_scene_entered_at(turn_number)
+            
             logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys" +
                        (f", progressive iterator: {self._progressive_config.get('iterator')}" 
                         if self._progressive_config else ""))
@@ -475,6 +556,7 @@ class StateEngine:
             self._current_state = {}
             self._preset_name = None
             self._progressive_config = None
+            self._scene_entered_at_turn = 0
             logger.info(f"Cleared all state for '{self.chat_name}'")
             return True
         except Exception as e:
@@ -607,15 +689,24 @@ class StateEngine:
             logger.error(f"Failed to get state history: {e}")
             return []
     
-    def format_for_prompt(self, include_vars: bool = True, include_story: bool = True) -> str:
+    def format_for_prompt(self, include_vars: bool = True, include_story: bool = True, current_turn: int = None) -> str:
         """
         Format current state for system prompt injection with progressive reveal.
         
         Args:
             include_vars: Include state variables (breaks caching each turn)
             include_story: Include story segments (cache-friendly, changes on scene advance)
+            current_turn: Current turn number (for scene_turns calculation in conditions)
         """
-        logger.info(f"[STATE] format_for_prompt called: vars={include_vars}, story={include_story}, progressive_config={self._progressive_config is not None}")
+        # Store for use by _match_conditions
+        self._current_turn_for_matching = current_turn
+        
+        logger.info(f"{'='*60}")
+        logger.info(f"[STATE] format_for_prompt called")
+        logger.info(f"  vars={include_vars}, story={include_story}")
+        logger.info(f"  current_turn={current_turn}, scene_entered_at={self._scene_entered_at_turn}")
+        logger.info(f"  scene_turns={self.get_scene_turns(current_turn) if current_turn else 'N/A'}")
+        logger.info(f"  progressive_config={self._progressive_config is not None}")
         
         parts = []
         
@@ -742,7 +833,16 @@ class StateEngine:
     def _match_conditions(self, conditions: list) -> bool:
         """Check if all conditions match current state (AND logic)."""
         for state_key, op, expected in conditions:
-            actual = self.get_state(state_key)
+            # Handle scene_turns pseudo-variable
+            if state_key == "scene_turns":
+                current_turn = getattr(self, '_current_turn_for_matching', None)
+                if current_turn is None:
+                    actual = 0  # No turn info, assume start
+                else:
+                    actual = self.get_scene_turns(current_turn)
+                logger.debug(f"[COND] scene_turns check: current_turn={current_turn}, scene_entered={self._scene_entered_at_turn}, actual={actual}, op={op}, expected={expected}")
+            else:
+                actual = self.get_state(state_key)
             
             if op == "=":
                 if actual != expected:
@@ -767,13 +867,17 @@ class StateEngine:
     
     def _select_segment(self, base_key: str, segments: dict) -> str:
         """
-        Select best matching segment for a base key, checking variants first.
+        Select and stack all matching segments for a base key.
         
-        Looks for segments like "3?condition" that match current state,
-        falls back to "3" if no variants match.
+        For turn-gated content, ALL matching conditions are stacked:
+        - Base segment "1" always included if it matches
+        - "1?scene_turns>=2" appended when condition matches  
+        - "1?scene_turns>=5" appended when that condition also matches
+        
+        Returns combined content of all matching segments.
         """
         # Collect all variants for this base key
-        variants = []
+        variants = []  # [(conditions, content, priority)]
         fallback = None
         
         for seg_key, content in segments.items():
@@ -784,17 +888,35 @@ class StateEngine:
             if not conditions:
                 fallback = content
             else:
-                variants.append((conditions, content))
+                # Extract priority from conditions for ordering
+                # Higher threshold = higher priority (shown later)
+                priority = 0
+                for cond in conditions:
+                    if cond[0] == "scene_turns" and cond[1] in (">=", ">"):
+                        priority = max(priority, cond[2])
+                variants.append((conditions, content, priority))
         
-        # Check variants in order (first match wins)
-        # Sort by condition count descending - more specific conditions first
-        variants.sort(key=lambda x: len(x[0]), reverse=True)
+        logger.debug(f"[SEGMENT] base_key={base_key}, variants={len(variants)}, has_fallback={fallback is not None}")
         
-        for conditions, content in variants:
-            if self._match_conditions(conditions):
-                return content
+        # Build stacked content
+        parts = []
         
-        return fallback or ""
+        # Fallback (base) always comes first if present
+        if fallback:
+            parts.append(fallback)
+        
+        # Sort variants by priority (ascending) so lower thresholds come first
+        variants.sort(key=lambda x: x[2])
+        
+        # Add ALL matching variants (stacking behavior)
+        for conditions, content, priority in variants:
+            match_result = self._match_conditions(conditions)
+            logger.debug(f"[SEGMENT] Checking variant priority={priority}, conditions={conditions}, match={match_result}")
+            if match_result:
+                parts.append(content)
+        
+        logger.debug(f"[SEGMENT] Final parts count: {len(parts)}")
+        return "".join(parts)  # No separator - content controls its own formatting
     
     def _get_navigation_config(self) -> dict:
         """Get navigation config from preset if present."""

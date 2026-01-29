@@ -158,10 +158,13 @@ class LLMChat:
                 logger.info(f"[STATE] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={state_engine.preset_name}")
                 
                 if vars_in_prompt or story_in_prompt:
-                    turn = self.session_manager.get_turn_count()
+                    # +1 because we're building prompt for the INCOMING message
+                    # get_turn_count() returns existing messages, but hints should reflect current turn
+                    turn = self.session_manager.get_turn_count() + 1
                     state_block = state_engine.format_for_prompt(
                         include_vars=vars_in_prompt,
-                        include_story=story_in_prompt
+                        include_story=story_in_prompt,
+                        current_turn=turn
                     )
                     logger.info(f"[STATE] State block length: {len(state_block)} chars")
                     context_parts.append(f"<state turn=\"{turn}\">\n{state_block}\n</state>")

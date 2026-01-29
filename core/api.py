@@ -73,12 +73,20 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 logger.info(f"Applied ability: {ability_name}")
                 publish(Events.ABILITY_CHANGED, {"name": ability_name})
             
-            # State engine: always update to handle both enable and disable
-            # The method checks settings internally and enables/disables accordingly
-            if 'state_engine_enabled' in settings:
-                system_instance.llm_chat._update_state_engine()
+            # State engine: ALWAYS update to sync state with current settings
+            # This ensures tools are correctly added/removed on chat switch and startup
+            system_instance.llm_chat._update_state_engine()
             
-            logger.debug(f"Applied chat settings: voice={settings.get('voice')}, prompt={settings.get('prompt')}, ability={settings.get('ability')}")
+            # Notify UI that tools may have changed (state engine adds/removes tools)
+            if settings.get('state_engine_enabled') is not None:
+                ability_info = system_instance.llm_chat.function_manager.get_current_ability_info()
+                publish(Events.ABILITY_CHANGED, {
+                    "name": ability_info.get("name", "custom"),
+                    "action": "state_engine_update",
+                    "function_count": ability_info.get("function_count", 0)
+                })
+            
+            logger.debug(f"Applied chat settings: voice={settings.get('voice')}, prompt={settings.get('prompt')}, ability={settings.get('ability')}, state_engine={settings.get('state_engine_enabled')}")
             
         except Exception as e:
             logger.error(f"Error applying chat settings: {e}", exc_info=True)
@@ -594,6 +602,9 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     @bp.route('/system/status', methods=['GET'])
     def get_system_status():
         try:
+            # Ensure state engine is synced with current settings before checking tools
+            system_instance.llm_chat._update_state_engine()
+            
             prompt_state = prompts.get_current_state()
             function_names = system_instance.llm_chat.function_manager.get_enabled_function_names()
             ability_info = system_instance.llm_chat.function_manager.get_current_ability_info()

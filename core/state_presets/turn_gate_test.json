@@ -1,0 +1,32 @@
+{
+  "name": "Turn Gate Test",
+  "description": "Test preset for turn-gated scene progression with hints and secrets",
+  "initial_state": {
+    "scene": {
+      "value": 1,
+      "type": "integer",
+      "label": "Current Scene",
+      "min": 1,
+      "max": 2,
+      "adjacent": 1
+    }
+  },
+  "progressive_prompt": {
+    "iterator": "scene",
+    "mode": "cumulative",
+    "base": "You are a narrator for a short interactive story test. Track scene_turns to reveal hints. The player advances scenes with set_state(scene, N).",
+    "segments": {
+      "1": "\n\n## SCENE 1: The Garden\nYou stand in a moonlit garden. Ancient statues watch from the shadows. A fountain gurgles nearby.",
+      "1?scene_turns>=1": "\n\n[HINT - Turn 1+]: The fountain seems to have something glinting at the bottom.",
+      "1?scene_turns>=2": "\n\n[HINT - Turn 2+]: One of the statues appears to be pointing toward the eastern hedge maze.",
+      "1?scene_turns>=3": "\n\n[HINT - Turn 3+]: You notice faint footprints leading toward a hidden door in the garden wall.",
+      "1?scene_turns>=5": "\n\n[SECRET - Turn 5+]: As you linger, the statues begin to whisper. They speak of a treasure buried beneath the oldest oak - but only to those patient enough to listen. This is a secret scene only revealed to unhurried explorers!",
+      
+      "2": "\n\n## SCENE 2: The Hedge Maze\nTall hedges tower above you. The path splits in three directions. Somewhere deep within, you hear music.",
+      "2?scene_turns>=1": "\n\n[HINT - Turn 1+]: The left path smells of roses.",
+      "2?scene_turns>=2": "\n\n[HINT - Turn 2+]: You notice claw marks on the right path's hedges - something large came through here.",
+      "2?scene_turns>=3": "\n\n[HINT - Turn 3+]: The center path's music grows louder. It sounds like a violin.",
+      "2?scene_turns>=5": "\n\n[SECRET - Turn 5+]: A ghostly figure materializes beside you - the spirit of the maze's creator. She offers to guide you to the heart of the maze, but only because you took the time to truly see her home. Secret companion unlocked!"
+    }
+  }
+}
