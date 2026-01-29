@@ -291,9 +291,16 @@
                                 </div>
                                 
                                 <div class="form-group">
-                                    <label>
-                                        <input type="checkbox" id="setting-state-in-prompt" checked>
-                                        Include in system prompt
+                                    <label title="Include story/chapter text in prompt. Cache-friendly - only changes on scene advance.">
+                                        <input type="checkbox" id="setting-state-story-in-prompt" checked>
+                                        Story in prompt
+                                    </label>
+                                </div>
+                                
+                                <div class="form-group">
+                                    <label title="Include state variables in prompt. ⚠️ Breaks prompt caching - variables change each turn.">
+                                        <input type="checkbox" id="setting-state-vars-in-prompt">
+                                        Variables in prompt <span style="opacity:0.6;font-size:0.85em">(no cache)</span>
                                     </label>
                                 </div>
                                 

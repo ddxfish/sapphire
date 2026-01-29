@@ -283,8 +283,7 @@ class OpenAIResponsesProvider(BaseProvider):
         if tools:
             request_kwargs["tools"] = self._convert_tools_for_api(tools)
         
-        logger.info(f"[RESPONSES] Streaming: {len(input_items)} items to {request_kwargs['model']}")
-        logger.info(f"[RESPONSES] Request reasoning config: {request_kwargs.get('reasoning')}")
+        logger.info(f"[RESPONSES] Streaming to {request_kwargs['model']} (effort={self.reasoning_effort})")
         
         try:
             stream = retry_on_rate_limit(
@@ -312,10 +311,6 @@ class OpenAIResponsesProvider(BaseProvider):
             event_count += 1
             event_type = event.type
             seen_event_types.add(event_type)
-            
-            # Log first few events, reasoning events, and ALL function-related events
-            if event_count <= 5 or 'reasoning' in event_type.lower() or 'function' in event_type.lower() or 'output_item' in event_type.lower():
-                logger.info(f"[RESPONSES] Event #{event_count}: {event_type}")
             
             # Reasoning summary events (GPT-5.x thinking summaries)
             if event_type == "response.reasoning_summary_text.delta":
@@ -349,8 +344,6 @@ class OpenAIResponsesProvider(BaseProvider):
                 call_id = item_id_to_call_id.get(event_id, event_id)
                 
                 if call_id and call_id not in tool_calls_acc:
-                    # Shouldn't happen if output_item.added came first
-                    logger.warning(f"[RESPONSES] call_id '{call_id}' (from event_id '{event_id}') not in tool_calls_acc!")
                     tool_calls_acc[call_id] = {"name": "", "arguments": "", "item_id": event_id}
                 
                 if call_id and delta_args:
@@ -372,7 +365,6 @@ class OpenAIResponsesProvider(BaseProvider):
                 call_id = item_id_to_call_id.get(event_id, event_id)
                 
                 if call_id and call_id in tool_calls_acc and tool_calls_acc[call_id]["name"]:
-                    logger.info(f"[RESPONSES] Tool call complete: {tool_calls_acc[call_id]['name']} (call_id={call_id})")
                     yield {
                         "type": "tool_call",
                         "index": list(tool_calls_acc.keys()).index(call_id),
@@ -398,7 +390,6 @@ class OpenAIResponsesProvider(BaseProvider):
                         # Get both IDs - call_id is for Chat Completions compat, item.id is for streaming events
                         call_id = getattr(item, 'call_id', '') or item_id
                         func_name = getattr(item, 'name', '')
-                        logger.info(f"[RESPONSES] Function call detected: name='{func_name}' call_id='{call_id}' item_id='{item_id}'")
                         
                         # Map item_id to call_id for delta events
                         if item_id:
@@ -406,9 +397,9 @@ class OpenAIResponsesProvider(BaseProvider):
                         
                         if call_id:
                             tool_calls_acc[call_id] = {"name": func_name, "arguments": "", "item_id": item_id}
-                            logger.info(f"[RESPONSES] tool_calls_acc now: {list(tool_calls_acc.keys())}")
+                            logger.info(f"[RESPONSES] Function call: {func_name}")
                     else:
-                        logger.debug(f"[RESPONSES] Output item added: type={item_type}")
+                        logger.debug(f"[RESPONSES] Output item: {item_type}")
             
             elif event_type == "response.output_item.done":
                 # Output item complete
@@ -419,19 +410,13 @@ class OpenAIResponsesProvider(BaseProvider):
                 logger.debug(f"[RESPONSES] Unhandled event: {event_type}")
         
         # Build final response
-        logger.info(f"[RESPONSES] Stream complete: {event_count} events, content={len(full_content)}chars, thinking={len(full_thinking)}chars, tools={len(tool_calls_acc)}")
-        logger.info(f"[RESPONSES] Event types seen: {sorted(seen_event_types)}")
-        if tool_calls_acc:
-            logger.info(f"[RESPONSES] Tool calls captured: {[(k, v['name'], len(v['arguments'])) for k, v in tool_calls_acc.items()]}")
+        logger.info(f"[RESPONSES] Complete: {len(full_content)}ch content, {len(full_thinking)}ch thinking, {len(tool_calls_acc)} tools")
         
         final_tool_calls = [
             ToolCall(id=call_id, name=tc["name"], arguments=tc["arguments"])
             for call_id, tc in tool_calls_acc.items()
             if tc["name"]
         ]
-        
-        if tool_calls_acc and not final_tool_calls:
-            logger.error(f"[RESPONSES] Tool calls captured but none have names! tool_calls_acc={tool_calls_acc}")
         
         final_response = LLMResponse(
             content=full_content if full_content else None,

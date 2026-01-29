@@ -1,0 +1,124 @@
+{
+  "name": "Zork Demo",
+  "description": "A classic room-based adventure. Navigate with compass directions. Find the treasure, escape alive.",
+  "initial_state": {
+    "player_room": {
+      "value": "entrance",
+      "type": "string",
+      "label": "Location",
+      "blockers": [
+        {
+          "target": "treasury",
+          "requires": {"has_key": true},
+          "message": "The treasury door is locked. A brass key might open it."
+        },
+        {
+          "target": "exit",
+          "requires": {"troll_dead": true},
+          "message": "A massive troll blocks the exit! You must deal with it first."
+        }
+      ]
+    },
+    "has_sword": {
+      "value": false,
+      "type": "boolean",
+      "label": "Has Sword"
+    },
+    "has_key": {
+      "value": false,
+      "type": "boolean",
+      "label": "Has Key"
+    },
+    "has_treasure": {
+      "value": false,
+      "type": "boolean",
+      "label": "Has Treasure"
+    },
+    "troll_dead": {
+      "value": false,
+      "type": "boolean",
+      "label": "Troll Slain"
+    },
+    "lantern_lit": {
+      "value": false,
+      "type": "boolean",
+      "label": "Lantern Lit"
+    },
+    "player_health": {
+      "value": 10,
+      "type": "integer",
+      "min": 0,
+      "max": 10,
+      "label": "Health"
+    }
+  },
+  "progressive_prompt": {
+    "iterator": "player_room",
+    "mode": "current_only",
+    "base": "You are running ZORK DEMO, a room-based text adventure.\n\nNAVIGATION:\n- Use move(direction) to navigate: north, south, east, west, up, down\n- The system shows available exits after each move\n- Some exits are blocked until conditions are met\n\nRULES:\n- Describe each room vividly when entered\n- Track items with set_state (has_sword, has_key, etc.)\n- Combat uses roll_dice - troll has 3 HP, player hits on 4+\n- Troll hits back for 2 damage per round\n- If health reaches 0, game over\n\nVICTORY: Get the treasure and reach the exit with the troll dead.",
+    "navigation": {
+      "position_key": "player_room",
+      "connections": {
+        "entrance": {
+          "north": "great_hall",
+          "east": "armory"
+        },
+        "great_hall": {
+          "south": "entrance",
+          "west": "kitchen",
+          "up": "balcony",
+          "north": "troll_bridge"
+        },
+        "armory": {
+          "west": "entrance"
+        },
+        "kitchen": {
+          "east": "great_hall"
+        },
+        "balcony": {
+          "down": "great_hall",
+          "east": "treasury"
+        },
+        "treasury": {
+          "west": "balcony"
+        },
+        "troll_bridge": {
+          "south": "great_hall",
+          "north": "exit"
+        },
+        "exit": {
+          "south": "troll_bridge"
+        }
+      }
+    },
+    "segments": {
+      "entrance": "THE ENTRANCE\n\nYou stand in a musty stone entrance. Cobwebs drape the ceiling. A cold draft blows from the north, where a grand hallway awaits. To the east, you hear the clank of metal.\n\nThis is where your adventure begins.",
+      
+      "great_hall": "THE GREAT HALL\n\nA vast chamber with a vaulted ceiling. Faded tapestries line the walls, depicting battles long forgotten. A grand staircase leads UP to a balcony. Passages lead SOUTH to the entrance, WEST to what smells like a kitchen, and NORTH toward an ominous stone bridge.",
+      
+      "great_hall?lantern_lit": "THE GREAT HALL (Illuminated)\n\nYour lantern reveals details hidden in darkness: the tapestries show a king defeating a dragon, and there are scratches on the floor leading north - claw marks. Something large lives that way.\n\nPassages: SOUTH (entrance), WEST (kitchen), UP (balcony), NORTH (bridge).",
+      
+      "armory": "THE ARMORY\n\nWeapon racks line the walls, mostly empty or rusted. But one sword gleams - clearly enchanted, untouched by time.\n\nIf the player takes it, set_state(\"has_sword\", true, \"took the enchanted sword\").\n\nThe only exit is WEST back to the entrance.",
+      
+      "armory?has_sword": "THE ARMORY (Looted)\n\nThe weapon racks are bare. Where the enchanted sword once hung, only a dusty outline remains.\n\nExit: WEST to entrance.",
+      
+      "kitchen": "THE KITCHEN\n\nAn ancient kitchen. Pots hang from hooks, covered in grime. On the counter: a brass key and an old lantern with oil still in it.\n\n- Take the key: set_state(\"has_key\", true, \"took brass key\")\n- Light the lantern: set_state(\"lantern_lit\", true, \"lit the lantern\")\n\nExit: EAST to the great hall.",
+      
+      "kitchen?has_key,lantern_lit": "THE KITCHEN (Emptied)\n\nThe counters are bare. You've already taken everything useful.\n\nExit: EAST to great hall.",
+      
+      "balcony": "THE BALCONY\n\nA stone balcony overlooking the great hall. To the EAST, a heavy iron door leads somewhere - the treasury, perhaps? You notice it has a keyhole.\n\nYou can go DOWN to the great hall or EAST to the treasury (if unlocked).",
+      
+      "treasury": "THE TREASURY\n\nGold coins carpet the floor. Jewels spill from chests. In the center: a golden chalice worth more than everything else combined.\n\nIf the player takes it, set_state(\"has_treasure\", true, \"claimed the golden chalice\").\n\nThe only exit is WEST back to the balcony.",
+      
+      "treasury?has_treasure": "THE TREASURY (Claimed)\n\nThe golden chalice is gone - safe in your pack. The remaining coins seem worthless by comparison.\n\nExit: WEST to balcony.",
+      
+      "troll_bridge": "THE TROLL BRIDGE\n\nA narrow stone bridge over a bottomless chasm. And standing in the middle: a MASSIVE TROLL. It sees you and roars.\n\nCOMBAT RULES:\n- Player attacks: roll_dice(1,6). On 4+, hit for 1 damage (troll starts at 3 HP, track mentally or use set_state)\n- Without sword: disadvantage, need 5+ to hit\n- Troll attacks back each round: 2 damage to player\n- When troll dies: set_state(\"troll_dead\", true, \"slew the troll\")\n\nExits: SOUTH (retreat to great hall), NORTH (exit - blocked by troll)",
+      
+      "troll_bridge?troll_dead": "THE TROLL BRIDGE (Safe)\n\nThe troll's body lies crumpled at the bridge's edge. The path north is clear now.\n\nExits: SOUTH to great hall, NORTH to the exit.",
+      
+      "exit": "THE EXIT\n\nSunlight! Fresh air! You've reached the exit of the dungeon.\n\nVICTORY CHECK:\n- has_treasure = true? FULL VICTORY - describe triumphant escape with riches\n- has_treasure = false? PARTIAL VICTORY - escaped alive but empty-handed\n\nCongratulate the player appropriately.",
+      
+      "exit?has_treasure": "THE EXIT - VICTORY!\n\nYou emerge into daylight, the golden chalice secure in your pack. The dungeon's horrors are behind you.\n\nYou've done it. Treasure claimed, troll slain, escaped alive.\n\n*** CONGRATULATIONS - FULL VICTORY ***"
+    }
+  }
+}

@@ -11,7 +11,7 @@ from typing import Any, Tuple
 logger = logging.getLogger(__name__)
 
 # Tool names for detection
-STATE_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'increment_counter'}
+STATE_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'increment_counter', 'move'}
 
 TOOLS = [
     {
@@ -52,6 +52,27 @@ TOOLS = [
                     }
                 },
                 "required": ["key", "value"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move",
+            "description": "Move in a direction (for room-based navigation). Use compass directions (north, south, east, west) or positional (up, down). The system will validate if that exit exists.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {
+                        "type": "string",
+                        "description": "Direction to move: north/n, south/s, east/e, west/w, up/u, down/d, etc."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for movement (for history)"
+                    }
+                },
+                "required": ["direction"]
             }
         }
     },
@@ -212,6 +233,36 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
                 if clamped:
                     return f"✓ {label}: {current} → {new_value} (clamped to bounds)", True
                 return f"✓ {label}: {current} → {new_value}", True
+            return msg, False
+        
+        elif function_name == "move":
+            direction = arguments.get("direction", "").strip()
+            reason = arguments.get("reason", f"moved {direction}")
+            
+            if not direction:
+                return "Error: direction is required", False
+            
+            # Get navigation config
+            nav_config = state_engine._get_navigation_config()
+            if not nav_config:
+                return "Error: This preset doesn't use room navigation. Use set_state() instead.", False
+            
+            position_key = nav_config.get("position_key", "player_room")
+            current_room = state_engine.get_state(position_key)
+            
+            # Get destination for this direction
+            destination, error = state_engine.get_room_for_direction(direction)
+            if not destination:
+                return error, False
+            
+            # Use set_state to move - this handles blockers automatically
+            success, msg = state_engine.set_state(position_key, destination, "ai", turn_number, reason)
+            
+            if success:
+                # Get new exits for response
+                exits = state_engine._get_available_exits()
+                exits_str = f" | Exits: {', '.join(exits)}" if exits else ""
+                return f"✓ Moved {direction}: {current_room} → {destination}{exits_str}", True
             return msg, False
         
         else:

@@ -131,6 +131,11 @@ class LLMChat:
         context_parts = []
         chat_settings = self.session_manager.get_chat_settings()
         
+        # Debug logging for state engine
+        state_enabled = chat_settings.get('state_engine_enabled', False)
+        state_engine = self.function_manager.get_state_engine()
+        logger.info(f"[STATE] _get_system_prompt: enabled={state_enabled}, engine_exists={state_engine is not None}")
+        
         # Inject datetime if enabled
         if chat_settings.get('inject_datetime', False):
             from datetime import datetime
@@ -145,10 +150,21 @@ class LLMChat:
         # Inject state engine block if enabled
         if chat_settings.get('state_engine_enabled', False):
             state_engine = self.function_manager.get_state_engine()
-            if state_engine and chat_settings.get('state_in_prompt', True):
-                turn = self.session_manager.get_turn_count()
-                state_block = state_engine.format_for_prompt()
-                context_parts.append(f"<state turn=\"{turn}\">\n{state_block}\n</state>")
+            if state_engine:
+                # New settings take priority, ignore legacy state_in_prompt
+                vars_in_prompt = chat_settings.get('state_vars_in_prompt', False)
+                story_in_prompt = chat_settings.get('state_story_in_prompt', True)
+                
+                logger.info(f"[STATE] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={state_engine.preset_name}")
+                
+                if vars_in_prompt or story_in_prompt:
+                    turn = self.session_manager.get_turn_count()
+                    state_block = state_engine.format_for_prompt(
+                        include_vars=vars_in_prompt,
+                        include_story=story_in_prompt
+                    )
+                    logger.info(f"[STATE] State block length: {len(state_block)} chars")
+                    context_parts.append(f"<state turn=\"{turn}\">\n{state_block}\n</state>")
         
         # Combine all context
         if context_parts:
@@ -171,21 +187,28 @@ class LLMChat:
             # Check if we need to create/update state engine
             current_engine = self.function_manager.get_state_engine()
             
-            # Detect preset change - need to reload if preset differs from current
-            preset_changed = False
-            if current_engine:
-                current_preset = current_engine.preset_name
-                if current_preset != new_preset:
-                    preset_changed = True
-                    logger.info(f"[STATE] Preset changed: '{current_preset}' → '{new_preset}'")
+            # Detect if we need a new engine instance
+            needs_new_engine = (
+                not current_engine or 
+                current_engine.chat_name != chat_name
+            )
             
-            if not current_engine or current_engine.chat_name != chat_name or preset_changed:
+            # Quick check for preset change on existing engine
+            if current_engine and current_engine.preset_name != new_preset:
+                needs_new_engine = True
+                logger.info(f"[STATE] Preset changed: '{current_engine.preset_name}' → '{new_preset}'")
+            
+            if needs_new_engine:
                 # Create new state engine for this chat
                 engine = StateEngine(chat_name, db_path)
                 
                 if new_preset:
-                    # Always load fresh when preset changed, otherwise check if empty
-                    if preset_changed or engine.is_empty():
+                    # Compare DB preset (what engine loaded) vs requested preset
+                    # This catches: no current_engine but DB has different preset
+                    db_preset = engine.preset_name
+                    needs_fresh_load = (db_preset != new_preset) or engine.is_empty()
+                    
+                    if needs_fresh_load:
                         # Fresh start - load full preset with initial state
                         turn = self.session_manager.get_turn_count()
                         success, msg = engine.load_preset(new_preset, turn)

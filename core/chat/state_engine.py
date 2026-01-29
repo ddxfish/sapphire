@@ -599,12 +599,19 @@ class StateEngine:
             logger.error(f"Failed to get state history: {e}")
             return []
     
-    def format_for_prompt(self) -> str:
-        """Format current state for system prompt injection with progressive reveal."""
-        if not self._current_state:
-            return "(no state)"
+    def format_for_prompt(self, include_vars: bool = True, include_story: bool = True) -> str:
+        """
+        Format current state for system prompt injection with progressive reveal.
         
-        # Get iterator value for visibility checks
+        Args:
+            include_vars: Include state variables (breaks caching each turn)
+            include_story: Include story segments (cache-friendly, changes on scene advance)
+        """
+        logger.info(f"[STATE] format_for_prompt called: vars={include_vars}, story={include_story}, progressive_config={self._progressive_config is not None}")
+        
+        parts = []
+        
+        # Get iterator value for visibility checks (needed for both vars and story)
         iterator_value = None
         if self._progressive_config:
             iterator_key = self._progressive_config.get("iterator")
@@ -612,52 +619,253 @@ class StateEngine:
                 val = self.get_state(iterator_key)
                 if isinstance(val, (int, float)):
                     iterator_value = int(val)
+                elif val is not None:
+                    iterator_value = val  # String for room names
         
-        lines = []
-        for key, entry in sorted(self._current_state.items()):
-            # Skip system keys (internal use only)
-            if key.startswith("_"):
-                continue
+        # Add state variables if requested
+        if include_vars and self._current_state:
+            lines = []
+            for key, entry in sorted(self._current_state.items()):
+                if key.startswith("_"):
+                    continue
+                
+                constraints = entry.get("constraints", {}) or {}
+                visible_from = constraints.get("visible_from")
+                if visible_from is not None and isinstance(iterator_value, int):
+                    if iterator_value < visible_from:
+                        continue
+                
+                value = entry["value"]
+                label = entry.get("label")
+                
+                if isinstance(value, list):
+                    value_str = json.dumps(value)
+                elif isinstance(value, bool):
+                    value_str = "true" if value else "false"
+                else:
+                    value_str = str(value)
+                
+                if label and label != key:
+                    lines.append(f"{key} ({label}): {value_str}")
+                else:
+                    lines.append(f"{key}: {value_str}")
             
-            # Check visibility constraint
-            constraints = entry.get("constraints", {}) or {}
-            visible_from = constraints.get("visible_from")
-            if visible_from is not None and iterator_value is not None:
-                if iterator_value < visible_from:
-                    continue  # Hide this variable until iterator reaches visible_from
-            
-            value = entry["value"]
-            label = entry.get("label")
-            
-            # Format value for readability
-            if isinstance(value, list):
-                value_str = json.dumps(value)
-            elif isinstance(value, bool):
-                value_str = "true" if value else "false"
-            else:
-                value_str = str(value)
-            
-            # Show key (required for set_state) with optional label for readability
-            if label and label != key:
-                lines.append(f"{key} ({label}): {value_str}")
-            else:
-                lines.append(f"{key}: {value_str}")
-        
-        state_block = "\n".join(lines)
+            if lines:
+                parts.append("\n".join(lines))
         
         # Add tools hint
-        state_block += "\n\nTools: get_state(), set_state(key, value, reason), roll_dice(count, sides), increment_counter(key, amount)"
+        nav_config = self._get_navigation_config()
+        if nav_config and nav_config.get("connections"):
+            parts.append("Tools: get_state(), set_state(key, value, reason), move(direction, reason), roll_dice(count, sides), increment_counter(key, amount)")
+        else:
+            parts.append("Tools: get_state(), set_state(key, value, reason), roll_dice(count, sides), increment_counter(key, amount)")
         
-        # Add progressive prompt content (only revealed segments)
-        prompt_content = self._build_progressive_prompt()
-        if prompt_content:
-            state_block += f"\n\n{prompt_content}"
+        # Add progressive prompt content (story segments) if requested
+        if include_story:
+            prompt_content = self._build_progressive_prompt()
+            if prompt_content:
+                parts.append(prompt_content)
         
-        return state_block
+        return "\n\n".join(parts) if parts else "(state engine active - use get_state())"
     
+    def _parse_segment_key(self, key: str) -> tuple[str, list]:
+        """
+        Parse segment key into base key and conditions.
+        
+        Examples:
+            "3" -> ("3", [])
+            "3?martinez_dead" -> ("3", [("martinez_dead", "=", True)])
+            "3?martinez_fate=abandoned" -> ("3", [("martinez_fate", "=", "abandoned")])
+            "5?rose_trust>70" -> ("5", [("rose_trust", ">", 70)])
+            "6?chen_alive,martinez_alive" -> ("6", [("chen_alive", "=", True), ("martinez_alive", "=", True)])
+        
+        Returns:
+            (base_key, [(state_key, operator, expected_value), ...])
+        """
+        if "?" not in key:
+            return key, []
+        
+        base, condition_str = key.split("?", 1)
+        conditions = []
+        
+        for cond in condition_str.split(","):
+            cond = cond.strip()
+            if not cond:
+                continue
+            
+            # Check for comparison operators
+            op = "="
+            k, v = None, None
+            
+            for check_op in (">=", "<=", "!=", ">", "<", "="):
+                if check_op in cond:
+                    parts = cond.split(check_op, 1)
+                    if len(parts) == 2:
+                        k = parts[0].strip()
+                        v = parts[1].strip()
+                        op = check_op
+                        break
+            
+            if k is None:
+                # Boolean shorthand: "key" means key=true
+                k = cond
+                v = True
+                op = "="
+            else:
+                # Parse value type
+                if isinstance(v, str):
+                    if v.lower() == "true":
+                        v = True
+                    elif v.lower() == "false":
+                        v = False
+                    else:
+                        try:
+                            v = int(v)
+                        except ValueError:
+                            try:
+                                v = float(v)
+                            except ValueError:
+                                pass  # Keep as string
+            
+            conditions.append((k, op, v))
+        
+        return base, conditions
+    
+    def _match_conditions(self, conditions: list) -> bool:
+        """Check if all conditions match current state (AND logic)."""
+        for state_key, op, expected in conditions:
+            actual = self.get_state(state_key)
+            
+            if op == "=":
+                if actual != expected:
+                    return False
+            elif op == "!=":
+                if actual == expected:
+                    return False
+            elif op == ">":
+                if not (isinstance(actual, (int, float)) and actual > expected):
+                    return False
+            elif op == "<":
+                if not (isinstance(actual, (int, float)) and actual < expected):
+                    return False
+            elif op == ">=":
+                if not (isinstance(actual, (int, float)) and actual >= expected):
+                    return False
+            elif op == "<=":
+                if not (isinstance(actual, (int, float)) and actual <= expected):
+                    return False
+        
+        return True
+    
+    def _select_segment(self, base_key: str, segments: dict) -> str:
+        """
+        Select best matching segment for a base key, checking variants first.
+        
+        Looks for segments like "3?condition" that match current state,
+        falls back to "3" if no variants match.
+        """
+        # Collect all variants for this base key
+        variants = []
+        fallback = None
+        
+        for seg_key, content in segments.items():
+            parsed_base, conditions = self._parse_segment_key(seg_key)
+            if parsed_base != base_key:
+                continue
+            
+            if not conditions:
+                fallback = content
+            else:
+                variants.append((conditions, content))
+        
+        # Check variants in order (first match wins)
+        # Sort by condition count descending - more specific conditions first
+        variants.sort(key=lambda x: len(x[0]), reverse=True)
+        
+        for conditions, content in variants:
+            if self._match_conditions(conditions):
+                return content
+        
+        return fallback or ""
+    
+    def _get_navigation_config(self) -> dict:
+        """Get navigation config from preset if present."""
+        if not self._progressive_config:
+            return {}
+        return self._progressive_config.get("navigation", {})
+    
+    def _get_available_exits(self) -> list:
+        """Get available exit directions from current room."""
+        nav = self._get_navigation_config()
+        if not nav:
+            return []
+        
+        connections = nav.get("connections", {})
+        position_key = nav.get("position_key", "player_room")
+        current_room = self.get_state(position_key)
+        
+        if not current_room or current_room not in connections:
+            return []
+        
+        room_exits = connections[current_room]
+        # Filter out metadata keys starting with _
+        return [d for d in room_exits.keys() if not d.startswith("_")]
+    
+    def get_room_for_direction(self, direction: str) -> tuple[str, str]:
+        """
+        Get destination room for a direction from current position.
+        
+        Returns:
+            (destination_room, error_message) - destination is None if invalid
+        """
+        nav = self._get_navigation_config()
+        if not nav:
+            return None, "Navigation not configured for this preset"
+        
+        connections = nav.get("connections", {})
+        position_key = nav.get("position_key", "player_room")
+        current_room = self.get_state(position_key)
+        
+        if not current_room:
+            return None, f"Current position unknown ({position_key} not set)"
+        
+        if current_room not in connections:
+            return None, f"No exits defined for '{current_room}'"
+        
+        room_exits = connections[current_room]
+        direction_lower = direction.lower()
+        
+        # Check exact match and common aliases
+        aliases = {
+            "n": "north", "s": "south", "e": "east", "w": "west",
+            "u": "up", "d": "down", "ne": "northeast", "nw": "northwest",
+            "se": "southeast", "sw": "southwest"
+        }
+        
+        # Try direct match first
+        if direction_lower in room_exits:
+            return room_exits[direction_lower], ""
+        
+        # Try alias
+        if direction_lower in aliases:
+            full_dir = aliases[direction_lower]
+            if full_dir in room_exits:
+                return room_exits[full_dir], ""
+        
+        # Try reverse alias (user said "north", check for "n")
+        for short, full in aliases.items():
+            if direction_lower == full and short in room_exits:
+                return room_exits[short], ""
+        
+        available = [d for d in room_exits.keys() if not d.startswith("_")]
+        return None, f"Can't go {direction}. Exits: {', '.join(available)}"
+
     def _build_progressive_prompt(self) -> str:
         """Build prompt from progressive config, revealing only appropriate segments."""
+        logger.info(f"[STATE] _build_progressive_prompt: config={self._progressive_config is not None}, preset={self._preset_name}")
+        
         if not self._progressive_config:
+            logger.debug("[PROMPT] No progressive_config set")
             return ""
         
         config = self._progressive_config
@@ -665,6 +873,9 @@ class StateEngine:
         segments = config.get("segments", {})
         iterator_key = config.get("iterator")
         mode = config.get("mode", "cumulative")  # cumulative or current_only
+        nav_config = config.get("navigation", {})
+        
+        logger.debug(f"[PROMPT] iterator_key={iterator_key}, mode={mode}, segment_count={len(segments)}")
         
         # Load universal base instructions (cached after first load)
         if not hasattr(self, '_base_instructions'):
@@ -679,7 +890,7 @@ class StateEngine:
                     logger.warning(f"Could not load _base.json: {e}")
         
         if not iterator_key or not segments:
-            # No progressive reveal, just return base instructions + preset base
+            logger.debug(f"[PROMPT] Early return: iterator_key={iterator_key}, segments={bool(segments)}")
             parts = []
             if self._base_instructions:
                 parts.append(self._base_instructions)
@@ -687,9 +898,12 @@ class StateEngine:
                 parts.append(base)
             return "\n\n".join(parts) if parts else ""
         
-        # Get current iterator value
+        # Get current iterator value (can be int or string for room names)
         iterator_value = self.get_state(iterator_key)
-        if iterator_value is None or not isinstance(iterator_value, (int, float)):
+        logger.debug(f"[PROMPT] iterator_value={iterator_value} (type={type(iterator_value).__name__})")
+        
+        if iterator_value is None:
+            logger.debug("[PROMPT] iterator_value is None, returning base only")
             parts = []
             if self._base_instructions:
                 parts.append(self._base_instructions)
@@ -697,30 +911,70 @@ class StateEngine:
                 parts.append(base)
             return "\n\n".join(parts) if parts else ""
         
-        iterator_value = int(iterator_value)
+        # Extract base keys from segments (strip ?conditions)
+        base_keys = set()
+        for seg_key in segments.keys():
+            parsed_base, _ = self._parse_segment_key(seg_key)
+            base_keys.add(parsed_base)
         
-        # Collect revealed segments
+        logger.debug(f"[PROMPT] base_keys={sorted(base_keys)}")
+        
+        # Determine if we're using numeric or string keys
+        is_numeric = isinstance(iterator_value, (int, float))
+        
+        # Collect revealed segments with variant support
         revealed = []
-        segment_keys = sorted([int(k) for k in segments.keys()])
         
-        for seg_key in segment_keys:
-            if mode == "cumulative":
-                # Reveal all segments <= current iterator
-                if seg_key <= iterator_value:
-                    revealed.append(segments[str(seg_key)])
-            else:  # current_only
-                # Only reveal exact match
-                if seg_key == iterator_value:
-                    revealed.append(segments[str(seg_key)])
-                    break
+        if is_numeric:
+            # Numeric mode: sort keys, cumulative or current_only
+            iterator_value = int(iterator_value)
+            numeric_keys = []
+            for bk in base_keys:
+                try:
+                    numeric_keys.append(int(bk))
+                except ValueError:
+                    continue
+            numeric_keys.sort()
+            
+            logger.debug(f"[PROMPT] numeric_keys={numeric_keys}, checking up to {iterator_value}")
+            
+            for seg_key in numeric_keys:
+                if mode == "cumulative":
+                    if seg_key <= iterator_value:
+                        content = self._select_segment(str(seg_key), segments)
+                        if content:
+                            revealed.append(content)
+                            logger.debug(f"[PROMPT] Revealed segment {seg_key} ({len(content)} chars)")
+                else:  # current_only
+                    if seg_key == iterator_value:
+                        content = self._select_segment(str(seg_key), segments)
+                        if content:
+                            revealed.append(content)
+                            logger.debug(f"[PROMPT] Revealed segment {seg_key} ({len(content)} chars)")
+                        break
+        else:
+            # String mode (room names): only show current room's segment
+            # Always current_only for room-based navigation
+            content = self._select_segment(str(iterator_value), segments)
+            if content:
+                revealed.append(content)
+                logger.debug(f"[PROMPT] Revealed room segment '{iterator_value}' ({len(content)} chars)")
         
-        # Assemble final prompt: base_instructions + preset_base + segments
+        logger.debug(f"[PROMPT] Total revealed segments: {len(revealed)}")
+        
+        # Assemble final prompt
         parts = []
         if self._base_instructions:
             parts.append(self._base_instructions)
         if base:
             parts.append(base)
         parts.extend(revealed)
+        
+        # Add navigation hints if in graph mode
+        if nav_config and nav_config.get("connections"):
+            exits = self._get_available_exits()
+            if exits:
+                parts.append(f"Exits: {', '.join(exits)}")
         
         return "\n\n".join(parts)
     
@@ -767,6 +1021,8 @@ class StateEngine:
             
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            
+            logger.info(f"[STATE] reload_preset_config: preset={preset_name}, has_progressive={self._progressive_config is not None}, segments={len(self._progressive_config.get('segments', {})) if self._progressive_config else 0}")
             
             # Refresh constraints on existing keys from preset definition
             initial_state = preset.get("initial_state", {})

@@ -30,7 +30,8 @@ SYSTEM_DEFAULTS = {
     "llm_model": "",            # Empty = use provider default, or specific model override
     "state_engine_enabled": False,  # State engine for games/simulations
     "state_preset": None,           # Preset to load (e.g., "five_rooms")
-    "state_in_prompt": True         # Include state block in system prompt
+    "state_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
+    "state_story_in_prompt": True   # Include story segments in prompt (cache-friendly)
 }
 
 def get_user_defaults() -> Dict[str, Any]:

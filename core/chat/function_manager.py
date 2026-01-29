@@ -179,7 +179,14 @@ class FunctionManager:
         # Add state tools if state engine is active
         if self._state_engine:
             from .state_tools import TOOLS as STATE_TOOLS
-            tools = tools + STATE_TOOLS
+            # Only include move tool if navigation is configured
+            nav_config = self._state_engine._get_navigation_config()
+            has_navigation = bool(nav_config and nav_config.get("connections"))
+            if has_navigation:
+                tools = tools + STATE_TOOLS
+            else:
+                # Exclude move tool for non-navigation presets
+                tools = tools + [t for t in STATE_TOOLS if t['function']['name'] != 'move']
         
         return tools
 

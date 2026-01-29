@@ -1,0 +1,70 @@
+{
+  "name": "Titanic",
+  "description": "A branching narrative where all paths converge. The ship always sinks, but WHO survives depends on your choices.",
+  "initial_state": {
+    "scene": {
+      "value": 1,
+      "type": "integer",
+      "min": 1,
+      "max": 5,
+      "adjacent": 1,
+      "label": "Chapter"
+    },
+    "jack_alive": {
+      "value": true,
+      "type": "boolean",
+      "label": "Jack Alive"
+    },
+    "rose_trust": {
+      "value": 50,
+      "type": "integer",
+      "min": 0,
+      "max": 100,
+      "label": "Rose's Trust"
+    },
+    "found_lifejackets": {
+      "value": false,
+      "type": "boolean",
+      "label": "Lifejackets Found",
+      "visible_from": 2
+    },
+    "cal_angry": {
+      "value": false,
+      "type": "boolean",
+      "label": "Cal Enraged",
+      "visible_from": 2
+    },
+    "ending": {
+      "value": "none",
+      "type": "string",
+      "label": "Ending",
+      "visible_from": 5
+    }
+  },
+  "progressive_prompt": {
+    "iterator": "scene",
+    "mode": "cumulative",
+    "base": "You are running TITANIC, a branching narrative tragedy.\n\nThis demonstrates Y-BRANCH storytelling: choices create permanent branches, but all paths CONVERGE at the iceberg.\n\nRULES:\n- Scene 3 has variants based on earlier choices\n- Scene 4 (the iceberg) is THE SAME for everyone - convergence point\n- Scene 5 has multiple endings based on accumulated state\n- Use the ?condition syntax to show how branches work\n\nCHARACTERS:\n- JACK: Poor artist, brave, in love\n- ROSE: First class passenger, conflicted\n- CAL: Rose's wealthy fiancé, dangerous when angry",
+    "segments": {
+      "1": "CHAPTER 1 - THE MEETING\n\nApril 10, 1912. The Titanic prepares to depart Southampton.\n\nRose stands at the railing, contemplating the water far below. A young artist named Jack notices her distress.\n\nOBJECTIVES:\n- Establish the meeting between Jack and Rose\n- Set rose_trust based on how the encounter goes (40-70 range)\n- Advance to scene 2 when connection is made",
+      
+      "2": "CHAPTER 2 - THE CHOICE\n\nJack and Rose grow closer. But danger lurks.\n\nKEY DECISION: Does Rose explore the ship with Jack (lower decks) or attend dinner with Cal?\n\n- If exploring: set_state(\"found_lifejackets\", true) - they discover the inadequate supply\n- If dinner with Cal: roll_dice(1,6). On 1-2: Cal becomes suspicious, set_state(\"cal_angry\", true)\n\nAdvance to scene 3 when the choice is made.",
+      
+      "3": "CHAPTER 3 - DEFAULT PATH\n\nThe night before destiny. Rose must choose her future.\n\nBased on rose_trust:\n- Trust <40: She's distant, hesitant\n- Trust 40-70: She's torn but warming\n- Trust >70: She's ready to leave Cal\n\nAdvance to scene 4 (the convergence point) when she makes her choice.",
+      
+      "3?cal_angry": "CHAPTER 3 - CAL'S FURY (Variant)\n\nCal has discovered something. His jealousy turns violent.\n\nJack is in danger! roll_dice(1,6):\n- On 1-2: Jack is badly beaten, set_state(\"jack_alive\", false) if trust <50 (no one helps)\n- On 3-6: Jack escapes with Rose's help\n\nThis is a Y-BRANCH - if Jack dies here, later scenes will be different.\n\nAdvance to scene 4.",
+      
+      "3?found_lifejackets": "CHAPTER 3 - THE SECRET (Variant)\n\nRose knows the terrible truth about the lifeboats. There aren't enough.\n\nShe must decide: tell others and cause panic, or keep the secret?\n\n- If she tells: set_state(\"rose_trust\", current+20) - Jack admires her courage\n- If silent: The guilt weighs on her\n\nAdvance to scene 4.",
+      
+      "4": "CHAPTER 4 - THE ICEBERG\n\n*** CONVERGENCE POINT - This scene is identical for all paths ***\n\n11:40 PM, April 14, 1912.\n\nThe lookout's cry: \"Iceberg, right ahead!\"\n\nToo late. The ship shudders. Metal screams.\n\nThe Titanic is sinking. Nothing can change this.\n\nWhat happens next depends on what came before:\n- If found_lifejackets=true, they know where to go\n- If jack_alive=false, Rose faces this alone\n- If cal_angry=true, Cal is hunting them\n\nDESCRIBE THE CHAOS. Then advance to scene 5 for the ending.",
+      
+      "5": "CHAPTER 5 - ENDINGS (Default: Tragic)\n\nThe ship goes down. Rose floats on debris.\n\nset_state(\"ending\", \"tragic\") - The default ending.\n\nShe survived, but at what cost?",
+      
+      "5?jack_alive,rose_trust>70": "CHAPTER 5 - GOOD ENDING\n\nThey made it. Together. Against all odds.\n\nset_state(\"ending\", \"together\")\n\nJack and Rose cling to the debris, taking turns in the freezing water. When rescue comes, they're both still breathing.\n\n\"I'll never let go,\" she whispers. And this time, she doesn't have to.",
+      
+      "5?jack_alive,rose_trust>50": "CHAPTER 5 - BITTERSWEET ENDING\n\nset_state(\"ending\", \"bittersweet\")\n\nThey both survive, but the trauma has changed them. Jack's carefree spirit is dimmed. Rose carries guilt for those who didn't make it.\n\nThey part ways in New York, promising to find each other again. Some promises take years to keep.",
+      
+      "5?jack_alive=false": "CHAPTER 5 - ALONE ENDING\n\nset_state(\"ending\", \"alone\")\n\nRose floats on the wreckage, staring at stars that don't care.\n\nJack never made it to this moment. Cal's fury took him before the ocean could.\n\nShe survives. She'll live a full life. But a part of her stays frozen in the Atlantic forever."
+    }
+  }
+}

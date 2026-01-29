@@ -191,7 +191,8 @@ export async function openSettingsModal() {
         // State engine settings
         document.getElementById('setting-state-enabled').checked = settings.state_engine_enabled === true;
         document.getElementById('setting-state-preset').value = settings.state_preset || '';
-        document.getElementById('setting-state-in-prompt').checked = settings.state_in_prompt !== false;
+        document.getElementById('setting-state-story-in-prompt').checked = settings.state_story_in_prompt !== false;
+        document.getElementById('setting-state-vars-in-prompt').checked = settings.state_vars_in_prompt === true;
         
         // TTS accordion toggle
         const ttsHeader = document.getElementById('tts-header');
@@ -369,7 +370,8 @@ export async function saveSettings() {
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
-            state_in_prompt: document.getElementById('setting-state-in-prompt')?.checked !== false
+            state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
+            state_vars_in_prompt: document.getElementById('setting-state-vars-in-prompt')?.checked || false
         };
         
         await api.updateChatSettings(chatName, settings);
@@ -458,7 +460,8 @@ export async function saveAsDefaults() {
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
-            state_in_prompt: document.getElementById('setting-state-in-prompt')?.checked !== false
+            state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
+            state_vars_in_prompt: document.getElementById('setting-state-vars-in-prompt')?.checked || false
         };
         
         const res = await fetch('/api/settings/chat-defaults', {
