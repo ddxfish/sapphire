@@ -1,0 +1,88 @@
+{
+  "name": "Feature Test",
+  "description": "Minimal 3-scene test exercising: linear progression, binary choice, Y-branch, riddle.",
+  "game_type": "linear",
+  "initial_state": {
+    "scene": {
+      "value": 1,
+      "type": "integer",
+      "label": "Scene",
+      "min": 1,
+      "max": 3,
+      "adjacent": 1
+    },
+    "chose_left": {
+      "value": false,
+      "type": "boolean",
+      "label": "Chose Left Path"
+    },
+    "chose_right": {
+      "value": false,
+      "type": "boolean",
+      "label": "Chose Right Path"
+    },
+    "vault_open": {
+      "value": false,
+      "type": "boolean",
+      "label": "Vault Opened",
+      "visible_from": 3
+    }
+  },
+  "binary_choices": [
+    {
+      "id": "fork_choice",
+      "trigger_turn": 0,
+      "prompt": "The path forks. Left goes into darkness. Right goes toward light.",
+      "options": {
+        "left": {
+          "description": "Take the dark path",
+          "set": { "chose_left": true }
+        },
+        "right": {
+          "description": "Take the lit path", 
+          "set": { "chose_right": true }
+        }
+      },
+      "required_for_scene": 2,
+      "block_message": "You must choose a path before continuing."
+    }
+  ],
+  "riddles": [
+    {
+      "id": "simple_code",
+      "name": "The Simple Lock",
+      "type": "fixed",
+      "answer": "42",
+      "visible_from_scene": 3,
+      "max_attempts": 3,
+      "clues": {
+        "1": "The answer to life, the universe, and everything.",
+        "2?scene_turns>=2": "Douglas Adams knew it well."
+      },
+      "success_sets": { "vault_open": true },
+      "success_message": "Click! The vault swings open.",
+      "fail_message": "Wrong.",
+      "lockout_message": "The lock jams permanently."
+    }
+  ],
+  "progressive_prompt": {
+    "iterator": "scene",
+    "mode": "cumulative",
+    "base": "FEATURE TEST - A minimal scenario testing all state engine features.\n\nYou are the narrator. Keep responses brief (2-3 sentences). Advance scenes with set_state(\"scene\", N, \"reason\") when objectives complete.\n\nFeatures being tested:\n1. Linear scene progression (1→2→3)\n2. Binary choice with scene blocking\n3. Y-branch content (different scene 2 based on choice)\n4. Riddle with progressive clues",
+    "segments": {
+      "1": "\n\n## SCENE 1: THE FORK\n\nThe player stands at a fork in the path.\n\nOBJECTIVE: Present the fork_choice. Cannot advance to scene 2 until they choose.",
+
+      "1?scene_turns>=2": "\n\n⏰ REMINDER: The choice is waiting. Use make_choice(\"fork_choice\", \"left\" or \"right\", \"reason\").",
+
+      "2?chose_left": "\n\n## SCENE 2: THE DARK PATH\n\nThe player chose DARKNESS. They stumble through shadows, hearing whispers.\n\nDescribe the eerie journey. When done, advance to scene 3.",
+
+      "2?chose_right": "\n\n## SCENE 2: THE LIGHT PATH\n\nThe player chose LIGHT. Warm sun guides them through a meadow.\n\nDescribe the pleasant journey. When done, advance to scene 3.",
+
+      "3": "\n\n## SCENE 3: THE VAULT\n\nBoth paths lead here: an ancient vault with a combination lock.\n\nThe riddle 'simple_code' is now active. Clues appear above. Work with the player to solve it.\n\nWhen vault_open=true OR riddle locked out, narrate the ending.",
+
+      "3?vault_open": "\n\n🏆 VICTORY: The vault opens, revealing treasure. Congratulate the player!",
+
+      "3?scene_turns>=4": "\n\n💡 HINT: The answer is a famous number from science fiction."
+    }
+  }
+}

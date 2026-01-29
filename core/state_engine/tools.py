@@ -292,28 +292,12 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
             if not direction:
                 return "Error: direction is required", False
             
-            # Get navigation config
-            nav_config = state_engine._get_navigation_config()
-            if not nav_config:
+            # Use navigation feature manager
+            if not state_engine.navigation or not state_engine.navigation.is_enabled:
                 return "Error: This preset doesn't use room navigation. Use set_state() instead.", False
             
-            position_key = nav_config.get("position_key", "player_room")
-            current_room = state_engine.get_state(position_key)
-            
-            # Get destination for this direction
-            destination, error = state_engine.get_room_for_direction(direction)
-            if not destination:
-                return error, False
-            
-            # Use set_state to move - this handles blockers automatically
-            success, msg = state_engine.set_state(position_key, destination, "ai", turn_number, reason)
-            
-            if success:
-                # Get new exits for response
-                exits = state_engine._get_available_exits()
-                exits_str = f" | Exits: {', '.join(exits)}" if exits else ""
-                return f"✓ Moved {direction}: {current_room} → {destination}{exits_str}", True
-            return msg, False
+            success, msg = state_engine.navigation.move(direction, turn_number, reason)
+            return msg, success
         
         elif function_name == "make_choice":
             choice_id = arguments.get("choice_id", "").strip()
@@ -325,7 +309,11 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
             if not option:
                 return "Error: option is required", False
             
-            success, msg = state_engine.make_choice(choice_id, option, turn_number, reason)
+            # Use choices feature manager
+            if not state_engine.choices:
+                return "Error: Choices not configured for this preset", False
+            
+            success, msg = state_engine.choices.make_choice(choice_id, option, turn_number, reason)
             return msg, success
         
         elif function_name == "attempt_riddle":
@@ -337,7 +325,11 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
             if not answer:
                 return "Error: answer is required", False
             
-            success, msg = state_engine.attempt_riddle(riddle_id, answer, turn_number)
+            # Use riddles feature manager
+            if not state_engine.riddles:
+                return "Error: Riddles not configured for this preset", False
+            
+            success, msg = state_engine.riddles.attempt(riddle_id, answer, turn_number)
             return msg, success
         
         else:

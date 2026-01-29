@@ -181,8 +181,8 @@ class FunctionManager:
         if self._state_engine and self._state_engine_enabled:
             from core.state_engine import TOOLS as STATE_TOOLS
             # Only include move tool if navigation is configured
-            nav_config = self._state_engine._get_navigation_config()
-            has_navigation = bool(nav_config and nav_config.get("connections"))
+            has_navigation = (self._state_engine.navigation is not None and 
+                              self._state_engine.navigation.is_enabled)
             if has_navigation:
                 tools = tools + STATE_TOOLS
             else:
