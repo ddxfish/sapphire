@@ -6,7 +6,8 @@ Supports:
 - lmstudio: LM Studio (local, no API key needed)
 - claude: Anthropic Claude API
 - fireworks: Fireworks.ai 
-- openai: OpenAI or compatible APIs
+- openai: OpenAI (auto-selects Completions vs Responses based on model)
+- responses: Generic Responses API (Open Responses standard)
 
 Usage:
     from llm_providers import get_provider_by_key, get_available_providers
@@ -21,13 +22,16 @@ from typing import Dict, Any, Optional, List
 
 from .base import BaseProvider, LLMResponse, ToolCall
 from .openai_compat import OpenAICompatProvider
+from .openai_responses import OpenAIResponsesProvider
 from .claude import ClaudeProvider
 
 logger = logging.getLogger(__name__)
 
 # Provider class registry
 PROVIDER_CLASSES = {
-    'openai': OpenAICompatProvider,
+    'openai': OpenAICompatProvider,  # Will be overridden by auto-select logic
+    'openai_responses': OpenAIResponsesProvider,
+    'responses': OpenAIResponsesProvider,  # Generic Responses API
     'fireworks': OpenAICompatProvider,
     'claude': ClaudeProvider,
 }
@@ -79,9 +83,9 @@ PROVIDER_METADATA = {
     },
     'openai': {
         'display_name': 'OpenAI',
-        'provider_class': 'openai',
+        'provider_class': 'openai',  # Auto-selects completions vs responses
         'required_fields': ['base_url', 'api_key', 'model'],
-        'optional_fields': ['timeout'],
+        'optional_fields': ['timeout', 'reasoning_effort'],
         'model_options': {
             'gpt-5.2': 'GPT-5.2 (Flagship)',
             'gpt-5.1': 'GPT-5.1',
@@ -92,6 +96,18 @@ PROVIDER_METADATA = {
         'is_local': False,
         'default_timeout': 10.0,
         'api_key_env': 'OPENAI_API_KEY',
+        'supports_reasoning': True,  # Flag for UI to show reasoning options
+    },
+    'responses': {
+        'display_name': 'Responses API (Generic)',
+        'provider_class': 'responses',
+        'required_fields': ['base_url', 'api_key', 'model'],
+        'optional_fields': ['timeout', 'reasoning_effort', 'reasoning_summary'],
+        'model_options': None,  # Free-form model entry
+        'is_local': False,
+        'default_timeout': 10.0,
+        'supports_reasoning': True,
+        'description': 'Generic Responses API endpoint (Open Responses standard)',
     },
     'other': {
         'display_name': 'Other (OpenAI Compatible)',
@@ -196,6 +212,9 @@ def get_provider_by_key(
     """
     Create provider instance by key from LLM_PROVIDERS config.
     
+    For OpenAI provider, auto-selects between Chat Completions and Responses API
+    based on model (gpt-5.x uses Responses API for reasoning summaries).
+    
     Args:
         provider_key: Key in LLM_PROVIDERS (e.g., 'claude', 'lmstudio')
         providers_config: The LLM_PROVIDERS dict from settings
@@ -216,6 +235,13 @@ def get_provider_by_key(
     
     # Determine provider class
     provider_type = config.get('provider', 'openai')
+    model = config.get('model', '')
+    
+    # Auto-select Responses API for OpenAI reasoning models
+    if provider_type == 'openai' and OpenAIResponsesProvider.should_use_responses_api(model):
+        provider_type = 'openai_responses'
+        logger.info(f"[AUTO-SELECT] Using Responses API for model '{model}'")
+    
     if provider_type not in PROVIDER_CLASSES:
         logger.error(f"Unknown provider type: {provider_type}")
         return None
@@ -229,7 +255,7 @@ def get_provider_by_key(
         'provider': provider_type,
         'base_url': config.get('base_url', ''),
         'api_key': api_key,
-        'model': config.get('model', ''),
+        'model': model,
         'timeout': config.get('timeout', PROVIDER_METADATA.get(provider_key, {}).get('default_timeout', 5.0)),
         'enabled': True,
         # Claude-specific settings
@@ -237,6 +263,9 @@ def get_provider_by_key(
         'thinking_budget': config.get('thinking_budget'),
         'cache_enabled': config.get('cache_enabled', False),
         'cache_ttl': config.get('cache_ttl', '5m'),
+        # Responses API / reasoning settings
+        'reasoning_effort': config.get('reasoning_effort', 'medium'),
+        'reasoning_summary': config.get('reasoning_summary', 'auto'),
     }
     
     try:
@@ -436,6 +465,7 @@ __all__ = [
     'LLMResponse',
     'ToolCall',
     'OpenAICompatProvider',
+    'OpenAIResponsesProvider',
     'ClaudeProvider',
     'PROVIDER_CLASSES',
     'PROVIDER_METADATA',

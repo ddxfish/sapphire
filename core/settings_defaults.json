@@ -141,7 +141,9 @@
         "model": "gpt-4o",
         "timeout": 10.0,
         "enabled": false,
-        "use_as_fallback": true
+        "use_as_fallback": true,
+        "reasoning_effort": "medium",
+        "reasoning_summary": "detailed"
       },
       "other": {
         "provider": "openai",
@@ -152,6 +154,17 @@
         "enabled": false,
         "use_as_fallback": true,
         "generation_params": {}
+      },
+      "responses": {
+        "provider": "responses",
+        "display_name": "Responses API (Generic)",
+        "base_url": "",
+        "model": "",
+        "timeout": 10.0,
+        "enabled": false,
+        "use_as_fallback": true,
+        "reasoning_effort": "medium",
+        "reasoning_summary": "detailed"
       }
     },
     "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "fireworks", "openai", "other"],

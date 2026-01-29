@@ -259,6 +259,33 @@ export function renderProviderFields(key, config, meta) {
     `);
   }
 
+  // Responses API / OpenAI reasoning settings (for gpt-5.x models)
+  if (meta.supports_reasoning || key === 'openai' || key === 'responses') {
+    const reasoningEffort = config.reasoning_effort || 'medium';
+    const reasoningSummary = config.reasoning_summary || 'auto';
+    
+    fields.push(`
+      <div class="field-row reasoning-settings-row">
+        <label>Reasoning Effort</label>
+        <select class="provider-field reasoning-effort" data-provider="${key}" data-field="reasoning_effort">
+          <option value="low" ${reasoningEffort === 'low' ? 'selected' : ''}>Low (faster)</option>
+          <option value="medium" ${reasoningEffort === 'medium' ? 'selected' : ''}>Medium (balanced)</option>
+          <option value="high" ${reasoningEffort === 'high' ? 'selected' : ''}>High (deeper thinking)</option>
+        </select>
+        <small class="field-hint">Controls thinking depth for GPT-5.x / Responses API models</small>
+      </div>
+      <div class="field-row reasoning-summary-row">
+        <label>Reasoning Summary</label>
+        <select class="provider-field reasoning-summary" data-provider="${key}" data-field="reasoning_summary">
+          <option value="auto" ${reasoningSummary === 'auto' ? 'selected' : ''}>Auto</option>
+          <option value="detailed" ${reasoningSummary === 'detailed' ? 'selected' : ''}>Detailed</option>
+          <option value="none" ${reasoningSummary === 'none' ? 'selected' : ''}>None</option>
+        </select>
+        <small class="field-hint">Shows CoT summaries as think tags (GPT-5.x only)</small>
+      </div>
+    `);
+  }
+
   return fields.join('');
 }
 
