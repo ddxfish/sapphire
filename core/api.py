@@ -506,6 +506,9 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         try:
             from core.chat.history import count_tokens, count_message_tokens
             
+            # Ensure state engine is synced with current settings before checking tools
+            system_instance.llm_chat._update_state_engine()
+            
             # Prompt state
             prompt_state = prompts.get_current_state()
             prompt_name = prompts.get_active_preset_name()
