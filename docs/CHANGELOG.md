@@ -1,3 +1,7 @@
+# 1.2.3 - Responses API and think tags
+- Added support for GPT 5.2 think summaries
+- Added OpenAI responses endpoint support
+- Added think support to Fireworks.ai models
 # 1.2.2 - State Engine
 - Added state engine to track story elements and games
 - Added simple stories for game engine demo (action, romance, technical)
