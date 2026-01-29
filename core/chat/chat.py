@@ -181,7 +181,7 @@ class LLMChat:
         
         if chat_settings.get('state_engine_enabled', False):
             # Lazy import to avoid circular dependency
-            from .state_engine import StateEngine
+            from core.state_engine import StateEngine
             
             chat_name = self.session_manager.get_active_chat_name()
             db_path = self.session_manager._db_path

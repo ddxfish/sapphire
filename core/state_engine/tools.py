@@ -1,4 +1,4 @@
-# core/chat/state_tools.py
+# core/state_engine/tools.py
 """
 State Engine Tools - Exposed to AI when state_engine_enabled.
 These are NOT loaded by FunctionManager's auto-scan - they're injected when state is active.

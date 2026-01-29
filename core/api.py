@@ -1318,7 +1318,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             # Search paths: user first (can override), then core
             search_paths = [
                 project_root / "user" / "state_presets",
-                project_root / "core" / "state_presets",
+                project_root / "core" / "state_engine" / "presets",
             ]
             
             seen = set()
@@ -1354,7 +1354,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         """Get current state for a chat."""
         try:
             from pathlib import Path
-            from core.chat.state_engine import StateEngine
+            from core.state_engine import StateEngine
             
             db_path = Path("user/history/sapphire_history.db")
             if not db_path.exists():
@@ -1410,7 +1410,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         """Get state change history for a chat."""
         try:
             from pathlib import Path
-            from core.chat.state_engine import StateEngine
+            from core.state_engine import StateEngine
             
             db_path = Path("user/history/sapphire_history.db")
             if not db_path.exists():
@@ -1436,7 +1436,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         """Reset state to preset or clear all."""
         try:
             from pathlib import Path
-            from core.chat.state_engine import StateEngine
+            from core.state_engine import StateEngine
             
             db_path = Path("user/history/sapphire_history.db")
             if not db_path.exists():
@@ -1476,7 +1476,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         """Set a state value directly (user/admin action)."""
         try:
             from pathlib import Path
-            from core.chat.state_engine import StateEngine
+            from core.state_engine import StateEngine
             
             db_path = Path("user/history/sapphire_history.db")
             if not db_path.exists():

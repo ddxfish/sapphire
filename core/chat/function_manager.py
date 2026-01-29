@@ -179,7 +179,7 @@ class FunctionManager:
         
         # Add state tools if state engine is active (both engine AND flag must be set)
         if self._state_engine and self._state_engine_enabled:
-            from .state_tools import TOOLS as STATE_TOOLS
+            from core.state_engine import TOOLS as STATE_TOOLS
             # Only include move tool if navigation is configured
             nav_config = self._state_engine._get_navigation_config()
             has_navigation = bool(nav_config and nav_config.get("connections"))
@@ -349,7 +349,7 @@ class FunctionManager:
         logger.info(f"Executing function: {function_name}")
         
         # Check if this is a state tool
-        from .state_tools import STATE_TOOL_NAMES, execute as state_execute
+        from core.state_engine import STATE_TOOL_NAMES, execute as state_execute
         if function_name in STATE_TOOL_NAMES:
             if not self._state_engine or not self._state_engine_enabled:
                 result = f"Error: State engine not active for tool '{function_name}'"

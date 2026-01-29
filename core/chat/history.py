@@ -967,7 +967,7 @@ class ChatSessionManager:
             return
         
         try:
-            from .state_engine import StateEngine
+            from core.state_engine import StateEngine
             new_turn = self.get_turn_count()
             engine = StateEngine(self.active_chat_name, self._db_path)
             
@@ -1017,7 +1017,7 @@ class ChatSessionManager:
         
         # Always clear state for this chat (even if engine currently disabled)
         try:
-            from .state_engine import StateEngine
+            from core.state_engine import StateEngine
             engine = StateEngine(self.active_chat_name, self._db_path)
             if not engine.is_empty():
                 engine.clear_all()

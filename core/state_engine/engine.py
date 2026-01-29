@@ -1,4 +1,4 @@
-# core/chat/state_engine.py
+# core/state_engine/engine.py
 """
 State Engine - Per-chat state management with full history for rollback.
 Enables games, simulations, and interactive stories where AI reads/writes state via tools.
@@ -438,13 +438,13 @@ class StateEngine:
         Returns:
             (success, message)
         """
-        # Get project root from state_engine.py location (core/chat/state_engine.py -> project root)
+        # Get project root from engine.py location (core/state_engine/engine.py -> project root)
         project_root = Path(__file__).parent.parent.parent
         
         # Search paths: user first, then core
         search_paths = [
             project_root / "user" / "state_presets" / f"{preset_name}.json",
-            project_root / "core" / "state_presets" / f"{preset_name}.json",
+            project_root / "core" / "state_engine" / "presets" / f"{preset_name}.json",
         ]
         
         preset_path = None
@@ -1055,6 +1055,41 @@ class StateEngine:
             
             logger.debug(f"[RIDDLE] Initialized '{riddle_id}', answer_hash={answer_hash[:16]}...")
     
+    def _ensure_riddles_initialized(self):
+        """
+        Ensure all riddles have their state initialized.
+        Called on reload to handle restarts where _init_riddles wasn't run.
+        Only initializes riddles that don't already have a hash.
+        """
+        import hashlib
+        
+        for riddle in self._riddles:
+            riddle_id = riddle.get("id")
+            if not riddle_id:
+                continue
+            
+            # Check if already initialized
+            existing_hash = self.get_state(f"_riddle_{riddle_id}_hash")
+            if existing_hash:
+                logger.debug(f"[RIDDLE] '{riddle_id}' already initialized")
+                continue
+            
+            # Initialize this riddle
+            answer = self._generate_riddle_answer(riddle)
+            if answer is None:
+                logger.warning(f"[RIDDLE] Could not generate answer for '{riddle_id}'")
+                continue
+            
+            answer_hash = hashlib.sha256(str(answer).encode()).hexdigest()
+            
+            # Use turn 0 for system initialization
+            self.set_state(f"_riddle_{riddle_id}_hash", answer_hash, "system", 0,
+                          "Riddle initialized on reload")
+            self.set_state(f"_riddle_{riddle_id}_attempts", 0, "system", 0,
+                          "Riddle attempts initialized on reload")
+            
+            logger.info(f"[RIDDLE] Late-initialized '{riddle_id}' on reload")
+    
     def _generate_riddle_answer(self, riddle: dict) -> str:
         """
         Generate riddle answer deterministically.
@@ -1372,7 +1407,7 @@ class StateEngine:
         # Load universal base instructions (cached after first load)
         if not hasattr(self, '_base_instructions'):
             self._base_instructions = ""
-            base_path = Path(__file__).parent.parent / "state_presets" / "_base.json"
+            base_path = Path(__file__).parent / "presets" / "_base.json"
             if base_path.exists():
                 try:
                     with open(base_path, 'r', encoding='utf-8') as f:
@@ -1479,9 +1514,16 @@ class StateEngine:
                     choice_section.append(f"(Must choose before advancing to scene {choice['required_for_scene']})")
             parts.append("\n".join(choice_section))
         
-        # Inject riddle clues
+        # Inject riddle clues (with scene gating)
         for riddle in self._riddles:
             riddle_id = riddle.get("id")
+            
+            # Check scene visibility
+            visible_from = riddle.get("visible_from_scene")
+            if visible_from is not None:
+                if isinstance(iterator_value, (int, float)) and iterator_value < visible_from:
+                    continue  # Not visible yet
+            
             status = self.get_riddle_status(riddle_id)
             
             if status.get("solved") or status.get("locked"):
@@ -1532,7 +1574,7 @@ class StateEngine:
         project_root = Path(__file__).parent.parent.parent
         search_paths = [
             project_root / "user" / "state_presets" / f"{preset_name}.json",
-            project_root / "core" / "state_presets" / f"{preset_name}.json",
+            project_root / "core" / "state_engine" / "presets" / f"{preset_name}.json",
         ]
         
         preset_path = None
@@ -1555,6 +1597,9 @@ class StateEngine:
             self._riddles = preset.get("riddles", [])
             
             logger.info(f"[STATE] reload_preset_config: preset={preset_name}, has_progressive={self._progressive_config is not None}, segments={len(self._progressive_config.get('segments', {})) if self._progressive_config else 0}, choices={len(self._binary_choices)}, riddles={len(self._riddles)}")
+            
+            # Ensure riddles are initialized (may have been missed on restart)
+            self._ensure_riddles_initialized()
             
             # Refresh constraints on existing keys from preset definition
             initial_state = preset.get("initial_state", {})

@@ -76,9 +76,9 @@
     {
       "id": "vault_code",
       "name": "The Vault Code",
-      "type": "numeric",
-      "digits": 4,
-      "seed_from": "chat_name",
+      "type": "fixed",
+      "answer": "6335",
+      "visible_from_scene": 3,
       "max_attempts": 3,
       "clues": {
         "1": "The vault requires a 4-digit code. An old note reads: 'First digit: count the letters in ESCAPE'",
