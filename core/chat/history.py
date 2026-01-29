@@ -1015,15 +1015,15 @@ class ChatSessionManager:
         self._in_tool_cycle = False
         self._save_current_chat()
         
-        # Clear state if enabled
-        if self.current_settings.get('state_engine_enabled', False):
-            try:
-                from .state_engine import StateEngine
-                engine = StateEngine(self.active_chat_name, self._db_path)
+        # Always clear state for this chat (even if engine currently disabled)
+        try:
+            from .state_engine import StateEngine
+            engine = StateEngine(self.active_chat_name, self._db_path)
+            if not engine.is_empty():
                 engine.clear_all()
                 logger.info(f"[STATE] Cleared state for chat '{self.active_chat_name}'")
-            except Exception as e:
-                logger.error(f"[STATE] Failed to clear state: {e}")
+        except Exception as e:
+            logger.error(f"[STATE] Failed to clear state: {e}")
         
         publish(Events.CHAT_CLEARED)
 

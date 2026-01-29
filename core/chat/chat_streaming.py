@@ -84,6 +84,9 @@ class StreamingChat:
                 yield {"type": "content", "text": response_text}
                 return
 
+            # Update state engine FIRST (before building messages) based on current settings
+            self.main_chat._update_state_engine()
+            
             messages = self.main_chat._build_base_messages(user_input, images=images)
             
             if not skip_user_message:
@@ -124,9 +127,6 @@ class StreamingChat:
             chat_settings = self.main_chat.session_manager.get_chat_settings()
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.main_chat.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
-            
-            # Update state engine for this chat context
-            self.main_chat._update_state_engine()
             
             active_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider, model_override = self.main_chat._select_provider()

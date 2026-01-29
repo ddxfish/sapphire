@@ -1437,14 +1437,22 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 # Get current turn from chat
                 turn = system_instance.llm_chat.session_manager.get_turn_count() if system_instance else 0
                 success, msg = engine.load_preset(preset, turn)
-                if success:
-                    return jsonify({"status": "reset", "preset": preset, "message": msg})
-                else:
+                if not success:
                     return jsonify({"error": msg}), 400
+                result = {"status": "reset", "preset": preset, "message": msg}
             else:
                 # Clear all state
                 engine.clear_all()
-                return jsonify({"status": "cleared", "message": "State cleared"})
+                result = {"status": "cleared", "message": "State cleared"}
+            
+            # Reload live engine if it exists for this chat (fixes stale cache)
+            if system_instance:
+                live_engine = system_instance.llm_chat.function_manager.get_state_engine()
+                if live_engine and live_engine.chat_name == chat_name:
+                    live_engine.reload_from_db()
+                    logger.info(f"[STATE] Reloaded live engine for '{chat_name}'")
+            
+            return jsonify(result)
         except Exception as e:
             logger.error(f"Failed to reset state for {chat_name}: {e}")
             return jsonify({"error": str(e)}), 500
@@ -1473,6 +1481,12 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             success, msg = engine.set_state(key, value, "user", turn, "Manual edit via UI")
             
             if success:
+                # Reload live engine if it exists for this chat (fixes stale cache)
+                if system_instance:
+                    live_engine = system_instance.llm_chat.function_manager.get_state_engine()
+                    if live_engine and live_engine.chat_name == chat_name:
+                        live_engine.reload_from_db()
+                
                 return jsonify({"status": "set", "key": key, "value": value})
             else:
                 return jsonify({"error": msg}), 400

@@ -35,6 +35,7 @@ class FunctionManager:
         
         # State engine for games/simulations (None = disabled)
         self._state_engine = None
+        self._state_engine_enabled = False  # Explicit enabled flag
         self._turn_getter = None  # Callable that returns current turn number
         
         # Track what was REQUESTED, not reverse-engineered
@@ -176,8 +177,8 @@ class FunctionManager:
         """Get enabled tools filtered by current prompt mode, plus state tools if active."""
         tools = self._apply_mode_filter(self._enabled_tools)
         
-        # Add state tools if state engine is active
-        if self._state_engine:
+        # Add state tools if state engine is active (both engine AND flag must be set)
+        if self._state_engine and self._state_engine_enabled:
             from .state_tools import TOOLS as STATE_TOOLS
             # Only include move tool if navigation is configured
             nav_config = self._state_engine._get_navigation_config()
@@ -322,6 +323,7 @@ class FunctionManager:
             turn_getter: Callable that returns current turn number
         """
         self._state_engine = engine
+        self._state_engine_enabled = engine is not None  # Track enabled state
         self._turn_getter = turn_getter
         if engine:
             logger.info(f"State engine enabled for chat '{engine.chat_name}'")
@@ -349,7 +351,7 @@ class FunctionManager:
         # Check if this is a state tool
         from .state_tools import STATE_TOOL_NAMES, execute as state_execute
         if function_name in STATE_TOOL_NAMES:
-            if not self._state_engine:
+            if not self._state_engine or not self._state_engine_enabled:
                 result = f"Error: State engine not active for tool '{function_name}'"
                 self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
                 return result

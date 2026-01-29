@@ -285,6 +285,9 @@ class LLMChat:
                 
                 return response_text
 
+            # Update state engine FIRST (before building messages) based on current settings
+            self._update_state_engine()
+            
             messages = self._build_base_messages(user_input)
             self.session_manager.add_user_message(user_input)
             
@@ -292,9 +295,6 @@ class LLMChat:
             chat_settings = self.session_manager.get_chat_settings()
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
-            
-            # Update state engine for this chat context
-            self._update_state_engine()
             
             active_tools = self.function_manager.enabled_tools
             

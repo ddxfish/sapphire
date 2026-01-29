@@ -71,6 +71,14 @@ class StateEngine:
             logger.error(f"Failed to load state for '{self.chat_name}': {e}")
             self._current_state = {}
     
+    def reload_from_db(self):
+        """Force reload state from database, clearing cache. Call after external DB changes."""
+        logger.info(f"[STATE] Reloading state from DB for '{self.chat_name}'")
+        self._current_state = {}
+        self._preset_name = None
+        self._progressive_config = None
+        self._load_state()
+    
     def _is_system_key(self, key: str) -> bool:
         """Check if key is system-managed (starts with _)."""
         return key.startswith("_")
