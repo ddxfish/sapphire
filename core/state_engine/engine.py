@@ -802,11 +802,13 @@ class StateEngine:
         else:
             self._navigation = None
         
-        # Prompt builder
+        # Prompt builder with game type for layered instructions
+        game_type_name = self._game_type.name if self._game_type else "linear"
         self._prompt_builder = PromptBuilder(
             preset=preset,
             state_getter=self.get_state,
-            scene_turns_getter=scene_turns_getter
+            scene_turns_getter=scene_turns_getter,
+            game_type=game_type_name
         )
         self._prompt_builder.set_features(
             choices=self._choices,

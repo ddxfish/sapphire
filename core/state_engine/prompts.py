@@ -7,6 +7,11 @@ Supports two modes:
 - current_only: Show only the segment matching current iterator value
 
 Segments can have conditional variants using "key?condition" syntax.
+
+Instruction layering:
+- _base.json: Universal rules for all game types
+- _linear.json: Linear story mode (advance_scene, choices, riddles)
+- _rooms.json: Room navigation mode (move, compass directions)
 """
 
 import json
@@ -18,30 +23,65 @@ from .conditions import parse_segment_key, match_conditions
 
 logger = logging.getLogger(__name__)
 
-# Cached base instructions (loaded once)
-_base_instructions_cache: Optional[str] = None
+# Cached instructions by game type
+_instructions_cache: dict[str, str] = {}
 
 
-def load_base_instructions() -> str:
-    """Load universal base instructions from _base.json (cached)."""
-    global _base_instructions_cache
+def load_instructions(game_type: str = "linear") -> str:
+    """
+    Load layered instructions: _base.json + _{game_type}.json
     
-    if _base_instructions_cache is not None:
-        return _base_instructions_cache
+    Args:
+        game_type: "linear" or "rooms"
     
-    base_path = Path(__file__).parent / "presets" / "_base.json"
+    Returns:
+        Combined instruction string
+    """
+    global _instructions_cache
+    
+    if game_type in _instructions_cache:
+        return _instructions_cache[game_type]
+    
+    presets_dir = Path(__file__).parent / "presets"
+    parts = []
+    
+    # Layer 1: Universal base
+    base_path = presets_dir / "_base.json"
     if base_path.exists():
         try:
             with open(base_path, 'r', encoding='utf-8') as f:
                 base_data = json.load(f)
-            _base_instructions_cache = base_data.get("instructions", "")
+            base_instructions = base_data.get("instructions", "")
+            if base_instructions:
+                parts.append(base_instructions)
         except Exception as e:
             logger.warning(f"Could not load _base.json: {e}")
-            _base_instructions_cache = ""
-    else:
-        _base_instructions_cache = ""
     
-    return _base_instructions_cache
+    # Layer 2: Game type specific
+    type_path = presets_dir / f"_{game_type}.json"
+    if type_path.exists():
+        try:
+            with open(type_path, 'r', encoding='utf-8') as f:
+                type_data = json.load(f)
+            type_instructions = type_data.get("instructions", "")
+            if type_instructions:
+                parts.append(type_instructions)
+        except Exception as e:
+            logger.warning(f"Could not load _{game_type}.json: {e}")
+    else:
+        logger.debug(f"No game type overlay found: _{game_type}.json")
+    
+    combined = "\n".join(parts)
+    _instructions_cache[game_type] = combined
+    
+    logger.info(f"[PROMPT] Loaded instructions for game_type={game_type}, {len(combined)} chars")
+    return combined
+
+
+def clear_instructions_cache():
+    """Clear the instructions cache (call if files change at runtime)."""
+    global _instructions_cache
+    _instructions_cache = {}
 
 
 def select_segment(
@@ -108,11 +148,13 @@ class PromptBuilder:
         self,
         preset: dict,
         state_getter: Callable[[str], Any],
-        scene_turns_getter: Optional[Callable[[], int]] = None
+        scene_turns_getter: Optional[Callable[[], int]] = None,
+        game_type: str = "linear"
     ):
         self._config = preset.get("progressive_prompt", {})
         self._get_state = state_getter
         self._get_scene_turns = scene_turns_getter
+        self._game_type = game_type
         
         # Feature managers (set by engine after init)
         self._choices = None
@@ -147,9 +189,10 @@ class PromptBuilder:
         Args:
             current_turn: Current turn number for scene_turns calculation
         """
-        logger.info(f"[PROMPT] Building progressive prompt, config={bool(self._config)}")
+        logger.info(f"[PROMPT] Building progressive prompt, config={bool(self._config)}, game_type={self._game_type}")
         
-        base_instructions = load_base_instructions()
+        # Load layered instructions for this game type
+        instructions = load_instructions(self._game_type)
         base = self._config.get("base", "")
         segments = self._config.get("segments", {})
         iterator_key = self.iterator_key
@@ -160,8 +203,8 @@ class PromptBuilder:
         # Early return if no segments
         if not iterator_key or not segments:
             parts = []
-            if base_instructions:
-                parts.append(base_instructions)
+            if instructions:
+                parts.append(instructions)
             if base:
                 parts.append(base)
             return "\n\n".join(parts) if parts else ""
@@ -172,8 +215,8 @@ class PromptBuilder:
         
         if iterator_value is None:
             parts = []
-            if base_instructions:
-                parts.append(base_instructions)
+            if instructions:
+                parts.append(instructions)
             if base:
                 parts.append(base)
             return "\n\n".join(parts) if parts else ""
@@ -183,8 +226,8 @@ class PromptBuilder:
         
         # Assemble prompt parts
         parts = []
-        if base_instructions:
-            parts.append(base_instructions)
+        if instructions:
+            parts.append(instructions)
         if base:
             parts.append(base)
         parts.extend(revealed)
