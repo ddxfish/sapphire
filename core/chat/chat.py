@@ -292,11 +292,12 @@ class LLMChat:
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
             
-            active_tools = self.function_manager.enabled_tools
-            
-            # DIAGNOSTIC: Log exactly what tools are being sent
-            active_tool_names = [t['function']['name'] for t in active_tools] if active_tools else []
-            logger.info(f"[TOOLS] Sending {len(active_tool_names)} tools to LLM: {active_tool_names}")
+            # Send only enabled tools - model should only know about active tools
+            enabled_tools = self.function_manager.enabled_tools
+
+            # DIAGNOSTIC: Log what tools are being sent
+            enabled_names = [t['function']['name'] for t in enabled_tools] if enabled_tools else []
+            logger.info(f"[TOOLS] Sending {len(enabled_names)} tools to LLM: {enabled_names}")
             logger.info(f"[TOOLS] Current ability: {self.function_manager.current_ability_name}")
             logger.info(f"[TOOLS] Prompt mode: {self.function_manager._get_current_prompt_mode()}")
             
@@ -342,7 +343,7 @@ class LLMChat:
 
                 try:
                     response_msg = self.tool_engine.call_llm_with_metrics(
-                        provider, messages, gen_params, tools=active_tools
+                        provider, messages, gen_params, tools=enabled_tools
                     )
                 except Exception as llm_error:
                     iteration_time = time.time() - iteration_start_time
@@ -390,8 +391,8 @@ class LLMChat:
                     called_tools = [tc.name for tc in response_msg.tool_calls]
                     logger.info(f"[TOOLS] LLM called tools via tool_calls: {called_tools}")
                     
-                    # Check if any called tools are NOT in active_tools
-                    active_names = set(t['function']['name'] for t in active_tools) if active_tools else set()
+                    # Check if any called tools are NOT in enabled_tools
+                    active_names = set(t['function']['name'] for t in enabled_tools) if enabled_tools else set()
                     unexpected = [t for t in called_tools if t not in active_names]
                     if unexpected:
                         logger.warning(f"[TOOLS] ⚠️ LLM called tools NOT in active set: {unexpected}")
@@ -441,12 +442,12 @@ class LLMChat:
 
                 elif response_msg.content:
                     function_call_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
-                    if function_call_data and active_tools:
+                    if function_call_data:
                         text_tool_name = function_call_data["function_call"]["name"]
                         logger.info(f"[TOOLS] Text-based tool call detected: {text_tool_name}")
-                        
-                        # Check if this is in active tools
-                        active_names = set(t['function']['name'] for t in active_tools)
+
+                        # Check if this is in active tools (execute anyway - function_manager returns error)
+                        active_names = set(t['function']['name'] for t in enabled_tools) if enabled_tools else set()
                         if text_tool_name not in active_names:
                             logger.warning(f"[TOOLS] ⚠️ Text-based call for tool NOT in active set: {text_tool_name}")
                         

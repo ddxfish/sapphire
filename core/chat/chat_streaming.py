@@ -128,7 +128,8 @@ class StreamingChat:
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.main_chat.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
             
-            active_tools = self.main_chat.function_manager.enabled_tools
+            # Send only enabled tools - model should only know about active tools
+            enabled_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider, model_override = self.main_chat._select_provider()
             
             # Determine effective model (per-chat override or provider default)
@@ -177,7 +178,7 @@ class StreamingChat:
                     logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
                     self.current_stream = provider.chat_completion_stream(
                         messages,
-                        tools=active_tools if active_tools else None,
+                        tools=enabled_tools if enabled_tools else None,
                         generation_params=gen_params
                     )
                     
@@ -408,8 +409,50 @@ class StreamingChat:
                         break
 
                     continue
-                
+
+                # Check for text-based tool calls (LM Studio, Qwen, GLM compatibility)
+                # Check both content AND thinking - GLM puts tool calls in reasoning_content
                 else:
+                    function_call_data = None
+                    # Check content first
+                    if current_content:
+                        function_call_data = self.tool_engine.extract_function_call_from_text(current_content)
+                    # Also check thinking content (GLM reasoning_content may contain tool calls)
+                    if not function_call_data and current_thinking:
+                        function_call_data = self.tool_engine.extract_function_call_from_text(current_thinking)
+                        if function_call_data:
+                            logger.info("[TOOL] Found text-based tool call in thinking/reasoning content")
+                    if function_call_data:
+                        text_tool_name = function_call_data["function_call"]["name"]
+                        logger.info(f"[TOOL] Text-based tool call detected: {text_tool_name}")
+
+                        tool_call_count += 1
+                        full_content = prefill + current_content if has_prefill else current_content
+
+                        # Execute text-based tool call (function_manager returns error if not active)
+                        self.tool_engine.execute_text_based_tool_call(
+                            function_call_data,
+                            full_content,
+                            messages,
+                            self.main_chat.session_manager,
+                            provider
+                        )
+
+                        # Emit tool events for UI
+                        tool_name = function_call_data["function_call"]["name"]
+                        tool_args = function_call_data["function_call"].get("arguments", {})
+                        yield {"type": "tool_start", "id": f"text_{iteration}", "name": tool_name, "args": tool_args}
+
+                        # Get the result that was added to messages
+                        last_msg = messages[-1] if messages else {}
+                        result = last_msg.get("content", "Tool executed")
+                        is_error = "Error:" in result or "not currently available" in result
+
+                        yield {"type": "tool_end", "id": f"text_{iteration}", "name": tool_name, "result": result[:500], "error": is_error}
+
+                        logger.info(f"[TOOL] Text-based tool iteration {iteration + 1} completed")
+                        continue
+
                     logger.info(f"[OK] Final response received after {iteration + 1} iteration(s)")
                     
                     full_content = current_content

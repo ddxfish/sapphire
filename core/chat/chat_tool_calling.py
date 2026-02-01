@@ -113,14 +113,14 @@ class ToolCallingEngine:
         return response
 
     def extract_function_call_from_text(self, text: str) -> Optional[Dict]:
-        """Extract function calls from text (LM Studio, Qwen3, etc compatibility)."""
+        """Extract function calls from text (LM Studio, Qwen3, GLM, etc compatibility)."""
         if not text:
             return None
-        
+
         # Format 1: {"function_call": {"name": "...", "arguments": {...}}}
         pattern = r'(\{"function_call":\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})'
         match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        
+
         if match:
             try:
                 parsed = json.loads(match.group(1))
@@ -128,20 +128,44 @@ class ToolCallingEngine:
                     return parsed
             except json.JSONDecodeError as e:
                 logger.debug(f"JSON parse failed for format 1: {e}")
-        
+
         # Format 2: <function_call>{"name": "...", "arguments": {...}}</function_call> (Qwen3, etc)
         xml_pattern = r'<function_call>\s*(\{.*?\})\s*</function_call>'
         xml_match = re.search(xml_pattern, text, re.IGNORECASE | re.DOTALL)
-        
+
         if xml_match:
             try:
                 inner = json.loads(xml_match.group(1))
                 if "name" in inner:
-                    # Wrap in expected format
                     return {"function_call": inner}
             except json.JSONDecodeError as e:
                 logger.debug(f"JSON parse failed for XML format: {e}")
-        
+
+        # Format 3: <tool_call>{"name": "...", "arguments": {...}}</tool_call> (GLM, etc)
+        tool_call_pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+        tool_call_match = re.search(tool_call_pattern, text, re.IGNORECASE | re.DOTALL)
+
+        if tool_call_match:
+            try:
+                inner = json.loads(tool_call_match.group(1))
+                if "name" in inner:
+                    return {"function_call": inner}
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON parse failed for tool_call format: {e}")
+
+        # Format 4: Raw JSON with name field (fallback) - {"name": "tool_name", "arguments": {...}}
+        # Only match if it looks like a standalone tool call (not embedded in prose)
+        raw_pattern = r'^\s*(\{"name":\s*"[^"]+",\s*"arguments":\s*\{[^{}]*\}\s*\})\s*$'
+        raw_match = re.search(raw_pattern, text, re.MULTILINE)
+
+        if raw_match:
+            try:
+                inner = json.loads(raw_match.group(1))
+                if "name" in inner:
+                    return {"function_call": inner}
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON parse failed for raw format: {e}")
+
         return None
 
     def format_tool_calls_for_conversation(self, tool_calls):

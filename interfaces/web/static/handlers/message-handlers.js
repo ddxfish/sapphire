@@ -56,16 +56,16 @@ export async function handleEdit(idx) {
     document.getElementById('save-edit').onclick = async () => {
         const newText = document.getElementById('edit-textarea').value;
         const timestamp = msgEl.dataset.editTimestamp;
-        
+
         try {
             console.log('[EDIT DEBUG] Editing message with timestamp:', timestamp);
             await api.editMessage(msg.role, timestamp, newText);
+            // refresh() rebuilds DOM, so exitEditMode not needed - new elements won't have edit state
             await refresh(false);
-            ui.exitEditMode(msgEl, false);
         } catch (e) {
             console.error('Edit failed:', e);
             ui.showToast(`Edit failed: ${e.message}`, 'error');
-            ui.exitEditMode(msgEl, true);
+            ui.exitEditMode(msgEl, true);  // Restore on error (element still exists)
         }
     };
     
