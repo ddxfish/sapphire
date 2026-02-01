@@ -164,6 +164,10 @@
     "short": "Silence duration to stop recording (seconds)",
     "long": "How long silence must last before stopping recording. 1.0 second allows natural pauses in speech without cutting off. Shorter values make interaction snappier but may cut sentences. Longer values are safer but less responsive."
   },
+  "RECORDER_NO_SPEECH_TIMEOUT": {
+    "short": "Abort if no speech detected within (seconds)",
+    "long": "Early abort timeout for accidental wakeword triggers. If no speech is detected within this time, recording stops immediately without waiting for RECORDER_MAX_SECONDS. Set to 3 seconds by default to quickly cancel false wakeword activations. Set higher if you need time to think before speaking."
+  },
   "RECORDER_SPEECH_DURATION": {
     "short": "Minimum speech duration to consider speech",
     "long": "How long speech must be detected before starting to record. 0.2 seconds prevents very short noise bursts from triggering transcribe. Too high may miss quick utterances."

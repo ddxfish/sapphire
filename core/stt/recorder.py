@@ -188,6 +188,11 @@ class AudioRecorder:
                 
                 frames.append(audio_data)
                 
+                # Early abort if no speech detected within timeout (accidental wakeword trigger)
+                if not has_speech and (time.time() - start_time) > config.RECORDER_NO_SPEECH_TIMEOUT:
+                    logger.info("No speech detected within timeout - early abort")
+                    break
+                
                 if time.time() - start_time > config.RECORDER_MAX_SECONDS:
                     if has_speech:
                         break

@@ -1,4 +1,4 @@
-// handlers/message-handlers.js - Trash, regenerate, edit, continue handlers
+// handlers/message-handlers.js - Trash, regenerate, edit, continue, replay handlers
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as audio from '../audio.js';
@@ -97,11 +97,21 @@ export async function handleContinue(idx) {
     if (len !== null) setHistLen(len);
 }
 
+export async function handleReplay(idx) {
+    if (audio.isTtsPlaying()) {
+        audio.stop(true);
+        return;
+    }
+    console.log(`Replaying TTS for message ${idx}`);
+    await audio.replayTts(idx);
+}
+
 export function handleToolbar(action, idx) {
     if (action === 'trash') handleTrash(idx);
     else if (action === 'regenerate') handleRegen(idx);
     else if (action === 'continue') handleContinue(idx);
     else if (action === 'edit') handleEdit(idx);
+    else if (action === 'replay') handleReplay(idx);
 }
 
 export async function handleAutoRefresh() {

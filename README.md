@@ -128,7 +128,7 @@ conda create -n sapphire python=3.11 -y
 conda activate sapphire
 git clone https://github.com/ddxfish/sapphire.git
 cd sapphire
-pip install -r requirements-all.txt
+pip install -r requirements.txt
 python main.py
 ```
 

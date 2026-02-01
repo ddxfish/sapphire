@@ -114,14 +114,21 @@ const setAvatarWithFallback = async (img, role) => {
     }
 };
 
-const createToolbar = (idx, total) => {
+const createToolbar = (idx, total, role = 'user') => {
     const tb = createElem('div', { class: 'toolbar' });
-    [
+    const buttons = [
         ['trash-btn', 'trash', '\u{1F5D1}\uFE0F', 'Delete'], 
         ['regen-btn', 'regenerate', '\u{1F504}', 'Regenerate'], 
         ['continue-btn', 'continue', '\u{25B6}\uFE0F', 'Continue'],
         ['edit-btn', 'edit', '\u{270F}\uFE0F', 'Edit']
-    ].forEach(([cls, act, icon, title]) => {
+    ];
+    
+    // Add replay button for assistant messages
+    if (role === 'assistant') {
+        buttons.push(['replay-btn', 'replay', '\u{1F50A}', 'Replay TTS']);
+    }
+    
+    buttons.forEach(([cls, act, icon, title]) => {
         const btn = createElem('button', { class: cls, 'data-action': act, 'data-message-index': idx }, icon);
         btn.title = title;
         tb.appendChild(btn);
@@ -135,10 +142,11 @@ const updateToolbars = () => {
         const toolbar = msg.querySelector('.toolbar');
         if (!toolbar) return;
         
+        const role = msg.classList.contains('assistant') ? 'assistant' : 'user';
         const btns = toolbar.querySelectorAll('button');
         
         if (btns.length === 0) {
-            const newToolbar = createToolbar(i, msgs.length);
+            const newToolbar = createToolbar(i, msgs.length, role);
             toolbar.replaceWith(newToolbar);
         } else {
             btns.forEach(btn => {
@@ -172,7 +180,7 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     setAvatarWithFallback(avatar, role);
     
     if (idx !== null) {
-        const toolbar = createToolbar(idx, total);
+        const toolbar = createToolbar(idx, total, role);
         tb.replaceWith(toolbar);
     }
     

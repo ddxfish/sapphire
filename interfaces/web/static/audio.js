@@ -7,6 +7,10 @@ let audioChunks = [];
 let player, blobUrl, ttsCtrl;
 let isRec = false, isStreaming = false;
 
+// TTS cache for replay functionality (keyed by message index)
+const ttsCache = new Map();
+const TTS_CACHE_MAX = 10;
+
 // Local TTS state (server-side speaker playback)
 // Now sourced from unified status via scene.js
 let localTtsPlaying = false;
@@ -86,7 +90,7 @@ export const stop = (force = false) => {
 
 export const isTtsPlaying = () => isStreaming;
 
-export const playText = async (txt) => {
+export const playText = async (txt, cacheKey = null) => {
     stop(true);
     isStreaming = true;
     
@@ -117,7 +121,24 @@ export const playText = async (txt) => {
     ui.updateStatus('Generating TTS...');
     
     try {
-        const blob = await api.fetchAudio(clean, null);
+        // Check cache first
+        let blob;
+        if (cacheKey !== null && ttsCache.has(cacheKey)) {
+            blob = ttsCache.get(cacheKey);
+            ui.updateStatus('Playing cached TTS...');
+        } else {
+            blob = await api.fetchAudio(clean, null);
+            // Cache if key provided
+            if (cacheKey !== null) {
+                // LRU eviction
+                if (ttsCache.size >= TTS_CACHE_MAX) {
+                    const firstKey = ttsCache.keys().next().value;
+                    ttsCache.delete(firstKey);
+                }
+                ttsCache.set(cacheKey, blob);
+            }
+        }
+        
         blobUrl = URL.createObjectURL(blob);
         player = new Audio(blobUrl);
         
@@ -146,6 +167,38 @@ export const playText = async (txt) => {
             ui.showToast(`Audio error: ${e.message}`, 'error');
         }
     }
+};
+
+// Replay TTS for a specific message index
+export const replayTts = async (idx) => {
+    const msgEl = document.querySelectorAll('#chat-container .message.assistant')[idx - Math.floor(idx/2)];
+    if (!msgEl) {
+        // Fallback: get by actual index
+        const allMsgs = document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
+        const msg = allMsgs[idx];
+        if (!msg || !msg.classList.contains('assistant')) return;
+        const content = msg.querySelector('.message-content');
+        if (!content) return;
+        const prose = extractProseForTts(content);
+        if (prose) await playText(prose, `msg-${idx}`);
+        return;
+    }
+    const content = msgEl.querySelector('.message-content');
+    if (!content) return;
+    const prose = extractProseForTts(content);
+    if (prose) await playText(prose, `msg-${idx}`);
+};
+
+// Extract prose text for TTS (mirrors ui.extractProseText logic)
+const extractProseForTts = (el) => {
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('details, .tool-block, .message-metadata, pre, code').forEach(e => e.remove());
+    return clone.textContent.trim();
+};
+
+// Clear TTS cache (call on chat switch/history reload)
+export const clearTtsCache = () => {
+    ttsCache.clear();
 };
 
 /**

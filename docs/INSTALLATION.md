@@ -56,17 +56,27 @@ conda activate sapphire
 
 ## Install Sapphire
 
+### Quick Start (Recommended)
+
+Installs everything including TTS, STT, and wake word detection:
+
 ```bash
 git clone https://github.com/ddxfish/sapphire.git
 cd sapphire
 pip install -r requirements.txt
 ```
 
----
+### Minimal Install
 
-## Optional: TTS, STT, Wakeword
+For a lighter footprint without voice features:
 
-These are separate installs to keep the base lightweight. Enable each in Settings after installing, then restart.
+```bash
+git clone https://github.com/ddxfish/sapphire.git
+cd sapphire
+pip install -r requirements-minimal.txt
+```
+
+Then add features as needed:
 
 ```bash
 # TTS (Kokoro voice synthesis)
@@ -78,6 +88,8 @@ pip install -r requirements-stt.txt
 # Wakeword (OpenWakeWord detection)
 pip install -r requirements-wakeword.txt
 ```
+
+Enable each in Settings after installing, then restart.
 
 ---
 
@@ -235,7 +247,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
-OPTIONAL FEATURES:
+MINIMAL INSTALL (no voice features):
+```
+pip install -r requirements-minimal.txt
+# Then add: requirements-tts.txt, requirements-stt.txt, requirements-wakeword.txt as needed
+```
+
+OPTIONAL FEATURES (only for minimal install):
 - TTS: pip install -r requirements-tts.txt
 - STT: pip install -r requirements-stt.txt  
 - Wakeword: pip install -r requirements-wakeword.txt
