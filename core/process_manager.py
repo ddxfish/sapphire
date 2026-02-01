@@ -12,6 +12,78 @@ logger = logging.getLogger(__name__)
 IS_WINDOWS = sys.platform == 'win32'
 
 
+def _make_child_die_with_parent():
+    """
+    Preexec function for subprocess: sets up child to die when parent dies.
+    On Linux, uses prctl(PR_SET_PDEATHSIG) to receive SIGTERM on parent death.
+    Also creates new session for process group management.
+    """
+    os.setsid()
+    if not IS_WINDOWS:
+        try:
+            import ctypes
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            PR_SET_PDEATHSIG = 1
+            SIGTERM = 15
+            libc.prctl(PR_SET_PDEATHSIG, SIGTERM)
+        except Exception:
+            pass  # Fall back to setsid only
+
+
+def kill_process_on_port(port: int) -> bool:
+    """
+    Kill any process listening on the specified port.
+    Returns True if a process was killed, False otherwise.
+    """
+    if IS_WINDOWS:
+        return False  # TODO: implement for Windows if needed
+
+    try:
+        # Find PID using fuser
+        result = subprocess.run(
+            ['fuser', f'{port}/tcp'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split()
+            for pid in pids:
+                try:
+                    pid_int = int(pid.strip())
+                    os.kill(pid_int, signal.SIGTERM)
+                    logger.info(f"Killed orphan process {pid_int} on port {port}")
+                except (ValueError, ProcessLookupError):
+                    pass
+            time.sleep(0.5)  # Let it die
+            return True
+    except FileNotFoundError:
+        # fuser not available, try lsof
+        try:
+            result = subprocess.run(
+                ['lsof', '-ti', f':{port}'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                for pid in result.stdout.strip().split('\n'):
+                    try:
+                        pid_int = int(pid.strip())
+                        os.kill(pid_int, signal.SIGTERM)
+                        logger.info(f"Killed orphan process {pid_int} on port {port}")
+                    except (ValueError, ProcessLookupError):
+                        pass
+                time.sleep(0.5)
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+    except subprocess.TimeoutExpired:
+        pass
+
+    return False
+
+
 class ProcessManager:
     """A generic class to manage the lifecycle of an external script process."""
     
@@ -62,12 +134,12 @@ class ProcessManager:
                         stderr=log
                     )
                 else:
-                    # Unix: create new session for process group management
+                    # Unix: new session + die-with-parent for clean orphan handling
                     self.process = subprocess.Popen(
                         self.command,
                         stdout=log,
                         stderr=log,
-                        preexec_fn=os.setsid
+                        preexec_fn=_make_child_die_with_parent
                     )
             
             logger.info(f"Process for '{self.script_path.name}' started with PID: {self.process.pid}")

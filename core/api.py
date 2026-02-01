@@ -1145,14 +1145,29 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     @bp.route('/api/audio/test-input', methods=['POST'])
     def test_audio_input():
         """Test audio input device by recording a short sample."""
+        logger.info("Audio test: starting")
+
+        # Pause wakeword stream (safer than stop/close which can segfault)
+        wakeword_paused = False
+        try:
+            if hasattr(system_instance, 'wake_word_recorder') and system_instance.wake_word_recorder:
+                if hasattr(system_instance.wake_word_recorder, 'pause_recording'):
+                    wakeword_paused = system_instance.wake_word_recorder.pause_recording()
+                    if wakeword_paused:
+                        import time
+                        time.sleep(0.3)  # Let PipeWire release
+                        logger.info("Audio test: wakeword paused")
+        except Exception as e:
+            logger.warning(f"Audio test: failed to pause wakeword: {e}")
+
         try:
             from core.audio import get_device_manager
             dm = get_device_manager()
-            
+
             data = request.get_json() or {}
             device_index = data.get('device_index')
-            duration = min(data.get('duration', 1.0), 3.0)  # Cap at 3 seconds
-            
+            duration = min(data.get('duration', 3.0), 5.0)  # Default 3s, cap at 5s
+
             # Convert 'auto' or None to None for auto-detection
             if device_index == 'auto' or device_index == '':
                 device_index = None
@@ -1161,19 +1176,35 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                     device_index = int(device_index)
                 except (ValueError, TypeError):
                     device_index = None
-            
-            result = dm.test_input_device(device_index=device_index, duration=duration)
-            
+
+            logger.info(f"Audio test: calling subprocess for device={device_index}, duration={duration}")
+            result = dm.test_input_device_safe(device_index=device_index, duration=duration)
+            if result.get('success'):
+                logger.info(f"Audio test: success - {result.get('device_name')}, peak={result.get('peak_level')}")
+            else:
+                logger.warning(f"Audio test: failed - {result.get('error')}")
+
             return jsonify(result)
-            
+
         except Exception as e:
-            logger.error(f"Audio input test failed: {e}")
+            logger.error(f"Audio input test failed: {e}", exc_info=True)
             from core.audio import classify_audio_error
             return jsonify({
                 'success': False,
                 'error': classify_audio_error(e)
             }), 500
-    
+
+        finally:
+            # Resume wakeword if we paused it
+            if wakeword_paused:
+                try:
+                    import time
+                    time.sleep(0.2)
+                    system_instance.wake_word_recorder.resume_recording()
+                    logger.info("Audio test: wakeword resumed")
+                except Exception as e:
+                    logger.warning(f"Audio test: failed to resume wakeword: {e}")
+
     @bp.route('/api/audio/test-output', methods=['POST'])
     def test_audio_output():
         """Test audio output device by playing a test tone."""

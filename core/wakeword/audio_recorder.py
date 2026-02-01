@@ -136,6 +136,28 @@ class AudioRecorder:
             self.stream = None
             logger.info("Wakeword audio stream closed")
 
+    def pause_recording(self):
+        """Pause audio stream without closing (safer for PipeWire)."""
+        if self.stream:
+            try:
+                self.stream.stop()
+                logger.debug("Wakeword audio stream paused")
+                return True
+            except Exception as e:
+                logger.debug(f"Error pausing wakeword stream: {e}")
+        return False
+
+    def resume_recording(self):
+        """Resume paused audio stream."""
+        if self.stream:
+            try:
+                self.stream.start()
+                logger.debug("Wakeword audio stream resumed")
+                return True
+            except Exception as e:
+                logger.debug(f"Error resuming wakeword stream: {e}")
+        return False
+
     def get_stream(self):
         """Return the underlying stream (for compatibility)."""
         return self.stream

@@ -51,7 +51,7 @@ except Exception as e:
     logger.critical(f"FATAL: Import error during startup: {e}", exc_info=True)
     sys.exit(1)
 
-from core.process_manager import ProcessManager
+from core.process_manager import ProcessManager, kill_process_on_port
 
 from core.modules.system import prompts
 from core.modules.system.toolsets import toolset_manager
@@ -86,6 +86,11 @@ class VoiceChatSystem:
         if config.TTS_ENABLED:
             tts_script = base_dir / "core" / "tts" / "tts_server.py"
             if tts_script.exists():
+                # Kill any orphaned TTS process from previous crash
+                tts_port = getattr(config, 'TTS_SERVER_PORT', 5012)
+                if kill_process_on_port(tts_port):
+                    logger.info(f"Cleaned up orphaned TTS process on port {tts_port}")
+
                 logger.info("Starting Kokoro TTS server...")
                 self.tts_server_manager = ProcessManager(
                     script_path=tts_script,

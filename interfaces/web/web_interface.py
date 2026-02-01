@@ -1196,7 +1196,8 @@ def get_audio_devices():
 @require_login
 def test_audio_input():
     """Test audio input device."""
-    return proxy('/api/audio/test-input', 'POST', json=request.json, timeout=10)
+    # Longer timeout: subprocess needs time for recording + setup
+    return proxy('/api/audio/test-input', 'POST', json=request.json, timeout=30)
 
 @app.route('/api/audio/test-output', methods=['POST'])
 @require_login

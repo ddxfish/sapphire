@@ -9,6 +9,7 @@ both STT recorder and wakeword detection.
 
 import sys
 import logging
+from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
 
@@ -134,8 +135,12 @@ class DeviceManager:
         devices = []
         try:
             raw_devices = sd.query_devices()
-            default_input = sd.default.device[0] if isinstance(sd.default.device, tuple) else None
-            default_output = sd.default.device[1] if isinstance(sd.default.device, tuple) else None
+            # sd.default.device is a _InputOutputPair (not tuple/list), but supports indexing
+            try:
+                default_input = sd.default.device[0]
+                default_output = sd.default.device[1]
+            except (TypeError, IndexError):
+                default_input = default_output = None
             
             for i, dev in enumerate(raw_devices):
                 devices.append(DeviceInfo(
@@ -342,62 +347,234 @@ class DeviceManager:
         )
     
     def test_input_device(self, device_index: Optional[int] = None,
-                         duration: float = 0.5) -> Dict[str, Any]:
+                         duration: float = 3.0) -> Dict[str, Any]:
         """
         Test an input device by recording a short sample.
-        
+
         Args:
             device_index: Device to test, or None for default
             duration: Recording duration in seconds
-            
+
         Returns:
             Dict with 'success', 'peak_level', 'device_name', 'error'
         """
+        recording = None
         try:
-            devices = self.query_devices()
-            
+            devices = self.query_devices(force_refresh=True)
+
             if device_index is None:
-                # Use first available input device
-                input_devs = [d for d in devices if d.max_input_channels > 0]
-                if not input_devs:
-                    return {'success': False, 'error': 'No input devices available'}
-                device_index = input_devs[0].index
-            
+                # Use system default input device
+                # sd.default.device is _InputOutputPair, supports indexing but not isinstance(tuple)
+                try:
+                    default_input = sd.default.device[0]
+                except (TypeError, IndexError):
+                    default_input = None
+
+                if default_input is not None:
+                    device_index = default_input
+                else:
+                    # Fall back to first available
+                    input_devs = [d for d in devices if d.max_input_channels > 0]
+                    if not input_devs:
+                        return {'success': False, 'error': 'No input devices available'}
+                    device_index = input_devs[0].index
+
             dev = next((d for d in devices if d.index == device_index), None)
             if not dev:
                 return {'success': False, 'error': f'Device {device_index} not found'}
-            
+
             if dev.max_input_channels < 1:
                 return {'success': False, 'error': f'{dev.name} has no input channels'}
-            
-            # Find working config
-            config = self.find_working_config(device_index, dev)
-            if not config:
-                return {'success': False, 'error': f'Could not configure {dev.name}'}
-            
-            # Record short sample
-            samples = int(duration * config.sample_rate)
+
+            # Use device's native sample rate to avoid probing issues with PipeWire
+            sample_rate = int(dev.default_samplerate)
+            channels = min(dev.max_input_channels, 2)  # Prefer mono/stereo
+
+            # Record sample - sd.rec handles stream open/close internally
+            samples = int(duration * sample_rate)
+            logger.info(f"Recording {duration}s test from '{dev.name}' at {sample_rate}Hz")
+
             recording = sd.rec(
                 samples,
-                samplerate=config.sample_rate,
-                channels=config.channels,
+                samplerate=sample_rate,
+                channels=channels,
                 dtype=np.int16,
                 device=device_index
             )
             sd.wait()
-            
+
             # Calculate peak level
             from .utils import calculate_peak, convert_to_mono
-            mono = convert_to_mono(recording) if config.needs_stereo_downmix else recording.flatten()
+            mono = convert_to_mono(recording) if channels > 1 else recording.flatten()
             peak = calculate_peak(mono)
-            
+
             return {
                 'success': True,
                 'peak_level': peak,
                 'device_name': dev.name,
-                'sample_rate': config.sample_rate,
-                'channels': config.channels,
+                'sample_rate': sample_rate,
+                'channels': channels,
             }
-            
+
         except Exception as e:
+            logger.error(f"Audio test failed for device {device_index}: {e}")
             return {'success': False, 'error': classify_audio_error(e)}
+
+        finally:
+            # Ensure sounddevice resources are released
+            try:
+                sd.stop()
+            except Exception:
+                pass
+
+    def test_input_device_safe(self, device_index: Optional[int] = None,
+                               duration: float = 3.0,
+                               timeout: float = 20.0) -> Dict[str, Any]:
+        """
+        Test an input device in a subprocess to isolate potential crashes.
+
+        Sounddevice/portaudio can segfault on certain device configurations.
+        Running in a subprocess protects the main Flask process.
+
+        Args:
+            device_index: Device to test, or None for default
+            duration: Recording duration in seconds
+            timeout: Max time to wait for test completion
+
+        Returns:
+            Dict with 'success', 'peak_level', 'device_name', 'error'
+        """
+        import subprocess
+        import json
+        import sys
+
+        # Standalone script - no project imports to avoid conflicts
+        script = f'''
+import json
+import sys
+try:
+    import numpy as np
+    import sounddevice as sd
+
+    requested_index = {device_index!r}
+    duration = {duration}
+
+    # Get device info - convert to plain Python dicts to avoid DeviceList quirks
+    raw_devices = sd.query_devices()
+    all_devices = []
+    for i, d in enumerate(raw_devices):
+        all_devices.append({{
+            "index": i,
+            "name": d["name"],
+            "max_input_channels": d["max_input_channels"],
+            "max_output_channels": d["max_output_channels"],
+            "default_samplerate": d["default_samplerate"]
+        }})
+    device_count = len(all_devices)
+
+    # Find the device to use
+    device_index = None
+    dev = None
+
+    if requested_index is not None:
+        # Specific device requested - find it by index
+        if 0 <= requested_index < device_count:
+            dev = all_devices[requested_index]
+            if dev["max_input_channels"] > 0:
+                device_index = requested_index
+            else:
+                print(json.dumps({{"success": False, "error": f"Device {{requested_index}} ({{dev['name']}}) has no input channels"}}))
+                sys.exit(0)
+        else:
+            print(json.dumps({{"success": False, "error": f"Device index {{requested_index}} out of range (0-{{device_count-1}})"}}))
+            sys.exit(0)
+    else:
+        # Auto-detect: try default input first
+        try:
+            default_in = sd.default.device[0]
+            if default_in is not None and 0 <= default_in < device_count:
+                dev = all_devices[default_in]
+                if dev["max_input_channels"] > 0:
+                    device_index = default_in
+        except (TypeError, IndexError, KeyError):
+            pass
+
+        # Fall back to first input device
+        if device_index is None:
+            for i in range(device_count):
+                d = all_devices[i]
+                if d["max_input_channels"] > 0:
+                    device_index = i
+                    dev = d
+                    break
+
+    if device_index is None or dev is None:
+        print(json.dumps({{"success": False, "error": "No input devices found"}}))
+        sys.exit(0)
+
+    sample_rate = int(dev["default_samplerate"])
+    channels = min(dev["max_input_channels"], 2)
+    samples = int(duration * sample_rate)
+
+    # Use explicit stream with timeout to avoid infinite blocking
+    import sys as _sys
+    _sys.stderr.write(f"Recording from device {{device_index}} ({{dev['name']}}) at {{sample_rate}}Hz...\\n")
+    _sys.stderr.flush()
+
+    recording = sd.rec(samples, samplerate=sample_rate, channels=channels, dtype=np.int16, device=device_index)
+    # Wait with timeout slightly longer than recording duration
+    try:
+        sd.wait(ignore_errors=True)
+    except Exception as wait_err:
+        _sys.stderr.write(f"sd.wait() error: {{wait_err}}\\n")
+        _sys.stderr.flush()
+
+    # Calculate peak level
+    audio = recording.flatten() if channels == 1 else recording.mean(axis=1).astype(np.int16)
+    peak = float(np.abs(audio).max()) / 32768.0
+
+    print(json.dumps({{
+        "success": True,
+        "peak_level": peak,
+        "device_name": dev["name"],
+        "sample_rate": sample_rate,
+        "channels": channels,
+        "device_index": device_index
+    }}))
+except Exception as e:
+    import traceback
+    print(json.dumps({{"success": False, "error": str(e), "traceback": traceback.format_exc()}}))
+finally:
+    try:
+        sd.stop()
+    except:
+        pass
+'''
+        try:
+            result = subprocess.run(
+                [sys.executable, '-c', script],
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+
+            if result.returncode != 0:
+                stderr = result.stderr.strip()
+                return {
+                    'success': False,
+                    'error': f'Audio test process failed: {stderr[:200] if stderr else "unknown error"}'
+                }
+
+            # Parse JSON result from stdout
+            output = result.stdout.strip()
+            if output:
+                return json.loads(output)
+            else:
+                return {'success': False, 'error': 'No output from audio test'}
+
+        except subprocess.TimeoutExpired:
+            return {'success': False, 'error': f'Audio test timed out after {timeout}s'}
+        except json.JSONDecodeError as e:
+            return {'success': False, 'error': f'Invalid response from audio test: {e}'}
+        except Exception as e:
+            return {'success': False, 'error': f'Audio test failed: {e}'}

@@ -2,6 +2,8 @@
 - Added support for GPT 5.2 think summaries
 - Added OpenAI responses endpoint support
 - Added think support to Fireworks.ai models
+- Disabled tool calls state to AI this is disabled
+- (re)Play TTS button for user and assistant on every message
 # 1.2.2 - State Engine
 - Added state engine to track story elements and games
 - Added simple stories for game engine demo (action, romance, technical)
