@@ -1235,8 +1235,8 @@ Editing:
     // Import from clipboard - show modal with textarea
     element.querySelector('#pm-import-clipboard')?.addEventListener('click', () => {
       const overwrite = element.querySelector('#pm-import-overwrite')?.checked || false;
-      
-      const { close: closeImport, element: importEl } = showModal('Paste JSON', [
+
+      showModal('Paste JSON', [
         { id: 'import-json', label: 'Paste exported prompt JSON below:', type: 'textarea', value: '', rows: 12 }
       ], async (data) => {
         const text = data['import-json']?.trim();
@@ -1244,15 +1244,10 @@ Editing:
           showToast('No JSON provided', 'error');
           return;
         }
-        try {
-          await this._importPromptData(text, overwrite);
-          close(); // Close main import/export modal
-        } catch (e) {
-          showToast(`Import failed: ${e.message}`, 'error');
-        }
+        await this._promptAndImport(text, overwrite, close);
       }, { large: true });
     });
-    
+
     // Import from file
     element.querySelector('#pm-import-file')?.addEventListener('click', () => {
       const overwrite = element.querySelector('#pm-import-overwrite')?.checked || false;
@@ -1264,8 +1259,7 @@ Editing:
         if (!file) return;
         try {
           const text = await file.text();
-          await this._importPromptData(text, overwrite);
-          close();
+          await this._promptAndImport(text, overwrite, close);
         } catch (e) {
           showToast(`Import failed: ${e.message}`, 'error');
         }
@@ -1274,29 +1268,78 @@ Editing:
     });
   },
   
-  async _importPromptData(jsonText, overwrite = false) {
+  async _promptAndImport(jsonText, overwrite, closeParentModal) {
+    // Parse first to get original name
+    let data;
+    try {
+      data = JSON.parse(jsonText);
+    } catch (e) {
+      showToast('Invalid JSON format', 'error');
+      return;
+    }
+
+    const originalName = data.name || 'imported_prompt';
+
+    // Small delay to let the Paste JSON modal finish closing
+    await new Promise(r => setTimeout(r, 350));
+
+    // Ask user for import name
+    showModal('Import As', [
+      { id: 'import-name', label: 'Prompt name:', type: 'text', value: originalName }
+    ], async (formData) => {
+      const newName = formData['import-name']?.trim();
+      if (!newName) {
+        showToast('Name is required', 'error');
+        return;
+      }
+      try {
+        await this._importPromptData(jsonText, overwrite, newName);
+        closeParentModal();
+      } catch (e) {
+        showToast(`Import failed: ${e.message}`, 'error');
+      }
+    });
+  },
+
+  async _importPromptData(jsonText, overwrite = false, nameOverride = null) {
     const data = JSON.parse(jsonText);
-    
+
     // Validate structure
     if (!data.prompt || !data.prompt.type || !['monolith', 'assembled'].includes(data.prompt.type)) {
       throw new Error('Invalid prompt format: missing or invalid prompt.type');
     }
-    
-    const promptName = data.name || this.currentPrompt;
+
+    const promptName = nameOverride || data.name || this.currentPrompt;
     const existingPrompts = await API.listPrompts();
     const promptExists = existingPrompts.some(p => p.name === promptName);
-    
-    // Import components first (if any)
+
+    // Check for component conflicts before importing
+    const conflicts = [];
     if (data.components) {
-      let imported = 0, skipped = 0;
-      
+      for (const [type, items] of Object.entries(data.components)) {
+        for (const key of Object.keys(items)) {
+          if (this.components[type]?.[key]) {
+            conflicts.push(`${type}: ${key}`);
+          }
+        }
+      }
+    }
+
+    // If conflicts exist, ask user to confirm overwrite
+    if (conflicts.length > 0) {
+      const msg = `The following components already exist and will be OVERWRITTEN:\n\n${conflicts.join('\n')}\n\nProceed with import?`;
+      if (!confirm(msg)) {
+        showToast('Import cancelled', 'info');
+        return;
+      }
+    }
+
+    // Import components (overwrite confirmed conflicts)
+    if (data.components) {
+      let imported = 0;
+
       for (const [type, items] of Object.entries(data.components)) {
         for (const [key, value] of Object.entries(items)) {
-          const exists = this.components[type]?.[key];
-          if (exists && !overwrite) {
-            skipped++;
-            continue;
-          }
           try {
             await API.saveComponent(type, key, value);
             imported++;
@@ -1305,12 +1348,12 @@ Editing:
           }
         }
       }
-      
-      if (imported > 0 || skipped > 0) {
-        showToast(`Components: ${imported} imported, ${skipped} skipped`, 'info');
+
+      if (imported > 0) {
+        showToast(`${imported} component(s) imported`, 'info');
       }
     }
-    
+
     // Import prompt
     let promptImported = false;
     if (promptExists && !overwrite) {
@@ -1320,18 +1363,17 @@ Editing:
       promptImported = true;
       showToast(`Prompt "${promptName}" ${promptExists ? 'updated' : 'created'}!`, 'success');
     }
-    
+
     // Force-reset guards before reloading
     this._listLoadInProgress = false;
     this._loadInProgress = false;
-    
+
     // Reload everything
     await this.loadComponents();
     await this.loadPromptList();
-    
+
     // Always activate and load the imported prompt
     if (promptImported) {
-      console.log(`[PromptManager] Activating imported prompt: ${promptName}`);
       await API.loadPrompt(promptName);
       await this.loadPromptIntoEditor(promptName);
       this.elements.select.value = promptName;

@@ -1256,9 +1256,13 @@ def security_headers(response):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     
-    # Cache static files to reduce connection pressure on hard refresh
+    # TEMPORARY: Aggressive no-cache to debug caching issue
     if request.path.startswith('/static/'):
-        response.headers['Cache-Control'] = 'public, max-age=3600'  # 1 hour
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        # Disable ETags which can cause 304 responses
+        response.headers.pop('ETag', None)
     
     # Encourage connection reuse
     response.headers['Connection'] = 'keep-alive'

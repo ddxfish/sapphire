@@ -2,6 +2,9 @@
 // Optimized for parallel plugin loading
 import { showHelpModal } from './shared/modal.js';
 
+// Cache buster - increment to force fresh plugin loads
+const PLUGIN_VERSION = '20260201a';
+
 class PluginLoader {
   constructor(containerSelector) {
     this.container = document.querySelector(containerSelector);
@@ -138,10 +141,10 @@ class PluginLoader {
     let wrapper = null;
     
     try {
-      // Phase 1: Import module
+      // Phase 1: Import module (version param busts ES module cache)
       let module;
       try {
-        module = await import(`/static/plugins/${name}/index.js`);
+        module = await import(`/static/plugins/${name}/index.js?v=${PLUGIN_VERSION}`);
       } catch (importErr) {
         console.error(`[Plugin:${name}] Import failed:`, importErr);
         return;
