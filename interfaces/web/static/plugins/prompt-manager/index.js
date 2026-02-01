@@ -142,10 +142,11 @@ Editing:
   },
   
   startStatusWatcher() {
+    // Poll every 10s as fallback - SSE handles real-time updates
     this.statusCheckInterval = setInterval(async () => {
       // Skip if a load is already in progress or was recent
       if (this._loadInProgress) return;
-      if (Date.now() - this._lastLoadTime < 1500) return;
+      if (Date.now() - this._lastLoadTime < 5000) return;
       
       try {
         // Check if pill prompt changed externally
@@ -187,9 +188,9 @@ Editing:
           }
         }
       } catch (e) {}
-    }, 2000);
+    }, 10000);
   },
-  
+
   _hashPromptData(data) {
     return JSON.stringify(data);
   },

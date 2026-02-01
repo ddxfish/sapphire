@@ -428,30 +428,46 @@ def unified_status():
 @app.route('/api/events', methods=['GET'])
 @require_login
 def event_stream():
-    """SSE proxy for real-time events."""
+    """SSE proxy for real-time events with proxy-layer keepalive."""
     replay = request.args.get('replay', 'false')
     backend_res = None
-    
+
     def generate():
         nonlocal backend_res
         try:
             # Use separate SSE session to avoid blocking regular API requests
+            # Read timeout of 20s - if backend doesn't send data, we send keepalive
             backend_res = _sse_session.get(
                 f"{API_BASE}/events?replay={replay}",
                 stream=True,
-                timeout=None,
+                timeout=(5, 20),  # 5s connect, 20s read
                 headers=get_api_headers()
             )
             backend_res.raise_for_status()
-            for line in backend_res.iter_lines(decode_unicode=True):
-                if line:
-                    yield f"{line}\n\n"
+
+            while True:
+                try:
+                    for line in backend_res.iter_lines(decode_unicode=True):
+                        if line:
+                            yield f"{line}\n\n"
+                    # iter_lines exhausted normally = connection closed
+                    break
+                except requests.exceptions.ReadTimeout:
+                    # No data from backend in 20s - send proxy keepalive
+                    yield f"data: {{\"type\": \"keepalive\", \"source\": \"proxy\"}}\n\n"
+                    # Continue the loop - connection is still open
+                    continue
+
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"SSE backend connection error: {e}")
+            yield f"data: {{\"type\": \"error\", \"data\": {{\"message\": \"Backend connection lost\"}}}}\n\n"
         except Exception as e:
+            logger.error(f"SSE proxy error: {e}")
             yield f"data: {{\"type\": \"error\", \"data\": {{\"message\": \"{str(e)}\"}}}}\n\n"
         finally:
             if backend_res:
                 backend_res.close()
-    
+
     return Response(
         generate(),
         mimetype='text/event-stream',

@@ -178,63 +178,56 @@ class LLMChat:
     def _update_state_engine(self):
         """Initialize or update state engine based on chat settings."""
         chat_settings = self.session_manager.get_chat_settings()
-        
-        if chat_settings.get('state_engine_enabled', False):
-            # Lazy import to avoid circular dependency
-            from core.state_engine import StateEngine
-            
-            chat_name = self.session_manager.get_active_chat_name()
-            db_path = self.session_manager._db_path
-            new_preset = chat_settings.get('state_preset')
-            
-            # Check if we need to create/update state engine
-            current_engine = self.function_manager.get_state_engine()
-            
-            # Detect if we need a new engine instance
-            needs_new_engine = (
-                not current_engine or 
-                current_engine.chat_name != chat_name
-            )
-            
-            # Quick check for preset change on existing engine
-            if current_engine and current_engine.preset_name != new_preset:
-                needs_new_engine = True
-                logger.info(f"[STATE] Preset changed: '{current_engine.preset_name}' → '{new_preset}'")
-            
-            if needs_new_engine:
-                # Create new state engine for this chat
-                engine = StateEngine(chat_name, db_path)
-                
-                if new_preset:
-                    # Compare DB preset (what engine loaded) vs requested preset
-                    # This catches: no current_engine but DB has different preset
-                    db_preset = engine.preset_name
-                    needs_fresh_load = (db_preset != new_preset) or engine.is_empty()
-                    
-                    if needs_fresh_load:
-                        # Fresh start - load full preset with initial state
-                        turn = self.session_manager.get_turn_count()
-                        success, msg = engine.load_preset(new_preset, turn)
-                        if success:
-                            logger.info(f"[STATE] Loaded preset '{new_preset}' for chat '{chat_name}'")
-                        else:
-                            logger.warning(f"[STATE] Failed to load preset '{new_preset}': {msg}")
-                    else:
-                        # State exists, same preset - just reload the prompt config (not state values)
-                        engine.reload_preset_config(new_preset)
-                        logger.info(f"[STATE] Reloaded config for existing state in '{chat_name}'")
-                
-                # Set on function manager with turn getter
-                self.function_manager.set_state_engine(
-                    engine, 
-                    lambda: self.session_manager.get_turn_count()
-                )
-                logger.info(f"[STATE] State engine enabled for chat '{chat_name}'")
-        else:
-            # Disable state engine if not enabled for this chat
+
+        # Fast path: state engine disabled (99% of users)
+        if not chat_settings.get('state_engine_enabled', False):
             if self.function_manager.get_state_engine():
                 self.function_manager.set_state_engine(None)
                 logger.debug("[STATE] State engine disabled")
+            return
+
+        # State engine is enabled - check if current engine is still valid
+        chat_name = self.session_manager.get_active_chat_name()
+        new_preset = chat_settings.get('state_preset')
+        current_engine = self.function_manager.get_state_engine()
+
+        # Fast path: existing engine is valid for this chat+preset
+        if (current_engine and
+            current_engine.chat_name == chat_name and
+            current_engine.preset_name == new_preset):
+            return
+
+        # Need to create or update engine
+        from core.state_engine import StateEngine
+        db_path = self.session_manager._db_path
+
+        if current_engine and current_engine.preset_name != new_preset:
+            logger.info(f"[STATE] Preset changed: '{current_engine.preset_name}' → '{new_preset}'")
+
+        # Create new state engine for this chat
+        engine = StateEngine(chat_name, db_path)
+
+        if new_preset:
+            # Compare DB preset (what engine loaded) vs requested preset
+            db_preset = engine.preset_name
+            needs_fresh_load = (db_preset != new_preset) or engine.is_empty()
+
+            if needs_fresh_load:
+                turn = self.session_manager.get_turn_count()
+                success, msg = engine.load_preset(new_preset, turn)
+                if success:
+                    logger.info(f"[STATE] Loaded preset '{new_preset}' for chat '{chat_name}'")
+                else:
+                    logger.warning(f"[STATE] Failed to load preset '{new_preset}': {msg}")
+            else:
+                engine.reload_preset_config(new_preset)
+                logger.info(f"[STATE] Reloaded config for existing state in '{chat_name}'")
+
+        self.function_manager.set_state_engine(
+            engine,
+            lambda: self.session_manager.get_turn_count()
+        )
+        logger.info(f"[STATE] State engine enabled for chat '{chat_name}'")
 
     def _build_base_messages(self, user_input: str, images: list = None):
         system_prompt, user_name = self._get_system_prompt()

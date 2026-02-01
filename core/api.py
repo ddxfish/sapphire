@@ -505,10 +505,11 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         """Unified status endpoint - single call for all UI state needs."""
         try:
             from core.chat.history import count_tokens, count_message_tokens
-            
-            # Ensure state engine is synced with current settings before checking tools
-            system_instance.llm_chat._update_state_engine()
-            
+
+            # NOTE: State engine sync removed - it's called before chat streaming
+            # which is the only time it needs to be current. Calling here caused
+            # heavy I/O on every UI poll, leading to SSE disconnects.
+
             # Prompt state
             prompt_state = prompts.get_current_state()
             prompt_name = prompts.get_active_preset_name()
@@ -605,9 +606,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     @bp.route('/system/status', methods=['GET'])
     def get_system_status():
         try:
-            # Ensure state engine is synced with current settings before checking tools
-            system_instance.llm_chat._update_state_engine()
-            
+            # NOTE: State engine sync removed - called before chat streaming only
             prompt_state = prompts.get_current_state()
             function_names = system_instance.llm_chat.function_manager.get_enabled_function_names()
             ability_info = system_instance.llm_chat.function_manager.get_current_ability_info()
