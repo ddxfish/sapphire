@@ -169,24 +169,16 @@ export const playText = async (txt, cacheKey = null) => {
     }
 };
 
-// Replay TTS for a specific message index
+// Replay TTS for a specific message index (works for user or assistant)
 export const replayTts = async (idx) => {
-    const msgEl = document.querySelectorAll('#chat-container .message.assistant')[idx - Math.floor(idx/2)];
-    if (!msgEl) {
-        // Fallback: get by actual index
-        const allMsgs = document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
-        const msg = allMsgs[idx];
-        if (!msg || !msg.classList.contains('assistant')) return;
-        const content = msg.querySelector('.message-content');
-        if (!content) return;
-        const prose = extractProseForTts(content);
-        if (prose) await playText(prose, `msg-${idx}`);
-        return;
-    }
-    const content = msgEl.querySelector('.message-content');
+    const allMsgs = document.querySelectorAll('#chat-container .message:not(.status):not(.error)');
+    const msg = allMsgs[idx];
+    if (!msg) return;
+    const content = msg.querySelector('.message-content');
     if (!content) return;
     const prose = extractProseForTts(content);
-    if (prose) await playText(prose, `msg-${idx}`);
+    // No cache key - always regenerate from current DOM content
+    if (prose) await playText(prose);
 };
 
 // Extract prose text for TTS (mirrors ui.extractProseText logic)

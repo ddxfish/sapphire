@@ -71,10 +71,10 @@ class EventBus:
         try:
             while True:
                 try:
-                    event = q.get(timeout=30)
+                    event = q.get(timeout=15)
                     yield event
                 except queue.Empty:
-                    # Send keepalive
+                    # Send keepalive (15s interval, proxy timeout is 20s)
                     yield {"type": "keepalive", "timestamp": time.time()}
         finally:
             with self._lock:
