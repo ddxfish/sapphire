@@ -17,6 +17,19 @@
       "set_tts_voice"
     ]
   },
+  "essentials": {
+    "functions": [
+      "save_memory",
+      "search_memory",
+      "get_recent_memories",
+      "search_help_docs",
+      "view_prompt",
+      "edit_prompt",
+      "set_piece",
+      "create_piece",
+      "list_pieces"
+    ]
+  },
   "user_new": {
     "functions": [
     ]

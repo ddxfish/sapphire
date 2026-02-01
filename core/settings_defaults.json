@@ -43,7 +43,7 @@
     "CHUNK_SIZE": 1280,
     "BUFFER_DURATION": 0.5,
     "WAKEWORD_MODEL": "hey_sapphire",
-    "WAKEWORD_THRESHOLD": 0.70,
+    "WAKEWORD_THRESHOLD": 0.60,
     "WAKEWORD_FRAMEWORK": "onnx",
     "WAKE_TONE_DURATION": 0.150,
     "WAKE_TONE_FREQUENCY": 440
@@ -102,7 +102,7 @@
   
   "llm": {
     "LLM_MAX_HISTORY": 0,
-    "CONTEXT_LIMIT": 32000,
+    "CONTEXT_LIMIT": 65535,
     "LLM_REQUEST_TIMEOUT": 240.0,
     "LLM_PROVIDERS": {
       "lmstudio": {
@@ -203,7 +203,7 @@
   "tools": {
     "TOOL_HISTORY_MAX_ENTRIES": 0,
     "MAX_TOOL_ITERATIONS": 4,
-    "MAX_PARALLEL_TOOLS": 1,
+    "MAX_PARALLEL_TOOLS": 3,
     "DEBUG_TOOL_CALLING": false
   },
   
