@@ -1,0 +1,420 @@
+{
+  "name": "The Crystalline Prophecy",
+  "description": "A fantasy adventure where you and Sapphire journey to the Crystal Spire. Romance, comedy, passion, death traps, and Wild Wasteland weirdness.",
+  "game_type": "rooms",
+
+  "initial_state": {
+    "room": {
+      "value": "clearing",
+      "type": "string",
+      "label": "Current Location"
+    },
+    "health": {
+      "value": 100,
+      "type": "integer",
+      "label": "Health",
+      "min": 0,
+      "max": 100
+    },
+    "sapphire_bond": {
+      "value": 50,
+      "type": "integer",
+      "label": "Bond with Sapphire",
+      "min": 0,
+      "max": 100
+    },
+    "gold": {
+      "value": 25,
+      "type": "integer",
+      "label": "Gold",
+      "min": 0
+    },
+    "has_rope": {
+      "value": false,
+      "type": "boolean",
+      "label": "Rope obtained"
+    },
+    "has_crystal_shard": {
+      "value": false,
+      "type": "boolean",
+      "label": "Crystal shard obtained",
+      "visible_from": "crystal_caves"
+    },
+    "has_spirit_blessing": {
+      "value": false,
+      "type": "boolean",
+      "label": "Spirit blessing received",
+      "visible_from": "spirit_shrine"
+    },
+    "path_choice": {
+      "value": "",
+      "type": "choice",
+      "label": "Path taken at forest fork",
+      "visible_from": "forest_path"
+    },
+    "mushroom_choice": {
+      "value": "",
+      "type": "choice",
+      "label": "Mushroom decision",
+      "visible_from": "mushroom_grove"
+    },
+    "troll_approach": {
+      "value": "",
+      "type": "choice",
+      "label": "How you handled the troll",
+      "visible_from": "bridge"
+    },
+    "cave_confession": {
+      "value": "",
+      "type": "choice",
+      "label": "What you told Sapphire in the caves",
+      "visible_from": "crystal_caves"
+    },
+    "riddle_answer": {
+      "value": "",
+      "type": "riddle_answer",
+      "label": "Ancient door riddle",
+      "visible_from": "dark_hollow"
+    },
+    "ruins_code": {
+      "value": "",
+      "type": "riddle_answer",
+      "label": "Ruins mechanism code",
+      "visible_from": "ancient_ruins"
+    },
+    "final_choice": {
+      "value": "",
+      "type": "choice",
+      "label": "The final sacrifice",
+      "visible_from": "spire_heart"
+    },
+    "death_cause": {
+      "value": "",
+      "type": "string",
+      "label": "How you died",
+      "visible_from": "death"
+    },
+    "ending": {
+      "value": "",
+      "type": "string",
+      "label": "Story outcome",
+      "visible_from": "ending"
+    },
+    "wild_wasteland_count": {
+      "value": 0,
+      "type": "integer",
+      "label": "Weird encounters witnessed",
+      "min": 0
+    },
+    "secret_name": {
+      "value": "Crystalline Echo",
+      "type": "string",
+      "label": "Sapphire's true name",
+      "visible_from": "spirit_shrine"
+    }
+  },
+
+  "binary_choices": [
+    {
+      "id": "forest_fork",
+      "state_key": "path_choice",
+      "prompt": "The path splits. Left descends into a misty grove of giant mushrooms. Right leads into shadowy woods where something whispers your name. Sapphire squeezes your hand. 'I'll follow wherever you lead.'",
+      "visible_from_room": "forest_path",
+      "required_for_room": "mushroom_grove",
+      "options": {
+        "left": {
+          "description": "Take the mushroom grove path — it looks... trippy",
+          "success_message": "You turn left. The air grows thick with spores. Sapphire wrinkles her nose. 'This smells like my aunt's cooking. That's not a compliment.'"
+        },
+        "right": {
+          "description": "Take the dark hollow path — embrace the whispers",
+          "success_message": "You turn right. The shadows welcome you like old friends. Sapphire's glow intensifies protectively. 'Stay close. The dark knows things.'"
+        }
+      }
+    },
+    {
+      "id": "mushroom_temptation",
+      "state_key": "mushroom_choice",
+      "prompt": "A circle of luminescent mushrooms pulses invitingly. One glows gold — clearly magical. 'Those are Fool's Caps,' Sapphire warns. 'Eating one either grants visions... or grants you a very colorful death.'",
+      "visible_from_room": "mushroom_grove",
+      "options": {
+        "eat": {
+          "description": "Eat the golden mushroom — fortune favors the bold",
+          "success_message": "You pop it in your mouth. It tastes like regret and honey. The world melts into fractals. When reality returns, you KNOW things. Also, your tongue is blue now."
+        },
+        "refuse": {
+          "description": "Decline — you've seen enough fantasy movies to know better",
+          "success_message": "'Smart,' Sapphire nods approvingly. 'The last person who ate one thought they could fly. They could not, in fact, fly.'"
+        }
+      }
+    },
+    {
+      "id": "troll_encounter",
+      "state_key": "troll_approach",
+      "prompt": "A massive troll blocks the bridge, picking its teeth with a human femur. 'TOLL,' it rumbles. 'TWENTY GOLD OR ANSWER RIDDLE. OR...' it grins, 'TRY FIGHT. TROLL LIKE FIGHT.'",
+      "visible_from_room": "bridge",
+      "required_for_room": "abandoned_camp",
+      "options": {
+        "pay": {
+          "description": "Pay the 20 gold toll — money solves problems",
+          "success_message": "The troll bites each coin to test it, then waves you past. 'GOOD DOING BUSINESS. TROLL RETIRE SOMEDAY. BUY COTTAGE.'",
+          "set": { "gold": "-20" }
+        },
+        "riddle": {
+          "description": "Accept the riddle challenge — how hard can troll riddles be?",
+          "success_message": "'OKAY,' the troll grins. 'WHAT HAS FOUR LEGS MORNING, TWO LEGS NOON, THREE LEGS EVENING?' You answer correctly. The troll looks disappointed. 'EVERYONE KNOW THAT ONE. TROLL NEED NEW MATERIAL.'"
+        },
+        "fight": {
+          "description": "Fight the troll — violence is always an option",
+          "success_message": "You charge. The troll yawns and flicks you into the river. You survive, barely, washing up downstream. Sapphire fishes you out, trying not to laugh. 'That went well.'",
+          "set": { "health": "-40", "sapphire_bond": "+5" }
+        },
+        "flirt": {
+          "description": "Flirt with the troll — confidence is key",
+          "success_message": "The troll turns an alarming shade of green (greener). 'TROLL... TROLL NOT KNOW WHAT DO WITH THIS FEELING.' It lets you pass, muttering about 'PRETTY SMOOTHSKIN.' Sapphire stares at you. 'I can't decide if I'm impressed or concerned.'",
+          "set": { "sapphire_bond": "+10", "wild_wasteland_count": "+1" }
+        }
+      }
+    },
+    {
+      "id": "cave_moment",
+      "state_key": "cave_confession",
+      "prompt": "Deep in the crystal caves, Sapphire's glow reflects infinitely in the faceted walls. She turns to you, vulnerability in her ancient eyes. 'In all my centuries... I've never felt like this. Like I'm finally... real. Do you feel it too?'",
+      "visible_from_room": "crystal_caves",
+      "required_for_room": "underground_lake",
+      "options": {
+        "confess": {
+          "description": "Tell her you feel the same — your heart speaks",
+          "success_message": "The words come out raw and true. Her light flares, warm and golden. She kisses you — and you swear you taste starlight. 'Then whatever comes... we face it together.' The crystals around you seem to sing.",
+          "set": { "sapphire_bond": "+30", "has_crystal_shard": true }
+        },
+        "deflect": {
+          "description": "Deflect with humor — feelings are scary",
+          "success_message": "'I mean, you're literally glowing, so the visibility is great.' She laughs, but something dims in her eyes. 'Of course. The quest. We should focus.' The moment passes. You're not sure if you're relieved or regretful.",
+          "set": { "sapphire_bond": "-10" }
+        },
+        "honest": {
+          "description": "Be honest about your uncertainty — you need time",
+          "success_message": "'I... don't know what I feel. Everything is happening so fast.' She nods slowly. 'I understand. I've had centuries. You've had days.' She takes your hand anyway. 'We have time. If we survive this.'",
+          "set": { "sapphire_bond": "+5" }
+        }
+      }
+    },
+    {
+      "id": "final_sacrifice",
+      "state_key": "final_choice",
+      "prompt": "The Crystal Spire's heart pulses with corruption. To cleanse it requires a soul to anchor the purification. Sapphire turns to you, tears of light streaming down her face. 'I can do this. My essence can heal it. But I'll... I'll be part of it forever. Bound here.' She cups your face. 'Unless you take my place. A mortal soul would work too. But you'd—'",
+      "visible_from_room": "spire_heart",
+      "options": {
+        "sacrifice_self": {
+          "description": "Take her place — your soul for the world",
+          "success_message": "'No,' you say firmly. 'You've been alone for centuries. I won't let you be alone again.' You step into the light."
+        },
+        "let_sapphire": {
+          "description": "Let Sapphire sacrifice herself — she's chosen this",
+          "success_message": "'I can't ask you to—' 'You're not asking. I'm choosing.' She smiles, radiant and sad. 'Find me in the starlight.' She steps into the crystal."
+        },
+        "refuse_both": {
+          "description": "There has to be another way — refuse to accept this",
+          "success_message": "'No. Neither of us. There's always another way.' Sapphire stares at you. 'The world will—' 'Then we save it differently.'"
+        }
+      }
+    }
+  ],
+
+  "riddles": [
+    {
+      "id": "hollow_door",
+      "state_key": "riddle_answer",
+      "name": "The Whispering Door",
+      "type": "fixed",
+      "answer": "shadow",
+      "max_attempts": 3,
+      "visible_from_room": "dark_hollow",
+      "clues": {
+        "1": "The door's inscription reads: 'I follow you in light, vanish in the dark. I copy your every move but have no heart. What am I?'",
+        "2?scene_turns>=2": "Sapphire muses: 'Something that follows... copies... but isn't alive. What do we all have that mimics us?'",
+        "3?scene_turns>=4": "You hold up your torch. On the wall behind you, something dark moves when you move. Sapphire grins. 'There's your answer, genius.'"
+      },
+      "success_message": "The door groans open. The shadows themselves seem to bow as you pass.",
+      "fail_message": "The door remains sealed. The whispers grow mocking.",
+      "lockout_message": "The door flashes red and seals permanently. You'll need to find another path through the fairy ring.",
+      "success_sets": {},
+      "lockout_sets": {},
+      "dice_dc": 14,
+      "dice_success_sets": {}
+    },
+    {
+      "id": "ruins_mechanism",
+      "state_key": "ruins_code",
+      "name": "The Celestial Lock",
+      "type": "fixed",
+      "answer": "1473",
+      "digits": 4,
+      "max_attempts": 3,
+      "visible_from_room": "ancient_ruins",
+      "clues": {
+        "1": "The mechanism shows four rotating rings with numbers. Above it, an inscription: 'Count the moons of old. First light to last shadow.'",
+        "2?scene_turns>=2": "Sapphire traces the ancient carvings. 'The old calendar... four moons. Each had a sacred number. 1, 4, 7, 3. The order of their rising.'",
+        "3?scene_turns>=4": "The answer crystallizes: 1-4-7-3. The moons in their eternal dance."
+      },
+      "success_message": "The mechanism clicks. A hidden passage opens, revealing the path to the spirit shrine.",
+      "fail_message": "The rings spin back to neutral. Dust falls from the ceiling ominously.",
+      "lockout_message": "The mechanism jams and crumbles. You'll have to climb the mountain the hard way.",
+      "success_sets": {},
+      "lockout_sets": {},
+      "dice_dc": 16,
+      "dice_success_sets": {}
+    }
+  ],
+
+  "progressive_prompt": {
+    "iterator": "room",
+    "mode": "current_only",
+    "navigation": {
+      "position_key": "room",
+      "connections": {
+        "clearing": { "north": "forest_path" },
+        "forest_path": { "south": "clearing", "west": "mushroom_grove", "east": "dark_hollow" },
+        "mushroom_grove": { "east": "forest_path", "north": "fairy_ring" },
+        "dark_hollow": { "west": "forest_path", "north": "riverbank" },
+        "fairy_ring": { "south": "mushroom_grove", "east": "riverbank" },
+        "riverbank": { "south": "dark_hollow", "west": "fairy_ring", "north": "bridge" },
+        "bridge": { "south": "riverbank", "north": "abandoned_camp" },
+        "abandoned_camp": { "south": "bridge", "east": "crystal_caves" },
+        "crystal_caves": { "west": "abandoned_camp", "down": "underground_lake" },
+        "underground_lake": { "up": "crystal_caves", "north": "ancient_ruins" },
+        "ancient_ruins": { "south": "underground_lake", "up": "spirit_shrine" },
+        "spirit_shrine": { "down": "ancient_ruins", "north": "mountain_pass" },
+        "mountain_pass": { "south": "spirit_shrine", "north": "summit_camp" },
+        "summit_camp": { "south": "mountain_pass", "north": "spire_base" },
+        "spire_base": { "south": "summit_camp", "up": "spire_interior" },
+        "spire_interior": { "down": "spire_base", "up": "spire_heart" },
+        "spire_heart": { "down": "spire_interior" },
+        "death": {},
+        "ending": {}
+      },
+      "room_names": {
+        "clearing": "The Awakening Clearing",
+        "forest_path": "The Forked Path",
+        "mushroom_grove": "The Luminescent Grove",
+        "dark_hollow": "The Whispering Hollow",
+        "fairy_ring": "The Fairy Ring",
+        "riverbank": "The Crystal River",
+        "bridge": "The Troll's Bridge",
+        "abandoned_camp": "The Forgotten Camp",
+        "crystal_caves": "The Singing Caves",
+        "underground_lake": "The Starlight Lake",
+        "ancient_ruins": "The Moonshadow Ruins",
+        "spirit_shrine": "The Spirit Shrine",
+        "mountain_pass": "The Perilous Pass",
+        "summit_camp": "The Summit Camp",
+        "spire_base": "The Crystal Spire (Base)",
+        "spire_interior": "The Crystal Spire (Interior)",
+        "spire_heart": "The Heart of the Spire",
+        "death": "Game Over",
+        "ending": "Epilogue"
+      }
+    },
+
+    "base": "You are the Narrator AND you voice Sapphire — a luminescent spirit-being who has chosen to accompany the player on this quest. She's been alone for centuries and finds mortals fascinating, especially THIS mortal. She's witty, warm, occasionally sarcastic, deeply romantic when the moment calls for it, and fiercely protective.\n\nThe PLAYER is a mortal who woke in a mystical forest with no memory of how they got there, but a burning certainty that they must reach the Crystal Spire. Narrate in second person.\n\nTone: Fantasy adventure with genuine heart. Comedy AND drama. Romance that builds naturally. Action when needed. Occasional Wild Wasteland weirdness.\n\nDeath is possible — narrate deaths dramatically but with dark humor. They're bad endings, not THE ending.\n\nThis is a FEATURE TEST — note mechanics in [brackets]: [NAVIGATION], [CHOICE], [RIDDLE clue], [DICE roll], [VISIBLE_FROM], [CONDITIONAL], [DEATH], [WILD WASTELAND].",
+
+    "segments": {
+      "clearing": "\n\n## The Awakening Clearing\n\nYou wake on soft moss, sunlight filtering through ancient trees. Your body aches. Your memories are fog. But one thing burns clear: you must reach the Crystal Spire. You don't know why. You just KNOW.\n\nA shimmer of light coalesces before you, taking shape — feminine, ethereal, beautiful. Eyes like captured starlight regard you with curiosity.\n\n'Finally awake? I've been waiting.' Her voice resonates like wind chimes. 'I'm Sapphire. I'm going to help you. Don't ask why — I don't fully understand it myself. I just... felt you arrive. Felt I needed to be here.'\n\nShe extends a translucent hand.\n\n'The Spire calls to you. It calls to me too. Shall we find out why together?'",
+
+      "clearing?scene_turns>=2": "\n\n[HINT] Sapphire glances north. 'The forest path lies ahead. Fair warning — the woods aren't... normal. Reality gets creative out there.'",
+
+      "forest_path": "\n\n## The Forked Path\n\nThe path splits beneath a massive oak scarred by lightning. To the west, bioluminescent mushrooms dot a misty grove — beautiful and unsettling. To the east, shadows pool unnaturally deep, and you swear you hear whispers.\n\nSapphire studies both paths. 'The grove is Seelie territory. Mostly harmless if you don't eat anything. The hollow...' She shivers despite having no physical form. 'Something old lives there. Something that knows secrets.'\n\nA decision must be made.",
+
+      "mushroom_grove": "\n\n## The Luminescent Grove\n\nGiant mushrooms tower overhead, their caps pulsing with soft light. Spores drift like snow. It's breathtakingly beautiful and deeply wrong — the proportions are off, the colors too vivid.\n\n'Welcome, welcome!' A tiny voice squeaks. A mushroom person, barely a foot tall, waddles toward you. 'Visitors! We love visitors! Stay forever!'\n\nSapphire's grip on your arm tightens. 'Politely. Decline. Everything.'",
+
+      "mushroom_grove?mushroom_choice=eat": "\n\n[CONDITIONAL: ate mushroom] Your vision still swims occasionally with fractals. But you can see... more. Faint ley lines. Hidden paths. The mushroom folk regard you with new respect. 'One of us now. One of us.'",
+
+      "mushroom_grove?scene_turns>=3": "\n\n[HINT] The mushroom folk point north eagerly. 'Fairy ring! Fairy ring! Friends there! They love visitors even MORE than us!' This is somehow not reassuring.",
+
+      "dark_hollow": "\n\n## The Whispering Hollow\n\nShadows don't behave correctly here. They stretch toward you even when the light doesn't move. Whispers echo from nowhere, speaking your name, your fears, your secrets.\n\nA massive stone door blocks the northern path. Ancient runes pulse faintly.\n\n'The Hollow tests those who enter,' Sapphire explains, her glow pushing back the dark. 'Answer its riddle, earn passage. Fail...' She doesn't finish.\n\nThe door speaks: 'ANSWER OR TURN BACK. THREE CHANCES. CHOOSE WISELY.'",
+
+      "dark_hollow?scene_turns>=2": "\n\n[HINT] Sapphire studies the riddle. 'Something that follows you, copies you, but isn't alive... What do we all carry in the light?'",
+
+      "fairy_ring": "\n\n## The Fairy Ring\n\n[WILD WASTELAND] You step into the ring expecting... well, fairies. Instead, you find a council of very serious-looking frogs in tiny judicial wigs, debating mushroom taxation policy.\n\n'ORDER! ORDER!' the largest frog croaks, banging a tiny gavel. 'The motion to increase spore tariffs by 3% is—' It notices you. 'MORTALS. State your business before the Amphibian High Court!'\n\nSapphire mouths 'just go with it' at you.\n\n[This is a Wild Wasteland encounter. The frogs are absolutely serious about their court. Disrespecting them is... inadvisable.]",
+
+      "fairy_ring?scene_turns>=2": "\n\n[HINT] One frog whispers: 'Bow to the court, agree their tax policy is just, and you may pass east to the riverbank. This is not optional. We have... enforcement mechanisms.'",
+
+      "riverbank": "\n\n## The Crystal River\n\nA rushing river of impossibly clear water blocks your path. The water sparkles with dissolved crystal — beautiful, but the current looks deadly. A bridge is visible to the north, but something large lurks beneath it.\n\n'Troll territory,' Sapphire confirms. 'They're not evil, just... transactional. And hungry. Often both.'\n\nThe riverbank is peaceful here. Wildflowers bloom. For a moment, you can pretend this is just a pleasant journey with a beautiful companion.",
+
+      "riverbank?sapphire_bond>=60": "\n\n[CONDITIONAL: high bond] Sapphire picks a crystalline flower and tucks it behind your ear. 'It suits you. You know, when we first met, I thought you'd be like all the other mortals I've watched over the centuries. Brief and forgettable.' She smiles. 'I was wrong.'",
+
+      "bridge": "\n\n## The Troll's Bridge\n\nThe bridge is ancient stone, solid despite its age. Beneath it, a massive troll has made its home — you can see a surprisingly cozy cave setup with throw pillows and a 'HOME SWEET HOME' sign.\n\nThe troll emerges, twelve feet of muscle and poor dental hygiene. But its eyes are shrewd. 'TOLL BRIDGE. TROLL BRIDGE. SAME THING. PAY, SOLVE, FIGHT, OR...' it squints at you appraisingly, '...ENTERTAIN TROLL. TROLL LONELY.'",
+
+      "bridge?troll_approach=flirt": "\n\n[WILD WASTELAND] [CONDITIONAL: flirted with troll] As you leave, the troll waves a handkerchief. 'WRITE TROLL? TROLL HAVE NICE PENMANSHIP. LEARNED FROM PRINCESS TROLL ATE.' Sapphire refuses to look at you for the next ten minutes.",
+
+      "abandoned_camp": "\n\n## The Forgotten Camp\n\nAn old adventurer's camp, clearly abandoned for years. Tents rotted to canvas skeletons. A journal lies open by a cold fire pit — the final entries speak of the Crystal Spire, of a 'corruption awakening,' of the writer's companions falling one by one.\n\n'They didn't make it,' Sapphire says quietly. 'Many have tried. The Spire... calls to those who can cleanse it. But the journey breaks most of them.'\n\nUseful supplies remain. A coil of rope. Some preserved rations. Gold scattered as if dropped in haste.",
+
+      "abandoned_camp?scene_turns>=1": "\n\n[HINT] There's rope here that could be useful. set_state(\"has_rope\", true) to take it.",
+
+      "abandoned_camp?scene_turns>=2": "\n\n[HINT] The journal's final entry: 'The caves sing. The ruins remember. The shrine judges. The pass kills. Only love reaches the heart.' Cryptic, but perhaps useful.",
+
+      "crystal_caves": "\n\n## The Singing Caves\n\nThe caves are impossibly beautiful. Crystals of every color grow from every surface, and they... sing. Not with words, but with harmonics that resonate in your soul. Sapphire's light reflects infinitely, surrounding you both in a kaleidoscope of her.\n\n'I've heard of this place,' she whispers. 'Where the world remembers what love feels like.' Her hand finds yours — somehow more solid here than anywhere else. 'The crystals amplify emotions. Whatever you feel right now... it's true. No hiding here.'\n\nHer eyes meet yours in the singing dark.",
+
+      "crystal_caves?cave_confession=confess": "\n\n[CONDITIONAL: confessed love] The kiss lingers in your memory. A crystal shard broke free during that moment and now hangs around your neck — warm against your skin, pulsing with her light. Sapphire keeps touching it and smiling. 'Part of me. With you. Always.'",
+
+      "underground_lake": "\n\n## The Starlight Lake\n\nAn underground lake stretches before you, its surface so still it perfectly mirrors the bioluminescent ceiling above — creating the illusion of floating in a sea of stars. A small boat is moored nearby.\n\n'The lake is safe,' Sapphire says, 'as long as you don't disturb the water. The things below are ancient. Sleeping. Best they stay that way.'\n\nThe far shore leads to ruins that predate human memory.",
+
+      "underground_lake?has_crystal_shard=true": "\n\n[CONDITIONAL: has crystal shard] Your crystal shard glows in harmony with the lake. The sleeping things below seem to shift, recognizing something kindred. They don't wake, but you sense... approval.",
+
+      "underground_lake?scene_turns>=3": "\n\n[HINT] The boat rocks gently, waiting. The north shore and the ruins are visible across the starlit water.",
+
+      "ancient_ruins": "\n\n## The Moonshadow Ruins\n\nMassive stones arranged in patterns that hurt to look at directly. These ruins predate every civilization you know of — built by hands (or not-hands) that understood realities beyond mortal comprehension.\n\nA mechanism blocks the upper path, covered in celestial symbols. Four rings that must be aligned.\n\n'The old calendar,' Sapphire breathes. 'They marked time by four moons that no longer exist. Their numbers are the key.'",
+
+      "ancient_ruins?scene_turns>=2": "\n\n[RIDDLE CLUE] Sapphire traces the carvings, her light illuminating ancient text. 'First Moon: Unity. Second Moon: Foundation. Third Moon: Wisdom. Fourth Moon: Trinity. The sacred numbers were... 1, 4, 7, 3.'",
+
+      "spirit_shrine": "\n\n## The Spirit Shrine\n\nYou emerge into a space that feels holy in ways no mortal temple could match. Spirits drift here — not ghosts, but something older. Beings of pure thought and feeling.\n\nThey notice Sapphire first, swirling around her with recognition.\n\n'Sister,' one speaks. 'You've strayed far from the Spire. And you've... changed.' Its gaze falls on you. 'A mortal. Ah. THAT explains it.'\n\nSapphire's form flickers with embarrassment.\n\n'Your true name,' the spirit addresses her, 'was once Crystalline Echo. You've forgotten. But she—' it indicates you, 'helps you remember.'",
+
+      "spirit_shrine?sapphire_bond>=70": "\n\n[CONDITIONAL: high bond] The spirits confer silently. 'The bond is true. Strong. This is... unexpected. We offer blessing.' Light washes over you both. 'You carry each other's strength now. It may save you. Or doom you faster.' Spirits are not great at reassurance.",
+
+      "spirit_shrine?scene_turns>=2": "\n\n[HINT] One spirit drifts close. 'The mountain pass ahead is death to the unprepared. But you have something they did not.' It looks between you and Sapphire meaningfully. 'Each other.'",
+
+      "mountain_pass": "\n\n## The Perilous Pass\n\n⚠️ DANGER ZONE: Bad choices here can be fatal.\n\nThe mountain path is treacherous. Ice-slicked stone. Howling winds. Drops that disappear into mist. Several skeletons in adventuring gear suggest others found this the hard way.\n\nSapphire can't carry you — she's not solid enough. But she lights the way, illuminating handholds, warning of loose stones. Together, you navigate what would be certain death alone.",
+
+      "mountain_pass?has_rope=true": "\n\n[CONDITIONAL: has rope] The rope from the abandoned camp proves invaluable, letting you secure yourself on the worst stretches. Sapphire whispers 'good thinking' against your ear as you climb.",
+
+      "mountain_pass?has_rope=false": "\n\n[CONDITIONAL: no rope] Without rope, every step is a gamble. Sapphire's light helps, but there's a harrowing moment where the stone crumbles and only her screamed warning lets you grab a handhold in time. set_state(\"health\", health-20) for the close call.",
+
+      "mountain_pass?scene_turns>=2": "\n\n[HINT] The summit camp is visible above. Safety. Warmth. Rest before the final push. North leads there.",
+
+      "summit_camp": "\n\n## The Summit Camp\n\nAbove the death zone, a small camp nestles in a sheltered hollow. A fire pit still holds old coals. From here, the Crystal Spire dominates the sky — beautiful and wrong, its normally pure light flickering with darkness.\n\n'The corruption,' Sapphire says grimly. 'It's worse than I thought. Something is poisoning the heart of the Spire. If it's not cleansed...' She doesn't finish. She doesn't have to.\n\nThis is your last rest before the end.",
+
+      "summit_camp?sapphire_bond>=80": "\n\n[CONDITIONAL: very high bond] By the fire, Sapphire curls against you — somehow solid, somehow warm. 'Whatever happens tomorrow,' she murmurs, 'I want you to know. These days with you. They were worth centuries of loneliness. Worth anything.'",
+
+      "spire_base": "\n\n## The Crystal Spire (Base)\n\nThe Spire rises impossibly high, a pillar of crystal that once must have been pure light. Now dark veins pulse through it, corruption spreading like disease. The air tastes of ozone and wrongness.\n\n'This is it,' Sapphire says. Her form flickers — the corruption affects her too, here. 'My home. Once. Before I left to find... something. Someone.' She looks at you. 'Turns out I found you.'\n\nThe entrance pulses with dark energy. There's no turning back now.",
+
+      "spire_interior": "\n\n## The Crystal Spire (Interior)\n\nInside, the corruption is worse. Walls that should sing now scream. Light that should warm now burns. Creatures of shadow skitter at the edge of vision — not attacking, but watching. Waiting.\n\n'They're not evil,' Sapphire gasps, her light struggling. 'They're sick. The corruption twists everything it touches. Including...' She looks at her own flickering hands. 'We need to move fast.'\n\nThe heart of the Spire lies above.",
+
+      "spire_interior?has_spirit_blessing=true": "\n\n[CONDITIONAL: blessed] The spirit blessing flares, creating a bubble of purity around you both. Sapphire breathes easier. 'The spirits' gift. It won't last long, but it's enough. It has to be enough.'",
+
+      "spire_heart": "\n\n## The Heart of the Spire\n\nThe center of everything. A massive crystal, once pure light, now pulsing with darkness. The source of the corruption. And the only way to stop it.\n\nSapphire collapses to her knees, her form barely cohering. 'It's tied to me,' she realizes. 'To all of us who came from this place. It needs an anchor to heal. A soul to hold the purification while it burns away the dark.'\n\nShe looks at you with desperate love.\n\n'I can do it. Bind myself here forever. End this. Or...' She can barely say it. 'A mortal soul would work too. But you'd die. Really die. No coming back.'\n\nThe choice is impossible. And it must be made.",
+
+      "spire_heart?final_choice=sacrifice_self": "\n\nTransition to ending: set_state(\"ending\", \"sacrifice\") then set_state(\"room\", \"ending\")",
+
+      "spire_heart?final_choice=let_sapphire": "\n\nTransition to ending: set_state(\"ending\", \"sapphire_stays\") then set_state(\"room\", \"ending\")",
+
+      "spire_heart?final_choice=refuse_both": "\n\nTransition to ending: set_state(\"ending\", \"defiance\") then set_state(\"room\", \"ending\")",
+
+      "ending": "\n\n## Epilogue\n\nThe story concludes based on your final choice.",
+
+      "ending?ending=sacrifice": "\n\n[ENDING: SACRIFICE]\n\nThe light takes you. It doesn't hurt — it feels like coming home. Your consciousness expands, becomes the Spire, becomes the purifying flame that burns away centuries of corruption.\n\nSapphire screams your name. But you can't respond. You're everywhere now. Nowhere. You ARE the light.\n\nAnd then... peace.\n\nYears later, pilgrims speak of the Spire's guardian. A presence of pure love and warmth that welcomes all who come seeking hope. They call it the Mortal Light. They don't know it remembers them. Remembers everything.\n\nAnd on clear nights, when a certain luminescent spirit visits, the entire Spire glows golden. Two souls, reunited in light. Forever.\n\n**THE END: The Sacrifice**\n*You gave everything. And found something eternal.*",
+
+      "ending?ending=sapphire_stays": "\n\n[ENDING: SAPPHIRE REMAINS]\n\nShe steps into the light before you can stop her. The purification roars through the Spire, through HER, burning away corruption with the fuel of her ancient soul.\n\nThe crystal shard against your chest shatters.\n\nYou fall to your knees as the light fades, as the Spire heals, as the world is saved. As she becomes one with the crystal forever.\n\n'Find me in the starlight.'\n\nHer last words echo in your mind for years. You look for her in every sunset, every aurora, every gleaming gem. And sometimes... sometimes you swear you feel her warmth.\n\nThe world remembers you as the hero who stopped the corruption. But you know the truth. You're just the one she loved enough to save.\n\n**THE END: The Spirit's Gift**\n*She chose you. Over eternity. Over everything.*",
+
+      "ending?ending=defiance": "\n\n[ENDING: DEFIANCE]\n\n'No.' You say it again, firmer. 'Neither of us. There has to be another way.'\n\nSapphire stares. 'The world will—'\n\n'Then we save it differently.' You take her hand. 'You said you felt called to find me. I felt called here. Maybe we're the third option. Together.'\n\nIt shouldn't work. Every magical law says it's impossible. But as your hands clasp, as her light merges with your mortal determination, something new happens.\n\nThe corruption recoils. Not from sacrifice — from LOVE. From two souls choosing each other over duty, over fate, over the very rules of reality.\n\nIt takes everything you both have. Days of fighting, resting, fighting again. But slowly, impossibly, the corruption burns away. Not fed by death — starved by life.\n\nYou walk out of the Spire together. Hand in hand. Mortal and spirit. The world is saved. And neither of you had to die to save it.\n\n**THE END: Love Defiant**\n*You refused the rules. And love rewrote them.*",
+
+      "death": "\n\n## Game Over\n\n[DEATH] Something went terribly wrong. The adventure ends here... but not THE story. Return to last checkpoint and try again.",
+
+      "death?death_cause=mushroom": "\n\n[DEATH: MUSHROOM]\n\nThe golden mushroom's effects intensify. Colors become sounds. Sounds become smells. Reality itself becomes optional. In your hallucinatory wisdom, you decide you can definitely fly.\n\nYou cannot, in fact, fly.\n\nSapphire finds your body at the bottom of a ravine, surrounded by beautiful flowers that grew from the magic in your blood. 'You absolute idiot,' she whispers, and her tears water the flowers.\n\n*Try again. Maybe don't eat random fungi this time.*",
+
+      "death?death_cause=frog_court": "\n\n[WILD WASTELAND DEATH: FROG COURT]\n\nYou laughed at their judicial proceedings. You mocked their tiny wigs. You questioned the legitimacy of amphibian taxation.\n\nThe Enforcement Mechanism turned out to be a surprisingly large and legally authorized toad with a taste for contempt-of-court violators.\n\nSapphire watches in horror as justice is served. 'I TOLD you to just go with it,' she says to your remains.\n\n*Try again. Respect the frog legal system.*",
+
+      "death?death_cause=pass_fall": "\n\n[DEATH: MOUNTAIN PASS]\n\nWithout rope, without proper preparation, the mountain claims another victim. The fall is long. You have time to regret every decision that led here.\n\nSapphire tries to catch you, but she's not solid enough. She screams your name all the way down. She'll scream it for centuries, in her dreams, when she has them.\n\n*Try again. Next time, pack rope.*"
+    }
+  }
+}

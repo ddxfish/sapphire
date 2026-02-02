@@ -90,14 +90,19 @@ class RiddleManager:
         
         # Check answer - handle leading zeros for numeric riddles
         stored_hash = self._get_state(f"_riddle_{riddle_id}_hash")
-        value_str = str(value)
+        value_str = str(value).strip()
 
         # Pad with leading zeros if riddle has digit constraint (e.g., "0847" not "847")
         digits = riddle.get("digits")
         if digits and value_str.isdigit():
             value_str = value_str.zfill(digits)
+        else:
+            # Case-insensitive for text riddles
+            value_str = value_str.lower()
 
         answer_hash = hashlib.sha256(value_str.encode()).hexdigest()
+
+        logger.info(f"[RIDDLE] Attempt '{riddle_id}': input='{value_str}', input_hash={answer_hash[:16]}..., stored_hash={stored_hash[:16] if stored_hash else 'NONE'}...")
         
         if answer_hash == stored_hash:
             # Success!
@@ -157,9 +162,13 @@ class RiddleManager:
             answer = self._generate_answer(riddle)
             if answer is None:
                 continue
-            
+
             # Store hashed answer (AI can't see plaintext)
-            answer_hash = hashlib.sha256(str(answer).encode()).hexdigest()
+            # Lowercase for text answers (case-insensitive matching)
+            answer_str = str(answer)
+            if not answer_str.isdigit():
+                answer_str = answer_str.lower()
+            answer_hash = hashlib.sha256(answer_str.encode()).hexdigest()
             self._set_state(f"_riddle_{riddle_id}_hash", answer_hash, "system", turn_number,
                            "Riddle initialized")
             
@@ -190,8 +199,12 @@ class RiddleManager:
             if answer is None:
                 logger.warning(f"[RIDDLE] Could not generate answer for '{riddle_id}'")
                 continue
-            
-            answer_hash = hashlib.sha256(str(answer).encode()).hexdigest()
+
+            # Lowercase for text answers (case-insensitive matching)
+            answer_str = str(answer)
+            if not answer_str.isdigit():
+                answer_str = answer_str.lower()
+            answer_hash = hashlib.sha256(answer_str.encode()).hexdigest()
             
             # Use turn 0 for system initialization
             self._set_state(f"_riddle_{riddle_id}_hash", answer_hash, "system", 0,
