@@ -143,19 +143,19 @@ def select_segment(
 
 class PromptBuilder:
     """Builds progressive prompts from preset configuration."""
-    
+
     def __init__(
         self,
         preset: dict,
         state_getter: Callable[[str], Any],
-        scene_turns_getter: Optional[Callable[[], int]] = None,
+        scene_turns_getter: Optional[Callable[[int], int]] = None,  # Now takes current_turn as arg
         game_type: str = "linear"
     ):
         self._config = preset.get("progressive_prompt", {})
         self._get_state = state_getter
-        self._get_scene_turns = scene_turns_getter
+        self._get_scene_turns = scene_turns_getter  # Signature: (current_turn) -> scene_turns
         self._game_type = game_type
-        
+
         # Feature managers (set by engine after init)
         self._choices = None
         self._riddles = None
@@ -221,8 +221,8 @@ class PromptBuilder:
                 parts.append(base)
             return "\n\n".join(parts) if parts else ""
         
-        # Collect revealed segments
-        revealed = self._collect_segments(segments, iterator_value, mode)
+        # Collect revealed segments (pass current_turn for scene_turns calculation)
+        revealed = self._collect_segments(segments, iterator_value, mode, current_turn)
         
         # Assemble prompt parts
         parts = []
@@ -250,19 +250,26 @@ class PromptBuilder:
         
         return "\n\n".join(parts)
     
-    def _collect_segments(self, segments: dict, iterator_value: Any, mode: str) -> list:
+    def _collect_segments(self, segments: dict, iterator_value: Any, mode: str, current_turn: int = 0) -> list:
         """Collect revealed segments based on iterator value and mode."""
         # Extract base keys from segments
         base_keys = set()
         for seg_key in segments.keys():
             parsed_base, _ = parse_segment_key(seg_key)
             base_keys.add(parsed_base)
-        
+
         logger.debug(f"[PROMPT] base_keys={sorted(base_keys)}")
-        
+
+        # Create scene_turns getter that uses current_turn
+        # _get_scene_turns now expects current_turn as argument
+        def scene_turns_for_this_build():
+            if self._get_scene_turns:
+                return self._get_scene_turns(current_turn)
+            return 0
+
         revealed = []
         is_numeric = isinstance(iterator_value, (int, float))
-        
+
         if is_numeric:
             iterator_value = int(iterator_value)
             numeric_keys = []
@@ -272,30 +279,30 @@ class PromptBuilder:
                 except ValueError:
                     continue
             numeric_keys.sort()
-            
+
             logger.debug(f"[PROMPT] numeric_keys={numeric_keys}, checking up to {iterator_value}")
-            
+
             for seg_key in numeric_keys:
                 if mode == "cumulative":
                     if seg_key <= iterator_value:
-                        content = select_segment(str(seg_key), segments, self._get_state, self._get_scene_turns)
+                        content = select_segment(str(seg_key), segments, self._get_state, scene_turns_for_this_build)
                         if content:
                             revealed.append(content)
                             logger.debug(f"[PROMPT] Revealed segment {seg_key}")
                 else:  # current_only
                     if seg_key == iterator_value:
-                        content = select_segment(str(seg_key), segments, self._get_state, self._get_scene_turns)
+                        content = select_segment(str(seg_key), segments, self._get_state, scene_turns_for_this_build)
                         if content:
                             revealed.append(content)
                             logger.debug(f"[PROMPT] Revealed segment {seg_key}")
                         break
         else:
             # String mode (room names): only show current room's segment
-            content = select_segment(str(iterator_value), segments, self._get_state, self._get_scene_turns)
+            content = select_segment(str(iterator_value), segments, self._get_state, scene_turns_for_this_build)
             if content:
                 revealed.append(content)
                 logger.debug(f"[PROMPT] Revealed room segment '{iterator_value}'")
-        
+
         logger.debug(f"[PROMPT] Total revealed segments: {len(revealed)}")
         return revealed
     

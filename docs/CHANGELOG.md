@@ -1,3 +1,6 @@
+# 1.2.4 - State Engine upgrades
+- SE bugs - UI and UX
+
 # 1.2.3 - Responses API and think tags
 - Added support for GPT 5.2 think summaries
 - Added OpenAI responses endpoint support

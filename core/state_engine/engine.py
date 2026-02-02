@@ -45,7 +45,8 @@ class StateEngine:
         self._preset_name = None
         self._progressive_config = None
         self._scene_entered_at_turn = 0
-        
+        self._last_advance_turn = -1  # Track to prevent double-advance in same turn
+
         # Feature managers (initialized on preset load)
         self._choices: Optional[ChoiceManager] = None
         self._riddles: Optional[RiddleManager] = None
@@ -378,6 +379,16 @@ class StateEngine:
             self._scene_entered_at_turn = current_turn
             self._persist_system_key("_scene_entered_at", current_turn, current_turn)
         return current_turn - self._scene_entered_at_turn
+
+    def can_advance_this_turn(self, turn_number: int) -> tuple[bool, str]:
+        """Check if advance_scene is allowed this turn (only once per turn)."""
+        if self._last_advance_turn == turn_number:
+            return False, "Already advanced this turn. Wait for player's next message."
+        return True, ""
+
+    def mark_advanced(self, turn_number: int):
+        """Mark that advance_scene was used this turn."""
+        self._last_advance_turn = turn_number
     
     def get_visible_state(self, current_turn: int = None) -> dict:
         """Get state filtered by visible_from constraints."""
@@ -768,9 +779,9 @@ class StateEngine:
     
     def _init_features(self, preset: dict, turn_number: int):
         """Initialize feature managers from preset."""
-        # Scene turns getter for features
-        def scene_turns_getter():
-            return self.get_scene_turns(turn_number)
+        # Scene turns getter for features - takes current_turn as argument
+        def scene_turns_getter(current_turn: int = None):
+            return self.get_scene_turns(current_turn if current_turn is not None else turn_number)
         
         # Always initialize choices and riddles (they're lightweight if empty)
         self._choices = ChoiceManager(

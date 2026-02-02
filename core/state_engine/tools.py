@@ -211,11 +211,16 @@ def _execute_set_state(arguments: dict, state_engine, turn_number: int) -> Tuple
 def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
     """Advance to next scene - validates prerequisites."""
     reason = arguments.get("reason", "story progression")
-    
+
+    # Check if already advanced this turn
+    can_advance, msg = state_engine.can_advance_this_turn(turn_number)
+    if not can_advance:
+        return f"Error: {msg}", False
+
     # Get iterator config
     if not state_engine.progressive_config:
         return "Error: No progressive story configured", False
-    
+
     iterator_key = state_engine.progressive_config.get("iterator")
     if not iterator_key:
         return "Error: No scene iterator configured", False
@@ -243,6 +248,7 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
     success, msg = state_engine.set_state(iterator_key, new_value, "ai", turn_number, reason)
     
     if success:
+        state_engine.mark_advanced(turn_number)
         summary = f"✓ Advanced to scene {new_value}"
         context = state_engine.get_context_block(turn_number, summary)
         return context, True

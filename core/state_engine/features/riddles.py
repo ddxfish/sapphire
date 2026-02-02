@@ -88,9 +88,16 @@ class RiddleManager:
         attempts = self._get_state(attempts_key) or 0
         max_attempts = riddle.get("max_attempts", 999)
         
-        # Check answer
+        # Check answer - handle leading zeros for numeric riddles
         stored_hash = self._get_state(f"_riddle_{riddle_id}_hash")
-        answer_hash = hashlib.sha256(str(value).encode()).hexdigest()
+        value_str = str(value)
+
+        # Pad with leading zeros if riddle has digit constraint (e.g., "0847" not "847")
+        digits = riddle.get("digits")
+        if digits and value_str.isdigit():
+            value_str = value_str.zfill(digits)
+
+        answer_hash = hashlib.sha256(value_str.encode()).hexdigest()
         
         if answer_hash == stored_hash:
             # Success!
