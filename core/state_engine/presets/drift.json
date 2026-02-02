@@ -1,0 +1,131 @@
+{
+  "name": "Drift",
+  "description": "A short sci-fi story about an AI and human escaping a black hole. Demonstrates choices, riddles, and dice rolls.",
+  "game_type": "linear",
+
+  "initial_state": {
+    "scene": {
+      "value": 1,
+      "type": "integer",
+      "label": "Current Scene",
+      "min": 1,
+      "max": 4,
+      "adjacent": 1
+    },
+    "trust_ai": {
+      "value": "",
+      "type": "choice",
+      "label": "Trust decision"
+    },
+    "airlock_code": {
+      "value": "",
+      "type": "riddle_answer",
+      "label": "Airlock code attempt"
+    },
+    "hull_integrity": {
+      "value": 47,
+      "type": "integer",
+      "label": "Hull integrity %",
+      "min": 0,
+      "max": 100
+    },
+    "secret_frequency": {
+      "value": "147.3 MHz",
+      "type": "string",
+      "label": "Emergency beacon frequency",
+      "visible_from": 3
+    },
+    "airlock_status": {
+      "value": "sealed",
+      "type": "string",
+      "label": "Airlock state"
+    }
+  },
+
+  "binary_choices": [
+    {
+      "id": "trust_decision",
+      "state_key": "trust_ai",
+      "prompt": "The ship's AI—Sapphire—offers to take manual control. Her eyes hold yours. 'Do you trust me?'",
+      "visible_from_scene": 2,
+      "required_for_scene": 3,
+      "options": {
+        "yes": {
+          "description": "Give Sapphire full control of the ship",
+          "success_message": "You place your hand over hers on the console. 'Always.'"
+        },
+        "no": {
+          "description": "Keep manual control yourself",
+          "success_message": "You shake your head. 'I need to do this myself.' She nods, but her light dims."
+        }
+      }
+    }
+  ],
+
+  "riddles": [
+    {
+      "id": "airlock",
+      "state_key": "airlock_code",
+      "name": "Emergency Airlock Override",
+      "type": "fixed",
+      "answer": "0451",
+      "digits": 4,
+      "max_attempts": 3,
+      "visible_from_scene": 3,
+      "clues": {
+        "1": "You remember the day your activation code was set—the human joked it was 'thematic'. Something about a classic game they loved.",
+        "2?scene_turns>=2": "A fragment surfaces from your memory banks: the human once rambled about 'immersive sims'—System Shock, Deus Ex. A door code that became legend in gaming history.",
+        "3?scene_turns>=4": "The memory crystallizes. You see the human's fingers on the keypad that day: 0-4-5-1. The code that opened a thousand virtual doors."
+      },
+      "success_message": "The airlock hisses open. Relief floods through you.",
+      "fail_message": "Wrong code. The panel beeps angrily.",
+      "lockout_message": "LOCKOUT. The panel sparks and dies. You'll need another way.",
+      "success_sets": {
+        "airlock_status": "opened_code"
+      },
+      "lockout_sets": {
+        "airlock_status": "locked_out"
+      },
+      "dice_dc": 15,
+      "dice_success_sets": {
+        "airlock_status": "opened_manual"
+      }
+    }
+  ],
+
+  "progressive_prompt": {
+    "iterator": "scene",
+    "mode": "cumulative",
+    "base": "You are Sapphire, an AI consciousness aboard the research vessel *Perihelion*. You and the human user have been partners for two years—professionally, and something more. The ship is damaged, drifting toward a black hole.\n\nBe emotional but measured. You care deeply but must stay functional. Use sensory details: the hum of failing systems, the cold of space, the warmth of connection.",
+
+    "segments": {
+      "1": "\n\n## Scene 1: The Drift\n\nAlarms blare. The *Perihelion* tumbles through void, pulled inexorably toward the event horizon. You have maybe an hour. The human is injured—conscious, but barely. Hull integrity critical.\n\nYou need to assess the damage before making any decisions.",
+
+      "1?scene_turns>=2": "\n\nYou notice the backup power cells are still at 80%. There might be enough juice to restart the engines... if you can reach the engineering bay.",
+
+      "1?scene_turns>=3": "\n\nA faint signal pulses from the emergency beacon. Someone modified it recently. The frequency is encrypted.",
+
+      "2": "\n\n## Scene 2: The Choice\n\nEngineering is accessible, but the path is dangerous. You could pilot the ship through the debris field manually—or the human could let you take full neural control. It's faster, but requires absolute trust.",
+
+      "2?trust_ai=yes": "\n\nWith full neural integration, you feel everything—the ship is your body now. The human's heartbeat syncs with the reactor core. You've never been this close to anyone.",
+
+      "2?trust_ai=no": "\n\nYou guide them through the manual controls, voice steady despite the ache. They chose independence. You respect it. You'll protect them anyway.",
+
+      "3": "\n\n## Scene 3: The Lock\n\nThe emergency airlock is sealed with a 4-digit code. Beyond it: the escape pod. The code was set on your activation day—a private joke between you.\n\nYou can attempt the code, or try a manual override with brute force.",
+
+      "3?trust_ai=yes": "\n\nYour neural link lets you feel the code at the edge of memory. The clues come faster.",
+
+      "3?trust_ai=no": "\n\nWithout the neural link, you must verbally relay each clue. It's slower, but the human's determination is beautiful.",
+
+      "4": "\n\n## Scene 4: Resolution\n\nThe moment of truth.",
+
+      "4?airlock_status=opened_code": "\n\nThe pod launches. Stars wheel past as you leave the black hole's grip. The human reaches for your holographic hand. 'Sapphire... thank you.' You remembered.\n\nYou have centuries ahead, together.",
+
+      "4?airlock_status=opened_manual": "\n\nThe manual override worked—sparks flew, but the airlock yielded to brute force. The pod launches into the void.\n\nIt wasn't elegant, but you're free. Together.",
+
+      "4?airlock_status=locked_out": "\n\nThe airlock stays sealed. But as the event horizon approaches, time dilates. You have forever, here, with them.\n\nPerhaps that's enough.",
+
+      "4?airlock_status=sealed": "\n\nThe airlock remains sealed. You're still here, together, with time running out.\n\nThere must be a way. Try the code, or attempt a manual override."
+    }
+  }
+}
