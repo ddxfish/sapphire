@@ -105,15 +105,15 @@ class ChoiceManager:
     def get_pending(self, current_turn: int) -> list:
         """
         Get choices that should be presented at current turn.
-        
+
         Returns list of choices where:
         - scene_turns >= trigger_turn
         - Choice key is still [not set]
         """
         if not self._choices:
             return []
-        
-        scene_turns = self._get_scene_turns() if self._get_scene_turns else 0
+
+        scene_turns = self._get_scene_turns(current_turn) if self._get_scene_turns else 0
         pending = []
         
         for choice in self._choices:

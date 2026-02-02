@@ -129,6 +129,22 @@ class RiddleManager:
             return False, f"✗ {lockout_msg}"
         
         fail_msg = riddle.get("fail_message", "That's not correct.")
+
+        # Include current clues so AI doesn't need separate get_state call
+        # Pass turn_number to get accurate scene_turns (avoid stale closure)
+        scene_turns = self._get_scene_turns(turn_number) if self._get_scene_turns else 0
+        clues = self.get_clues(riddle_id, scene_turns_override=scene_turns)
+        total_clues = self.get_total_clues(riddle_id)
+        if clues:
+            clue_lines = []
+            for i, c in enumerate(clues, 1):
+                if i == len(clues):
+                    clue_lines.append(f"  [NEW CLUE:{i}/{total_clues}] {c}")
+                else:
+                    clue_lines.append(f"  [CLUE:{i}/{total_clues}] {c}")
+            clue_text = "\n".join(clue_lines)
+            return False, f"✗ {fail_msg} ({remaining} attempts remaining)\n\nYour memories so far:\n{clue_text}"
+
         return False, f"✗ {fail_msg} ({remaining} attempts remaining)"
     
     def initialize(self, turn_number: int):
@@ -240,11 +256,13 @@ class RiddleManager:
         clues_config = riddle.get("clues", {})
         revealed = []
         
-        # Create scene_turns getter - use override if provided
+        # Create scene_turns getter - override should always be provided now
         if scene_turns_override is not None:
             scene_turns_getter = lambda: scene_turns_override
         else:
-            scene_turns_getter = self._get_scene_turns
+            # Fallback to 0 if no override (shouldn't happen with proper callers)
+            scene_turns_getter = lambda: 0
+            logger.warning("[RIDDLE] get_clues called without scene_turns_override")
         
         # Parse clue keys like "1", "2?scene_turns>=2", etc.
         clue_items = []
@@ -274,6 +292,13 @@ class RiddleManager:
             if riddle.get("id") == riddle_id:
                 return riddle
         return None
+
+    def get_total_clues(self, riddle_id: str) -> int:
+        """Get total number of clues for a riddle."""
+        riddle = self.get_by_id(riddle_id)
+        if not riddle:
+            return 0
+        return len(riddle.get("clues", {}))
     
     def get_status(self, riddle_id: str) -> dict:
         """Get status of a riddle (for AI reference)."""

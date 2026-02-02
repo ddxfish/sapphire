@@ -162,7 +162,22 @@ class StateEngine:
         if action_summary:
             lines.append(action_summary)
             lines.append("")
-        
+
+        # Scene progress (so AI knows story continues, but not how many scenes)
+        if self._progressive_config:
+            iterator_key = self._progressive_config.get("iterator")
+            if iterator_key:
+                current_scene = self.get_state(iterator_key)
+                entry = self.get_state_full(iterator_key)
+                if entry and entry.get("constraints"):
+                    max_scene = entry["constraints"].get("max")
+                    if current_scene is not None and max_scene is not None:
+                        if current_scene < max_scene:
+                            lines.append("📍 More story ahead — use advance_scene() when ready")
+                        else:
+                            lines.append("📍 Final scene — story concludes here")
+                        lines.append("")
+
         # Scene description from prompt builder
         if self._prompt_builder:
             scene_content = self._get_current_scene_content(current_turn)
@@ -346,11 +361,15 @@ class StateEngine:
             
             # Pass actual scene_turns to get correct clues
             clues = self._riddles.get_clues(riddle_id, scene_turns_override=scene_turns)
+            total_clues = self._riddles.get_total_clues(riddle_id)
             if clues:
-                lines = [f"**Clues for {riddle.get('name', riddle_id)}:**"]
+                lines = [f"**Memories for {riddle.get('name', riddle_id)}:**"]
                 for i, clue in enumerate(clues, 1):
-                    lines.append(f"  {i}. {clue}")
-                
+                    if i == len(clues):
+                        lines.append(f"  [NEW CLUE:{i}/{total_clues}] {clue}")
+                    else:
+                        lines.append(f"  [CLUE:{i}/{total_clues}] {clue}")
+
                 remaining = status['max_attempts'] - status['attempts']
                 lines.append(f"  ({remaining} attempts remaining)")
                 sections.append("\n".join(lines))
@@ -779,9 +798,12 @@ class StateEngine:
     
     def _init_features(self, preset: dict, turn_number: int):
         """Initialize feature managers from preset."""
-        # Scene turns getter for features - takes current_turn as argument
+        # Scene turns getter - accepts optional current_turn for accurate values
+        # If not provided, returns 0 (safe default, callers should pass turn when possible)
         def scene_turns_getter(current_turn: int = None):
-            return self.get_scene_turns(current_turn if current_turn is not None else turn_number)
+            if current_turn is not None:
+                return self.get_scene_turns(current_turn)
+            return 0  # Safe default when turn unknown
         
         # Always initialize choices and riddles (they're lightweight if empty)
         self._choices = ChoiceManager(

@@ -690,7 +690,40 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         # Method 2: Delete last N messages (for trash button)
         if count == -1:
             try:
-                system_instance.llm_chat.session_manager.clear()
+                session_manager = system_instance.llm_chat.session_manager
+                session_manager.clear()
+
+                # Reset state engine if enabled for this chat
+                chat_settings = session_manager.get_chat_settings()
+                logger.debug(f"[CLEAR] chat_settings: state_engine_enabled={chat_settings.get('state_engine_enabled')}, preset={chat_settings.get('state_preset')}")
+
+                if chat_settings.get('state_engine_enabled', False):
+                    from pathlib import Path
+                    from core.state_engine import StateEngine
+
+                    chat_name = session_manager.get_active_chat_name()
+                    db_path = Path("user/history/sapphire_history.db")
+                    logger.info(f"[CLEAR] Resetting state engine for chat '{chat_name}'")
+
+                    if db_path.exists() and chat_name:
+                        engine = StateEngine(chat_name, db_path)
+                        preset = chat_settings.get('state_preset')
+                        if preset:
+                            # Reset with preset (turn 1 to trigger riddle init)
+                            success, msg = engine.load_preset(preset, 1)
+                            logger.info(f"[CLEAR] load_preset result: success={success}, msg={msg}")
+                        else:
+                            engine.clear_all()
+                            logger.info(f"[CLEAR] Cleared state engine (no preset)")
+
+                        # Reload live engine if exists
+                        live_engine = system_instance.llm_chat.function_manager.get_state_engine()
+                        logger.debug(f"[CLEAR] live_engine exists={live_engine is not None}, live_chat={live_engine.chat_name if live_engine else 'N/A'}, target={chat_name}")
+                        if live_engine and live_engine.chat_name == chat_name:
+                            live_engine.reload_from_db()
+                            logger.info(f"[CLEAR] Reloaded live engine for '{chat_name}'"
+                                       f", state keys={list(live_engine._current_state.keys())[:5]}...")
+
                 return jsonify({"status": "success", "message": "All chat history cleared."})
             except Exception as e:
                 logger.error(f"Error clearing history: {e}")

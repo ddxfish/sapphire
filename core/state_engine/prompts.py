@@ -348,18 +348,24 @@ class PromptBuilder:
             status = self._riddles.get_status(riddle_id)
             if status.get("solved") or status.get("locked"):
                 continue
-            
-            clues = self._riddles.get_clues(riddle_id)
+
+            # Compute scene_turns for clue visibility
+            scene_turns = self._get_scene_turns(current_turn) if self._get_scene_turns else 0
+            clues = self._riddles.get_clues(riddle_id, scene_turns_override=scene_turns)
+            total_clues = self._riddles.get_total_clues(riddle_id)
             if clues:
                 state_key = riddle.get("state_key", f"riddle_{riddle_id}")
-                lines = [f"\n🔐 RIDDLE: {riddle.get('name', riddle_id)}"]
+                lines = [f"\n## RIDDLE: {riddle.get('name', riddle_id)}"]
                 if riddle.get("digits"):
                     lines.append(f"Format: {riddle['digits']} digits")
                 lines.append(f"Attempts: {status['attempts']}/{status['max_attempts']}")
-                lines.append("Clues revealed:")
+                lines.append("Your character's memories (weave into narrative — NEVER invent clues):")
                 for i, clue in enumerate(clues, 1):
-                    lines.append(f"  {i}. {clue}")
-                lines.append(f"Use: set_state(\"{state_key}\", \"<answer>\", \"reason\")")
+                    if i == len(clues):
+                        lines.append(f"  [NEW CLUE:{i}/{total_clues}] {clue}")
+                    else:
+                        lines.append(f"  [CLUE:{i}/{total_clues}] {clue}")
+                lines.append(f"To attempt: set_state(\"{state_key}\", \"<answer>\", \"reason\")")
                 sections.append("\n".join(lines))
         
         return "\n".join(sections)

@@ -84,7 +84,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "roll_dice",
-            "description": "Roll dice for random outcomes. Returns individual rolls and total.",
+            "description": "Roll dice for random outcomes. If bypassing a riddle, provide riddle_id and dc - success auto-applies the riddle's dice_success_sets.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -99,6 +99,14 @@ TOOLS = [
                         "description": "Number of sides per die (e.g., 6 for d6, 20 for d20)",
                         "minimum": 2,
                         "maximum": 100
+                    },
+                    "riddle_id": {
+                        "type": "string",
+                        "description": "Optional: riddle ID to bypass. On success, applies dice_success_sets from riddle config."
+                    },
+                    "dc": {
+                        "type": "integer",
+                        "description": "Optional: difficulty class. Roll must meet or exceed this to succeed."
                     }
                 },
                 "required": ["count", "sides"]
@@ -257,31 +265,56 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
 
 
 def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
-    """Roll dice - returns result with context."""
+    """Roll dice - returns result with context. Optionally bypass a riddle on success."""
     count = arguments.get("count", 1)
     sides = arguments.get("sides", 6)
-    
+    riddle_id = arguments.get("riddle_id")
+    dc = arguments.get("dc")
+
     # Validate
     count = max(1, min(20, int(count)))
     sides = max(2, min(100, int(sides)))
-    
+
     rolls = [random.randint(1, sides) for _ in range(count)]
     total = sum(rolls)
-    
+
     if count == 1:
         summary = f"🎲 Rolled d{sides}: {total}"
     else:
         summary = f"🎲 Rolled {count}d{sides}: {rolls} = {total}"
-    
+
+    # Check for riddle bypass
+    bypass_result = ""
+    if riddle_id and dc is not None:
+        dc = int(dc)
+        if total >= dc:
+            # Success! Apply riddle's dice_success_sets if available
+            summary += f" vs DC {dc} — SUCCESS!"
+            if state_engine._riddles:
+                riddle = state_engine._riddles.get_by_id(riddle_id)
+                if riddle:
+                    # Mark riddle as solved via bypass
+                    state_engine.set_state(f"_riddle_{riddle_id}_solved", True, "system",
+                                          turn_number, "Dice bypass")
+                    # Apply dice_success_sets (or fall back to success_sets)
+                    success_sets = riddle.get("dice_success_sets") or riddle.get("success_sets", {})
+                    for key, value in success_sets.items():
+                        state_engine.set_state(key, value, "ai", turn_number, f"Dice bypass: {riddle_id}")
+                        bypass_result += f"\n  → {key} = {value}"
+                    if bypass_result:
+                        summary += bypass_result
+        else:
+            summary += f" vs DC {dc} — FAILED"
+
     # Log the roll to state (for audit trail)
     state_engine.set_state(
-        "_last_roll", 
-        {"dice": f"{count}d{sides}", "rolls": rolls, "total": total},
-        "system", 
-        turn_number, 
+        "_last_roll",
+        {"dice": f"{count}d{sides}", "rolls": rolls, "total": total, "dc": dc, "riddle_id": riddle_id},
+        "system",
+        turn_number,
         "dice roll"
     )
-    
+
     context = state_engine.get_context_block(turn_number, summary)
     return context, True
 
