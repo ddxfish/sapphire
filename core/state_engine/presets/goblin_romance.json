@@ -32,22 +32,26 @@
     "goblin_vibe": {
       "value": "",
       "type": "choice",
-      "label": "How you approached Grimbella"
+      "label": "How you approached Grimbella",
+      "visible_from": "goblin_den"
     },
     "has_key": {
       "value": false,
       "type": "boolean",
-      "label": "Rusty key obtained"
+      "label": "Rusty key obtained",
+      "visible_from": "goblin_den"
     },
     "vault_code": {
       "value": "",
       "type": "riddle_answer",
-      "label": "Vault combination attempt"
+      "label": "Vault combination attempt",
+      "visible_from": "treasure_vault"
     },
     "vault_status": {
       "value": "locked",
       "type": "string",
-      "label": "Treasure vault state"
+      "label": "Treasure vault state",
+      "visible_from": "treasure_vault"
     },
     "secret_phrase": {
       "value": "The goat knows",
@@ -128,6 +132,14 @@
         "goblin_den": { "west": "tunnel", "north": "treasure_vault" },
         "shrine": { "east": "tunnel" },
         "treasure_vault": { "south": "goblin_den" }
+      },
+      "room_names": {
+        "tavern": "The Soggy Flagon",
+        "cellar": "The Damp Cellar",
+        "tunnel": "The Questionable Tunnel",
+        "goblin_den": "Grimbella's Boudoir",
+        "shrine": "Shrine of Dubious Wisdom",
+        "treasure_vault": "The Vault of Mild Inconvenience"
       }
     },
 

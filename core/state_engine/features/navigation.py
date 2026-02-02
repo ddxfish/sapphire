@@ -60,14 +60,38 @@ class NavigationManager:
         """Get available exit directions from current room."""
         if not self.is_enabled:
             return []
-        
+
         current_room = self.get_current_room()
         if not current_room or current_room not in self.connections:
             return []
-        
+
         room_exits = self.connections[current_room]
         # Filter out metadata keys starting with _
         return [d for d in room_exits.keys() if not d.startswith("_")]
+
+    def get_exits_with_descriptions(self) -> list:
+        """Get exits with room names based on visited status."""
+        if not self.is_enabled:
+            return []
+
+        current_room = self.get_current_room()
+        if not current_room or current_room not in self.connections:
+            return []
+
+        room_names = self._config.get("room_names", {})
+        visited = self._get_state("_visited_rooms") or []
+
+        exits = []
+        room_exits = self.connections[current_room]
+        for direction, destination in room_exits.items():
+            if direction.startswith("_"):
+                continue
+            if destination in visited:
+                name = room_names.get(destination, destination)
+                exits.append(f"{direction.upper()}: {name}")
+            else:
+                exits.append(f"{direction.upper()}: ???")
+        return exits
     
     def get_room_for_direction(self, direction: str) -> tuple[Optional[str], str]:
         """
@@ -107,7 +131,7 @@ class NavigationManager:
             if direction_lower == full and short in room_exits:
                 return room_exits[short], ""
         
-        available = self.get_available_exits()
+        available = self.get_exits_with_descriptions()
         return None, f"Can't go {direction}. Exits: {', '.join(available)}"
     
     def move(self, direction: str, turn_number: int, reason: str = None) -> tuple[bool, str]:
@@ -136,8 +160,17 @@ class NavigationManager:
         success, msg = self._set_state(self.position_key, destination, "ai", turn_number, reason)
         
         if success:
-            exits = self.get_available_exits()
-            exits_str = f" | Exits: {', '.join(exits)}" if exits else ""
-            return True, f"✓ Moved {direction}: {current_room} → {destination}{exits_str}"
-        
+            # Track visited rooms for fog-of-war
+            visited = self._get_state("_visited_rooms") or []
+            if destination not in visited:
+                visited = visited + [destination]
+                self._set_state("_visited_rooms", visited, "system", turn_number, "room visited")
+
+            # Show exits with names for visited rooms, ??? for unvisited
+            room_names = self._config.get("room_names", {})
+            dest_name = room_names.get(destination, destination)
+            exits = self.get_exits_with_descriptions()
+            exits_str = f"\nExits: {', '.join(exits)}" if exits else ""
+            return True, f"✓ Moved to {dest_name}{exits_str}"
+
         return False, msg

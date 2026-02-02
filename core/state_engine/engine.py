@@ -199,9 +199,9 @@ class StateEngine:
                 lines.append(clues_block)
                 lines.append("")
         
-        # Navigation exits
+        # Navigation exits with fog-of-war (show names for visited rooms)
         if self._navigation and self._navigation.is_enabled:
-            exits = self._navigation.get_available_exits()
+            exits = self._navigation.get_exits_with_descriptions()
             if exits:
                 lines.append(f"**Exits:** {', '.join(exits)}")
                 lines.append("")
@@ -258,15 +258,24 @@ class StateEngine:
             
             constraints = entry.get("constraints", {}) or {}
             visible_from = constraints.get("visible_from")
-            
-            # Check visibility
-            if visible_from is not None and isinstance(iterator_value, int):
-                if iterator_value < visible_from:
-                    continue
-                # Just became visible this scene
-                if iterator_value == visible_from:
-                    new_keys.append((key, entry))
-                    continue
+
+            # Check visibility - supports both scene (numeric) and room (string)
+            if visible_from is not None:
+                if isinstance(iterator_value, (int, float)):
+                    # Scene-based: visible when scene >= visible_from
+                    if iterator_value < visible_from:
+                        continue
+                    if iterator_value == visible_from:
+                        new_keys.append((key, entry))
+                        continue
+                elif isinstance(iterator_value, str):
+                    # Room-based: visible when in that room OR have visited it
+                    visited = self.get_state("_visited_rooms") or []
+                    if iterator_value != visible_from and visible_from not in visited:
+                        continue
+                    if iterator_value == visible_from and visible_from not in visited:
+                        new_keys.append((key, entry))
+                        continue
             
             # Check if readonly (iterator or derived)
             is_readonly = (key == iterator_key) or constraints.get("readonly", False)
@@ -417,19 +426,23 @@ class StateEngine:
     def get_visible_state(self, current_turn: int = None) -> dict:
         """Get state filtered by visible_from constraints."""
         iterator_value = self._get_iterator_value()
-        
+        visited = self.get_state("_visited_rooms") or []
+
         result = {}
         for key, entry in self._current_state.items():
             if key.startswith("_"):
                 continue
-            
+
             constraints = entry.get("constraints", {}) or {}
             visible_from = constraints.get("visible_from")
-            
+
             if visible_from is not None:
-                if isinstance(iterator_value, int) and iterator_value < visible_from:
+                if isinstance(iterator_value, (int, float)) and iterator_value < visible_from:
                     continue
-            
+                elif isinstance(iterator_value, str):
+                    if iterator_value != visible_from and visible_from not in visited:
+                        continue
+
             result[key] = entry["value"]
         
         if current_turn is not None and self._progressive_config:
@@ -740,11 +753,17 @@ class StateEngine:
             self._progressive_config = preset.get("progressive_prompt")
             self._game_type = get_game_type(preset)
             self._init_features(preset, turn_number)
-            
+
             # Initialize scene tracking
             self._scene_entered_at_turn = turn_number
             self._persist_system_key("_scene_entered_at", turn_number, turn_number)
-            
+
+            # Mark starting room as visited for room-based games
+            if self._navigation and self._navigation.is_enabled:
+                starting_room = self._navigation.get_current_room()
+                if starting_room:
+                    self.set_state("_visited_rooms", [starting_room], "system", turn_number, "starting room")
+
             logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys, game_type={self._game_type.name}")
             return True, f"Loaded preset: {preset_name}"
             
@@ -867,16 +886,20 @@ class StateEngine:
         if include_vars and self._current_state:
             lines = []
             iterator_value = self._get_iterator_value()
-            
+            visited = self.get_state("_visited_rooms") or []
+
             for key, entry in sorted(self._current_state.items()):
                 if key.startswith("_"):
                     continue
-                
+
                 constraints = entry.get("constraints", {}) or {}
                 visible_from = constraints.get("visible_from")
-                if visible_from is not None and isinstance(iterator_value, int):
-                    if iterator_value < visible_from:
+                if visible_from is not None:
+                    if isinstance(iterator_value, (int, float)) and iterator_value < visible_from:
                         continue
+                    elif isinstance(iterator_value, str):
+                        if iterator_value != visible_from and visible_from not in visited:
+                            continue
                 
                 value = entry["value"]
                 label = entry.get("label")

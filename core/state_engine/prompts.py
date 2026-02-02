@@ -244,7 +244,7 @@ class PromptBuilder:
                 parts.append(riddle_section)
         
         if self._navigation and self._navigation.is_enabled:
-            exits = self._navigation.get_available_exits()
+            exits = self._navigation.get_exits_with_descriptions()
             if exits:
                 parts.append(f"Exits: {', '.join(exits)}")
         
