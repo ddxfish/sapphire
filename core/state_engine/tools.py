@@ -84,7 +84,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "roll_dice",
-            "description": "Roll dice for random outcomes. If bypassing a riddle, provide riddle_id and dc - success auto-applies the riddle's dice_success_sets.",
+            "description": "Roll dice for random outcomes. Auto-detects active riddles with dice_dc and applies bypass effects on success.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -265,7 +265,7 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
 
 
 def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
-    """Roll dice - returns result with context. Optionally bypass a riddle on success."""
+    """Roll dice - returns result with context. Auto-detects active riddle with dice_dc."""
     count = arguments.get("count", 1)
     sides = arguments.get("sides", 6)
     riddle_id = arguments.get("riddle_id")
@@ -283,13 +283,39 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
     else:
         summary = f"🎲 Rolled {count}d{sides}: {rolls} = {total}"
 
+    # Auto-detect active riddle with dice_dc if not specified
+    if riddle_id is None and dc is None and state_engine._riddles:
+        # Find active riddles (not solved, not locked) with dice_dc configured
+        for riddle in state_engine._riddles.riddles:
+            rid = riddle.get("id")
+            if not rid:
+                continue
+            # Check if riddle has dice_dc
+            riddle_dc = riddle.get("dice_dc")
+            if riddle_dc is None:
+                continue
+            # Check if already solved or locked
+            status = state_engine._riddles.get_status(rid)
+            if status.get("solved") or status.get("locked"):
+                continue
+            # Check scene visibility
+            visible_from = riddle.get("visible_from_scene")
+            if visible_from is not None:
+                current_scene = state_engine.get_state(state_engine._progressive_config.get("iterator")) if state_engine._progressive_config else None
+                if current_scene is not None and current_scene < visible_from:
+                    continue
+            # Found an active riddle with dice_dc - use it
+            riddle_id = rid
+            dc = riddle_dc
+            logger.info(f"[DICE] Auto-detected riddle '{riddle_id}' with DC {dc}")
+            break
+
     # Check for riddle bypass
-    bypass_result = ""
     if riddle_id and dc is not None:
         dc = int(dc)
         if total >= dc:
             # Success! Apply riddle's dice_success_sets if available
-            summary += f" vs DC {dc} — SUCCESS!"
+            summary += f" vs DC {dc} — SUCCESS! (bypassed {riddle_id})"
             if state_engine._riddles:
                 riddle = state_engine._riddles.get_by_id(riddle_id)
                 if riddle:
@@ -300,11 +326,9 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
                     success_sets = riddle.get("dice_success_sets") or riddle.get("success_sets", {})
                     for key, value in success_sets.items():
                         state_engine.set_state(key, value, "ai", turn_number, f"Dice bypass: {riddle_id}")
-                        bypass_result += f"\n  → {key} = {value}"
-                    if bypass_result:
-                        summary += bypass_result
+                        summary += f"\n  → {key} = {value}"
         else:
-            summary += f" vs DC {dc} — FAILED"
+            summary += f" vs DC {dc} — FAILED (need {dc}+)"
 
     # Log the roll to state (for audit trail)
     state_engine.set_state(
