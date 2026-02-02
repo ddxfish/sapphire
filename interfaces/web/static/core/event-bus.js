@@ -161,6 +161,14 @@ export function isConnected() {
     return eventSource && eventSource.readyState === EventSource.OPEN;
 }
 
+// Clean up on page unload to prevent stale connections
+window.addEventListener('beforeunload', () => {
+    if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+    }
+});
+
 // Event type constants (mirror server-side)
 export const Events = {
     // AI/Chat events

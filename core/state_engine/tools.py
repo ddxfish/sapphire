@@ -202,15 +202,21 @@ def _execute_set_state(arguments: dict, state_engine, turn_number: int) -> Tuple
     key = arguments.get("key")
     value = arguments.get("value")
     reason = arguments.get("reason", "")
-    
+
     if not key:
         return "Error: key is required", False
-    
+
+    # Check if this is a riddle attempt (before we call set_state)
+    is_riddle_attempt = state_engine._riddles and state_engine._riddles.is_riddle_key(key)
+
     # Let engine handle routing to choices/riddles based on key type
     success, msg = state_engine.set_state(key, value, "ai", turn_number, reason)
-    
+
     if success:
         context = state_engine.get_context_block(turn_number, msg)
+        # Terminal instruction for riddle attempts - let player react to result
+        if is_riddle_attempt:
+            context += "\n\n⛔ STOP — Narrate this attempt to the player. Do NOT guess again or make additional tool calls this turn."
         return context, True
     else:
         return msg, False
@@ -259,6 +265,8 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
         state_engine.mark_advanced(turn_number)
         summary = f"✓ Advanced to scene {new_value}"
         context = state_engine.get_context_block(turn_number, summary)
+        # Terminal instruction - AI must narrate new scene before more tool calls
+        context += "\n\n⛔ STOP — Narrate this new scene to the player. Do NOT make additional tool calls this turn."
         return context, True
     else:
         return msg, False
@@ -298,11 +306,16 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
             status = state_engine._riddles.get_status(rid)
             if status.get("solved") or status.get("locked"):
                 continue
-            # Check scene visibility
-            visible_from = riddle.get("visible_from_scene")
-            if visible_from is not None:
-                current_scene = state_engine.get_state(state_engine._progressive_config.get("iterator")) if state_engine._progressive_config else None
-                if current_scene is not None and current_scene < visible_from:
+            # Check visibility - supports both scene (numeric) and room (string)
+            visible_from_scene = riddle.get("visible_from_scene")
+            visible_from_room = riddle.get("visible_from_room")
+            current_pos = state_engine.get_state(state_engine._progressive_config.get("iterator")) if state_engine._progressive_config else None
+
+            if visible_from_scene is not None:
+                if isinstance(current_pos, (int, float)) and current_pos < visible_from_scene:
+                    continue
+            elif visible_from_room is not None:
+                if isinstance(current_pos, str) and current_pos != visible_from_room:
                     continue
             # Found an active riddle with dice_dc - use it
             riddle_id = rid
@@ -358,6 +371,8 @@ def _execute_move(arguments: dict, state_engine, turn_number: int) -> Tuple[str,
     
     if success:
         context = state_engine.get_context_block(turn_number, msg)
+        # Terminal instruction - AI must respond before more tool calls
+        context += "\n\n⛔ STOP — Narrate this location to the player. Do NOT make additional tool calls this turn."
         return context, True
     else:
         return msg, False

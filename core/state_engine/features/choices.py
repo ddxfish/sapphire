@@ -107,29 +107,45 @@ class ChoiceManager:
         Get choices that should be presented at current turn.
 
         Returns list of choices where:
+        - Visibility satisfied (scene/room)
         - scene_turns >= trigger_turn
         - Choice key is still [not set]
         """
         if not self._choices:
             return []
 
+        # Get current iterator value for visibility checks
+        iterator_key = self._progressive_config.get("iterator")
+        iterator_value = self._get_state(iterator_key) if iterator_key else None
+
         scene_turns = self._get_scene_turns(current_turn) if self._get_scene_turns else 0
         pending = []
-        
+
         for choice in self._choices:
+            # Check visibility - supports both scene (numeric) and room (string)
+            visible_from_scene = choice.get("visible_from_scene")
+            visible_from_room = choice.get("visible_from_room")
+
+            if visible_from_scene is not None:
+                if isinstance(iterator_value, (int, float)) and iterator_value < visible_from_scene:
+                    continue
+            elif visible_from_room is not None:
+                if isinstance(iterator_value, str) and iterator_value != visible_from_room:
+                    continue
+
             trigger = choice.get("trigger_turn", 0)
             if scene_turns < trigger:
                 continue
-            
+
             # Check if choice has been made (state key is set)
             state_key = choice.get("state_key")
             if state_key:
                 current_value = self._get_state(state_key)
                 if current_value is not None and current_value != "":
                     continue  # Already chosen
-            
+
             pending.append(choice)
-        
+
         return pending
     
     def get_by_id(self, choice_id: str) -> Optional[dict]:
@@ -142,25 +158,27 @@ class ChoiceManager:
     def get_blockers(self) -> list:
         """
         Generate dynamic blockers for unresolved binary choices.
-        These prevent scene advancement until choices are made.
+        These prevent scene/room advancement until choices are made.
+        Supports both required_for_scene (numeric) and required_for_room (string).
         """
         blockers = []
         for choice in self._choices:
-            required_scene = choice.get("required_for_scene")
-            if not required_scene:
+            # Support both scene and room-based blocking
+            required_target = choice.get("required_for_scene") or choice.get("required_for_room")
+            if not required_target:
                 continue
-            
+
             state_key = choice.get("state_key")
             if not state_key:
                 continue
-            
+
             blockers.append({
-                "target": required_scene,
+                "target": required_target,
                 "state_key": state_key,
-                "message": choice.get("block_message", 
+                "message": choice.get("block_message",
                     f"You must make a choice before proceeding: {choice.get('prompt', state_key)}")
             })
-        
+
         return blockers
     
     def check_blockers(self, key: str, new_value: Any) -> tuple[bool, str]:

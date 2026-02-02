@@ -213,9 +213,14 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
     @bp.route('/chat/stream', methods=['POST'])
     def handle_chat_stream():
         data = request.json
-        if not data or 'text' not in data: 
+        if not data or 'text' not in data:
             return jsonify({"error": "No text provided"}), 400
-        
+
+        # Debug: detect duplicate requests
+        import time
+        msg_preview = data['text'][:50] if data.get('text') else '(empty)'
+        logger.info(f"[CHAT-STREAM] Request received: '{msg_preview}' at {time.time():.3f}")
+
         prefill = data.get('prefill')
         skip_user_message = data.get('skip_user_message', False)
         images = data.get('images', [])  # List of {data: "...", media_type: "..."}
@@ -723,6 +728,10 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                             live_engine.reload_from_db()
                             logger.info(f"[CLEAR] Reloaded live engine for '{chat_name}'"
                                        f", state keys={list(live_engine._current_state.keys())[:5]}...")
+
+                # Notify frontend to refresh
+                from core.event_bus import publish, Events
+                publish(Events.CHAT_CLEARED, {"chat_name": chat_name})
 
                 return jsonify({"status": "success", "message": "All chat history cleared."})
             except Exception as e:

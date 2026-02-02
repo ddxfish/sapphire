@@ -349,10 +349,15 @@ class StateEngine:
         for riddle in self._riddles.riddles:
             riddle_id = riddle.get("id")
             
-            # Check scene visibility
-            visible_from = riddle.get("visible_from_scene")
-            if visible_from is not None:
-                if isinstance(iterator_value, (int, float)) and iterator_value < visible_from:
+            # Check visibility - supports both scene (numeric) and room (string)
+            visible_from_scene = riddle.get("visible_from_scene")
+            visible_from_room = riddle.get("visible_from_room")
+
+            if visible_from_scene is not None:
+                if isinstance(iterator_value, (int, float)) and iterator_value < visible_from_scene:
+                    continue
+            elif visible_from_room is not None:
+                if isinstance(iterator_value, str) and iterator_value != visible_from_room:
                     continue
             
             status = self._riddles.get_status(riddle_id)

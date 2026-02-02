@@ -66,7 +66,7 @@ class EventBus:
                     except queue.Full:
                         break
         
-        logger.info(f"New subscriber: {sub_id} (replay={replay})")
+        logger.info(f"New subscriber: {sub_id} (replay={replay}) — total subscribers: {len(self._subscribers)}")
         
         try:
             while True:
