@@ -186,7 +186,11 @@ export function closeAllKebabs() {
 export async function handleLogout() {
     closeAllKebabs();
     try {
-        await fetch('/logout', { method: 'POST' });
+        const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+        await fetch('/logout', {
+            method: 'POST',
+            headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {}
+        });
         window.location.href = '/login';
     } catch (e) {
         console.error('Logout failed:', e);

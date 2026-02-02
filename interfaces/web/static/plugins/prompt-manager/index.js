@@ -142,8 +142,10 @@ Editing:
   },
   
   startStatusWatcher() {
-    // Poll every 10s as fallback - SSE handles real-time updates
+    // Poll every 60s as fallback - SSE handles real-time updates
     this.statusCheckInterval = setInterval(async () => {
+      // Skip if SSE is connected (it handles real-time sync)
+      if (window.eventBus?.isConnected?.()) return;
       // Skip if a load is already in progress or was recent
       if (this._loadInProgress) return;
       if (Date.now() - this._lastLoadTime < 5000) return;
@@ -188,7 +190,7 @@ Editing:
           }
         }
       } catch (e) {}
-    }, 10000);
+    }, 60000);
   },
 
   _hashPromptData(data) {

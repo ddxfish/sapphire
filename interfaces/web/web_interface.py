@@ -1256,13 +1256,11 @@ def security_headers(response):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     
-    # TEMPORARY: Aggressive no-cache to debug caching issue
+    # Static assets: cache aggressively since URLs are versioned (?v=xxx)
+    # Version string in plugin-loader.js and index.html ensures fresh loads after updates
     if request.path.startswith('/static/'):
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-        # Disable ETags which can cause 304 responses
-        response.headers.pop('ETag', None)
+        # 1 week cache - version params bust cache on updates
+        response.headers['Cache-Control'] = 'public, max-age=604800, immutable'
     
     # Encourage connection reuse
     response.headers['Connection'] = 'keep-alive'

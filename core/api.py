@@ -696,6 +696,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         if count == -1:
             try:
                 session_manager = system_instance.llm_chat.session_manager
+                chat_name = session_manager.get_active_chat_name()
                 session_manager.clear()
 
                 # Reset state engine if enabled for this chat
@@ -705,8 +706,6 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 if chat_settings.get('state_engine_enabled', False):
                     from pathlib import Path
                     from core.state_engine import StateEngine
-
-                    chat_name = session_manager.get_active_chat_name()
                     db_path = Path("user/history/sapphire_history.db")
                     logger.info(f"[CLEAR] Resetting state engine for chat '{chat_name}'")
 

@@ -361,10 +361,11 @@
 
     <!-- Modulepreload: only critical entry points to reduce connection storm -->
     <!-- Browser discovers other modules via import chain - less parallel pressure -->
-    <link rel="modulepreload" href="/static/main.js">
-    <link rel="modulepreload" href="/static/api.js">
-    <link rel="modulepreload" href="/static/shared/fetch.js">
-    
-    <script type="module" src="/static/main.js"></script>
+    <!-- Version string (v=) busts cache on updates - increment when deploying JS changes -->
+    <link rel="modulepreload" href="/static/main.js?v=20260202b">
+    <link rel="modulepreload" href="/static/api.js?v=20260202b">
+    <link rel="modulepreload" href="/static/shared/fetch.js?v=20260202b">
+
+    <script type="module" src="/static/main.js?v=20260202b"></script>
 </body>
 </html>
