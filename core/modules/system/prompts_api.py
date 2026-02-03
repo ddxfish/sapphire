@@ -108,7 +108,8 @@ def create_prompts_api(system_instance=None):
                 message = f"Prompt '{name}' saved" if success else "Failed to save prompt"
             
             if success:
-                publish(Events.PROMPT_CHANGED, {"name": name, "type": prompt_type, "action": "saved"})
+                origin = request.headers.get('X-Session-ID')
+                publish(Events.PROMPT_CHANGED, {"name": name, "type": prompt_type, "action": "saved", "origin": origin})
                 return jsonify({'status': 'success', 'message': message})
             else:
                 return jsonify({'error': message}), 409
@@ -122,7 +123,8 @@ def create_prompts_api(system_instance=None):
         try:
             success = prompts.delete_prompt(name)
             if success:
-                publish(Events.PROMPT_DELETED, {"name": name})
+                origin = request.headers.get('X-Session-ID')
+                publish(Events.PROMPT_DELETED, {"name": name, "origin": origin})
                 return jsonify({'status': 'success', 'message': f"Prompt '{name}' deleted"})
             else:
                 return jsonify({'error': f"Prompt '{name}' not found or cannot be deleted"}), 404
@@ -159,7 +161,8 @@ def create_prompts_api(system_instance=None):
                 logger.info(f"Applied scenario state '{name}'")
 
             # Notify frontend of prompt change
-            publish(Events.PROMPT_CHANGED, {"name": name, "action": "loaded"})
+            origin = request.headers.get('X-Session-ID')
+            publish(Events.PROMPT_CHANGED, {"name": name, "action": "loaded", "origin": origin})
 
             return jsonify({'status': 'success', 'message': f"Loaded prompt '{name}'"})
         except Exception as e:
@@ -214,10 +217,18 @@ def create_prompts_api(system_instance=None):
             
             prompts.prompt_manager.components[comp_type][key] = value
             prompts.prompt_manager.save_components()
-            
-            publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "saved"})
+
+            # Get origin session for SSE filtering
+            origin = request.headers.get('X-Session-ID')
+            publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "saved", "origin": origin})
             logger.info(f"Saved component {comp_type}.{key}")
-            return jsonify({'status': 'success', 'message': f'Component {comp_type}.{key} saved'})
+
+            # Return full components so client can update without refetch
+            return jsonify({
+                'status': 'success',
+                'message': f'Component {comp_type}.{key} saved',
+                'components': prompts.prompt_manager.components
+            })
             
         except Exception as e:
             logger.error(f"Error saving component {comp_type}.{key}: {e}")
@@ -238,10 +249,18 @@ def create_prompts_api(system_instance=None):
             
             del prompts.prompt_manager.components[comp_type][key]
             prompts.prompt_manager.save_components()
-            
-            publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
+
+            # Get origin session for SSE filtering
+            origin = request.headers.get('X-Session-ID')
+            publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted", "origin": origin})
             logger.info(f"Deleted component {comp_type}.{key}")
-            return jsonify({'status': 'success', 'message': f'Component {comp_type}.{key} deleted'})
+
+            # Return full components so client can update without refetch
+            return jsonify({
+                'status': 'success',
+                'message': f'Component {comp_type}.{key} deleted',
+                'components': prompts.prompt_manager.components
+            })
             
         except Exception as e:
             logger.error(f"Error deleting component {comp_type}.{key}: {e}")

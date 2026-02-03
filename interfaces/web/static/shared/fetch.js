@@ -1,11 +1,27 @@
 // /static/shared/fetch.js - Shared fetch utility with timeout and auth handling
 
+// Session ID for SSE origin tracking - generated once per browser tab
+const getSessionId = () => {
+  let sid = sessionStorage.getItem('sapphire_session_id');
+  if (!sid) {
+    sid = 'ses_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem('sapphire_session_id', sid);
+  }
+  return sid;
+};
+
+// Export for SSE filtering
+export const sessionId = getSessionId();
+
 export const fetchWithTimeout = async (url, opts = {}, timeout = 60000) => {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeout);
-  
+
+  // Add session ID header to all requests
+  const headers = { ...opts.headers, 'X-Session-ID': sessionId };
+
   try {
-    const res = await fetch(url, { ...opts, signal: opts.signal || ctrl.signal });
+    const res = await fetch(url, { ...opts, headers, signal: opts.signal || ctrl.signal });
     clearTimeout(id);
     
     if (!res.ok) {

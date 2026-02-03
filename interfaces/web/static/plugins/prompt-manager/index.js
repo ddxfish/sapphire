@@ -979,13 +979,13 @@ Editing:
     // Track current selection for refreshes
     let liveSelected = isMultiSelect ? [...currentSelected] : currentSelected;
 
-    // Refresh modal content AND dropdown after add/delete
-    const refreshModal = async (newKey = null) => {
-      console.log(`[ComponentModal] Refreshing ${type}...`);
+    // Refresh modal using components data (from API response, no refetch needed)
+    const refreshModal = (componentsData, newKey = null) => {
+      console.log(`[ComponentModal] Refreshing ${type} from response data`);
 
-      // Fetch fresh data from server
-      await this.loadComponents();
-      const newItems = this.components[type] || {};
+      // Update the cached components
+      this.components = componentsData;
+      const newItems = componentsData[type] || {};
       const newKeys = Object.keys(newItems);
       console.log(`[ComponentModal] Got ${newKeys.length} items:`, newKeys);
 
@@ -1038,7 +1038,7 @@ Editing:
           if (!confirm(`Delete "${key}"?\n\nThis cannot be undone.`)) return;
 
           try {
-            await API.deleteComponent(type, key);
+            const result = await API.deleteComponent(type, key);
             showToast(`Deleted ${key}`, 'success');
 
             // Remove from selection
@@ -1048,7 +1048,10 @@ Editing:
               liveSelected = '';
             }
 
-            await refreshModal();
+            // Use returned components data instead of refetching
+            if (result.components) {
+              refreshModal(result.components);
+            }
           } catch (e) {
             console.error(`Failed to delete ${type}.${key}:`, e);
             showToast(`Failed to delete ${key}`, 'error');
@@ -1073,12 +1076,13 @@ Editing:
         }
 
         try {
-          await API.saveComponent(type, key, value);
+          const result = await API.saveComponent(type, key, value);
           showToast(`${typeLabel} added!`, 'success');
 
-          // Small delay to ensure server has processed, then refresh with new key
-          await new Promise(r => setTimeout(r, 100));
-          await refreshModal(key);
+          // Use returned components data instead of refetching
+          if (result.components) {
+            refreshModal(result.components, key);
+          }
         } catch (e) {
           showToast(`Failed: ${e.message}`, 'error');
         }
@@ -1137,11 +1141,15 @@ Editing:
 
       close();
 
-      // Save text changes
+      // Save text changes - use returned components from last save
       let textSaved = 0;
+      let latestComponents = null;
       for (const [key, value] of Object.entries(textChanges)) {
         try {
-          await API.saveComponent(type, key, value);
+          const result = await API.saveComponent(type, key, value);
+          if (result.components) {
+            latestComponents = result.components;
+          }
           textSaved++;
         } catch (e) {
           console.error(`Failed to save ${type}.${key}:`, e);
@@ -1149,6 +1157,11 @@ Editing:
       }
       if (textSaved > 0) {
         showToast(`Updated ${textSaved} item(s)`, 'success');
+      }
+
+      // Update cached components from API response
+      if (latestComponents) {
+        this.components = latestComponents;
       }
 
       // Update selection
@@ -1163,8 +1176,7 @@ Editing:
         }
       }
 
-      // Refresh everything
-      await this.loadComponents();
+      // Refresh editor and scene
       await this.loadPromptIntoEditor(this.currentPrompt);
       await updateScene();
     });

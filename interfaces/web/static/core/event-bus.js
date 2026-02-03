@@ -1,4 +1,5 @@
 // core/event-bus.js - EventSource client for real-time server events
+import { sessionId } from '../shared/fetch.js';
 
 let eventSource = null;
 let reconnectAttempts = 0;
@@ -33,13 +34,19 @@ export function connect(replay = false) {
     eventSource.onmessage = (e) => {
         try {
             const event = JSON.parse(e.data);
-            
+
             // Skip keepalives
             if (event.type === 'keepalive') return;
-            
+
+            // Skip events we originated (we already handled them locally)
+            if (event.data?.origin && event.data.origin === sessionId) {
+                console.log(`[EventBus] Skipping self-originated ${event.type}`);
+                return;
+            }
+
             // Dispatch to registered handlers
             dispatch(event.type, event.data, event.timestamp);
-            
+
         } catch (err) {
             console.error('[EventBus] Parse error:', err, e.data);
         }

@@ -859,7 +859,8 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
 
                 # Notify frontend to refresh
                 from core.event_bus import publish, Events
-                publish(Events.CHAT_CLEARED, {"chat_name": chat_name})
+                origin = request.headers.get('X-Session-ID')
+                publish(Events.CHAT_CLEARED, {"chat_name": chat_name, "origin": origin})
 
                 return jsonify({"status": "success", "message": "All chat history cleared."})
             except Exception as e:
@@ -981,11 +982,12 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 settings = system_instance.llm_chat.session_manager.get_chat_settings()
                 _apply_chat_settings(settings)
                 
-                publish(Events.CHAT_SWITCHED, {"name": chat_name})
-                
+                origin = request.headers.get('X-Session-ID')
+                publish(Events.CHAT_SWITCHED, {"name": chat_name, "origin": origin})
+
                 return jsonify({
-                    "status": "success", 
-                    "active_chat": chat_name, 
+                    "status": "success",
+                    "active_chat": chat_name,
                     "message": f"Switched to: {chat_name}",
                     "settings": settings
                 })
@@ -1066,9 +1068,11 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             _apply_chat_settings(session_manager.get_chat_settings())
             
             # Publish SSE event for UI updates
+            origin = request.headers.get('X-Session-ID')
             publish(Events.CHAT_SETTINGS_CHANGED, {
                 "chat": chat_name,
-                "settings": new_settings
+                "settings": new_settings,
+                "origin": origin
             })
             
             logger.info(f"Updated and applied settings for chat '{chat_name}'")

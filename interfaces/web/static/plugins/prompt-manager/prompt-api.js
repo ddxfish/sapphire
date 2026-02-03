@@ -1,5 +1,6 @@
 // API functions for Prompt Manager plugin
 import { getInitData, getInitDataSync } from '../../shared/init-data.js';
+import { fetchWithTimeout } from '../../shared/fetch.js';
 
 // Use init data for initial load (avoids 3 separate API calls)
 export async function getComponents() {
@@ -19,52 +20,40 @@ export async function getPrompt(name) {
     return cached.prompts.current;
   }
   // Fall back to direct API for other prompts
-  const res = await fetch(`/api/prompts/${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`);
 }
 
-// These still need direct API calls (mutations)
+// Mutations - use fetchWithTimeout for session ID header
 export async function savePrompt(name, data) {
-  const res = await fetch(`/api/prompts/${encodeURIComponent(name)}`, {
+  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
 }
 
 export async function deletePrompt(name) {
-  const res = await fetch(`/api/prompts/${encodeURIComponent(name)}`, {
+  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`, {
     method: 'DELETE'
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
 }
 
 export async function saveComponent(type, key, value) {
-  const res = await fetch(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
+  return await fetchWithTimeout(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value })
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
 }
 
 export async function deleteComponent(type, key) {
-  const res = await fetch(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
+  return await fetchWithTimeout(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
     method: 'DELETE'
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
 }
 
 export async function loadPrompt(name) {
-  const res = await fetch(`/api/prompts/${encodeURIComponent(name)}/load`, {
+  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}/load`, {
     method: 'POST'
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
 }
