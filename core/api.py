@@ -689,6 +689,34 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             # --- Wizard step ---
             wizard_step = getattr(config, 'SETUP_WIZARD_STEP', 'complete')
 
+            # --- Avatars (resolve paths once) ---
+            import glob
+            avatar_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'user', 'public', 'avatars')
+            static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'interfaces', 'web', 'static', 'users')
+            avatars = {}
+            for role in ('user', 'assistant'):
+                custom = glob.glob(os.path.join(avatar_dir, f'{role}.*'))
+                if custom:
+                    ext = os.path.splitext(custom[0])[1]
+                    avatars[role] = f"/user-assets/avatars/{role}{ext}"
+                else:
+                    for ext in ('.webp', '.jpg', '.png'):
+                        if os.path.exists(os.path.join(static_dir, f'{role}{ext}')):
+                            avatars[role] = f"/static/users/{role}{ext}"
+                            break
+                    else:
+                        avatars[role] = None
+
+            # --- Plugins config ---
+            plugins_config = {"enabled": [], "plugins": {}}
+            try:
+                plugins_json = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'interfaces', 'web', 'static', 'plugins', 'plugins.json')
+                if os.path.exists(plugins_json):
+                    with open(plugins_json) as f:
+                        plugins_config = json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load plugins.json: {e}")
+
             return jsonify({
                 "abilities": {
                     "list": abilities_list,
@@ -707,7 +735,9 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 "settings": {
                     "AVATARS_IN_CHAT": avatars_in_chat
                 },
-                "wizard_step": wizard_step
+                "wizard_step": wizard_step,
+                "avatars": avatars,
+                "plugins_config": plugins_config
             })
         except Exception as e:
             logger.error(f"Error getting init data: {e}", exc_info=True)

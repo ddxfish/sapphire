@@ -5,6 +5,7 @@ import { getElements } from '../core/state.js';
 import { updateScene } from './scene.js';
 import { openSettingsModal } from './chat-settings.js';
 import * as eventBus from '../core/event-bus.js';
+import { getInitDataSync } from '../shared/init-data.js';
 
 // Cache for dropdown data - avoids fetch on every click
 let promptsCache = null;
@@ -12,12 +13,17 @@ let abilitiesCache = null;
 
 // Initialize cache and subscribe to SSE events for invalidation
 export function initPillsCache() {
+    // Pre-populate from init data (already fetched by main.js)
+    const initData = getInitDataSync();
+    if (initData) {
+        promptsCache = initData.prompts?.list || null;
+        abilitiesCache = initData.abilities?.list || null;
+    }
+
     // Invalidate caches when relevant events occur
     eventBus.on(eventBus.Events.PROMPT_CHANGED, () => { promptsCache = null; });
     eventBus.on(eventBus.Events.PROMPT_DELETED, () => { promptsCache = null; });
     eventBus.on(eventBus.Events.ABILITY_CHANGED, () => { abilitiesCache = null; });
-    // Note: No pre-fetch - plugins already fetch this data at init
-    // Cache populated on first dropdown click
 }
 
 export function closePillDropdowns() {
@@ -60,20 +66,12 @@ export async function showPromptDropdown(e) {
     const dropdown = promptPill.querySelector('.pill-dropdown');
     promptPill.classList.add('dropdown-open');
 
-    // Use cache if available, otherwise fetch
+    // Use cache if available, otherwise use init data
     let prompts = promptsCache;
     if (!prompts) {
-        dropdown.innerHTML = '<div class="pill-dropdown-item" style="color:var(--text-muted)">Loading...</div>';
-        try {
-            const res = await fetch('/api/prompts');
-            if (!res.ok) throw new Error('Failed to fetch');
-            const data = await res.json();
-            prompts = data.prompts || [];
-            promptsCache = prompts;
-        } catch (err) {
-            dropdown.innerHTML = '<div class="pill-dropdown-item" style="color:var(--error)">Error loading</div>';
-            return;
-        }
+        const initData = getInitDataSync();
+        prompts = initData?.prompts?.list || [];
+        promptsCache = prompts;
     }
 
     const currentPrompt = promptPill.querySelector('.pill-text').textContent.split(' (')[0];
@@ -106,20 +104,12 @@ export async function showAbilityDropdown(e) {
     const dropdown = abilityPill.querySelector('.pill-dropdown');
     abilityPill.classList.add('dropdown-open');
 
-    // Use cache if available, otherwise fetch
+    // Use cache if available, otherwise use init data
     let abilities = abilitiesCache;
     if (!abilities) {
-        dropdown.innerHTML = '<div class="pill-dropdown-item" style="color:var(--text-muted)">Loading...</div>';
-        try {
-            const res = await fetch('/api/abilities');
-            if (!res.ok) throw new Error('Failed to fetch');
-            const data = await res.json();
-            abilities = data.abilities || [];
-            abilitiesCache = abilities;
-        } catch (err) {
-            dropdown.innerHTML = '<div class="pill-dropdown-item" style="color:var(--error)">Error loading</div>';
-            return;
-        }
+        const initData = getInitDataSync();
+        abilities = initData?.abilities?.list || [];
+        abilitiesCache = abilities;
     }
 
     const currentAbility = abilityPill.querySelector('.pill-text').textContent.split(' (')[0];

@@ -11,54 +11,52 @@ const chatbgOverlay = document.getElementById('chatbg-overlay');
 const msgTpl = document.getElementById('message-template');
 const statusTpl = document.getElementById('status-template');
 
-// Avatar display setting (fetched on load)
+// Avatar display setting (loaded from /api/init)
 let avatarsInChat = true;
-
-// Fetch avatar setting on module init
-(async () => {
-    try {
-        const res = await fetch('/api/settings/AVATARS_IN_CHAT');
-        if (res.ok) {
-            const data = await res.json();
-            avatarsInChat = data.value !== false;
-        }
-    } catch (e) {
-        console.log('[UI] Could not fetch avatar setting, defaulting to enabled');
-    }
-})();
 
 // Export setter for immediate updates from settings modal
 export const setAvatarsInChat = (val) => { avatarsInChat = val; };
 
-// Avatar path cache - populated once via API, eliminates 404 cascades
+// Avatar path cache - populated from /api/init, eliminates 404 cascades
 let avatarPaths = null;
-let avatarPathsLoading = null;
 
-const loadAvatarPaths = async () => {
-    if (avatarPaths) return avatarPaths;
-    if (avatarPathsLoading) return avatarPathsLoading;
-    
-    avatarPathsLoading = fetch('/api/avatars')
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-            avatarPaths = data || { user: null, assistant: null };
-            avatarPathsLoading = null;
-            return avatarPaths;
-        })
-        .catch(() => {
-            avatarPaths = { user: null, assistant: null };
-            avatarPathsLoading = null;
-            return avatarPaths;
-        });
-    
-    return avatarPathsLoading;
+// Initialize from /api/init data (called from main.js after init data loads)
+export const initFromInitData = (initData) => {
+    if (initData.settings?.AVATARS_IN_CHAT !== undefined) {
+        avatarsInChat = initData.settings.AVATARS_IN_CHAT !== false;
+    }
+    if (initData.avatars) {
+        avatarPaths = initData.avatars;
+    }
 };
 
-// Pre-fetch avatars on module load
-loadAvatarPaths();
+// Getter for avatar paths (returns cached or fetches if needed)
+const loadAvatarPaths = async () => {
+    if (avatarPaths) return avatarPaths;
+
+    // Fallback fetch if init data wasn't loaded yet
+    try {
+        const res = await fetch('/api/avatars');
+        if (res.ok) {
+            avatarPaths = await res.json();
+        }
+    } catch (e) {
+        avatarPaths = { user: null, assistant: null };
+    }
+    return avatarPaths || { user: null, assistant: null };
+};
 
 // Export for cache invalidation after avatar upload
-export const refreshAvatarPaths = () => { avatarPaths = null; loadAvatarPaths(); };
+export const refreshAvatarPaths = async () => {
+    try {
+        const res = await fetch('/api/avatars');
+        if (res.ok) {
+            avatarPaths = await res.json();
+        }
+    } catch (e) {
+        // Keep existing cache on error
+    }
+};
 
 // =============================================================================
 // SCROLL MANAGEMENT

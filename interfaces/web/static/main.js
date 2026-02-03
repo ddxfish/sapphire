@@ -14,6 +14,7 @@ import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
 import { setupImageModal } from './ui-images.js';
 import * as eventBus from './core/event-bus.js';
+import { getInitData } from './shared/init-data.js';
 
 // Initialize appearance settings from localStorage (theme, density, font, trim)
 function initAppearance() {
@@ -146,7 +147,18 @@ async function init() {
         // Show loading status in chat area
         ui.showStatus();
         ui.updateStatus('Loading...');
-        
+
+        // Fetch init data first - contains avatars, settings, plugins config
+        // This single call replaces multiple separate API calls
+        let initData = null;
+        try {
+            initData = await getInitData();
+            // Initialize ui.js with avatar paths and settings from init data
+            ui.initFromInitData(initData);
+        } catch (e) {
+            console.warn('[Init] Could not fetch init data, will use fallbacks:', e);
+        }
+
         // Parallel initialization - use combined status endpoint
         // updateScene() now returns chats and settings too, reducing API calls
         const [status, historyLen] = await Promise.all([
@@ -203,8 +215,9 @@ async function init() {
         
         // LAZY: Load plugins in background AFTER UI is interactive
         // This prevents plugin loading from blocking the main UI
+        // Pass init data to avoid separate plugins config fetch
         setTimeout(() => {
-            initAvatar().then(() => {
+            initAvatar(initData).then(() => {
                 console.log('[Init] Plugins loaded in background');
             }).catch(e => {
                 console.warn('[Init] Plugin loading failed:', e);

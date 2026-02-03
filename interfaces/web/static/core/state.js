@@ -79,9 +79,16 @@ export async function refresh(playAudio = false) {
 }
 
 // Avatar/Plugin initialization
-export async function initAvatar() {
+// Optional initData param allows pre-seeding plugins config from /api/init
+export async function initAvatar(initData = null) {
     pluginLoader = new PluginLoader('#sidebar-plugin-area');
     window.pluginLoader = pluginLoader;
+
+    // Use plugins_config from init data if available (avoids separate fetch)
+    if (initData?.plugins_config) {
+        pluginLoader.setConfigFromInitData(initData.plugins_config);
+    }
+
     await pluginLoader.loadPlugins();
     
     const assistantAvatar = document.querySelector('.sidebar .avatar');

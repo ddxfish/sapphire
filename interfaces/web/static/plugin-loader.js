@@ -90,25 +90,36 @@ class PluginLoader {
     document.head.appendChild(style);
   }
 
+  // Set config from /api/init data (avoids separate fetch)
+  setConfigFromInitData(pluginsConfig) {
+    if (pluginsConfig && pluginsConfig.enabled) {
+      this.config = pluginsConfig;
+      return true;
+    }
+    return false;
+  }
+
   async loadPlugins() {
     const t0 = performance.now();
 
     try {
-      // Try API first (returns merged user + static config)
-      let response = await fetch('/api/webui/plugins/config');
+      // Use pre-set config from init data if available
+      if (!this.config) {
+        // Fallback: fetch config directly
+        let response = await fetch('/api/webui/plugins/config');
 
-      // Fallback to static file if API fails (e.g., not logged in)
-      if (!response.ok) {
-        console.log('[PluginLoader] API unavailable, falling back to static plugins.json');
-        response = await fetch('/static/plugins/plugins.json');
+        if (!response.ok) {
+          console.log('[PluginLoader] API unavailable, falling back to static plugins.json');
+          response = await fetch('/static/plugins/plugins.json');
+        }
+
+        if (!response.ok) {
+          console.log('[PluginLoader] No plugins config found, skipping plugins');
+          return;
+        }
+
+        this.config = await response.json();
       }
-
-      if (!response.ok) {
-        console.log('[PluginLoader] No plugins config found, skipping plugins');
-        return;
-      }
-
-      this.config = await response.json();
       const pluginNames = this.config.enabled || [];
 
       if (pluginNames.length === 0) {

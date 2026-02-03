@@ -1,4 +1,5 @@
 // continuity-api.js - API wrapper for continuity endpoints
+import { getInitDataSync } from '../../shared/init-data.js';
 
 const API_BASE = '/api/continuity';
 
@@ -77,20 +78,16 @@ export async function fetchTimeline(hours = 24) {
   return data.timeline || [];
 }
 
-// Fetch prompts for dropdown
+// Fetch prompts for dropdown (from init data cache)
 export async function fetchPrompts() {
-  const res = await fetch('/api/prompts');
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.prompts || [];
+  const initData = getInitDataSync();
+  return initData?.prompts?.list || [];
 }
 
-// Fetch abilities/toolsets for dropdown
+// Fetch abilities/toolsets for dropdown (from init data cache)
 export async function fetchAbilities() {
-  const res = await fetch('/api/abilities');
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.abilities || [];
+  const initData = getInitDataSync();
+  return initData?.abilities?.list || [];
 }
 
 // Fetch LLM providers with metadata

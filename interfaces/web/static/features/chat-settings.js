@@ -4,6 +4,7 @@ import * as ui from '../ui.js';
 import { getElements, getTtsEnabled } from '../core/state.js';
 import { closeAllKebabs } from './chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './scene.js';
+import { getInitDataSync } from '../shared/init-data.js';
 
 let llmProviders = [];
 let llmMetadata = {};
@@ -19,42 +20,29 @@ export async function openSettingsModal() {
         const response = await api.getChatSettings(chatName);
         const settings = response.settings;
         
-        // Load prompts list
-        try {
-            const promptsResp = await fetch('/api/prompts');
-            if (promptsResp.ok) {
-                const promptsData = await promptsResp.json();
-                const promptSelect = document.getElementById('setting-prompt');
-                promptSelect.innerHTML = '';
-                
-                promptsData.prompts.forEach(p => {
-                    const opt = document.createElement('option');
-                    opt.value = p.name;
-                    opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1);
-                    promptSelect.appendChild(opt);
-                });
-            }
-        } catch (e) {
-            console.warn('Could not load prompts list:', e);
+        // Load prompts list from init data cache
+        const initData = getInitDataSync();
+        if (initData?.prompts?.list) {
+            const promptSelect = document.getElementById('setting-prompt');
+            promptSelect.innerHTML = '';
+            initData.prompts.list.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.name;
+                opt.textContent = p.name.charAt(0).toUpperCase() + p.name.slice(1);
+                promptSelect.appendChild(opt);
+            });
         }
-        
-        // Load abilities list
-        try {
-            const abilitiesResp = await fetch('/api/abilities');
-            if (abilitiesResp.ok) {
-                const abilitiesData = await abilitiesResp.json();
-                const abilitySelect = document.getElementById('setting-ability');
-                abilitySelect.innerHTML = '';
-                
-                abilitiesData.abilities.forEach(a => {
-                    const opt = document.createElement('option');
-                    opt.value = a.name;
-                    opt.textContent = `${a.name} (${a.function_count} functions)`;
-                    abilitySelect.appendChild(opt);
-                });
-            }
-        } catch (e) {
-            console.warn('Could not load abilities list:', e);
+
+        // Load abilities list from init data cache
+        if (initData?.abilities?.list) {
+            const abilitySelect = document.getElementById('setting-ability');
+            abilitySelect.innerHTML = '';
+            initData.abilities.list.forEach(a => {
+                const opt = document.createElement('option');
+                opt.value = a.name;
+                opt.textContent = `${a.name} (${a.function_count} functions)`;
+                abilitySelect.appendChild(opt);
+            });
         }
         
         // Load LLM providers list with metadata
