@@ -1,6 +1,12 @@
-# 1.2.4 - State Engine upgrades
-- SE bugs - UI and UX
-
+# 1.2.5 - Performance upgrades
+- SSE bugs - added ID to prevent 2 tab issues
+- Reduced requests with 1 mega endpoint
+- webp defaults for avatars
+- lazy loading most JS files
+# 1.2.4 - State Engine - room based games
+- Added 2d dungeon crawler support
+- move North, roll dice, forced choices, non-linear
+- AI can only see current/past rooms and not future
 # 1.2.3 - Responses API and think tags
 - Added support for GPT 5.2 think summaries
 - Added OpenAI responses endpoint support
