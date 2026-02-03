@@ -102,20 +102,16 @@ function buildAssembledEditor(data, components) {
       <label>Extras</label>
       <div class="pm-component-row">
         <div class="pm-selected-items" id="pm-extras-display">${(comp.extras || []).join(', ') || 'none'}</div>
-        <button class="inline-btn pm-extras-select-btn" title="Select Active">&#x2713;</button>
-        <button class="inline-btn edit pm-extras-edit-btn" title="Edit Definitions">&#x270E;</button>
+        <button class="inline-btn edit pm-extras-edit-btn" title="Edit &amp; Select">&#x270E;</button>
         <button class="inline-btn add" data-type="extras" title="Add New">+</button>
-        <button class="inline-btn delete pm-extras-delete-btn" title="Delete">&#x1F5D1;</button>
       </div>
     </div>
     <div class="pm-component">
       <label>Emotions</label>
       <div class="pm-component-row">
         <div class="pm-selected-items" id="pm-emotions-display">${(comp.emotions || []).join(', ') || 'none'}</div>
-        <button class="inline-btn pm-emotions-select-btn" title="Select Active">&#x2713;</button>
-        <button class="inline-btn edit pm-emotions-edit-btn" title="Edit Definitions">&#x270E;</button>
+        <button class="inline-btn edit pm-emotions-edit-btn" title="Edit &amp; Select">&#x270E;</button>
         <button class="inline-btn add" data-type="emotions" title="Add New">+</button>
-        <button class="inline-btn delete pm-emotions-delete-btn" title="Delete">&#x1F5D1;</button>
       </div>
     </div>
   `;

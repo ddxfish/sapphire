@@ -474,40 +474,16 @@ Editing:
       });
     });
     
-    this.elements.editor.querySelector('.pm-extras-select-btn')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleExtrasModal();
-    });
-    
-    this.elements.editor.querySelector('.pm-emotions-select-btn')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleEmotionsModal();
-    });
-    
     this.elements.editor.querySelector('.pm-extras-edit-btn')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.handleEditExtrasDefinitions();
+      this.handleCombinedExtrasEmotions('extras');
     });
-    
+
     this.elements.editor.querySelector('.pm-emotions-edit-btn')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.handleEditEmotionsDefinitions();
-    });
-    
-    this.elements.editor.querySelector('.pm-extras-delete-btn')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleDeleteExtrasModal();
-    });
-    
-    this.elements.editor.querySelector('.pm-emotions-delete-btn')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleDeleteEmotionsModal();
+      this.handleCombinedExtrasEmotions('emotions');
     });
   },
   
@@ -610,357 +586,7 @@ Editing:
       showToast(`Failed: ${e.message}`, 'error');
     });
   },
-  
-  handleExtrasModal() {
-    if (!this.currentData || this.currentData.type !== 'assembled') return;
-    
-    const currentExtras = this.currentData.components?.extras || [];
-    const availableExtras = this.components.extras || {};
-    
-    const formattedOptions = {};
-    Object.entries(availableExtras).forEach(([key, content]) => {
-      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
-    });
-    
-    showModal('Select Extras', [
-      {
-        id: 'extras-select',
-        label: 'Active extras (multi-select)',
-        type: 'checkboxes',
-        options: formattedOptions,
-        selected: currentExtras
-      }
-    ], async (data) => {
-      const selected = data['extras-select'] || [];
-      this.currentData.components.extras = selected;
-      
-      const promptData = this.collectData();
-      if (!promptData) return;
-      
-      try {
-        await API.savePrompt(this.currentPrompt, promptData);
-        await API.loadPrompt(this.currentPrompt);
-        await updateScene();
-        showToast('Extras updated', 'success');
-        await this.loadPromptIntoEditor(this.currentPrompt);
-      } catch (e) {
-        showToast(`Failed: ${e.message}`, 'error');
-      }
-    }, { wide: true });
-  },
-  
-  handleEmotionsModal() {
-    if (!this.currentData || this.currentData.type !== 'assembled') return;
-    
-    const currentEmotions = this.currentData.components?.emotions || [];
-    const availableEmotions = this.components.emotions || {};
-    
-    const formattedOptions = {};
-    Object.entries(availableEmotions).forEach(([key, content]) => {
-      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
-    });
-    
-    showModal('Select Emotions', [
-      {
-        id: 'emotions-select',
-        label: 'Active emotions (multi-select)',
-        type: 'checkboxes',
-        options: formattedOptions,
-        selected: currentEmotions
-      }
-    ], async (data) => {
-      const selected = data['emotions-select'] || [];
-      this.currentData.components.emotions = selected;
-      
-      const promptData = this.collectData();
-      if (!promptData) return;
-      
-      try {
-        await API.savePrompt(this.currentPrompt, promptData);
-        await API.loadPrompt(this.currentPrompt);
-        await updateScene();
-        showToast('Emotions updated', 'success');
-        await this.loadPromptIntoEditor(this.currentPrompt);
-      } catch (e) {
-        showToast(`Failed: ${e.message}`, 'error');
-      }
-    }, { wide: true });
-  },
-  
-  handleDeleteExtrasModal() {
-    const availableExtras = this.components.extras || {};
-    const keys = Object.keys(availableExtras);
-    
-    if (keys.length === 0) {
-      showToast('No extras to delete', 'info');
-      return;
-    }
-    
-    const formattedOptions = {};
-    Object.entries(availableExtras).forEach(([key, content]) => {
-      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
-    });
-    
-    showModal('Delete Extras', [
-      {
-        id: 'delete-extras',
-        label: 'Select extras to DELETE (permanent)',
-        type: 'checkboxes',
-        options: formattedOptions,
-        selected: []
-      }
-    ], async (data) => {
-      const toDelete = data['delete-extras'] || [];
-      if (toDelete.length === 0) {
-        showToast('Nothing selected', 'info');
-        return;
-      }
-      
-      if (!confirm(`Delete ${toDelete.length} extra(s)?\n\n${toDelete.join(', ')}\n\nThis cannot be undone.`)) {
-        return;
-      }
-      
-      let deleted = 0;
-      for (const key of toDelete) {
-        try {
-          await API.deleteComponent('extras', key);
-          deleted++;
-        } catch (e) {
-          console.error(`Failed to delete extras.${key}:`, e);
-        }
-      }
-      
-      showToast(`Deleted ${deleted} extra(s)`, 'success');
-      await this.loadComponents();
-      
-      // Clean stale refs from current prompt
-      if (this.currentData?.type === 'assembled' && this.currentData.components?.extras) {
-        const validKeys = Object.keys(this.components.extras || {});
-        const before = this.currentData.components.extras.length;
-        this.currentData.components.extras = this.currentData.components.extras.filter(k => validKeys.includes(k));
-        
-        if (this.currentData.components.extras.length < before) {
-          const promptData = this.collectData();
-          if (promptData) {
-            await API.savePrompt(this.currentPrompt, promptData);
-            await API.loadPrompt(this.currentPrompt);
-            await updateScene();
-          }
-        }
-      }
-      
-      await this.loadPromptIntoEditor(this.currentPrompt);
-    }, { wide: true });
-  },
-  
-  handleDeleteEmotionsModal() {
-    const availableEmotions = this.components.emotions || {};
-    const keys = Object.keys(availableEmotions);
-    
-    if (keys.length === 0) {
-      showToast('No emotions to delete', 'info');
-      return;
-    }
-    
-    const formattedOptions = {};
-    Object.entries(availableEmotions).forEach(([key, content]) => {
-      formattedOptions[key] = `<strong>${key}:</strong><br><pre style="white-space:pre-wrap;margin:4px 0 8px;max-height:200px;overflow-y:auto;">${content}</pre>`;
-    });
-    
-    showModal('Delete Emotions', [
-      {
-        id: 'delete-emotions',
-        label: 'Select emotions to DELETE (permanent)',
-        type: 'checkboxes',
-        options: formattedOptions,
-        selected: []
-      }
-    ], async (data) => {
-      const toDelete = data['delete-emotions'] || [];
-      if (toDelete.length === 0) {
-        showToast('Nothing selected', 'info');
-        return;
-      }
-      
-      if (!confirm(`Delete ${toDelete.length} emotion(s)?\n\n${toDelete.join(', ')}\n\nThis cannot be undone.`)) {
-        return;
-      }
-      
-      let deleted = 0;
-      for (const key of toDelete) {
-        try {
-          await API.deleteComponent('emotions', key);
-          deleted++;
-        } catch (e) {
-          console.error(`Failed to delete emotions.${key}:`, e);
-        }
-      }
-      
-      showToast(`Deleted ${deleted} emotion(s)`, 'success');
-      await this.loadComponents();
-      
-      // Clean stale refs from current prompt
-      if (this.currentData?.type === 'assembled' && this.currentData.components?.emotions) {
-        const validKeys = Object.keys(this.components.emotions || {});
-        const before = this.currentData.components.emotions.length;
-        this.currentData.components.emotions = this.currentData.components.emotions.filter(k => validKeys.includes(k));
-        
-        if (this.currentData.components.emotions.length < before) {
-          const promptData = this.collectData();
-          if (promptData) {
-            await API.savePrompt(this.currentPrompt, promptData);
-            await API.loadPrompt(this.currentPrompt);
-            await updateScene();
-          }
-        }
-      }
-      
-      await this.loadPromptIntoEditor(this.currentPrompt);
-    }, { wide: true });
-  },
-  
-  handleEditExtrasDefinitions() {
-    const availableExtras = this.components.extras || {};
-    const keys = Object.keys(availableExtras);
-    
-    if (keys.length === 0) {
-      showToast('No extras to edit. Add one first.', 'info');
-      return;
-    }
-    
-    this._showEditDefinitionsModal('extras', availableExtras, async (changes) => {
-      let saved = 0;
-      for (const [key, value] of Object.entries(changes)) {
-        try {
-          await API.saveComponent('extras', key, value);
-          saved++;
-        } catch (e) {
-          console.error(`Failed to save extras.${key}:`, e);
-        }
-      }
-      
-      if (saved > 0) {
-        showToast(`Updated ${saved} extra(s)`, 'success');
-        await this.loadComponents();
-        
-        // Re-apply prompt to LLM since content changed
-        if (this.currentPrompt) {
-          await API.loadPrompt(this.currentPrompt);
-          await updateScene();
-        }
-        
-        await this.loadPromptIntoEditor(this.currentPrompt);
-      }
-    });
-  },
-  
-  handleEditEmotionsDefinitions() {
-    const availableEmotions = this.components.emotions || {};
-    const keys = Object.keys(availableEmotions);
-    
-    if (keys.length === 0) {
-      showToast('No emotions to edit. Add one first.', 'info');
-      return;
-    }
-    
-    this._showEditDefinitionsModal('emotions', availableEmotions, async (changes) => {
-      let saved = 0;
-      for (const [key, value] of Object.entries(changes)) {
-        try {
-          await API.saveComponent('emotions', key, value);
-          saved++;
-        } catch (e) {
-          console.error(`Failed to save emotions.${key}:`, e);
-        }
-      }
-      
-      if (saved > 0) {
-        showToast(`Updated ${saved} emotion(s)`, 'success');
-        await this.loadComponents();
-        
-        // Re-apply prompt to LLM since content changed
-        if (this.currentPrompt) {
-          await API.loadPrompt(this.currentPrompt);
-          await updateScene();
-        }
-        
-        await this.loadPromptIntoEditor(this.currentPrompt);
-      }
-    });
-  },
-  
-  _showEditDefinitionsModal(type, items, onSave) {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay modal-wide';
-    
-    const itemsHTML = Object.entries(items).map(([key, value]) => `
-      <div class="edit-def-item">
-        <label for="edit-def-${key}">${key}</label>
-        <textarea id="edit-def-${key}" data-key="${key}" rows="3">${value.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</textarea>
-      </div>
-    `).join('');
-    
-    overlay.innerHTML = `
-      <div class="modal-base">
-        <div class="modal-header">
-          <h3>Edit ${type.charAt(0).toUpperCase() + type.slice(1)} Definitions</h3>
-          <button class="close-btn modal-x">&times;</button>
-        </div>
-        <div class="modal-body">
-          <p style="margin:0 0 12px;color:var(--text-muted);font-size:var(--font-sm);">
-            Edit the text for each ${type.slice(0, -1)}. Changes are saved when you click Save.
-          </p>
-          <div class="edit-def-list">${itemsHTML}</div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn btn-secondary modal-cancel">Cancel</button>
-          <button class="btn btn-primary modal-save">Save Changes</button>
-        </div>
-      </div>
-    `;
-    
-    document.body.appendChild(overlay);
-    requestAnimationFrame(() => overlay.classList.add('active'));
-    
-    const close = () => {
-      overlay.classList.remove('active');
-      setTimeout(() => overlay.remove(), 300);
-    };
-    
-    overlay.querySelector('.modal-x')?.addEventListener('click', close);
-    overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
-    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
-    
-    const escHandler = e => {
-      if (e.key === 'Escape') {
-        close();
-        document.removeEventListener('keydown', escHandler);
-      }
-    };
-    document.addEventListener('keydown', escHandler);
-    
-    overlay.querySelector('.modal-save')?.addEventListener('click', () => {
-      const changes = {};
-      overlay.querySelectorAll('.edit-def-list textarea').forEach(textarea => {
-        const key = textarea.dataset.key;
-        const newValue = textarea.value.trim();
-        const originalValue = items[key];
-        
-        if (newValue && newValue !== originalValue) {
-          changes[key] = newValue;
-        }
-      });
-      
-      close();
-      
-      if (Object.keys(changes).length > 0) {
-        onSave(changes);
-      } else {
-        showToast('No changes to save', 'info');
-      }
-    });
-  },
-  
+
   handleNew() {
     showModal('Create New Prompt', [
       { id: 'prompt-name', label: 'Prompt Name', type: 'text' },
@@ -1396,5 +1022,193 @@ Editing:
       this.elements.select.value = promptName;
       await updateScene();
     }
+  },
+
+  handleCombinedExtrasEmotions(type) {
+    if (!this.currentData || this.currentData.type !== 'assembled') return;
+
+    const availableItems = this.components[type] || {};
+    const currentSelected = this.currentData.components?.[type] || [];
+    const keys = Object.keys(availableItems);
+
+    if (keys.length === 0) {
+      showToast(`No ${type} to manage. Add one first.`, 'info');
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay modal-wide';
+
+    const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
+    const singularLabel = type.slice(0, -1);
+
+    const itemsHTML = keys.map(key => {
+      const value = availableItems[key];
+      const isChecked = currentSelected.includes(key) ? 'checked' : '';
+      const escapedValue = value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `
+        <div class="combined-edit-row" data-key="${key}">
+          <input type="checkbox" class="combined-edit-check" data-key="${key}" ${isChecked}>
+          <div class="combined-edit-content">
+            <label class="combined-edit-label">${key}</label>
+            <textarea class="combined-edit-textarea" data-key="${key}" rows="4">${escapedValue}</textarea>
+          </div>
+          <button class="combined-edit-delete" data-key="${key}" title="Delete ${key}">✕</button>
+        </div>
+      `;
+    }).join('');
+
+    overlay.innerHTML = `
+      <div class="modal-base">
+        <div class="modal-header">
+          <h3>Edit ${typeLabel}</h3>
+          <button class="close-btn modal-x">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin:0 0 12px;color:var(--text-muted);font-size:var(--font-sm);">
+            Check to enable, edit text. Red ✕ deletes immediately.
+          </p>
+          <div class="combined-edit-list">${itemsHTML}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary modal-cancel">Cancel</button>
+          <button class="btn btn-primary modal-save">Save Changes</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('active'));
+
+    const close = () => {
+      overlay.classList.remove('active');
+      setTimeout(() => overlay.remove(), 300);
+    };
+
+    // Refresh modal content after delete
+    const refreshModal = async () => {
+      await this.loadComponents();
+      const newItems = this.components[type] || {};
+      const newKeys = Object.keys(newItems);
+
+      if (newKeys.length === 0) {
+        close();
+        showToast(`No ${type} remaining`, 'info');
+        await this.loadPromptIntoEditor(this.currentPrompt);
+        await updateScene();
+        return;
+      }
+
+      // Update currentSelected to remove deleted keys
+      const validSelected = currentSelected.filter(k => newKeys.includes(k));
+      this.currentData.components[type] = validSelected;
+
+      // Rebuild just the list
+      const listEl = overlay.querySelector('.combined-edit-list');
+      listEl.innerHTML = newKeys.map(key => {
+        const value = newItems[key];
+        const isChecked = validSelected.includes(key) ? 'checked' : '';
+        const escapedValue = value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `
+          <div class="combined-edit-row" data-key="${key}">
+            <input type="checkbox" class="combined-edit-check" data-key="${key}" ${isChecked}>
+            <div class="combined-edit-content">
+              <label class="combined-edit-label">${key}</label>
+              <textarea class="combined-edit-textarea" data-key="${key}" rows="4">${escapedValue}</textarea>
+            </div>
+            <button class="combined-edit-delete" data-key="${key}" title="Delete ${key}">✕</button>
+          </div>
+        `;
+      }).join('');
+
+      // Re-bind delete handlers
+      bindDeleteHandlers();
+    };
+
+    // Instant delete with confirm
+    const bindDeleteHandlers = () => {
+      overlay.querySelectorAll('.combined-edit-delete').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const key = btn.dataset.key;
+          if (!confirm(`Delete "${key}"?\n\nThis cannot be undone.`)) return;
+
+          try {
+            await API.deleteComponent(type, key);
+            showToast(`Deleted ${key}`, 'success');
+            await refreshModal();
+          } catch (e) {
+            console.error(`Failed to delete ${type}.${key}:`, e);
+            showToast(`Failed to delete ${key}`, 'error');
+          }
+        });
+      });
+    };
+    bindDeleteHandlers();
+
+    overlay.querySelector('.modal-x')?.addEventListener('click', close);
+    overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+    const escHandler = e => {
+      if (e.key === 'Escape') {
+        close();
+        document.removeEventListener('keydown', escHandler);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+
+    overlay.querySelector('.modal-save')?.addEventListener('click', async () => {
+      const textChanges = {};
+      const enabledKeys = [];
+
+      overlay.querySelectorAll('.combined-edit-row').forEach(row => {
+        const key = row.dataset.key;
+        const checkbox = row.querySelector('.combined-edit-check');
+        const textarea = row.querySelector('.combined-edit-textarea');
+        const newValue = textarea.value.trim();
+        const originalValue = this.components[type]?.[key];
+
+        if (checkbox.checked) {
+          enabledKeys.push(key);
+        }
+
+        if (newValue && newValue !== originalValue) {
+          textChanges[key] = newValue;
+        }
+      });
+
+      close();
+
+      // Save text changes
+      let textSaved = 0;
+      for (const [key, value] of Object.entries(textChanges)) {
+        try {
+          await API.saveComponent(type, key, value);
+          textSaved++;
+        } catch (e) {
+          console.error(`Failed to save ${type}.${key}:`, e);
+        }
+      }
+      if (textSaved > 0) {
+        showToast(`Updated ${textSaved} ${singularLabel}(s)`, 'success');
+      }
+
+      // Update enabled selection
+      this.currentData.components[type] = enabledKeys;
+      const promptData = this.collectData();
+      if (promptData) {
+        try {
+          await API.savePrompt(this.currentPrompt, promptData);
+          await API.loadPrompt(this.currentPrompt);
+        } catch (e) {
+          console.warn('Failed to save enabled selection:', e);
+        }
+      }
+
+      // Refresh everything
+      await this.loadComponents();
+      await this.loadPromptIntoEditor(this.currentPrompt);
+      await updateScene();
+    });
   }
 };

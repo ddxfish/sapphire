@@ -173,6 +173,84 @@ export function injectStyles() {
       border-color: var(--input-focus-border);
       box-shadow: 0 0 0 2px var(--focus-ring);
     }
+
+    /* Combined Edit Modal (extras/emotions) */
+    .combined-edit-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 500px;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+
+    .combined-edit-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-md);
+    }
+
+    .combined-edit-check {
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .combined-edit-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .combined-edit-label {
+      color: var(--text-light);
+      font-size: var(--font-sm);
+      font-weight: 600;
+      font-family: var(--font-mono);
+    }
+
+    .combined-edit-textarea {
+      width: 100%;
+      padding: 8px;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: var(--font-sm);
+      font-family: var(--font-mono);
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .combined-edit-textarea:focus {
+      outline: none;
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 2px var(--focus-ring);
+    }
+
+    .combined-edit-delete {
+      padding: 4px 8px;
+      background: transparent;
+      border: 1px solid var(--danger, #dc3545);
+      border-radius: var(--radius-sm);
+      color: var(--danger, #dc3545);
+      cursor: pointer;
+      font-size: var(--font-sm);
+      font-weight: bold;
+      flex-shrink: 0;
+      transition: all var(--transition-fast);
+    }
+
+    .combined-edit-delete:hover {
+      background: var(--danger, #dc3545);
+      color: white;
+    }
   `;
   document.head.appendChild(style);
 }
