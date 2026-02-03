@@ -76,7 +76,7 @@ export async function updateScene() {
         audio.setLocalTtsPlaying(ttsPlaying);
         
         updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count);
-        updateFuncs(status?.functions, status?.ability, hasCloudTools);
+        updateFuncs(status?.functions, status?.ability, hasCloudTools, status?.state_tools);
         updateSpice(status?.spice);
         updateStoryIndicator(status?.story);
 
@@ -151,30 +151,37 @@ function updatePrompt(state, promptName, charCount) {
     }
 }
 
-function updateFuncs(funcs, ability, cloudTools) {
+function updateFuncs(funcs, ability, cloudTools, stateTools) {
     const { abilityPill } = getElements();
     if (!abilityPill) return;
-    
+
     const textEl = abilityPill.querySelector('.pill-text');
     const tooltipEl = abilityPill.querySelector('.pill-tooltip');
-    
-    if (!funcs || funcs.length === 0) {
+
+    // Total count includes both user tools and state tools
+    const totalCount = (funcs?.length || 0) + (stateTools?.length || 0);
+
+    if (totalCount === 0) {
         textEl.textContent = 'None (0)';
         tooltipEl.textContent = 'No functions enabled';
         abilityPill.classList.remove('cloud-tools');
         return;
     }
-    
+
     const name = ability?.name || 'Custom';
-    const count = ability?.function_count || funcs.length;
-    
-    textEl.textContent = `${name} (${count})`;
-    tooltipEl.textContent = funcs.join(', ');
-    
+    textEl.textContent = `${name} (${totalCount})`;
+
+    // Build tooltip with sections
+    const parts = [];
+    if (cloudTools) parts.push('⚠️ Network tools enabled');
+    if (stateTools?.length) parts.push(`📖 Story: ${stateTools.join(', ')}`);
+    if (funcs?.length) parts.push(`🔧 Tools: ${funcs.join(', ')}`);
+
+    tooltipEl.textContent = parts.join('\n');
+
     // Yellow indicator only for toolsets with network/cloud tools
     if (cloudTools) {
         abilityPill.classList.add('cloud-tools');
-        tooltipEl.textContent = '🌐 Network tools enabled\n' + funcs.join(', ');
     } else {
         abilityPill.classList.remove('cloud-tools');
     }

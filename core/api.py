@@ -8,6 +8,7 @@ import time
 from flask import Flask, Blueprint, request, jsonify, send_file, Response
 from core.modules.system import prompts
 from core.event_bus import publish, Events
+from core.state_engine import STATE_TOOL_NAMES
 import config
 
 logger = logging.getLogger(__name__)
@@ -511,9 +512,10 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
         try:
             from core.chat.history import count_tokens, count_message_tokens
 
-            # NOTE: State engine sync removed - it's called before chat streaming
-            # which is the only time it needs to be current. Calling here caused
-            # heavy I/O on every UI poll, leading to SSE disconnects.
+            # Initialize state engine if needed (one-time per chat load)
+            chat_settings = system_instance.llm_chat.session_manager.get_chat_settings()
+            if chat_settings.get('state_engine_enabled') and not system_instance.llm_chat.function_manager.get_state_engine():
+                system_instance.llm_chat._update_state_engine()
 
             # Prompt state
             prompt_state = prompts.get_current_state()
@@ -527,7 +529,6 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             has_cloud_tools = system_instance.llm_chat.function_manager.has_network_tools_enabled()
             
             # Spice state
-            chat_settings = system_instance.llm_chat.session_manager.get_chat_settings()
             spice_enabled = chat_settings.get('spice_enabled', True)
             current_spice = prompts.get_current_spice()
             
@@ -584,12 +585,17 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 logger.warning(f"Error getting story status: {e}")
                 story_status = None
 
+            # Separate state engine tools from user-selected tools
+            state_tools = [f for f in function_names if f in STATE_TOOL_NAMES]
+            user_tools = [f for f in function_names if f not in STATE_TOOL_NAMES]
+
             return jsonify({
                 "prompt_name": prompt_name,
                 "prompt_char_count": prompt_char_count,
                 "prompt": prompt_state,
                 "ability": ability_info,
-                "functions": function_names,
+                "functions": user_tools,
+                "state_tools": state_tools,
                 "has_cloud_tools": has_cloud_tools,
                 "tts_enabled": config.TTS_ENABLED,
                 "tts_playing": tts_playing,
