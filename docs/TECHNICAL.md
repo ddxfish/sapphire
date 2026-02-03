@@ -138,6 +138,62 @@ Runtime config
 
 Providers are tried in fallback order. Each chat can override to use a specific provider.
 
+### Claude-Friendly Settings
+
+Claude works well with Sapphire but requires specific settings for optimal cost and performance:
+
+**For prompt caching (90% cost savings):**
+- Enable caching: Gear icon → App Settings → LLM → Claude → Enable prompt caching
+- **Disable Spice** — Changes system prompt every turn, breaks cache (25% write penalty)
+- **Disable Datetime injection** — Same problem, changes every turn
+- **Disable State vars in prompt** — Changes on state updates, breaks cache
+- "Story in prompt" is fine — Only changes on scene advance
+
+**Other recommendations:**
+- Claude supports parallel tool calls natively
+- Extended thinking adds extra reasoning tokens, good for complex tasks
+- Cache TTL can be 5m (default) or 1h for longer sessions
+
+**What the logs show:**
+```
+[CACHE] ✓ HIT - 1234 tokens read from cache (90% savings)
+[CACHE] ✗ MISS - 1234 tokens written to cache
+```
+
+---
+
+## Extended Thinking & Reasoning
+
+Different providers handle "thinking" differently:
+
+| Provider | Feature | How It Works |
+|----------|---------|--------------|
+| **Claude** | Extended Thinking | Structured thinking blocks with budget, uses `thinking` API param |
+| **GPT-5.x** | Reasoning Summaries | Uses Responses API, `reasoning_summary` param |
+| **Fireworks** | Reasoning Effort | Models like Qwen-Thinking, Kimi-K2 use `reasoning_effort` param |
+
+### Claude Extended Thinking
+
+Enable in LLM settings → Claude → Extended Thinking. Set a budget (default 10,000 tokens).
+
+The thinking is shown in a collapsible UI block. Thinking blocks are preserved across tool call cycles so Claude maintains context.
+
+**Auto-disable:** Thinking is automatically disabled for:
+- Continue mode (can't inject thinking into existing response)
+- Active tool cycles that started without thinking
+
+### GPT-5.x Reasoning Summaries
+
+GPT-5 and later models use the Responses API which provides reasoning summaries instead of raw thinking. Configure:
+- `reasoning_effort`: low, medium, high
+- `reasoning_summary`: auto, detailed, concise
+
+### Fireworks Reasoning Models
+
+Models with "thinking" in the name (Qwen3-Thinking, Kimi-K2-Thinking) return reasoning in `reasoning_content` field when `reasoning_effort` is set.
+
+**Note:** When switching between providers, thinking blocks are stripped from history sent to non-Claude providers to avoid format conflicts.
+
 ### Reload Behavior
 
 | Type | When Applied | Examples |

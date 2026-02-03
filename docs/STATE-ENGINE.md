@@ -56,6 +56,31 @@ When State Engine is enabled, the AI gets these tools:
 
 ---
 
+## Game Types
+
+Set `game_type` in your preset to load the appropriate AI instruction layer:
+
+| Type | Use Case | AI Instructions |
+|------|----------|-----------------|
+| `linear` | Scene-based stories with `advance_scene()` | `_linear.json` — scene advancement, no room navigation |
+| `rooms` | Room-based exploration with `move()` | `_rooms.json` — Zork-style navigation, no scene numbers |
+
+```json
+{
+  "name": "My Adventure",
+  "game_type": "rooms",
+  ...
+}
+```
+
+**Linear** is for traditional stories: scene 1 → 2 → 3 → ending.
+
+**Rooms** is for dungeon crawlers and text adventures: move north/south/east/west between connected rooms. Great for exploration-heavy games.
+
+Both types share all features (state, choices, riddles, dice) but differ in how progression works.
+
+---
+
 ## Features
 
 ### 1. State Variables
@@ -187,6 +212,15 @@ Force decisions that block progression:
 - `required_for_scene` blocks `advance_scene()` until choice is made
 - `set` applies automatic consequences (supports `"+10"` relative values)
 
+**For room-based games**, use `visible_from_room` and `required_for_room` instead:
+
+```json
+{
+  "visible_from_room": "goblin_den",
+  "required_for_room": "treasure_vault"
+}
+```
+
 ### 6. Riddles with Progressive Clues
 
 Puzzles where neither AI nor player knows the answer:
@@ -202,7 +236,8 @@ Puzzles where neither AI nor player knows the answer:
       "answer": "0451",
       "digits": 4,
       "max_attempts": 3,
-      "visible_from_scene": 3,
+      "visible_from_scene": 3,  // For linear games
+      // Or: "visible_from_room": "treasure_vault" for room-based games
       "clues": {
         "1": "The code was set on a special day...",
         "2?scene_turns>=2": "Something about classic games...",

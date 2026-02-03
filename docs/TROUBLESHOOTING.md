@@ -88,8 +88,28 @@
 - Check API key (some are for Claude Code only)
 - Put new API key in Gear icon > App Settings > LLM > Claude
 
-**No thinking tags in some models**
-- We can't switch between models when some use think tags. GLM, Claude do not have think.
+**No thinking/reasoning visible**
+- Not all models support thinking. Check provider supports it.
+- Claude: Enable "Extended Thinking" in LLM settings
+- GPT-5.x: Uses Responses API, set reasoning_summary to "detailed"
+- Fireworks: Only works with thinking-enabled models (Qwen3-Thinking, Kimi-K2-Thinking)
+- Local models via LM Studio: May need specific model that outputs `<think>` tags
+
+**Thinking breaks when switching providers**
+- Thinking should transfer between chats 
+- Note, models cannot see their past think tags in some cases (Claude)
+- Check if the model you are on supports thinking
+
+**Claude prompt caching not working (always MISS)**
+- Spice changes system prompt every turn — disable if caching matters
+- Datetime injection also breaks cache
+- "State vars in prompt" breaks cache (changes on state updates)
+- Check logs for `[CACHE] Dynamic content detected - tools only, system prompt not cached`
+
+**Claude caching enabled but costs seem high**
+- First request is always a MISS (writing to cache costs 25% more)
+- Cache expires after TTL (5m default, can set to 1h)
+- If prompts change often, cache never gets reused
 
 ## Tool/Function Issues
 
