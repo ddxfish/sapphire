@@ -942,6 +942,29 @@ body:not(.sidebar-collapsed) #toggle-sidebar {
     }
 }
 
+.send-btn-wrapper {
+    position: relative;
+}
+
+#llm-indicator {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 2px;
+    font-size: 9px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    opacity: 0.7;
+    white-space: nowrap;
+}
+
+#llm-indicator.cloud {
+    color: var(--warning);
+    opacity: 1;
+}
+
 #send-btn, #stop-btn {
     padding: 10px 20px;
     border: none;

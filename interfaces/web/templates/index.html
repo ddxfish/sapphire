@@ -99,8 +99,11 @@
                     <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
                 </div>
                 <input type="file" id="image-upload-input" accept="image/*" multiple style="display: none;">
-                <button type="submit" id="send-btn">Send</button>
-                <button type="button" id="stop-btn" style="display: none;">Stop</button>
+                <div class="send-btn-wrapper">
+                    <button type="submit" id="send-btn">Send</button>
+                    <button type="button" id="stop-btn" style="display: none;">Stop</button>
+                    <span id="llm-indicator"></span>
+                </div>
             </form>
             <div class="pill-bar">
                 <button class="spice-indicator" id="spice-indicator" title="Spice disabled">

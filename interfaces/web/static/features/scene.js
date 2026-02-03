@@ -17,27 +17,41 @@ export function getTtsPlaying() {
 // Call this when chat's primary LLM is known (from chat-manager, chat-settings)
 export function updateSendButtonLLM(primary, model = '') {
     const sendBtn = document.getElementById('send-btn');
+    const indicator = document.getElementById('llm-indicator');
     if (!sendBtn) return;
-    
+
     // Remove all mode classes first
     sendBtn.classList.remove('llm-local', 'llm-cloud', 'llm-auto');
-    
+    if (indicator) indicator.classList.remove('cloud');
+
     // Cloud providers
     const cloudProviders = ['claude', 'openai', 'fireworks', 'other'];
-    
+    const isCloud = cloudProviders.includes(primary);
+
+    // Build display name - capitalize first letter
+    const displayName = primary === 'lmstudio' ? 'LM Studio' :
+                       primary === 'none' ? 'Off' :
+                       primary ? primary.charAt(0).toUpperCase() + primary.slice(1) : 'Local';
+
     // Build title suffix for model
     const modelSuffix = model ? ` (${model.split('/').pop()})` : '';
-    
+
     if (primary === 'auto') {
         sendBtn.classList.add('llm-auto');
         sendBtn.title = 'Send (auto LLM selection)';
-    } else if (cloudProviders.includes(primary)) {
+        if (indicator) indicator.textContent = 'Auto';
+    } else if (isCloud) {
         sendBtn.classList.add('llm-cloud');
         sendBtn.title = `Send: ${primary}${modelSuffix}`;
+        if (indicator) {
+            indicator.textContent = displayName;
+            indicator.classList.add('cloud');
+        }
     } else {
-        // lmstudio, none, or unknown = local/grey
+        // lmstudio, none, or unknown = local
         sendBtn.classList.add('llm-local');
         sendBtn.title = primary === 'none' ? 'Send (LLM disabled)' : `Send: ${primary || 'local'}${modelSuffix}`;
+        if (indicator) indicator.textContent = displayName;
     }
 }
 
