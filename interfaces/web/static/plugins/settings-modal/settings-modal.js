@@ -60,8 +60,8 @@ class SettingsModal {
         settingsAPI.checkAvatar('assistant').catch(() => ({ exists: false }))
       ]);
       
-      this.avatarPaths.user = userCheck.exists ? userCheck.path : '/static/users/user.png';
-      this.avatarPaths.assistant = assistantCheck.exists ? assistantCheck.path : '/static/users/assistant.png';
+      this.avatarPaths.user = userCheck.exists ? userCheck.path : '/static/users/user.webp';
+      this.avatarPaths.assistant = assistantCheck.exists ? assistantCheck.path : '/static/users/assistant.webp';
     } catch (e) {
       console.warn('Failed to check avatars:', e);
     }

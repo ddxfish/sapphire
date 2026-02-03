@@ -32,25 +32,27 @@ except Exception as e:
 def _init_avatars():
     avatar_dir = 'user/public/avatars'
     static_dir = 'interfaces/web/static/users'
-    patterns = ['user.png', 'user.jpg', 'assistant.png', 'assistant.jpg']
-    
-    # Check if ANY avatar already exists
-    has_avatar = any(os.path.exists(os.path.join(avatar_dir, p)) for p in patterns)
-    if has_avatar:
-        return
-    
-    # Copy defaults if static dir exists
+
+    # Check if ANY avatar already exists (any format)
+    for role in ('user', 'assistant'):
+        for ext in ('.webp', '.jpg', '.png'):
+            if os.path.exists(os.path.join(avatar_dir, f'{role}{ext}')):
+                return  # Already have avatars, don't overwrite
+
+    # Copy defaults - prefer webp > jpg > png
     if not os.path.isdir(static_dir):
         return
-    
-    for f in os.listdir(static_dir):
-        if f.lower().endswith(('.png', '.jpg', '.jpeg')):
-            src = os.path.join(static_dir, f)
-            dst = os.path.join(avatar_dir, f)
-            try:
-                shutil.copy2(src, dst)
-            except Exception:
-                pass
+
+    for role in ('user', 'assistant'):
+        for ext in ('.webp', '.jpg', '.png'):
+            src = os.path.join(static_dir, f'{role}{ext}')
+            if os.path.exists(src):
+                dst = os.path.join(avatar_dir, f'{role}{ext}')
+                try:
+                    shutil.copy2(src, dst)
+                except Exception:
+                    pass
+                break  # Only copy one format per role
 
 _init_avatars()  
 

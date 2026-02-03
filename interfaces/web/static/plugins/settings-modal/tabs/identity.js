@@ -21,8 +21,8 @@ export default {
   },
 
   renderAvatarSection(modal) {
-    const userPath = modal.avatarPaths?.user || '/static/users/user.png';
-    const assistantPath = modal.avatarPaths?.assistant || '/static/users/assistant.png';
+    const userPath = modal.avatarPaths?.user || '/static/users/user.webp';
+    const assistantPath = modal.avatarPaths?.assistant || '/static/users/assistant.webp';
     const ts = Date.now();
     
     return `
@@ -30,7 +30,7 @@ export default {
         <div class="avatar-column">
           <h4>User Avatar</h4>
           <img src="${userPath}?t=${ts}" alt="User" class="avatar-preview" id="user-avatar-preview" 
-               onerror="this.src='/static/users/user.png'">
+               onerror="this.src='/static/users/user.webp'">
           <input type="file" id="user-avatar-input" accept=".png,.jpg,.jpeg,.gif,.webp" hidden>
           <button class="btn btn-secondary" id="user-avatar-btn">Choose File</button>
           <span class="avatar-hint">PNG, JPG, GIF, WEBP • Max 4MB</span>
@@ -38,7 +38,7 @@ export default {
         <div class="avatar-column">
           <h4>Assistant Avatar</h4>
           <img src="${assistantPath}?t=${ts}" alt="Assistant" class="avatar-preview" id="assistant-avatar-preview"
-               onerror="this.src='/static/users/assistant.png'">
+               onerror="this.src='/static/users/assistant.webp'">
           <input type="file" id="assistant-avatar-input" accept=".png,.jpg,.jpeg,.gif,.webp" hidden>
           <button class="btn btn-secondary" id="assistant-avatar-btn">Choose File</button>
           <span class="avatar-hint">PNG, JPG, GIF, WEBP • Max 4MB</span>
