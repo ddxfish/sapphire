@@ -506,70 +506,100 @@ const addToolDeleteButton = (acc, toolCallId) => {
 const renderToolResult = (el, part) => {
     const toolName = part.name || 'Unknown Tool';
     const toolCallId = part.tool_call_id;
-    let resultContent = part.content || part.result || '';
-    
+    const fullResult = part.content || part.result || '';
+
+    // Get truncation limit based on tool
+    const maxLen = toolName === 'generate_scene_image' ? 2000 :
+                  toolName === 'web_search' ? 1000 :
+                  toolName === 'get_website' ? 800 : 500;
+
     // Check for image markers
-    const imgMatch = resultContent.match(/<<IMG::([^>]+)>>/);
+    const imgMatch = fullResult.match(/<<IMG::([^>]+)>>/);
     if (imgMatch) {
         const imageId = imgMatch[1];
-        const textWithoutMarker = resultContent.replace(/<<IMG::[^>]+>>\n?/, '').trim();
-        
-        const maxLen = 500;
-        let displayText = textWithoutMarker;
-        if (displayText.length > maxLen) {
-            displayText = displayText.substring(0, maxLen) + '...(truncated)';
-        }
-        
-        let accordionContent = '';
-        
+        const textWithoutMarker = fullResult.replace(/<<IMG::[^>]+>>\n?/, '').trim();
+        const isTruncated = textWithoutMarker.length > maxLen;
+        const truncatedText = isTruncated
+            ? textWithoutMarker.substring(0, maxLen) + '...'
+            : textWithoutMarker;
+
+        let inputsPrefix = '';
         if (part.inputs && Object.keys(part.inputs).length > 0) {
             try {
-                let inputsStr = JSON.stringify(part.inputs, null, 2);
-                if (inputsStr.length > 500) {
-                    inputsStr = inputsStr.substring(0, 500) + '\n...(truncated)';
-                }
-                accordionContent += 'Inputs:\n' + inputsStr + '\n\n';
+                inputsPrefix = 'Inputs:\n' + JSON.stringify(part.inputs, null, 2) + '\n\n';
             } catch (e) {}
         }
-        
-        accordionContent += 'Result:\n' + displayText;
-        
-        const { acc, content } = createAccordion('tool', `Tool Result: ${toolName}`, accordionContent);
+
+        const { acc, content } = createAccordion('tool', `Tool Result: ${toolName}`,
+            inputsPrefix + 'Result:\n' + truncatedText);
         addToolDeleteButton(acc, toolCallId);
-        
+
+        // Add expand/collapse toggle if truncated
+        if (isTruncated) {
+            addExpandToggle(content, inputsPrefix + 'Result:\n', truncatedText, textWithoutMarker);
+        }
+
         const img = Images.createImageElement(imageId, false, null);
         img.className = 'tool-result-image';
         content.insertBefore(img, content.firstChild);
-        
+
         el.appendChild(acc);
         return;
     }
-    
+
     // Regular tool result (no image)
-    const maxLen = toolName === 'generate_scene_image' ? 2000 : 
-                  toolName === 'web_search' ? 1000 : 
-                  toolName === 'get_website' ? 800 : 500;
-    
-    if (resultContent.length > maxLen) {
-        resultContent = resultContent.substring(0, maxLen) + '...(truncated)';
-    }
-    
-    let inputsStr = '';
+    const isTruncated = fullResult.length > maxLen;
+    const truncatedResult = isTruncated
+        ? fullResult.substring(0, maxLen) + '...'
+        : fullResult;
+
+    let inputsPrefix = '';
     if (part.inputs && Object.keys(part.inputs).length > 0) {
         try {
-            inputsStr = JSON.stringify(part.inputs, null, 2);
-            if (inputsStr.length > 500) {
-                inputsStr = inputsStr.substring(0, 500) + '\n...(truncated)';
-            }
-            inputsStr = 'Inputs:\n' + inputsStr + '\n\n';
-        } catch (e) {
-            inputsStr = '';
-        }
+            inputsPrefix = 'Inputs:\n' + JSON.stringify(part.inputs, null, 2) + '\n\n';
+        } catch (e) {}
     }
-    
-    const { acc } = createAccordion('tool', `Tool Result: ${toolName}`, inputsStr + 'Result:\n' + resultContent);
+
+    const { acc, content } = createAccordion('tool', `Tool Result: ${toolName}`,
+        inputsPrefix + 'Result:\n' + truncatedResult);
     addToolDeleteButton(acc, toolCallId);
+
+    // Add expand/collapse toggle if truncated
+    if (isTruncated) {
+        addExpandToggle(content, inputsPrefix + 'Result:\n', truncatedResult, fullResult);
+    }
+
     el.appendChild(acc);
+};
+
+// Helper to add expand/collapse toggle for truncated content
+const addExpandToggle = (contentEl, prefix, shortText, fullText) => {
+    let isExpanded = false;
+
+    const toggle = document.createElement('button');
+    toggle.className = 'tool-expand-toggle';
+    toggle.textContent = `Show more (${(fullText.length / 1000).toFixed(1)}k chars)`;
+    toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        isExpanded = !isExpanded;
+        // contentEl is the accordion-inner div, update its textContent directly
+        // But we need to preserve the toggle button, so use a text node approach
+        const textNode = contentEl.firstChild;
+        if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+            textNode.textContent = prefix + (isExpanded ? fullText : shortText);
+        } else {
+            // Fallback: rebuild content
+            contentEl.textContent = prefix + (isExpanded ? fullText : shortText);
+            contentEl.appendChild(toggle);
+        }
+        toggle.textContent = isExpanded ? 'Show less' : `Show more (${(fullText.length / 1000).toFixed(1)}k chars)`;
+    });
+
+    // Convert existing text to a text node so we can update it separately
+    const currentText = contentEl.textContent;
+    contentEl.textContent = '';
+    contentEl.appendChild(document.createTextNode(currentText));
+    contentEl.appendChild(toggle);
 };
 
 const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) => {

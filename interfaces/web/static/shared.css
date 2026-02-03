@@ -480,6 +480,26 @@
     overflow: hidden;
 }
 
+/* Tool result expand toggle */
+.tool-expand-toggle {
+    display: block;
+    margin-top: var(--space-xs);
+    padding: 4px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.tool-expand-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: var(--border);
+}
+
 /* =============================================================================
    MODAL SYSTEM
    ============================================================================= */

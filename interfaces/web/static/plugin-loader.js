@@ -3,7 +3,7 @@
 import { showHelpModal } from './shared/modal.js';
 
 // Cache buster - increment to force fresh plugin loads
-const PLUGIN_VERSION = '20260202e';
+const PLUGIN_VERSION = '20260202g';
 
 class PluginLoader {
   constructor(containerSelector) {
