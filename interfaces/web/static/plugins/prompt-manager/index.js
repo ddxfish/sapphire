@@ -449,141 +449,14 @@ Editing:
         select.addEventListener('change', () => this._handleComponentChange(type, select.value));
       }
     });
-    
-    this.elements.editor.querySelectorAll('.inline-btn.add[data-type]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.handleAddComponent(btn.dataset.type);
-      });
-    });
-    
-    this.elements.editor.querySelectorAll('.inline-btn.edit[data-type]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.handleEditComponent(btn.dataset.type);
-      });
-    });
-    
-    this.elements.editor.querySelectorAll('.inline-btn.delete[data-type]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.handleDeleteComponent(btn.dataset.type);
-      });
-    });
-    
-    this.elements.editor.querySelector('.pm-extras-edit-btn')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleCombinedExtrasEmotions('extras');
-    });
 
-    this.elements.editor.querySelector('.pm-emotions-edit-btn')?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      this.handleCombinedExtrasEmotions('emotions');
-    });
-  },
-  
-  handleAddComponent(type) {
-    showModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, [
-      { id: 'comp-key', label: 'Key Name (e.g., "bunker", "sapphire")', type: 'text' },
-      { id: 'comp-value', label: 'Component Text', type: 'textarea' }
-    ], async (data) => {
-      const key = data['comp-key'].trim();
-      const value = data['comp-value'].trim();
-      
-      if (!key || !value) {
-        showToast('Key and value required', 'error');
-        return;
-      }
-      
-      try {
-        await API.saveComponent(type, key, value);
-        showToast(`${type} added!`, 'success');
-        await this.loadComponents();
-        
-        // Auto-select new extras/emotions in current prompt
-        if ((type === 'extras' || type === 'emotions') && 
-            this.currentData?.type === 'assembled' && 
-            this.currentData.components) {
-          const arr = this.currentData.components[type] || [];
-          if (!arr.includes(key)) {
-            this.currentData.components[type] = [...arr, key];
-            const promptData = this.collectData();
-            if (promptData) {
-              await API.savePrompt(this.currentPrompt, promptData);
-              await API.loadPrompt(this.currentPrompt);
-              await updateScene();
-            }
-          }
-        }
-        
-        await this.loadPromptIntoEditor(this.currentPrompt);
-      } catch (e) {
-        showToast(`Failed: ${e.message}`, 'error');
-      }
-    });
-  },
-  
-  handleEditComponent(type) {
-    const selectEl = document.getElementById(`pm-${type}`);
-    if (!selectEl) return;
-    
-    const key = selectEl.value;
-    if (!key) {
-      showToast('Select an option first', 'info');
-      return;
-    }
-    
-    const currentValue = this.components[type]?.[key] || '';
-    
-    showModal(`Edit ${type}: ${key}`, [
-      { id: 'comp-value', label: 'Component Text', type: 'textarea', value: currentValue }
-    ], async (data) => {
-      const newValue = data['comp-value'].trim();
-      
-      if (!newValue) {
-        showToast('Value required', 'error');
-        return;
-      }
-      
-      try {
-        await API.saveComponent(type, key, newValue);
-        showToast(`${type} updated!`, 'success');
-        await this.loadComponents();
-        
-        // Re-apply to LLM since component text changed
-        await API.loadPrompt(this.currentPrompt);
-        await updateScene();
-        
-        await this.loadPromptIntoEditor(this.currentPrompt);
-      } catch (e) {
-        showToast(`Failed: ${e.message}`, 'error');
-      }
-    }, { large: true });
-  },
-  
-  handleDeleteComponent(type) {
-    const selectEl = document.getElementById(`pm-${type}`);
-    if (!selectEl) return;
-    
-    const key = selectEl.value;
-    if (!key) {
-      showToast('Select an option first', 'info');
-      return;
-    }
-    
-    if (!confirm(`Delete ${type}.${key}?`)) return;
-    
-    API.deleteComponent(type, key).then(async () => {
-      showToast(`${type} deleted!`, 'success');
-      await this.loadComponents();
-      await this.loadPromptIntoEditor(this.currentPrompt);
-    }).catch(e => {
-      showToast(`Failed: ${e.message}`, 'error');
+    // All pencil buttons use unified modal handler
+    this.elements.editor.querySelectorAll('.pm-component-edit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.handleComponentModal(btn.dataset.type);
+      });
     });
   },
 
@@ -1024,31 +897,36 @@ Editing:
     }
   },
 
-  handleCombinedExtrasEmotions(type) {
+  handleComponentModal(type) {
     if (!this.currentData || this.currentData.type !== 'assembled') return;
 
+    const isMultiSelect = type === 'extras' || type === 'emotions';
     const availableItems = this.components[type] || {};
-    const currentSelected = this.currentData.components?.[type] || [];
-    const keys = Object.keys(availableItems);
+    const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
 
-    if (keys.length === 0) {
-      showToast(`No ${type} to manage. Add one first.`, 'info');
-      return;
+    // Get current selection
+    let currentSelected;
+    if (isMultiSelect) {
+      currentSelected = this.currentData.components?.[type] || [];
+    } else {
+      currentSelected = this.currentData.components?.[type] || '';
     }
 
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay modal-wide';
 
-    const typeLabel = type.charAt(0).toUpperCase() + type.slice(1);
-    const singularLabel = type.slice(0, -1);
-
-    const itemsHTML = keys.map(key => {
-      const value = availableItems[key];
-      const isChecked = currentSelected.includes(key) ? 'checked' : '';
+    // Build row HTML helper
+    const buildRowHTML = (key, value, selected) => {
       const escapedValue = value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const inputType = isMultiSelect ? 'checkbox' : 'radio';
+      const inputName = isMultiSelect ? '' : 'name="component-select"';
+      const isChecked = isMultiSelect
+        ? (selected.includes(key) ? 'checked' : '')
+        : (selected === key ? 'checked' : '');
+
       return `
         <div class="combined-edit-row" data-key="${key}">
-          <input type="checkbox" class="combined-edit-check" data-key="${key}" ${isChecked}>
+          <input type="${inputType}" ${inputName} class="combined-edit-check" data-key="${key}" ${isChecked}>
           <div class="combined-edit-content">
             <label class="combined-edit-label">${key}</label>
             <textarea class="combined-edit-textarea" data-key="${key}" rows="4">${escapedValue}</textarea>
@@ -1056,7 +934,19 @@ Editing:
           <button class="combined-edit-delete" data-key="${key}" title="Delete ${key}">✕</button>
         </div>
       `;
-    }).join('');
+    };
+
+    const buildListHTML = (items, selected) => {
+      const keys = Object.keys(items);
+      if (keys.length === 0) {
+        return '<div style="color:var(--text-muted);padding:12px;text-align:center;">No items yet. Click + to add one.</div>';
+      }
+      return keys.map(key => buildRowHTML(key, items[key], selected)).join('');
+    };
+
+    const helpText = isMultiSelect
+      ? 'Check to enable, edit text. Red ✕ deletes immediately.'
+      : 'Select one, edit text. Red ✕ deletes immediately.';
 
     overlay.innerHTML = `
       <div class="modal-base">
@@ -1065,10 +955,11 @@ Editing:
           <button class="close-btn modal-x">&times;</button>
         </div>
         <div class="modal-body">
-          <p style="margin:0 0 12px;color:var(--text-muted);font-size:var(--font-sm);">
-            Check to enable, edit text. Red ✕ deletes immediately.
-          </p>
-          <div class="combined-edit-list">${itemsHTML}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <span style="color:var(--text-muted);font-size:var(--font-sm);">${helpText}</span>
+            <button class="btn btn-secondary combined-edit-add" style="padding:4px 12px;">+ Add New</button>
+          </div>
+          <div class="combined-edit-list">${buildListHTML(availableItems, currentSelected)}</div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary modal-cancel">Cancel</button>
@@ -1085,47 +976,61 @@ Editing:
       setTimeout(() => overlay.remove(), 300);
     };
 
-    // Refresh modal content after delete
-    const refreshModal = async () => {
+    // Track current selection for refreshes
+    let liveSelected = isMultiSelect ? [...currentSelected] : currentSelected;
+
+    // Refresh modal content AND dropdown after add/delete
+    const refreshModal = async (newKey = null) => {
+      console.log(`[ComponentModal] Refreshing ${type}...`);
+
+      // Fetch fresh data from server
       await this.loadComponents();
       const newItems = this.components[type] || {};
       const newKeys = Object.keys(newItems);
+      console.log(`[ComponentModal] Got ${newKeys.length} items:`, newKeys);
 
-      if (newKeys.length === 0) {
-        close();
-        showToast(`No ${type} remaining`, 'info');
-        await this.loadPromptIntoEditor(this.currentPrompt);
-        await updateScene();
-        return;
+      // Clean up selection to only valid keys
+      if (isMultiSelect) {
+        liveSelected = liveSelected.filter(k => newKeys.includes(k));
+        // Auto-select new item if provided
+        if (newKey && newKeys.includes(newKey) && !liveSelected.includes(newKey)) {
+          liveSelected.push(newKey);
+        }
+      } else {
+        if (newKey && newKeys.includes(newKey)) {
+          liveSelected = newKey;
+        } else if (!newKeys.includes(liveSelected)) {
+          liveSelected = newKeys[0] || '';
+        }
       }
 
-      // Update currentSelected to remove deleted keys
-      const validSelected = currentSelected.filter(k => newKeys.includes(k));
-      this.currentData.components[type] = validSelected;
-
-      // Rebuild just the list
+      // Rebuild modal list
       const listEl = overlay.querySelector('.combined-edit-list');
-      listEl.innerHTML = newKeys.map(key => {
-        const value = newItems[key];
-        const isChecked = validSelected.includes(key) ? 'checked' : '';
-        const escapedValue = value.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return `
-          <div class="combined-edit-row" data-key="${key}">
-            <input type="checkbox" class="combined-edit-check" data-key="${key}" ${isChecked}>
-            <div class="combined-edit-content">
-              <label class="combined-edit-label">${key}</label>
-              <textarea class="combined-edit-textarea" data-key="${key}" rows="4">${escapedValue}</textarea>
-            </div>
-            <button class="combined-edit-delete" data-key="${key}" title="Delete ${key}">✕</button>
-          </div>
-        `;
-      }).join('');
+      if (listEl) {
+        listEl.innerHTML = buildListHTML(newItems, liveSelected);
+        bindDeleteHandlers();
+      }
 
-      // Re-bind delete handlers
-      bindDeleteHandlers();
+      // Also update the UI in the main editor
+      if (!isMultiSelect) {
+        // Update dropdown for single-select types
+        const selectEl = document.getElementById(`pm-${type}`);
+        if (selectEl) {
+          const currentVal = liveSelected;
+          selectEl.innerHTML = newKeys.map(k =>
+            `<option value="${k}" ${k === currentVal ? 'selected' : ''}>${k}</option>`
+          ).join('') || `<option value="">No ${type}s</option>`;
+        }
+      } else {
+        // Update display div for multi-select types
+        const displayEl = document.getElementById(`pm-${type}-display`);
+        if (displayEl) {
+          displayEl.textContent = liveSelected.length > 0 ? liveSelected.join(', ') : 'none';
+        }
+      }
     };
 
-    // Instant delete with confirm
+    // Bind delete handlers
     const bindDeleteHandlers = () => {
       overlay.querySelectorAll('.combined-edit-delete').forEach(btn => {
         btn.addEventListener('click', async () => {
@@ -1135,6 +1040,14 @@ Editing:
           try {
             await API.deleteComponent(type, key);
             showToast(`Deleted ${key}`, 'success');
+
+            // Remove from selection
+            if (isMultiSelect) {
+              liveSelected = liveSelected.filter(k => k !== key);
+            } else if (liveSelected === key) {
+              liveSelected = '';
+            }
+
             await refreshModal();
           } catch (e) {
             console.error(`Failed to delete ${type}.${key}:`, e);
@@ -1144,6 +1057,33 @@ Editing:
       });
     };
     bindDeleteHandlers();
+
+    // Add new component
+    overlay.querySelector('.combined-edit-add')?.addEventListener('click', () => {
+      showModal(`Add ${typeLabel}`, [
+        { id: 'comp-key', label: 'Key Name', type: 'text' },
+        { id: 'comp-value', label: 'Component Text', type: 'textarea' }
+      ], async (data) => {
+        const key = data['comp-key'].trim();
+        const value = data['comp-value'].trim();
+
+        if (!key || !value) {
+          showToast('Key and value required', 'error');
+          return;
+        }
+
+        try {
+          await API.saveComponent(type, key, value);
+          showToast(`${typeLabel} added!`, 'success');
+
+          // Small delay to ensure server has processed, then refresh with new key
+          await new Promise(r => setTimeout(r, 100));
+          await refreshModal(key);
+        } catch (e) {
+          showToast(`Failed: ${e.message}`, 'error');
+        }
+      });
+    });
 
     overlay.querySelector('.modal-x')?.addEventListener('click', close);
     overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
@@ -1159,23 +1099,41 @@ Editing:
 
     overlay.querySelector('.modal-save')?.addEventListener('click', async () => {
       const textChanges = {};
-      const enabledKeys = [];
+      let selectedValue;
 
-      overlay.querySelectorAll('.combined-edit-row').forEach(row => {
-        const key = row.dataset.key;
-        const checkbox = row.querySelector('.combined-edit-check');
-        const textarea = row.querySelector('.combined-edit-textarea');
-        const newValue = textarea.value.trim();
-        const originalValue = this.components[type]?.[key];
+      if (isMultiSelect) {
+        selectedValue = [];
+        overlay.querySelectorAll('.combined-edit-row').forEach(row => {
+          const key = row.dataset.key;
+          const checkbox = row.querySelector('.combined-edit-check');
+          const textarea = row.querySelector('.combined-edit-textarea');
+          const newValue = textarea.value.trim();
+          const originalValue = this.components[type]?.[key];
 
-        if (checkbox.checked) {
-          enabledKeys.push(key);
-        }
+          if (checkbox.checked) {
+            selectedValue.push(key);
+          }
 
-        if (newValue && newValue !== originalValue) {
-          textChanges[key] = newValue;
-        }
-      });
+          if (newValue && newValue !== originalValue) {
+            textChanges[key] = newValue;
+          }
+        });
+      } else {
+        // Single select - find the checked radio
+        const checkedRadio = overlay.querySelector('.combined-edit-check:checked');
+        selectedValue = checkedRadio?.dataset.key || '';
+
+        overlay.querySelectorAll('.combined-edit-row').forEach(row => {
+          const key = row.dataset.key;
+          const textarea = row.querySelector('.combined-edit-textarea');
+          const newValue = textarea.value.trim();
+          const originalValue = this.components[type]?.[key];
+
+          if (newValue && newValue !== originalValue) {
+            textChanges[key] = newValue;
+          }
+        });
+      }
 
       close();
 
@@ -1190,18 +1148,18 @@ Editing:
         }
       }
       if (textSaved > 0) {
-        showToast(`Updated ${textSaved} ${singularLabel}(s)`, 'success');
+        showToast(`Updated ${textSaved} item(s)`, 'success');
       }
 
-      // Update enabled selection
-      this.currentData.components[type] = enabledKeys;
+      // Update selection
+      this.currentData.components[type] = selectedValue;
       const promptData = this.collectData();
       if (promptData) {
         try {
           await API.savePrompt(this.currentPrompt, promptData);
           await API.loadPrompt(this.currentPrompt);
         } catch (e) {
-          console.warn('Failed to save enabled selection:', e);
+          console.warn('Failed to save selection:', e);
         }
       }
 

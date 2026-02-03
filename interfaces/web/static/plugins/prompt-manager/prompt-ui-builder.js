@@ -42,79 +42,38 @@ function buildMonolithEditor(data) {
 
 function buildAssembledEditor(data, components) {
   const comp = data.components || {};
-  
-  return `
+
+  // Single-select components: dropdown + pencil
+  const singleSelectTypes = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+  const singleSelectHTML = singleSelectTypes.map(type => `
     <div class="pm-component">
-      <label>Persona</label>
+      <label>${type.charAt(0).toUpperCase() + type.slice(1)}</label>
       <div class="pm-component-row">
-        <select id="pm-persona">${buildOptions(components.persona, comp.persona)}</select>
-        <button class="inline-btn add" data-type="persona" title="Add">+</button>
-        <button class="inline-btn edit" data-type="persona" title="Edit">&#x270E;</button>
-        <button class="inline-btn delete" data-type="persona" title="Delete">&#x1F5D1;</button>
+        <select id="pm-${type}">${buildOptions(components[type], comp[type])}</select>
+        <button class="inline-btn edit pm-component-edit" data-type="${type}" title="Edit ${type}s">&#x270E;</button>
       </div>
     </div>
-    <div class="pm-component">
-      <label>Location</label>
-      <div class="pm-component-row">
-        <select id="pm-location">${buildOptions(components.location, comp.location)}</select>
-        <button class="inline-btn add" data-type="location" title="Add">+</button>
-        <button class="inline-btn edit" data-type="location" title="Edit">&#x270E;</button>
-        <button class="inline-btn delete" data-type="location" title="Delete">&#x1F5D1;</button>
-      </div>
-    </div>
-    <div class="pm-component">
-      <label>Goals</label>
-      <div class="pm-component-row">
-        <select id="pm-goals">${buildOptions(components.goals, comp.goals)}</select>
-        <button class="inline-btn add" data-type="goals" title="Add">+</button>
-        <button class="inline-btn edit" data-type="goals" title="Edit">&#x270E;</button>
-        <button class="inline-btn delete" data-type="goals" title="Delete">&#x1F5D1;</button>
-      </div>
-    </div>
-    <div class="pm-component">
-      <label>Relationship</label>
-      <div class="pm-component-row">
-        <select id="pm-relationship">${buildOptions(components.relationship, comp.relationship)}</select>
-        <button class="inline-btn add" data-type="relationship" title="Add">+</button>
-        <button class="inline-btn edit" data-type="relationship" title="Edit">&#x270E;</button>
-        <button class="inline-btn delete" data-type="relationship" title="Delete">&#x1F5D1;</button>
-      </div>
-    </div>
-    <div class="pm-component">
-      <label>Format</label>
-      <div class="pm-component-row">
-        <select id="pm-format">${buildOptions(components.format, comp.format)}</select>
-        <button class="inline-btn add" data-type="format" title="Add">+</button>
-        <button class="inline-btn edit" data-type="format" title="Edit">&#x270E;</button>
-        <button class="inline-btn delete" data-type="format" title="Delete">&#x1F5D1;</button>
-      </div>
-    </div>
-    <div class="pm-component">
-      <label>Scenario</label>
-      <div class="pm-component-row">
-        <select id="pm-scenario">${buildOptions(components.scenario, comp.scenario)}</select>
-        <button class="inline-btn add" data-type="scenario" title="Add">+</button>
-        <button class="inline-btn edit" data-type="scenario" title="Edit">&#x270E;</button>
-        <button class="inline-btn delete" data-type="scenario" title="Delete">&#x1F5D1;</button>
-      </div>
-    </div>
+  `).join('');
+
+  // Multi-select components: display + pencil
+  const multiSelectHTML = `
     <div class="pm-component">
       <label>Extras</label>
       <div class="pm-component-row">
         <div class="pm-selected-items" id="pm-extras-display">${(comp.extras || []).join(', ') || 'none'}</div>
-        <button class="inline-btn edit pm-extras-edit-btn" title="Edit &amp; Select">&#x270E;</button>
-        <button class="inline-btn add" data-type="extras" title="Add New">+</button>
+        <button class="inline-btn edit pm-component-edit" data-type="extras" title="Edit extras">&#x270E;</button>
       </div>
     </div>
     <div class="pm-component">
       <label>Emotions</label>
       <div class="pm-component-row">
         <div class="pm-selected-items" id="pm-emotions-display">${(comp.emotions || []).join(', ') || 'none'}</div>
-        <button class="inline-btn edit pm-emotions-edit-btn" title="Edit &amp; Select">&#x270E;</button>
-        <button class="inline-btn add" data-type="emotions" title="Add New">+</button>
+        <button class="inline-btn edit pm-component-edit" data-type="emotions" title="Edit emotions">&#x270E;</button>
       </div>
     </div>
   `;
+
+  return singleSelectHTML + multiSelectHTML;
 }
 
 function buildOptions(componentOptions, selected) {
