@@ -4,6 +4,8 @@ import * as ui from '../ui.js';
 let storyMenu = null;
 let storyBtn = null;
 let isDropdownOpen = false;
+let currentPreset = null;
+let presetsCache = null;
 
 export function initStoryIndicator() {
     storyMenu = document.getElementById('story-indicator');
@@ -35,6 +37,9 @@ export function initStoryIndicator() {
             closeDropdown();
         }
     });
+
+    // Load presets for submenu
+    loadPresets();
 }
 
 function toggleDropdown() {
@@ -57,6 +62,84 @@ function closeDropdown() {
 
 export function closeStoryDropdown() {
     closeDropdown();
+}
+
+async function loadPresets() {
+    try {
+        const res = await fetch('/api/state/presets');
+        if (!res.ok) return;
+        const data = await res.json();
+        // Filter out base presets (start with _)
+        presetsCache = (data.presets || []).filter(p => !p.name.startsWith('_'));
+        populatePresetSubmenu();
+    } catch (e) {
+        console.warn('Failed to load story presets:', e);
+    }
+}
+
+function populatePresetSubmenu() {
+    if (!storyMenu || !presetsCache) return;
+
+    const submenu = storyMenu.querySelector('.story-preset-submenu');
+    if (!submenu) return;
+
+    submenu.innerHTML = presetsCache.map(p => `
+        <button class="story-preset-item${p.name === currentPreset ? ' active' : ''}" data-preset="${p.name}">
+            <span class="story-preset-check">✓</span>
+            <span>${p.display_name || p.name}</span>
+        </button>
+    `).join('');
+
+    // Add click handlers
+    submenu.querySelectorAll('.story-preset-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const presetName = item.dataset.preset;
+            closeDropdown();
+            await switchPreset(presetName);
+        });
+    });
+}
+
+async function switchPreset(presetName) {
+    const chatSelect = document.getElementById('chat-select');
+    const chatName = chatSelect?.value;
+    if (!chatName) return;
+
+    try {
+        // Update chat settings with new preset and enable story engine
+        const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                settings: {
+                    state_engine_enabled: true,
+                    state_preset: presetName
+                }
+            })
+        });
+        if (!res.ok) throw new Error('Failed to switch preset');
+
+        // Ask if user wants to reset progress
+        const shouldReset = confirm(`Switched to "${presetName}". Would you like to reset progress and start fresh?`);
+
+        if (shouldReset) {
+            await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preset: presetName })
+            });
+            ui.showToast('Story switched and reset', 'success');
+        } else {
+            ui.showToast('Story switched', 'success');
+        }
+
+        // Refresh scene to update UI
+        const { updateScene } = await import('./scene.js');
+        await updateScene();
+    } catch (e) {
+        ui.showToast('Failed to switch story', 'error');
+    }
 }
 
 async function handleAction(action) {
@@ -223,7 +306,7 @@ export function updateStoryIndicator(story) {
     if (!storyMenu) return;
 
     const tooltipEl = storyMenu.querySelector('.story-tooltip');
-    const headerEl = storyMenu.querySelector('.story-dropdown-header');
+    const headerTextEl = storyMenu.querySelector('.story-dropdown-header-text');
     const btn = storyMenu.querySelector('.story-btn');
 
     // Always show the indicator
@@ -236,12 +319,14 @@ export function updateStoryIndicator(story) {
     // No story engine active - show greyed out
     if (!story || !story.enabled) {
         storyMenu.classList.remove('active');
+        currentPreset = null;
         if (tooltipEl) tooltipEl.textContent = 'Story Engine disabled';
-        if (headerEl) headerEl.textContent = '📖 No Story';
+        if (headerTextEl) headerTextEl.textContent = '📖 Select Story';
         if (btn) btn.title = 'Story Engine (disabled)';
         // Show inactive menu options
         if (activeContent) activeContent.style.display = 'none';
         if (inactiveContent) inactiveContent.style.display = 'block';
+        populatePresetSubmenu();
         return;
     }
 
@@ -253,6 +338,7 @@ export function updateStoryIndicator(story) {
 
     // Story name for header and tooltip
     const storyName = story.preset_display || 'Story';
+    currentPreset = story.preset || null;
 
     // Build progress info
     let progressText = '';
@@ -270,7 +356,7 @@ export function updateStoryIndicator(story) {
     }
 
     // Dropdown header shows story name
-    if (headerEl) headerEl.textContent = `📖 ${storyName}`;
+    if (headerTextEl) headerTextEl.textContent = `📖 ${storyName}`;
 
     // Tooltip shows name + progress + stats
     const parts = [storyName];
@@ -280,4 +366,7 @@ export function updateStoryIndicator(story) {
 
     // Button title for accessibility
     if (btn) btn.title = storyName;
+
+    // Update submenu checkmarks
+    populatePresetSubmenu();
 }

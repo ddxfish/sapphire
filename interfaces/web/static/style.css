@@ -1217,6 +1217,80 @@ body:not(.sidebar-collapsed) #toggle-sidebar {
     color: var(--text-light);
     border-bottom: 1px solid var(--border-light);
     margin-bottom: 4px;
+    position: relative;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background var(--transition-fast);
+}
+
+.story-dropdown-header.has-submenu:hover {
+    background: var(--bg-hover);
+}
+
+.story-dropdown-arrow {
+    font-size: 12px;
+    opacity: 0.6;
+    transition: transform 0.2s;
+}
+
+.story-dropdown-header:hover .story-dropdown-arrow {
+    opacity: 1;
+}
+
+.story-preset-submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    bottom: 0;
+    min-width: 180px;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    box-shadow: var(--shadow-lg);
+    z-index: 210;
+}
+
+.story-dropdown-header:hover .story-preset-submenu {
+    display: block;
+}
+
+.story-preset-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: var(--font-sm);
+    text-align: left;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast);
+}
+
+.story-preset-item:hover {
+    background: var(--bg-hover);
+}
+
+.story-preset-item.active {
+    background: var(--trim-light, var(--accent-blue-light));
+    color: var(--trim, var(--accent-blue));
+}
+
+.story-preset-check {
+    width: 16px;
+    opacity: 0;
+}
+
+.story-preset-item.active .story-preset-check {
+    opacity: 1;
 }
 
 .story-dropdown-item {
