@@ -425,38 +425,41 @@ def unified_status():
     """Unified status - single endpoint for all UI state."""
     return proxy('/status')
 
+@app.route('/api/init', methods=['GET'])
+@require_login
+def init_data():
+    """Mega-endpoint for initial page load - all plugin data in one call."""
+    return proxy('/init')
+
 @app.route('/api/events', methods=['GET'])
 @require_login
 def event_stream():
-    """SSE proxy for real-time events with proxy-layer keepalive."""
+    """SSE proxy - simple passthrough, let backend handle keepalives."""
     replay = request.args.get('replay', 'false')
     backend_res = None
 
     def generate():
         nonlocal backend_res
         try:
-            # Use separate SSE session to avoid blocking regular API requests
-            # Read timeout of 20s - if backend doesn't send data, we send keepalive
+            # Long timeout - backend sends keepalives every 15s
+            # Use 3600s (1 hour) read timeout - effectively infinite for our purposes
             backend_res = _sse_session.get(
                 f"{API_BASE}/events?replay={replay}",
                 stream=True,
-                timeout=(5, 20),  # 5s connect, 20s read
+                timeout=(5, 3600),  # 5s connect, 1hr read timeout
                 headers=get_api_headers()
             )
             backend_res.raise_for_status()
 
-            while True:
-                try:
-                    for line in backend_res.iter_lines(decode_unicode=True):
-                        if line:
-                            yield f"{line}\n\n"
-                    # iter_lines exhausted normally = connection closed
-                    break
-                except requests.exceptions.ReadTimeout:
-                    # No data from backend in 20s - send proxy keepalive
-                    yield f"data: {{\"type\": \"keepalive\", \"source\": \"proxy\"}}\n\n"
-                    # Continue the loop - connection is still open
-                    continue
+            # Simple passthrough - just forward everything
+            line_count = 0
+            for line in backend_res.iter_lines(decode_unicode=True):
+                if line:
+                    line_count += 1
+                    if 'keepalive' in line or line_count <= 3:
+                        logger.info(f"SSE proxy #{line_count}: {line[:60]}")
+                    yield f"{line}\n\n"
+            logger.warning(f"SSE proxy: iter_lines ended after {line_count} lines")
 
         except requests.exceptions.ConnectionError as e:
             logger.warning(f"SSE backend connection error: {e}")

@@ -69,13 +69,18 @@ class EventBus:
         logger.info(f"New subscriber: {sub_id} (replay={replay}) — total subscribers: {len(self._subscribers)}")
         
         try:
+            keepalive_count = 0
             while True:
                 try:
                     event = q.get(timeout=15)
                     yield event
                 except queue.Empty:
-                    # Send keepalive (15s interval, proxy timeout is 20s)
+                    # Send keepalive (15s interval)
+                    keepalive_count += 1
+                    logger.debug(f"Keepalive #{keepalive_count} for {sub_id}")
                     yield {"type": "keepalive", "timestamp": time.time()}
+        except GeneratorExit:
+            logger.info(f"Subscriber {sub_id} generator closed by client")
         finally:
             with self._lock:
                 if sub_id in self._subscribers:

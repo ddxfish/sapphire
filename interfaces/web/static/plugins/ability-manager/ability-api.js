@@ -1,27 +1,27 @@
 // API functions for Ability Manager plugin
+import { getInitData } from '../../shared/init-data.js';
 
+// Use init data for initial load (avoids 3 separate API calls)
 export async function getAbilities() {
-  const res = await fetch('/api/abilities');
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const init = await getInitData();
+  return { abilities: init.abilities.list, count: init.abilities.list.length };
 }
 
 export async function getCurrentAbility() {
-  const res = await fetch('/api/abilities/current');
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
+  const init = await getInitData();
+  return init.abilities.current;
 }
 
+export async function getFunctions() {
+  const init = await getInitData();
+  return init.functions;
+}
+
+// These still need direct API calls (mutations)
 export async function activateAbility(name) {
   const res = await fetch(`/api/abilities/${encodeURIComponent(name)}/activate`, {
     method: 'POST'
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return await res.json();
-}
-
-export async function getFunctions() {
-  const res = await fetch('/api/functions');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }

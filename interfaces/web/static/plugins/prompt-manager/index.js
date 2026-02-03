@@ -86,15 +86,25 @@ Editing:
         }
       });
       
-      // Prompt changed - refresh list and potentially editor
+      // Prompt changed - sync editor to the changed prompt
       this._promptChangedUnsub = eventBus.on('prompt_changed', async (data) => {
         console.log('[PromptManager] SSE: prompt_changed', data);
         if (!this._loadInProgress) {
-          await this.loadPromptList();
-          // If bulk change, refresh everything
           if (data?.bulk) {
             await this.loadComponents();
+            await this.loadPromptList();
             await this.syncToActivePill();
+          } else if (data?.name && data?.action === 'loaded') {
+            // Specific prompt was loaded - switch editor to it directly
+            await this.loadPromptList();
+            const option = Array.from(this.elements.select.options).find(o => o.value === data.name);
+            if (option) {
+              console.log(`[PromptManager] Switching editor to: ${data.name}`);
+              this.elements.select.value = data.name;
+              await this.loadPromptIntoEditor(data.name);
+            }
+          } else {
+            await this.loadPromptList();
           }
         }
       });
@@ -125,15 +135,20 @@ Editing:
   async syncToActivePill() {
     // Read active prompt from pill element
     const pillText = document.querySelector('#prompt-pill .pill-text');
-    if (!pillText) return;
-    
+    if (!pillText) {
+      console.log('[PromptManager] syncToActivePill: no pill element');
+      return;
+    }
+
     // Format is "PromptName (2.4k)" - extract just the name
     const fullText = pillText.textContent || '';
     const activeName = fullText.split(' (')[0].trim();
-    
-    if (activeName && activeName !== 'Loading...') {
+    console.log(`[PromptManager] syncToActivePill: pill="${activeName}", current="${this.currentPrompt}"`);
+
+    if (activeName && activeName !== 'Loading...' && activeName !== this.currentPrompt) {
       // Set dropdown to match and load it
       const option = Array.from(this.elements.select.options).find(o => o.value === activeName);
+      console.log(`[PromptManager] syncToActivePill: option found=${!!option}`);
       if (option) {
         this.elements.select.value = activeName;
         await this.loadPromptIntoEditor(activeName);

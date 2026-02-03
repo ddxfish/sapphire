@@ -584,6 +584,135 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             logger.error(f"Error getting unified status: {e}")
             return jsonify({"error": "Failed to get status"}), 500
 
+    @bp.route('/init', methods=['GET'])
+    def get_init_data():
+        """Mega-endpoint for initial page load - combines all plugin init data."""
+        try:
+            from core.modules.system.toolsets import toolset_manager
+
+            function_manager = system_instance.llm_chat.function_manager
+            session_manager = system_instance.llm_chat.session_manager
+
+            # --- Abilities data ---
+            abilities_set = set()
+            abilities_set.update(function_manager.get_available_abilities())
+            abilities_set.update(toolset_manager.get_toolset_names())
+            network_functions = set(function_manager.get_network_functions())
+
+            abilities_list = []
+            for ability_name in sorted(abilities_set):
+                if ability_name in ['all', 'none']:
+                    ability_type = 'builtin'
+                elif ability_name in function_manager.function_modules:
+                    ability_type = 'module'
+                elif toolset_manager.toolset_exists(ability_name):
+                    ability_type = 'user'
+                else:
+                    ability_type = 'unknown'
+
+                if ability_name == "all":
+                    func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
+                elif ability_name == "none":
+                    func_list = []
+                elif ability_name in function_manager.function_modules:
+                    func_list = function_manager.function_modules[ability_name]['available_functions']
+                elif toolset_manager.toolset_exists(ability_name):
+                    func_list = toolset_manager.get_toolset_functions(ability_name)
+                else:
+                    func_list = []
+
+                abilities_list.append({
+                    "name": ability_name,
+                    "function_count": len(func_list),
+                    "type": ability_type,
+                    "functions": func_list,
+                    "has_network_tools": bool(set(func_list) & network_functions)
+                })
+
+            # Current ability
+            ability_info = function_manager.get_current_ability_info()
+            current_ability = {
+                "name": ability_info.get("name", "custom"),
+                "function_count": ability_info.get("function_count", 0),
+                "enabled_functions": function_manager.get_enabled_function_names(),
+                "has_network_tools": function_manager.has_network_tools_enabled()
+            }
+
+            # --- Functions data ---
+            enabled = set(function_manager.get_enabled_function_names())
+            modules = {}
+            for module_name, module_info in function_manager.function_modules.items():
+                functions = []
+                for tool in module_info['tools']:
+                    func_name = tool['function']['name']
+                    functions.append({
+                        "name": func_name,
+                        "description": tool['function'].get('description', ''),
+                        "enabled": func_name in enabled,
+                        "is_network": func_name in network_functions
+                    })
+                modules[module_name] = {"functions": functions, "count": len(functions)}
+
+            # --- Prompts data ---
+            prompt_names = prompts.list_prompts()
+            prompt_list = []
+            for name in prompt_names:
+                pdata = prompts.get_prompt(name)
+                prompt_list.append({
+                    'name': name,
+                    'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
+                    'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata))
+                })
+            current_prompt_name = prompts.get_active_preset_name()
+            current_prompt_data = prompts.get_prompt(current_prompt_name) if current_prompt_name else None
+            prompt_components = prompts.prompt_manager.components if hasattr(prompts.prompt_manager, 'components') else {}
+
+            # --- Spices data ---
+            spices_raw = prompts.prompt_manager.spices
+            disabled_cats = prompts.prompt_manager.disabled_categories
+            spice_categories = {}
+            for cat_name, spice_list in spices_raw.items():
+                spice_categories[cat_name] = {
+                    'spices': spice_list,
+                    'count': len(spice_list),
+                    'enabled': cat_name not in disabled_cats
+                }
+            spice_data = {
+                'categories': spice_categories,
+                'category_count': len(spice_categories),
+                'total_spices': sum(len(s) for s in spices_raw.values())
+            }
+
+            # --- Settings data ---
+            avatars_in_chat = getattr(config, 'AVATARS_IN_CHAT', False)
+
+            # --- Wizard step ---
+            wizard_step = getattr(config, 'SETUP_WIZARD_STEP', 'complete')
+
+            return jsonify({
+                "abilities": {
+                    "list": abilities_list,
+                    "current": current_ability
+                },
+                "functions": {
+                    "modules": modules
+                },
+                "prompts": {
+                    "list": prompt_list,
+                    "current_name": current_prompt_name,
+                    "current": current_prompt_data,
+                    "components": prompt_components
+                },
+                "spices": spice_data,
+                "settings": {
+                    "AVATARS_IN_CHAT": avatars_in_chat
+                },
+                "wizard_step": wizard_step
+            })
+        except Exception as e:
+            logger.error(f"Error getting init data: {e}", exc_info=True)
+            return jsonify({"error": str(e)}), 500
+
     @bp.route('/events', methods=['GET'])
     def event_stream():
         """SSE endpoint for real-time event streaming."""

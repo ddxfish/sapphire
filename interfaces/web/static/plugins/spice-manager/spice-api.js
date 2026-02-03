@@ -1,7 +1,12 @@
 // spice-api.js - Backend communication for Spice Manager
 import { fetchWithTimeout } from '../../shared/fetch.js';
+import { getInitData } from '../../shared/init-data.js';
 
-export const getSpices = () => fetchWithTimeout('/api/spices');
+// Use init data for initial load
+export const getSpices = async () => {
+  const init = await getInitData();
+  return init.spices;
+};
 
 export const addSpice = (category, text) =>
   fetchWithTimeout('/api/spices', {

@@ -157,7 +157,10 @@ def create_prompts_api(system_instance=None):
             if hasattr(prompts.prompt_manager, 'scenario_presets') and name in prompts.prompt_manager.scenario_presets:
                 prompts.apply_scenario(name)
                 logger.info(f"Applied scenario state '{name}'")
-            
+
+            # Notify frontend of prompt change
+            publish(Events.PROMPT_CHANGED, {"name": name, "action": "loaded"})
+
             return jsonify({'status': 'success', 'message': f"Loaded prompt '{name}'"})
         except Exception as e:
             logger.error(f"Error loading prompt '{name}': {e}")
