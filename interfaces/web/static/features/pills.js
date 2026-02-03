@@ -6,6 +6,7 @@ import { updateScene } from './scene.js';
 import { openSettingsModal } from './chat-settings.js';
 import * as eventBus from '../core/event-bus.js';
 import { getInitDataSync } from '../shared/init-data.js';
+import { closeStoryDropdown } from './story.js';
 
 // Cache for dropdown data - avoids fetch on every click
 let promptsCache = null;
@@ -30,6 +31,7 @@ export function closePillDropdowns() {
     const { promptPill, abilityPill } = getElements();
     promptPill?.classList.remove('dropdown-open');
     abilityPill?.classList.remove('dropdown-open');
+    closeStoryDropdown();
 }
 
 export async function handleSpiceToggle(e) {

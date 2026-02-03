@@ -123,6 +123,25 @@
                     <span class="pill-tooltip"></span>
                     <div class="pill-dropdown"></div>
                 </button>
+                <div class="story-menu" id="story-indicator">
+                    <button class="story-btn" title="Story Engine">
+                        <span class="story-icon">📖</span>
+                    </button>
+                    <span class="story-tooltip"></span>
+                    <div class="story-dropdown">
+                        <div class="story-dropdown-header"></div>
+                        <div class="story-dropdown-active">
+                            <button class="story-dropdown-item" data-action="view">View State</button>
+                            <button class="story-dropdown-item" data-action="history">History</button>
+                            <button class="story-dropdown-item" data-action="reset">Reset Progress</button>
+                            <hr>
+                            <button class="story-dropdown-item danger" data-action="disable">Disable Story</button>
+                        </div>
+                        <div class="story-dropdown-inactive" style="display: none;">
+                            <button class="story-dropdown-item" data-action="enable">Enable Story</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div id="prompt-display"></div>
             <div id="functions-display"></div>

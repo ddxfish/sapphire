@@ -18,6 +18,7 @@ export function initElements() {
         promptPill: document.getElementById('prompt-pill'),
         abilityPill: document.getElementById('ability-pill'),
         spiceIndicator: document.getElementById('spice-indicator'),
+        storyIndicator: document.getElementById('story-indicator'),
         container: document.getElementById('chat-container'),
         chatSelect: document.getElementById('chat-select'),
         settingsModal: document.getElementById('settings-modal'),

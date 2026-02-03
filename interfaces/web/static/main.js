@@ -10,6 +10,7 @@ import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
 import { initPillsCache } from './features/pills.js';
+import { initStoryIndicator } from './features/story.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
 import { setupImageModal } from './ui-images.js';
@@ -188,6 +189,7 @@ async function init() {
         bindAllEvents();
         setupImageHandlers();
         setupImageModal();
+        initStoryIndicator();
         
         // Connect to event bus for real-time updates
         initEventBus();

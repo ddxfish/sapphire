@@ -2,6 +2,7 @@
 import * as api from '../api.js';
 import * as audio from '../audio.js';
 import { getElements, setTtsEnabled } from '../core/state.js';
+import { updateStoryIndicator } from './story.js';
 
 let hasCloudTools = false;
 let ttsPlaying = false;
@@ -77,7 +78,8 @@ export async function updateScene() {
         updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count);
         updateFuncs(status?.functions, status?.ability, hasCloudTools);
         updateSpice(status?.spice);
-        
+        updateStoryIndicator(status?.story);
+
         return status;
     } catch {
         return null;

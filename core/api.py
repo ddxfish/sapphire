@@ -553,7 +553,37 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                 prompt_tokens = 0
             total_used = history_tokens + prompt_tokens
             context_percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
-            
+
+            # Story engine status (lightweight - just reads from chat_settings + engine)
+            story_status = None
+            try:
+                if chat_settings.get('state_engine_enabled', False):
+                    story_status = {
+                        "enabled": True,
+                        "preset": chat_settings.get('state_preset', ''),
+                        "preset_display": chat_settings.get('state_preset', '').replace('_', ' ').title() if chat_settings.get('state_preset') else ''
+                    }
+                    # Get quick stats from live engine if available
+                    live_engine = system_instance.llm_chat.function_manager.get_state_engine()
+                    if live_engine and hasattr(live_engine, 'preset_config'):
+                        story_status["turn"] = getattr(live_engine, 'current_turn', 0)
+                        visible_state = live_engine.get_visible_state() if hasattr(live_engine, 'get_visible_state') else {}
+                        story_status["key_count"] = len(visible_state)
+                        # Get iterator info for progress display
+                        preset_config = live_engine.preset_config or {}
+                        iterator_key = preset_config.get('progressive_prompt', {}).get('iterator', 'scene')
+                        iterator_val = live_engine.get_state(iterator_key) if hasattr(live_engine, 'get_state') else None
+                        if iterator_val is not None:
+                            story_status["iterator_key"] = iterator_key
+                            story_status["iterator_value"] = iterator_val
+                            # For linear games, try to show progress (scene X of Y)
+                            state_def = preset_config.get('initial_state', {}).get(iterator_key, {})
+                            if state_def.get('type') == 'integer' and state_def.get('max'):
+                                story_status["iterator_max"] = state_def['max']
+            except Exception as e:
+                logger.warning(f"Error getting story status: {e}")
+                story_status = None
+
             return jsonify({
                 "prompt_name": prompt_name,
                 "prompt_char_count": prompt_char_count,
@@ -576,6 +606,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
                     "limit": context_limit,
                     "percent": context_percent
                 },
+                "story": story_status,
                 # Combined init data - reduces startup API calls
                 "chats": system_instance.llm_chat.list_chats(),
                 "chat_settings": chat_settings
