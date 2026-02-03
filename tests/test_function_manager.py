@@ -210,11 +210,13 @@ class TestExecution:
         """execute_function should call the right executor."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mock_executor = MagicMock(return_value=("result_data", True))
-            
+
             mgr._enabled_tools = [{'function': {'name': 'test_func'}}]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.execution_map = {'test_func': mock_executor}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -230,9 +232,11 @@ class TestExecution:
         """Should reject execution of non-enabled functions."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [{'function': {'name': 'allowed_func'}}]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.execution_map = {'disabled_func': MagicMock()}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -247,9 +251,11 @@ class TestExecution:
         """Should handle case where executor is not found."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [{'function': {'name': 'orphan_func'}}]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.execution_map = {}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -264,12 +270,14 @@ class TestExecution:
         """Should catch and report executor exceptions."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             def failing_executor(*args):
                 raise ValueError("Executor crashed!")
-            
+
             mgr._enabled_tools = [{'function': {'name': 'crashy_func'}}]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.execution_map = {'crashy_func': failing_executor}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -292,28 +300,32 @@ class TestNetworkToolDetection:
         """Should detect when network tools are enabled."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [
                 {'function': {'name': 'local_func'}},
                 {'function': {'name': 'web_search'}},
             ]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr._network_functions = {'web_search', 'web_fetch'}
-            
+
             assert mgr.has_network_tools_enabled() is True
-    
+
     def test_has_network_tools_enabled_false(self):
         """Should return False when no network tools enabled."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [
                 {'function': {'name': 'local_func'}},
                 {'function': {'name': 'another_local'}},
             ]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr._network_functions = {'web_search', 'web_fetch'}
-            
+
             assert mgr.has_network_tools_enabled() is False
     
     def test_get_network_functions(self):
@@ -338,7 +350,7 @@ class TestModeFiltering:
         """Monolith mode should only show monolith-allowed tools."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [
                 {'function': {'name': 'mono_only'}},
                 {'function': {'name': 'assembled_only'}},
@@ -351,11 +363,13 @@ class TestModeFiltering:
                     'assembled': ['assembled_only', 'both_modes'],
                 }
             }
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.function_modules = {
                 'test_module': {'available_functions': ['mono_only', 'assembled_only', 'both_modes']},
                 'other_module': {'available_functions': ['no_filter']},
             }
-            
+
             with patch.object(mgr, '_get_current_prompt_mode', return_value='monolith'):
                 filtered = mgr.enabled_tools
             
@@ -369,7 +383,7 @@ class TestModeFiltering:
         """Assembled mode should only show assembled-allowed tools."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [
                 {'function': {'name': 'mono_only'}},
                 {'function': {'name': 'assembled_only'}},
@@ -381,10 +395,12 @@ class TestModeFiltering:
                     'assembled': ['assembled_only', 'both_modes'],
                 }
             }
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.function_modules = {
                 'test_module': {'available_functions': ['mono_only', 'assembled_only', 'both_modes']},
             }
-            
+
             with patch.object(mgr, '_get_current_prompt_mode', return_value='assembled'):
                 filtered = mgr.enabled_tools
             
@@ -397,16 +413,18 @@ class TestModeFiltering:
         """No mode filters should return all enabled tools."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [
                 {'function': {'name': 'func_a'}},
                 {'function': {'name': 'func_b'}},
             ]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.function_modules = {}
-            
+
             filtered = mgr.enabled_tools
-            
+
             assert len(filtered) == 2
 
 
@@ -421,28 +439,32 @@ class TestEnabledFunctionNames:
         """Should return list of enabled function names."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = [
                 {'function': {'name': 'func_a'}},
                 {'function': {'name': 'func_b'}},
                 {'function': {'name': 'func_c'}},
             ]
             mgr._mode_filters = {}
-            
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
+
             names = mgr.get_enabled_function_names()
-            
+
             assert names == ['func_a', 'func_b', 'func_c']
-    
+
     def test_get_enabled_function_names_empty(self):
         """Should return empty list when no tools enabled."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr._enabled_tools = []
             mgr._mode_filters = {}
-            
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
+
             names = mgr.get_enabled_function_names()
-            
+
             assert names == []
 
 
@@ -457,18 +479,20 @@ class TestAbilityInfo:
         """Should return structured info about current ability."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            
+
             mgr.current_ability_name = "web"
             mgr._enabled_tools = [
                 {'function': {'name': 'search'}},
                 {'function': {'name': 'fetch'}},
             ]
             mgr._mode_filters = {}
+            mgr._state_engine = None
+            mgr._state_engine_enabled = False
             mgr.function_modules = {
                 'web': {'available_functions': ['search', 'fetch']}
             }
             mgr.all_possible_tools = mgr._enabled_tools
-            
+
             with patch.object(mgr, '_get_current_prompt_mode', return_value='monolith'):
                 with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                     mock_ts.toolset_exists.return_value = False

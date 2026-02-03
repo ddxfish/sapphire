@@ -38,7 +38,7 @@ sys.modules['openai'] = mock_openai
 def mock_system():
     """Create a mock system instance with all required attributes."""
     system = MagicMock()
-    
+
     # LLM Chat
     system.llm_chat = MagicMock()
     system.llm_chat.session_manager = MagicMock()
@@ -55,13 +55,20 @@ def mock_system():
     system.llm_chat.module_loader = MagicMock()
     system.llm_chat.module_loader.get_module_list.return_value = []
     system.llm_chat.get_system_prompt_template.return_value = "Test prompt"
-    
+    # Unified status endpoint needs these
+    system.llm_chat.list_chats.return_value = ['default']
+    system.llm_chat.get_active_chat.return_value = 'default'
+    system.llm_chat.streaming_chat = MagicMock()
+    system.llm_chat.streaming_chat.is_streaming = False
+    system.llm_chat.current_system_prompt = "Test prompt"
+
     # TTS
     system.tts = MagicMock()
-    
+    system.tts._is_playing = False
+
     # Whisper
     system.whisper_client = MagicMock()
-    
+
     return system
 
 
@@ -523,6 +530,132 @@ class TestCancelEndpoint:
             assert response.status_code == 200
             data = json.loads(response.data)
             assert data['status'] == 'success'
+
+
+# =============================================================================
+# Init Endpoint Tests (Mega-endpoint for page load)
+# =============================================================================
+
+class TestInitEndpoint:
+    """Test /init mega-endpoint for reducing startup API calls."""
+
+    def test_init_returns_abilities_data(self, client, mock_system):
+        """GET /init should return abilities data."""
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.list_prompts.return_value = ['default']
+                mock_prompts.get_prompt.return_value = {'type': 'monolith', 'content': 'test'}
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.prompt_manager = MagicMock()
+                mock_prompts.prompt_manager.components = {}
+                mock_prompts.prompt_manager.spices = {}
+                mock_prompts.prompt_manager.disabled_categories = []
+
+                with patch('core.modules.system.toolsets.toolset_manager') as mock_ts:
+                    mock_ts.get_toolset_names.return_value = []
+                    mock_ts.toolset_exists.return_value = False
+
+                    response = client.get('/api/init', headers={'X-API-Key': 'test'})
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert 'abilities' in data
+        # Abilities has nested structure: {list: [], current: {}}
+        assert 'list' in data['abilities']
+        assert 'current' in data['abilities']
+
+    def test_init_returns_prompts_data(self, client, mock_system):
+        """GET /init should return prompts data."""
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.list_prompts.return_value = ['sapphire', 'custom']
+                mock_prompts.get_prompt.return_value = {'type': 'monolith', 'content': 'test content'}
+                mock_prompts.get_active_preset_name.return_value = 'sapphire'
+                mock_prompts.prompt_manager = MagicMock()
+                mock_prompts.prompt_manager.components = {'persona': {'friendly': 'A friendly AI'}}
+                mock_prompts.prompt_manager.spices = {'tone': ['playful', 'serious']}
+                mock_prompts.prompt_manager.disabled_categories = []
+
+                with patch('core.modules.system.toolsets.toolset_manager') as mock_ts:
+                    mock_ts.get_toolset_names.return_value = []
+                    mock_ts.toolset_exists.return_value = False
+
+                    response = client.get('/api/init', headers={'X-API-Key': 'test'})
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert 'prompts' in data
+        # Prompts has nested structure: {list, current, current_name, components}
+        assert 'current_name' in data['prompts']
+        assert 'components' in data['prompts']
+        assert 'list' in data['prompts']
+
+    def test_init_returns_spice_data(self, client, mock_system):
+        """GET /init should return spice categories."""
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.list_prompts.return_value = []
+                mock_prompts.get_prompt.return_value = None
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.prompt_manager = MagicMock()
+                mock_prompts.prompt_manager.components = {}
+                mock_prompts.prompt_manager.spices = {
+                    'tone': ['playful', 'serious', 'casual'],
+                    'style': ['verbose', 'concise']
+                }
+                mock_prompts.prompt_manager.disabled_categories = ['style']
+
+                with patch('core.modules.system.toolsets.toolset_manager') as mock_ts:
+                    mock_ts.get_toolset_names.return_value = []
+                    mock_ts.toolset_exists.return_value = False
+
+                    response = client.get('/api/init', headers={'X-API-Key': 'test'})
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert 'spices' in data
+        assert 'categories' in data['spices']
+        assert data['spices']['category_count'] == 2
+
+    def test_init_returns_functions_data(self, client, mock_system):
+        """GET /init should return function modules data."""
+        mock_system.llm_chat.function_manager.function_modules = {
+            'meta': {'tools': [{'function': {'name': 'view_prompt', 'description': 'View prompt'}}]}
+        }
+        mock_system.llm_chat.function_manager.get_enabled_function_names.return_value = ['view_prompt']
+        mock_system.llm_chat.function_manager.get_network_functions.return_value = []
+
+        with patch('core.setup.get_password_hash', return_value="test"):
+            with patch('core.api.prompts') as mock_prompts:
+                mock_prompts.list_prompts.return_value = []
+                mock_prompts.get_prompt.return_value = None
+                mock_prompts.get_active_preset_name.return_value = 'default'
+                mock_prompts.prompt_manager = MagicMock()
+                mock_prompts.prompt_manager.components = {}
+                mock_prompts.prompt_manager.spices = {}
+                mock_prompts.prompt_manager.disabled_categories = []
+
+                with patch('core.modules.system.toolsets.toolset_manager') as mock_ts:
+                    mock_ts.get_toolset_names.return_value = []
+                    mock_ts.toolset_exists.return_value = False
+
+                    response = client.get('/api/init', headers={'X-API-Key': 'test'})
+
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert 'functions' in data
+        # Functions has nested structure: {modules: {}}
+        assert 'modules' in data['functions']
+        # Current ability is under abilities.current
+        assert 'abilities' in data
+        assert 'current' in data['abilities']
+
+    def test_init_requires_auth(self, client):
+        """GET /init should require authentication."""
+        with patch('core.setup.get_password_hash', return_value="test"):
+            response = client.get('/api/init')
+
+        assert response.status_code == 401
 
 
 # =============================================================================

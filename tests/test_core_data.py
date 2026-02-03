@@ -128,13 +128,15 @@ class TestChatSessionManager:
         shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_session_manager_creates_default_chat(self, temp_history_dir):
-        """Should create default.json on init."""
+        """Should create database with default chat on init."""
         from core.chat.history import ChatSessionManager
-        
+
         manager = ChatSessionManager(history_dir=temp_history_dir)
-        
-        default_path = Path(temp_history_dir) / "default.json"
-        assert default_path.exists()
+
+        # Now uses SQLite - check database exists and default chat is loaded
+        db_path = Path(temp_history_dir) / "sapphire_history.db"
+        assert db_path.exists()
+        assert manager.active_chat_name == "default"
     
     def test_session_manager_list_chat_files(self, temp_history_dir):
         """Should list available chat files."""
@@ -148,14 +150,17 @@ class TestChatSessionManager:
         assert len(chats) >= 1
     
     def test_session_manager_create_chat(self, temp_history_dir):
-        """Should create new chat."""
+        """Should create new chat in database."""
         from core.chat.history import ChatSessionManager
-        
+
         manager = ChatSessionManager(history_dir=temp_history_dir)
         result = manager.create_chat("test_chat")
-        
+
         assert result is True
-        assert (Path(temp_history_dir) / "test_chat.json").exists()
+        # Verify chat exists by listing chats (returns list of dicts with 'name' key)
+        chats = manager.list_chat_files()
+        chat_names = [c['name'] for c in chats]
+        assert "test_chat" in chat_names
     
     def test_session_manager_set_active_chat(self, temp_history_dir):
         """Should switch between chats."""
@@ -192,14 +197,17 @@ class TestChatSessionManager:
     def test_session_manager_delete_default_recreates(self, temp_history_dir):
         """Deleting default chat should recreate it."""
         from core.chat.history import ChatSessionManager
-        
+
         manager = ChatSessionManager(history_dir=temp_history_dir)
-        
+
         result = manager.delete_chat("default")
-        
+
         # Should succeed but recreate default
         assert result is True
-        assert (Path(temp_history_dir) / "default.json").exists()
+        # Verify default chat still exists in database (returns list of dicts with 'name' key)
+        chats = manager.list_chat_files()
+        chat_names = [c['name'] for c in chats]
+        assert "default" in chat_names
     
     def test_session_manager_add_user_message(self, temp_history_dir):
         """Should add user message through manager."""

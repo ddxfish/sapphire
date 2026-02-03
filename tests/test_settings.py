@@ -295,14 +295,15 @@ class TestSettingsTiers:
             assert mgr.validate_tier("STT_ENABLED") == "restart"
     
     def test_restart_tier(self):
-        """Unknown settings should return 'restart'."""
+        """Unknown settings should return 'restart', SOCKS is hot-reloadable."""
         from core.settings_manager import SettingsManager
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
-            
+
             assert mgr.validate_tier("SOME_RANDOM_SETTING") == "restart"
-            assert mgr.validate_tier("SOCKS_HOST") == "restart"
+            # SOCKS settings are hot-reloadable (session cache is cleared on change)
+            assert mgr.validate_tier("SOCKS_HOST") == "hot"
 
 
 class TestUserOverrides:

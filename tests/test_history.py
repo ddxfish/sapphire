@@ -252,16 +252,19 @@ class TestChatSessionManager:
     """Test ChatSessionManager class."""
     
     def test_create_chat(self, tmp_path):
-        """Should create new chat file."""
+        """Should create new chat in database."""
         with patch('core.chat.history.SYSTEM_DEFAULTS', {"prompt": "default"}):
             with patch('core.chat.history.get_user_defaults', return_value={"prompt": "default"}):
                 from core.chat.history import ChatSessionManager
-                
+
                 mgr = ChatSessionManager(history_dir=str(tmp_path))
                 result = mgr.create_chat("test_chat")
-                
+
                 assert result is True
-                assert (tmp_path / "test_chat.json").exists()
+                # Verify chat exists by listing chats (returns list of dicts with 'name' key)
+                chats = mgr.list_chat_files()
+                chat_names = [c['name'] for c in chats]
+                assert "test_chat" in chat_names
     
     def test_create_duplicate_chat(self, tmp_path):
         """Should return False for duplicate chat name."""
