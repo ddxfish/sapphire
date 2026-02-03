@@ -131,6 +131,13 @@ export function injectStyles() {
 
     .tab-content.active {
       display: block;
+    }
+
+    .tab-loading {
+      padding: 40px 20px;
+      text-align: center;
+      color: var(--text-muted);
+      font-style: italic;
       animation: settingsFadeIn var(--transition-normal);
     }
 

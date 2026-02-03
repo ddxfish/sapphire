@@ -1,4 +1,5 @@
 // index.js - Backup plugin entry point
+// Supports both eager and lazy loading modes
 import BackupModal from './backup-modal.js';
 import { injectStyles } from './backup-styles.js';
 
@@ -9,7 +10,14 @@ const BackupPlugin = {
   async init(container) {
     injectStyles();
 
-    // Register in app kebab menu
+    // Check if loaded lazily (menu button already exists)
+    const existingBtn = document.querySelector('[data-plugin="backup"][data-lazy="true"]');
+    if (existingBtn) {
+      console.log('✔ Backup plugin initialized (lazy)');
+      return;
+    }
+
+    // Eager mode - register menu item ourselves
     if (window.pluginLoader) {
       const menuBtn = window.pluginLoader.registerIcon(this);
       if (menuBtn) {
@@ -18,7 +26,12 @@ const BackupPlugin = {
       }
     }
 
-    console.log('Backup plugin initialized');
+    console.log('✔ Backup plugin initialized');
+  },
+
+  // Called by lazy loader when menu item is clicked
+  onTrigger() {
+    this.openModal();
   },
 
   openModal() {

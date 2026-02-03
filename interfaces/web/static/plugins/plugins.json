@@ -27,36 +27,40 @@
       "collapsible": true
     },
     "settings-modal": {
-      "title": "Settings Modal",
-      "collapsible": true,
-      "showInSidebar": false
+      "title": "App Settings",
+      "menuText": "App Settings",
+      "showInSidebar": false,
+      "lazy": true
     },
     "plugins-modal": {
       "title": "Plugins",
-      "collapsible": true,
-      "showInSidebar": false
+      "menuText": "Plugins",
+      "showInSidebar": false,
+      "lazy": true
     },
     "backup": {
-      "title": "Backup Modal",
-      "collapsible": true,
-      "showInSidebar": false
+      "title": "Backup",
+      "menuText": "Backup & Restore",
+      "showInSidebar": false,
+      "lazy": true
     },
-    "spice-manager": { "title": "Spice Editor", "collapsible": true },
+    "spice-manager": {
+      "title": "Spice Editor",
+      "collapsible": true
+    },
     "image-gen": {
       "title": "Image Generation",
-      "collapsible": true,
       "showInSidebar": false
     },
     "continuity": {
       "title": "Continuity",
-      "collapsible": true,
-      "showInSidebar": false
+      "menuText": "Continuity Tasks",
+      "showInSidebar": false,
+      "lazy": true
     },
     "homeassistant": {
       "title": "Home Assistant",
-      "collapsible": true,
       "showInSidebar": false
     }
-
   }
 }

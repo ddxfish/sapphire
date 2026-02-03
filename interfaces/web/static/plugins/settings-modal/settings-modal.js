@@ -1,6 +1,6 @@
 // settings-modal.js - Settings modal UI orchestrator
 import settingsAPI from './settings-api.js';
-import { TABS, CATEGORIES } from './settings-categories.js';
+import { TABS, CATEGORIES, loadTab, isTabLoaded, getLoadedTab } from './settings-categories.js';
 import { showToast, showActionToast } from '../../shared/toast.js';
 import { updateScene } from '../../features/scene.js';
 
@@ -25,7 +25,9 @@ class SettingsModal {
   async open() {
     this.originalTheme = localStorage.getItem('sapphire-theme') || 'dark';
     this.currentTheme = this.originalTheme;
-    
+
+    // Preload first tab before rendering
+    await loadTab(this.currentTab);
     await this.loadData();
     this.render();
     this.attachEventListeners();
@@ -137,15 +139,20 @@ class SettingsModal {
   }
 
   renderTabContent() {
-    return TABS.map(tab => `
-      <div class="tab-content ${tab.id === this.currentTab ? 'active' : ''}" data-tab="${tab.id}">
-        <div class="tab-header">
-          <h3>${tab.icon} ${tab.name}</h3>
-          <p>${tab.description}</p>
+    return TABS.map(tab => {
+      const loaded = getLoadedTab(tab.id);
+      const content = loaded ? loaded.render(this) : '<div class="tab-loading">Click tab to load...</div>';
+
+      return `
+        <div class="tab-content ${tab.id === this.currentTab ? 'active' : ''}" data-tab="${tab.id}">
+          <div class="tab-header">
+            <h3>${tab.icon} ${tab.name}</h3>
+            <p>${tab.description}</p>
+          </div>
+          ${content}
         </div>
-        ${tab.render(this)}
-      </div>
-    `).join('');
+      `;
+    }).join('');
   }
 
   // Generic settings renderer - used by tabs
@@ -310,9 +317,13 @@ class SettingsModal {
     };
     document.addEventListener('keydown', this.escHandler);
     
-    // Tab switching
+    // Tab switching (async for lazy loading)
     this.modal.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        await this.switchTab(btn.dataset.tab);
+        btn.disabled = false;
+      });
     });
     
     // Settings inputs
@@ -337,27 +348,80 @@ class SettingsModal {
     this.modal.querySelector('#settings-save').addEventListener('click', () => this.saveChanges());
     this.modal.querySelector('#settings-reload').addEventListener('click', () => this.reloadSettings());
     
-    // Tab-specific listeners
+    // Tab-specific listeners for loaded tabs only
     for (const tab of TABS) {
-      if (tab.attachListeners) {
+      const loadedTab = getLoadedTab(tab.id);
+      if (loadedTab && loadedTab.attachListeners) {
         const contentEl = this.modal.querySelector(`.tab-content[data-tab="${tab.id}"]`);
         if (contentEl) {
-          tab.attachListeners(this, contentEl);
+          loadedTab.attachListeners(this, contentEl);
         }
       }
     }
   }
 
-  switchTab(tabId) {
+  async switchTab(tabId) {
     this.currentTab = tabId;
-    
+
     this.modal.querySelectorAll('.tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === tabId);
     });
-    
+
     this.modal.querySelectorAll('.tab-content').forEach(content => {
       content.classList.toggle('active', content.dataset.tab === tabId);
     });
+
+    // Lazy load tab if not yet loaded
+    if (!isTabLoaded(tabId)) {
+      const contentEl = this.modal.querySelector(`.tab-content[data-tab="${tabId}"]`);
+      if (contentEl) {
+        contentEl.innerHTML = `
+          <div class="tab-header">
+            <h3>Loading...</h3>
+          </div>
+        `;
+
+        const tab = await loadTab(tabId);
+        if (tab) {
+          this.renderSingleTab(tabId, contentEl);
+        }
+      }
+    }
+  }
+
+  renderSingleTab(tabId, contentEl) {
+    const tabMeta = TABS.find(t => t.id === tabId);
+    const loadedTab = getLoadedTab(tabId);
+
+    if (!tabMeta || !loadedTab) return;
+
+    contentEl.innerHTML = `
+      <div class="tab-header">
+        <h3>${tabMeta.icon} ${tabMeta.name}</h3>
+        <p>${tabMeta.description}</p>
+      </div>
+      ${loadedTab.render(this)}
+    `;
+
+    // Re-attach listeners for this tab
+    this.modal.querySelectorAll('.tab-content[data-tab="' + tabId + '"] input, .tab-content[data-tab="' + tabId + '"] textarea, .tab-content[data-tab="' + tabId + '"] select').forEach(input => {
+      input.addEventListener('change', (e) => this.handleInputChange(e));
+    });
+
+    this.modal.querySelectorAll('.tab-content[data-tab="' + tabId + '"] .reset-btn').forEach(btn => {
+      btn.addEventListener('click', () => this.resetSetting(btn.dataset.key));
+    });
+
+    this.modal.querySelectorAll('.tab-content[data-tab="' + tabId + '"] .help-icon').forEach(icon => {
+      icon.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.showHelpDetails(icon.dataset.key);
+      });
+    });
+
+    if (loadedTab.attachListeners) {
+      loadedTab.attachListeners(this, contentEl);
+    }
   }
 
   handleInputChange(e) {
@@ -624,34 +688,35 @@ class SettingsModal {
 
   refreshContent() {
     if (!this.modal) return;
-    
+
     const content = this.modal.querySelector('.settings-modal-content');
     if (!content) return;
-    
+
     content.innerHTML = this.renderTabContent();
-    
+
     // Re-attach input listeners
     this.modal.querySelectorAll('input, textarea, select').forEach(input => {
       input.addEventListener('change', (e) => this.handleInputChange(e));
     });
-    
+
     this.modal.querySelectorAll('.reset-btn').forEach(btn => {
       btn.addEventListener('click', () => this.resetSetting(btn.dataset.key));
     });
-    
+
     this.modal.querySelectorAll('.help-icon').forEach(icon => {
       icon.addEventListener('click', (e) => {
         e.stopPropagation();
         this.showHelpDetails(icon.dataset.key);
       });
     });
-    
-    // Re-attach tab-specific listeners
+
+    // Re-attach tab-specific listeners for loaded tabs only
     for (const tab of TABS) {
-      if (tab.attachListeners) {
+      const loadedTab = getLoadedTab(tab.id);
+      if (loadedTab && loadedTab.attachListeners) {
         const contentEl = this.modal.querySelector(`.tab-content[data-tab="${tab.id}"]`);
         if (contentEl) {
-          tab.attachListeners(this, contentEl);
+          loadedTab.attachListeners(this, contentEl);
         }
       }
     }

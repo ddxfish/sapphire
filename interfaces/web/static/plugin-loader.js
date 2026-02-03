@@ -1,15 +1,16 @@
 // plugin-loader.js - Plugin system with auto-discovery and collapsible wrappers
-// Optimized for parallel plugin loading
+// Supports lazy loading: plugins marked lazy=true only load when triggered
 import { showHelpModal } from './shared/modal.js';
 
 // Cache buster - increment to force fresh plugin loads
-const PLUGIN_VERSION = '20260203a';
+const PLUGIN_VERSION = '20260203b';
 
 class PluginLoader {
   constructor(containerSelector) {
     this.container = document.querySelector(containerSelector);
     this.iconContainer = document.querySelector('#plugin-icon-area');
     this.plugins = [];
+    this.lazyPlugins = new Map(); // name -> {config, loaded: false}
     this.config = null;
     this.injectGlobalStyles();
   }
@@ -91,49 +92,169 @@ class PluginLoader {
 
   async loadPlugins() {
     const t0 = performance.now();
-    
+
     try {
       // Try API first (returns merged user + static config)
       let response = await fetch('/api/webui/plugins/config');
-      
+
       // Fallback to static file if API fails (e.g., not logged in)
       if (!response.ok) {
         console.log('[PluginLoader] API unavailable, falling back to static plugins.json');
         response = await fetch('/static/plugins/plugins.json');
       }
-      
+
       if (!response.ok) {
         console.log('[PluginLoader] No plugins config found, skipping plugins');
         return;
       }
-      
+
       this.config = await response.json();
       const pluginNames = this.config.enabled || [];
-      
+
       if (pluginNames.length === 0) {
         console.log('[PluginLoader] No plugins enabled');
         return;
       }
-      
-      console.log(`[PluginLoader] Loading ${pluginNames.length} plugin(s) in parallel: ${pluginNames.join(', ')}`);
-      
-      // Load all plugins in parallel instead of sequentially
-      const results = await Promise.allSettled(
-        pluginNames.map(name => this.loadPlugin(name))
-      );
-      
-      // Log any failures
-      results.forEach((result, i) => {
-        if (result.status === 'rejected') {
-          console.error(`[Plugin:${pluginNames[i]}] Failed:`, result.reason);
+
+      // Separate lazy vs eager plugins
+      const eagerPlugins = [];
+      const lazyPlugins = [];
+
+      for (const name of pluginNames) {
+        const pluginConfig = this.config.plugins?.[name] || {};
+        if (pluginConfig.lazy) {
+          lazyPlugins.push(name);
+        } else {
+          eagerPlugins.push(name);
         }
-      });
-      
+      }
+
+      console.log(`[PluginLoader] Loading ${eagerPlugins.length} eager, ${lazyPlugins.length} lazy plugins`);
+
+      // Register lazy plugins (just menu items, no code loaded yet)
+      for (const name of lazyPlugins) {
+        this.registerLazyPlugin(name);
+      }
+
+      // Load eager plugins in parallel
+      if (eagerPlugins.length > 0) {
+        const results = await Promise.allSettled(
+          eagerPlugins.map(name => this.loadPlugin(name))
+        );
+
+        results.forEach((result, i) => {
+          if (result.status === 'rejected') {
+            console.error(`[Plugin:${eagerPlugins[i]}] Failed:`, result.reason);
+          }
+        });
+      }
+
       const elapsed = (performance.now() - t0).toFixed(0);
-      console.log(`[PluginLoader] Finished in ${elapsed}ms. ${this.plugins.length}/${pluginNames.length} plugins active`);
-      
+      console.log(`[PluginLoader] Finished in ${elapsed}ms. ${this.plugins.length} active, ${this.lazyPlugins.size} lazy`);
+
     } catch (e) {
       console.error('[PluginLoader] System error:', e);
+    }
+  }
+
+  registerLazyPlugin(name) {
+    const pluginConfig = this.config.plugins?.[name] || {};
+    const title = pluginConfig.title || name;
+    const menuText = pluginConfig.menuText || title;
+
+    // Store config for later loading
+    this.lazyPlugins.set(name, { config: pluginConfig, loaded: false, instance: null });
+
+    // Register menu item that triggers lazy load
+    if (!pluginConfig.showInSidebar || pluginConfig.showInSidebar === false) {
+      const menuButton = document.createElement('button');
+      menuButton.className = 'plugin-menu-item';
+      menuButton.dataset.plugin = name;
+      menuButton.dataset.lazy = 'true';
+      menuButton.textContent = menuText;
+      menuButton.title = title;
+
+      menuButton.addEventListener('click', async () => {
+        await this.triggerLazyPlugin(name);
+      });
+
+      if (this.iconContainer) {
+        this.iconContainer.appendChild(menuButton);
+      }
+    }
+
+    console.log(`⏳ Plugin registered (lazy): ${name}`);
+  }
+
+  async triggerLazyPlugin(name) {
+    const lazy = this.lazyPlugins.get(name);
+    if (!lazy) {
+      console.error(`[Plugin:${name}] Not found in lazy registry`);
+      return;
+    }
+
+    // Close any open kebab menus
+    document.querySelectorAll('.kebab-menu.open').forEach(m => m.classList.remove('open'));
+
+    // If already loaded, just call the trigger method
+    if (lazy.loaded && lazy.instance) {
+      if (lazy.instance.onTrigger) {
+        lazy.instance.onTrigger();
+      } else if (lazy.instance.open) {
+        lazy.instance.open();
+      }
+      return;
+    }
+
+    // Show loading state on button
+    const btn = this.iconContainer?.querySelector(`[data-plugin="${name}"]`);
+    const originalText = btn?.textContent;
+    if (btn) {
+      btn.textContent = 'Loading...';
+      btn.disabled = true;
+    }
+
+    try {
+      // Load the plugin module
+      const module = await import(`/static/plugins/${name}/index.js?v=${PLUGIN_VERSION}`);
+      const plugin = module.default;
+
+      if (!plugin) {
+        throw new Error('No default export');
+      }
+
+      // Initialize plugin
+      const wrapper = document.createElement('div');
+      wrapper.className = 'plugin-wrapper';
+      wrapper.dataset.plugin = name;
+
+      if (typeof plugin.init === 'function') {
+        await plugin.init(wrapper);
+      }
+
+      // Store instance
+      lazy.loaded = true;
+      lazy.instance = plugin;
+      this.plugins.push({ name, instance: plugin, wrapper });
+
+      // Trigger the plugin's action
+      if (plugin.onTrigger) {
+        plugin.onTrigger();
+      } else if (plugin.openSettings) {
+        plugin.openSettings();
+      } else if (plugin.open) {
+        plugin.open();
+      }
+
+      console.log(`✓ Plugin loaded (lazy): ${name}`);
+
+    } catch (e) {
+      console.error(`[Plugin:${name}] Lazy load failed:`, e);
+    } finally {
+      if (btn) {
+        btn.textContent = originalText;
+        btn.disabled = false;
+      }
     }
   }
 

@@ -1,4 +1,5 @@
 // index.js - Continuity plugin entry point
+// Supports both eager and lazy loading modes
 
 import ContinuityModal from './continuity-modal.js';
 import { injectStyles } from './continuity-styles.js';
@@ -6,11 +7,11 @@ import { injectStyles } from './continuity-styles.js';
 const ContinuityPlugin = {
   name: 'continuity',
   modal: null,
-  
+
   helpText: `
     <h4>Continuity - Scheduled AI Tasks</h4>
     <p>Wake Sapphire on a schedule to run autonomous tasks.</p>
-    
+
     <h5>Task Options</h5>
     <ul>
       <li><strong>Schedule:</strong> Cron expression (minute hour day month weekday)</li>
@@ -18,14 +19,14 @@ const ContinuityPlugin = {
       <li><strong>Cooldown:</strong> Minimum minutes between runs</li>
       <li><strong>Iterations:</strong> How many back-and-forth messages per run</li>
     </ul>
-    
+
     <h5>Chat Modes</h5>
     <ul>
       <li><strong>Dated:</strong> Creates a new chat each run (default)</li>
       <li><strong>Single:</strong> One persistent chat per task</li>
       <li><strong>Fixed:</strong> Use a specific existing chat</li>
     </ul>
-    
+
     <h5>Cron Examples</h5>
     <pre>
 0 9 * * *      = 9:00 AM daily
@@ -39,7 +40,14 @@ const ContinuityPlugin = {
   async init(container) {
     injectStyles();
 
-    // Register in app kebab menu
+    // Check if loaded lazily (menu button already exists)
+    const existingBtn = document.querySelector('[data-plugin="continuity"][data-lazy="true"]');
+    if (existingBtn) {
+      console.log('✔ Continuity plugin initialized (lazy)');
+      return;
+    }
+
+    // Eager mode - register menu item ourselves
     if (window.pluginLoader) {
       const menuBtn = window.pluginLoader.registerIcon(this);
       if (menuBtn) {
@@ -48,7 +56,12 @@ const ContinuityPlugin = {
       }
     }
 
-    console.log('Continuity plugin initialized');
+    console.log('✔ Continuity plugin initialized');
+  },
+
+  // Called by lazy loader when menu item is clicked
+  onTrigger() {
+    this.openModal();
   },
 
   openModal() {

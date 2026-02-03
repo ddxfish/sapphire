@@ -1,4 +1,5 @@
 // index.js - Plugins modal plugin entry point
+// Supports both eager and lazy loading modes
 
 import { injectStyles } from './plugins-styles.js';
 import PluginsModal from './plugins-modal.js';
@@ -12,28 +13,37 @@ export default {
 
   init(container) {
     injectStyles();
-    
-    // Register in app kebab menu
-    const pluginLoader = window.pluginLoader;
-    if (!pluginLoader) {
-      console.error('Plugin loader not available');
+
+    // Check if loaded lazily (menu button already exists)
+    const existingBtn = document.querySelector('[data-plugin="plugins-modal"][data-lazy="true"]');
+    if (existingBtn) {
+      console.log('✔ Plugins modal initialized (lazy)');
       return;
     }
 
-    const menuButton = pluginLoader.registerIcon(this);
-    if (menuButton) {
-      menuButton.textContent = 'Plugins';
-      menuButton.title = 'Manage Plugins';
-      menuButton.addEventListener('click', () => this.openPlugins());
+    // Eager mode - register menu item ourselves
+    const pluginLoader = window.pluginLoader;
+    if (pluginLoader) {
+      const menuButton = pluginLoader.registerIcon(this);
+      if (menuButton) {
+        menuButton.textContent = 'Plugins';
+        menuButton.title = 'Manage Plugins';
+        menuButton.addEventListener('click', () => this.openPlugins());
+      }
     }
 
     console.log('✔ Plugins modal initialized');
   },
 
+  // Called by lazy loader when menu item is clicked
+  onTrigger() {
+    this.openPlugins();
+  },
+
   openPlugins() {
     // Close any open kebab menus
     document.querySelectorAll('.kebab-menu.open').forEach(m => m.classList.remove('open'));
-    
+
     if (this.modal) {
       console.log('Plugins modal already open');
       return;
