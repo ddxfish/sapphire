@@ -1779,10 +1779,150 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             logger.error(f"Failed to set state for {chat_name}: {e}")
             return jsonify({"error": str(e)}), 500
 
+    @bp.route('/api/state/saves/<preset_name>', methods=['GET'])
+    def list_game_saves(preset_name):
+        """List save slots for a game preset."""
+        try:
+            from pathlib import Path
+            from datetime import datetime
+
+            saves_dir = Path("user/state_saves") / preset_name
+            slots = []
+
+            for i in range(1, 6):  # Slots 1-5
+                slot_file = saves_dir / f"slot_{i}.json"
+                if slot_file.exists():
+                    with open(slot_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    slots.append({
+                        "slot": i,
+                        "timestamp": data.get("timestamp"),
+                        "turn": data.get("turn", 0),
+                        "empty": False
+                    })
+                else:
+                    slots.append({"slot": i, "empty": True})
+
+            return jsonify({"preset": preset_name, "slots": slots})
+        except Exception as e:
+            logger.error(f"Failed to list saves for {preset_name}: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @bp.route('/api/state/<chat_name>/save', methods=['POST'])
+    def save_game_state(chat_name):
+        """Save current game state to a slot."""
+        try:
+            from pathlib import Path
+            from datetime import datetime, timezone
+            from core.state_engine import StateEngine
+
+            data = request.get_json() or {}
+            slot = data.get('slot')
+
+            if not slot or slot < 1 or slot > 5:
+                return jsonify({"error": "Slot must be 1-5"}), 400
+
+            # Get current chat settings to find the preset
+            chat_settings = system_instance.llm_chat.session_manager.get_chat_settings()
+            preset_name = chat_settings.get('state_preset')
+
+            if not preset_name:
+                return jsonify({"error": "No game preset active"}), 400
+
+            # Get current state from engine
+            db_path = Path("user/history/sapphire_history.db")
+            engine = StateEngine(chat_name, db_path)
+            state = engine.get_state()  # Returns all state when no key specified
+            turn = system_instance.llm_chat.session_manager.get_turn_count() if system_instance else 0
+
+            # Create save data
+            save_data = {
+                "slot": slot,
+                "preset": preset_name,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "turn": turn,
+                "state": state
+            }
+
+            # Ensure directory exists
+            saves_dir = Path("user/state_saves") / preset_name
+            saves_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write save file
+            slot_file = saves_dir / f"slot_{slot}.json"
+            with open(slot_file, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, indent=2)
+
+            logger.info(f"[STATE] Saved game to slot {slot} for preset '{preset_name}'")
+            return jsonify({"status": "saved", "slot": slot, "timestamp": save_data["timestamp"]})
+        except Exception as e:
+            logger.error(f"Failed to save game state: {e}")
+            return jsonify({"error": str(e)}), 500
+
+    @bp.route('/api/state/<chat_name>/load', methods=['POST'])
+    def load_game_state(chat_name):
+        """Load game state from a slot."""
+        try:
+            from pathlib import Path
+            from core.state_engine import StateEngine
+
+            data = request.get_json() or {}
+            slot = data.get('slot')
+
+            if not slot or slot < 1 or slot > 5:
+                return jsonify({"error": "Slot must be 1-5"}), 400
+
+            # Get current chat settings to find the preset
+            chat_settings = system_instance.llm_chat.session_manager.get_chat_settings()
+            preset_name = chat_settings.get('state_preset')
+
+            if not preset_name:
+                return jsonify({"error": "No game preset active"}), 400
+
+            # Load save file
+            saves_dir = Path("user/state_saves") / preset_name
+            slot_file = saves_dir / f"slot_{slot}.json"
+
+            if not slot_file.exists():
+                return jsonify({"error": f"Slot {slot} is empty"}), 404
+
+            with open(slot_file, 'r', encoding='utf-8') as f:
+                save_data = json.load(f)
+
+            # Restore state to engine
+            db_path = Path("user/history/sapphire_history.db")
+            engine = StateEngine(chat_name, db_path)
+            turn = system_instance.llm_chat.session_manager.get_turn_count() if system_instance else 0
+
+            # Clear current state and load saved state
+            engine.clear_all()
+            for key, value in save_data.get("state", {}).items():
+                # Extract just the value if it's a dict with metadata
+                val = value.get("value") if isinstance(value, dict) else value
+                engine.set_state(key, val, "load", turn, f"Loaded from slot {slot}")
+
+            # Reload live engine if active
+            if system_instance:
+                live_engine = system_instance.llm_chat.function_manager.get_state_engine()
+                if live_engine and live_engine.chat_name == chat_name:
+                    live_engine.reload_from_db()
+                    logger.info(f"[STATE] Reloaded live engine for '{chat_name}'")
+
+            logger.info(f"[STATE] Loaded game from slot {slot} for preset '{preset_name}'")
+            return jsonify({
+                "status": "loaded",
+                "slot": slot,
+                "turn": save_data.get("turn", 0),
+                "timestamp": save_data.get("timestamp")
+            })
+        except Exception as e:
+            logger.error(f"Failed to load game state: {e}")
+            return jsonify({"error": str(e)}), 500
+
     # =============================================================================
     # SYSTEM MANAGEMENT ROUTES
     # =============================================================================
-    
+
     @bp.route('/api/system/restart', methods=['POST'])
     def request_system_restart():
         """Request application restart. Returns immediately, restart happens async."""

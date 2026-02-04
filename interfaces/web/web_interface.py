@@ -956,6 +956,21 @@ def reset_chat_state(chat_name):
 def set_chat_state_value(chat_name):
     return proxy(f'/api/state/{chat_name}/set', 'POST', json=request.json, timeout=10)
 
+@app.route('/api/state/saves/<preset_name>', methods=['GET'])
+@require_login
+def list_game_saves(preset_name):
+    return proxy(f'/api/state/saves/{preset_name}')
+
+@app.route('/api/state/<chat_name>/save', methods=['POST'])
+@require_login
+def save_game_state(chat_name):
+    return proxy(f'/api/state/{chat_name}/save', 'POST', json=request.json, timeout=10)
+
+@app.route('/api/state/<chat_name>/load', methods=['POST'])
+@require_login
+def load_game_state(chat_name):
+    return proxy(f'/api/state/{chat_name}/load', 'POST', json=request.json, timeout=10)
+
 @app.route('/user-assets/<path:filename>')
 @require_login
 def user_assets(filename):

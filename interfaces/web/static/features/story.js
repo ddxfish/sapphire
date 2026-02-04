@@ -6,6 +6,7 @@ let storyBtn = null;
 let isDropdownOpen = false;
 let currentPreset = null;
 let presetsCache = null;
+let saveSlotsCache = null;
 
 export function initStoryIndicator() {
     storyMenu = document.getElementById('story-indicator');
@@ -50,9 +51,14 @@ function toggleDropdown() {
     }
 }
 
-function openDropdown() {
+async function openDropdown() {
     if (storyMenu) storyMenu.classList.add('dropdown-open');
     isDropdownOpen = true;
+    // Refresh save slots when opening dropdown
+    if (currentPreset) {
+        await loadSaveSlots();
+        populateSaveLoadSubmenus();
+    }
 }
 
 function closeDropdown() {
@@ -338,7 +344,13 @@ export function updateStoryIndicator(story) {
 
     // Story name for header and tooltip
     const storyName = story.preset_display || 'Story';
+    const presetChanged = currentPreset !== story.preset;
     currentPreset = story.preset || null;
+
+    // Load save slots if preset changed
+    if (presetChanged && currentPreset) {
+        loadSaveSlots();
+    }
 
     // Build progress info
     let progressText = '';
@@ -367,6 +379,145 @@ export function updateStoryIndicator(story) {
     // Button title for accessibility
     if (btn) btn.title = storyName;
 
-    // Update submenu checkmarks
+    // Update submenu checkmarks and save slots
     populatePresetSubmenu();
+    populateSaveLoadSubmenus();
+}
+
+async function loadSaveSlots() {
+    if (!currentPreset) {
+        saveSlotsCache = null;
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/state/saves/${encodeURIComponent(currentPreset)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        saveSlotsCache = data.slots || [];
+    } catch (e) {
+        console.warn('Failed to load save slots:', e);
+        saveSlotsCache = null;
+    }
+}
+
+function populateSaveLoadSubmenus() {
+    if (!storyMenu) return;
+
+    const saveSubmenu = storyMenu.querySelector('.story-save-submenu');
+    const loadSubmenu = storyMenu.querySelector('.story-load-submenu');
+
+    if (!saveSubmenu || !loadSubmenu) return;
+
+    // Generate slot HTML
+    const slots = saveSlotsCache || [];
+    const slotHtml = (action) => {
+        let html = '';
+        for (let i = 1; i <= 5; i++) {
+            const slot = slots.find(s => s.slot === i);
+            const isEmpty = !slot || slot.empty;
+            const timestamp = isEmpty ? 'Empty' : formatTimestamp(slot.timestamp);
+            const turn = isEmpty ? '' : ` (Turn ${slot.turn})`;
+            html += `<button class="story-slot-item" data-action="${action}" data-slot="${i}">
+                <span class="story-slot-num">${i}</span>
+                <span class="story-slot-info">${timestamp}${turn}</span>
+            </button>`;
+        }
+        return html;
+    };
+
+    saveSubmenu.innerHTML = slotHtml('save');
+    loadSubmenu.innerHTML = slotHtml('load');
+
+    // Add click handlers
+    saveSubmenu.querySelectorAll('.story-slot-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const slot = parseInt(item.dataset.slot);
+            closeDropdown();
+            await saveGame(slot);
+        });
+    });
+
+    loadSubmenu.querySelectorAll('.story-slot-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const slot = parseInt(item.dataset.slot);
+            const slotData = slots.find(s => s.slot === slot);
+            if (!slotData || slotData.empty) {
+                ui.showToast(`Slot ${slot} is empty`, 'info');
+                return;
+            }
+            closeDropdown();
+            await loadGame(slot);
+        });
+    });
+}
+
+function formatTimestamp(isoString) {
+    if (!isoString) return 'Empty';
+    try {
+        const date = new Date(isoString);
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    } catch {
+        return 'Saved';
+    }
+}
+
+async function saveGame(slot) {
+    const chatSelect = document.getElementById('chat-select');
+    const chatName = chatSelect?.value;
+    if (!chatName) return;
+
+    try {
+        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot })
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || 'Save failed');
+        }
+
+        ui.showToast(`Game saved to slot ${slot}`, 'success');
+
+        // Refresh save slots
+        await loadSaveSlots();
+        populateSaveLoadSubmenus();
+    } catch (e) {
+        ui.showToast(`Save failed: ${e.message}`, 'error');
+    }
+}
+
+async function loadGame(slot) {
+    if (!confirm(`Load save from slot ${slot}? Current progress will be replaced.`)) {
+        return;
+    }
+
+    const chatSelect = document.getElementById('chat-select');
+    const chatName = chatSelect?.value;
+    if (!chatName) return;
+
+    try {
+        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}/load`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slot })
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || 'Load failed');
+        }
+
+        ui.showToast(`Game loaded from slot ${slot}`, 'success');
+
+        // Refresh scene to update UI
+        const { updateScene } = await import('./scene.js');
+        await updateScene();
+    } catch (e) {
+        ui.showToast(`Load failed: ${e.message}`, 'error');
+    }
 }
