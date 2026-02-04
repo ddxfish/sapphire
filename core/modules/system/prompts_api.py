@@ -33,16 +33,17 @@ def create_prompts_api(system_instance=None):
         try:
             prompt_list = prompts.list_prompts()
             prompt_metadata = []
-            
+
             for name in prompt_list:
                 prompt_data = prompts.get_prompt(name)
                 metadata = {
                     'name': name,
                     'type': prompt_data.get('type', 'unknown') if isinstance(prompt_data, dict) else 'monolith',
-                    'char_count': len(prompt_data.get('content', '')) if isinstance(prompt_data, dict) else len(str(prompt_data))
+                    'char_count': len(prompt_data.get('content', '')) if isinstance(prompt_data, dict) else len(str(prompt_data)),
+                    'privacy_required': prompt_data.get('privacy_required', False) if isinstance(prompt_data, dict) else False
                 }
                 prompt_metadata.append(metadata)
-            
+
             return jsonify({'prompts': prompt_metadata})
         except Exception as e:
             logger.error(f"Error listing prompts: {e}")
@@ -139,7 +140,20 @@ def create_prompts_api(system_instance=None):
             prompt_data = prompts.get_prompt(name)
             if not prompt_data:
                 return jsonify({'error': f"Prompt '{name}' not found"}), 404
-            
+
+            # Check if prompt requires privacy mode
+            privacy_required = prompt_data.get('privacy_required', False) if isinstance(prompt_data, dict) else False
+            if privacy_required:
+                try:
+                    from core.privacy import is_privacy_mode
+                    if not is_privacy_mode():
+                        return jsonify({
+                            'error': f"Prompt '{name}' requires Privacy Mode. Enable it first.",
+                            'privacy_required': True
+                        }), 403
+                except ImportError:
+                    pass
+
             content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
             
             if system_instance and hasattr(system_instance, 'llm_chat'):

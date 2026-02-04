@@ -251,6 +251,44 @@ export function injectStyles() {
       background: var(--danger, #dc3545);
       color: white;
     }
+
+    /* Privacy checkbox row */
+    .pm-privacy-row {
+      margin-top: 12px;
+      padding: 8px 12px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius-sm);
+      border-left: 3px solid var(--primary);
+    }
+
+    .pm-privacy-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      color: var(--text-light);
+      font-size: var(--font-sm);
+    }
+
+    .pm-privacy-label input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .pm-privacy-icon {
+      font-size: 1.1em;
+    }
+
+    .pm-privacy-hint {
+      color: var(--text-muted);
+      font-size: var(--font-xs);
+      margin-left: auto;
+    }
+
+    .pm-privacy-label:hover {
+      color: var(--text);
+    }
   `;
   document.head.appendChild(style);
 }

@@ -1,7 +1,7 @@
 // features/scene.js - Scene state, prompt display, functions display
 import * as api from '../api.js';
 import * as audio from '../audio.js';
-import { getElements, setTtsEnabled } from '../core/state.js';
+import { getElements, setTtsEnabled, setPromptPrivacyRequired } from '../core/state.js';
 import { updateStoryIndicator } from './story.js';
 
 let hasCloudTools = false;
@@ -75,7 +75,8 @@ export async function updateScene() {
         ttsPlaying = status?.tts_playing || false;
         audio.setLocalTtsPlaying(ttsPlaying);
         
-        updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count);
+        updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count, status?.prompt_privacy_required);
+        setPromptPrivacyRequired(status?.prompt_privacy_required || false);
         updateFuncs(status?.functions, status?.ability, hasCloudTools, status?.state_tools);
         updateSpice(status?.spice);
         updateStoryIndicator(status?.story);
@@ -122,19 +123,27 @@ function updateSpice(spice) {
     }
 }
 
-function updatePrompt(state, promptName, charCount) {
+function updatePrompt(state, promptName, charCount, privacyRequired) {
     const { promptPill } = getElements();
     if (!promptPill) return;
-    
+
     const textEl = promptPill.querySelector('.pill-text');
     const tooltipEl = promptPill.querySelector('.pill-tooltip');
-    
+
     // Format char count (2400 -> 2.4k)
     const formatCount = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
     const displayName = promptName || 'Unknown';
     const displayCount = charCount !== undefined ? ` (${formatCount(charCount)})` : '';
-    
-    textEl.textContent = `${displayName}${displayCount}`;
+    const lockIcon = privacyRequired ? '🔒 ' : '';
+
+    textEl.textContent = `${lockIcon}${displayName}${displayCount}`;
+
+    // Add/remove private class for styling
+    if (privacyRequired) {
+        promptPill.classList.add('prompt-private');
+    } else {
+        promptPill.classList.remove('prompt-private');
+    }
     
     // Build tooltip from state
     if (state) {

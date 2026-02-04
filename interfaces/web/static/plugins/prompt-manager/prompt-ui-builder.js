@@ -35,8 +35,16 @@ export function buildEditor(data, components) {
 }
 
 function buildMonolithEditor(data) {
+  const privacyChecked = data.privacy_required ? 'checked' : '';
   return `
     <textarea id="pm-content">${data.content || ''}</textarea>
+    <div class="pm-privacy-row">
+      <label class="pm-privacy-label">
+        <input type="checkbox" id="pm-privacy-required" ${privacyChecked}>
+        <span class="pm-privacy-icon">🔒</span> Private Only
+        <span class="pm-privacy-hint">(requires Privacy Mode)</span>
+      </label>
+    </div>
   `;
 }
 
@@ -73,7 +81,19 @@ function buildAssembledEditor(data, components) {
     </div>
   `;
 
-  return singleSelectHTML + multiSelectHTML;
+  // Privacy checkbox
+  const privacyChecked = data.privacy_required ? 'checked' : '';
+  const privacyHTML = `
+    <div class="pm-privacy-row">
+      <label class="pm-privacy-label">
+        <input type="checkbox" id="pm-privacy-required" ${privacyChecked}>
+        <span class="pm-privacy-icon">🔒</span> Private Only
+        <span class="pm-privacy-hint">(requires Privacy Mode)</span>
+      </label>
+    </div>
+  `;
+
+  return singleSelectHTML + multiSelectHTML + privacyHTML;
 }
 
 function buildOptions(componentOptions, selected) {

@@ -62,19 +62,30 @@ class PromptManager:
     def _load_monoliths(self):
         """Load monolith prompts from user/prompts/."""
         path = self.USER_DIR / "prompt_monoliths.json"
-        
+
         if not path.exists():
             logger.warning(f"prompt_monoliths.json not found at {path} - using empty defaults")
             self._monoliths = {}
             return
-        
+
         try:
             with open(path, 'r', encoding='utf-8') as f:
-                self._monoliths = json.load(f)
-            
-            # Remove metadata keys
-            self._monoliths = {k: v for k, v in self._monoliths.items() if not k.startswith('_')}
-            
+                raw_data = json.load(f)
+
+            # Normalize format: support both old (string) and new (object) formats
+            self._monoliths = {}
+            for k, v in raw_data.items():
+                if k.startswith('_'):
+                    continue
+                if isinstance(v, str):
+                    # Old format: {name: "content"} -> convert to new format
+                    self._monoliths[k] = {'content': v, 'privacy_required': False}
+                elif isinstance(v, dict):
+                    # New format: {name: {content: "...", privacy_required: bool}}
+                    self._monoliths[k] = v
+                else:
+                    logger.warning(f"Skipping monolith '{k}' with unexpected type: {type(v)}")
+
             logger.info(f"Loaded {len(self._monoliths)} monolith prompts")
         except Exception as e:
             logger.error(f"Failed to load monoliths: {e}")
@@ -260,7 +271,7 @@ class PromptManager:
     def save_monoliths(self):
         """Save monoliths to user/prompts/prompt_monoliths.json"""
         target_path = self.USER_DIR / "prompt_monoliths.json"
-        
+
         # Load existing to preserve _comment
         try:
             with open(target_path, 'r', encoding='utf-8') as f:
@@ -268,13 +279,19 @@ class PromptManager:
             comment = old_data.get('_comment')
         except Exception:
             comment = "User monolith prompts"
-        
-        # Build fresh dict
+
+        # Build fresh dict with new format
         data = {}
         if comment:
             data['_comment'] = comment
-        data.update(self._monoliths)
-        
+        # Ensure each monolith has the full object structure
+        for name, mono in self._monoliths.items():
+            if isinstance(mono, dict):
+                data[name] = mono
+            else:
+                # Shouldn't happen, but handle gracefully
+                data[name] = {'content': str(mono), 'privacy_required': False}
+
         # Save
         with open(target_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)

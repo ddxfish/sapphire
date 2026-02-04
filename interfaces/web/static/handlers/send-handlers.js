@@ -4,12 +4,14 @@ import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
 import * as Images from '../ui-images.js';
-import { 
-    getElements, 
-    getIsProc, 
+import { isPrivacyMode } from '../features/privacy.js';
+import {
+    getElements,
+    getIsProc,
     getTtsEnabled,
-    setProc, 
-    setAbortController, 
+    getPromptPrivacyRequired,
+    setProc,
+    setAbortController,
     getAbortController,
     setIsCancelling,
     getIsCancelling,
@@ -21,7 +23,13 @@ export async function handleSend() {
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
     if (!txt && !Images.hasPendingUploadImages()) return;
-    
+
+    // Block send if current prompt requires privacy but privacy mode is off
+    if (getPromptPrivacyRequired() && !isPrivacyMode()) {
+        ui.showToast('This prompt requires Privacy Mode to be enabled', 'error');
+        return;
+    }
+
     const abortController = new AbortController();
     setAbortController(abortController);
     setIsCancelling(false);

@@ -22,13 +22,14 @@ from .prompt_state import (
     SPICE_POOL,
     _assembled_state,
     _user_prompts,
-    
+
     # State management functions
     get_current_state,
     get_active_preset_name,
     set_active_preset_name,
     get_prompt_char_count,
     get_current_prompt,
+    is_current_prompt_private,
     generate_random_assembled,
     reset_to_defaults,
     set_random_spice,
@@ -82,6 +83,7 @@ __all__ = [
     'set_active_preset_name',
     'get_prompt_char_count',
     'get_current_prompt',
+    'is_current_prompt_private',
     'generate_random_assembled',
     'reset_to_defaults',
     'set_random_spice',

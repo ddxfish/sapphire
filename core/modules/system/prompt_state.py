@@ -72,6 +72,27 @@ def get_active_preset_name():
     return 'unknown'
 
 
+def is_current_prompt_private():
+    """Check if the currently active prompt requires privacy mode."""
+    preset = get_active_preset_name()
+    if not preset or preset == 'unknown':
+        return False
+
+    # Check monoliths
+    if preset in prompt_manager.monoliths:
+        mono = prompt_manager.monoliths[preset]
+        if isinstance(mono, dict):
+            return mono.get('privacy_required', False)
+        return False
+
+    # Check scenario presets
+    if preset in prompt_manager.scenario_presets:
+        components = prompt_manager.scenario_presets[preset]
+        return components.get('_privacy_required', False)
+
+    return False
+
+
 def set_active_preset_name(name: str):
     """Track which preset is currently active."""
     global _assembled_state
@@ -98,11 +119,12 @@ def get_prompt_char_count():
 def get_current_prompt():
     """Get the currently active prompt (monolith or assembled)."""
     preset = _assembled_state.get("active_preset", "default")
-    
+
     if preset in prompt_manager.monoliths:
-        text = prompt_manager.monoliths[preset]
+        mono = prompt_manager.monoliths[preset]
+        text = mono.get('content', '') if isinstance(mono, dict) else mono
         return {"role": "system", "content": prompt_manager._replace_templates(text)}
-    
+
     return assemble_prompt()
 
 

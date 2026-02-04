@@ -26,11 +26,22 @@ export async function fetchPrivacyStatus() {
 
 export async function setPrivacyMode(enabled) {
     try {
-        const data = await fetchWithTimeout('/api/privacy', {
+        const resp = await fetch('/api/privacy', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled })
         });
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            // Handle blocked by prompt case
+            if (data.blocked_by_prompt) {
+                showToast(data.error, 'error');
+                return false;
+            }
+            throw new Error(data.error || 'Failed to toggle privacy mode');
+        }
 
         privacyEnabled = data.privacy_mode;
         updatePrivacyUI();
@@ -38,7 +49,7 @@ export async function setPrivacyMode(enabled) {
         return true;
     } catch (e) {
         console.error('[Privacy] Failed to set mode:', e);
-        showToast('Failed to toggle privacy mode', 'error');
+        showToast(e.message || 'Failed to toggle privacy mode', 'error');
     }
     return false;
 }

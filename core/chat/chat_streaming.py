@@ -57,7 +57,17 @@ class StreamingChat:
         
         # Immediate feedback that backend received the request
         yield {"type": "stream_started"}
-        
+
+        # Check if current prompt requires privacy mode
+        try:
+            from core.modules.system.prompt_state import is_current_prompt_private
+            from core.privacy import is_privacy_mode
+            if is_current_prompt_private() and not is_privacy_mode():
+                yield {"type": "error", "text": "This prompt requires Privacy Mode to be enabled."}
+                return
+        except ImportError:
+            pass
+
         try:
             self.main_chat.refresh_spice_if_needed()
             self.cancel_flag = False

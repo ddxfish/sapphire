@@ -948,12 +948,22 @@ def create_settings_api():
         """Toggle privacy mode on/off (runtime only, not persisted)."""
         try:
             from core.privacy import set_privacy_mode
+            from core.modules.system.prompt_state import is_current_prompt_private, get_active_preset_name
 
             data = request.json
             if data is None or 'enabled' not in data:
                 return jsonify({'error': "Missing 'enabled' in request body"}), 400
 
             enabled = bool(data['enabled'])
+
+            # Block disabling privacy mode if current prompt requires it
+            if not enabled and is_current_prompt_private():
+                prompt_name = get_active_preset_name()
+                return jsonify({
+                    'error': f"Cannot disable Privacy Mode while using '{prompt_name}' (requires privacy)",
+                    'blocked_by_prompt': True
+                }), 403
+
             set_privacy_mode(enabled)
 
             logger.info(f"Privacy mode {'enabled' if enabled else 'disabled'}")

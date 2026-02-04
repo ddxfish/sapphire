@@ -282,7 +282,8 @@ Editing:
         const opt = document.createElement('option');
         opt.value = p.name;
         const typeLabel = p.type === 'assembled' ? '(A)' : '(M)';
-        opt.textContent = `${p.name} ${typeLabel}`;
+        const lockIcon = p.privacy_required ? '🔒 ' : '';
+        opt.textContent = `${lockIcon}${p.name} ${typeLabel}`;
         this.elements.select.appendChild(opt);
       }
       
@@ -296,8 +297,12 @@ Editing:
       console.log('[PromptManager] loadPromptList complete');
     } catch (e) {
       console.error('Failed to load prompt list:', e);
-      this.elements.select.innerHTML = '<option value="">Error loading prompts</option>';
-      showToast('Failed to load prompts', 'error');
+      // Don't wipe the dropdown on error - leave existing items
+      // Only show toast if dropdown is empty (first load failure)
+      if (this.elements.select.options.length <= 1) {
+        this.elements.select.innerHTML = '<option value="">Error loading prompts</option>';
+        showToast('Failed to load prompts', 'error');
+      }
     } finally {
       this._listLoadInProgress = false;
     }
@@ -312,19 +317,32 @@ Editing:
       this.lastLoadedContentHash = null;
       return;
     }
-    
+
+    const previousPrompt = this.currentPrompt;
+
     try {
       // ACTIVATE the prompt immediately
       await API.loadPrompt(name);
       await updateScene();
-      
+
       // Then load into editor
       await this.loadPromptIntoEditor(name);
-      
+
       showToast(`Prompt: ${name}`, 'success');
     } catch (e) {
       console.error('Failed to switch prompt:', e);
-      showToast(`Failed: ${e.message}`, 'error');
+
+      // Reset dropdown to previous selection on failure
+      if (previousPrompt) {
+        this.elements.select.value = previousPrompt;
+      }
+
+      // Show specific error for privacy requirement
+      if (e.privacyRequired) {
+        showToast(`🔒 ${e.message}`, 'error');
+      } else {
+        showToast(`Failed: ${e.message}`, 'error');
+      }
     }
   },
   
@@ -367,7 +385,7 @@ Editing:
   bindMonolithAutoSave() {
     const textarea = document.getElementById('pm-content');
     if (!textarea) return;
-    
+
     // Debounced auto-save on input
     textarea.addEventListener('input', () => {
       if (this._monolithSaveTimeout) {
@@ -375,7 +393,7 @@ Editing:
       }
       this._monolithSaveTimeout = setTimeout(() => this.autoSaveMonolith(), 1000);
     });
-    
+
     // Immediate save on blur
     textarea.addEventListener('blur', () => {
       if (this._monolithSaveTimeout) {
@@ -383,20 +401,29 @@ Editing:
       }
       this.autoSaveMonolith();
     });
+
+    // Privacy checkbox triggers immediate save
+    const privacyCheckbox = document.getElementById('pm-privacy-required');
+    if (privacyCheckbox) {
+      privacyCheckbox.addEventListener('change', () => this.autoSaveMonolith());
+    }
   },
   
   async autoSaveMonolith() {
     if (!this.currentPrompt || this.currentData?.type !== 'monolith') return;
-    
+
     const textarea = document.getElementById('pm-content');
     if (!textarea) return;
-    
+
+    const privacyRequired = document.getElementById('pm-privacy-required')?.checked || false;
+
     const data = {
       name: this.currentPrompt,
       type: 'monolith',
-      content: textarea.value
+      content: textarea.value,
+      privacy_required: privacyRequired
     };
-    
+
     try {
       await API.savePrompt(this.currentPrompt, data);
       await API.loadPrompt(this.currentPrompt);
@@ -458,6 +485,22 @@ Editing:
         this.handleComponentModal(btn.dataset.type);
       });
     });
+
+    // Privacy checkbox triggers immediate save for assembled prompts
+    const privacyCheckbox = document.getElementById('pm-privacy-required');
+    if (privacyCheckbox) {
+      privacyCheckbox.addEventListener('change', async () => {
+        const data = this.collectData();
+        if (!data) return;
+        try {
+          await API.savePrompt(this.currentPrompt, data);
+          await API.loadPrompt(this.currentPrompt);
+          await updateScene();
+        } catch (e) {
+          console.warn('Privacy save failed:', e);
+        }
+      });
+    }
   },
 
   handleNew() {
@@ -518,19 +561,22 @@ Editing:
   
   collectData() {
     if (!this.currentData) return null;
-    
+
     const type = this.currentData.type || 'monolith';
-    
+    const privacyRequired = document.getElementById('pm-privacy-required')?.checked || false;
+
     if (type === 'monolith') {
       return {
         name: this.currentPrompt,
         type: 'monolith',
-        content: document.getElementById('pm-content')?.value || ''
+        content: document.getElementById('pm-content')?.value || '',
+        privacy_required: privacyRequired
       };
     } else if (type === 'assembled') {
       return {
         name: this.currentPrompt,
         type: 'assembled',
+        privacy_required: privacyRequired,
         components: {
           persona: document.getElementById('pm-persona')?.value || 'default',
           location: document.getElementById('pm-location')?.value || 'default',
@@ -543,7 +589,7 @@ Editing:
         }
       };
     }
-    
+
     return null;
   },
   

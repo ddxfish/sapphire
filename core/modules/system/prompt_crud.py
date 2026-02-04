@@ -80,21 +80,27 @@ def get_prompt(name: str):
     
     # Check monoliths
     if name in prompt_manager.monoliths:
+        mono = prompt_manager.monoliths[name]
         return {
             'name': name,
             'type': 'monolith',
-            'content': prompt_manager.monoliths[name]
+            'content': mono.get('content', ''),
+            'privacy_required': mono.get('privacy_required', False)
         }
     
     # Check scenario presets
     if name in prompt_manager.scenario_presets:
         components = prompt_manager.scenario_presets[name]
-        assembled_text = prompt_manager.assemble_from_components(components)
+        privacy_required = components.get('_privacy_required', False)
+        # Filter out metadata for assembly
+        clean_components = {k: v for k, v in components.items() if not k.startswith('_')}
+        assembled_text = prompt_manager.assemble_from_components(clean_components)
         return {
             'name': name,
             'type': 'assembled',
-            'components': components,
-            'content': assembled_text
+            'components': clean_components,
+            'content': assembled_text,
+            'privacy_required': privacy_required
         }
     
     return None
@@ -130,13 +136,19 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True) -> tuple[bo
         
         # Proceed with save
         if prompt_type == 'monolith':
-            prompt_manager._monoliths[name] = data['content']
+            prompt_manager._monoliths[name] = {
+                'content': data['content'],
+                'privacy_required': data.get('privacy_required', False)
+            }
             prompt_manager.save_monoliths()
             logger.info(f"Saved monolith '{name}'")
             return True, f"Saved monolith '{name}'"
-            
+
         elif prompt_type == 'assembled':
-            prompt_manager._scenario_presets[name] = data['components']
+            components = data['components'].copy()
+            # Store privacy_required at top level of preset
+            components['_privacy_required'] = data.get('privacy_required', False)
+            prompt_manager._scenario_presets[name] = components
             prompt_manager.save_scenario_presets()
             logger.info(f"Saved assembled prompt '{name}'")
             return True, f"Saved assembled '{name}'"

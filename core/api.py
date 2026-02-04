@@ -521,6 +521,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             prompt_state = prompts.get_current_state()
             prompt_name = prompts.get_active_preset_name()
             prompt_char_count = prompts.get_prompt_char_count()
+            prompt_privacy_required = prompts.is_current_prompt_private()
             is_assembled = prompts.is_assembled_mode()
             
             # Ability/function state
@@ -592,6 +593,7 @@ def create_api(system_instance, restart_callback=None, shutdown_callback=None):
             return jsonify({
                 "prompt_name": prompt_name,
                 "prompt_char_count": prompt_char_count,
+                "prompt_privacy_required": prompt_privacy_required,
                 "prompt": prompt_state,
                 "ability": ability_info,
                 "functions": user_tools,

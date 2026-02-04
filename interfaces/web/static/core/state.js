@@ -43,6 +43,7 @@ let isProc = false;
 let currentAbortController = null;
 let isCancelling = false;
 let ttsEnabled = true;
+let promptPrivacyRequired = false;
 let pluginLoader = null;
 let avatarPlugin = null;
 
@@ -56,6 +57,8 @@ export const getAbortController = () => currentAbortController;
 export const setAbortController = (ctrl) => { currentAbortController = ctrl; };
 export const getIsCancelling = () => isCancelling;
 export const setIsCancelling = (val) => { isCancelling = val; };
+export const getPromptPrivacyRequired = () => promptPrivacyRequired;
+export const setPromptPrivacyRequired = (val) => { promptPrivacyRequired = val; };
 export const getPluginLoader = () => pluginLoader;
 
 export function setProc(proc) {
