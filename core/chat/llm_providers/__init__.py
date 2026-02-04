@@ -317,7 +317,18 @@ def get_first_available_provider(
         if not config.get('use_as_fallback', True):
             logger.debug(f"Provider '{provider_key}' excluded from Auto mode (use_as_fallback=False)")
             continue
-        
+
+        # Privacy mode: only allow local providers
+        try:
+            from core.privacy import is_privacy_mode
+            if is_privacy_mode():
+                metadata = PROVIDER_METADATA.get(provider_key, {})
+                if not metadata.get('is_local', False):
+                    logger.debug(f"Provider '{provider_key}' excluded in privacy mode (not local)")
+                    continue
+        except ImportError:
+            pass
+
         provider = get_provider_by_key(provider_key, providers_config, request_timeout)
         if provider:
             try:

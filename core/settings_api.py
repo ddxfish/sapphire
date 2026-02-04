@@ -894,20 +894,99 @@ def create_settings_api():
         """Clear SOCKS proxy credentials."""
         try:
             from core.credentials_manager import credentials
-            
+
             if credentials.clear_socks_credentials():
                 from core.socks_proxy import clear_session_cache
                 clear_session_cache()
-                
+
                 return jsonify({
                     'status': 'success',
                     'message': 'SOCKS credentials cleared'
                 })
             else:
                 return jsonify({'error': 'Failed to clear credentials'}), 500
-                
+
         except Exception as e:
             logger.error(f"Error clearing SOCKS credentials: {e}", exc_info=True)
             return jsonify({'error': str(e)}), 500
-    
+
+    # =========================================================================
+    # Privacy Mode Endpoints
+    # =========================================================================
+
+    @bp.route('/privacy', methods=['GET'])
+    def get_privacy_status():
+        """Get current privacy mode status."""
+        try:
+            from core.privacy import is_privacy_mode, is_allowed_endpoint
+            from core.chat.llm_providers import PROVIDER_METADATA
+
+            enabled = is_privacy_mode()
+            start_in_privacy = settings.get('START_IN_PRIVACY_MODE', False)
+            whitelist = settings.get('PRIVACY_NETWORK_WHITELIST', [])
+
+            # Get list of local providers
+            providers_config = settings.get('LLM_PROVIDERS', {})
+            local_providers = [
+                key for key, cfg in providers_config.items()
+                if cfg.get('enabled', False) and PROVIDER_METADATA.get(key, {}).get('is_local', False)
+            ]
+
+            return jsonify({
+                'status': 'success',
+                'privacy_mode': enabled,
+                'start_in_privacy_mode': start_in_privacy,
+                'network_whitelist': whitelist,
+                'local_providers': local_providers
+            })
+        except Exception as e:
+            logger.error(f"Error getting privacy status: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+
+    @bp.route('/privacy', methods=['PUT'])
+    def set_privacy_status():
+        """Toggle privacy mode on/off (runtime only, not persisted)."""
+        try:
+            from core.privacy import set_privacy_mode
+
+            data = request.json
+            if data is None or 'enabled' not in data:
+                return jsonify({'error': "Missing 'enabled' in request body"}), 400
+
+            enabled = bool(data['enabled'])
+            set_privacy_mode(enabled)
+
+            logger.info(f"Privacy mode {'enabled' if enabled else 'disabled'}")
+
+            return jsonify({
+                'status': 'success',
+                'privacy_mode': enabled,
+                'message': f"Privacy mode {'enabled' if enabled else 'disabled'}"
+            })
+        except Exception as e:
+            logger.error(f"Error setting privacy mode: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+
+    @bp.route('/privacy/start-mode', methods=['PUT'])
+    def set_start_in_privacy():
+        """Set whether to start in privacy mode (persisted)."""
+        try:
+            data = request.json
+            if data is None or 'enabled' not in data:
+                return jsonify({'error': "Missing 'enabled' in request body"}), 400
+
+            enabled = bool(data['enabled'])
+            settings.set('START_IN_PRIVACY_MODE', enabled, persist=True)
+
+            logger.info(f"Start in privacy mode set to {enabled}")
+
+            return jsonify({
+                'status': 'success',
+                'start_in_privacy_mode': enabled,
+                'message': f"Will {'start in' if enabled else 'not start in'} privacy mode on restart"
+            })
+        except Exception as e:
+            logger.error(f"Error setting start in privacy mode: {e}", exc_info=True)
+            return jsonify({'error': str(e)}), 500
+
     return bp

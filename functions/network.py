@@ -21,6 +21,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "get_external_ip",
             "description": "Get your external/public IP address as seen by the internet",
@@ -33,6 +34,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "check_internet",
             "description": "Check if internet connection is working",
@@ -45,6 +47,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "website_status",
             "description": "Check if a website is up and responding",

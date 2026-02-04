@@ -29,6 +29,8 @@ class FunctionManager:
         self._enabled_tools = []  # Internal storage (ability-filtered)
         self._mode_filters = {}   # module_name -> MODE_FILTER dict
         self._network_functions = set()  # Function names that require network access
+        self._is_local_map = {}  # function_name -> is_local value (True, False, or "endpoint")
+        self._function_module_map = {}  # function_name -> module_name (for endpoint lookups)
         
         # Memory scope for current execution context (None = disabled)
         self._memory_scope = 'default'
@@ -101,10 +103,15 @@ class FunctionManager:
                         'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools]
                     }
                     
-                    # Track network functions (per-tool flag)
+                    # Track network functions and is_local (per-tool flags)
                     for tool in tools:
+                        func_name = tool['function']['name']
                         if tool.get('network', False):
-                            self._network_functions.add(tool['function']['name'])
+                            self._network_functions.add(func_name)
+                        # Track is_local flag (True, False, or "endpoint" for conditional)
+                        if 'is_local' in tool:
+                            self._is_local_map[func_name] = tool['is_local']
+                        self._function_module_map[func_name] = module_name
                     
                     # Store mode filter if present
                     if mode_filter:
@@ -334,10 +341,83 @@ class FunctionManager:
         """Get current state engine. Returns None if disabled."""
         return self._state_engine
 
+    def _check_privacy_allowed(self, function_name: str) -> tuple:
+        """
+        Check if function is allowed under current privacy mode.
+
+        Returns:
+            (allowed: bool, error_message: str or None)
+        """
+        from core.privacy import is_privacy_mode, is_allowed_endpoint
+
+        if not is_privacy_mode():
+            return True, None
+
+        is_local = self._is_local_map.get(function_name)
+
+        # No is_local flag = assume non-local for safety
+        if is_local is None:
+            logger.warning(f"Tool '{function_name}' has no is_local flag, blocking in privacy mode")
+            return False, f"Tool '{function_name}' is blocked in privacy mode (no locality flag)."
+
+        # Explicitly local tools are always allowed
+        if is_local is True:
+            return True, None
+
+        # Explicitly non-local tools are blocked
+        if is_local is False:
+            return False, f"Tool '{function_name}' requires external network access and is blocked in privacy mode. Inform the user that privacy mode is active."
+
+        # Conditional tools ("endpoint") - check their configured endpoint
+        if is_local == "endpoint":
+            endpoint = self._get_tool_endpoint(function_name)
+            if not endpoint:
+                logger.warning(f"Tool '{function_name}' has no configured endpoint")
+                return False, f"Tool '{function_name}' has no configured endpoint."
+
+            if is_allowed_endpoint(endpoint):
+                logger.info(f"Tool '{function_name}' endpoint '{endpoint}' allowed in privacy mode")
+                return True, None
+            else:
+                return False, f"Tool '{function_name}' endpoint '{endpoint}' is not in privacy whitelist. Inform the user."
+
+        # Unknown is_local value - block for safety
+        return False, f"Tool '{function_name}' has unknown locality setting."
+
+    def _get_tool_endpoint(self, function_name: str) -> str:
+        """Get the configured endpoint URL for conditional tools."""
+        module_name = self._function_module_map.get(function_name, '')
+
+        if module_name == 'image':
+            # Image generation endpoint from plugin settings
+            import json
+            settings_path = Path(config.BASE_DIR) / 'user' / 'webui' / 'plugins' / 'image-gen.json'
+            try:
+                if settings_path.exists():
+                    with open(settings_path) as f:
+                        return json.load(f).get('api_url', 'http://localhost:5153')
+                return 'http://localhost:5153'  # Default
+            except Exception:
+                return 'http://localhost:5153'
+
+        elif module_name == 'homeassistant':
+            # Home Assistant endpoint from plugin settings
+            import json
+            settings_path = Path(config.BASE_DIR) / 'user' / 'webui' / 'plugins' / 'homeassistant.json'
+            try:
+                if settings_path.exists():
+                    with open(settings_path) as f:
+                        return json.load(f).get('url', 'http://homeassistant.local:8123')
+                return 'http://homeassistant.local:8123'  # Default
+            except Exception:
+                return 'http://homeassistant.local:8123'
+
+        return ''
+
     def execute_function(self, function_name, arguments):
         """Execute a function using the mapped executor."""
         start_time = time.time()
-        
+
         # Validate function is currently enabled
         enabled_names = self.get_enabled_function_names()
         if function_name not in enabled_names:
@@ -345,7 +425,14 @@ class FunctionManager:
             result = f"Error: The tool '{function_name}' is not currently available."
             self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
             return result
-        
+
+        # Privacy mode check
+        allowed, error_msg = self._check_privacy_allowed(function_name)
+        if not allowed:
+            logger.info(f"Function '{function_name}' blocked by privacy mode: {error_msg}")
+            self._log_tool_call(function_name, arguments, error_msg, time.time() - start_time, False)
+            return error_msg
+
         logger.info(f"Executing function: {function_name}")
         
         # Check if this is a state tool

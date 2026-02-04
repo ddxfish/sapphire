@@ -37,6 +37,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_list_scenes_and_scripts",
             "description": "List all available Home Assistant scenes and scripts. Returns names with type label.",
@@ -48,6 +49,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_activate",
             "description": "Activate a Home Assistant scene or run a script by name.",
@@ -65,6 +67,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_list_areas",
             "description": "List all available Home Assistant areas/rooms. Use this to find valid area names for ha_area_light and ha_area_color.",
@@ -76,6 +79,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_area_light",
             "description": "Set brightness for all lights in an area. 0 = off, 100 = full brightness.",
@@ -97,6 +101,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_area_color",
             "description": "Set color for all RGB lights in an area.",
@@ -117,6 +122,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_get_thermostat",
             "description": "Get current thermostat temperature.",
@@ -128,6 +134,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_set_thermostat",
             "description": "Set thermostat target temperature.",
@@ -145,6 +152,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_list_lights_and_switches",
             "description": "List all available lights and switches with their type.",
@@ -156,6 +164,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_set_light",
             "description": "Control a specific light by name. Brightness 0 = off.",
@@ -180,6 +189,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_set_switch",
             "description": "Turn a switch on or off by name.",
@@ -202,6 +212,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_notify",
             "description": "Send a notification to the user's phone via Home Assistant mobile app.",
@@ -223,6 +234,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "ha_house_status",
             "description": "Get a snapshot of the home status: presence, climate, lights by area, door/window/motion sensors, and active scenes.",

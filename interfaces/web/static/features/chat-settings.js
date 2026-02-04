@@ -45,56 +45,45 @@ export async function openSettingsModal() {
             });
         }
         
-        // Load LLM providers list with metadata
-        try {
-            const llmResp = await fetch('/api/llm/providers');
-            if (llmResp.ok) {
-                const llmData = await llmResp.json();
-                llmProviders = llmData.providers || [];
-                llmMetadata = llmData.metadata || {};
-                populateLlmDropdown(settings);
-            }
-        } catch (e) {
-            console.warn('Could not load LLM providers:', e);
+        // Fetch supplemental data in parallel to avoid HTTP/1.1 connection queuing
+        const [llmResult, scopesResult, presetsResult] = await Promise.allSettled([
+            fetch('/api/llm/providers').then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch('/api/state/presets').then(r => r.ok ? r.json() : null).catch(() => null)
+        ]);
+
+        // Process LLM providers
+        if (llmResult.status === 'fulfilled' && llmResult.value) {
+            llmProviders = llmResult.value.providers || [];
+            llmMetadata = llmResult.value.metadata || {};
+            populateLlmDropdown(settings);
         }
-        
-        // Load memory scopes
-        try {
-            const scopesResp = await fetch('/api/memory/scopes');
-            if (scopesResp.ok) {
-                const scopesData = await scopesResp.json();
-                const scopeSelect = document.getElementById('setting-memory-scope');
-                scopeSelect.innerHTML = '<option value="none">None (disabled)</option>';
-                (scopesData.scopes || []).forEach(s => {
-                    const opt = document.createElement('option');
-                    opt.value = s.name;
-                    opt.textContent = `${s.name} (${s.count})`;
-                    scopeSelect.appendChild(opt);
-                });
-                scopeSelect.value = settings.memory_scope || 'default';
-            }
-        } catch (e) {
-            console.warn('Could not load memory scopes:', e);
+
+        // Process memory scopes
+        if (scopesResult.status === 'fulfilled' && scopesResult.value) {
+            const scopeSelect = document.getElementById('setting-memory-scope');
+            scopeSelect.innerHTML = '<option value="none">None (disabled)</option>';
+            (scopesResult.value.scopes || []).forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.name;
+                opt.textContent = `${s.name} (${s.count})`;
+                scopeSelect.appendChild(opt);
+            });
+            scopeSelect.value = settings.memory_scope || 'default';
         }
-        
-        // Load state presets
-        try {
-            const presetsResp = await fetch('/api/state/presets');
-            if (presetsResp.ok) {
-                const presetsData = await presetsResp.json();
-                const presetSelect = document.getElementById('setting-state-preset');
-                presetSelect.innerHTML = '<option value="">None</option>';
-                (presetsData.presets || []).forEach(p => {
-                    const opt = document.createElement('option');
-                    opt.value = p.name;
-                    opt.textContent = `${p.display_name} (${p.key_count} keys)`;
-                    presetSelect.appendChild(opt);
-                });
-            }
-        } catch (e) {
-            console.warn('Could not load state presets:', e);
+
+        // Process state presets
+        if (presetsResult.status === 'fulfilled' && presetsResult.value) {
+            const presetSelect = document.getElementById('setting-state-preset');
+            presetSelect.innerHTML = '<option value="">None</option>';
+            (presetsResult.value.presets || []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p.name;
+                opt.textContent = `${p.display_name} (${p.key_count} keys)`;
+                presetSelect.appendChild(opt);
+            });
         }
-        
+
         // Load current state info if enabled
         await loadStateInfo(chatName, settings);
         
@@ -526,7 +515,9 @@ async function loadStateInfo(chatName, settings) {
     }
     
     try {
-        const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`);
+        const ctrl = new AbortController();
+        setTimeout(() => ctrl.abort(), 5000);
+        const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`, { signal: ctrl.signal });
         if (resp.ok) {
             const data = await resp.json();
             if (turnInfo) turnInfo.textContent = `Turn: ${Object.values(data.state || {})[0]?.turn || 0}`;

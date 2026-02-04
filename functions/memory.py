@@ -30,6 +30,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "save_memory",
             "description": "Save important information to long-term memory for future conversations",
@@ -52,6 +53,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "search_memory",
             "description": "Search stored memories by keywords or topic",
@@ -74,6 +76,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "get_recent_memories",
             "description": "Get the most recent memories",
@@ -91,6 +94,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "delete_memory",
             "description": "Delete a memory by its ID number",

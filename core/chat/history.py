@@ -724,6 +724,15 @@ class ChatSessionManager:
 
     def _save_current_chat(self):
         """Save current chat to SQLite atomically."""
+        # Privacy mode: keep messages in memory only, don't persist to disk
+        try:
+            from core.privacy import is_privacy_mode
+            if is_privacy_mode():
+                logger.debug("Privacy mode active - skipping chat persistence")
+                return
+        except ImportError:
+            pass
+
         self._ensure_db()
         
         with self._lock:

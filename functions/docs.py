@@ -183,6 +183,7 @@ AVAILABLE_FUNCTIONS = ['search_help_docs']
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "search_help_docs",
             "description": f"Get Sapphire documentation. Available docs: {_doc_list}. Call without arguments for summaries of all docs.",

@@ -23,6 +23,7 @@ AVAILABLE_FUNCTIONS = [
 TOOLS = [
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "notepad_read",
             "description": "Read your scratch notepad. Returns all lines with line numbers for reference.",
@@ -35,6 +36,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "notepad_append_lines",
             "description": "Append one or more lines to the end of your notepad.",
@@ -53,6 +55,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "notepad_delete_lines",
             "description": "Delete specific lines by their line numbers.",
@@ -71,6 +74,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "notepad_insert_line",
             "description": "Insert a line after a specific line number. Use 0 to insert at the beginning.",

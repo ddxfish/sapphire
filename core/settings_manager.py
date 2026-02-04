@@ -123,7 +123,7 @@ class SettingsManager:
     def _merge_settings(self):
         """Merge defaults with user overrides, deep-merging LLM_PROVIDERS"""
         self._config = {**self._defaults, **self._user}
-        
+
         # Deep-merge LLM_PROVIDERS so new provider fields from defaults aren't lost
         if 'LLM_PROVIDERS' in self._defaults and 'LLM_PROVIDERS' in self._user:
             merged_providers = {}
@@ -138,6 +138,11 @@ class SettingsManager:
                 if key not in merged_providers:
                     merged_providers[key] = user_config
             self._config['LLM_PROVIDERS'] = merged_providers
+
+        # Initialize runtime PRIVACY_MODE from persistent START_IN_PRIVACY_MODE
+        # PRIVACY_MODE is runtime-only (resets on restart), not persisted
+        if 'PRIVACY_MODE' not in self._config:
+            self._config['PRIVACY_MODE'] = self._config.get('START_IN_PRIVACY_MODE', False)
     
     def _ensure_example_file(self):
         """Create user/settings.example.json if it doesn't exist"""
@@ -351,7 +356,9 @@ class SettingsManager:
             'FORCE_THINKING', 'THINKING_PREFILL',
             'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
             # SOCKS can be hot-reloaded - session cache is cleared on change
-            'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'
+            'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT',
+            # Privacy mode is runtime-only, always hot
+            'PRIVACY_MODE', 'PRIVACY_NETWORK_WHITELIST', 'START_IN_PRIVACY_MODE'
         }
         
         # Everything else requires restart (TTS, STT, modules, etc. are initialized at startup)

@@ -13,6 +13,18 @@
     "SOCKS_PORT": 1080,
     "SOCKS_TIMEOUT": 10.0
   },
+
+  "privacy": {
+    "_comment": "Privacy mode blocks all outbound connections except whitelisted local endpoints",
+    "START_IN_PRIVACY_MODE": false,
+    "PRIVACY_NETWORK_WHITELIST": [
+      "127.0.0.1",
+      "localhost",
+      "192.168.0.0/16",
+      "10.0.0.0/8",
+      "172.16.0.0/12"
+    ]
+  },
   
   "features": {
     "MODULES_ENABLED": true,

@@ -28,6 +28,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "web_search",
             "description": "Search the web to find relevant URLs. Returns titles and URLs only - use get_website to read content.",
@@ -43,6 +44,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "get_website",
             "description": "Fetch and read the full content of a webpage.",
@@ -58,6 +60,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "get_wikipedia",
             "description": "Get Wikipedia article summary for any topic",
@@ -73,6 +76,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "research_topic",
             "description": "Use this for advanced research if you want. It returns multiple pages of data on your topic.",

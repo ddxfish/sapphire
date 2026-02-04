@@ -37,6 +37,7 @@ AVAILABLE_FUNCTIONS = ['generate_scene_image']
 TOOLS = [
     {
         "type": "function",
+        "is_local": "endpoint",
         "function": {
             "name": "generate_scene_image",
             "description": "Generate an image with a concise 18 word scene description. Write from your perspective: use 'me' for yourself and 'you' for the human.",

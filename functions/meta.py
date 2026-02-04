@@ -45,6 +45,7 @@ TOOLS = [
     # === Universal tools (both modes) ===
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "view_prompt",
             "description": "View a system prompt. Without name, shows current active prompt.",
@@ -62,6 +63,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "switch_prompt",
             "description": "Switch to a different system prompt. Without name, lists available prompts.",
@@ -79,6 +81,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "reset_chat",
             "description": "Clear all chat history and start fresh.",
@@ -96,6 +99,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "change_ai_name",
             "description": "Change your AI name. Updates the setting used in prompts.",
@@ -113,6 +117,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "change_username",
             "description": "Change the user's name. Updates the setting used in prompts.",
@@ -130,6 +135,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "set_tts_voice",
             "description": "Set TTS voice. Without name, lists current/available voices. Prefix indicates accent/gender: am=American Male, af=American Female, bm=British Male, bf=British Female.",
@@ -147,6 +153,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "list_tools",
             "description": "List available tools. Without scope, shows currently enabled tools. Use 'all' to see every tool including inactive ones.",
@@ -166,6 +173,7 @@ TOOLS = [
     # === Monolith-only tools ===
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "edit_prompt",
             "description": "Replace the content of the current monolith prompt.",
@@ -184,6 +192,7 @@ TOOLS = [
     # === Assembled-only tools ===
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "set_piece",
             "description": "Set a prompt component. For persona/location/goals/etc: replaces value. For emotions/extras: adds to list.",
@@ -205,6 +214,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "remove_piece",
             "description": "Remove a piece from emotions or extras list.",
@@ -226,6 +236,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "create_piece",
             "description": "Create a new prompt piece, save to library, and activate it.",
@@ -251,6 +262,7 @@ TOOLS = [
     },
     {
         "type": "function",
+        "is_local": True,
         "function": {
             "name": "list_pieces",
             "description": "List available pieces for a component type.",

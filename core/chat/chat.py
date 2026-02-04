@@ -604,18 +604,29 @@ class LLMChat:
             
             # If chat has specific provider set (not "auto"), use ONLY that provider - no fallback
             if chat_primary and chat_primary != 'auto':
+                # Privacy mode check for explicitly selected provider
+                try:
+                    from core.privacy import is_privacy_mode
+                    from core.chat.llm_providers import PROVIDER_METADATA
+                    if is_privacy_mode():
+                        metadata = PROVIDER_METADATA.get(chat_primary, {})
+                        if not metadata.get('is_local', False):
+                            raise ConnectionError(f"Provider '{chat_primary}' is not local and blocked in privacy mode. Use a local LLM or disable privacy mode.")
+                except ImportError:
+                    pass
+
                 provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT)
                 if not provider:
                     raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
-                
+
                 try:
                     if provider.health_check():
-                        logger.info(f"Using chat-specific provider '{chat_primary}'" + 
+                        logger.info(f"Using chat-specific provider '{chat_primary}'" +
                                    (f" with model '{chat_model}'" if chat_model else ""))
                         return (chat_primary, provider, chat_model)
                 except Exception as e:
                     pass  # Fall through to error
-                
+
                 raise ConnectionError(f"Provider '{chat_primary}' failed health check - no fallback for specific provider selection")
             
             # Auto mode - use global fallback order

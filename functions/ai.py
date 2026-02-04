@@ -15,6 +15,7 @@ TOOLS = [
     {
         "type": "function",
         "network": True,
+        "is_local": False,
         "function": {
             "name": "ask_claude",
             "description": "Ask Anthropic Claude for complex analysis beyond simple web search",

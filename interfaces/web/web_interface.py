@@ -149,9 +149,15 @@ def proxy(endpoint, method='GET', **kwargs):
     try:
         headers = kwargs.pop('headers', {})
         headers.update(get_api_headers())
+        # Default 30s timeout if not specified
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = 30
         res = _api_session.request(method, f"{API_BASE}{endpoint}", headers=headers, **kwargs)
         res.raise_for_status()
         return jsonify(res.json()) if res.headers.get('Content-Type', '').startswith('application/json') else res
+    except requests.exceptions.Timeout:
+        logger.error(f"Proxy timeout: {method} {endpoint}")
+        return jsonify({"error": "Backend timeout"}), 504
     except requests.exceptions.HTTPError as e:
         logger.error(f"Proxy failed: {method} {endpoint} - {e}")
         try:
@@ -725,6 +731,25 @@ def test_socks_connection():
     except Exception as e:
         logger.error(f"SOCKS test error: {type(e).__name__}: {e}")
         return jsonify({'status': 'error', 'error': f'{type(e).__name__}: {e}'})
+
+# =============================================================================
+# PRIVACY MODE ROUTES (3 routes)
+# =============================================================================
+
+@app.route('/api/privacy', methods=['GET'])
+@require_login
+def get_privacy_status():
+    return proxy('/api/privacy')
+
+@app.route('/api/privacy', methods=['PUT'])
+@require_login
+def set_privacy_status():
+    return proxy('/api/privacy', 'PUT', json=request.json, timeout=10)
+
+@app.route('/api/privacy/start-mode', methods=['PUT'])
+@require_login
+def set_start_in_privacy():
+    return proxy('/api/privacy/start-mode', 'PUT', json=request.json, timeout=10)
 
 # =============================================================================
 # LLM PROVIDER ROUTES (4 routes)
