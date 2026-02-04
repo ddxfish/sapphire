@@ -67,7 +67,10 @@ class EventBus:
                         break
         
         logger.info(f"New subscriber: {sub_id} (replay={replay}) — total subscribers: {len(self._subscribers)}")
-        
+
+        # Immediate connection event - wakes up client instantly
+        yield {"type": "connected", "data": {"sub_id": sub_id}, "timestamp": time.time()}
+
         try:
             keepalive_count = 0
             while True:
@@ -147,6 +150,9 @@ class Events:
     CONTEXT_WARNING = "context_warning"    # 80% threshold
     CONTEXT_CRITICAL = "context_critical"  # 95% threshold
     
+    # Connection events
+    CONNECTED = "connected"
+
     # Error events
     LLM_ERROR = "llm_error"
     TTS_ERROR = "tts_error"

@@ -220,7 +220,8 @@ export const Events = {
     TTS_ERROR: 'tts_error',
     STT_ERROR: 'stt_error',
     
-    // Connection events (client-side only)
-    BUS_CONNECTED: 'bus_connected',
+    // Connection events
+    CONNECTED: 'connected',           // Server confirms SSE subscription
+    BUS_CONNECTED: 'bus_connected',   // Client-side: EventSource opened
     BUS_DISCONNECTED: 'bus_disconnected'
 };

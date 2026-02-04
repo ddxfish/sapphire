@@ -103,6 +103,16 @@ init_app()
 # Register blueprints
 app.register_blueprint(plugins_bp)
 
+# --- Request Logging for Debugging ---
+@app.before_request
+def log_request():
+    """Log all incoming requests for debugging connection issues."""
+    # Only log non-static requests at INFO level, static at DEBUG
+    if request.path.startswith('/static/'):
+        logger.debug(f"REQ: {request.method} {request.path}")
+    else:
+        logger.info(f"REQ: {request.method} {request.path}")
+
 # --- Auth Decorators ---
 def require_setup(f):
     """Decorator to require setup complete."""
@@ -1275,6 +1285,8 @@ def security_headers(response):
 # =============================================================================
 
 if __name__ == '__main__':
-    ssl_ctx = 'adhoc' if config.WEB_UI_SSL_ADHOC else None
-    logger.info(f"Starting web interface on {config.WEB_UI_HOST}:{config.WEB_UI_PORT} (SSL: {ssl_ctx})")
+    from core.ssl_utils import get_ssl_context
+    ssl_ctx = get_ssl_context()
+    ssl_status = "enabled" if ssl_ctx else "disabled"
+    logger.info(f"Starting web interface on {config.WEB_UI_HOST}:{config.WEB_UI_PORT} (SSL: {ssl_status})")
     app.run(host=config.WEB_UI_HOST, port=config.WEB_UI_PORT, debug=False, threaded=True, ssl_context=ssl_ctx)

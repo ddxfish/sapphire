@@ -386,13 +386,8 @@
         </div>
     </div>
 
-    <!-- Modulepreload: only critical entry points to reduce connection storm -->
-    <!-- Browser discovers other modules via import chain - less parallel pressure -->
+    <!-- Script loads sequentially - more reliable than modulepreload with Flask dev server -->
     <!-- Version string (v=) busts cache on updates - increment when deploying JS changes -->
-    <link rel="modulepreload" href="/static/main.js?v=20260202c">
-    <link rel="modulepreload" href="/static/api.js?v=20260202c">
-    <link rel="modulepreload" href="/static/shared/fetch.js?v=20260202c">
-
     <script type="module" src="/static/main.js?v=20260202c"></script>
 </body>
 </html>
