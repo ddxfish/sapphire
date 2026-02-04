@@ -483,20 +483,31 @@ Editing:
       try {
         console.log(`[PromptManager] Creating prompt: ${name}`);
         await API.savePrompt(name, promptData);
-        
+
         // Force-reset guard and refresh list
         this._listLoadInProgress = false;
         await this.loadPromptList();
-        
+
+        // Verify option exists in dropdown (defensive)
+        let option = Array.from(this.elements.select.options).find(o => o.value === name);
+        if (!option) {
+          // Option missing - manually add it
+          console.warn(`[PromptManager] Option not found after refresh, adding manually`);
+          option = document.createElement('option');
+          option.value = name;
+          option.textContent = `${name} (${promptData.type === 'assembled' ? 'A' : 'M'})`;
+          this.elements.select.appendChild(option);
+        }
+
         // Select the new prompt in dropdown
         this.elements.select.value = name;
-        
+
         // Activate it (loads into backend + editor)
         console.log(`[PromptManager] Activating new prompt: ${name}`);
         await API.loadPrompt(name);
         await this.loadPromptIntoEditor(name);
         await updateScene();
-        
+
         showToast(`Created & activated: ${name}`, 'success');
       } catch (e) {
         console.error('[PromptManager] Create failed:', e);

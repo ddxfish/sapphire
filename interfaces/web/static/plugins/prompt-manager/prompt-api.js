@@ -9,8 +9,9 @@ export async function getComponents() {
 }
 
 export async function listPrompts() {
-  const init = await getInitData();
-  return init.prompts.list || [];
+  // Always fetch fresh list - cache may be stale after create/delete
+  const data = await fetchWithTimeout('/api/prompts');
+  return data.prompts || [];
 }
 
 // For current prompt, try init data first (avoids extra call at startup)
