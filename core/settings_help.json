@@ -26,6 +26,14 @@
     "short": "SOCKS proxy server port number",
     "long": "Port number for the SOCKS proxy server. Standard Tor SOCKS port is 9050. Default SOCKS5 port is 1080. Only used when SOCKS_ENABLED is true."
   },
+  "SOCKS_TIMEOUT": {
+    "short": "SOCKS proxy connection timeout (seconds)",
+    "long": "How long to wait for the SOCKS proxy to respond before timing out. Default is 10 seconds. Increase if your proxy is slow or on a high-latency connection."
+  },
+  "PRIVACY_NETWORK_WHITELIST": {
+    "short": "Allowed network destinations when Privacy Mode is enabled",
+    "long": "List of IP addresses, hostnames, and CIDR ranges that are allowed when Privacy Mode is active. All other network connections are blocked. Supports single IPs (192.168.1.50), hostnames (localhost, myserver.local), and CIDR notation for ranges (192.168.0.0/16, 10.0.0.0/8). Default includes RFC1918 private address ranges for LAN-only operation."
+  },
   
   "PLUGINS_ENABLED": {
     "short": "Enable plugins from plugins/ and user/plugins/ directories",

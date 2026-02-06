@@ -10,7 +10,7 @@ const TAB_METADATA = [
   { id: 'stt', name: 'STT', icon: '🎤', description: 'Speech-to-text settings', keys: ['WHISPER_MODEL', 'STT_SAMPLE_RATE', 'STT_BLOCK_SIZE', 'STT_SILENCE_THRESHOLD', 'STT_MIN_DURATION', 'STT_MAX_DURATION', 'STT_SILENCE_DURATION', 'VAD_AGGRESSIVENESS', 'VAD_SAMPLE_RATE', 'VAD_FRAME_DURATION', 'VAD_PADDING_DURATION'] },
   { id: 'llm', name: 'LLM', icon: '🧠', description: 'Language model configuration', keys: ['LLM_PRIMARY', 'LLM_FALLBACK', 'CLAUDE_MODEL', 'OPENAI_MODEL', 'LMSTUDIO_HOST', 'LMSTUDIO_PORT', 'LMSTUDIO_MODEL', 'MAX_TOKENS', 'TEMPERATURE', 'CONTEXT_STRATEGY', 'CONTEXT_MAX_TOKENS', 'CONTEXT_RESERVE_TOKENS'] },
   { id: 'tools', name: 'Tools', icon: '🔧', description: 'Tool and function settings', keys: ['TOOL_CALL_LIMIT'] },
-  { id: 'socks', name: 'SOCKS', icon: '🌐', description: 'SOCKS proxy settings', keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_USERNAME', 'SOCKS_PASSWORD'] },
+  { id: 'network', name: 'Network', icon: '🌐', description: 'SOCKS proxy and privacy network settings', keys: ['SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT', 'PRIVACY_NETWORK_WHITELIST'] },
   { id: 'wakeword', name: 'Wake Word', icon: '👂', description: 'Wake word detection settings', keys: ['WAKEWORD_ENABLED', 'WAKEWORD_MODEL', 'WAKEWORD_THRESHOLD', 'WAKEWORD_FRAMEWORK', 'WAKEWORD_DEBOUNCE_TIME'] },
   { id: 'system', name: 'System', icon: '⚙️', description: 'System and maintenance', keys: [] }
 ];

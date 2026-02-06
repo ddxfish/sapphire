@@ -1432,20 +1432,150 @@ export function injectStyles() {
       .socks-creds-grid {
         grid-template-columns: 1fr;
       }
-      
+
       .socks-creds-header {
         flex-direction: column;
         align-items: flex-start;
         gap: 8px;
       }
-      
+
       .socks-actions-row {
         flex-direction: column;
         align-items: stretch;
       }
-      
+
       .socks-actions-row .test-result-row {
         flex: none;
+      }
+    }
+
+    /* =============================================================================
+       NETWORK TAB - Privacy Whitelist Section
+       ============================================================================= */
+
+    .privacy-whitelist-section {
+      margin-top: 24px;
+      padding: 16px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+    }
+
+    .whitelist-header {
+      margin-bottom: 12px;
+    }
+
+    .whitelist-title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .whitelist-title-row h4 {
+      margin: 0;
+      font-size: var(--font-md);
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+
+    .whitelist-entries {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+      min-height: 32px;
+    }
+
+    .whitelist-entry {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px 6px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      font-family: var(--font-mono);
+      font-size: var(--font-sm);
+      color: var(--text-light);
+      transition: all var(--transition-normal);
+    }
+
+    .whitelist-entry:hover {
+      border-color: var(--accent-blue);
+      background: var(--bg-hover);
+    }
+
+    .whitelist-entry .entry-value {
+      user-select: all;
+    }
+
+    .whitelist-entry .whitelist-remove {
+      width: 20px;
+      height: 20px;
+      padding: 0;
+      border: none;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: var(--font-lg);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--transition-normal);
+    }
+
+    .whitelist-entry .whitelist-remove:hover {
+      background: var(--error-subtle);
+      color: var(--error-text);
+    }
+
+    .whitelist-empty {
+      padding: 12px;
+      text-align: center;
+      color: var(--text-muted);
+      font-style: italic;
+      background: var(--bg);
+      border: 1px dashed var(--border);
+      border-radius: var(--radius-md);
+    }
+
+    .whitelist-add-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .whitelist-add-row input {
+      flex: 1;
+      padding: 8px 12px;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      border-radius: var(--radius-sm);
+      color: var(--text-bright);
+      font-size: var(--font-base);
+      font-family: var(--font-mono);
+    }
+
+    .whitelist-add-row input:focus {
+      outline: none;
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 3px var(--focus-ring);
+    }
+
+    .whitelist-add-row input::placeholder {
+      color: var(--placeholder-color);
+      font-family: var(--font-base);
+    }
+
+    @media (max-width: 600px) {
+      .whitelist-add-row {
+        flex-direction: column;
+      }
+
+      .whitelist-add-row button {
+        width: 100%;
       }
     }
     

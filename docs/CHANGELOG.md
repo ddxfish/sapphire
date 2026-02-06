@@ -1,3 +1,5 @@
+# 1.2.6 - Privacy mode
+- Privacy mode only allows whitelisted
 # 1.2.5 - Performance upgrades
 - SSE bugs - added ID to prevent 2 tab issues
 - Reduced requests with 1 mega endpoint
