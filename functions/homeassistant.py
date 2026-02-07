@@ -832,7 +832,7 @@ def _notify(message: str, title: str, settings: dict) -> tuple:
     
     try:
         endpoint = f"{url}/api/services/notify/{notify_service}"
-        logger.info(f"HA notify: calling {endpoint} with message: {message[:50]}...")
+        logger.info(f"HA notify: calling {endpoint}")
         
         response = requests.post(
             endpoint,

@@ -608,7 +608,6 @@ class LLMChat:
                 "error": True
             }
             
-            self.session_manager.add_user_message(user_input)
             self.session_manager.add_assistant_final(error_text, metadata=metadata)
             return error_text
 

@@ -179,7 +179,7 @@ class TTSClient:
         try:
             response = requests.get(f"{server_url}/health", timeout=timeout)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
             
     def get_server_url(self):
@@ -334,7 +334,7 @@ class TTSClient:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
-                except:
+                except Exception:
                     pass
         
     def _generate_and_play_audio(self, text):
@@ -389,7 +389,7 @@ class TTSClient:
             if self._is_playing:
                 try:
                     sd.stop()
-                except:
+                except Exception:
                     pass
                 self._is_playing = False
 
@@ -432,5 +432,5 @@ class TTSClient:
             if temp_path and os.path.exists(temp_path):
                 try:
                     os.unlink(temp_path)
-                except:
+                except Exception:
                     pass

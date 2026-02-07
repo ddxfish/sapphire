@@ -26,7 +26,7 @@ class Backup:
     
     def process(self, user_input, llm_client=None):
         """Process backup commands from event scheduler."""
-        logger.info(f"Backup module processing: '{user_input}'")
+        logger.info(f"Backup module processing")
         
         if user_input == "run_scheduled":
             return self.run_scheduled()

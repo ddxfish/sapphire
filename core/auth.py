@@ -55,7 +55,7 @@ async def require_login(request: Request):
     api_key = request.headers.get('X-API-Key')
     if api_key:
         stored_hash = get_password_hash()
-        if stored_hash and api_key == stored_hash:
+        if stored_hash and secrets.compare_digest(api_key, stored_hash):
             return True
 
     # Not authenticated
@@ -75,8 +75,5 @@ async def require_setup(request: Request):
 
 
 def get_client_ip(request: Request) -> str:
-    """Get client IP from request, handling proxies."""
-    forwarded = request.headers.get('X-Forwarded-For')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
+    """Get client IP from request. Uses direct connection IP only (X-Forwarded-For is spoofable)."""
     return request.client.host if request.client else '127.0.0.1'

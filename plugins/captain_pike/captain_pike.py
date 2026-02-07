@@ -79,7 +79,7 @@ Assistant: beep beep"""
             result = sock.connect_ex((hostname, port))
             sock.close()
             return result == 0
-        except:
+        except Exception:
             return False
     
     def _get_client(self):

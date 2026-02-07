@@ -288,14 +288,6 @@
   },
   "WEB_UI_SSL_ADHOC": {
     "short": "Use self-signed SSL certificate",
-    "long": "When enabled, Flask generates a temporary self-signed SSL certificate for HTTPS. Browser will show security warning but connection is encrypted. Disable only if you're behind a reverse proxy that handles SSL. Requires restart."
-  },
-  "API_HOST": {
-    "short": "Backend API bind address",
-    "long": "Network interface for the internal API server. Default '127.0.0.1' restricts to localhost only (recommended). The web UI proxies requests to this API. Requires restart."
-  },
-  "API_PORT": {
-    "short": "Backend API port number",
-    "long": "Port number for the internal backend API. Default is 8071. The web UI connects to this port internally. Requires restart to take effect."
+    "long": "When enabled, the server generates a self-signed SSL certificate for HTTPS. Browser will show security warning but connection is encrypted. Disable only if you're behind a reverse proxy that handles SSL. Requires restart."
   }
 }

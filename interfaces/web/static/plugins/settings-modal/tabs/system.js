@@ -10,9 +10,7 @@ export default {
     'PLUGINS_ENABLED',
     'WEB_UI_HOST',
     'WEB_UI_PORT',
-    'WEB_UI_SSL_ADHOC',
-    'API_HOST',
-    'API_PORT'
+    'WEB_UI_SSL_ADHOC'
   ],
 
   essentialKeys: [
@@ -22,9 +20,7 @@ export default {
 
   advancedKeys: [
     'WEB_UI_HOST',
-    'WEB_UI_PORT',
-    'API_HOST',
-    'API_PORT'
+    'WEB_UI_PORT'
   ],
 
   render(modal) {

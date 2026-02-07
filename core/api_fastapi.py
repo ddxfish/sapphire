@@ -138,6 +138,11 @@ app.add_middleware(
 # PAGE ROUTES (HTML)
 # =============================================================================
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
+
+
 @app.get("/")
 async def index(request: Request, _=Depends(require_login)):
     """Main chat page."""
@@ -460,8 +465,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     if not data or 'text' not in data:
         raise HTTPException(status_code=400, detail="No text provided")
 
-    msg_preview = data['text'][:50] if data.get('text') else '(empty)'
-    logger.info(f"[CHAT-STREAM] Request received: '{msg_preview}' at {time.time():.3f}")
+    logger.info(f"[CHAT-STREAM] Request received at {time.time():.3f}")
 
     prefill = data.get('prefill')
     skip_user_message = data.get('skip_user_message', False)
@@ -1181,7 +1185,7 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
         try:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
-        except:
+        except Exception:
             pass
     return {"text": transcribed_text}
 
@@ -2426,7 +2430,7 @@ async def test_audio_input(request: Request, _=Depends(require_login), system=De
                 wakeword_paused = system.wake_word_recorder.pause_recording()
                 if wakeword_paused:
                     time.sleep(0.3)
-    except:
+    except Exception:
         pass
 
     try:
@@ -2453,7 +2457,7 @@ async def test_audio_input(request: Request, _=Depends(require_login), system=De
             try:
                 time.sleep(0.2)
                 system.wake_word_recorder.resume_recording()
-            except:
+            except Exception:
                 pass
 
 
@@ -2483,7 +2487,7 @@ async def test_audio_output(request: Request, _=Depends(require_login)):
         try:
             dev_info = sd.query_devices(device_index)
             default_rate = int(dev_info['default_samplerate'])
-        except:
+        except Exception:
             pass
 
     for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
@@ -2492,7 +2496,7 @@ async def test_audio_output(request: Request, _=Depends(require_login)):
             stream.close()
             sample_rate = rate
             break
-        except:
+        except Exception:
             continue
 
     if sample_rate is None:
@@ -2695,7 +2699,7 @@ async def upload_avatar(file: UploadFile = File(...), role: str = Form(...), _=D
     for old_file in existing:
         try:
             old_file.unlink()
-        except:
+        except Exception:
             pass
 
     save_path = avatar_dir / f'{role}{ext}'
@@ -2737,7 +2741,7 @@ def _get_merged_plugins():
     try:
         with open(static_plugins_json) as f:
             static = json.load(f)
-    except:
+    except Exception:
         static = {"enabled": [], "plugins": {}}
 
     if not USER_PLUGINS_JSON.exists():
@@ -2746,7 +2750,7 @@ def _get_merged_plugins():
     try:
         with open(USER_PLUGINS_JSON) as f:
             user = json.load(f)
-    except:
+    except Exception:
         return static
 
     merged = {
@@ -2807,7 +2811,7 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         try:
             with open(USER_PLUGINS_JSON) as f:
                 user_data = json.load(f)
-        except:
+        except Exception:
             pass
     user_data["enabled"] = enabled
     with open(USER_PLUGINS_JSON, 'w') as f:
@@ -2826,7 +2830,7 @@ async def get_plugin_settings(plugin_name: str, request: Request, _=Depends(requ
         with open(settings_file) as f:
             settings = json.load(f)
         return {"plugin": plugin_name, "settings": settings}
-    except:
+    except Exception:
         return {"plugin": plugin_name, "settings": {}}
 
 
@@ -2998,7 +3002,7 @@ async def proxy_sdxl_image(image_id: str, request: Request, _=Depends(require_lo
             with open(settings_file) as f:
                 settings = json.load(f)
             sdxl_url = settings.get('api_url', sdxl_url)
-        except:
+        except Exception:
             pass
 
     try:

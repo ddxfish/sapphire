@@ -27,7 +27,7 @@ class Reset:
             user_input: The user's command text
             active_chat: Name of the chat to reset (defaults to "default")
         """
-        logger.info(f"Message management command received for chat '{active_chat}': {user_input}")
+        logger.info(f"Message management command received for chat '{active_chat}'")
         
         # Use the full command if available
         command_text = self.full_command if self.full_command else user_input

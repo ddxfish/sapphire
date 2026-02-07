@@ -14,7 +14,7 @@ class Example:
     
     def process(self, user_input, llm_client=None):
         """Process the example command - report current time."""
-        logger.info(f"Example module processing: '{user_input}'")
+        logger.info(f"Example module processing")
         
         # Get current time
         current_time = datetime.now().strftime("%H:%M")

@@ -98,7 +98,7 @@ def clean_text(text):
     text = re.sub(r'<[^>]+>', '', text)
     
     # Stage 3: Replace problematic punctuation
-    text = re.sub(r'[—–―]', ', ', text)  # Em/en dashes → comma for TTS pause
+    text = re.sub(r'[—–―]|--', '. ', text)  # Em/en dashes and -- → period for TTS pause
     text = re.sub(r'…+', '.', text)
     text = re.sub(r'\.{3,}', '.', text)
     text = re.sub(r'[\u201C\u201D\u201E\u201A]', '"', text)  # Smart double quotes
@@ -195,7 +195,7 @@ def health_check():
     try:
         process = psutil.Process(os.getpid())
         mem_gb = process.memory_info().rss / (1024**3)
-    except:
+    except Exception:
         mem_gb = -1
     
     return {

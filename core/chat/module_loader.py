@@ -299,7 +299,7 @@ class ModuleLoader:
             return None
         
         try:
-            logger.info(f"Direct processing with module '{module_name}': '{user_input}' (chat: {active_chat})")
+            logger.info(f"Direct processing with module '{module_name}' (chat: {active_chat})")
             
             # Isolate module execution
             try:

@@ -8,7 +8,7 @@ class TimeDate:
     
     def process(self, user_input, llm_client=None):
         """Process time/date request."""
-        logger.info(f"Time/date request received: '{user_input}'")
+        logger.info(f"Time/date request received")
         
         # Get current time and date
         now = datetime.now()

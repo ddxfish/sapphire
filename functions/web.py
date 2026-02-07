@@ -92,7 +92,7 @@ TOOLS = [
 ]
 
 def search_ddg_html(query: str, max_results: int = 15) -> list:
-    logger.info(f"[WEB] DDG search query: '{query}'")
+    logger.info(f"[WEB] DDG search requested")
     encoded = urllib.parse.quote_plus(query)
     url = f"https://html.duckduckgo.com/html/?q={encoded}&kp=-1&kl=us-en"
     
@@ -210,7 +210,7 @@ def fetch_single_site(url: str, max_chars: int = 10000) -> dict:
         return {'url': url, 'content': None, 'error': str(e)}
 
 def execute(function_name, arguments, config):
-    logger.info(f"[WEB] Executing {function_name} with args: {arguments}")
+    logger.info(f"[WEB] Executing {function_name}")
     try:
         if function_name == "web_search":
             if not (query := arguments.get('query')):
@@ -232,7 +232,7 @@ def execute(function_name, arguments, config):
                 return "Search failed: Network connection error.", False
             
             if not results:
-                logger.warning(f"[WEB] web_search: No results for '{query}'")
+                logger.warning(f"[WEB] web_search: No results")
                 return "No search results found.", True
             
             logger.info(f"[WEB] web_search: Returning {len(results)} results")
@@ -379,10 +379,10 @@ def execute(function_name, arguments, config):
                 logger.warning("[WEB] research_topic: No query provided")
                 return "I need a topic or question to research.", False
             
-            logger.info(f"[WEB] research_topic: Researching '{query}'")
+            logger.info(f"[WEB] research_topic: Researching")
             results = search_ddg_html(query, max_results=15)
             if not results:
-                logger.warning(f"[WEB] research_topic: No search results for '{query}'")
+                logger.warning(f"[WEB] research_topic: No search results")
                 return "I couldn't find any search results to research that topic.", True
             
             logger.info(f"[WEB] research_topic: Found {len(results)} search results")

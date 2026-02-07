@@ -10,7 +10,7 @@ try:
     os.makedirs('user/logs', exist_ok=True)
     _startup_log = open('user/logs/startup_errors.log', 'a')
     _startup_log.write(f"\n--- Startup attempt ---\n")
-except:
+except Exception:
     pass
 
 def _log_startup_error(msg):
@@ -81,8 +81,8 @@ for handler in root_logger.handlers[:]:
 root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
-# Quiet down Flask's werkzeug logger
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
+# Quiet down noisy loggers
+logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
 
 # Only redirect stdout/stderr when running as systemd service
 # if os.environ.get('SYSTEMD_EXEC_PID'):

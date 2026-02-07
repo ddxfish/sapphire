@@ -238,7 +238,7 @@ class ToolCallingEngine:
             
             # Don't save reset tool result - history is about to be wiped anyway
             if function_name != "end_and_reset_chat":
-                logger.info(f"[SAVE] DEBUG: About to save tool result with inputs: {function_args}")
+                logger.info(f"[SAVE] Saving tool result for: {function_name}")
                 history.add_tool_result(tool_call["id"], function_name, result_str, inputs=function_args)
             else:
                 logger.info(f"[RESET] Skipping history save for reset tool")

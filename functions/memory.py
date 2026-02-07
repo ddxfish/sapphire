@@ -278,7 +278,7 @@ def _format_time_ago(timestamp_str: str) -> str:
             return f"{minutes}m ago"
         else:
             return "just now"
-    except:
+    except Exception:
         return ""
 
 

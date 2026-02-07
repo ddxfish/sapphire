@@ -60,15 +60,19 @@ class TestCleanTextSmartQuotes:
 
 
 class TestCleanTextDashes:
-    """Dash normalization - em/en dashes become comma for TTS pause."""
+    """Dash normalization - em/en dashes become period for TTS pause."""
 
-    def test_em_dash_to_comma(self):
+    def test_em_dash_to_period(self):
         result = clean_text("Hello\u2014world")
-        assert ", " in result
+        assert ". " in result
 
-    def test_en_dash_to_comma(self):
+    def test_en_dash_to_period(self):
         result = clean_text("Hello\u2013world")
-        assert ", " in result
+        assert ". " in result
+
+    def test_double_hyphen_to_period(self):
+        result = clean_text("Hello--world")
+        assert ". " in result
 
     def test_hyphen_preserved(self):
         """Regular hyphens should NOT be replaced."""
