@@ -1,4 +1,3 @@
 # TTS (Kokoro voice synthesis)
-flask>=3.0.0
 psutil
 kokoro

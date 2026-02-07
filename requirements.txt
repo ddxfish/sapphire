@@ -9,9 +9,6 @@ jinja2>=3.1.0
 itsdangerous>=2.1.0
 cryptography>=41.0.0
 
-# Internal servers (TTS/STT run as Flask subprocesses)
-flask>=3.0.0
-
 # LLM API Clients
 openai>=1.12.0
 anthropic>=0.39.0

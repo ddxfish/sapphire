@@ -294,25 +294,22 @@ class TTSClient:
             server_url = self.get_server_url()
             tts_url = f"{server_url}/tts"
             
-            response = requests.post(tts_url, data={
+            response = requests.post(tts_url, json={
                 'text': text.replace("*", ""),
                 'voice': self.voice_name,
                 'speed': self.speed
             })
-            
+
             if response.status_code != 200:
                 logger.error(f"TTS server error: {response.status_code}")
                 return None, None
-            
+
             # Save to temp file for soundfile to read
             fd, temp_path = tempfile.mkstemp(suffix='.ogg', dir=self.temp_dir)
             os.close(fd)
-            
+
             with open(temp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if self.should_stop.is_set():
-                        break
-                    f.write(chunk)
+                f.write(response.content)
             
             if self.should_stop.is_set():
                 return None, None
@@ -400,15 +397,15 @@ class TTSClient:
             server_url = self.get_server_url()
             tts_url = f"{server_url}/tts"
             
-            response = requests.post(tts_url, data={
+            response = requests.post(tts_url, json={
                 'text': text.replace("*", ""),
                 'voice': self.voice_name,
                 'speed': self.speed
             })
-            
+
             if response.status_code != 200:
                 return None
-            
+
             # Save to temp, apply pitch, return bytes
             fd, temp_path = tempfile.mkstemp(suffix='.ogg', dir=self.temp_dir)
             os.close(fd)

@@ -1,4 +1,6 @@
-from flask import Flask, request, send_file, g
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
+import json
 import time
 import os
 import sys
@@ -80,8 +82,7 @@ def schedule_restart(reason: str):
         os._exit(0)
     threading.Thread(target=_exit, daemon=True).start()
 
-# --- App & Model Setup ---
-app = Flask(__name__)
+# --- Model Setup ---
 logger.info("Loading Kokoro model...")
 pipeline = KPipeline(lang_code='a')
 logger.info(f"Model loaded successfully! Using temp dir: {TEMP_DIR}")
@@ -93,10 +94,10 @@ def clean_text(text):
     # Stage 1: Remove thinking blocks
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
     text = re.sub(r'<seed:think>.*?</seed:think>', '', text, flags=re.DOTALL)
-    
+
     # Stage 2: Strip all HTML tags
     text = re.sub(r'<[^>]+>', '', text)
-    
+
     # Stage 3: Replace problematic punctuation
     text = re.sub(r'[—–―]|--', '. ', text)  # Em/en dashes and -- → period for TTS pause
     text = re.sub(r'…+', '.', text)
@@ -107,105 +108,141 @@ def clean_text(text):
     text = re.sub(r'[⁄∕]', '/', text)
     text = re.sub(r'[‹›«»]', '"', text)
     text = re.sub(r'\s+', ' ', text)
-    
+
     # Stage 4: Character whitelist
     cleaned_text = re.sub(r"[^a-zA-Z0-9 .,?!'\"\-():;']", '', text)
-    
+
     return cleaned_text.strip()
 
 
-@app.route('/tts', methods=['POST'])
-def generate_tts():
-    """Generate text-to-speech from the provided text."""
-    global request_count
-    request_count += 1
-    
-    # Check memory/requests every 10 requests
-    if request_count % 10 == 0:
-        mem_exceeded = check_memory()
-        req_exceeded = request_count >= MAX_REQUESTS
-        
-        if mem_exceeded or req_exceeded:
-            reason = f"Memory: {mem_exceeded}, Requests: {request_count}/{MAX_REQUESTS}"
-            schedule_restart(reason)
-    
-    if 'text' not in request.form:
-        return {'error': 'No text provided'}, 400
+def _json_response(handler, data, status=200):
+    """Send a JSON response."""
+    body = json.dumps(data).encode()
+    handler.send_response(status)
+    handler.send_header('Content-Type', 'application/json')
+    handler.send_header('Content-Length', str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
 
-    text = request.form['text']
-    text_to_speak = clean_text(text)
-    if not text_to_speak.strip():
-        return {'error': 'Text is empty after filtering'}, 400
 
-    voice = request.form.get('voice', DEFAULT_VOICE)
+def _file_response(handler, file_path, mimetype='audio/ogg'):
+    """Send a file as the response, then delete it."""
     try:
-        speed = float(request.form.get('speed', DEFAULT_SPEED))
-    except ValueError:
-        speed = DEFAULT_SPEED
-
-    generation_start = time.time()
-    generator = pipeline(text_to_speak, voice=voice, speed=speed)
-    audio_segments = [audio_segment for _, _, audio_segment in generator]
-    
-    if not audio_segments:
-        logger.error(f"Failed to generate audio for text.")
-        return {'error': 'Failed to generate audio'}, 500
-
-    audio = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
-    generation_time = time.time() - generation_start
-    logger.info(f"Audio generation completed in {generation_time:.2f}s (request #{request_count})")
-
-    file_uuid = uuid.uuid4().hex
-    timestamp = int(time.time())
-    file_path = os.path.join(TEMP_DIR, f'audio_{timestamp}_{file_uuid}.ogg')
-
-    try:
-        sf.write(file_path, audio, AUDIO_SAMPLE_RATE, format='OGG', subtype='VORBIS')
-        g.file_to_delete = file_path
-        
-        response = send_file(
-            file_path,
-            mimetype='audio/ogg',
-            as_attachment=True,
-            download_name='tts_output.ogg'
-        )
-        return response
-    except Exception as e:
-        logger.error(f"Error processing audio file: {e}")
-        return {'error': f'Server error: {str(e)}'}, 500
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        handler.send_response(200)
+        handler.send_header('Content-Type', mimetype)
+        handler.send_header('Content-Length', str(len(data)))
+        handler.send_header('Content-Disposition', 'attachment; filename="tts_output.ogg"')
+        handler.end_headers()
+        handler.wfile.write(data)
+    finally:
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            logger.error(f"Error deleting temp file {file_path}: {e}")
 
 
-@app.after_request
-def delete_file(response):
-    """Delete the temporary file after sending the response."""
-    if hasattr(g, 'file_to_delete'):
-        file_path = g.file_to_delete
-        if os.path.exists(file_path):
-            try:
-                time.sleep(0.1)
-                os.remove(file_path)
-            except Exception as e:
-                logger.error(f"Error deleting file {file_path}: {e}")
-    return response
+class TTSHandler(BaseHTTPRequestHandler):
+    """Handle TTS requests — POST /tts (JSON) and GET /health."""
+
+    def log_message(self, format, *args):
+        """Suppress default stderr logging — we use file-based logging."""
+        pass
+
+    def do_GET(self):
+        if self.path == '/health':
+            self._handle_health()
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path == '/tts':
+            self._handle_tts()
+        else:
+            self.send_error(404)
+
+    def _handle_health(self):
+        try:
+            process = psutil.Process(os.getpid())
+            mem_gb = process.memory_info().rss / (1024**3)
+        except Exception:
+            mem_gb = -1
+
+        _json_response(self, {
+            'status': 'ok',
+            'model': 'loaded',
+            'requests': request_count,
+            'memory_gb': round(mem_gb, 2),
+            'memory_limit_gb': MAX_MEMORY_GB,
+            'temp_dir': TEMP_DIR
+        })
+
+    def _handle_tts(self):
+        global request_count
+        request_count += 1
+
+        # Check memory/requests every 10 requests
+        if request_count % 10 == 0:
+            mem_exceeded = check_memory()
+            req_exceeded = request_count >= MAX_REQUESTS
+
+            if mem_exceeded or req_exceeded:
+                reason = f"Memory: {mem_exceeded}, Requests: {request_count}/{MAX_REQUESTS}"
+                schedule_restart(reason)
+
+        # Read and parse JSON body
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            body = self.rfile.read(content_length)
+            data = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            _json_response(self, {'error': 'Invalid JSON body'}, 400)
+            return
+
+        if 'text' not in data:
+            _json_response(self, {'error': 'No text provided'}, 400)
+            return
+
+        text_to_speak = clean_text(data['text'])
+        if not text_to_speak.strip():
+            _json_response(self, {'error': 'Text is empty after filtering'}, 400)
+            return
+
+        voice = data.get('voice', DEFAULT_VOICE)
+        try:
+            speed = float(data.get('speed', DEFAULT_SPEED))
+        except (ValueError, TypeError):
+            speed = DEFAULT_SPEED
+
+        generation_start = time.time()
+        generator = pipeline(text_to_speak, voice=voice, speed=speed)
+        audio_segments = [audio_segment for _, _, audio_segment in generator]
+
+        if not audio_segments:
+            logger.error("Failed to generate audio for text.")
+            _json_response(self, {'error': 'Failed to generate audio'}, 500)
+            return
+
+        audio = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
+        generation_time = time.time() - generation_start
+        logger.info(f"Audio generation completed in {generation_time:.2f}s (request #{request_count})")
+
+        file_uuid = uuid.uuid4().hex
+        timestamp = int(time.time())
+        file_path = os.path.join(TEMP_DIR, f'audio_{timestamp}_{file_uuid}.ogg')
+
+        try:
+            sf.write(file_path, audio, AUDIO_SAMPLE_RATE, format='OGG', subtype='VORBIS')
+            _file_response(self, file_path)
+        except Exception as e:
+            logger.error(f"Error processing audio file: {e}")
+            _json_response(self, {'error': f'Server error: {str(e)}'}, 500)
 
 
-@app.route('/health', methods=['GET'])
-def health_check():
-    """Health check with memory stats."""
-    try:
-        process = psutil.Process(os.getpid())
-        mem_gb = process.memory_info().rss / (1024**3)
-    except Exception:
-        mem_gb = -1
-    
-    return {
-        'status': 'ok',
-        'model': 'loaded',
-        'requests': request_count,
-        'memory_gb': round(mem_gb, 2),
-        'memory_limit_gb': MAX_MEMORY_GB,
-        'temp_dir': TEMP_DIR
-    }
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTPServer that handles each request in a new thread."""
+    daemon_threads = True
 
 
 def main():
@@ -213,7 +250,13 @@ def main():
     logger.info(f"Starting Kokoro TTS server on {HOST}:{PORT}")
     logger.info(f"Memory limit: {MAX_MEMORY_GB}GB, Request limit: {MAX_REQUESTS}")
     logger.info(f"Temp directory: {TEMP_DIR}")
-    app.run(host=HOST, port=PORT, debug=False, threaded=True)
+
+    server = ThreadedHTTPServer((HOST, PORT), TTSHandler)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        logger.info("TTS server shutting down")
+        server.shutdown()
 
 
 if __name__ == "__main__":
