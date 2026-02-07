@@ -1,3 +1,7 @@
+# 1.3.0 - FastAPI uvicorn
+- Switched entire app to FastAPI
+- Served through uvicorn instead of flask
+- Creates self-signed cert on app load
 # 1.2.6 - Privacy mode
 - Privacy mode only allows whitelisted
 # 1.2.5 - Performance upgrades

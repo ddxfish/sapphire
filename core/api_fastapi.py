@@ -1564,7 +1564,7 @@ async def get_privacy_status(request: Request, _=Depends(require_login)):
     """Get privacy mode status."""
     from core.settings_manager import settings
     return {
-        "enabled": settings.get('PRIVACY_MODE', False),
+        "privacy_mode": settings.get('PRIVACY_MODE', False),
         "start_in_privacy": settings.get('START_IN_PRIVACY_MODE', False)
     }
 
@@ -1577,7 +1577,8 @@ async def set_privacy_status(request: Request, _=Depends(require_login)):
     enabled = data.get('enabled', False)
     settings.set('PRIVACY_MODE', enabled, persist=False)
     publish(Events.SETTINGS_CHANGED, {"key": "PRIVACY_MODE", "value": enabled})
-    return {"status": "success", "enabled": enabled}
+    label = "Privacy mode enabled" if enabled else "Privacy mode disabled"
+    return {"privacy_mode": enabled, "message": label}
 
 
 @app.put("/api/privacy/start-mode")
