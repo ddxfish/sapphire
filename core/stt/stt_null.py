@@ -6,10 +6,9 @@ logger = logging.getLogger(__name__)
 
 class NullWhisperClient:
     """No-op Whisper client used when STT_ENABLED=False"""
-    
-    def __init__(self, server_url: str = None):
+
+    def __init__(self):
         logger.info("STT disabled - using NullWhisperClient")
-        self.server_url = server_url
         
     def transcribe_file(self, audio_file: str) -> Optional[str]:
         """Return empty string - no transcription"""
@@ -71,13 +70,3 @@ class NullAudioRecorder:
         pass
 
 
-def null_initialize_model(model_size=None, language=None):
-    """No-op model initialization - returns False immediately"""
-    logger.info("STT disabled - skipping model initialization")
-    return False
-
-
-def null_run_server(host=None, port=None):
-    """No-op server - does nothing"""
-    logger.info("STT disabled - not starting server")
-    pass

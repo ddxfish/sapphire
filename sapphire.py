@@ -37,8 +37,9 @@ ensure_state_presets()
 
 # Wrap all further imports to catch errors
 try:
-    from core.stt import initialize_model, run_server, WhisperClient
+    from core.stt import WhisperSTT
     from core.stt import AudioRecorder as WhisperRecorder
+    from core.stt.stt_null import NullWhisperClient
     from core.chat import LLMChat, ConversationHistory
     from core.api_fastapi import app, set_system
     from core.settings_manager import settings
@@ -224,7 +225,7 @@ class VoiceChatSystem:
             self.wake_detector = NullWakeWordDetector(None)
         
         self.whisper_recorder = WhisperRecorder()
-        self.whisper_client = WhisperClient(server_url=config.STT_SERVER_URL)
+        self.whisper_client = NullWhisperClient()
 
     def stop_components(self):
         if hasattr(self, 'wake_detector') and self.wake_detector:
@@ -327,16 +328,13 @@ class VoiceChatSystem:
     def start_background_services(self):
         if config.STT_ENABLED:
             logger.info(f"Initializing {config.STT_ENGINE} model...")
-            if not initialize_model():
-                logger.error(f"Failed to initialize {config.STT_ENGINE} model")
+            try:
+                self.whisper_client = WhisperSTT()
+            except RuntimeError as e:
+                logger.error(f"Failed to initialize {config.STT_ENGINE}: {e}")
                 return False
-
-            logger.info("Starting speech-to-text server...")
-            server_thread = threading.Thread(target=run_server, daemon=True)
-            server_thread.start()
-            time.sleep(2)
         else:
-            logger.info("STT disabled - skipping model and server initialization")
+            logger.info("STT disabled - skipping model initialization")
 
         logger.info("Starting event scheduler...")
         event_thread = threading.Thread(target=self.run_event_scheduler, daemon=True)

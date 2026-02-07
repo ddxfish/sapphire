@@ -82,12 +82,6 @@ class SettingsManager:
         # Add BASE_DIR
         self._defaults['BASE_DIR'] = str(self.BASE_DIR)
         
-        # Construct STT_SERVER_URL
-        if 'STT_HOST' in self._defaults and 'STT_SERVER_PORT' in self._defaults:
-            host = self._defaults['STT_HOST']
-            port = self._defaults['STT_SERVER_PORT']
-            self._defaults['STT_SERVER_URL'] = f"http://{host}:{port}"
-        
         # Construct API_URL (for internal use by functions like meta.py)
         # Uses unified FastAPI server (WEB_UI_HOST/WEB_UI_PORT)
         api_host = self._defaults.get('WEB_UI_HOST', '127.0.0.1')

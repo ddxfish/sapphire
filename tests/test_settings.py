@@ -73,22 +73,6 @@ class TestSettingsFlattening:
 class TestApplyConstruction:
     """Test programmatic construction of settings."""
     
-    def test_constructs_stt_server_url(self):
-        """Should construct STT_SERVER_URL from host and port."""
-        from core.settings_manager import SettingsManager
-        
-        with patch.object(SettingsManager, '__init__', lambda self: None):
-            mgr = SettingsManager()
-            mgr.BASE_DIR = Path("/tmp")
-            mgr._defaults = {
-                "STT_HOST": "localhost",
-                "STT_SERVER_PORT": 8765
-            }
-            
-            mgr._apply_construction()
-            
-            assert mgr._defaults["STT_SERVER_URL"] == "http://localhost:8765"
-    
     def test_adds_base_dir(self):
         """Should add BASE_DIR to defaults."""
         from core.settings_manager import SettingsManager
