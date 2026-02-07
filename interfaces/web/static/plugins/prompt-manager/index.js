@@ -56,6 +56,7 @@ Editing:
     this._listLoadInProgress = false;
     this._listLoadStarted = 0;
     this._lastLoadTime = 0;
+    this._lastEditorSaveTime = 0;
     
     this.bindEvents();
     await this.loadComponents();
@@ -105,7 +106,7 @@ Editing:
             await this.loadPromptList();
             await this._syncFromServer();
           } else if (data?.name && data?.action === 'loaded') {
-            // Skip if editor already shows this prompt
+            // A different prompt was activated - switch to it
             if (this.currentPrompt !== data.name) {
               await this.loadPromptList();
               const option = Array.from(this.elements.select.options).find(o => o.value === data.name);
@@ -115,6 +116,15 @@ Editing:
                 await this.loadPromptIntoEditor(data.name);
               }
             }
+          } else if (data?.name && data?.action === 'saved') {
+            // Content was saved (by AI tools, another tab, etc.)
+            // Reload editor if viewing this prompt, unless WE just saved it
+            if (data.name === this.currentPrompt && !this._userIsEditing() &&
+                Date.now() - this._lastEditorSaveTime > 2000) {
+              console.log(`[PromptManager] External save detected, reloading: ${data.name}`);
+              await this.loadPromptIntoEditor(data.name);
+            }
+            await this.loadPromptList();
           } else {
             await this.loadPromptList();
           }
@@ -420,6 +430,7 @@ Editing:
     };
 
     try {
+      this._lastEditorSaveTime = Date.now();
       await API.savePrompt(this.currentPrompt, data);
       await API.loadPrompt(this.currentPrompt);
       await updateScene();
@@ -438,6 +449,7 @@ Editing:
     if (!data) return;
     
     try {
+      this._lastEditorSaveTime = Date.now();
       await API.savePrompt(this.currentPrompt, data);
       await API.loadPrompt(this.currentPrompt);
       await updateScene();
@@ -488,6 +500,7 @@ Editing:
         const data = this.collectData();
         if (!data) return;
         try {
+          this._lastEditorSaveTime = Date.now();
           await API.savePrompt(this.currentPrompt, data);
           await API.loadPrompt(this.currentPrompt);
           await updateScene();
@@ -1221,6 +1234,7 @@ Editing:
       const promptData = this.collectData();
       if (promptData) {
         try {
+          this._lastEditorSaveTime = Date.now();
           await API.savePrompt(this.currentPrompt, promptData);
           await API.loadPrompt(this.currentPrompt);
         } catch (e) {

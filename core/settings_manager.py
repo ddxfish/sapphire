@@ -88,11 +88,14 @@ class SettingsManager:
             port = self._defaults['STT_SERVER_PORT']
             self._defaults['STT_SERVER_URL'] = f"http://{host}:{port}"
         
-        # Construct API_URL (for internal use by web_interface and functions)
-        if 'API_HOST' in self._defaults and 'API_PORT' in self._defaults:
-            host = self._defaults['API_HOST']
-            port = self._defaults['API_PORT']
-            self._defaults['API_URL'] = f"http://{host}:{port}"
+        # Construct API_URL (for internal use by functions like meta.py)
+        # Uses unified FastAPI server (WEB_UI_HOST/WEB_UI_PORT)
+        api_host = self._defaults.get('WEB_UI_HOST', '127.0.0.1')
+        if api_host == '0.0.0.0':
+            api_host = '127.0.0.1'  # localhost for internal requests
+        api_port = self._defaults.get('WEB_UI_PORT', 8073)
+        api_proto = 'https' if self._defaults.get('WEB_UI_SSL_ADHOC', False) else 'http'
+        self._defaults['API_URL'] = f"{api_proto}://{api_host}:{api_port}"
         
         # Apply platform-specific audio device defaults
         if IS_WINDOWS:

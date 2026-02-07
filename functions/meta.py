@@ -6,7 +6,11 @@ Tools are dynamically filtered based on prompt mode (monolith vs assembled).
 
 import logging
 import requests
+import urllib3
 import config as app_config
+
+# Suppress SSL warnings for self-signed cert on internal requests
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
@@ -381,7 +385,7 @@ def _save_and_activate_assembled(preset_name: str, headers: dict, api_url: str) 
             f"{api_url}/api/prompts/{preset_name}",
             json={"type": "assembled", "components": components},
             headers=headers,
-            timeout=5
+            timeout=5, verify=False
         )
         if response.status_code != 200:
             return False, f"Failed to save preset: {response.text}"
@@ -392,7 +396,7 @@ def _save_and_activate_assembled(preset_name: str, headers: dict, api_url: str) 
         response = requests.post(
             f"{api_url}/api/prompts/{preset_name}/load",
             headers=headers,
-            timeout=5
+            timeout=5, verify=False
         )
         if response.status_code != 200:
             return False, f"Saved but failed to activate: {response.text}"
@@ -411,9 +415,9 @@ def _get_active_chat(headers: dict, api_url: str) -> str:
     """Get the active chat name."""
     try:
         response = requests.get(
-            f"{api_url}/chats/active",
+            f"{api_url}/api/chats/active",
             headers=headers,
-            timeout=5
+            timeout=5, verify=False
         )
         if response.status_code == 200:
             return response.json().get('active_chat', 'default')
@@ -428,10 +432,10 @@ def _update_chat_setting(setting_key: str, value, headers: dict, api_url: str) -
     
     try:
         response = requests.put(
-            f"{api_url}/chats/{chat_name}/settings",
+            f"{api_url}/api/chats/{chat_name}/settings",
             json={"settings": {setting_key: value}},
             headers=headers,
-            timeout=5
+            timeout=5, verify=False
         )
         if response.status_code != 200:
             return False, f"Failed to update {setting_key}: {response.text}"
@@ -480,7 +484,7 @@ def execute(function_name, arguments, config):
                     response = requests.get(
                         f"{main_api_url}/api/prompts",
                         headers=headers,
-                        timeout=5
+                        timeout=5, verify=False
                     )
                     if response.status_code == 200:
                         prompt_list = response.json().get('prompts', [])
@@ -510,7 +514,7 @@ def execute(function_name, arguments, config):
             response = requests.post(
                 f"{main_api_url}/api/prompts/{name}/load",
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             
             if response.status_code != 200:
@@ -527,10 +531,10 @@ def execute(function_name, arguments, config):
             logger.info(f"AI INITIATED CHAT RESET - Reason: {reason}")
             
             response = requests.delete(
-                f"{main_api_url}/history/messages",
+                f"{main_api_url}/api/history/messages",
                 json={"count": -1},
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             response.raise_for_status()
             
@@ -545,7 +549,7 @@ def execute(function_name, arguments, config):
                 f"{main_api_url}/api/settings/DEFAULT_AI_NAME",
                 json={"value": name, "persist": True},
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             
             if response.status_code != 200:
@@ -563,7 +567,7 @@ def execute(function_name, arguments, config):
                 f"{main_api_url}/api/settings/DEFAULT_USERNAME",
                 json={"value": name, "persist": True},
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             
             if response.status_code != 200:
@@ -581,9 +585,9 @@ def execute(function_name, arguments, config):
                 try:
                     chat_name = _get_active_chat(headers, main_api_url)
                     response = requests.get(
-                        f"{main_api_url}/chats/{chat_name}/settings",
+                        f"{main_api_url}/api/chats/{chat_name}/settings",
                         headers=headers,
-                        timeout=5
+                        timeout=5, verify=False
                     )
                     if response.status_code == 200:
                         current_voice = response.json().get('settings', {}).get('voice', 'af_heart')
@@ -620,7 +624,7 @@ def execute(function_name, arguments, config):
                     response = requests.get(
                         f"{main_api_url}/api/functions",
                         headers=headers,
-                        timeout=5
+                        timeout=5, verify=False
                     )
                     
                     if response.status_code != 200:
@@ -647,7 +651,7 @@ def execute(function_name, arguments, config):
                     response = requests.get(
                         f"{main_api_url}/api/abilities/current",
                         headers=headers,
-                        timeout=5
+                        timeout=5, verify=False
                     )
                     
                     if response.status_code != 200:
@@ -663,7 +667,7 @@ def execute(function_name, arguments, config):
                     func_response = requests.get(
                         f"{main_api_url}/api/functions",
                         headers=headers,
-                        timeout=5
+                        timeout=5, verify=False
                     )
                     
                     desc_map = {}
@@ -714,7 +718,7 @@ def execute(function_name, arguments, config):
                 f"{main_api_url}/api/prompts/{current_name}",
                 json={"type": "monolith", "content": content},
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             
             if response.status_code != 200:
@@ -724,7 +728,7 @@ def execute(function_name, arguments, config):
             response = requests.post(
                 f"{main_api_url}/api/prompts/{current_name}/load",
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             
             if response.status_code != 200:
@@ -824,7 +828,7 @@ def execute(function_name, arguments, config):
                 f"{main_api_url}/api/prompts/components/{component}/{key}",
                 json={"value": value},
                 headers=headers,
-                timeout=5
+                timeout=5, verify=False
             )
             
             if response.status_code != 200:

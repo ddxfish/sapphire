@@ -42,19 +42,26 @@ def validate_csrf(request: Request, token: Optional[str] = None) -> bool:
 
 async def require_login(request: Request):
     """Dependency that requires login. Raises HTTPException if not logged in."""
-    from core.setup import is_setup_complete
+    from core.setup import is_setup_complete, get_password_hash
 
     if not is_setup_complete():
         raise HTTPException(status_code=307, headers={"Location": "/setup"})
 
-    if not request.session.get('logged_in'):
-        # For API routes, return 401
-        if request.url.path.startswith('/api/'):
-            raise HTTPException(status_code=401, detail="Unauthorized")
-        # For page routes, redirect to login
-        raise HTTPException(status_code=307, headers={"Location": "/login"})
+    # Session auth (browser users)
+    if request.session.get('logged_in'):
+        return True
 
-    return True
+    # API key auth (internal/tool calls from same process, e.g. meta.py)
+    api_key = request.headers.get('X-API-Key')
+    if api_key:
+        stored_hash = get_password_hash()
+        if stored_hash and api_key == stored_hash:
+            return True
+
+    # Not authenticated
+    if request.url.path.startswith('/api/'):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    raise HTTPException(status_code=307, headers={"Location": "/login"})
 
 
 async def require_setup(request: Request):
