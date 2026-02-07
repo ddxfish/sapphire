@@ -1611,13 +1611,40 @@ async def update_fallback_order(request: Request, _=Depends(require_login)):
 
 
 @app.post("/api/llm/test/{provider_key}")
-async def test_llm_provider(provider_key: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Test LLM provider connection."""
+async def test_llm_provider(provider_key: str, request: Request, _=Depends(require_login)):
+    """Test LLM provider connection via health_check()."""
+    from core.chat.llm_providers import get_provider_by_key
     try:
-        result = system.llm_chat.test_provider(provider_key)
-        return result
+        providers_config = dict(getattr(config, 'LLM_PROVIDERS', {}))
+        if provider_key not in providers_config:
+            return {"status": "error", "error": f"Unknown provider: {provider_key}"}
+
+        # Temporarily force enabled so we can test even if not yet enabled
+        test_config = dict(providers_config[provider_key])
+        test_config['enabled'] = True
+
+        # Apply any form overrides (api_key, base_url, model) from the request body
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        for field in ('api_key', 'base_url', 'model'):
+            if body.get(field):
+                test_config[field] = body[field]
+
+        providers_config[provider_key] = test_config
+        provider = get_provider_by_key(provider_key, providers_config, getattr(config, 'LLM_REQUEST_TIMEOUT', 30))
+
+        if not provider:
+            return {"status": "error", "error": f"Could not create provider '{provider_key}' — check API key and settings"}
+
+        healthy = provider.health_check()
+        if healthy:
+            return {"status": "success"}
+        else:
+            return {"status": "error", "error": "Connection failed — provider did not respond to health check"}
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"status": "error", "error": str(e)}
 
 
 # =============================================================================
@@ -2555,28 +2582,21 @@ async def get_continuity_timeline(request: Request, _=Depends(require_login), sy
 
 @app.get("/api/setup/check-packages")
 async def check_packages(request: Request, _=Depends(require_login)):
-    """Check optional packages."""
-    packages = {
-        "tts": False,
-        "stt": False,
-        "wakeword": False
+    """Check optional packages. Returns format expected by setup wizard UI."""
+    checks = {
+        "tts": {"package": "Kokoro TTS", "requirements": "requirements-tts.txt", "mod": "kokoro"},
+        "stt": {"package": "Faster Whisper", "requirements": "requirements-stt.txt", "mod": "faster_whisper"},
+        "wakeword": {"package": "OpenWakeWord", "requirements": "requirements-wakeword.txt", "mod": "openwakeword"},
     }
-    try:
-        import kokoro
-        packages["tts"] = True
-    except ImportError:
-        pass
-    try:
-        import faster_whisper
-        packages["stt"] = True
-    except ImportError:
-        pass
-    try:
-        import openwakeword
-        packages["wakeword"] = True
-    except ImportError:
-        pass
-    return packages
+    packages = {}
+    for key, info in checks.items():
+        try:
+            __import__(info["mod"])
+            installed = True
+        except ImportError:
+            installed = False
+        packages[key] = {"installed": installed, "package": info["package"], "requirements": info["requirements"]}
+    return {"packages": packages}
 
 
 @app.get("/api/setup/wizard-step")
