@@ -224,7 +224,7 @@ export async function openSettingsModal() {
         
     } catch (e) {
         console.error('Failed to load settings:', e);
-        ui.showToast('Failed to load settings', 'error');
+        ui.showToast('Failed to load settings: ' + e.message, 'error');
     }
 }
 

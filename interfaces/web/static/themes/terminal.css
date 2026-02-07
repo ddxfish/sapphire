@@ -4,6 +4,9 @@
     /* Trim - phosphor green */
     --trim: #33ff33;
     --trim-glow: rgba(51, 255, 51, 0.5);
+    --trim-light: rgba(51, 255, 51, 0.15);
+    --trim-border: rgba(51, 255, 51, 0.4);
+    --trim-50: rgba(51, 255, 51, 0.5);
     
     /* Colors - Core - true black with phosphor green */
     --bg: #0a0a0a;

@@ -94,10 +94,12 @@ def is_current_prompt_private():
 
 
 def set_active_preset_name(name: str):
-    """Track which preset is currently active."""
+    """Track which preset is currently active. Publishes event for all consumers."""
     global _assembled_state
     prompt_manager._active_preset_name = name
     _assembled_state["active_preset"] = name
+    from core.event_bus import publish, Events
+    publish(Events.PROMPT_CHANGED, {"name": name, "action": "loaded"})
 
 
 def get_prompt_char_count():

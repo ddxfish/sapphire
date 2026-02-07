@@ -40,13 +40,14 @@ try:
     from core.stt import initialize_model, run_server, WhisperClient
     from core.stt import AudioRecorder as WhisperRecorder
     from core.chat import LLMChat, ConversationHistory
-    from core.api import app, create_api
-    from core.settings_api import create_settings_api
+    from core.api_fastapi import app, set_system
     from core.settings_manager import settings
     from core.event_handler import EventScheduler
+    from core.ssl_utils import get_ssl_context
     import config
     import string
     import re
+    import uvicorn
 except Exception as e:
     logger.critical(f"FATAL: Import error during startup: {e}", exc_info=True)
     sys.exit(1)
@@ -72,15 +73,7 @@ class VoiceChatSystem:
         self.history = ConversationHistory(max_history=config.LLM_MAX_HISTORY)
 
         base_dir = Path(__file__).parent.resolve()
-        
-        # Start web interface
-        self.web_interface_manager = ProcessManager(
-            script_path=base_dir / "interfaces" / "web" / "web_interface.py",
-            log_name="web_interface",
-            base_dir=base_dir
-        )
-        self.web_interface_manager.start()
-        
+
         # Start TTS server if enabled
         self.tts_server_manager = None
         if config.TTS_ENABLED:
@@ -319,17 +312,16 @@ class VoiceChatSystem:
     def stop(self):
         """Stop all components with error isolation - one failure won't block others."""
         logger.info("Stopping voice chat system...")
-        
+
         stop_actions = [
             ("voice components", self.stop_components),
             ("continuity scheduler", lambda: hasattr(self, 'continuity_scheduler') and self.continuity_scheduler and self.continuity_scheduler.stop()),
-            ("web interface", lambda: self.web_interface_manager and self.web_interface_manager.stop()),
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
             ("settings watcher", settings.stop_file_watcher),
             ("prompt watcher", lambda: prompts.prompt_manager.stop_file_watcher()),
             ("toolset watcher", toolset_manager.stop_file_watcher),
         ]
-        
+
         for name, action in stop_actions:
             try:
                 action()
@@ -362,12 +354,7 @@ def run():
         traceback.print_exc()
         return 1
     
-    print("Starting API server")
-    def run_api_server():
-        try:
-            app.run(host=config.API_HOST, port=config.API_PORT, debug=False, threaded=True)
-        except Exception as e:
-            logger.error(f"API server crashed: {e}", exc_info=True)
+    print("Starting Sapphire server")
 
     try:
         if not voice_chat.start_background_services():
@@ -376,54 +363,32 @@ def run():
             return 1
 
         voice_chat.start_voice_components()
-        api_blueprint = create_api(voice_chat, restart_callback=request_restart, shutdown_callback=request_shutdown)
-        app.register_blueprint(api_blueprint)
-        
-        settings_api_blueprint = create_settings_api()
-        app.register_blueprint(settings_api_blueprint, url_prefix='/api')
-        
-        from core.modules.system.prompts_api import create_prompts_api
-        prompts_api_blueprint = create_prompts_api(voice_chat)
-        app.register_blueprint(prompts_api_blueprint)
-        
-        from core.abilities_api import create_abilities_api
-        abilities_api_blueprint = create_abilities_api(voice_chat)
-        app.register_blueprint(abilities_api_blueprint, url_prefix='/api')
-        
-        from core.modules.system.spices_api import create_spices_api
-        spices_api_blueprint = create_spices_api()
-        app.register_blueprint(spices_api_blueprint)
-        
+
+        # Inject system into FastAPI app
+        set_system(voice_chat, restart_callback=request_restart, shutdown_callback=request_shutdown)
+
         # Continuity - scheduled autonomous tasks
         from core.modules.continuity import ContinuityScheduler, ContinuityExecutor
-        from core.modules.continuity.continuity_api import create_continuity_api
         continuity_executor = ContinuityExecutor(voice_chat)
         continuity_scheduler = ContinuityScheduler(voice_chat, continuity_executor)
-        voice_chat.continuity_scheduler = continuity_scheduler  # Attach for stop()
-        continuity_api_blueprint = create_continuity_api(continuity_scheduler)
-        app.register_blueprint(continuity_api_blueprint, url_prefix='/api/continuity')
+        voice_chat.continuity_scheduler = continuity_scheduler  # Attach for stop() and API routes
         continuity_scheduler.start()
         logger.info("Continuity scheduler started")
-        
+
         settings.start_file_watcher()
 
         from core.modules.system import prompts
         prompts.prompt_manager.start_file_watcher()
         logger.info("Prompt file watcher started")
-        
+
         toolset_manager.start_file_watcher()
         logger.info("Toolset file watcher started")
-        
-        api_thread = threading.Thread(target=run_api_server, daemon=True)
-        api_thread.start()
-        
-        logger.info(f"Sapphire is running. API is live.")
-        
+
         # Display clickable URL for user
         protocol = 'https' if config.WEB_UI_SSL_ADHOC else 'http'
         host_display = 'localhost' if config.WEB_UI_HOST in ('0.0.0.0', '127.0.0.1') else config.WEB_UI_HOST
         url = f"{protocol}://{host_display}:{config.WEB_UI_PORT}"
-        
+
         # ANSI colors: cyan background, black text, bold
         CYAN_BG = '\033[46m'
         BLACK = '\033[30m'
@@ -431,10 +396,31 @@ def run():
         RESET = '\033[0m'
         print(f"\n{CYAN_BG}{BLACK}{BOLD} ✨ SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
 
+        logger.info(f"Sapphire is running. Starting uvicorn server...")
+
+        # Run uvicorn - this blocks until shutdown
+        # Using a thread so we can still check for restart signals
+        ssl_paths = get_ssl_context()
+        server_config = uvicorn.Config(
+            app,
+            host=config.WEB_UI_HOST,
+            port=config.WEB_UI_PORT,
+            log_level="info",
+            ssl_certfile=ssl_paths[0] if ssl_paths else None,
+            ssl_keyfile=ssl_paths[1] if ssl_paths else None,
+        )
+        server = uvicorn.Server(server_config)
+
+        def run_server():
+            server.run()
+
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+
         # Main loop - check for restart/shutdown signals
         while not _restart_requested and not _shutdown_requested:
             time.sleep(0.5)
-        
+
         # Determine exit code
         if _restart_requested:
             logger.info("Restart signal received, shutting down for restart...")
@@ -442,10 +428,13 @@ def run():
         else:
             logger.info("Shutdown signal received...")
             exit_code = 0
-            
+
+        # Signal uvicorn to shutdown
+        server.should_exit = True
+
     finally:
         voice_chat.stop()
-    
+
     return exit_code
 
 

@@ -4,6 +4,9 @@
     /* Trim - sapphire blue */
     --trim: #50a0ff;
     --trim-glow: rgba(80, 160, 255, 0.4);
+    --trim-light: rgba(80, 160, 255, 0.15);
+    --trim-border: rgba(80, 160, 255, 0.4);
+    --trim-50: rgba(80, 160, 255, 0.5);
     
     /* Colors - Core */
     --bg: #0a1628;

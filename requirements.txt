@@ -2,7 +2,12 @@
 # Use this for quick setup. For minimal installs, use individual requirements files.
 
 # Core API and Web Interface
-Flask>=3.0.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+jinja2>=3.1.0
+aiofiles>=23.2.0
+itsdangerous>=2.1.0
 cryptography>=41.0.0
 
 # LLM API Clients

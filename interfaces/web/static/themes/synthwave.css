@@ -4,6 +4,9 @@
     /* Trim - hot pink neon */
     --trim: #ff66b2;
     --trim-glow: rgba(255, 102, 178, 0.4);
+    --trim-light: rgba(255, 102, 178, 0.15);
+    --trim-border: rgba(255, 102, 178, 0.4);
+    --trim-50: rgba(255, 102, 178, 0.5);
     
     /* Colors - Core */
     --bg: #1a1025;

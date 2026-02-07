@@ -21,7 +21,8 @@ export async function getPrompt(name) {
     return cached.prompts.current;
   }
   // Fall back to direct API for other prompts
-  return await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`);
+  const response = await fetchWithTimeout(`/api/prompts/${encodeURIComponent(name)}`);
+  return response.data;
 }
 
 // Mutations - use fetchWithTimeout for session ID header

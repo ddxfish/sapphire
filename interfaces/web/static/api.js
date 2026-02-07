@@ -40,8 +40,7 @@ export const fetchHistory = async () => {
 };
 
 export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw');
-export const postReset = () => fetchWithTimeout('/api/reset', { method: 'POST' });
-export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages', { 
+export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages', {
     method: 'DELETE', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ user_message: userMessage }) 
@@ -294,7 +293,7 @@ export const fetchAudio = async (text, signal = null) => {
         return await fetchWithTimeout('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify({ text, output_mode: 'file' }),
             signal
         }, 120000);
     } catch (e) {

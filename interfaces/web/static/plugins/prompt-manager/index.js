@@ -5,6 +5,8 @@ import { showToast } from '../../shared/toast.js';
 import { showModal } from '../../shared/modal.js';
 import * as API from './prompt-api.js';
 import { buildMainUI, buildEditor } from './prompt-ui-builder.js';
+import { getInitDataSync } from '../../shared/init-data.js';
+import { fetchWithTimeout } from '../../shared/fetch.js';
 
 // Import updateScene to sync pill after changes
 async function updateScene() {
@@ -59,8 +61,16 @@ Editing:
     await this.loadComponents();
     await this.loadPromptList();
     
-    // Sync to currently active prompt from pill
-    await this.syncToActivePill();
+    // Read active prompt from init data (server source of truth)
+    const initData = getInitDataSync();
+    const activeName = initData?.prompts?.current_name;
+    if (activeName) {
+      const option = Array.from(this.elements.select.options).find(o => o.value === activeName);
+      if (option) {
+        this.elements.select.value = activeName;
+        await this.loadPromptIntoEditor(activeName);
+      }
+    }
     
     this.startStatusWatcher();
     
@@ -93,15 +103,17 @@ Editing:
           if (data?.bulk) {
             await this.loadComponents();
             await this.loadPromptList();
-            await this.syncToActivePill();
+            await this._syncFromServer();
           } else if (data?.name && data?.action === 'loaded') {
-            // Specific prompt was loaded - switch editor to it directly
-            await this.loadPromptList();
-            const option = Array.from(this.elements.select.options).find(o => o.value === data.name);
-            if (option) {
-              console.log(`[PromptManager] Switching editor to: ${data.name}`);
-              this.elements.select.value = data.name;
-              await this.loadPromptIntoEditor(data.name);
+            // Skip if editor already shows this prompt
+            if (this.currentPrompt !== data.name) {
+              await this.loadPromptList();
+              const option = Array.from(this.elements.select.options).find(o => o.value === data.name);
+              if (option) {
+                console.log(`[PromptManager] Switching editor to: ${data.name}`);
+                this.elements.select.value = data.name;
+                await this.loadPromptIntoEditor(data.name);
+              }
             }
           } else {
             await this.loadPromptList();
@@ -128,64 +140,47 @@ Editing:
     // Prompts were reset/merged externally - refresh everything
     await this.loadComponents();
     await this.loadPromptList();
-    await this.syncToActivePill();
+    await this._syncFromServer();
     showToast('Prompts refreshed', 'info');
   },
   
-  async syncToActivePill() {
-    // Read active prompt from pill element
-    const pillText = document.querySelector('#prompt-pill .pill-text');
-    if (!pillText) {
-      console.log('[PromptManager] syncToActivePill: no pill element');
-      return;
-    }
-
-    // Format is "PromptName (2.4k)" - extract just the name
-    const fullText = pillText.textContent || '';
-    const activeName = fullText.split(' (')[0].trim();
-    console.log(`[PromptManager] syncToActivePill: pill="${activeName}", current="${this.currentPrompt}"`);
-
-    if (activeName && activeName !== 'Loading...' && activeName !== this.currentPrompt) {
-      // Set dropdown to match and load it
-      const option = Array.from(this.elements.select.options).find(o => o.value === activeName);
-      console.log(`[PromptManager] syncToActivePill: option found=${!!option}`);
-      if (option) {
-        this.elements.select.value = activeName;
-        await this.loadPromptIntoEditor(activeName);
+  async _syncFromServer() {
+    try {
+      const status = await fetchWithTimeout('/api/status', {}, 5000);
+      if (status?.prompt_name && status.prompt_name !== this.currentPrompt) {
+        const option = Array.from(this.elements.select.options).find(o => o.value === status.prompt_name);
+        if (option) {
+          this.elements.select.value = status.prompt_name;
+          await this.loadPromptIntoEditor(status.prompt_name);
+        }
       }
+    } catch (e) {
+      console.warn('[PromptManager] _syncFromServer failed:', e);
     }
   },
-  
+
   startStatusWatcher() {
-    // Poll every 60s as fallback - SSE handles real-time updates
+    // Poll every 60s as fallback when SSE is down
     this.statusCheckInterval = setInterval(async () => {
-      // Skip if SSE is connected (it handles real-time sync)
       if (window.eventBus?.isConnected?.()) return;
-      // Skip if a load is already in progress or was recent
       if (this._loadInProgress) return;
       if (Date.now() - this._lastLoadTime < 5000) return;
-      
+
       try {
-        // Check if pill prompt changed externally
-        const pillText = document.querySelector('#prompt-pill .pill-text');
-        if (!pillText) return;
-        
-        const fullText = pillText.textContent || '';
-        const pillPromptName = fullText.split(' (')[0].trim();
-        
-        // If pill shows different prompt than editor, sync editor to pill
-        if (pillPromptName && pillPromptName !== 'Loading...' && pillPromptName !== this.currentPrompt) {
+        // Sync active prompt from server (not pill DOM)
+        const status = await fetchWithTimeout('/api/status', {}, 5000);
+        if (status?.prompt_name && status.prompt_name !== this.currentPrompt) {
           this._loadInProgress = true;
           try {
-            this.elements.select.value = pillPromptName;
+            this.elements.select.value = status.prompt_name;
             await this.loadComponents();
-            await this.loadPromptIntoEditor(pillPromptName);
+            await this.loadPromptIntoEditor(status.prompt_name);
           } finally {
             this._loadInProgress = false;
             this._lastLoadTime = Date.now();
           }
         }
-        
+
         // Auto-refresh: check if currently loaded prompt changed on disk (external edit)
         if (this.currentPrompt && !this._userIsEditing() && !this._loadInProgress) {
           const freshData = await API.getPrompt(this.currentPrompt);
@@ -459,7 +454,7 @@ Editing:
       
       await this.loadComponents();
       await this.loadPromptList();
-      await this.syncToActivePill();
+      await this._syncFromServer();
       showToast('Refreshed', 'success');
     } catch (e) {
       console.error('Refresh failed:', e);
