@@ -1,20 +1,33 @@
 // API functions for Ability Manager plugin
 import { getInitData } from '../../shared/init-data.js';
+import { fetchWithTimeout } from '../../shared/fetch.js';
 
-// Use init data for initial load (avoids 3 separate API calls)
+let _initialLoad = true;
+
+// Use init data for first load, then fetch fresh from API
 export async function getAbilities() {
-  const init = await getInitData();
-  return { abilities: init.abilities.list, count: init.abilities.list.length };
+  if (_initialLoad) {
+    const init = await getInitData();
+    return { abilities: init.abilities.list, count: init.abilities.list.length };
+  }
+  return fetchWithTimeout('/api/abilities');
 }
 
 export async function getCurrentAbility() {
-  const init = await getInitData();
-  return init.abilities.current;
+  if (_initialLoad) {
+    const init = await getInitData();
+    return init.abilities.current;
+  }
+  return fetchWithTimeout('/api/abilities/current');
 }
 
 export async function getFunctions() {
-  const init = await getInitData();
-  return init.functions;
+  if (_initialLoad) {
+    const init = await getInitData();
+    _initialLoad = false;  // After first full load, always fetch fresh
+    return init.functions;
+  }
+  return fetchWithTimeout('/api/functions');
 }
 
 // These still need direct API calls (mutations)

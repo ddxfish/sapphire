@@ -287,7 +287,7 @@ class BaseProvider(ABC):
             Tools in provider-specific format
         """
         # Strip internal fields that APIs don't accept
-        internal_fields = {'network'}
+        internal_fields = {'network', 'is_local'}
         cleaned = []
         for tool in tools:
             clean_tool = {k: v for k, v in tool.items() if k not in internal_fields}

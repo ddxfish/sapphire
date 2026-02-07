@@ -2,10 +2,16 @@
 import { fetchWithTimeout } from '../../shared/fetch.js';
 import { getInitData } from '../../shared/init-data.js';
 
-// Use init data for initial load
+let _initialLoad = true;
+
+// Use init data for first load, then fetch fresh from API
 export const getSpices = async () => {
-  const init = await getInitData();
-  return init.spices;
+  if (_initialLoad) {
+    _initialLoad = false;
+    const init = await getInitData();
+    return init.spices;
+  }
+  return fetchWithTimeout('/api/spices');
 };
 
 export const addSpice = (category, text) =>

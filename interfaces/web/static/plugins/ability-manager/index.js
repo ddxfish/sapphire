@@ -527,13 +527,20 @@ Using Toolsets:
     if (!confirm(`Delete user toolset "${selected}"?`)) return;
     
     try {
+      const wasActive = this.currentAbility?.name === selected;
       await API.deleteAbility(selected);
       showToast(`Deleted: ${selected}`, 'success');
+
+      // If we deleted the active toolset, switch to "none"
+      if (wasActive) {
+        await API.activateAbility('none');
+      }
       await this.refresh();
-      
-      // Select and activate current ability
-      if (this.currentAbility?.name) {
-        this.elements.select.value = this.currentAbility.name;
+
+      // If deleted was active, ensure dropdown shows the fallback
+      if (wasActive) {
+        this.elements.select.value = 'none';
+        updatePillDirect('none', 0);
       }
       await updateScene();
     } catch (e) {

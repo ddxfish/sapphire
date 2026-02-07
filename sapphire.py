@@ -122,25 +122,39 @@ class VoiceChatSystem:
 
     def _prime_default_prompt(self):
         try:
-            # Read default prompt name from chat_defaults.json
             import json
             from pathlib import Path
-            chat_defaults_path = Path(__file__).parent / "user" / "settings" / "chat_defaults.json"
-            
-            prompt_name = 'default'  # fallback if file missing
-            if chat_defaults_path.exists():
-                with open(chat_defaults_path, 'r', encoding='utf-8') as f:
 
-                    defaults = json.load(f)
-                    prompt_name = defaults.get('prompt', 'default')
-            
+            # Priority 1: active chat's saved prompt setting
+            prompt_name = None
+            try:
+                chat_settings = self.llm_chat.session_manager.get_chat_settings()
+                prompt_name = chat_settings.get('prompt')
+                if prompt_name:
+                    logger.info(f"Startup prompt from chat settings: '{prompt_name}'")
+            except Exception:
+                pass
+
+            # Priority 2: chat_defaults.json
+            if not prompt_name:
+                chat_defaults_path = Path(__file__).parent / "user" / "settings" / "chat_defaults.json"
+                if chat_defaults_path.exists():
+                    with open(chat_defaults_path, 'r', encoding='utf-8') as f:
+                        defaults = json.load(f)
+                        prompt_name = defaults.get('prompt', 'default')
+                else:
+                    prompt_name = 'default'
+                logger.info(f"Startup prompt from defaults: '{prompt_name}'")
+
             prompt_details = prompts.get_prompt(prompt_name)
             if not prompt_details:
                 raise ValueError(f"Prompt '{prompt_name}' not found")
-            
+
             content = prompt_details['content'] if isinstance(prompt_details, dict) else str(prompt_details)
             self.llm_chat.set_system_prompt(content)
             prompts.set_active_preset_name(prompt_name)
+            if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
+                prompts.apply_scenario(prompt_name)
             logger.info(f"System primed with '{prompt_name}' prompt.")
         except Exception as e:
             logger.error(f"FATAL: Could not prime default prompt: {e}")
@@ -166,19 +180,8 @@ class VoiceChatSystem:
             if "speed" in settings:
                 self.tts.set_speed(settings["speed"])
             
-            if "prompt" in settings:
-                from core.modules.system import prompts
-                prompt_name = settings["prompt"]
-                prompt_data = prompts.get_prompt(prompt_name)
-                if prompt_data:
-                    content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
-                    if content:
-                        self.llm_chat.set_system_prompt(content)
-                        prompts.set_active_preset_name(prompt_name)
-                        
-                        if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
-                            prompts.apply_scenario(prompt_name)
-            
+            # Prompt already handled by _prime_default_prompt (checks chat settings first)
+
             if "ability" in settings:
                 ability_name = settings["ability"]
                 self.llm_chat.function_manager.update_enabled_functions([ability_name])

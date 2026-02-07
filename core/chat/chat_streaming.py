@@ -296,6 +296,12 @@ class StreamingChat:
                         "tokens_per_second": round(total_tokens / duration, 1) if duration > 0 else 0
                     }
                 
+                # Generate fallback IDs for tool calls missing them (GLM, some OpenAI-compat APIs)
+                for tc in tool_calls:
+                    if tc.get("function", {}).get("name") and not tc.get("id"):
+                        tc["id"] = f"call_{iteration}_{tool_calls.index(tc)}"
+                        logger.info(f"[TOOL] Generated fallback ID for tool call: {tc['function']['name']}")
+
                 if tool_calls and any(tc.get("id") and tc.get("function", {}).get("name") for tc in tool_calls):
                     logger.info(f"[TOOL] Processing {len(tool_calls)} tool call(s)")
                     
@@ -464,15 +470,15 @@ class StreamingChat:
                         continue
 
                     logger.info(f"[OK] Final response received after {iteration + 1} iteration(s)")
-                    
+
                     full_content = current_content
-                    
+
                     if has_prefill:
                         full_content = prefill + full_content
-                    
+
                     if force_prefill:
                         full_content = force_prefill + full_content
-                    
+
                     # Save final response with thinking separated
                     self.main_chat.session_manager.add_assistant_final(
                         content=full_content,

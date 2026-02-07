@@ -1721,6 +1721,8 @@ async def load_prompt(name: str, request: Request, _=Depends(require_login), sys
     prompts.set_active_preset_name(name)
     if hasattr(prompts.prompt_manager, 'scenario_presets') and name in prompts.prompt_manager.scenario_presets:
         prompts.apply_scenario(name)
+    # Persist to chat settings so it survives restart
+    system.llm_chat.session_manager.update_chat_settings({"prompt": name})
     return {"status": "success", "name": name}
 
 
@@ -1769,17 +1771,23 @@ async def list_abilities(request: Request, _=Depends(require_login), system=Depe
     for name in sorted(abilities_set):
         if name == "all":
             func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
+            ability_type = "builtin"
         elif name == "none":
             func_list = []
+            ability_type = "builtin"
         elif name in function_manager.function_modules:
             func_list = function_manager.function_modules[name]['available_functions']
+            ability_type = "module"
         elif toolset_manager.toolset_exists(name):
             func_list = toolset_manager.get_toolset_functions(name)
+            ability_type = "user"
         else:
             func_list = []
+            ability_type = "unknown"
 
         abilities.append({
             "name": name,
+            "type": ability_type,
             "function_count": len(func_list),
             "functions": func_list,
             "has_network_tools": bool(set(func_list) & network_functions)
@@ -1799,6 +1807,8 @@ async def activate_ability(ability_name: str, request: Request, _=Depends(requir
     """Activate an ability."""
     system.llm_chat.function_manager.update_enabled_functions([ability_name])
     publish(Events.ABILITY_CHANGED, {"name": ability_name})
+    # Persist to chat settings so it survives restart
+    system.llm_chat.session_manager.update_chat_settings({"ability": ability_name})
     return {"status": "success", "ability": ability_name}
 
 
@@ -1862,9 +1872,8 @@ async def delete_ability(ability_name: str, request: Request, _=Depends(require_
 # SPICES ROUTES (from spices_api.py)
 # =============================================================================
 
-@app.get("/api/spices")
-async def list_spices(request: Request, _=Depends(require_login)):
-    """List all spices."""
+def _build_spice_response():
+    """Build standardized spice response dict."""
     spices_raw = prompts.prompt_manager.spices
     disabled_cats = prompts.prompt_manager.disabled_categories
     categories = {}
@@ -1874,46 +1883,20 @@ async def list_spices(request: Request, _=Depends(require_login)):
             'count': len(spice_list),
             'enabled': cat_name not in disabled_cats
         }
-    return {"categories": categories}
+    return {
+        "categories": categories,
+        "category_count": len(categories),
+        "total_spices": sum(c['count'] for c in categories.values())
+    }
 
 
-@app.post("/api/spices")
-async def add_spice(request: Request, _=Depends(require_login)):
-    """Add a new spice."""
-    data = await request.json()
-    category = data.get('category')
-    content = data.get('content')
-    if not category or not content:
-        raise HTTPException(status_code=400, detail="Category and content required")
-    if prompts.prompt_manager.add_spice(category, content):
-        publish(Events.SPICE_CHANGED, {"category": category, "action": "added"})
-        return {"status": "success"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to add spice")
+@app.get("/api/spices")
+async def list_spices(request: Request, _=Depends(require_login)):
+    """List all spices."""
+    return _build_spice_response()
 
 
-@app.put("/api/spices/{category}/{index}")
-async def update_spice(category: str, index: int, request: Request, _=Depends(require_login)):
-    """Update a spice."""
-    data = await request.json()
-    content = data.get('content')
-    if prompts.prompt_manager.update_spice(category, index, content):
-        publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "updated"})
-        return {"status": "success"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to update spice")
-
-
-@app.delete("/api/spices/{category}/{index}")
-async def delete_spice(category: str, index: int, request: Request, _=Depends(require_login)):
-    """Delete a spice."""
-    if prompts.prompt_manager.delete_spice(category, index):
-        publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "deleted"})
-        return {"status": "success"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to delete spice")
-
-
+# Category routes MUST come before wildcard /api/spices/{category}/{index}
 @app.post("/api/spices/category")
 async def create_spice_category(request: Request, _=Depends(require_login)):
     """Create a spice category."""
@@ -1921,19 +1904,24 @@ async def create_spice_category(request: Request, _=Depends(require_login)):
     name = data.get('name')
     if not name:
         raise HTTPException(status_code=400, detail="Name required")
-    if prompts.prompt_manager.create_category(name):
-        return {"status": "success", "name": name}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to create category")
+    spices = prompts.prompt_manager._spices
+    if name in spices:
+        raise HTTPException(status_code=409, detail=f"Category '{name}' already exists")
+    spices[name] = []
+    prompts.prompt_manager.save_spices()
+    return {"status": "success", "name": name}
 
 
 @app.delete("/api/spices/category/{name}")
 async def delete_spice_category(name: str, request: Request, _=Depends(require_login)):
     """Delete a spice category."""
-    if prompts.prompt_manager.delete_category(name):
-        return {"status": "success", "name": name}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to delete category")
+    spices = prompts.prompt_manager._spices
+    if name not in spices:
+        raise HTTPException(status_code=404, detail=f"Category '{name}' not found")
+    del spices[name]
+    prompts.prompt_manager._disabled_categories.discard(name)
+    prompts.prompt_manager.save_spices()
+    return {"status": "success", "name": name}
 
 
 @app.put("/api/spices/category/{name}")
@@ -1943,16 +1931,29 @@ async def rename_spice_category(name: str, request: Request, _=Depends(require_l
     new_name = data.get('new_name')
     if not new_name:
         raise HTTPException(status_code=400, detail="New name required")
-    if prompts.prompt_manager.rename_category(name, new_name):
-        return {"status": "success", "old_name": name, "new_name": new_name}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to rename category")
+    spices = prompts.prompt_manager._spices
+    if name not in spices:
+        raise HTTPException(status_code=404, detail=f"Category '{name}' not found")
+    spices[new_name] = spices.pop(name)
+    # Transfer disabled state
+    if name in prompts.prompt_manager._disabled_categories:
+        prompts.prompt_manager._disabled_categories.discard(name)
+        prompts.prompt_manager._disabled_categories.add(new_name)
+    prompts.prompt_manager.save_spices()
+    return {"status": "success", "old_name": name, "new_name": new_name}
 
 
 @app.post("/api/spices/category/{name}/toggle")
 async def toggle_spice_category(name: str, request: Request, _=Depends(require_login)):
     """Toggle a spice category."""
-    enabled = prompts.prompt_manager.toggle_category(name)
+    disabled = prompts.prompt_manager._disabled_categories
+    if name in disabled:
+        disabled.discard(name)
+        enabled = True
+    else:
+        disabled.add(name)
+        enabled = False
+    prompts.prompt_manager.save_spices()
     publish(Events.SPICE_CHANGED, {"category": name, "enabled": enabled})
     return {"status": "success", "category": name, "enabled": enabled}
 
@@ -1960,7 +1961,51 @@ async def toggle_spice_category(name: str, request: Request, _=Depends(require_l
 @app.post("/api/spices/reload")
 async def reload_spices(request: Request, _=Depends(require_login)):
     """Reload spices from disk."""
-    prompts.prompt_manager.reload_spices()
+    prompts.prompt_manager._load_spices()
+    return {"status": "success"}
+
+
+# Individual spice CRUD - wildcard routes AFTER category routes
+@app.post("/api/spices")
+async def add_spice(request: Request, _=Depends(require_login)):
+    """Add a new spice."""
+    data = await request.json()
+    category = data.get('category')
+    content = data.get('content') or data.get('text')
+    if not category or not content:
+        raise HTTPException(status_code=400, detail="Category and content required")
+    spices = prompts.prompt_manager._spices
+    if category not in spices:
+        raise HTTPException(status_code=404, detail=f"Category '{category}' not found")
+    spices[category].append(content)
+    prompts.prompt_manager.save_spices()
+    publish(Events.SPICE_CHANGED, {"category": category, "action": "added"})
+    return {"status": "success"}
+
+
+@app.put("/api/spices/{category}/{index}")
+async def update_spice(category: str, index: int, request: Request, _=Depends(require_login)):
+    """Update a spice."""
+    data = await request.json()
+    content = data.get('content') or data.get('text')
+    spices = prompts.prompt_manager._spices
+    if category not in spices or index < 0 or index >= len(spices[category]):
+        raise HTTPException(status_code=404, detail="Spice not found")
+    spices[category][index] = content
+    prompts.prompt_manager.save_spices()
+    publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "updated"})
+    return {"status": "success"}
+
+
+@app.delete("/api/spices/{category}/{index}")
+async def delete_spice(category: str, index: int, request: Request, _=Depends(require_login)):
+    """Delete a spice."""
+    spices = prompts.prompt_manager._spices
+    if category not in spices or index < 0 or index >= len(spices[category]):
+        raise HTTPException(status_code=404, detail="Spice not found")
+    spices[category].pop(index)
+    prompts.prompt_manager.save_spices()
+    publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "deleted"})
     return {"status": "success"}
 
 
