@@ -33,7 +33,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": "Save important information to long-term memory for future conversations",
+            "description": "Save important information to long-term memory for future conversations. Max 512 characters - be concise.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -282,11 +282,16 @@ def _format_time_ago(timestamp_str: str) -> str:
         return ""
 
 
+MAX_MEMORY_LENGTH = 512
+
 def _save_memory(content: str, importance: int = 5, scope: str = 'default') -> tuple:
     """Store a new memory in the given scope."""
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
+
+        if len(content) > MAX_MEMORY_LENGTH:
+            return f"Memory too long ({len(content)} chars). Max is {MAX_MEMORY_LENGTH}. Write a shorter, more concise memory.", False
         
         importance = max(1, min(10, importance))
         keywords = _extract_keywords(content)
