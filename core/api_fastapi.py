@@ -1687,22 +1687,27 @@ async def get_prompt_components(request: Request, _=Depends(require_login)):
 async def save_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
     """Save a prompt component."""
     data = await request.json()
-    content = data.get('content', '')
-    if prompts.prompt_manager.save_component(comp_type, key, content):
-        publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
-        return {"status": "success"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to save component")
+    value = data.get('value', '')
+    components = prompts.prompt_manager.components
+    if comp_type not in components:
+        components[comp_type] = {}
+    components[comp_type][key] = value
+    prompts.prompt_manager.save_components()
+    publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
+    return {"status": "success", "components": components}
 
 
 @app.delete("/api/prompts/components/{comp_type}/{key}")
 async def delete_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
     """Delete a prompt component."""
-    if prompts.prompt_manager.delete_component(comp_type, key):
+    components = prompts.prompt_manager.components
+    if comp_type in components and key in components[comp_type]:
+        del components[comp_type][key]
+        prompts.prompt_manager.save_components()
         publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
-        return {"status": "success"}
+        return {"status": "success", "components": components}
     else:
-        raise HTTPException(status_code=500, detail="Failed to delete component")
+        raise HTTPException(status_code=404, detail=f"Component '{comp_type}/{key}' not found")
 
 
 @app.post("/api/prompts/{name}/load")
