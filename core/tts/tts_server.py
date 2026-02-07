@@ -98,11 +98,11 @@ def clean_text(text):
     text = re.sub(r'<[^>]+>', '', text)
     
     # Stage 3: Replace problematic punctuation
-    text = re.sub(r'[—–―\-]', ' ', text)
+    text = re.sub(r'[—–―]', ', ', text)  # Em/en dashes → comma for TTS pause
     text = re.sub(r'…+', '.', text)
     text = re.sub(r'\.{3,}', '.', text)
-    text = re.sub(r'[""„‚]', '"', text)
-    text = re.sub(r'[''‛]', "'", text)
+    text = re.sub(r'[\u201C\u201D\u201E\u201A]', '"', text)  # Smart double quotes
+    text = re.sub(r'[\u2018\u2019\u201B]', "'", text)  # Smart single quotes/apostrophes
     text = re.sub(r'[•·‧∙]', ' ', text)
     text = re.sub(r'[⁄∕]', '/', text)
     text = re.sub(r'[‹›«»]', '"', text)
