@@ -109,8 +109,8 @@ export default class ContinuityEditor {
 
           <div class="continuity-field">
             <label for="task-chat-target">Chat Name</label>
-            <input type="text" id="task-chat-target" value="${this.escapeHtml(t.chat_target || '')}" placeholder="Leave blank for auto-dated name" />
-            <span class="continuity-field-hint">Blank = new dated chat each run. Filled = reuse same chat.</span>
+            <input type="text" id="task-chat-target" value="${this.escapeHtml(t.chat_target || '')}" placeholder="Leave blank for ephemeral" />
+            <span class="continuity-field-hint">Blank = ephemeral (no chat, runs quietly). Named = persists to that chat.</span>
           </div>
 
           <div class="continuity-field-row">
@@ -166,11 +166,6 @@ export default class ContinuityEditor {
           <div class="continuity-checkbox">
             <input type="checkbox" id="task-tts" ${t.tts_enabled !== false ? 'checked' : ''} />
             <label for="task-tts">Enable TTS (speak responses)</label>
-          </div>
-
-          <div class="continuity-checkbox">
-            <input type="checkbox" id="task-background" ${t.background ? 'checked' : ''} />
-            <label for="task-background">Background task (no UI switching, ephemeral)</label>
           </div>
 
           <div class="continuity-checkbox">
@@ -305,7 +300,6 @@ export default class ContinuityEditor {
       model: modelValue,
       memory_scope: this.el.querySelector('#task-memory-scope').value,
       tts_enabled: this.el.querySelector('#task-tts').checked,
-      background: this.el.querySelector('#task-background').checked,
       inject_datetime: this.el.querySelector('#task-inject-datetime').checked
     };
 

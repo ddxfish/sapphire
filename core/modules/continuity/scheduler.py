@@ -170,10 +170,9 @@ class ContinuityScheduler:
             "model": data.get("model", ""),
             "prompt": data.get("prompt", "default"),
             "toolset": data.get("toolset", "none"),
-            "chat_target": data.get("chat_target", ""),  # blank = ephemeral (no save)
+            "chat_target": data.get("chat_target", ""),  # blank = ephemeral (no chat, no UI)
             "initial_message": data.get("initial_message", "Hello."),
             "tts_enabled": data.get("tts_enabled", True),
-            "background": data.get("background", False),  # run in background, no UI switching
             "inject_datetime": data.get("inject_datetime", False),
             "memory_scope": data.get("memory_scope", "default"),
             "cooldown_minutes": data.get("cooldown_minutes", 1),
@@ -213,7 +212,7 @@ class ContinuityScheduler:
             allowed = {
                 "name", "enabled", "schedule", "chance", "iterations",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "tts_enabled", "background", "inject_datetime", "memory_scope", "cooldown_minutes"
+                "initial_message", "tts_enabled", "inject_datetime", "memory_scope", "cooldown_minutes"
             }
             for key in allowed:
                 if key in data:

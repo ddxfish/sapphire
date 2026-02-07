@@ -6,7 +6,7 @@ Switches chat context, applies settings, runs LLM, restores original state.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +42,14 @@ class ContinuityExecutor:
             "responses": [],
             "errors": []
         }
-        
-        background = task.get("background", False)
-        
-        # Background mode: completely isolated, no session/UI impact
-        if background:
+
+        chat_target = task.get("chat_target", "").strip()
+
+        # Blank chat_target = ephemeral: isolated, no chat creation, no UI impact
+        if not chat_target:
             return self._run_background(task, result)
-        
-        # Foreground mode: switches chat context (original behavior)
+
+        # Named chat_target = foreground: switches to that chat, runs, restores
         return self._run_foreground(task, result)
     
     def _run_background(self, task: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
@@ -107,43 +107,36 @@ class ContinuityExecutor:
         return result
     
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
-        """Run task in foreground mode - switches chat context."""
+        """Run task in foreground mode - switches to named chat, runs, restores original."""
         session_manager = self.system.llm_chat.session_manager
         original_chat = session_manager.get_active_chat_name()
-        
-        # Determine target chat - None means ephemeral
-        target_chat = self._resolve_target_chat(task)
-        ephemeral = target_chat is None
-        
-        if ephemeral:
-            # Ephemeral mode: use temp chat that will be deleted after
-            target_chat = f"_continuity_tmp_{task.get('id', 'unknown')}"
-        
+        target_chat = task.get("chat_target", "").strip()
+
         try:
-            logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}' (ephemeral={ephemeral})")
-            
+            logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}'")
+
             # Create chat if it doesn't exist
             existing_chats = [c["name"] for c in session_manager.list_chat_files()]
             if target_chat not in existing_chats:
                 logger.info(f"[Continuity] Creating new chat: {target_chat}")
                 if not session_manager.create_chat(target_chat):
                     raise RuntimeError(f"Failed to create chat: {target_chat}")
-            
+
             # Switch to target chat
             if not session_manager.set_active_chat(target_chat):
                 raise RuntimeError(f"Failed to switch to chat: {target_chat}")
-            
+
             # Apply task settings to chat
             self._apply_task_settings(task, session_manager)
-            
+
             # Run iterations
             iterations = max(1, task.get("iterations", 1))
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
-            
+
             for i in range(iterations):
                 msg = initial_message if i == 0 else "[continue]"
-                
+
                 try:
                     response = self.system.process_llm_query(msg, skip_tts=not tts_enabled)
                     result["responses"].append({
@@ -155,53 +148,29 @@ class ContinuityExecutor:
                     error_msg = f"Iteration {i+1} failed: {e}"
                     logger.error(f"[Continuity] {error_msg}")
                     result["errors"].append(error_msg)
-            
+
             result["success"] = len(result["errors"]) == 0
-            
+
         except Exception as e:
             error_msg = f"Foreground task failed: {e}"
             logger.error(f"[Continuity] {error_msg}", exc_info=True)
             result["errors"].append(error_msg)
-            
+
         finally:
             # Always restore original chat context
             try:
                 if session_manager.get_active_chat_name() != original_chat:
                     session_manager.set_active_chat(original_chat)
                     logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
-                    
-                    # Publish chat switch event so UI updates
+
                     from core.event_bus import publish, Events
                     publish(Events.CHAT_SWITCHED, {"chat": original_chat})
             except Exception as e:
                 logger.error(f"[Continuity] Failed to restore chat context: {e}")
                 result["errors"].append(f"Context restore failed: {e}")
-            
-            # Delete ephemeral chat
-            if ephemeral:
-                try:
-                    session_manager.delete_chat(target_chat)
-                    logger.debug(f"[Continuity] Deleted ephemeral chat: {target_chat}")
-                except Exception as e:
-                    logger.warning(f"[Continuity] Failed to delete ephemeral chat: {e}")
-        
+
         result["completed_at"] = datetime.now().isoformat()
         return result
-    
-    def _resolve_target_chat(self, task: Dict[str, Any]) -> Optional[str]:
-        """
-        Determine which chat to use for the task.
-        
-        If chat_target is set: use that name (reuses same chat)
-        If chat_target is blank: return None for ephemeral mode (no save)
-        """
-        chat_target = task.get("chat_target", "").strip()
-        
-        if chat_target:
-            return chat_target
-        else:
-            # Blank = ephemeral, no persistence
-            return None
     
     def _apply_task_settings(self, task: Dict[str, Any], session_manager) -> None:
         """Apply task's prompt/ability/LLM/memory/datetime settings to current chat."""
