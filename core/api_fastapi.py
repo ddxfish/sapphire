@@ -1133,8 +1133,8 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         if audio_data:
             return StreamingResponse(
                 io.BytesIO(audio_data),
-                media_type='audio/wav',
-                headers={'Content-Disposition': 'attachment; filename="output.wav"'}
+                media_type='audio/ogg',
+                headers={'Content-Disposition': 'attachment; filename="output.ogg"'}
             )
         else:
             raise HTTPException(status_code=503, detail="TTS generation failed")
