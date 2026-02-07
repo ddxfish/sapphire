@@ -317,13 +317,13 @@ class TestPromptManagerSaving:
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
             mgr.USER_DIR = prompts_dir
-            mgr._monoliths = {"test_mono": "Test prompt content"}
-            
+            mgr._monoliths = {"test_mono": {"content": "Test prompt content", "privacy_required": False}}
+
             mgr.save_monoliths()
-            
+
             mono_file = prompts_dir / "prompt_monoliths.json"
             saved = json.loads(mono_file.read_text(encoding='utf-8'))
-            assert saved["test_mono"] == "Test prompt content"
+            assert saved["test_mono"]["content"] == "Test prompt content"
     
     def test_save_components(self, tmp_path):
         """save_components should write to prompt_pieces.json."""
@@ -401,13 +401,13 @@ class TestPromptManagerEncoding:
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
             mgr.USER_DIR = prompts_dir
-            mgr._monoliths = {"chinese": "你好世界"}
-            
+            mgr._monoliths = {"chinese": {"content": "你好世界", "privacy_required": False}}
+
             mgr.save_monoliths()
-            
+
             mono_file = prompts_dir / "prompt_monoliths.json"
             saved = json.loads(mono_file.read_text(encoding='utf-8'))
-            assert saved["chinese"] == "你好世界"
+            assert saved["chinese"]["content"] == "你好世界"
 
 
 class TestPromptManagerFileWatcher:
@@ -544,7 +544,7 @@ class TestPromptCrud:
     def test_get_prompt_monolith(self):
         """get_prompt should return monolith with content."""
         with patch('core.modules.system.prompt_crud.prompt_manager') as mock_mgr:
-            mock_mgr.monoliths = {"test": "Test prompt content"}
+            mock_mgr.monoliths = {"test": {"content": "Test prompt content", "privacy_required": False}}
             mock_mgr.scenario_presets = {}
             
             with patch('core.modules.system.prompt_crud.prompt_state') as mock_state:

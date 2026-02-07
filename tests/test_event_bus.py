@@ -174,7 +174,8 @@ class TestEventBusSubscribeReplay:
         def collector(gen):
             for event in gen:
                 received_events.append(event)
-                if len(received_events) >= 3:
+                # connected + 2 replayed + 1 live = 4
+                if len(received_events) >= 4:
                     break
 
         # Subscribe with replay=True in a thread
@@ -189,8 +190,9 @@ class TestEventBusSubscribeReplay:
         bus.publish("live_event")
         t.join(timeout=1)
 
-        # Should have received the 2 replayed + 1 live event
+        # Should have received connected + 2 replayed + 1 live event
         event_types = [e["type"] for e in received_events]
+        assert "connected" in event_types
         assert "pre_event_1" in event_types
         assert "pre_event_2" in event_types
         assert "live_event" in event_types
