@@ -45,6 +45,7 @@ PROVIDER_METADATA = {
         'optional_fields': ['timeout'],
         'model_options': None,  # No model selection for LM Studio
         'is_local': True,
+        'privacy_check_whitelist': True,
         'default_timeout': 0.3,
     },
     'claude': {
@@ -105,6 +106,7 @@ PROVIDER_METADATA = {
         'optional_fields': ['timeout', 'reasoning_effort', 'reasoning_summary'],
         'model_options': None,  # Free-form model entry
         'is_local': False,
+        'privacy_check_whitelist': True,
         'default_timeout': 10.0,
         'supports_reasoning': True,
         'description': 'Generic Responses API endpoint (Open Responses standard)',
@@ -116,6 +118,7 @@ PROVIDER_METADATA = {
         'optional_fields': ['timeout'],
         'model_options': None,  # Free-form model entry
         'is_local': False,
+        'privacy_check_whitelist': True,
         'default_timeout': 10.0,
     },
 }
@@ -318,13 +321,18 @@ def get_first_available_provider(
             logger.debug(f"Provider '{provider_key}' excluded from Auto mode (use_as_fallback=False)")
             continue
 
-        # Privacy mode: only allow local providers
+        # Privacy mode: only allow local/whitelisted providers
         try:
-            from core.privacy import is_privacy_mode
+            from core.privacy import is_privacy_mode, is_allowed_endpoint
             if is_privacy_mode():
                 metadata = PROVIDER_METADATA.get(provider_key, {})
-                if not metadata.get('is_local', False):
-                    logger.debug(f"Provider '{provider_key}' excluded in privacy mode (not local)")
+                if metadata.get('privacy_check_whitelist'):
+                    base_url = config.get('base_url', '')
+                    if not is_allowed_endpoint(base_url):
+                        logger.debug(f"Provider '{provider_key}' excluded in privacy mode (base_url not in whitelist)")
+                        continue
+                elif not metadata.get('is_local', False):
+                    logger.debug(f"Provider '{provider_key}' excluded in privacy mode (cloud provider)")
                     continue
         except ImportError:
             pass

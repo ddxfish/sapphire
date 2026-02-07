@@ -606,13 +606,19 @@ class LLMChat:
             if chat_primary and chat_primary != 'auto':
                 # Privacy mode check for explicitly selected provider
                 try:
-                    from core.privacy import is_privacy_mode
+                    from core.privacy import is_privacy_mode, is_allowed_endpoint
                     from core.chat.llm_providers import PROVIDER_METADATA
                     if is_privacy_mode():
                         metadata = PROVIDER_METADATA.get(chat_primary, {})
-                        if not metadata.get('is_local', False):
-                            raise ConnectionError(f"Provider '{chat_primary}' is not local and blocked in privacy mode. Use a local LLM or disable privacy mode.")
-                except ImportError:
+                        if metadata.get('privacy_check_whitelist'):
+                            base_url = providers_config.get(chat_primary, {}).get('base_url', '')
+                            if not is_allowed_endpoint(base_url):
+                                raise ConnectionError(f"Provider '{chat_primary}' base URL is not in the privacy whitelist. Update whitelist or disable privacy mode.")
+                        elif not metadata.get('is_local', False):
+                            raise ConnectionError(f"Provider '{chat_primary}' is a cloud provider and blocked in privacy mode. Use a local LLM or disable privacy mode.")
+                except ConnectionError:
+                    raise
+                except Exception:
                     pass
 
                 provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT)
