@@ -1,6 +1,7 @@
 // tabs/voice.js - Voice feature setup (TTS, STT, Wakeword)
 
 import { checkPackages, updateSetting } from '../setup-api.js';
+import { updateScene } from '../../../features/scene.js';
 
 let packageStatus = {};
 
@@ -91,6 +92,9 @@ export default {
           } else {
             card.classList.remove('enabled');
           }
+
+          // Immediately refresh UI state (mic button, volume row, etc.)
+          updateScene();
         } catch (err) {
           console.error('Failed to update setting:', err);
           e.target.checked = !enabled;

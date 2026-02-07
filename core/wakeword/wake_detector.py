@@ -219,10 +219,19 @@ class WakeWordDetector:
                 
     def wake_word_detected(self):
         """Handle wake word detection by recording and processing user speech."""
+        from core.stt.utils import can_transcribe
+
+        # Shared guard: skip if STT disabled or not initialized
+        ok, reason = can_transcribe(self.system.whisper_client)
+        if not ok:
+            logger.info(f"Wakeword fired but STT unavailable: {reason}")
+            publish(Events.STT_ERROR, {"message": f"Wakeword heard — {reason}"})
+            return
+
         start_time = threading.local()
         start_time.value = time.time()
         logger.info("Wake word detected! Starting to listen...")
-        
+
         # Stop wakeword audio stream to avoid conflict with STT recorder
         # Both use the same audio device - running simultaneously causes heap corruption
         if self.audio_recorder:

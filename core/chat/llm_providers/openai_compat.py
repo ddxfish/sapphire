@@ -506,10 +506,15 @@ class OpenAICompatProvider(BaseProvider):
         message = choice.message
         
         # Check for reasoning_content (Fireworks reasoning models)
+        # Prepend as <think> tags to match streaming behavior
         reasoning = getattr(message, 'reasoning_content', None)
         if reasoning:
             logger.info(f"[REASONING] Non-stream response has reasoning_content ({len(reasoning)} chars)")
-        
+            content = message.content or ""
+            message_content = f"<think>{reasoning}</think>\n\n{content}"
+        else:
+            message_content = message.content
+
         # Parse tool calls if present
         tool_calls = []
         if message.tool_calls:
@@ -530,7 +535,7 @@ class OpenAICompatProvider(BaseProvider):
             }
         
         return LLMResponse(
-            content=message.content,
+            content=message_content,
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason,
             usage=usage

@@ -929,6 +929,20 @@ body:not(.sidebar-collapsed) #toggle-sidebar {
     animation: tts-pulse 2.5s ease-in-out infinite;
 }
 #mic-btn.tts-playing:hover { background: var(--danger); border-color: var(--danger); }
+/* STT disabled - grayed out with line-through effect */
+#mic-btn.stt-disabled:not(.tts-playing) {
+    opacity: 0.3;
+    cursor: not-allowed;
+    filter: grayscale(1);
+}
+#mic-btn.stt-disabled:not(.tts-playing):hover { background: var(--bg-secondary); border-color: var(--border); }
+#mic-btn.stt-disabled:not(.tts-playing):active { transform: none; }
+/* STT enabled but needs restart - amber indicator */
+#mic-btn.stt-needs-restart:not(.tts-playing) {
+    opacity: 0.5;
+    cursor: help;
+    border-color: var(--warning, orange);
+}
 
 /* Peaceful slow pulse for TTS stop button */
 @keyframes tts-pulse {

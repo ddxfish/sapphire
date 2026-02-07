@@ -1,24 +1,25 @@
 // features/mic.js - Mic button state, TTS detection, recording handlers
 import * as audio from '../audio.js';
-import { getElements, getIsProc } from '../core/state.js';
+import { getElements, getIsProc, getSttEnabled, getSttReady } from '../core/state.js';
 
 let micIconPollInterval = null;
 
 export function updateMicButtonState() {
     const { micBtn } = getElements();
     if (!micBtn) return;
-    
+
     // Check both browser TTS and local (server speaker) TTS
     const ttsActive = audio.isTtsPlaying() || audio.isLocalTtsPlaying();
-    
+
     if (ttsActive) {
         micBtn.classList.add('tts-playing');
         micBtn.textContent = '⏹';
         micBtn.title = 'Stop TTS';
     } else {
         micBtn.classList.remove('tts-playing');
-        micBtn.textContent = '🎤';
-        micBtn.title = 'Hold to record';
+        const canRecord = getSttEnabled() && getSttReady();
+        micBtn.textContent = canRecord ? '🎤' : '🎤';
+        micBtn.title = micBtn.dataset.sttTitle || 'Hold to record';
     }
 }
 
@@ -47,6 +48,9 @@ export async function handleMicPress() {
         return;
     }
     
+    // Block recording if STT is disabled or not initialized
+    if (!getSttEnabled() || !getSttReady()) return;
+
     // Normal recording behavior
     await audio.handlePress(micBtn);
 }

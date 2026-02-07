@@ -394,6 +394,7 @@ function initEventBus() {
     
     eventBus.on(eventBus.Events.STT_ERROR, (data) => {
         console.warn('[EventBus] STT error:', data);
+        if (data?.message) ui.showToast(data.message, 'error');
     });
     
     // Connect to server

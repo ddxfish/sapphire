@@ -25,6 +25,8 @@ from core.setup import get_password_hash, save_password_hash, verify_password, i
 from core.event_bus import publish, Events
 from core.modules.system import prompts
 from core.state_engine import STATE_TOOL_NAMES
+from core.stt.stt_null import NullWhisperClient as _NullWhisperClient
+from core.stt.utils import can_transcribe
 
 logger = logging.getLogger(__name__)
 
@@ -627,6 +629,8 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "state_tools": state_tools,
             "has_cloud_tools": has_cloud_tools,
             "tts_enabled": config.TTS_ENABLED,
+            "stt_enabled": config.STT_ENABLED,
+            "stt_ready": not isinstance(system.whisper_client, _NullWhisperClient),
             "tts_playing": tts_playing,
             "active_chat": active_chat,
             "is_streaming": is_streaming,
@@ -1147,6 +1151,10 @@ async def tts_stop(request: Request, _=Depends(require_login), system=Depends(ge
 @app.post("/api/transcribe")
 async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_login), system=Depends(get_system)):
     """Transcribe audio to text."""
+    ok, reason = can_transcribe(system.whisper_client)
+    if not ok:
+        raise HTTPException(status_code=400, detail=reason)
+
     fd, temp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(fd)
@@ -1335,6 +1343,7 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             tier = settings.validate_tier(key)
             settings.set(key, value, persist=persist)
             results.append({"key": key, "status": "success", "tier": tier})
+            publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
     return {"status": "success", "results": results}
@@ -1343,15 +1352,24 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
 @app.get("/api/settings/help")
 async def get_settings_help(request: Request, _=Depends(require_login)):
     """Get help text for settings."""
-    from core.settings_manager import settings
-    return {"help": settings.get_help()}
+    help_path = Path(__file__).parent / "settings_help.json"
+    try:
+        with open(help_path) as f:
+            return {"help": json.load(f)}
+    except Exception:
+        return {"help": {}}
 
 
 @app.get("/api/settings/help/{key}")
 async def get_setting_help(key: str, request: Request, _=Depends(require_login)):
     """Get help for a specific setting."""
-    from core.settings_manager import settings
-    help_text = settings.get_help(key)
+    help_path = Path(__file__).parent / "settings_help.json"
+    try:
+        with open(help_path) as f:
+            all_help = json.load(f)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not load help data")
+    help_text = all_help.get(key)
     if not help_text:
         raise HTTPException(status_code=404, detail=f"No help for '{key}'")
     return {"key": key, "help": help_text}

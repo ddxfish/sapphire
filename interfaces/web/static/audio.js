@@ -374,7 +374,9 @@ export const handleRelease = async (btn, triggerSendFn) => {
             
         } catch (e) {
             console.error('Transcription failed:', e);
-            ui.updateStatus('Transcription failed');
+            const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
+                ? e.message : 'Transcription failed';
+            ui.updateStatus(msg);
             setTimeout(() => ui.hideStatus(), 2000);
             return null;
         }

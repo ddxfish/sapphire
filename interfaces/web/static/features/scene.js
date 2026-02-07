@@ -1,7 +1,7 @@
 // features/scene.js - Scene state, prompt display, functions display
 import * as api from '../api.js';
 import * as audio from '../audio.js';
-import { getElements, setTtsEnabled, setPromptPrivacyRequired } from '../core/state.js';
+import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivacyRequired } from '../core/state.js';
 import { updateStoryIndicator } from './story.js';
 
 let hasCloudTools = false;
@@ -65,6 +65,26 @@ export async function updateScene() {
             setTtsEnabled(status.tts_enabled);
             const volumeRow = document.querySelector('.sidebar-row-3');
             if (volumeRow) volumeRow.style.display = status.tts_enabled ? '' : 'none';
+        }
+
+        if (status?.stt_enabled !== undefined) {
+            setSttEnabled(status.stt_enabled);
+            setSttReady(status.stt_ready ?? true);
+            const { micBtn } = getElements();
+            if (micBtn) {
+                const canRecord = status.stt_enabled && status.stt_ready;
+                const needsRestart = status.stt_enabled && !status.stt_ready;
+                micBtn.classList.toggle('stt-disabled', !canRecord);
+                micBtn.classList.toggle('stt-needs-restart', needsRestart);
+                // Update title for clarity
+                if (!status.stt_enabled) {
+                    micBtn.dataset.sttTitle = 'STT disabled';
+                } else if (!status.stt_ready) {
+                    micBtn.dataset.sttTitle = 'STT enabled — restart to load model';
+                } else {
+                    micBtn.dataset.sttTitle = 'Hold to record';
+                }
+            }
         }
         
         // Track cloud tools status
