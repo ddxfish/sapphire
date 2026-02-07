@@ -140,6 +140,8 @@ def execute(function_name, arguments, config):
 
         elif function_name == "notepad_append_lines":
             new_lines = arguments.get('lines', [])
+            if isinstance(new_lines, str):
+                new_lines = [new_lines]
             if not new_lines:
                 return "No lines provided to append.", False
             
