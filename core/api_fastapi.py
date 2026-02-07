@@ -770,15 +770,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 else:
                     avatars[role] = None
 
-        # Plugins config
-        plugins_config = {"enabled": [], "plugins": {}}
-        plugins_json = STATIC_DIR / 'plugins' / 'plugins.json'
-        if plugins_json.exists():
-            try:
-                with open(plugins_json) as f:
-                    plugins_config = json.load(f)
-            except Exception as e:
-                logger.warning(f"Could not load plugins.json: {e}")
+        # Plugins config (merged: static + user overrides)
+        plugins_config = _get_merged_plugins()
 
         return {
             "abilities": {
@@ -1667,6 +1660,19 @@ async def list_prompts(request: Request, _=Depends(require_login)):
     return {"prompts": prompt_list, "current": prompts.get_active_preset_name()}
 
 
+@app.post("/api/prompts/reload")
+async def reload_prompts(request: Request, _=Depends(require_login)):
+    """Reload prompts from disk."""
+    prompts.prompt_manager.reload()
+    return {"status": "success"}
+
+
+@app.get("/api/prompts/components")
+async def get_prompt_components(request: Request, _=Depends(require_login)):
+    """Get prompt components."""
+    return {"components": prompts.prompt_manager.components}
+
+
 @app.get("/api/prompts/{name}")
 async def get_prompt(name: str, request: Request, _=Depends(require_login)):
     """Get a specific prompt."""
@@ -1695,19 +1701,6 @@ async def delete_prompt(name: str, request: Request, _=Depends(require_login)):
         return {"status": "success", "name": name}
     else:
         raise HTTPException(status_code=500, detail="Failed to delete prompt")
-
-
-@app.post("/api/prompts/reload")
-async def reload_prompts(request: Request, _=Depends(require_login)):
-    """Reload prompts from disk."""
-    prompts.prompt_manager.reload()
-    return {"status": "success"}
-
-
-@app.get("/api/prompts/components")
-async def get_prompt_components(request: Request, _=Depends(require_login)):
-    """Get prompt components."""
-    return {"components": prompts.prompt_manager.components}
 
 
 @app.put("/api/prompts/components/{comp_type}/{key}")
