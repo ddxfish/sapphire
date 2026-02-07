@@ -279,6 +279,7 @@ def format_messages_for_display(messages):
             if isinstance(content, list):
                 text_parts = []
                 images = []
+                user_files = []
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "text":
@@ -288,11 +289,18 @@ def format_messages_for_display(messages):
                                 "data": block.get("data", ""),
                                 "media_type": block.get("media_type", "image/jpeg")
                             })
+                        elif block.get("type") == "file":
+                            user_files.append({
+                                "filename": block.get("filename", ""),
+                                "text": block.get("text", "")
+                            })
                     elif isinstance(block, str):
                         text_parts.append(block)
                 user_msg["content"] = " ".join(text_parts)
                 if images:
                     user_msg["images"] = images
+                if user_files:
+                    user_msg["files"] = user_files
             else:
                 user_msg["content"] = content
 
@@ -458,13 +466,14 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     prefill = data.get('prefill')
     skip_user_message = data.get('skip_user_message', False)
     images = data.get('images', [])
+    files = data.get('files', [])
 
     system.llm_chat.streaming_chat.cancel_flag = False
 
     def generate():
         try:
             chunk_count = 0
-            for event in system.llm_chat.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images):
+            for event in system.llm_chat.chat_stream(data['text'], prefill=prefill, skip_user_message=skip_user_message, images=images, files=files):
                 if system.llm_chat.streaming_chat.cancel_flag:
                     logger.info(f"STREAMING CANCELLED at chunk {chunk_count}")
                     yield f"data: {json.dumps({'cancelled': True})}\n\n"

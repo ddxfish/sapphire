@@ -208,10 +208,10 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
 // PUBLIC API - MESSAGE OPERATIONS
 // =============================================================================
 
-export const addUserMessage = (txt, images = null) => {
+export const addUserMessage = (txt, images = null, files = null) => {
     const cnt = chat.querySelectorAll('.message').length;
     const msgData = { role: 'user', content: txt };
-    
+
     // Add images for display if present
     if (images && images.length > 0) {
         msgData.images = images.map(img => ({
@@ -219,7 +219,15 @@ export const addUserMessage = (txt, images = null) => {
             media_type: img.media_type
         }));
     }
-    
+
+    // Add files for display if present
+    if (files && files.length > 0) {
+        msgData.files = files.map(f => ({
+            filename: f.filename,
+            text: f.text
+        }));
+    }
+
     const { clone } = createMessage(msgData, cnt, cnt + 1, false);
     chat.appendChild(clone);
     scrollToBottomIfSticky(true);

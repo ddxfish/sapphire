@@ -31,7 +31,7 @@ class StreamingChat:
             finally:
                 self.current_stream = None
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
         - {"type": "stream_started"} immediately when processing begins
@@ -42,14 +42,15 @@ class StreamingChat:
         - {"type": "iteration_start", "iteration": N} before each LLM call
         - {"type": "reload"} for page reload signal
         - str for legacy compatibility (module responses, prefills)
-        
+
         Args:
             user_input: Text input from user
             prefill: Optional assistant prefill for continue mode
             skip_user_message: Don't add user message to history (continue mode)
-            images: Optional list of {"type": "image", "data": "...", "media_type": "..."} 
+            images: Optional list of {"type": "image", "data": "...", "media_type": "..."}
+            files: Optional list of {"filename": "...", "text": "..."}
         """
-        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, images={len(images) if images else 0}")
+        logger.info(f"[START] [STREAMING START] cancel_flag={self.cancel_flag}, prefill={bool(prefill)}, skip_user={skip_user_message}, images={len(images) if images else 0}, files={len(files) if files else 0}")
         
         # Publish typing start event
         self.is_streaming = True
@@ -97,13 +98,19 @@ class StreamingChat:
             # Update state engine FIRST (before building messages) based on current settings
             self.main_chat._update_state_engine()
             
-            messages = self.main_chat._build_base_messages(user_input, images=images)
-            
+            messages = self.main_chat._build_base_messages(user_input, images=images, files=files)
+
             if not skip_user_message:
-                # Build content list if images present, otherwise just text
-                if images:
+                # Build content list if files or images present, otherwise just text
+                if files or images:
                     user_content = [{"type": "text", "text": user_input}]
-                    for img in images:
+                    for f in (files or []):
+                        user_content.append({
+                            "type": "file",
+                            "filename": f.get("filename", ""),
+                            "text": f.get("text", "")
+                        })
+                    for img in (images or []):
                         user_content.append({
                             "type": "image",
                             "data": img.get("data", ""),

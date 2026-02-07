@@ -16,6 +16,24 @@ from .llm_providers import get_provider, get_provider_for_url, get_provider_by_k
 
 logger = logging.getLogger(__name__)
 
+# Extension → language map for fenced code blocks
+TEXT_EXTENSIONS = {
+    '.py': 'python', '.txt': 'text', '.md': 'markdown',
+    '.js': 'javascript', '.ts': 'typescript', '.json': 'json',
+    '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml',
+    '.ini': 'ini', '.cfg': 'ini', '.conf': 'ini',
+    '.sh': 'bash', '.bash': 'bash',
+    '.html': 'html', '.css': 'css', '.xml': 'xml',
+    '.csv': 'csv', '.log': 'text', '.env': 'bash',
+    '.rs': 'rust', '.go': 'go', '.java': 'java',
+    '.c': 'c', '.cpp': 'cpp', '.h': 'c',
+}
+
+def _ext_to_lang(filename: str) -> str:
+    """Map filename extension to language identifier for fenced code blocks."""
+    import os
+    ext = os.path.splitext(filename)[1].lower()
+    return TEXT_EXTENSIONS.get(ext, 'text')
 
 
 class LLMChat:
@@ -229,13 +247,21 @@ class LLMChat:
         )
         logger.info(f"[STATE] State engine enabled for chat '{chat_name}'")
 
-    def _build_base_messages(self, user_input: str, images: list = None):
+    def _build_base_messages(self, user_input: str, images: list = None, files: list = None):
         system_prompt, user_name = self._get_system_prompt()
-        
+
+        # Flatten files into user_input as fenced code blocks
+        if files:
+            parts = [user_input]
+            for f in files:
+                lang = _ext_to_lang(f.get('filename', ''))
+                parts.append(f"```{lang}\n# {f['filename']}\n{f['text']}\n```")
+            user_input = "\n\n".join(parts)
+
         # Reserve space for system prompt + current user message in context budget
         reserved_tokens = count_tokens(system_prompt) + count_tokens(user_input)
         history_messages = self.session_manager.get_messages_for_llm(reserved_tokens)
-        
+
         # Build user message content - list if images, string otherwise
         if images:
             user_content = [{"type": "text", "text": user_input}]
@@ -247,15 +273,15 @@ class LLMChat:
                 })
         else:
             user_content = user_input
-        
+
         return [
             {"role": "system", "content": system_prompt},
             *history_messages,
             {"role": "user", "content": user_content}
         ]
 
-    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None):
-        return self.streaming_chat.chat_stream(user_input, prefill=prefill, skip_user_message=skip_user_message, images=images)
+    def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None):
+        return self.streaming_chat.chat_stream(user_input, prefill=prefill, skip_user_message=skip_user_message, images=images, files=files)
 
     def chat(self, user_input: str):
         try:

@@ -217,12 +217,13 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
     }
 };
 
-export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null) => {
+export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
     let reader = null;
     try {
         const body = { text };
         if (prefill) body.prefill = prefill;
         if (images && images.length > 0) body.images = images;
+        if (files && files.length > 0) body.files = files;
         
         const res = await fetch('/api/chat/stream', {
             method: 'POST',

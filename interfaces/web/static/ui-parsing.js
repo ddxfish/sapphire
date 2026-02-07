@@ -437,22 +437,30 @@ const processInlineCode = (html) => {
 
 export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = null) => {
     globalThinkCounter = 0;
-    
+
     const txt = typeof msg === 'string' ? msg : (msg.content || '');
     const parts = (typeof msg === 'object' && msg.parts) ? msg.parts : [];
     const userImages = (typeof msg === 'object' && msg.images) ? msg.images : [];
-    
-    if (!txt && parts.length === 0 && userImages.length === 0) {
+    const userFiles = (typeof msg === 'object' && msg.files) ? msg.files : [];
+
+    if (!txt && parts.length === 0 && userImages.length === 0 && userFiles.length === 0) {
         el.textContent = '';
         return;
     }
-    
+
     el.innerHTML = '';
-    
+
     // Render user-attached images first (for user messages)
     if (userImages.length > 0) {
         const thumbs = Images.createUserImageThumbnails(userImages);
         el.appendChild(thumbs);
+    }
+
+    // Render user-attached files as collapsible accordions
+    if (userFiles.length > 0) {
+        for (const file of userFiles) {
+            el.appendChild(Images.createFileAccordion(file));
+        }
     }
     
     if (parts.length > 0) {

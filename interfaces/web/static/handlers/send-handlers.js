@@ -22,7 +22,7 @@ import {
 export async function handleSend() {
     const { input, sendBtn } = getElements();
     const txt = input.value.trim();
-    if (!txt && !Images.hasPendingUploadImages()) return;
+    if (!txt && !Images.hasPendingUploadImages() && !Images.hasPendingFiles()) return;
 
     // Block send if current prompt requires privacy but privacy mode is off
     if (getPromptPrivacyRequired() && !isPrivacyMode()) {
@@ -40,12 +40,15 @@ export async function handleSend() {
     sendBtn.textContent = '...';
     input.dispatchEvent(new Event('input'));
     
-    // Get pending images and clear them
+    // Get pending images and files, then clear them
     const pendingImages = Images.getImagesForApi();
     const hasImages = pendingImages.length > 0;
-    
-    ui.addUserMessage(txt, hasImages ? Images.getPendingUploadImages() : null);
+    const pendingFilesForApi = Images.getFilesForApi();
+    const hasFiles = pendingFilesForApi.length > 0;
+
+    ui.addUserMessage(txt, hasImages ? Images.getPendingUploadImages() : null, hasFiles ? Images.getPendingFiles() : null);
     Images.clearPendingUploadImages();
+    Images.clearPendingFiles();
     updateImagePreviewArea();
     
     ui.showStatus();
@@ -133,7 +136,9 @@ export async function handleSend() {
                 }
             },
             // Images
-            hasImages ? pendingImages : null
+            hasImages ? pendingImages : null,
+            // Files
+            hasFiles ? pendingFilesForApi : null
         );
         
         if (streamOk) return null;
@@ -152,27 +157,67 @@ export async function handleSend() {
     }
 }
 
-// Update image preview area in DOM
+// Update image/file preview area in DOM
 function updateImagePreviewArea() {
     const previewArea = document.getElementById('image-preview-area');
     if (!previewArea) return;
-    
+
     previewArea.innerHTML = '';
-    const pending = Images.getPendingUploadImages();
-    
-    if (pending.length === 0) {
+    const pendingImgs = Images.getPendingUploadImages();
+    const pendingFilesList = Images.getPendingFiles();
+
+    if (pendingImgs.length === 0 && pendingFilesList.length === 0) {
         previewArea.style.display = 'none';
         return;
     }
-    
+
     previewArea.style.display = 'flex';
-    pending.forEach((img, idx) => {
+    pendingImgs.forEach((img, idx) => {
         const preview = Images.createUploadPreview(img, idx, (index) => {
             Images.removePendingUploadImage(index);
             updateImagePreviewArea();
         });
         previewArea.appendChild(preview);
     });
+    pendingFilesList.forEach((file, idx) => {
+        const chip = Images.createFilePreview(file, idx, (index) => {
+            Images.removePendingFile(index);
+            updateImagePreviewArea();
+        });
+        previewArea.appendChild(chip);
+    });
+}
+
+// Handle text file upload (read client-side)
+export async function handleFileUpload(file) {
+    const dot = file.name.lastIndexOf('.');
+    const ext = dot !== -1 ? file.name.slice(dot).toLowerCase() : '';
+
+    if (!Images.ALLOWED_FILE_EXTENSIONS.has(ext)) {
+        ui.showToast(`Unsupported file type: ${ext || 'no extension'}`, 'error');
+        return;
+    }
+
+    if (file.size > 100 * 1024) {
+        ui.showToast('File too large (max 100KB)', 'error');
+        return;
+    }
+
+    try {
+        const text = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('Failed to read file'));
+            reader.readAsText(file);
+        });
+
+        Images.addPendingFile({ filename: file.name, text });
+        updateImagePreviewArea();
+        ui.showToast(`File attached: ${file.name}`, 'success', 2000);
+    } catch (e) {
+        console.error('File read failed:', e);
+        ui.showToast(e.message, 'error');
+    }
 }
 
 // Handle image file selection/paste/drop
@@ -226,7 +271,11 @@ export function setupImageHandlers() {
         fileInput.addEventListener('change', async (e) => {
             const files = e.target.files;
             for (const file of files) {
-                await handleImageUpload(file);
+                if (file.type.startsWith('image/')) {
+                    await handleImageUpload(file);
+                } else {
+                    await handleFileUpload(file);
+                }
             }
             fileInput.value = '';
         });
@@ -262,13 +311,20 @@ export function setupImageHandlers() {
         form.addEventListener('drop', async (e) => {
             e.preventDefault();
             form.classList.remove('drag-over');
-            
+
             const files = e.dataTransfer?.files;
             if (!files) return;
-            
+
             for (const file of files) {
                 if (file.type.startsWith('image/')) {
                     await handleImageUpload(file);
+                } else {
+                    // Try as text file
+                    const dot = file.name.lastIndexOf('.');
+                    const ext = dot !== -1 ? file.name.slice(dot).toLowerCase() : '';
+                    if (Images.ALLOWED_FILE_EXTENSIONS.has(ext)) {
+                        await handleFileUpload(file);
+                    }
                 }
             }
         });

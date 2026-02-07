@@ -2038,6 +2038,90 @@ body:not(.sidebar-collapsed) #toggle-sidebar {
     background: var(--danger);
 }
 
+/* File preview chips in upload area */
+.file-preview-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--accent-blue, #4a9eff);
+    border-radius: var(--radius-sm);
+    font-size: var(--font-sm);
+    color: var(--text);
+    max-width: 200px;
+}
+
+.file-chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+}
+
+.file-chip-remove {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.3);
+    color: var(--text);
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.file-chip-remove:hover {
+    background: var(--danger);
+    color: white;
+}
+
+/* File accordion in chat history */
+.accordion-file {
+    margin: 8px 0;
+    border: 1px solid var(--accent-blue, #4a9eff);
+    border-radius: var(--radius-md);
+    padding: 5px 10px;
+    background: var(--bg-inset);
+    overflow: hidden;
+}
+
+.accordion-file summary {
+    cursor: pointer;
+    font-weight: bold;
+    font-size: var(--font-base);
+    user-select: none;
+    color: var(--accent-blue, #4a9eff);
+    font-family: var(--font-mono);
+}
+
+.accordion-file > .accordion-body {
+    display: grid !important;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition: grid-template-rows var(--transition-normal), opacity var(--transition-normal);
+    content-visibility: visible !important;
+}
+
+.accordion-file[open] > .accordion-body {
+    grid-template-rows: 1fr;
+    opacity: 1;
+}
+
+.accordion-file .accordion-inner {
+    overflow: hidden;
+    padding-top: 4px;
+}
+
+.accordion-file .accordion-inner pre {
+    margin: 0;
+}
+
 /* Drag-over state for form */
 #chat-form.drag-over {
     outline: 2px dashed var(--trim);

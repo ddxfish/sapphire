@@ -97,6 +97,8 @@ def count_message_tokens(content, include_images: bool = False) -> int:
             if isinstance(block, dict):
                 if block.get('type') == 'text':
                     total += count_tokens(block.get('text', ''))
+                elif block.get('type') == 'file':
+                    total += count_tokens(block.get('text', ''))
                 elif block.get('type') == 'image' and include_images:
                     # Estimate image tokens: Claude uses ~1 token per 750 pixels
                     # A 1920x1080 image ≈ 2700 tokens, 1024x1024 ≈ 1400 tokens
@@ -353,15 +355,21 @@ class ConversationHistory:
                 
             elif role == "user":
                 content = msg.get("content", "")
-                # Handle content stored as list (for multimodal or edge cases)
+                # Handle content stored as list (multimodal: text + files + images)
                 if isinstance(content, list):
                     text_parts = []
                     for block in content:
-                        if isinstance(block, dict) and block.get('type') == 'text':
-                            text_parts.append(block.get('text', ''))
+                        if isinstance(block, dict):
+                            if block.get('type') == 'text':
+                                text_parts.append(block.get('text', ''))
+                            elif block.get('type') == 'file':
+                                # Flatten file to fenced code block
+                                from core.chat.chat import _ext_to_lang
+                                lang = _ext_to_lang(block.get('filename', ''))
+                                text_parts.append(f"```{lang}\n# {block['filename']}\n{block.get('text', '')}\n```")
                         elif isinstance(block, str):
                             text_parts.append(block)
-                    content = ' '.join(text_parts).strip()
+                    content = '\n\n'.join(text_parts).strip()
                 llm_msg = {"role": "user", "content": content}
                 
             else:

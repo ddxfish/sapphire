@@ -7,6 +7,9 @@ let scrollAfterImagesTimeout = null;
 // Track pending upload images (before send)
 let pendingUploadImages = [];
 
+// Track pending upload files (before send)
+let pendingFiles = [];
+
 export const hasPendingImages = () => {
     return pendingImages.size > 0;
 };
@@ -81,6 +84,146 @@ export const createUploadPreview = (imageData, index, onRemove) => {
     container.appendChild(removeBtn);
     return container;
 };
+
+// ============================================================================
+// UPLOAD FILE MANAGEMENT
+// ============================================================================
+
+const TEXT_EXTENSIONS = {
+    '.py': 'python', '.txt': 'text', '.md': 'markdown',
+    '.js': 'javascript', '.ts': 'typescript', '.json': 'json',
+    '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml',
+    '.ini': 'ini', '.cfg': 'ini', '.conf': 'ini',
+    '.sh': 'bash', '.bash': 'bash',
+    '.html': 'html', '.css': 'css', '.xml': 'xml',
+    '.csv': 'csv', '.log': 'text', '.env': 'bash',
+    '.rs': 'rust', '.go': 'go', '.java': 'java',
+    '.c': 'c', '.cpp': 'cpp', '.h': 'c',
+};
+
+export const ALLOWED_FILE_EXTENSIONS = new Set(Object.keys(TEXT_EXTENSIONS));
+
+const extToLang = (filename) => {
+    const dot = filename.lastIndexOf('.');
+    if (dot === -1) return 'text';
+    return TEXT_EXTENSIONS[filename.slice(dot).toLowerCase()] || 'text';
+};
+
+export const getPendingFiles = () => [...pendingFiles];
+
+export const addPendingFile = (fileData) => {
+    // fileData: {filename: string, text: string}
+    pendingFiles.push(fileData);
+    return pendingFiles.length - 1;
+};
+
+export const removePendingFile = (index) => {
+    if (index >= 0 && index < pendingFiles.length) {
+        pendingFiles.splice(index, 1);
+    }
+};
+
+export const clearPendingFiles = () => { pendingFiles = []; };
+
+export const hasPendingFiles = () => pendingFiles.length > 0;
+
+export const getFilesForApi = () => {
+    return pendingFiles.map(f => ({
+        filename: f.filename,
+        text: f.text
+    }));
+};
+
+// Create preview chip for file in upload zone
+export const createFilePreview = (fileData, index, onRemove) => {
+    const chip = document.createElement('div');
+    chip.className = 'file-preview-chip';
+    chip.dataset.index = index;
+
+    const lineCount = (fileData.text.match(/\n/g) || []).length + 1;
+
+    const label = document.createElement('span');
+    label.className = 'file-chip-label';
+    label.textContent = `${fileData.filename} (${lineCount} lines)`;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'file-chip-remove';
+    removeBtn.innerHTML = '×';
+    removeBtn.title = 'Remove file';
+    removeBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onRemove(index);
+    };
+
+    chip.appendChild(label);
+    chip.appendChild(removeBtn);
+    return chip;
+};
+
+// Create file accordion for history rendering
+export const createFileAccordion = (file) => {
+    const details = document.createElement('details');
+    details.className = 'accordion-file';
+
+    const summary = document.createElement('summary');
+    const lineCount = (file.text.match(/\n/g) || []).length + 1;
+    summary.textContent = `${file.filename} (${lineCount} lines)`;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'accordion-body';
+    const inner = document.createElement('div');
+    inner.className = 'accordion-inner';
+
+    // Use createCodeBlock from ui-parsing for syntax highlighting
+    const lang = extToLang(file.filename);
+    const { createCodeBlock } = await_createCodeBlock();
+    const codeBlock = createCodeBlock(lang, file.text);
+    inner.appendChild(codeBlock);
+
+    wrapper.appendChild(inner);
+    details.appendChild(summary);
+    details.appendChild(wrapper);
+    return details;
+};
+
+// Lazy import helper for createCodeBlock (avoids circular import)
+function await_createCodeBlock() {
+    // Direct inline implementation to avoid circular dependency with ui-parsing
+    return {
+        createCodeBlock: (language, code) => {
+            const wrapper = document.createElement('pre');
+            if (language && language !== 'text') {
+                const header = document.createElement('div');
+                header.className = 'code-block-header';
+                header.innerHTML = `
+                    <span class="code-lang">${language}</span>
+                    <button class="code-copy" title="Copy code">Copy</button>
+                `;
+                wrapper.appendChild(header);
+                const copyBtn = header.querySelector('.code-copy');
+                copyBtn.addEventListener('click', async () => {
+                    try {
+                        await navigator.clipboard.writeText(code);
+                        copyBtn.textContent = 'Copied!';
+                        setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+                    } catch (e) {
+                        copyBtn.textContent = 'Failed';
+                        setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+                    }
+                });
+            }
+            const codeEl = document.createElement('code');
+            codeEl.className = `language-${language}`;
+            codeEl.textContent = code;
+            wrapper.appendChild(codeEl);
+            if (window.hljs) {
+                try { window.hljs.highlightElement(codeEl); } catch (e) {}
+            }
+            return wrapper;
+        }
+    };
+}
 
 // Image modal functions (defined before createUserImageThumbnails which uses them)
 export const closeImageModal = () => {
