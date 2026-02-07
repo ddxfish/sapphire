@@ -27,6 +27,7 @@ from core.modules.system import prompts
 from core.state_engine import STATE_TOOL_NAMES
 from core.stt.stt_null import NullWhisperClient as _NullWhisperClient
 from core.stt.utils import can_transcribe
+from core.wakeword.wakeword_null import NullWakeWordDetector as _NullWakeWordDetector
 
 logger = logging.getLogger(__name__)
 
@@ -631,6 +632,8 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "tts_enabled": config.TTS_ENABLED,
             "stt_enabled": config.STT_ENABLED,
             "stt_ready": not isinstance(system.whisper_client, _NullWhisperClient),
+            "wakeword_enabled": config.WAKE_WORD_ENABLED,
+            "wakeword_ready": not isinstance(system.wake_detector, _NullWakeWordDetector),
             "tts_playing": tts_playing,
             "active_chat": active_chat,
             "is_streaming": is_streaming,
@@ -1343,6 +1346,8 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             tier = settings.validate_tier(key)
             settings.set(key, value, persist=persist)
             results.append({"key": key, "status": "success", "tier": tier})
+            if key == 'WAKE_WORD_ENABLED':
+                get_system().toggle_wakeword(value)
             publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
@@ -1443,6 +1448,9 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     settings.set(key, value, persist=persist)
     if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'}:
         clear_session_cache()
+    if key == 'WAKE_WORD_ENABLED':
+        system = get_system()
+        system.toggle_wakeword(value)
     publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
     return {"status": "success", "key": key, "value": value, "tier": tier, "persisted": persist}
 

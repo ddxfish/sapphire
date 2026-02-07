@@ -204,9 +204,14 @@ class WakeWordDetector:
 
     def _on_activation(self):
         """Handle wake word activation."""
+        # Runtime guard: skip if wakeword disabled via settings
+        if not config.WAKE_WORD_ENABLED:
+            logger.debug("Wakeword detected but WAKE_WORD_ENABLED=False, ignoring")
+            return
+
         self.callback_pool.submit(self._play_tone)
         publish(Events.WAKEWORD_DETECTED)
-        
+
         if self.system:
             self.wake_word_detected()
         else:
@@ -279,11 +284,16 @@ class WakeWordDetector:
         
         while self.running:
             try:
+                # Pause processing when disabled at runtime (save CPU)
+                if not config.WAKE_WORD_ENABLED:
+                    time.sleep(0.5)
+                    continue
+
                 stream = self.audio_recorder.get_stream()
                 if stream is None:
                     time.sleep(0.1)
                     continue
-                
+
                 # Read audio frame (sounddevice returns numpy array directly)
                 audio_data, overflowed = stream.read(frame_samples)
                 if overflowed:

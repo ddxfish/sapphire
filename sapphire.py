@@ -237,6 +237,44 @@ class VoiceChatSystem:
         self.wake_detector.start_listening()
         logger.info("Voice components are running.")
 
+    def toggle_wakeword(self, enabled: bool):
+        """Hot-swap wakeword components at runtime."""
+        from core.wakeword.wakeword_null import NullAudioRecorder, NullWakeWordDetector
+
+        if enabled:
+            # Already real? Just resume listening
+            if not isinstance(self.wake_detector, NullWakeWordDetector):
+                logger.info("Wakeword already initialized, resuming")
+                self.wake_word_recorder.start_recording()
+                self.wake_detector.start_listening()
+                return True
+
+            # Cold start: load real components
+            try:
+                from core.wakeword.audio_recorder import AudioRecorder as RealAudioRecorder
+                from core.wakeword.wake_detector import WakeWordDetector as RealWakeWordDetector
+
+                self.wake_word_recorder = RealAudioRecorder()
+                self.wake_detector = RealWakeWordDetector(model_name=config.WAKEWORD_MODEL)
+                self.wake_detector.set_audio_recorder(self.wake_word_recorder)
+                self.wake_detector.set_system(self)
+                self.wake_word_recorder.start_recording()
+                self.wake_detector.start_listening()
+                logger.info("Wakeword hot-started successfully")
+                return True
+            except Exception as e:
+                logger.error(f"Wakeword hot-start failed: {e}")
+                self.wake_word_recorder = NullAudioRecorder()
+                self.wake_detector = NullWakeWordDetector(None)
+                return False
+        else:
+            # Tear down if real
+            if not isinstance(self.wake_detector, NullWakeWordDetector):
+                self.wake_detector.stop_listening()
+                self.wake_word_recorder.stop_recording()
+                logger.info("Wakeword stopped")
+            return True
+
     def reset_chat(self):
         self.llm_chat.reset()
         self.tts.speak("reset.")
