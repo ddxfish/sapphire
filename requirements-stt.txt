@@ -1,3 +1,4 @@
 # Speech-to-Text (Faster Whisper)
+flask>=3.0.0
 faster-whisper>=1.0.0
 torch>=2.0.0  # Required by faster-whisper

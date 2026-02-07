@@ -241,7 +241,7 @@ Use CSS variables for theme compatibility:
 | `interfaces/web/static/plugins/` | All web UI plugins |
 | `interfaces/web/static/plugins/plugins.json` | Plugin registry |
 | `interfaces/web/static/plugin-loader.js` | Plugin loading system |
-| `interfaces/web/plugins_api.py` | Backend API for plugin settings |
+| `core/api_fastapi.py` | Backend API (includes plugin settings endpoints) |
 | `user/webui/plugins/` | User plugin settings storage |
 
 ## Reference for AI

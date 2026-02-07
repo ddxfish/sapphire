@@ -10,7 +10,7 @@ System architecture and internals for developers and power users.
 main.py (runner with restart loop)
 └── sapphire.py (VoiceChatSystem)
     ├── LLMChat (core/chat/)
-    │   ├── llm_providers → Claude, OpenAI, Fireworks, LM Studio
+    │   ├── llm_providers → Claude, OpenAI, Fireworks, LM Studio, Responses
     │   ├── module_loader → plugins/*, core/modules/*
     │   ├── function_manager → functions/*
     │   └── session_manager → chat history
@@ -20,35 +20,32 @@ main.py (runner with restart loop)
     ├── TTS Server (core/tts/) → port 5012
     ├── STT Server (core/stt/) → port 5050
     ├── Wake Word (core/wakeword/)
-    ├── Internal API (core/api.py) → 127.0.0.1:8071
+    ├── FastAPI Server (core/api_fastapi.py) → 0.0.0.0:8073
     └── Event Scheduler (core/event_handler.py)
-
-Web Interface (interfaces/web/web_interface.py)
-└── HTTPS proxy → 0.0.0.0:8073
-    └── Proxies to Internal API
 ```
 
-**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the web interface and TTS server as subprocesses via `ProcessManager`. STT runs as a thread. Everything else runs in the main process.
+**Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the TTS server as a subprocess via `ProcessManager`. STT runs as a thread. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE) on a single port. Everything else runs in the main process.
 
 ---
 
-## Dual API Architecture
+## API Architecture
 
-Sapphire has two API layers:
+Sapphire runs a single **FastAPI/uvicorn** server that handles everything:
 
 | Layer | Binds To | Purpose |
 |-------|----------|---------|
-| Internal API | `127.0.0.1:8071` | Backend logic, no auth |
-| Web Interface | `0.0.0.0:8073` | HTTPS proxy with sessions, CSRF, rate limiting |
+| FastAPI Server | `0.0.0.0:8073` | All routes, auth, static files, SSE, API |
 
-**Flow:** Browser → Web Interface (8073) → Internal API (8071) → VoiceChatSystem
+**Flow:** Browser → FastAPI (8073) → VoiceChatSystem
 
-The web interface adds:
+The server provides:
 - Session-based login (bcrypt password)
 - CSRF protection on forms
 - Rate limiting on auth endpoints
 - Security headers (X-Frame-Options, etc.)
-- API key injection for backend calls
+- Static file serving and Jinja2 templates
+- SSE streaming for real-time events
+- All API endpoints in one process
 
 **Direct API access:** Send `X-API-Key` header with the bcrypt hash from `secret_key` file.
 
@@ -199,7 +196,8 @@ Models with "thinking" in the name (Qwen3-Thinking, Kimi-K2-Thinking) return rea
 | Type | When Applied | Examples |
 |------|--------------|----------|
 | Hot | Immediate | Names, TTS voice/speed/pitch, generation params |
-| Component restart | Next component init | TTS/STT enabled, server URLs |
+| Hot toggle | Immediate | Wakeword on/off (hot-swaps real/null detector at runtime) |
+| Component restart | Next component init | STT enabled (requires restart to load speech model) |
 | Full restart | App restart | Ports, model configs |
 
 ---
@@ -211,7 +209,7 @@ Models with "thinking" in the name (Qwen3-Thinking, Kimi-K2-Thinking) return rea
 One bcrypt hash serves as:
 - Login password
 - API key (`X-API-Key` header)
-- Flask session secret
+- Session secret
 
 | OS | Path |
 |----|------|
@@ -243,8 +241,7 @@ API keys and SOCKS credentials are stored separately from settings via `core/cre
 
 | Service | Port | Binding |
 |---------|------|---------|
-| Web Interface | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
-| Internal API | 8071 | `127.0.0.1` (localhost only) |
+| FastAPI Server | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
 | TTS Server | 5012 | `localhost` |
 | STT Server | 5050 | `localhost` |
 | LM Studio (default) | 1234 | External |
@@ -255,7 +252,7 @@ API keys and SOCKS credentials are stored separately from settings via `core/cre
 
 ### TTS (Text-to-Speech)
 
-- Server: `core/tts/tts_server.py` (Kokoro)
+- Server: `core/tts/tts_server.py` (Kokoro, Flask subprocess)
 - Client: `core/tts/tts_client.py`
 - Null impl: `core/tts/tts_null.py` (when disabled)
 
@@ -263,11 +260,12 @@ Started by `ProcessManager` if `TTS_ENABLED=true`. Auto-restarts on crash.
 
 ### STT (Speech-to-Text)
 
-- Server: `core/stt/server.py` (faster-whisper)
+- Server: `core/stt/server.py` (faster-whisper, Flask subprocess)
 - Client: `core/stt/client.py`
 - Recorder: `core/stt/recorder.py`
+- Guard: `core/stt/utils.py` (shared `can_transcribe()` check)
 
-Runs as thread in main process if `STT_ENABLED=true`.
+Runs as thread in main process if `STT_ENABLED=true`. Requires restart to load the speech model — the status endpoint reports both `stt_enabled` (setting) and `stt_ready` (model loaded).
 
 ### Wake Word
 
@@ -275,13 +273,26 @@ Runs as thread in main process if `STT_ENABLED=true`.
 - Recorder: `core/wakeword/audio_recorder.py`
 - Null impl: `core/wakeword/wakeword_null.py`
 
-Downloads models on first run via `core/setup.py`.
+Downloads models on first run via `core/setup.py`. Supports **hot-toggle** — can be enabled/disabled at runtime without restart via `VoiceChatSystem.toggle_wakeword()`. Respects STT guard: if wakeword fires but STT is unavailable, shows a toast notification instead.
 
 ### Audio Device Manager
 
 - Manager: `core/audio/device_manager.py`
 - Handles device enumeration, sample rate detection, fallback logic
 - Shared by STT and wakeword systems
+
+---
+
+## Privacy Mode
+
+When enabled, blocks cloud LLM providers to keep conversations local.
+
+**Provider behavior:**
+- `is_local: True` providers (lmstudio) — always allowed
+- `privacy_check_whitelist: True` providers (other, lmstudio, responses) — allowed if their `base_url` passes the endpoint whitelist (localhost, LAN IPs, .local domains)
+- All other cloud providers (claude, openai, fireworks) — blocked
+
+Toggle via Settings or `/api/privacy` endpoint.
 
 ---
 
@@ -307,9 +318,9 @@ Real-time UI updates use Server-Sent Events (SSE) via the event bus.
 
 **Frontend:** `interfaces/web/static/core/event-bus.js` manages SSE connection and dispatches to UI components.
 
-**Event types:** `tts_state`, `llm_state`, `chat_switch`, `settings_change`, `prompt_change`
+**Event types:** `tts_state`, `llm_state`, `chat_switch`, `settings_change`, `prompt_change`, `stt_error`
 
-The `/status` endpoint provides a unified polling fallback with context usage (token count and percent bar), prompt state, spice info, and streaming status.
+The `/status` endpoint provides a unified polling fallback with context usage (token count and percent bar), prompt state, spice info, streaming status, and feature readiness (`stt_enabled`, `stt_ready`, `wakeword_enabled`, `wakeword_ready`).
 
 ---
 
@@ -333,18 +344,19 @@ Managed by `core/chat/history.py` via `SessionManager`.
 
 ---
 
-## Internal API Endpoints
+## API Endpoints
 
-Key endpoints (all require `X-API-Key` header):
+Key endpoints (all require session auth or `X-API-Key` header):
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/chat` | POST | Send message, get response |
 | `/chat/stream` | POST | Streaming response |
-| `/status` | GET | Unified UI state (prompt, context, spice, TTS) |
+| `/status` | GET | Unified UI state (prompt, context, spice, TTS, STT/wakeword readiness) |
 | `/events` | GET | SSE stream for real-time events |
 | `/history` | GET | Get chat history |
 | `/api/settings` | GET/PUT | Read/write settings |
+| `/api/privacy` | GET/PUT | Privacy mode toggle |
 | `/api/prompts` | GET | List prompts |
 | `/api/prompts/<n>` | GET/PUT/DELETE | CRUD prompts |
 | `/api/llm/providers` | GET | List LLM providers |
@@ -368,7 +380,7 @@ Key endpoints (all require `X-API-Key` header):
 | `/api/webui/plugins/homeassistant/token` | GET/PUT | HA token status/save |
 | `/api/webui/plugins/homeassistant/entities` | POST | Preview HA entities |
 
-Full routes in `core/api.py`, `core/settings_api.py`, and `interfaces/web/web_interface.py`.
+All routes defined in `core/api_fastapi.py`.
 
 ---
 
@@ -390,23 +402,24 @@ See dedicated docs:
 | `main.py` | Runner with restart loop |
 | `sapphire.py` | VoiceChatSystem entry point |
 | `config.py` | Settings proxy |
-| `core/api.py` | Internal API routes |
-| `core/settings_api.py` | Settings and LLM API routes |
+| `core/api_fastapi.py` | Unified FastAPI server (all routes, auth, static files) |
+| `core/auth.py` | Session auth, CSRF, rate limiting |
+| `core/ssl_utils.py` | Self-signed certificate generation |
 | `core/settings_manager.py` | Settings merge logic |
 | `core/credentials_manager.py` | API keys and secrets |
 | `core/setup.py` | Bootstrap, auth, first-run |
 | `core/chat/chat.py` | LLM interaction |
-| `core/chat/llm_providers/` | Provider abstraction (Claude, OpenAI, etc.) |
+| `core/chat/llm_providers/` | Provider abstraction (Claude, OpenAI, Fireworks, Responses, etc.) |
 | `core/chat/module_loader.py` | Plugin loading |
 | `core/chat/function_manager.py` | Tool loading |
 | `core/chat/history.py` | Session management |
+| `core/stt/utils.py` | Shared STT guard logic (`can_transcribe()`) |
 | `core/audio/device_manager.py` | Audio device handling |
 | `core/event_handler.py` | Scheduled events |
 | `core/event_bus.py` | Real-time event pub/sub for SSE |
 | `core/modules/continuity/scheduler.py` | Cron-based task scheduler |
 | `core/modules/continuity/executor.py` | Task execution with context isolation |
 | `functions/homeassistant.py` | Home Assistant tools (12 functions) |
-| `interfaces/web/web_interface.py` | Web proxy, auth |
 
 ---
 
@@ -417,29 +430,29 @@ Sapphire architecture for troubleshooting and development.
 PROCESSES:
 - main.py: Runner with restart loop (exit 42 = restart)
 - sapphire.py: Core VoiceChatSystem
-- web_interface.py: Web UI proxy (port 8073, HTTPS)
-- core/api.py: Internal API (port 8071, HTTP)
-- TTS server: Kokoro (port 5012, if enabled)
+- core/api_fastapi.py: Unified FastAPI server (port 8073, HTTPS)
+- TTS server: Kokoro Flask subprocess (port 5012, if enabled)
+- STT server: Faster-whisper Flask subprocess (port 5050, if enabled)
 
 PORTS:
-- 8073: Web UI (HTTPS, user-facing)
-- 8071: Internal API (localhost only)
+- 8073: FastAPI server (HTTPS, user-facing, all routes)
 - 5012: TTS server (if enabled)
 - 5050: STT server (if enabled)
 - 1234: Default LLM (LM Studio)
 
 LLM PROVIDERS:
-- LLM_PROVIDERS dict with lmstudio, claude, fireworks, openai, other
+- LLM_PROVIDERS dict with lmstudio, claude, fireworks, openai, other, responses
 - LLM_FALLBACK_ORDER controls Auto mode priority
 - Per-chat override via session settings
 - API keys in ~/.config/sapphire/credentials.json or env vars
+- Privacy mode blocks cloud providers, whitelist-based for configurable-endpoint providers
 
 KEY DIRECTORIES:
 - core/: Main application code
 - core/chat/llm_providers/: LLM abstraction
 - functions/: AI-callable tools
 - plugins/: Keyword-triggered modules
-- interfaces/web/: Web UI
+- interfaces/web/: Web UI (templates, static assets)
 - user/: All user data
 
 CREDENTIALS:
@@ -451,6 +464,8 @@ HOT RELOAD:
 - Settings: ~2s after file change
 - Prompts: ~2s after file change
 - Toolsets: ~2s after file change
+- Wakeword: hot-toggle on/off at runtime (no restart needed)
+- STT: setting change is hot, but model load requires restart
 - Continuity tasks: immediate on save
 - Code changes: Require restart
 
