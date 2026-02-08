@@ -1051,7 +1051,7 @@ Editing:
       // Update the cached components
       this.components = componentsData;
       const newItems = componentsData[type] || {};
-      const newKeys = Object.keys(newItems);
+      const newKeys = Object.keys(newItems).sort((a, b) => a.localeCompare(b));
       console.log(`[ComponentModal] Got ${newKeys.length} items:`, newKeys);
 
       // Clean up selection to only valid keys
@@ -1126,33 +1126,52 @@ Editing:
     };
     bindDeleteHandlers();
 
-    // Add new component
-    overlay.querySelector('.combined-edit-add')?.addEventListener('click', () => {
-      showModal(`Add ${typeLabel}`, [
-        { id: 'comp-key', label: 'Key Name', type: 'text' },
-        { id: 'comp-value', label: 'Component Text', type: 'textarea' }
-      ], async (data) => {
-        const key = data['comp-key'].trim();
-        const value = data['comp-value'].trim();
+    // Add new component inline
+    const addNewInline = () => {
+      const listEl = overlay.querySelector('.combined-edit-list');
+      if (!listEl || listEl.querySelector('.new-piece-row')) return; // one at a time
 
-        if (!key || !value) {
-          showToast('Key and value required', 'error');
-          return;
-        }
+      const row = document.createElement('div');
+      row.className = 'combined-edit-row new-piece-row';
+      row.innerHTML = `
+        <div class="combined-edit-content">
+          <input type="text" class="new-piece-name" placeholder="Piece name" style="width:100%;padding:6px 8px;background:var(--input-bg);border:1px solid var(--input-focus-border);border-radius:var(--radius-sm);color:var(--text-light);font-size:var(--font-sm);font-weight:600;font-family:var(--font-mono);">
+          <textarea class="new-piece-text" placeholder="Piece content" rows="4" style="width:100%;padding:8px;background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm);font-family:var(--font-mono);resize:vertical;min-height:80px;"></textarea>
+        </div>
+        <button class="btn btn-primary new-piece-confirm" style="padding:4px 12px;align-self:flex-start;margin-top:2px;">Add</button>
+      `;
+      listEl.prepend(row);
+      row.querySelector('.new-piece-name').focus();
+
+      const confirm = async () => {
+        const name = row.querySelector('.new-piece-name').value.trim();
+        const text = row.querySelector('.new-piece-text').value.trim();
+        if (!name || !text) { showToast('Name and content required', 'error'); return; }
 
         try {
-          const result = await API.saveComponent(type, key, value);
+          const result = await API.saveComponent(type, name, text);
           showToast(`${typeLabel} added!`, 'success');
-
-          // Use returned components data instead of refetching
-          if (result.components) {
-            refreshModal(result.components, key);
+          // Auto-select the new item
+          if (isMultiSelect) {
+            if (!liveSelected.includes(name)) liveSelected.push(name);
+          } else {
+            liveSelected = name;
           }
+          if (result.components) refreshModal(result.components, name);
         } catch (e) {
           showToast(`Failed: ${e.message}`, 'error');
         }
+      };
+
+      row.querySelector('.new-piece-confirm').addEventListener('click', confirm);
+      row.querySelector('.new-piece-name').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); row.querySelector('.new-piece-text').focus(); }
       });
-    });
+      row.querySelector('.new-piece-text').addEventListener('keydown', e => {
+        if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); confirm(); }
+      });
+    };
+    overlay.querySelector('.combined-edit-add')?.addEventListener('click', addNewInline);
 
     overlay.querySelector('.modal-x')?.addEventListener('click', close);
     overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
@@ -1229,9 +1248,23 @@ Editing:
         this.components = latestComponents;
       }
 
-      // Update selection
+      // Update selection — sync in-memory, DOM, then save
       this.currentData.components[type] = selectedValue;
+      if (!isMultiSelect) {
+        const selectEl = document.getElementById(`pm-${type}`);
+        if (selectEl) {
+          // Ensure option exists before setting value
+          if (!Array.from(selectEl.options).some(o => o.value === selectedValue)) {
+            selectEl.add(new Option(selectedValue, selectedValue));
+          }
+          selectEl.value = selectedValue;
+        }
+      }
       const promptData = this.collectData();
+      // Double-check component was set (collectData reads DOM which can desync)
+      if (promptData?.components) {
+        promptData.components[type] = selectedValue;
+      }
       if (promptData) {
         try {
           this._lastEditorSaveTime = Date.now();

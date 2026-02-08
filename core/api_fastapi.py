@@ -132,9 +132,9 @@ async def security_headers(request: Request, call_next):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
 
-    # Static assets: cache aggressively
+    # Static assets: cache with revalidation (no immutable — files change in-place)
     if request.url.path.startswith('/static/'):
-        response.headers['Cache-Control'] = 'public, max-age=604800, immutable'
+        response.headers['Cache-Control'] = 'public, max-age=3600, must-revalidate'
 
     response.headers['Connection'] = 'keep-alive'
     return response
