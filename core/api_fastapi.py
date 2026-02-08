@@ -604,6 +604,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
 
         spice_enabled = chat_settings.get('spice_enabled', True)
         current_spice = prompts.get_current_spice()
+        next_spice = prompts.get_next_spice()
 
         tts_playing = getattr(system.tts, '_is_playing', False)
         active_chat = system.llm_chat.get_active_chat()
@@ -671,6 +672,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "message_count": message_count,
             "spice": {
                 "current": current_spice,
+                "next": next_spice,
                 "enabled": spice_enabled,
                 "available": is_assembled
             },
@@ -1272,6 +1274,7 @@ async def get_system_status(request: Request, _=Depends(require_login), system=D
         chat_settings = system.llm_chat.session_manager.get_chat_settings()
         spice_enabled = chat_settings.get('spice_enabled', True)
         current_spice = prompts.get_current_spice()
+        next_spice = prompts.get_next_spice()
         is_assembled = prompts.is_assembled_mode()
 
         return {
@@ -1282,7 +1285,7 @@ async def get_system_status(request: Request, _=Depends(require_login), system=D
             "ability": ability_info,
             "tts_enabled": config.TTS_ENABLED,
             "has_cloud_tools": has_cloud_tools,
-            "spice": {"current": current_spice, "enabled": spice_enabled, "available": is_assembled}
+            "spice": {"current": current_spice, "next": next_spice, "enabled": spice_enabled, "available": is_assembled}
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to get system status")
@@ -2030,6 +2033,7 @@ async def toggle_spice_category(name: str, request: Request, _=Depends(require_l
         disabled.add(name)
         enabled = False
     prompts.prompt_manager.save_spices()
+    prompts.invalidate_spice_picks()
     publish(Events.SPICE_CHANGED, {"category": name, "enabled": enabled})
     return {"status": "success", "category": name, "enabled": enabled}
 

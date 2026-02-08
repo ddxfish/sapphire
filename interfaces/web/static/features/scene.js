@@ -135,7 +135,10 @@ function updateSpice(spice) {
     if (spice.enabled) {
         spiceIndicator.classList.add('active');
         spiceIndicator.title = 'Spice enabled (click to disable)';
-        tooltipEl.textContent = spice.current || 'No spice yet';
+        const parts = [];
+        if (spice.current) parts.push(`Active: ${spice.current}`);
+        if (spice.next) parts.push(`Next: ${spice.next}`);
+        tooltipEl.textContent = parts.length ? parts.join('\n') : 'No spice yet';
     } else {
         spiceIndicator.classList.remove('active');
         spiceIndicator.title = 'Spice disabled (click to enable)';

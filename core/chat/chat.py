@@ -107,23 +107,31 @@ class LLMChat:
 
     def refresh_spice_if_needed(self):
         turn_count = self.session_manager.get_turn_count()
-        
+        from core.modules.system import prompts
+
         # Check per-chat spice setting
         chat_settings = self.session_manager.get_chat_settings()
         if not chat_settings.get('spice_enabled', True):
-            from core.modules.system import prompts
-            prompts.clear_spice()
+            if prompts.get_current_spice():
+                # Clear stale spice AND reassemble prompt so AI stops seeing it
+                prompts.clear_spice()
+                if prompts.is_assembled_mode():
+                    prompt_data = prompts.get_current_prompt()
+                    content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)
+                    self.set_system_prompt(content)
+                    logger.info("[SPICE] Spice disabled — cleared and reassembled prompt")
             return False
-        
+
+        if not prompts.is_assembled_mode():
+            return False
+
         spice_turns = chat_settings.get('spice_turns', 3)
-        if turn_count % spice_turns == 0:
-            logger.info(f"[SPICE] SPICE REFRESH at turn {turn_count}")
+        current_spice = prompts.get_current_spice()
+
+        # Pick spice if: none set (just enabled) OR rotation interval hit
+        if not current_spice or turn_count % spice_turns == 0:
+            logger.info(f"[SPICE] SPICE REFRESH at turn {turn_count} (had_spice={bool(current_spice)})")
             try:
-                from core.modules.system import prompts
-                # Only apply spice in assembled mode, skip for monoliths
-                if not prompts.is_assembled_mode():
-                    logger.info(f"[SPICE] Skipping spice - monolith mode active")
-                    return False
                 spice_result = prompts.set_random_spice()
                 prompt_data = prompts.get_current_prompt()
                 content = prompt_data['content'] if isinstance(prompt_data, dict) else str(prompt_data)

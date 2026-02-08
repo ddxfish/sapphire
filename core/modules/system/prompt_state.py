@@ -161,35 +161,70 @@ def reset_to_defaults():
         "extras": [],
         "emotions": [],
         "spice": "",
+        "next_spice": "",
         "active_preset": "default"
     }
     return "Reset to default state"
 
 
+def _pick_spice(exclude=""):
+    """Pick a random spice, avoiding exclude if possible."""
+    all_spices = prompt_manager.get_enabled_spices()
+    if not all_spices:
+        return ""
+    candidates = [s for s in all_spices if s != exclude]
+    return random.choice(candidates) if candidates else random.choice(all_spices)
+
+
 def set_random_spice():
     """Set a random spice from enabled categories in the pool."""
     global _assembled_state
-    all_spices = prompt_manager.get_enabled_spices()
-    
-    if all_spices:
-        _assembled_state["spice"] = random.choice(all_spices)
-        return f"Random spice: {_assembled_state['spice']}"
-    
-    # Clear spice when no categories enabled
-    _assembled_state["spice"] = ""
-    return "No spices available"
+    # Use pre-picked next if available, otherwise pick fresh
+    if _assembled_state.get("next_spice"):
+        _assembled_state["spice"] = _assembled_state["next_spice"]
+    else:
+        _assembled_state["spice"] = _pick_spice()
+
+    if not _assembled_state["spice"]:
+        _assembled_state["next_spice"] = ""
+        return "No spices available"
+
+    # Pre-pick next (avoid repeating current)
+    _assembled_state["next_spice"] = _pick_spice(exclude=_assembled_state["spice"])
+    return f"Random spice: {_assembled_state['spice']}"
 
 
 def clear_spice():
-    """Clear the current spice."""
+    """Clear the current and next spice."""
     global _assembled_state
     _assembled_state["spice"] = ""
+    _assembled_state["next_spice"] = ""
     return "Spice cleared"
+
+
+def invalidate_spice_picks():
+    """Re-pick current and next spice from the updated enabled pool.
+    Called when spice categories change (enable/disable)."""
+    global _assembled_state
+    enabled = prompt_manager.get_enabled_spices()
+    # Clear next so it gets lazy-re-picked from new pool
+    _assembled_state["next_spice"] = ""
+    # If current spice is no longer in enabled pool, clear it too
+    if _assembled_state.get("spice") and _assembled_state["spice"] not in enabled:
+        _assembled_state["spice"] = ""
 
 
 def get_current_spice():
     """Get the currently active spice text, or empty string if none."""
     return _assembled_state.get("spice", "")
+
+
+def get_next_spice():
+    """Get the pre-picked next spice text. Lazy-picks if empty and pool has spices."""
+    global _assembled_state
+    if not _assembled_state.get("next_spice"):
+        _assembled_state["next_spice"] = _pick_spice(exclude=_assembled_state.get("spice", ""))
+    return _assembled_state.get("next_spice", "")
 
 
 def assemble_prompt():
