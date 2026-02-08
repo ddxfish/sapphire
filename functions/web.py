@@ -6,7 +6,7 @@ import urllib.parse
 import requests
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from core.socks_proxy import get_session, SocksAuthError
+from core.socks_proxy import get_session, clear_session_cache, SocksAuthError
 import config
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,29 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
     try:
         logger.info(f"[WEB] Fetching DDG: {url}")
         resp = get_session().get(url, timeout=12)
+    except (SocksAuthError, requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+        # Stale session or transient failure — clear cache and retry once
+        logger.warning(f"[WEB] DDG request failed ({type(e).__name__}), retrying with fresh session...")
+        clear_session_cache()
+        try:
+            resp = get_session().get(url, timeout=12)
+        except (SocksAuthError, ValueError) as e2:
+            logger.error(f"[WEB] DDG retry SOCKS/auth failed: {e2}")
+            raise
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e2:
+            logger.error(f"[WEB] DDG retry network failed: {e2}")
+            raise
+    except ValueError as e:
+        logger.error(f"[WEB] SOCKS config error: {e}")
+        raise
+    except requests.exceptions.Timeout as e:
+        logger.error(f"[WEB] DDG request timed out: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"[WEB] DDG request failed: {type(e).__name__}: {e}")
+        return []
+
+    try:
         logger.info(f"[WEB] DDG response: {resp.status_code}")
         if resp.status_code not in [200, 202]:
             logger.warning(f"[WEB] DDG bad status: {resp.status_code}")
@@ -106,17 +129,8 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
         if not resp.text or len(resp.text) < 100:
             logger.warning(f"[WEB] DDG returned empty/minimal response ({len(resp.text)} chars)")
             return []
-    except ValueError as e:
-        # SOCKS misconfiguration - let execute() handle it
-        if "SOCKS5 is enabled" in str(e):
-            logger.error(f"[WEB] SOCKS misconfiguration: {e}")
-            raise
-        raise
-    except requests.exceptions.ProxyError as e:
-        logger.error(f"[WEB] SOCKS proxy failed: {e}")
-        raise
     except Exception as e:
-        logger.error(f"[WEB] DDG request failed: {type(e).__name__}: {e}")
+        logger.error(f"[WEB] DDG response processing failed: {type(e).__name__}: {e}")
         return []
     
     logger.info(f"[WEB] Parsing DDG HTML ({len(resp.text)} chars)")
@@ -219,21 +233,21 @@ def execute(function_name, arguments, config):
 
             try:
                 results = search_ddg_html(query, WORK_SEARCH_MAX_RESULTS)
+            except SocksAuthError as e:
+                logger.error(f"[WEB] web_search: SOCKS auth failed: {e}")
+                return f"Search failed: SOCKS proxy authentication error. Tell the user to check their SOCKS credentials in Settings.", False
             except ValueError as e:
                 if "SOCKS5 is enabled" in str(e):
                     logger.error("[WEB] web_search: SOCKS misconfiguration")
-                    return "Search failed: SOCKS5 is enabled in config but credentials are not configured.", False
+                    return "Search failed: SOCKS5 is enabled but credentials are not configured. Tell the user to set them in Settings → SOCKS.", False
                 raise
-            except requests.exceptions.ProxyError:
-                logger.error("[WEB] web_search: SOCKS proxy error")
-                return "Search failed: SOCKS proxy connection error.", False
-            except requests.exceptions.ConnectionError:
-                logger.error("[WEB] web_search: Connection error")
-                return "Search failed: Network connection error.", False
-            
+            except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+                logger.error(f"[WEB] web_search: Network/proxy error: {e}")
+                return "Search failed: Could not connect through the network/proxy. Tell the user to check their SOCKS proxy and internet connection.", False
+
             if not results:
-                logger.warning(f"[WEB] web_search: No results")
-                return "No search results found.", True
+                logger.warning(f"[WEB] web_search: No results for '{query}'")
+                return f"Search returned no results for '{query}'. This may be a temporary issue with the search provider. Try rephrasing or try again.", True
             
             logger.info(f"[WEB] web_search: Returning {len(results)} results")
             # Title + URL only - no snippets to prevent lazy AI
@@ -380,10 +394,17 @@ def execute(function_name, arguments, config):
                 return "I need a topic or question to research.", False
             
             logger.info(f"[WEB] research_topic: Researching")
-            results = search_ddg_html(query, max_results=15)
+            try:
+                results = search_ddg_html(query, max_results=15)
+            except SocksAuthError as e:
+                logger.error(f"[WEB] research_topic: SOCKS auth failed: {e}")
+                return f"Research failed: SOCKS proxy authentication error. Tell the user to check their SOCKS credentials in Settings.", False
+            except (ValueError, requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+                logger.error(f"[WEB] research_topic: Network error: {e}")
+                return "Research failed: Network/proxy connection error. Tell the user to check their connection.", False
             if not results:
-                logger.warning(f"[WEB] research_topic: No search results")
-                return "I couldn't find any search results to research that topic.", True
+                logger.warning(f"[WEB] research_topic: No search results for '{query}'")
+                return f"Search returned no results for '{query}'. Try rephrasing the query.", True
             
             logger.info(f"[WEB] research_topic: Found {len(results)} search results")
             

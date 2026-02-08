@@ -62,41 +62,47 @@ def get_session():
     Get configured requests session.
     Returns SOCKS5 session if enabled, plain session otherwise.
     Caches and reuses session for performance.
-    
+
     Raises:
-        SocksAuthError: If SOCKS5 auth fails (fast failure, no caching)
+        SocksAuthError: If SOCKS5 auth fails after retry
         ValueError: If SOCKS5 enabled but credentials missing
     """
     global _cached_session
-    
+
     if _cached_session:
         return _cached_session
-    
+
     session = requests.Session()
-    
+
     if config.SOCKS_ENABLED:
         username, password = get_socks_credentials()
-        
+
         if not username or not password:
             raise ValueError(
                 "SOCKS5 is enabled but credentials not found. "
                 "Set them in Settings → SOCKS, or use environment variables "
                 "SAPPHIRE_SOCKS_USERNAME and SAPPHIRE_SOCKS_PASSWORD"
             )
-        
+
         logger.info(f"Testing SOCKS5 auth to {config.SOCKS_HOST}:{config.SOCKS_PORT}")
-        
-        # Test auth before caching session - fail fast on bad creds
+
+        # Test auth with one retry for transient proxy failures
         timeout = getattr(config, 'SOCKS_TIMEOUT', 10.0)
-        _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
-        
+        try:
+            _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
+        except SocksAuthError as e:
+            import time
+            logger.warning(f"SOCKS5 auth failed, retrying in 2s: {e}")
+            time.sleep(2)
+            _test_socks_auth(config.SOCKS_HOST, config.SOCKS_PORT, username, password, timeout)
+
         proxy_url = f"socks5://{username}:{password}@{config.SOCKS_HOST}:{config.SOCKS_PORT}"
-        
+
         session.proxies = {
             'http': proxy_url,
             'https': proxy_url
         }
-        
+
         logger.info(f"SOCKS5 enabled: {config.SOCKS_HOST}:{config.SOCKS_PORT}")
     else:
         logger.info("SOCKS5 disabled, using direct connection")
