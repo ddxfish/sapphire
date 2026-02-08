@@ -61,7 +61,9 @@ AUDIO_SAMPLE_RATE = 24000
 # --- Memory Management ---
 MAX_MEMORY_GB = 3.0
 MAX_REQUESTS = 500
+MAX_CONTENT_LENGTH = 1024 * 1024  # 1MB max request body
 request_count = 0
+request_count_lock = threading.Lock()
 
 def check_memory():
     """Return True if memory exceeds limit."""
@@ -180,20 +182,25 @@ class TTSHandler(BaseHTTPRequestHandler):
 
     def _handle_tts(self):
         global request_count
-        request_count += 1
+        with request_count_lock:
+            request_count += 1
+            current_count = request_count
 
         # Check memory/requests every 10 requests
-        if request_count % 10 == 0:
+        if current_count % 10 == 0:
             mem_exceeded = check_memory()
-            req_exceeded = request_count >= MAX_REQUESTS
+            req_exceeded = current_count >= MAX_REQUESTS
 
             if mem_exceeded or req_exceeded:
-                reason = f"Memory: {mem_exceeded}, Requests: {request_count}/{MAX_REQUESTS}"
+                reason = f"Memory: {mem_exceeded}, Requests: {current_count}/{MAX_REQUESTS}"
                 schedule_restart(reason)
 
         # Read and parse JSON body
         try:
             content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > MAX_CONTENT_LENGTH:
+                _json_response(self, {'error': 'Request body too large'}, 413)
+                return
             body = self.rfile.read(content_length)
             data = json.loads(body)
         except (json.JSONDecodeError, ValueError):

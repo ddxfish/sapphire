@@ -419,10 +419,16 @@ const processInlineMarkdown = (html) => {
     html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
     
     // Images: ![alt](url) - MUST be before links
-    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%">');
-    
-    // Links: [text](url)
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
+        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" style="max-width:100%">`;
+        return m;
+    });
+
+    // Links: [text](url) - block javascript:, data:, vbscript: schemes
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, url) => {
+        if (/^(https?:\/\/|mailto:)/i.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+        return m;
+    });
     
     return html;
 };

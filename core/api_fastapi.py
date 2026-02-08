@@ -455,7 +455,7 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
     if not data or 'text' not in data:
         raise HTTPException(status_code=400, detail="No text provided")
 
-    response = system.process_llm_query(data['text'], skip_tts=True)
+    response = await asyncio.to_thread(system.process_llm_query, data['text'], True)
     return {"response": response}
 
 
@@ -1134,7 +1134,7 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         system.tts.speak(text)
         return {"status": "success", "message": "Playback started."}
     elif output_mode == 'file':
-        audio_data = system.tts.generate_audio_data(text)
+        audio_data = await asyncio.to_thread(system.tts.generate_audio_data, text)
         if audio_data:
             return StreamingResponse(
                 io.BytesIO(audio_data),
@@ -1488,7 +1488,7 @@ async def delete_setting(key: str, request: Request, _=Depends(require_login)):
 async def get_credentials(request: Request, _=Depends(require_login)):
     """Get credentials status (not actual values)."""
     from core.credentials_manager import credentials
-    return credentials.get_status()
+    return credentials.get_masked_summary()
 
 
 @app.put("/api/credentials/llm/{provider}")
@@ -1497,7 +1497,7 @@ async def set_llm_credential(provider: str, request: Request, _=Depends(require_
     from core.credentials_manager import credentials
     data = await request.json()
     api_key = data.get('api_key', '')
-    if credentials.set_llm_key(provider, api_key):
+    if credentials.set_llm_api_key(provider, api_key):
         return {"status": "success", "provider": provider}
     else:
         raise HTTPException(status_code=500, detail="Failed to save credential")
@@ -1507,7 +1507,7 @@ async def set_llm_credential(provider: str, request: Request, _=Depends(require_
 async def delete_llm_credential(provider: str, request: Request, _=Depends(require_login)):
     """Delete LLM API key for a provider."""
     from core.credentials_manager import credentials
-    if credentials.delete_llm_key(provider):
+    if credentials.clear_llm_api_key(provider):
         return {"status": "success", "provider": provider}
     else:
         raise HTTPException(status_code=404, detail="Credential not found")
@@ -2421,53 +2421,48 @@ async def get_audio_devices(request: Request, _=Depends(require_login)):
 @app.post("/api/audio/test-input")
 async def test_audio_input(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Test audio input device."""
-    from core.audio import get_device_manager
+    data = await request.json() or {}
+    device_index = data.get('device_index')
+    duration = min(data.get('duration', 3.0), 5.0)
 
-    # Pause wakeword
-    wakeword_paused = False
-    try:
-        if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
-            if hasattr(system.wake_word_recorder, 'pause_recording'):
-                wakeword_paused = system.wake_word_recorder.pause_recording()
-                if wakeword_paused:
-                    time.sleep(0.3)
-    except Exception:
-        pass
-
-    try:
-        dm = get_device_manager()
-        data = await request.json() or {}
-        device_index = data.get('device_index')
-        duration = min(data.get('duration', 3.0), 5.0)
-
-        if device_index == 'auto' or device_index == '':
+    if device_index == 'auto' or device_index == '':
+        device_index = None
+    elif device_index is not None:
+        try:
+            device_index = int(device_index)
+        except (ValueError, TypeError):
             device_index = None
-        elif device_index is not None:
-            try:
-                device_index = int(device_index)
-            except (ValueError, TypeError):
-                device_index = None
 
-        result = dm.test_input_device_safe(device_index=device_index, duration=duration)
-        return result
-    except Exception as e:
-        from core.audio import classify_audio_error
-        return {'success': False, 'error': classify_audio_error(e)}
-    finally:
-        if wakeword_paused:
-            try:
-                time.sleep(0.2)
-                system.wake_word_recorder.resume_recording()
-            except Exception:
-                pass
+    def _test_input():
+        from core.audio import get_device_manager, classify_audio_error
+        wakeword_paused = False
+        try:
+            if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
+                if hasattr(system.wake_word_recorder, 'pause_recording'):
+                    wakeword_paused = system.wake_word_recorder.pause_recording()
+                    if wakeword_paused:
+                        time.sleep(0.3)
+        except Exception:
+            pass
+        try:
+            dm = get_device_manager()
+            return dm.test_input_device_safe(device_index=device_index, duration=duration)
+        except Exception as e:
+            return {'success': False, 'error': classify_audio_error(e)}
+        finally:
+            if wakeword_paused:
+                try:
+                    time.sleep(0.2)
+                    system.wake_word_recorder.resume_recording()
+                except Exception:
+                    pass
+
+    return await asyncio.to_thread(_test_input)
 
 
 @app.post("/api/audio/test-output")
 async def test_audio_output(request: Request, _=Depends(require_login)):
     """Test audio output device."""
-    import numpy as np
-    import sounddevice as sd
-
     data = await request.json() or {}
     device_index = data.get('device_index')
     duration = min(data.get('duration', 0.5), 2.0)
@@ -2481,41 +2476,45 @@ async def test_audio_output(request: Request, _=Depends(require_login)):
         except (ValueError, TypeError):
             device_index = None
 
-    # Find working sample rate
-    sample_rate = None
-    default_rate = 44100
-    if device_index is not None:
-        try:
-            dev_info = sd.query_devices(device_index)
-            default_rate = int(dev_info['default_samplerate'])
-        except Exception:
-            pass
+    def _test_output():
+        import numpy as np
+        import sounddevice as sd
 
-    for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
-        try:
-            stream = sd.OutputStream(device=device_index, samplerate=rate, channels=1, dtype=np.float32)
-            stream.close()
-            sample_rate = rate
-            break
-        except Exception:
-            continue
+        sample_rate = None
+        default_rate = 44100
+        if device_index is not None:
+            try:
+                dev_info = sd.query_devices(device_index)
+                default_rate = int(dev_info['default_samplerate'])
+            except Exception:
+                pass
 
-    if sample_rate is None:
-        return {'success': False, 'error': 'Device does not support any common sample rate'}
+        for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
+            try:
+                stream = sd.OutputStream(device=device_index, samplerate=rate, channels=1, dtype=np.float32)
+                stream.close()
+                sample_rate = rate
+                break
+            except Exception:
+                continue
 
-    t = np.linspace(0, duration, int(sample_rate * duration), False)
-    tone = np.sin(2 * np.pi * frequency * t)
-    fade_samples = int(sample_rate * 0.02)
-    fade_in = np.linspace(0, 1, fade_samples)
-    fade_out = np.linspace(1, 0, fade_samples)
-    tone[:fade_samples] *= fade_in
-    tone[-fade_samples:] *= fade_out
-    tone = (tone * 0.5 * 32767).astype(np.int16)
+        if sample_rate is None:
+            return {'success': False, 'error': 'Device does not support any common sample rate'}
 
-    sd.play(tone, sample_rate, device=device_index)
-    sd.wait()
+        t = np.linspace(0, duration, int(sample_rate * duration), False)
+        tone = np.sin(2 * np.pi * frequency * t)
+        fade_samples = int(sample_rate * 0.02)
+        fade_in = np.linspace(0, 1, fade_samples)
+        fade_out = np.linspace(1, 0, fade_samples)
+        tone[:fade_samples] *= fade_in
+        tone[-fade_samples:] *= fade_out
+        tone = (tone * 0.5 * 32767).astype(np.int16)
 
-    return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
+        sd.play(tone, sample_rate, device=device_index)
+        sd.wait()
+        return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
+
+    return await asyncio.to_thread(_test_output)
 
 
 # =============================================================================
