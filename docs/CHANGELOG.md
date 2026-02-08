@@ -1,9 +1,15 @@
 # 1.3.0 - FastAPI uvicorn
+## February 7, 2026
 - Switched entire app to FastAPI
 - Served through uvicorn instead of flask
+- Removed proxy, straight to API now
 - Creates self-signed cert on app load
+- Moved STT to be its own object instead of process
+- Removed flask from TTS, uses simple http server now
+- Added file uploads (with syntax highlight)
 # 1.2.6 - Privacy mode
-- Privacy mode only allows whitelisted
+- Privacy mode only allows whitelisted IP/hosts
+- Private prompts can only be used with privacy mode
 # 1.2.5 - Performance upgrades
 - SSE bugs - added ID to prevent 2 tab issues
 - Reduced requests with 1 mega endpoint
