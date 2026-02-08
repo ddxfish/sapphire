@@ -410,7 +410,7 @@ class OpenAIResponsesProvider(BaseProvider):
                 logger.debug(f"[RESPONSES] Unhandled event: {event_type}")
         
         # Build final response
-        logger.info(f"[RESPONSES] Complete: {len(full_content)}ch content, {len(full_thinking)}ch thinking, {len(tool_calls_acc)} tools")
+        logger.info(f"[RESPONSES] Complete: {len(full_content)}ch content, {len(full_thinking)}ch thinking, {len(tool_calls_acc)} tools, events={sorted(seen_event_types)}")
         
         final_tool_calls = [
             ToolCall(id=call_id, name=tc["name"], arguments=tc["arguments"])

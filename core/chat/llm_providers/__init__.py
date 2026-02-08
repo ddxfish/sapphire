@@ -212,19 +212,21 @@ def get_generation_params(provider_key: str, model: str, providers_config: Dict[
 def get_provider_by_key(
     provider_key: str,
     providers_config: Dict[str, Dict[str, Any]],
-    request_timeout: float = 240.0
+    request_timeout: float = 240.0,
+    model_override: str = ''
 ) -> Optional[BaseProvider]:
     """
     Create provider instance by key from LLM_PROVIDERS config.
-    
+
     For OpenAI provider, auto-selects between Chat Completions and Responses API
     based on model (gpt-5.x uses Responses API for reasoning summaries).
-    
+
     Args:
         provider_key: Key in LLM_PROVIDERS (e.g., 'claude', 'lmstudio')
         providers_config: The LLM_PROVIDERS dict from settings
         request_timeout: Overall request timeout
-    
+        model_override: Per-chat model override (takes priority for provider selection)
+
     Returns:
         Provider instance or None if disabled/error
     """
@@ -240,8 +242,8 @@ def get_provider_by_key(
     
     # Determine provider class
     provider_type = config.get('provider', 'openai')
-    model = config.get('model', '')
-    
+    model = model_override or config.get('model', '')
+
     # Auto-select Responses API for OpenAI reasoning models
     if provider_type == 'openai' and OpenAIResponsesProvider.should_use_responses_api(model):
         provider_type = 'openai_responses'

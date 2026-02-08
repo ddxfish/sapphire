@@ -646,7 +646,7 @@ class LLMChat:
                 except Exception:
                     pass
 
-                provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT)
+                provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT, model_override=chat_model)
                 if not provider:
                     raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
 
@@ -774,7 +774,7 @@ class LLMChat:
             
             if provider_key and provider_key not in ("auto", ""):
                 providers_config = getattr(config, 'LLM_PROVIDERS', {})
-                provider = get_provider_by_key(provider_key, providers_config, config.LLM_REQUEST_TIMEOUT)
+                provider = get_provider_by_key(provider_key, providers_config, config.LLM_REQUEST_TIMEOUT, model_override=model_override)
                 if not provider:
                     raise ConnectionError(f"Provider '{provider_key}' not available")
             else:

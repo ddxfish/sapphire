@@ -523,7 +523,7 @@ class ClaudeProvider(BaseProvider):
             "content": [
                 {
                     "type": "tool_result",
-                    "tool_use_id": tool_call_id,
+                    "tool_use_id": self._sanitize_tool_id(tool_call_id),
                     "content": result
                 }
             ]
@@ -564,6 +564,15 @@ class ClaudeProvider(BaseProvider):
         
         return result
     
+    @staticmethod
+    def _sanitize_tool_id(tool_id: str) -> str:
+        """Sanitize tool call ID to match Claude's required pattern: ^[a-zA-Z0-9_-]+$"""
+        import re
+        if not tool_id:
+            return f"toolu_{uuid.uuid4().hex[:24]}"
+        sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', tool_id)
+        return sanitized or f"toolu_{uuid.uuid4().hex[:24]}"
+
     def _convert_messages(self, messages: List[Dict[str, Any]]) -> tuple:
         """
         Convert OpenAI-format messages to Claude format.
@@ -633,7 +642,7 @@ class ClaudeProvider(BaseProvider):
                         
                         content_blocks.append({
                             "type": "tool_use",
-                            "id": tc.get("id"),
+                            "id": self._sanitize_tool_id(tc.get("id", "")),
                             "name": func.get("name"),
                             "input": args
                         })
@@ -657,7 +666,7 @@ class ClaudeProvider(BaseProvider):
                     "content": [
                         {
                             "type": "tool_result",
-                            "tool_use_id": msg.get("tool_call_id"),
+                            "tool_use_id": self._sanitize_tool_id(msg.get("tool_call_id", "")),
                             "content": tool_content
                         }
                     ]
