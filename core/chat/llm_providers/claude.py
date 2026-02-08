@@ -776,10 +776,15 @@ class ClaudeProvider(BaseProvider):
                 usage["cache_read_tokens"] = cache_read
                 usage["cache_write_tokens"] = cache_write
         
-        # Note: For non-streaming, thinking is not returned separately
-        # The caller would need to handle this differently if needed
+        # Prepend thinking as <think> tags to match streaming behavior
+        if thinking_text:
+            logger.info(f"[THINK] Non-stream response has thinking ({len(thinking_text)} chars)")
+            final_content = f"<think>{thinking_text}</think>\n\n{content_text}"
+        else:
+            final_content = content_text
+
         return LLMResponse(
-            content=content_text if content_text else None,
+            content=final_content if final_content else None,
             tool_calls=tool_calls,
             finish_reason=response.stop_reason,
             usage=usage

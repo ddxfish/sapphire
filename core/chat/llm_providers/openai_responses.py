@@ -478,11 +478,15 @@ class OpenAIResponsesProvider(BaseProvider):
                     usage["reasoning_tokens"] = reasoning_tokens
                     logger.info(f"[RESPONSES] Reasoning tokens: {reasoning_tokens}")
         
+        # Prepend thinking as <think> tags to match streaming behavior
         if thinking_text:
             logger.info(f"[RESPONSES] Got reasoning summary ({len(thinking_text)} chars)")
-        
+            final_content = f"<think>{thinking_text}</think>\n\n{content_text}"
+        else:
+            final_content = content_text
+
         return LLMResponse(
-            content=content_text if content_text else None,
+            content=final_content if final_content else None,
             tool_calls=tool_calls,
             finish_reason=getattr(response, 'status', None),
             usage=usage
