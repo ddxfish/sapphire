@@ -88,7 +88,7 @@ class VoiceChatSystem:
                 logger.info("Starting Kokoro TTS server...")
                 self.tts_server_manager = ProcessManager(
                     script_path=tts_script,
-                    log_name="kokoro_tts",
+                    log_name="kokoro",
                     base_dir=base_dir
                 )
                 self.tts_server_manager.start()

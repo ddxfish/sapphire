@@ -1,5 +1,6 @@
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+import faulthandler
 import json
 import time
 import os
@@ -14,18 +15,17 @@ import tempfile
 import psutil
 from kokoro import KPipeline
 
+# Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
+faulthandler.enable()
+
 # --- Path setup for config import ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(script_dir))
 sys.path.insert(0, project_root)
 
-# --- Set up file-based logging ---
-log_dir = os.path.join(script_dir, '..', '..', 'user', 'logs')
-os.makedirs(log_dir, exist_ok=True)
-log_file_path = os.path.join(log_dir, 'kokoro.log')
-
+# --- Set up logging to stderr (captured by ProcessManager into kokoro.log) ---
 logging.basicConfig(
-    filename=log_file_path,
+    stream=sys.stderr,
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
@@ -64,6 +64,7 @@ MAX_REQUESTS = 500
 MAX_CONTENT_LENGTH = 1024 * 1024  # 1MB max request body
 request_count = 0
 request_count_lock = threading.Lock()
+pipeline_lock = threading.Lock()
 
 def check_memory():
     """Return True if memory exceeds limit."""
@@ -223,8 +224,12 @@ class TTSHandler(BaseHTTPRequestHandler):
             speed = DEFAULT_SPEED
 
         generation_start = time.time()
-        generator = pipeline(text_to_speak, voice=voice, speed=speed)
-        audio_segments = [audio_segment for _, _, audio_segment in generator]
+        with pipeline_lock:
+            generator = pipeline(text_to_speak, voice=voice, speed=speed)
+            # Copy each segment to decouple from PyTorch tensor memory
+            # Without copy, GC of generator tensors can free memory numpy still references → SIGSEGV
+            audio_segments = [np.copy(seg) for _, _, seg in generator]
+            del generator
 
         if not audio_segments:
             logger.error("Failed to generate audio for text.")
@@ -232,16 +237,25 @@ class TTSHandler(BaseHTTPRequestHandler):
             return
 
         audio = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
+        del audio_segments  # Free segment list
         generation_time = time.time() - generation_start
-        logger.info(f"Audio generation completed in {generation_time:.2f}s (request #{request_count})")
+        logger.info(f"Audio generated in {generation_time:.2f}s — shape={audio.shape} dtype={audio.dtype} (req #{request_count})")
+        sys.stderr.flush()
 
         file_uuid = uuid.uuid4().hex
         timestamp = int(time.time())
         file_path = os.path.join(TEMP_DIR, f'audio_{timestamp}_{file_uuid}.ogg')
 
         try:
-            sf.write(file_path, audio, AUDIO_SAMPLE_RATE, format='OGG', subtype='VORBIS')
+            logger.info(f"Encoding OGG/Opus to {file_path}...")
+            sys.stderr.flush()
+            sf.write(file_path, audio, AUDIO_SAMPLE_RATE, format='OGG', subtype='OPUS')
+            logger.info(f"OGG/Opus written OK ({os.path.getsize(file_path)} bytes)")
+            sys.stderr.flush()
+            del audio  # Free numpy array before sending
             _file_response(self, file_path)
+            logger.info("Response sent OK")
+            sys.stderr.flush()
         except Exception as e:
             logger.error(f"Error processing audio file: {e}")
             _json_response(self, {'error': f'Server error: {str(e)}'}, 500)

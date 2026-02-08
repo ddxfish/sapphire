@@ -1,8 +1,12 @@
 import os
 import sys
+import faulthandler
 import logging
 import shutil
 from logging.handlers import TimedRotatingFileHandler
+
+# Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
+faulthandler.enable()
 
 # Early stderr capture - ensures ANY errors get logged
 _startup_log = None
@@ -65,9 +69,26 @@ file_handler = TimedRotatingFileHandler(
 )
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
+# Colored console formatter
+class ColoredFormatter(logging.Formatter):
+    """ANSI color formatter for terminal output."""
+    COLORS = {
+        logging.DEBUG:    '\033[90m',   # Light grey
+        logging.INFO:     '\033[97m',   # White
+        logging.WARNING:  '\033[93m',   # Yellow
+        logging.ERROR:    '\033[91m',   # Red
+        logging.CRITICAL: '\033[1;91m', # Bold red
+    }
+    RESET = '\033[0m'
+
+    def format(self, record):
+        color = self.COLORS.get(record.levelno, '')
+        msg = super().format(record)
+        return f"{color}{msg}{self.RESET}" if color else msg
+
 # Console handler for terminal output
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+console_handler.setFormatter(ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
 # Configure root logger
 root_logger = logging.getLogger()

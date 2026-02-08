@@ -310,10 +310,10 @@ class TTSClient:
 
             with open(temp_path, 'wb') as f:
                 f.write(response.content)
-            
+
             if self.should_stop.is_set():
                 return None, None
-            
+
             # Load audio data
             audio_data, samplerate = sf.read(temp_path)
             
@@ -409,16 +409,16 @@ class TTSClient:
             # Save to temp, apply pitch, return bytes
             fd, temp_path = tempfile.mkstemp(suffix='.ogg', dir=self.temp_dir)
             os.close(fd)
-            
+
             with open(temp_path, 'wb') as f:
                 f.write(response.content)
-            
+
             # Apply pitch shift if needed
             if self.pitch_shift != 1.0:
                 audio_data, samplerate = sf.read(temp_path)
                 audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
-                sf.write(temp_path, audio_data, samplerate)
-            
+                sf.write(temp_path, audio_data, samplerate, format='OGG', subtype='OPUS')
+
             with open(temp_path, 'rb') as f:
                 return f.read()
                 
