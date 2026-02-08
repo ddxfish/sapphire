@@ -4,6 +4,7 @@ import os
 import time
 import tempfile
 import logging
+import threading
 from typing import Optional
 
 import config
@@ -36,6 +37,7 @@ class WhisperSTT:
     def __init__(self, model_size=config.STT_MODEL_SIZE, language=config.STT_LANGUAGE):
         logger.info(f"Loading faster-whisper model: {model_size}")
         self.model = None
+        self._lock = threading.Lock()
 
         try:
             from faster_whisper import WhisperModel
@@ -85,40 +87,41 @@ class WhisperSTT:
             raise RuntimeError(f"Failed to initialize STT model: {e}")
 
     def transcribe_file(self, audio_file: str) -> Optional[str]:
-        """Transcribe an audio file and return the text."""
+        """Transcribe an audio file and return the text. Thread-safe."""
         temp_path = None
 
-        try:
-            # Load and normalize audio
-            audio_data, sample_rate = sf.read(audio_file)
-            if len(audio_data.shape) > 1:  # Convert stereo to mono
-                audio_data = audio_data.mean(axis=1)
+        with self._lock:
+            try:
+                # Load and normalize audio
+                audio_data, sample_rate = sf.read(audio_file)
+                if len(audio_data.shape) > 1:  # Convert stereo to mono
+                    audio_data = audio_data.mean(axis=1)
 
-            max_val = np.max(np.abs(audio_data))
-            if max_val > 0:
-                audio_data = audio_data / max_val
+                max_val = np.max(np.abs(audio_data))
+                if max_val > 0:
+                    audio_data = audio_data / max_val
 
-            # Save preprocessed audio to temp file
-            fd, temp_path = tempfile.mkstemp(suffix=".wav", prefix="stt_processed_")
-            os.close(fd)
-            sf.write(temp_path, audio_data, sample_rate)
+                # Save preprocessed audio to temp file
+                fd, temp_path = tempfile.mkstemp(suffix=".wav", prefix="stt_processed_")
+                os.close(fd)
+                sf.write(temp_path, audio_data, sample_rate)
 
-            # Configure transcription parameters
-            transcription_params = {
-                'language': config.STT_LANGUAGE,
-                'beam_size': getattr(config, 'FASTER_WHISPER_BEAM_SIZE', 3),
-                'vad_filter': getattr(config, 'FASTER_WHISPER_VAD_FILTER', True),
-                'vad_parameters': getattr(config, 'FASTER_WHISPER_VAD_PARAMETERS', None)
-            }
+                # Configure transcription parameters
+                transcription_params = {
+                    'language': config.STT_LANGUAGE,
+                    'beam_size': getattr(config, 'FASTER_WHISPER_BEAM_SIZE', 3),
+                    'vad_filter': getattr(config, 'FASTER_WHISPER_VAD_FILTER', True),
+                    'vad_parameters': getattr(config, 'FASTER_WHISPER_VAD_PARAMETERS', None)
+                }
 
-            segments, _ = self.model.transcribe(temp_path, **transcription_params)
-            text = " ".join([segment.text for segment in segments]).strip()
-            return text
+                segments, _ = self.model.transcribe(temp_path, **transcription_params)
+                text = " ".join([segment.text for segment in segments]).strip()
+                return text
 
-        except Exception as e:
-            logger.error(f"Transcription error: {e}")
-            return None
+            except Exception as e:
+                logger.error(f"Transcription error: {e}")
+                return None
 
-        finally:
-            if temp_path:
-                safe_unlink(temp_path)
+            finally:
+                if temp_path:
+                    safe_unlink(temp_path)

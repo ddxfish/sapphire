@@ -17,8 +17,9 @@ export const fetchWithTimeout = async (url, opts = {}, timeout = 60000) => {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), timeout);
 
-  // Add session ID header to all requests
-  const headers = { ...opts.headers, 'X-Session-ID': sessionId };
+  // Add session ID and CSRF token headers to all requests
+  const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  const headers = { ...opts.headers, 'X-Session-ID': sessionId, 'X-CSRF-Token': csrfToken };
 
   try {
     const res = await fetch(url, { ...opts, headers, signal: opts.signal || ctrl.signal });

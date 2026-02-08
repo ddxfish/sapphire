@@ -253,7 +253,13 @@ class WakeWordDetector:
                 return
                 
             process_time = time.time()
-            text = self.system.whisper_client.transcribe_file(audio_file)
+            try:
+                text = self.system.whisper_client.transcribe_file(audio_file)
+            finally:
+                try:
+                    os.unlink(audio_file)
+                except OSError:
+                    pass
             logger.info(f"Processing took: {(time.time() - process_time)*1000:.1f}ms")
             
             if not text or not text.strip():

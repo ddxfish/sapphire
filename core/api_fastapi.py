@@ -108,6 +108,23 @@ async def log_requests(request: Request, call_next):
 # =============================================================================
 
 @app.middleware("http")
+async def csrf_protection(request: Request, call_next):
+    """Validate CSRF token on state-changing requests from browser sessions."""
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        # API key auth (internal/tool calls) — skip CSRF
+        if not request.headers.get('X-API-Key'):
+            # Form-based endpoints handle their own CSRF
+            if request.url.path not in ("/login", "/setup"):
+                if request.session.get('logged_in'):
+                    csrf_header = request.headers.get('X-CSRF-Token')
+                    session_token = request.session.get('csrf_token')
+                    if not csrf_header or not session_token or csrf_header != session_token:
+                        from starlette.responses import JSONResponse
+                        return JSONResponse(status_code=403, content={"detail": "CSRF validation failed"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def security_headers(request: Request, call_next):
     """Add security headers to all responses."""
     response = await call_next(request)
@@ -1546,27 +1563,27 @@ async def delete_socks_credential(request: Request, _=Depends(require_login)):
 @app.post("/api/credentials/socks/test")
 async def test_socks_connection(request: Request, _=Depends(require_login)):
     """Test SOCKS proxy connection."""
-    from core.socks_proxy import get_session, SocksAuthError, clear_session_cache
-    import requests as req
-
     if not config.SOCKS_ENABLED:
         return {"status": "error", "error": "SOCKS proxy is disabled"}
 
-    clear_session_cache()
-    try:
-        session = get_session()
-        resp = session.get('https://icanhazip.com', timeout=8)
-        if resp.ok:
-            ip = resp.text.strip()
-            return {"status": "success", "message": f"Connected via {ip}"}
-        else:
+    def _test_socks():
+        from core.socks_proxy import get_session, SocksAuthError, clear_session_cache
+        import requests as req
+        clear_session_cache()
+        try:
+            session = get_session()
+            resp = session.get('https://icanhazip.com', timeout=8)
+            if resp.ok:
+                return {"status": "success", "message": f"Connected via {resp.text.strip()}"}
             return {"status": "error", "error": f"HTTP {resp.status_code}"}
-    except SocksAuthError as e:
-        return {"status": "error", "error": str(e)}
-    except req.exceptions.Timeout:
-        return {"status": "error", "error": "Connection timed out"}
-    except Exception as e:
-        return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+        except SocksAuthError as e:
+            return {"status": "error", "error": str(e)}
+        except req.exceptions.Timeout:
+            return {"status": "error", "error": "Connection timed out"}
+        except Exception as e:
+            return {"status": "error", "error": f"{type(e).__name__}: {e}"}
+
+    return await asyncio.to_thread(_test_socks)
 
 
 # =============================================================================
@@ -1653,11 +1670,9 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
         if provider_key not in providers_config:
             return {"status": "error", "error": f"Unknown provider: {provider_key}"}
 
-        # Temporarily force enabled so we can test even if not yet enabled
         test_config = dict(providers_config[provider_key])
         test_config['enabled'] = True
 
-        # Apply any form overrides (api_key, base_url, model) from the request body
         try:
             body = await request.json()
         except Exception:
@@ -1667,16 +1682,16 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
                 test_config[field] = body[field]
 
         providers_config[provider_key] = test_config
-        provider = get_provider_by_key(provider_key, providers_config, getattr(config, 'LLM_REQUEST_TIMEOUT', 30))
 
-        if not provider:
-            return {"status": "error", "error": f"Could not create provider '{provider_key}' — check API key and settings"}
-
-        healthy = provider.health_check()
-        if healthy:
-            return {"status": "success"}
-        else:
+        def _test_provider():
+            provider = get_provider_by_key(provider_key, providers_config, getattr(config, 'LLM_REQUEST_TIMEOUT', 30))
+            if not provider:
+                return {"status": "error", "error": f"Could not create provider '{provider_key}' — check API key and settings"}
+            if provider.health_check():
+                return {"status": "success"}
             return {"status": "error", "error": "Connection failed — provider did not respond to health check"}
+
+        return await asyncio.to_thread(_test_provider)
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -2866,22 +2881,26 @@ async def get_plugins_config(request: Request, _=Depends(require_login)):
 @app.post("/api/webui/plugins/image-gen/test-connection")
 async def test_sdxl_connection(request: Request, _=Depends(require_login)):
     """Test SDXL connection."""
-    import requests as req
     data = await request.json() or {}
     url = data.get('url', '').strip()
     if not url:
         return {"success": False, "error": "No URL provided"}
     if not url.startswith(('http://', 'https://')):
         return {"success": False, "error": "URL must start with http:// or https://"}
-    try:
-        response = req.get(url, timeout=5)
-        return {"success": True, "status_code": response.status_code, "message": f"Connected (HTTP {response.status_code})"}
-    except req.exceptions.Timeout:
-        return {"success": False, "error": "Connection timed out (5s)"}
-    except req.exceptions.ConnectionError as e:
-        return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
-    except Exception as e:
-        return {"success": False, "error": f"Error: {str(e)[:100]}"}
+
+    def _test():
+        import requests as req
+        try:
+            response = req.get(url, timeout=5)
+            return {"success": True, "status_code": response.status_code, "message": f"Connected (HTTP {response.status_code})"}
+        except req.exceptions.Timeout:
+            return {"success": False, "error": "Connection timed out (5s)"}
+        except req.exceptions.ConnectionError as e:
+            return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error: {str(e)[:100]}"}
+
+    return await asyncio.to_thread(_test)
 
 
 @app.get("/api/webui/plugins/image-gen/defaults")
@@ -2903,7 +2922,6 @@ async def get_ha_defaults(request: Request, _=Depends(require_login)):
 @app.post("/api/webui/plugins/homeassistant/test-connection")
 async def test_ha_connection(request: Request, _=Depends(require_login)):
     """Test HA connection."""
-    import requests as req
     from core.credentials_manager import credentials
 
     data = await request.json() or {}
@@ -2922,21 +2940,24 @@ async def test_ha_connection(request: Request, _=Depends(require_login)):
     if not url.startswith(('http://', 'https://')):
         return {"success": False, "error": "URL must start with http:// or https://"}
 
-    try:
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        response = req.get(f"{url}/api/", headers=headers, timeout=10)
-        if response.status_code == 200:
-            return {"success": True, "message": response.json().get('message', 'Connected')}
-        elif response.status_code == 401:
-            return {"success": False, "error": "Invalid API token"}
-        else:
+    def _test():
+        import requests as req
+        try:
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            response = req.get(f"{url}/api/", headers=headers, timeout=10)
+            if response.status_code == 200:
+                return {"success": True, "message": response.json().get('message', 'Connected')}
+            elif response.status_code == 401:
+                return {"success": False, "error": "Invalid API token"}
             return {"success": False, "error": f"HTTP {response.status_code}"}
-    except req.exceptions.Timeout:
-        return {"success": False, "error": "Connection timed out"}
-    except req.exceptions.ConnectionError as e:
-        return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
-    except Exception as e:
-        return {"success": False, "error": f"Error: {str(e)[:100]}"}
+        except req.exceptions.Timeout:
+            return {"success": False, "error": "Connection timed out"}
+        except req.exceptions.ConnectionError as e:
+            return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error: {str(e)[:100]}"}
+
+    return await asyncio.to_thread(_test)
 
 
 @app.put("/api/webui/plugins/homeassistant/token")
@@ -2989,7 +3010,6 @@ async def request_system_shutdown(request: Request, _=Depends(require_login)):
 async def proxy_sdxl_image(image_id: str, request: Request, _=Depends(require_login)):
     """Proxy SDXL images."""
     import re
-    import requests as req
 
     if not re.match(r'^[a-zA-Z0-9_-]+$', image_id):
         raise HTTPException(status_code=400, detail="Invalid image ID")
@@ -3005,8 +3025,13 @@ async def proxy_sdxl_image(image_id: str, request: Request, _=Depends(require_lo
         except Exception:
             pass
 
+    def _fetch_image():
+        import requests as req
+        return req.get(f'{sdxl_url}/output/{image_id}.jpg', timeout=10)
+
     try:
-        response = req.get(f'{sdxl_url}/output/{image_id}.jpg', timeout=10)
+        import requests as req
+        response = await asyncio.to_thread(_fetch_image)
         if response.status_code == 200:
             return StreamingResponse(io.BytesIO(response.content), media_type='image/jpeg')
         elif response.status_code == 404:

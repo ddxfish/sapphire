@@ -34,6 +34,20 @@
             document.head.appendChild(link);
         })();
     </script>
+    <script>
+        // CSRF protection: inject token into all API fetch requests
+        (function() {
+            const _fetch = window.fetch;
+            window.fetch = function(url, opts) {
+                if (typeof url === 'string' && url.startsWith('/api/')) {
+                    opts = opts || {};
+                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
+                    if (csrf) opts.headers = { ...opts.headers, 'X-CSRF-Token': csrf };
+                }
+                return _fetch.apply(this, arguments);
+            };
+        })();
+    </script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="sidebar-collapsed">
