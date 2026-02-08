@@ -1,4 +1,5 @@
 # api_fastapi.py - Unified FastAPI API (replaces Flask api.py + web_interface.py)
+import asyncio
 import os
 import io
 import json
@@ -1177,7 +1178,7 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
         contents = await audio.read()
         with open(temp_path, 'wb') as f:
             f.write(contents)
-        transcribed_text = system.whisper_client.transcribe_file(temp_path)
+        transcribed_text = await asyncio.to_thread(system.whisper_client.transcribe_file, temp_path)
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         raise HTTPException(status_code=500, detail="Failed to process audio")
