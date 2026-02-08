@@ -5,6 +5,7 @@ Switches chat context, applies settings, runs LLM, restores original state.
 """
 
 import time
+import random
 import logging
 from datetime import datetime
 from typing import Dict, Any
@@ -71,6 +72,7 @@ class ContinuityExecutor:
             
             iterations = max(1, task.get("iterations", 1))
             cooldown_sec = task.get("cooldown_minutes", 0) * 60
+            chance = task.get("chance", 100)
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
 
@@ -79,6 +81,13 @@ class ContinuityExecutor:
                 if i > 0 and cooldown_sec > 0:
                     logger.info(f"[Continuity] Iteration cooldown: {cooldown_sec}s before iteration {i+1}")
                     time.sleep(cooldown_sec)
+
+                # Per-iteration chance roll
+                if chance < 100:
+                    roll = random.randint(1, 100)
+                    if roll > chance:
+                        logger.info(f"[Continuity] Iteration {i+1} skipped (roll {roll} > {chance}%)")
+                        continue
 
                 msg = initial_message if i == 0 else "[continue]"
 
@@ -144,6 +153,7 @@ class ContinuityExecutor:
             # Run iterations
             iterations = max(1, task.get("iterations", 1))
             cooldown_sec = task.get("cooldown_minutes", 0) * 60
+            chance = task.get("chance", 100)
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
 
@@ -152,6 +162,13 @@ class ContinuityExecutor:
                 if i > 0 and cooldown_sec > 0:
                     logger.info(f"[Continuity] Iteration cooldown: {cooldown_sec}s before iteration {i+1}")
                     time.sleep(cooldown_sec)
+
+                # Per-iteration chance roll
+                if chance < 100:
+                    roll = random.randint(1, 100)
+                    if roll > chance:
+                        logger.info(f"[Continuity] Iteration {i+1} skipped (roll {roll} > {chance}%)")
+                        continue
 
                 msg = initial_message if i == 0 else "[continue]"
 

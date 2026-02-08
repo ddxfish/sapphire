@@ -891,12 +891,10 @@ Editing:
     }
 
     const promptName = nameOverride || data.name || this.currentPrompt;
-    const existingPrompts = await API.listPrompts();
-    const promptExists = existingPrompts.some(p => p.name === promptName);
 
-    // Check for component conflicts before importing
-    const conflicts = [];
-    if (data.components) {
+    // Import components only if overwrite is enabled
+    if (overwrite && data.components) {
+      const conflicts = [];
       for (const [type, items] of Object.entries(data.components)) {
         for (const key of Object.keys(items)) {
           if (this.components[type]?.[key]) {
@@ -904,21 +902,16 @@ Editing:
           }
         }
       }
-    }
 
-    // If conflicts exist, ask user to confirm overwrite
-    if (conflicts.length > 0) {
-      const msg = `The following components already exist and will be OVERWRITTEN:\n\n${conflicts.join('\n')}\n\nProceed with import?`;
-      if (!confirm(msg)) {
-        showToast('Import cancelled', 'info');
-        return;
+      if (conflicts.length > 0) {
+        const msg = `The following components already exist and will be OVERWRITTEN:\n\n${conflicts.join('\n')}\n\nProceed?`;
+        if (!confirm(msg)) {
+          showToast('Import cancelled', 'info');
+          return;
+        }
       }
-    }
 
-    // Import components (overwrite confirmed conflicts)
-    if (data.components) {
       let imported = 0;
-
       for (const [type, items] of Object.entries(data.components)) {
         for (const [key, value] of Object.entries(items)) {
           try {
@@ -935,15 +928,10 @@ Editing:
       }
     }
 
-    // Import prompt
-    let promptImported = false;
-    if (promptExists && !overwrite) {
-      showToast(`Prompt "${promptName}" exists - check overwrite to replace`, 'warning');
-    } else {
-      await API.savePrompt(promptName, data.prompt);
-      promptImported = true;
-      showToast(`Prompt "${promptName}" ${promptExists ? 'updated' : 'created'}!`, 'success');
-    }
+    // Save prompt (always — user chose the name via Import As dialog)
+    await API.savePrompt(promptName, data.prompt);
+    showToast(`Prompt "${promptName}" imported!`, 'success');
+    const promptImported = true;
 
     // Force-reset guards before reloading
     this._listLoadInProgress = false;

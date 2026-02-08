@@ -335,15 +335,6 @@ class ContinuityScheduler:
 
             logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
 
-            # Probability gate
-            chance = task.get("chance", 100)
-            if chance < 100:
-                roll = random.randint(1, 100)
-                if roll > chance:
-                    self._log_activity(task_id, task_name, "skipped", {"reason": "chance", "roll": roll, "threshold": chance})
-                    logger.info(f"[Continuity] Task '{task_name}' skipped (roll {roll} > {chance}%)")
-                    continue
-
             # If task is already running, queue it instead of overlapping
             with self._lock:
                 if self._task_running.get(task_id, False):
