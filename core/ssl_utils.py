@@ -1,5 +1,6 @@
 # ssl_utils.py - Persistent self-signed SSL certificate management
 import os
+import sys
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -94,7 +95,8 @@ def _generate_self_signed_cert():
             format=serialization.PrivateFormat.TraditionalOpenSSL,
             encryption_algorithm=serialization.NoEncryption(),
         ))
-    os.chmod(KEY_FILE, 0o600)  # Restrict key permissions
+    if sys.platform != 'win32':
+        os.chmod(KEY_FILE, 0o600)  # Restrict key permissions
 
     # Write cert file
     with open(CERT_FILE, "wb") as f:

@@ -18,6 +18,8 @@ def _make_child_die_with_parent():
     On Linux, uses prctl(PR_SET_PDEATHSIG) to receive SIGTERM on parent death.
     Also creates new session for process group management.
     """
+    if IS_WINDOWS:
+        return
     os.setsid()
     if not IS_WINDOWS:
         try:
@@ -36,7 +38,21 @@ def kill_process_on_port(port: int) -> bool:
     Returns True if a process was killed, False otherwise.
     """
     if IS_WINDOWS:
-        return False  # TODO: implement for Windows if needed
+        try:
+            result = subprocess.run(
+                ['netstat', '-ano', '-p', 'TCP'],
+                capture_output=True, text=True, timeout=5
+            )
+            for line in result.stdout.splitlines():
+                if f':{port}' in line and 'LISTENING' in line:
+                    pid = int(line.strip().split()[-1])
+                    if pid > 0:
+                        subprocess.run(['taskkill', '/F', '/PID', str(pid)], timeout=5)
+                        logger.info(f"Killed orphan process {pid} on port {port}")
+                        return True
+        except Exception:
+            pass
+        return False
 
     try:
         # Find PID using fuser
