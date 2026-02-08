@@ -100,7 +100,7 @@ function buildOptions(componentOptions, selected) {
   const options = componentOptions || {};
   let html = '';
   
-  for (const [key, value] of Object.entries(options)) {
+  for (const [key, value] of Object.entries(options).sort(([a], [b]) => a.localeCompare(b))) {
     const isSelected = key === selected ? 'selected' : '';
     html += `<option value="${key}" ${isSelected}>${key}</option>`;
   }

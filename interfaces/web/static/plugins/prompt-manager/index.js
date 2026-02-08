@@ -1002,7 +1002,7 @@ Editing:
     };
 
     const buildListHTML = (items, selected) => {
-      const keys = Object.keys(items);
+      const keys = Object.keys(items).sort((a, b) => a.localeCompare(b));
       if (keys.length === 0) {
         return '<div style="color:var(--text-muted);padding:12px;text-align:center;">No items yet. Click + to add one.</div>';
       }
