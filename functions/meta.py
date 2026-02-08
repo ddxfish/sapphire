@@ -632,8 +632,9 @@ def execute(function_name, arguments, config):
                     
                     data = response.json()
                     modules = data.get('modules', {})
-                    
-                    lines = [f"All tools ({data.get('total_functions', 0)} total):"]
+                    total = sum(m.get('count', 0) for m in modules.values())
+
+                    lines = [f"All tools ({total} total):"]
                     
                     for module_name, module_info in sorted(modules.items()):
                         for func in module_info.get('functions', []):

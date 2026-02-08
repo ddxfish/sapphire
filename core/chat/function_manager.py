@@ -307,6 +307,7 @@ class FunctionManager:
             "function_count": actual_count,
             "base_count": base_count,
             "expected_count": expected_count,
+            "enabled_functions": self.get_enabled_function_names(),
             "prompt_mode": mode,
             "status": "ok" if base_count == expected_count else "partial"
         }
