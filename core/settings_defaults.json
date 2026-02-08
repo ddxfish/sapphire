@@ -210,7 +210,7 @@
   
   "tools": {
     "TOOL_HISTORY_MAX_ENTRIES": 0,
-    "MAX_TOOL_ITERATIONS": 4,
+    "MAX_TOOL_ITERATIONS": 5,
     "MAX_PARALLEL_TOOLS": 3,
     "DEBUG_TOOL_CALLING": false
   },
