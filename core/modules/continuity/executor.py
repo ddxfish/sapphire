@@ -4,6 +4,7 @@ Continuity Executor - Runs scheduled tasks with proper context isolation.
 Switches chat context, applies settings, runs LLM, restores original state.
 """
 
+import time
 import logging
 from datetime import datetime
 from typing import Dict, Any
@@ -69,23 +70,29 @@ class ContinuityExecutor:
             }
             
             iterations = max(1, task.get("iterations", 1))
+            cooldown_sec = task.get("cooldown_minutes", 0) * 60
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
-            
+
             for i in range(iterations):
+                # Cooldown between follow-up iterations (not before first)
+                if i > 0 and cooldown_sec > 0:
+                    logger.info(f"[Continuity] Iteration cooldown: {cooldown_sec}s before iteration {i+1}")
+                    time.sleep(cooldown_sec)
+
                 msg = initial_message if i == 0 else "[continue]"
-                
+
                 try:
                     # Use isolated_chat - no session state changes
                     response = self.system.llm_chat.isolated_chat(msg, task_settings)
-                    
+
                     # TTS if enabled
                     if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
                         try:
                             self.system.tts.speak(response)
                         except Exception as tts_err:
                             logger.warning(f"[Continuity] TTS failed: {tts_err}")
-                    
+
                     result["responses"].append({
                         "iteration": i + 1,
                         "input": msg,
@@ -115,12 +122,17 @@ class ContinuityExecutor:
         try:
             logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}'")
 
-            # Create chat if it doesn't exist
-            existing_chats = [c["name"] for c in session_manager.list_chat_files()]
-            if target_chat not in existing_chats:
+            # Find existing chat (case-insensitive) or create new one
+            existing_chats = {c["name"].lower(): c["name"] for c in session_manager.list_chat_files()}
+            match = existing_chats.get(target_chat.lower())
+            if match:
+                target_chat = match  # Use actual DB name
+            else:
                 logger.info(f"[Continuity] Creating new chat: {target_chat}")
                 if not session_manager.create_chat(target_chat):
                     raise RuntimeError(f"Failed to create chat: {target_chat}")
+                # create_chat lowercases, so resolve the actual name
+                target_chat = target_chat.replace(' ', '_').lower()
 
             # Switch to target chat
             if not session_manager.set_active_chat(target_chat):
@@ -131,10 +143,16 @@ class ContinuityExecutor:
 
             # Run iterations
             iterations = max(1, task.get("iterations", 1))
+            cooldown_sec = task.get("cooldown_minutes", 0) * 60
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
 
             for i in range(iterations):
+                # Cooldown between follow-up iterations (not before first)
+                if i > 0 and cooldown_sec > 0:
+                    logger.info(f"[Continuity] Iteration cooldown: {cooldown_sec}s before iteration {i+1}")
+                    time.sleep(cooldown_sec)
+
                 msg = initial_message if i == 0 else "[continue]"
 
                 try:

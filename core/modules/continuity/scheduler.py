@@ -59,6 +59,11 @@ class ContinuityScheduler:
         # In-memory caches
         self._tasks: Dict[str, Dict] = {}
         self._activity: List[Dict] = []
+
+        # Per-task run state: tracks busy flag, queued fires, and last matched minute
+        self._task_running: Dict[str, bool] = {}
+        self._task_pending: Dict[str, int] = {}
+        self._task_last_matched: Dict[str, str] = {}  # task_id -> "YYYY-MM-DD HH:MM"
         
         self._ensure_dirs()
         self._load_tasks()
@@ -262,58 +267,74 @@ class ContinuityScheduler:
             logger.error(f"[Continuity] Cron check failed for '{cron_expr}': {e}")
             return False
     
-    def _cooldown_passed(self, task: Dict) -> bool:
-        """Check if enough time has passed since last run. 0 = no cooldown."""
-        cooldown = task.get("cooldown_minutes", 60)
-        if cooldown == 0:
-            return True  # 0 means no cooldown
-        
-        last_run = task.get("last_run")
-        if not last_run:
-            return True
-        
-        try:
-            last_dt = datetime.fromisoformat(last_run)
-            elapsed = (datetime.now() - last_dt).total_seconds() / 60
-            return elapsed >= cooldown
-        except Exception:
-            return True
-    
+    def _execute_task(self, task: Dict):
+        """Execute a task and drain any pending queue. Runs on a worker thread."""
+        task_id = task["id"]
+        task_name = task.get("name", "Unnamed")
+
+        while True:
+            self._log_activity(task_id, task_name, "started")
+            try:
+                result = self.executor.run(task)
+
+                with self._lock:
+                    if task_id in self._tasks:
+                        self._tasks[task_id]["last_run"] = datetime.now().isoformat()
+                        self._save_tasks()
+
+                status = "complete" if result.get("success") else "error"
+                self._log_activity(task_id, task_name, status, {
+                    "responses": len(result.get("responses", [])),
+                    "errors": result.get("errors", [])
+                })
+            except Exception as e:
+                logger.error(f"[Continuity] Task '{task_name}' execution failed: {e}", exc_info=True)
+                self._log_activity(task_id, task_name, "error", {"exception": str(e)})
+
+            # Check for queued fires
+            with self._lock:
+                if self._task_pending.get(task_id, 0) > 0:
+                    self._task_pending[task_id] -= 1
+                    logger.info(f"[Continuity] '{task_name}' draining queue ({self._task_pending[task_id]} remaining)")
+                    continue  # Run again immediately
+                else:
+                    self._task_running[task_id] = False
+                    break
+
     def _check_and_run(self):
         """Single check cycle - evaluate all tasks, run eligible ones."""
         now = datetime.now()
-        
+
         with self._lock:
             tasks_snapshot = list(self._tasks.values())
-        
+
         if not tasks_snapshot:
             return
-        
+
         logger.debug(f"[Continuity] Checking {len(tasks_snapshot)} tasks at {now.strftime('%H:%M:%S')}")
-        
+
         for task in tasks_snapshot:
             if not task.get("enabled", True):
                 continue
-            
+
             task_id = task["id"]
             task_name = task.get("name", "Unnamed")
             schedule = task.get("schedule", "")
-            
+
             # Check cron match
             cron_matched = self._cron_matches_now(schedule, now - timedelta(seconds=self.CHECK_INTERVAL))
             if not cron_matched:
                 logger.debug(f"[Continuity] '{task_name}' schedule '{schedule}' - no match at {now.strftime('%H:%M')}")
                 continue
-            
-            logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
-            
-            # Check cooldown
-            if not self._cooldown_passed(task):
-                cooldown = task.get("cooldown_minutes", 60)
-                last_run = task.get("last_run", "never")
-                logger.info(f"[Continuity] Task '{task_name}' skipped - in cooldown ({cooldown}min, last run: {last_run})")
+
+            # Dedup: only fire once per matching minute (scheduler checks every 30s)
+            current_minute = now.strftime('%Y-%m-%d %H:%M')
+            if self._task_last_matched.get(task_id) == current_minute:
                 continue
-            
+            self._task_last_matched[task_id] = current_minute
+
+            logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
+
             # Probability gate
             chance = task.get("chance", 100)
             if chance < 100:
@@ -322,68 +343,72 @@ class ContinuityScheduler:
                     self._log_activity(task_id, task_name, "skipped", {"reason": "chance", "roll": roll, "threshold": chance})
                     logger.info(f"[Continuity] Task '{task_name}' skipped (roll {roll} > {chance}%)")
                     continue
-            
-            # Execute task
+
+            # If task is already running, queue it instead of overlapping
+            with self._lock:
+                if self._task_running.get(task_id, False):
+                    self._task_pending[task_id] = self._task_pending.get(task_id, 0) + 1
+                    logger.info(f"[Continuity] '{task_name}' busy — queued (pending: {self._task_pending[task_id]})")
+                    self._log_activity(task_id, task_name, "queued", {"pending": self._task_pending[task_id]})
+                    continue
+                self._task_running[task_id] = True
+
+            # Run on a separate thread so different tasks can run concurrently
             logger.info(f"[Continuity] Triggering task: {task_name}")
-            self._log_activity(task_id, task_name, "started")
-            
-            try:
-                result = self.executor.run(task)
-                
-                # Update last_run
-                with self._lock:
-                    if task_id in self._tasks:
-                        self._tasks[task_id]["last_run"] = datetime.now().isoformat()
-                        self._save_tasks()
-                
-                status = "complete" if result.get("success") else "error"
-                self._log_activity(task_id, task_name, status, {
-                    "responses": len(result.get("responses", [])),
-                    "errors": result.get("errors", [])
-                })
-                
-            except Exception as e:
-                logger.error(f"[Continuity] Task '{task_name}' execution failed: {e}", exc_info=True)
-                self._log_activity(task_id, task_name, "error", {"exception": str(e)})
+            thread = threading.Thread(
+                target=self._execute_task, args=(task,),
+                daemon=True, name=f"Continuity-{task_name}"
+            )
+            thread.start()
     
     # =========================================================================
     # MANUAL RUN
     # =========================================================================
     
     def run_task_now(self, task_id: str) -> Dict[str, Any]:
-        """Manually trigger a task immediately (for testing)."""
+        """Manually trigger a task immediately (for testing). Runs synchronously."""
         with self._lock:
             task = self._tasks.get(task_id)
-        
+
         if not task:
             return {"success": False, "error": "Task not found"}
-        
+
         task_name = task.get("name", "Unnamed")
+
+        # Check if already running
+        with self._lock:
+            if self._task_running.get(task_id, False):
+                return {"success": False, "error": f"Task '{task_name}' is already running"}
+            self._task_running[task_id] = True
+
         logger.info(f"[Continuity] Manual run: {task_name}")
         self._log_activity(task_id, task_name, "started", {"manual": True})
-        
+
         try:
             result = self.executor.run(task)
-            
-            # Update last_run
+
             with self._lock:
                 if task_id in self._tasks:
                     self._tasks[task_id]["last_run"] = datetime.now().isoformat()
                     self._save_tasks()
-            
+
             status = "complete" if result.get("success") else "error"
             self._log_activity(task_id, task_name, status, {
                 "manual": True,
                 "responses": len(result.get("responses", [])),
                 "errors": result.get("errors", [])
             })
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"[Continuity] Manual run failed: {e}", exc_info=True)
             self._log_activity(task_id, task_name, "error", {"manual": True, "exception": str(e)})
             return {"success": False, "error": str(e)}
+
+        finally:
+            with self._lock:
+                self._task_running[task_id] = False
     
     # =========================================================================
     # THREAD CONTROL
