@@ -91,11 +91,42 @@ TOOLS = [
     }
 ]
 
+def _parse_ddg_results(html: str, max_results: int = 15) -> list:
+    """Parse DDG HTML response into result dicts."""
+    soup = BeautifulSoup(html, 'html.parser')
+    result_divs = soup.find_all('div', class_='result')
+    results = []
+    for div in result_divs[:max_results]:
+        if div.find('div', class_='badge--ad__tooltip-wrap'):
+            continue
+        title_link = div.find('a', class_='result__a')
+        url_link = div.find('a', class_='result__url')
+        snippet_link = div.find('a', class_='result__snippet')
+        if title_link and url_link:
+            href = url_link.get('href', '')
+            if href.startswith('//'):
+                href = 'https:' + href
+            if 'duckduckgo.com/l/?uddg=' in href:
+                try:
+                    parsed = urllib.parse.urlparse(href)
+                    params = urllib.parse.parse_qs(parsed.query)
+                    if 'uddg' in params:
+                        href = urllib.parse.unquote(params['uddg'][0])
+                except Exception:
+                    continue
+            results.append({
+                'title': title_link.get_text(strip=True),
+                'href': href,
+                'body': snippet_link.get_text(strip=True)[:50] if snippet_link else ''
+            })
+    return results
+
+
 def search_ddg_html(query: str, max_results: int = 15) -> list:
     logger.info(f"[WEB] DDG search requested")
     encoded = urllib.parse.quote_plus(query)
     url = f"https://html.duckduckgo.com/html/?q={encoded}&kp=-1&kl=us-en"
-    
+
     try:
         logger.info(f"[WEB] Fetching DDG: {url}")
         resp = get_session().get(url, timeout=12)
@@ -132,59 +163,24 @@ def search_ddg_html(query: str, max_results: int = 15) -> list:
     except Exception as e:
         logger.error(f"[WEB] DDG response processing failed: {type(e).__name__}: {e}")
         return []
-    
+
     logger.info(f"[WEB] Parsing DDG HTML ({len(resp.text)} chars)")
-    soup = BeautifulSoup(resp.text, 'html.parser')
-    
-    # Diagnostic: see what divs we actually have
-    all_divs = soup.find_all('div', class_=True)
-    div_classes = set()
-    for div in all_divs[:20]:  # Sample first 20 divs
-        div_classes.update(div.get('class', []))
-    logger.info(f"[WEB] Sample div classes found: {sorted(list(div_classes))[:10]}")
-    
-    # Find result divs - DDG uses multiple classes including 'result' and 'web-result'
-    result_divs = soup.find_all('div', class_='result')
-    logger.info(f"[WEB] Found {len(result_divs)} result divs in HTML")
-    
-    results = []
-    
-    for div in result_divs[:max_results]:
-        # Skip ads
-        if div.find('div', class_='badge--ad__tooltip-wrap'):
-            continue
-        
-        # New structure uses double-underscore classes
-        title_link = div.find('a', class_='result__a')
-        url_link = div.find('a', class_='result__url')
-        snippet_link = div.find('a', class_='result__snippet')
-        
-        if title_link and url_link:
-            href = url_link.get('href', '')
-            if href.startswith('//'):
-                href = 'https:' + href
-            
-            if 'duckduckgo.com/l/?uddg=' in href:
-                try:
-                    parsed = urllib.parse.urlparse(href)
-                    params = urllib.parse.parse_qs(parsed.query)
-                    if 'uddg' in params:
-                        href = urllib.parse.unquote(params['uddg'][0])
-                except Exception as e:
-                    logger.warning(f"[WEB] URL decode failed: {e}")
-                    continue
-            
-            results.append({
-                'title': title_link.get_text(strip=True),
-                'href': href,
-                'body': snippet_link.get_text(strip=True)[:50] if snippet_link else ''
-            })
-    
+    results = _parse_ddg_results(resp.text, max_results)
     logger.info(f"[WEB] DDG found {len(results)} results")
+
+    # DDG returns a challenge page on fresh sessions (HTTP 200 but no result divs)
+    # Retry once on the warm connection — second request usually gets real results
     if not results and resp.text:
-        # Show first 500 chars to diagnose what page we got
-        preview = resp.text[:500].replace('\n', ' ')
-        logger.warning(f"[WEB] No results, HTML preview: {preview}")
+        preview = resp.text[:200].replace('\n', ' ')
+        logger.warning(f"[WEB] No results, retrying (challenge page?): {preview}")
+        try:
+            resp = get_session().get(url, timeout=12)
+            if resp.status_code == 200 and resp.text and len(resp.text) >= 100:
+                results = _parse_ddg_results(resp.text, max_results)
+                logger.info(f"[WEB] DDG retry found {len(results)} results")
+        except Exception as e:
+            logger.warning(f"[WEB] DDG retry failed: {e}")
+
     return results
 
 

@@ -250,8 +250,10 @@ class VoiceChatSystem:
                 self.wake_detector.start_listening()
                 return True
 
-            # Cold start: load real components
+            # Cold start: ensure models exist, then load real components
             try:
+                from core.setup import ensure_wakeword_models
+                ensure_wakeword_models()
                 from core.wakeword.audio_recorder import AudioRecorder as RealAudioRecorder
                 from core.wakeword.wake_detector import WakeWordDetector as RealWakeWordDetector
 
@@ -508,6 +510,12 @@ def run():
         print(f"\n{CYAN_BG}{BLACK}{BOLD} ✨ SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
 
         logger.info(f"Sapphire is running. Starting uvicorn server...")
+
+        # Windows: ProactorEventLoop has socket cleanup issues with uvicorn
+        # SelectorEventLoop is more stable for mixed threading + asyncio
+        if sys.platform == 'win32':
+            import asyncio
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
         # Run uvicorn - this blocks until shutdown
         # Using a thread so we can still check for restart signals

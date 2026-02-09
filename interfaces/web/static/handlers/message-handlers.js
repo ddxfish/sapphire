@@ -116,9 +116,10 @@ export function handleToolbar(action, idx) {
 
 export async function handleAutoRefresh() {
     const histLen = getHistLen();
-    const len = await chat.autoRefresh(getIsProc(), histLen, () => {
+    const len = await chat.autoRefresh(getIsProc(), histLen, async () => {
         // Import dynamically to avoid circular dep
-        import('../features/scene.js').then(scene => scene.updateScene());
+        const scene = await import('../features/scene.js');
+        return scene.updateScene();
     });
     setHistLen(len);
 }
