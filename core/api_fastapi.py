@@ -1386,7 +1386,7 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             if key == 'WAKE_WORD_ENABLED':
                 get_system().toggle_wakeword(value)
             if key == 'STT_ENABLED':
-                get_system().toggle_stt(value)
+                await asyncio.to_thread(get_system().toggle_stt, value)
             if key == 'TTS_ENABLED':
                 await asyncio.to_thread(get_system().toggle_tts, value)
             publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
@@ -1493,8 +1493,7 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         system = get_system()
         system.toggle_wakeword(value)
     if key == 'STT_ENABLED':
-        system = get_system()
-        system.toggle_stt(value)
+        await asyncio.to_thread(get_system().toggle_stt, value)
     if key == 'TTS_ENABLED':
         await asyncio.to_thread(get_system().toggle_tts, value)
     publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})

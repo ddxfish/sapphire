@@ -327,9 +327,9 @@ class WakeWordDetector:
                     break
                 consecutive_errors += 1
                 if consecutive_errors <= 3:
-                    logger.error(f"Error in listen loop: {e}")
+                    logger.warning(f"Audio stream hiccup ({consecutive_errors}/3): {e}")
                 elif consecutive_errors == max_consecutive:
-                    logger.error(f"Stream error persisting ({consecutive_errors}x), backing off: {e}")
+                    logger.error(f"Audio stream error persisting ({consecutive_errors}x), attempting recovery: {e}")
                 # Exponential backoff: 0.1, 0.2, 0.4, ... capped at 5s
                 backoff = min(0.1 * (2 ** (consecutive_errors - 1)), 5.0)
                 time.sleep(backoff)
