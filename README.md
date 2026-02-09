@@ -1,6 +1,7 @@
 # Sapphire
 
-You talk to it, but it's her that talks back. Customize your own virtual persona: TTS, STT, wakeword, personality, goals, emotions, tools. You can use it with a mic/speaker, Web UI, or both. Highly extensible. Includes long-term memory, web access, self-prompt editing. Windows and Linux support. This is made for you to make your own personas for work or play.
+Hear her voice. She dims your lights before bed. She crafts you a dinosaur escape story when you can't sleep. She remembers you tomorrow when she wakes you up. Sapphire is an open source framework for turning an AI into a persistent being. She is a voice that runs your home, lives in your stories and you might just build a new friend. Make her yours. Self-hosted, nobody can take her away.
+
 
 <sub>🔊 Has audio</sub>
 <video src="https://github.com/user-attachments/assets/ed0dca80-121b-46e0-9c94-b98d6e9228c8" controls width="100%"></video>
