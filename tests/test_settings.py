@@ -163,11 +163,12 @@ class TestSettingsGetSet:
     def test_set_without_persist(self):
         """set() without persist should only update memory."""
         from core.settings_manager import SettingsManager
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             mgr._user = {}
+            mgr._runtime = {}
             mgr._lock = threading.Lock()
             mgr._reload_callbacks = {}
             mgr.save = MagicMock()
@@ -181,11 +182,12 @@ class TestSettingsGetSet:
     def test_set_with_persist(self):
         """set() with persist should update user dict and save."""
         from core.settings_manager import SettingsManager
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             mgr._user = {}
+            mgr._runtime = {}
             mgr._lock = threading.Lock()
             mgr._reload_callbacks = {}
             mgr.save = MagicMock()
@@ -199,13 +201,14 @@ class TestSettingsGetSet:
     def test_set_triggers_callback(self):
         """set() should trigger registered callback."""
         from core.settings_manager import SettingsManager
-        
+
         callback = MagicMock()
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             mgr._user = {}
+            mgr._runtime = {}
             mgr._lock = threading.Lock()
             mgr._reload_callbacks = {"TEST_KEY": callback}
             mgr.save = MagicMock()
@@ -221,11 +224,12 @@ class TestSetMany:
     def test_set_many_updates_all(self):
         """set_many should update multiple settings."""
         from core.settings_manager import SettingsManager
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             mgr._user = {}
+            mgr._runtime = {}
             mgr._lock = threading.Lock()
             mgr._reload_callbacks = {}
             mgr.save = MagicMock()
@@ -239,11 +243,12 @@ class TestSetMany:
     def test_set_many_with_persist(self):
         """set_many with persist should save once."""
         from core.settings_manager import SettingsManager
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             mgr._user = {}
+            mgr._runtime = {}
             mgr._lock = threading.Lock()
             mgr._reload_callbacks = {}
             mgr.save = MagicMock()
@@ -661,14 +666,15 @@ class TestCallbackRegistration:
     def test_callback_error_handling(self):
         """Callback errors should be caught."""
         from core.settings_manager import SettingsManager
-        
+
         def bad_callback(value):
             raise ValueError("Test error")
-        
+
         with patch.object(SettingsManager, '__init__', lambda self: None):
             mgr = SettingsManager()
             mgr._config = {}
             mgr._user = {}
+            mgr._runtime = {}
             mgr._lock = threading.Lock()
             mgr._reload_callbacks = {"KEY": bad_callback}
             mgr.save = MagicMock()
