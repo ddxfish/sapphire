@@ -92,7 +92,14 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 </tr>
 </table>
 
-**Uses**: AI companion, work autopilot, sentient house, storytelling, research, ethics testing, or just a plain web UI.
+### Use Cases
+
+- **AI companion** — A persistent voice that remembers you, greets you, and grows over time
+- **Voice assistant** — Wake word, hands-free operation, smart home control via Home Assistant
+- **Game master** — Tabletop RPGs, dungeon crawlers, interactive fiction with the Story Engine
+- **Autonomous agent** — Scheduled tasks, morning briefings, dream mode, alarm clock actions
+- **Research assistant** — Web search, memory, notes, multi-step tool reasoning
+- **Privacy-first AI** — Block all cloud connections, run fully local, private prompts that never leak
 
 ## Quick Start
 

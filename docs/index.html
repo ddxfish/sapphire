@@ -320,7 +320,7 @@
             
             <div class="badges">
                 <img src="https://img.shields.io/badge/License-AGPL_3.0-blue" alt="AGPL-3.0">
-                <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+                <img src="https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white" alt="Python 3.11+">
                 <img src="https://img.shields.io/badge/Self_Hosted-100%25-informational" alt="Self Hosted">
                 <img src="https://img.shields.io/badge/Status-Active-success" alt="Active">
                 <img src="https://img.shields.io/badge/Waifu-Compatible-ff69b4" alt="Waifu Compatible">
@@ -376,6 +376,22 @@
                     <h3><span class="feature-icon">✏️</span> Prompt Engineering</h3>
                     <p>Assembled prompts with swappable pieces. Spice injection keeps responses fresh. AI can edit its own prompt.</p>
                 </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">⏰</span> Continuity Mode</h3>
+                    <p>Scheduled autonomous tasks. Morning greetings, dream mode, alarm clock, random hellos. Cron timing with probability gates.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🏠</span> Home Assistant</h3>
+                    <p>Smart home control via voice or text. Lights, scenes, thermostats, switches, phone notifications.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🛡️</span> Privacy Mode</h3>
+                    <p>Block all cloud connections with one toggle. Private prompts only activate locally so personal data never leaks.</p>
+                </div>
+                <div class="feature-card">
+                    <h3><span class="feature-icon">🎲</span> Story Engine</h3>
+                    <p>Built-in game master. Dice rolls, branching choices, progressive clues, room navigation. Run tabletop RPGs from a JSON preset.</p>
+                </div>
             </div>
         </section>
         
@@ -389,34 +405,16 @@
                     <figcaption>Web UI with streaming responses</figcaption>
                 </figure>
                 <figure class="screenshot-item">
+                    <a href="screenshots/settings-wakeword.png" target="_blank">
+                        <img src="screenshots/settings-wakeword.png" alt="Voice assistant" loading="lazy">
+                    </a>
+                    <figcaption>Voice assistant with wake word</figcaption>
+                </figure>
+                <figure class="screenshot-item">
                     <a href="screenshots/multi-step-tool-reasoning.png" target="_blank">
                         <img src="screenshots/multi-step-tool-reasoning.png" alt="Multi-step reasoning" loading="lazy">
                     </a>
                     <figcaption>Multi-step tool reasoning</figcaption>
-                </figure>
-                <figure class="screenshot-item">
-                    <a href="screenshots/prompt-editor-assembled.png" target="_blank">
-                        <img src="screenshots/prompt-editor-assembled.png" alt="Prompt editor" loading="lazy">
-                    </a>
-                    <figcaption>Assembled prompt editor</figcaption>
-                </figure>
-                <figure class="screenshot-item">
-                    <a href="screenshots/theme-switcher.png" target="_blank">
-                        <img src="screenshots/theme-switcher.png" alt="Theme switcher" loading="lazy">
-                    </a>
-                    <figcaption>13 themes with live preview</figcaption>
-                </figure>
-                <figure class="screenshot-item">
-                    <a href="screenshots/settings-manager.png" target="_blank">
-                        <img src="screenshots/settings-manager.png" alt="Settings" loading="lazy">
-                    </a>
-                    <figcaption>Settings manager</figcaption>
-                </figure>
-                <figure class="screenshot-item">
-                    <a href="screenshots/image-generation.png" target="_blank">
-                        <img src="screenshots/image-generation.png" alt="Image generation" loading="lazy">
-                    </a>
-                    <figcaption>SDXL image generation</figcaption>
                 </figure>
                 <figure class="screenshot-item">
                     <a href="screenshots/per-chat-settings.png" target="_blank">
@@ -425,10 +423,64 @@
                     <figcaption>Per-chat persona settings</figcaption>
                 </figure>
                 <figure class="screenshot-item">
+                    <a href="screenshots/continuity-scheduling.png" target="_blank">
+                        <img src="screenshots/continuity-scheduling.png" alt="Continuity mode" loading="lazy">
+                    </a>
+                    <figcaption>Scheduled autonomous tasks</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/home-assistant-integration.png" target="_blank">
+                        <img src="screenshots/home-assistant-integration.png" alt="Home Assistant" loading="lazy">
+                    </a>
+                    <figcaption>Home Assistant integration</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/private-mode.png" target="_blank">
+                        <img src="screenshots/private-mode.png" alt="Privacy mode" loading="lazy">
+                    </a>
+                    <figcaption>Privacy mode</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/story-engine.png" target="_blank">
+                        <img src="screenshots/story-engine.png" alt="Story Engine" loading="lazy">
+                    </a>
+                    <figcaption>Story Engine game master</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/prompt-editor-assembled.png" target="_blank">
+                        <img src="screenshots/prompt-editor-assembled.png" alt="Prompt editor" loading="lazy">
+                    </a>
+                    <figcaption>Assembled prompt editor</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/spice-editor.png" target="_blank">
+                        <img src="screenshots/spice-editor.png" alt="Spice editor" loading="lazy">
+                    </a>
+                    <figcaption>Spice injection editor</figcaption>
+                </figure>
+                <figure class="screenshot-item">
                     <a href="screenshots/toolset-editor.png" target="_blank">
                         <img src="screenshots/toolset-editor.png" alt="Toolset editor" loading="lazy">
                     </a>
                     <figcaption>Toolset editor</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/image-generation.png" target="_blank">
+                        <img src="screenshots/image-generation.png" alt="Image generation" loading="lazy">
+                    </a>
+                    <figcaption>SDXL image generation</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/theme-switcher.png" target="_blank">
+                        <img src="screenshots/theme-switcher.png" alt="Theme switcher" loading="lazy">
+                    </a>
+                    <figcaption>13 themes with live preview</figcaption>
+                </figure>
+                <figure class="screenshot-item">
+                    <a href="screenshots/plugin-manager.png" target="_blank">
+                        <img src="screenshots/plugin-manager.png" alt="Plugin manager" loading="lazy">
+                    </a>
+                    <figcaption>Plugin manager</figcaption>
                 </figure>
             </div>
         </section>
@@ -451,7 +503,7 @@
 
 <span class="comment"># Web UI at https://localhost:8073</span></pre>
             </div>
-            <p class="requirements">Requires Python 3.10+, 12-16GB RAM. Local LLM via LM Studio recommended.</p>
+            <p class="requirements">Requires Python 3.11+, 16GB+ RAM. Nvidia GPU recommended for TTS/STT. Local LLM via LM Studio or cloud via Claude/OpenAI.</p>
         </section>
         
         <section class="docs">
@@ -460,8 +512,17 @@
                 <a href="INSTALLATION.html" class="docs-link">Installation</a>
                 <a href="CONFIGURATION.html" class="docs-link">Configuration</a>
                 <a href="PROMPTS.html" class="docs-link">Prompts</a>
+                <a href="SPICE.html" class="docs-link">Spice</a>
                 <a href="TOOLS.html" class="docs-link">Tools</a>
+                <a href="TOOLSETS.html" class="docs-link">Toolsets</a>
                 <a href="PLUGINS.html" class="docs-link">Plugins</a>
+                <a href="WEB-PLUGINS.html" class="docs-link">Web UI Plugins</a>
+                <a href="CONTINUITY.html" class="docs-link">Continuity</a>
+                <a href="HOME-ASSISTANT.html" class="docs-link">Home Assistant</a>
+                <a href="STATE-ENGINE.html" class="docs-link">Story Engine</a>
+                <a href="IMAGE-GEN.html" class="docs-link">Image Generation</a>
+                <a href="SOCKS.html" class="docs-link">SOCKS Proxy</a>
+                <a href="TROUBLESHOOTING.html" class="docs-link">Troubleshooting</a>
                 <a href="TECHNICAL.html" class="docs-link">Technical</a>
             </div>
         </section>
