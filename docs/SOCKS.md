@@ -19,15 +19,15 @@ Open Settings → Network tab.
 
 Sapphire checks for SOCKS credentials in this order:
 
-1. **Environment variables** (checked first)
-   - `SAPPHIRE_SOCKS_USERNAME`
-   - `SAPPHIRE_SOCKS_PASSWORD`
-
-2. **Credential Manager** (override if set in Sapphire)
+1. **Credential Manager** (checked first)
    - Enter in Settings → Network
    - Stored in `~/.config/sapphire/credentials.json` (not in Sapphire's user directory)
    - Not included in backups for security
    - Use the **Clear** button to remove stored credentials
+
+2. **Environment variables** (fallback)
+   - `SAPPHIRE_SOCKS_USERNAME`
+   - `SAPPHIRE_SOCKS_PASSWORD`
 
 ## Verify It Works
 
@@ -40,7 +40,7 @@ Sapphire checks for SOCKS credentials in this order:
 Route web tools through SOCKS5 proxy for privacy.
 
 WHAT IT DOES:
-- Only affects tools: web_search, get_website_from_url, research_topic
+- Only affects tools: web_search, get_website, research_topic
 - Does NOT affect: LLM connections, model downloads, TTS/STT
 - Fail-secure: if proxy broken, tools error instead of leaking
 
@@ -51,8 +51,8 @@ SETUP:
 4. Add credentials if needed (env vars or in Settings)
 
 CREDENTIALS PRIORITY:
-1. Env vars: SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD
-2. Credential Manager in Settings (stored in ~/.config/sapphire/)
+1. Credential Manager in Settings (stored in ~/.config/sapphire/)
+2. Env vars: SAPPHIRE_SOCKS_USERNAME, SAPPHIRE_SOCKS_PASSWORD
 
 VERIFY: Ask AI to fetch https://icanhazip.com/ - should show proxy IP
 

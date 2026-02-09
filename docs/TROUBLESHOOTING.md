@@ -18,7 +18,7 @@
 - Try http:// and https://
 - Delete cookies for this site
 - Test in private browsing window
-- Detele secret key `~/.config/sapphire/secret_key` 
+- Delete secret key `~/.config/sapphire/secret_key` 
 - Restart Sapphire app
 
 **Blank page or "Unauthorized"**
@@ -26,8 +26,9 @@
 - Try incognito window
 - Delete `~/.config/sapphire/secret_key` and restart the app
 
-**Certificate warning every app restart**
-- Expected with self-signed certs. SSL is enabled.
+**Certificate warning on first visit**
+- Expected with self-signed certs. Accept once (Advanced → Proceed) and the browser remembers it.
+- Cert is persistent (valid 10 years), stored in `user/ssl/`. Not regenerated on restart.
 
 **UI loads but chat doesn't respond**
 - Check browser console (F12) for errors
@@ -74,7 +75,7 @@
 - Test a different mic
 
 ## Prompt issues
-**If you broke your default promtps**
+**If you broke your default prompts**
 - Gear icon > App Settings > System tab 
 - You can reset all prompts to default, or merge the defaults back into yours
 

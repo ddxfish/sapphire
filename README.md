@@ -35,16 +35,36 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 <td><strong>Per-chat Persona</strong><br/>Each chat holds its own prompt, voice, speed, pitch, spice, and toolset. Switch chat = switch persona. See <a href="docs/CONFIGURATION.md">Configuration</a>.</td>
 </tr>
 <tr>
-<td><a href="docs/screenshots/setup-wizard.png"><img src="docs/screenshots/setup-wizard.png" alt="Setup Wizard"/></a></td>
-<td><strong>Setup Wizard</strong><br/>First run walks you through LLM, voice, and audio configuration. Supports LM Studio (local), Claude, OpenAI, and Fireworks with automatic fallback between providers.</td>
+<td><a href="docs/screenshots/continuity-scheduling.png"><img src="docs/screenshots/continuity-scheduling.png" alt="Continuity Mode"/></a></td>
+<td><strong>Continuity Mode</strong><br/>Scheduled autonomous AI tasks. Morning greetings, dream mode, alarm clock actions, random hellos. Cron timing with probability gates. See <a href="docs/CONTINUITY.md">Continuity</a>.</td>
 </tr>
 <tr>
-<td><a href="docs/screenshots/settings-manager.png"><img src="docs/screenshots/settings-manager.png" alt="Settings Manager"/></a></td>
-<td><strong>Settings UI</strong><br/>Nearly every setting editable from UI, saves to JSON. No file editing needed.</td>
+<td><a href="docs/screenshots/home-assistant-integration.png"><img src="docs/screenshots/home-assistant-integration.png" alt="Home Assistant"/></a></td>
+<td><strong>Home Assistant</strong><br/>Smart home control via voice or text. Lights, scenes, thermostats, switches, phone notifications. See <a href="docs/HOME-ASSISTANT.md">Home Assistant</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/private-mode.png"><img src="docs/screenshots/private-mode.png" alt="Privacy Mode"/></a></td>
+<td><strong>Privacy Mode</strong><br/>Block all cloud connections with one toggle. Only local LLMs allowed. Tools that phone home are disabled. Private prompts stay private — they only activate in privacy mode so your personal data never leaks to cloud providers.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/edit-past-messages.png"><img src="docs/screenshots/edit-past-messages.png" alt="Edit Messages"/></a></td>
 <td><strong>Chat History Control</strong><br/>Edit, regenerate, continue, or delete any message-even the AI's responses.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/prompt-editor-assembled.png"><img src="docs/screenshots/prompt-editor-assembled.png" alt="Assembled Prompt" width="48%"/></a> <a href="docs/screenshots/prompt-editor-monolith.png"><img src="docs/screenshots/prompt-editor-monolith.png" alt="Monolith Prompt" width="48%"/></a></td>
+<td><strong>Prompt Editor</strong><br/>Assembled prompts (left) have swappable pieces the AI can edit itself. Monoliths (right) are simpler text blocks. See <a href="docs/PROMPTS.md">Prompts</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/spice-editor.png"><img src="docs/screenshots/spice-editor.png" alt="Spice Editor"/></a></td>
+<td><strong>Spice Injection</strong><br/>Random snippets injected each reply. Keeps stories and conversations from going stale. See <a href="docs/SPICE.md">Spice</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/toolset-editor.png"><img src="docs/screenshots/toolset-editor.png" alt="Toolset Editor"/></a></td>
+<td><strong>Tools and Toolsets</strong><br/>Mix and match tool sets per persona. Easy to create, easy to have the AI make more for you. See <a href="docs/TOOLS.md">Tools</a> and <a href="docs/TOOLSETS.md">Toolsets</a>.</td>
+</tr>
+<tr>
+<td><a href="docs/screenshots/image-generation.png"><img src="docs/screenshots/image-generation.png" alt="Image Generation"/></a></td>
+<td><strong>Image Generation</strong><br/>SDXL image generation with character replacement. AI describes scenes, characters stay consistent. See <a href="docs/IMAGE-GEN.md">Image Generation</a>.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/backup-manager.png"><img src="docs/screenshots/backup-manager.png" alt="Backup Manager"/></a></td>
@@ -63,32 +83,8 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 <td><strong>Plugins</strong><br/>Extensible for both core LLM/persona and web UI. Sidebar auto-populates with plugin controls. See <a href="docs/PLUGINS.md">Plugins</a>.</td>
 </tr>
 <tr>
-<td><a href="docs/screenshots/prompt-editor-assembled.png"><img src="docs/screenshots/prompt-editor-assembled.png" alt="Assembled Prompt" width="48%"/></a> <a href="docs/screenshots/prompt-editor-monolith.png"><img src="docs/screenshots/prompt-editor-monolith.png" alt="Monolith Prompt" width="48%"/></a></td>
-<td><strong>Prompt Editor</strong><br/>Assembled prompts (left) have swappable pieces the AI can edit itself. Monoliths (right) are simpler text blocks. See <a href="docs/PROMPTS.md">Prompts</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/spice-editor.png"><img src="docs/screenshots/spice-editor.png" alt="Spice Editor"/></a></td>
-<td><strong>Spice Injection</strong><br/>Random snippets injected each reply. Keeps stories and conversations from going stale. See <a href="docs/SPICE.md">Spice</a>.</td>
-</tr>
-<tr>
 <td><a href="docs/screenshots/webui-plugins.png"><img src="docs/screenshots/webui-plugins.png" alt="Web UI Plugins"/></a></td>
 <td><strong>Web UI Plugins</strong><br/>Extensible JavaScript plugins for the web interface. Add widgets to sidebar, gear menu, or settings tabs. See <a href="docs/WEB-PLUGINS.md">Web UI Plugins</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/image-generation.png"><img src="docs/screenshots/image-generation.png" alt="Image Generation"/></a></td>
-<td><strong>Image Generation</strong><br/>SDXL image generation with character replacement. AI describes scenes, characters stay consistent. See <a href="docs/IMAGE-GEN.md">Image Generation</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/toolset-editor.png"><img src="docs/screenshots/toolset-editor.png" alt="Toolset Editor"/></a></td>
-<td><strong>Tools and Toolsets</strong><br/>Mix and match tool sets per persona. Easy to create, easy to have the AI make more for you. See <a href="docs/TOOLS.md">Tools</a> and <a href="docs/TOOLSETS.md">Toolsets</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/continuity-scheduling.png"><img src="docs/screenshots/continuity-scheduling.png" alt="Continuity Mode"/></a></td>
-<td><strong>Continuity Mode</strong><br/>Scheduled autonomous AI tasks. Morning greetings, dream mode, alarm clock actions, random hellos. Cron timing with probability gates. See <a href="docs/CONTINUITY.md">Continuity</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/home-assistant-integration.png"><img src="docs/screenshots/home-assistant-integration.png" alt="Home Assistant"/></a></td>
-<td><strong>Home Assistant</strong><br/>Smart home control via voice or text. Lights, scenes, thermostats, switches, phone notifications. See <a href="docs/HOME-ASSISTANT.md">Home Assistant</a>.</td>
 </tr>
 </table>
 

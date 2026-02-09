@@ -17,8 +17,8 @@ main.py (runner with restart loop)
     ├── Continuity (core/modules/continuity/)
     │   ├── scheduler → cron-based task runner
     │   └── executor → context isolation, task execution
-    ├── TTS Server (core/tts/) → port 5012
-    ├── STT Server (core/stt/) → port 5050
+    ├── TTS Server (core/tts/) → port 5012 (HTTP subprocess)
+    ├── STT (core/stt/) → thread in main process
     ├── Wake Word (core/wakeword/)
     ├── FastAPI Server (core/api_fastapi.py) → 0.0.0.0:8073
     └── Event Scheduler (core/event_handler.py)
@@ -242,8 +242,7 @@ API keys and SOCKS credentials are stored separately from settings via `core/cre
 | Service | Port | Binding |
 |---------|------|---------|
 | FastAPI Server | 8073 | `0.0.0.0` (all interfaces, HTTPS) |
-| TTS Server | 5012 | `localhost` |
-| STT Server | 5050 | `localhost` |
+| TTS Server | 5012 | `0.0.0.0` (configurable) |
 | LM Studio (default) | 1234 | External |
 
 ---
@@ -252,7 +251,7 @@ API keys and SOCKS credentials are stored separately from settings via `core/cre
 
 ### TTS (Text-to-Speech)
 
-- Server: `core/tts/tts_server.py` (Kokoro, Flask subprocess)
+- Server: `core/tts/tts_server.py` (Kokoro, HTTP subprocess)
 - Client: `core/tts/tts_client.py`
 - Null impl: `core/tts/tts_null.py` (when disabled)
 
@@ -260,8 +259,7 @@ Started by `ProcessManager` if `TTS_ENABLED=true`. Auto-restarts on crash.
 
 ### STT (Speech-to-Text)
 
-- Server: `core/stt/server.py` (faster-whisper, Flask subprocess)
-- Client: `core/stt/client.py`
+- Server: `core/stt/server.py` (faster-whisper, loaded in main process)
 - Recorder: `core/stt/recorder.py`
 - Guard: `core/stt/utils.py` (shared `can_transcribe()` check)
 
@@ -326,19 +324,16 @@ The `/status` endpoint provides a unified polling fallback with context usage (t
 
 ## Chat Sessions
 
-Sessions stored as JSON in `user/history/`:
+Sessions stored in SQLite database `user/history/sapphire_history.db` (WAL mode):
 
 ```
-user/history/
-├── default.json           # Default chat
-├── work-project.json      # Named chat
-└── ...
+Schema: chats(name TEXT PRIMARY KEY, settings JSON, messages JSON, updated_at TEXT)
 ```
 
 Each session has:
 - Message history (user, assistant, tool messages)
 - Settings (prompt, voice, toolset, LLM provider, spice config)
-- Metadata (created, updated timestamps)
+- Metadata (updated timestamp)
 
 Managed by `core/chat/history.py` via `SessionManager`.
 
@@ -431,13 +426,12 @@ PROCESSES:
 - main.py: Runner with restart loop (exit 42 = restart)
 - sapphire.py: Core VoiceChatSystem
 - core/api_fastapi.py: Unified FastAPI server (port 8073, HTTPS)
-- TTS server: Kokoro Flask subprocess (port 5012, if enabled)
-- STT server: Faster-whisper Flask subprocess (port 5050, if enabled)
+- TTS server: Kokoro HTTP subprocess (port 5012, if enabled)
+- STT: Faster-whisper thread in main process (no port, loaded as library)
 
 PORTS:
 - 8073: FastAPI server (HTTPS, user-facing, all routes)
 - 5012: TTS server (if enabled)
-- 5050: STT server (if enabled)
 - 1234: Default LLM (LM Studio)
 
 LLM PROVIDERS:

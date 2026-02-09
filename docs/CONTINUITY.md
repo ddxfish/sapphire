@@ -30,7 +30,7 @@ Tasks can run in the foreground (switches to that chat) or background (invisible
 | **Name** | Label for the task. Shows in the list and activity log. |
 | **Schedule** | When to run (cron format—see below). |
 | **Chance %** | Probability the task actually fires. 100 = always, 50 = coin flip. Good for random variety. |
-| **Cooldown** | Minutes to wait before this task can run again. Prevents rapid re-triggers. |
+| **Cooldown** | Minutes to wait between iterations when using multiple iterations. Controls pacing within a single run. |
 | **Iterations** | How many back-and-forth exchanges. 1 = single response. Higher = conversation with itself. |
 | **Initial Message** | What gets sent to the AI when the task triggers. "Good morning!" or "Continue the story." |
 | **Chat Name** | Which chat to use. Blank = new dated chat each time. Filled = reuse same chat (keeps history). |
@@ -40,7 +40,7 @@ Tasks can run in the foreground (switches to that chat) or background (invisible
 | **Model** | Specific model override (optional). |
 | **Memory Scope** | Which memory slot to read/write. "none" = no memory access. |
 | **Enable TTS** | Speak the response out loud. |
-| **Background** | Run silently without switching the UI to that chat. Good for invisible tasks. |
+| **Background** | Controlled by **Chat Name**: leave it blank for background mode (no UI switching), or name a chat for foreground mode. |
 | **Inject datetime** | Add current date/time to the system prompt so the AI knows when it is. |
 
 ## Cron Basics
@@ -64,11 +64,11 @@ Use `*` for "any value". Use `*/N` for "every N". Use `1-5` for ranges (1=Monday
 
 **Timeline tab** — Shows what's scheduled for the next 24 hours. Chance percentages shown.
 
-**Activity tab** — Log of recent task runs. See what fired, what was skipped (cooldown, chance roll), and any errors.
+**Activity tab** — Log of recent task runs. See what fired, what was queued (overlapping runs), and any errors.
 
 ## Tips
 
-- Start with high cooldowns (60+ min) while testing to avoid spam
+- Start with infrequent schedules while testing to avoid spam
 - Use "Run Now" button to test without waiting for the schedule
 - Background tasks are great for things you don't need to see
 - Combine with Home Assistant tools for smart home automation
@@ -87,10 +87,10 @@ TASK CREATION:
 KEY FIELDS:
 - schedule: cron format (minute hour day month weekday)
 - chance: 1-100 probability to actually run
-- cooldown_minutes: prevent re-trigger within N minutes
+- cooldown_minutes: delay between iterations within a single run
 - iterations: number of AI responses per trigger
 - chat_target: blank = ephemeral, named = persistent chat
-- background: true = no UI switching
+- background: blank chat_target = background (no UI switching)
 - memory_scope: which memory slot to use
 
 COMMON SCHEDULES:

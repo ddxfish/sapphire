@@ -29,6 +29,10 @@ Think weather widgets, API integrations, custom controls, or anything that exten
 | backup | Gear menu | Backup management |
 | plugins-modal | Gear menu | Enable/disable plugins |
 | image-gen | Plugins popup | SDXL image generation settings |
+| continuity | Gear menu | Scheduled task management |
+| homeassistant | Plugins popup | Home Assistant integration |
+| setup-wizard | Auto-show | First-run configuration |
+| hello-world | Sidebar | Example/template plugin |
 
 ## Creating Plugins with AI
 

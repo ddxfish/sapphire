@@ -27,8 +27,8 @@ Tools are grouped into **toolsets** - named collections you can switch between. 
 | `save_memory` | Store info for future conversations |
 | `search_memory` | Find stored memories by keyword |
 | `get_recent_memories` | Get latest memories |
-| `search_for_urls` | Web search, returns URLs |
-| `get_website_from_url` | Fetch webpage content |
+| `web_search` | Web search, returns URLs |
+| `get_website` | Fetch webpage content |
 | `get_wikipedia` | Get Wikipedia article |
 | `research_topic` | Multi-source research |
 
@@ -210,7 +210,7 @@ def execute(function_name, arguments, config):
 **Descriptions matter:** The AI uses descriptions to decide WHEN to call tools.
 ```python
 # Good - tells AI when to use it
-"description": "Search the web for URLs. Use get_website_from_url to read content."
+"description": "Search the web for URLs. Use get_website to read content."
 
 # Bad - doesn't help AI decide
 "description": "Searches the web"
@@ -254,8 +254,8 @@ CORE TOOLS AVAILABLE:
 - save_memory(content, keywords) - store info for later
 - search_memory(query) - find stored memories
 - get_recent_memories(count) - get latest memories
-- search_for_urls(query) - web search, returns URLs
-- get_website_from_url(url) - fetch webpage content
+- web_search(query) - web search, returns URLs
+- get_website(url) - fetch webpage content
 - get_wikipedia(topic) - get Wikipedia article
 - research_topic(topic) - multi-source research
 

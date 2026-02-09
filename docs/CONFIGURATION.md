@@ -137,6 +137,24 @@ Note: Set as Default is for all future chats. Save is for this chat only. Each c
 
 ---
 
+## Privacy Mode
+
+Privacy Mode blocks all outbound cloud connections, keeping conversations local-only.
+
+**What it does:**
+- Blocks cloud LLM providers (Claude, OpenAI, Fireworks)
+- Allows local providers (LM Studio on localhost)
+- Blocks tool calls that require external network access
+- Only allows endpoints on the whitelist (localhost, LAN IPs)
+
+**How to enable:**
+- Settings → toggle Privacy Mode
+- Or set `START_IN_PRIVACY_MODE: true` in `user/settings.json`
+
+**Note:** Model downloads (wakeword, STT) still work on first launch even in privacy mode. Once downloaded, everything runs offline.
+
+---
+
 ## Advanced Personalization
 
 ### Custom Plugins

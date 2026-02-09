@@ -33,9 +33,8 @@ Plugins load automatically on startup. To disable a plugin:
 ### Included Plugins
 
 - **example** - Says "Example received at [time]" when you say "example"
-- **captain_pike** - Star Trek joke plugin, responds with beeps (yes/no via AI)
 
-You can delete both - they're just examples. Sapphire works fine without any plugins.
+You can delete it - it's just an example. Sapphire works fine without any plugins.
 
 ## Creating Plugins with AI
 
@@ -228,7 +227,7 @@ BUILT-IN PLUGINS:
 - backup: Keyword "backup" - creates user data backup
 - stop: Keyword "stop" - halts TTS playback
 - reset: Keyword "reset" - clears chat history
-- time_date: Keyword "time" - returns current time
+- time_date: Keyword "what time is it" - returns current time
 
 PLUGIN LOCATIONS:
 - plugins/ - Shared plugins (git tracked)

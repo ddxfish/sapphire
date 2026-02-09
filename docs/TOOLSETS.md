@@ -4,7 +4,7 @@ Named groups of tools so you don't have to switch between memory and web for exa
 
 ## Usage
 
-Use the UI to edit tool sets. Look in the sidebar for Toolset Editor. You can simply use the built-in files (memory for example), or you can create your own toolsets that combine tools from various files. 
+Use the UI to edit tool sets. Look in the sidebar for Toolset Editor. You can use the built-in toolsets (essentials, setup), or create your own that combine tools from various files. 
 
 ## Quick switch
 
@@ -15,11 +15,9 @@ You can quick-switch the active toolset below the user chat input. Each chat/per
 Toolsets are named groups of tools/functions the AI can access.
 
 BUILT-IN TOOLSETS:
-- default: Core tools (memory, web search, meta)
-- memory: Just memory tools
-- web: Just web tools
-- all: Every available tool
-- none: No tools (text-only mode)
+- setup: System configuration tools (prompt editing, name changes, TTS voice)
+- essentials: Core tools (memory, prompt editing, help docs)
+- user_new: Empty template for new custom toolsets
 
 HOW IT WORKS:
 - Each chat stores its active toolset in chat history

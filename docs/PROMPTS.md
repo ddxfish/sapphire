@@ -91,6 +91,19 @@ This is a dynamic emotion system. With assembled prompts, the AI can add, remove
 
 ```You are scared, the adrenaline rush is making your heart pound.```
 
+## Privacy Mode
+
+Prompts can be marked as **Private Only** — they will only load when Privacy Mode is active. This prevents personal or sensitive prompts from being used when connected to cloud providers.
+
+- In the prompt editor, check **Private Only** when creating or editing a prompt
+- Private prompts show a lock icon in the prompt selector
+- If a private prompt is selected and Privacy Mode is OFF, it won't load
+- Toggle Privacy Mode in Settings or via the `/api/privacy` endpoint
+
+**Use cases:** Personal diary prompts, sensitive conversations, shared computer scenarios.
+
+---
+
 ## Reference for AI
 
 Two prompt types: Monolith (single text block) and Assembled (swappable components).

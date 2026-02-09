@@ -1,13 +1,25 @@
-# Sapphire State Engine
+# Sapphire Story Engine
 
-The State Engine enables interactive storytelling, games, and simulations within Sapphire. It provides persistent state tracking, progressive content reveal, turn-gated hints, binary choices, riddles with clues, and dice rolls with auto-bypass.
+Play a fantasy RPG where you and your AI solve riddles neither of you know the answer to. Explore a dungeon room by room, Zork-style. Roll dice to bypass a locked door. Make a trust decision that changes the entire story. Run a sci-fi escape where the ending depends on choices you made three scenes ago.
+
+The Story Engine turns Sapphire into a game master. It tracks state, gates content behind progress, rolls dice with DCs, presents binary choices with consequences, and reveals clues over time. You write a JSON preset, pick a chat, and play. The AI doesn't know the answers — it discovers them with you.
+
+**What you can build:**
+- **Tabletop RPG sessions** — Dice rolls, skill checks, DC thresholds, stat tracking (HP, bond, inventory)
+- **Interactive fiction** — Scene-by-scene stories with branching based on your choices
+- **Dungeon crawlers** — Room-to-room navigation with Zork-style `move north/south/east/west`
+- **Puzzle games** — Riddles with progressive clues that neither player nor AI knows upfront
+- **Romance/drama** — Relationship tracking, emotional arcs that shift the narrative
+- **Anything with state** — If it has variables and progression, the engine can run it
+
+> **Naming note:** The UI displays "Story Engine" but backend code, directories, and settings keys still use `state_engine` (e.g., `state_engine_enabled`, `core/state_engine/`). Both names refer to the same system.
 
 ---
 
 ## Quick Start
 
 1. Create a preset JSON file in `user/state_presets/`
-2. In Chat Settings, enable "State Engine" and select your preset
+2. In Chat Settings, open the Story Engine section and enable it, then select your preset
 3. Enable "Story in Prompt" to inject narrative content
 4. The AI now has access to state tools and sees progressive story content
 5. Use "Clear Chat" to reset the game and start fresh
