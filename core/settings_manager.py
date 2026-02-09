@@ -23,6 +23,7 @@ class SettingsManager:
         self._defaults = {}
         self._user = {}
         self._config = {}
+        self._runtime = {}  # Non-persisted runtime overrides (survive file reload)
         self._reload_callbacks = {}
         self._lock = threading.Lock()
         
@@ -136,10 +137,13 @@ class SettingsManager:
                     merged_providers[key] = user_config
             self._config['LLM_PROVIDERS'] = merged_providers
 
-        # Initialize runtime PRIVACY_MODE from persistent START_IN_PRIVACY_MODE
-        # PRIVACY_MODE is runtime-only (resets on restart), not persisted
-        if 'PRIVACY_MODE' not in self._config:
+        # Initialize PRIVACY_MODE from persistent START_IN_PRIVACY_MODE on first load
+        if 'PRIVACY_MODE' not in self._config and 'PRIVACY_MODE' not in self._runtime:
             self._config['PRIVACY_MODE'] = self._config.get('START_IN_PRIVACY_MODE', False)
+
+        # Restore runtime-only overrides (set with persist=False, must survive reload)
+        if self._runtime:
+            self._config.update(self._runtime)
     
     def _ensure_example_file(self):
         """Create user/settings.example.json if it doesn't exist"""
@@ -185,14 +189,17 @@ class SettingsManager:
             self._config[key] = value
             if persist:
                 self._user[key] = value
+                self._runtime.pop(key, None)  # Now persisted, no need to preserve
                 self.save()
-                
+
                 # Track if this setting requires restart
                 tier = self.validate_tier(key)
                 if tier == 'restart' and hasattr(self, '_pending_restart_keys'):
                     self._restart_pending = True
                     self._pending_restart_keys.add(key)
-            
+            else:
+                self._runtime[key] = value  # Track for survival across reloads
+
             # Trigger hot-reload callback if registered
             if key in self._reload_callbacks:
                 try:
@@ -207,8 +214,10 @@ class SettingsManager:
         
         if persist:
             self._user.update(settings_dict)
+            for key in settings_dict:
+                self._runtime.pop(key, None)  # Now persisted
             self.save()
-            
+
             # Track which settings require restart
             if hasattr(self, '_pending_restart_keys'):
                 for key in settings_dict.keys():
@@ -299,6 +308,7 @@ class SettingsManager:
         """Reset all settings to defaults (clears user overrides and file)"""
         with self._lock:
             self._user = {}
+            self._runtime = {}  # Clear runtime overrides too
             self._merge_settings()
             
             # Actually delete/recreate the settings file
