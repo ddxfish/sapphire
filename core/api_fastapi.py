@@ -532,6 +532,9 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                 logger.info(f"STREAMING COMPLETE: {chunk_count} chunks, ephemeral={ephemeral}")
                 yield f"data: {json.dumps({'done': True, 'ephemeral': ephemeral})}\n\n"
 
+        except ConnectionError as e:
+            logger.warning(f"STREAMING: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
         except Exception as e:
             logger.error(f"STREAMING ERROR: {e}", exc_info=True)
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
@@ -1382,6 +1385,10 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             results.append({"key": key, "status": "success", "tier": tier})
             if key == 'WAKE_WORD_ENABLED':
                 get_system().toggle_wakeword(value)
+            if key == 'STT_ENABLED':
+                get_system().toggle_stt(value)
+            if key == 'TTS_ENABLED':
+                await asyncio.to_thread(get_system().toggle_tts, value)
             publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
@@ -1485,6 +1492,11 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     if key == 'WAKE_WORD_ENABLED':
         system = get_system()
         system.toggle_wakeword(value)
+    if key == 'STT_ENABLED':
+        system = get_system()
+        system.toggle_stt(value)
+    if key == 'TTS_ENABLED':
+        await asyncio.to_thread(get_system().toggle_tts, value)
     publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
     return {"status": "success", "key": key, "value": value, "tier": tier, "persisted": persist}
 

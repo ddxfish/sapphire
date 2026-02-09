@@ -276,6 +276,78 @@ class VoiceChatSystem:
                 logger.info("Wakeword stopped")
             return True
 
+    def toggle_stt(self, enabled: bool):
+        """Hot-swap STT components at runtime."""
+        if enabled:
+            # Already real? Nothing to do
+            if not isinstance(self.whisper_client, NullWhisperClient):
+                logger.info("STT already initialized")
+                return True
+
+            # Cold start: load whisper model
+            try:
+                logger.info(f"Hot-loading {config.STT_ENGINE} model...")
+                self.whisper_client = WhisperSTT()
+                logger.info("STT hot-started successfully")
+                return True
+            except Exception as e:
+                logger.error(f"STT hot-start failed: {e}")
+                self.whisper_client = NullWhisperClient()
+                return False
+        else:
+            # Swap to null (free model memory)
+            if not isinstance(self.whisper_client, NullWhisperClient):
+                logger.info("STT stopped, unloading model")
+                self.whisper_client = NullWhisperClient()
+            return True
+
+    def toggle_tts(self, enabled: bool):
+        """Hot-swap TTS server + client at runtime."""
+        from core.tts.tts_null import NullTTS
+        base_dir = Path(__file__).parent.resolve()
+
+        if enabled:
+            # Already running?
+            if self.tts_server_manager and self.tts_server_manager.is_running():
+                logger.info("TTS server already running")
+                return True
+
+            try:
+                tts_script = base_dir / "core" / "tts" / "tts_server.py"
+                tts_port = getattr(config, 'TTS_SERVER_PORT', 5012)
+
+                # Kill any orphaned process on the port
+                if kill_process_on_port(tts_port):
+                    logger.info(f"Cleaned up orphaned TTS process on port {tts_port}")
+
+                logger.info("Hot-starting TTS server...")
+                self.tts_server_manager = ProcessManager(
+                    script_path=tts_script,
+                    log_name="kokoro",
+                    base_dir=base_dir
+                )
+                self.tts_server_manager.start()
+                self.tts_server_manager.monitor_and_restart(check_interval=10)
+                time.sleep(3)  # Let model load
+
+                from core.tts.tts_client import TTSClient
+                self.tts = TTSClient()
+                logger.info("TTS hot-started successfully")
+                return True
+            except Exception as e:
+                logger.error(f"TTS hot-start failed: {e}")
+                self.tts = NullTTS()
+                return False
+        else:
+            # Stop server + swap to null
+            if self.tts_server_manager:
+                self.tts_server_manager.stop()
+                self.tts_server_manager = None
+                logger.info("TTS server stopped")
+            if not isinstance(self.tts, NullTTS):
+                self.tts = NullTTS()
+            return True
+
     def reset_chat(self):
         self.llm_chat.reset()
         self.tts.speak("reset.")

@@ -12,9 +12,6 @@ const STEP_NAMES = ['Voice', 'Audio', 'AI Brain', 'Identity'];
 
 // Settings that require full app restart when changed
 const RESTART_TIER_KEYS = [
-  'STT_ENABLED',
-  'TTS_ENABLED',
-  'WAKE_WORD_ENABLED',
   'WAKEWORD_MODEL',
   'WAKEWORD_THRESHOLD',
   'AUDIO_INPUT_DEVICE',

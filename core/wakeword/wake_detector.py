@@ -339,7 +339,11 @@ class WakeWordDetector:
             return
         
         logger.info(f"Starting OpenWakeWord detection: model={self.model_name}, threshold={self.threshold}")
-        
+
+        # Recreate callback pool if it was shut down (e.g. after stop_listening)
+        if self.callback_pool._shutdown:
+            self.callback_pool = ThreadPoolExecutor(max_workers=1)
+
         # Start with clean state
         self._reset_detection_state()
         

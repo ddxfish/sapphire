@@ -587,6 +587,10 @@ class StreamingChat:
                 yield {"type": "content", "text": error_msg}
                 self.main_chat.session_manager.add_assistant_final(error_msg)
 
+        except ConnectionError as e:
+            logger.warning(f"[STREAMING] {e}")
+            self._cleanup_stream()
+            raise
         except Exception as e:
             logger.error(f"[ERR] [STREAMING FATAL] Unhandled error: {e}", exc_info=True)
             self._cleanup_stream()
