@@ -285,9 +285,11 @@ class WakeWordDetector:
         """Main listening loop - polls OWW for predictions."""
         # OWW works best with 80ms frames (1280 samples at 16kHz)
         frame_samples = 1280
-        
+        consecutive_errors = 0
+        max_consecutive = 10  # After 10 rapid errors, back off hard
+
         logger.info(f"Listen loop started: frame_samples={frame_samples}, threshold={self.threshold}")
-        
+
         while self.running:
             try:
                 # Pause processing when disabled at runtime (save CPU)
@@ -305,10 +307,10 @@ class WakeWordDetector:
                 if overflowed:
                     logger.debug("Audio buffer overflow in wake detection")
                 audio_array = audio_data.flatten().astype(np.int16)
-                
+
                 # Get prediction from OWW
                 predictions = self.model.predict(audio_array)
-                
+
                 # Check if wake word detected
                 # OWW keys predictions by model name (stem), even for custom paths
                 score = predictions.get(self.model_name, 0)
@@ -317,11 +319,31 @@ class WakeWordDetector:
                     self._on_activation()
                     # Note: _on_activation resets state, minimal cooldown needed
                     time.sleep(0.5)
-                    
+
+                consecutive_errors = 0  # Reset on successful read
+
             except Exception as e:
-                if self.running:
+                if not self.running:
+                    break
+                consecutive_errors += 1
+                if consecutive_errors <= 3:
                     logger.error(f"Error in listen loop: {e}")
-                    time.sleep(0.1)
+                elif consecutive_errors == max_consecutive:
+                    logger.error(f"Stream error persisting ({consecutive_errors}x), backing off: {e}")
+                # Exponential backoff: 0.1, 0.2, 0.4, ... capped at 5s
+                backoff = min(0.1 * (2 ** (consecutive_errors - 1)), 5.0)
+                time.sleep(backoff)
+                # Try to recover the stream after persistent errors
+                if consecutive_errors >= max_consecutive:
+                    try:
+                        self.audio_recorder.stop_recording()
+                        time.sleep(1)
+                        self.audio_recorder.start_recording()
+                        logger.info("Attempted stream recovery after persistent errors")
+                        consecutive_errors = 0
+                    except Exception as recovery_err:
+                        logger.error(f"Stream recovery failed: {recovery_err}")
+                        time.sleep(5)
 
     def start_listening(self):
         if not self.audio_recorder:

@@ -7,6 +7,11 @@ import threading
 import subprocess
 from pathlib import Path
 
+# Windows: Set event loop policy before ANY asyncio usage (imports like FastAPI trigger it)
+if sys.platform == 'win32':
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 # CRITICAL: Import logging setup FIRST before any core modules
 import core.sapphire_logging
 import logging
@@ -510,12 +515,6 @@ def run():
         print(f"\n{CYAN_BG}{BLACK}{BOLD} ✨ SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
 
         logger.info(f"Sapphire is running. Starting uvicorn server...")
-
-        # Windows: ProactorEventLoop has socket cleanup issues with uvicorn
-        # SelectorEventLoop is more stable for mixed threading + asyncio
-        if sys.platform == 'win32':
-            import asyncio
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
         # Run uvicorn - this blocks until shutdown
         # Using a thread so we can still check for restart signals

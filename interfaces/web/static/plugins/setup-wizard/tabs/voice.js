@@ -83,6 +83,15 @@ export default {
         const enabled = e.target.checked;
         const card = e.target.closest('.feature-card');
 
+        // Show download status for features that need model downloads
+        const pkgStatus = card.querySelector('.package-status');
+        const needsDownload = enabled && (settingKey === 'WAKE_WORD_ENABLED' || settingKey === 'STT_ENABLED');
+        if (needsDownload && pkgStatus) {
+          const label = settingKey === 'WAKE_WORD_ENABLED' ? 'wakeword' : 'STT';
+          pkgStatus.className = 'package-status checking';
+          pkgStatus.innerHTML = `<span class="spinner">⏳</span> Downloading ${label} models, please wait...`;
+        }
+
         try {
           await updateSetting(settingKey, enabled);
           settings[settingKey] = enabled;
@@ -93,11 +102,21 @@ export default {
             card.classList.remove('enabled');
           }
 
+          // Clear download message on success
+          if (needsDownload && pkgStatus) {
+            pkgStatus.className = 'package-status installed';
+            pkgStatus.innerHTML = `<span class="status-icon">✓</span> Models loaded successfully`;
+          }
+
           // Immediately refresh UI state (mic button, volume row, etc.)
           updateScene();
         } catch (err) {
           console.error('Failed to update setting:', err);
           e.target.checked = !enabled;
+          if (needsDownload && pkgStatus) {
+            pkgStatus.className = 'package-status not-installed';
+            pkgStatus.innerHTML = `<span class="status-icon">✗</span> Failed to load models`;
+          }
         }
       });
     });
