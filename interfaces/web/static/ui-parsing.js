@@ -675,12 +675,52 @@ const renderContentText = (el, txt, isHistoryRender, scrollCallback, thinkCnt) =
     // Handle think blocks
     if (txt.includes('<think>') || txt.includes('<seed:think>')) {
         let processed = txt.replace(/<\/seed:cot_budget_reflect>(.*?)<\/seed:think>/gs, '$1</seed:think>');
+
+        // Detect imbalanced think tags (GLM quirk: <think>A</think>B</think>C)
+        const openCount = (processed.match(/<(?:seed:)?think>/g) || []).length;
+        const closeCount = (processed.match(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g) || []).length;
+
+        if (closeCount > openCount) {
+            // Greedy match: first <think> to LAST </think>
+            const m = processed.match(/^([\s\S]*?)<(?:seed:)?think>([\s\S]*)<\/(?:seed:think|seed:cot_budget_reflect|think)>([\s\S]*)$/);
+            if (m) {
+                const isSeed = processed.indexOf('<seed:think>') < processed.indexOf('<think>') || !processed.includes('<think>');
+                const thinkContent = m[2].replace(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g, '').trim();
+
+                if (m[1]?.trim()) {
+                    const p = createElem('p');
+                    p.innerHTML = safeReplaceImagePlaceholders(m[1].trim());
+                    Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
+                    replaceCodePlaceholders(p);
+                    el.appendChild(p);
+                }
+                if (thinkContent) {
+                    globalThinkCounter++;
+                    const label = isSeed ? 'Seed Think' : 'Think';
+                    const { acc } = createAccordion('think', `${label} (Step ${globalThinkCounter})`, '');
+                    const contentDiv = acc.querySelector('div');
+                    contentDiv.innerHTML = safeReplaceImagePlaceholders(thinkContent);
+                    Images.replaceImagePlaceholdersInElement(contentDiv, images, isHistoryRender, scrollCallback);
+                    replaceCodePlaceholders(contentDiv);
+                    el.appendChild(acc);
+                }
+                if (m[3]?.trim()) {
+                    const p = createElem('p');
+                    p.innerHTML = safeReplaceImagePlaceholders(m[3].trim());
+                    Images.replaceImagePlaceholdersInElement(p, images, isHistoryRender, scrollCallback);
+                    replaceCodePlaceholders(p);
+                    el.appendChild(p);
+                }
+                return;
+            }
+        }
+
         const parts = processed.split(/<(?:seed:)?think>|<\/(?:seed:think|seed:cot_budget_reflect|think)>/);
-        
+
         parts.forEach((part, i) => {
             const trimmed = part.trim();
             if (!trimmed) return;
-            
+
             if (i % 2 === 1) {
                 globalThinkCounter++;
                 const isSeed = processed.substring(0, processed.indexOf(part)).includes('<seed:think>');

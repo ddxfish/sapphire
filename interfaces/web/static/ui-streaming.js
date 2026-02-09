@@ -277,7 +277,18 @@ export const appendStream = (chunk, scrollCallback) => {
             
             state.thinkBuf += newContent.slice(i, endPos);
             if (state.thinkAcc) state.thinkAcc.textContent = state.thinkBuf;
-            
+
+            // GLM quirk: <think>A</think>B</think> - premature close
+            // If another </think> follows without a <think>, skip this close
+            const afterClose = newContent.slice(endPos + endTag.length);
+            const nextCloseIdx = afterClose.search(/<\/(?:seed:think|think)>/);
+            const nextOpenIdx = afterClose.search(/<(?:seed:)?think>/);
+            if (nextCloseIdx !== -1 && (nextOpenIdx === -1 || nextCloseIdx < nextOpenIdx)) {
+                i = endPos + endTag.length;
+                state.thinkBuf += '\n';
+                continue;
+            }
+
             // Remove streaming class when think block completes
             if (state.thinkAccEl) state.thinkAccEl.classList.remove('streaming');
             
