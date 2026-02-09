@@ -12,20 +12,34 @@ export default class ContinuityModal {
     this.timeline = [];
     this.activity = [];
     this.status = {};
+    this._pollTimer = null;
   }
 
   async open() {
     this.render();
     document.body.appendChild(this.el);
     await this.loadData();
+    this._startPolling();
   }
 
   close() {
+    this._stopPolling();
     if (this.el) {
       this.el.remove();
       this.el = null;
     }
     if (this.onCloseCallback) this.onCloseCallback();
+  }
+
+  _startPolling() {
+    this._pollTimer = setInterval(() => this.loadData(), 5000);
+  }
+
+  _stopPolling() {
+    if (this._pollTimer) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
   }
 
   async loadData() {
@@ -75,7 +89,7 @@ export default class ContinuityModal {
     `;
 
     this.el.addEventListener('click', (e) => this.handleClick(e));
-    
+
     // Close on overlay click
     this.el.addEventListener('click', (e) => {
       if (e.target === this.el) this.close();
@@ -134,14 +148,14 @@ export default class ContinuityModal {
 
   renderContent() {
     const content = this.el.querySelector('#continuity-content');
-    
+
     // Update status badge
     const badge = this.el.querySelector('.status-badge');
     if (badge) {
       badge.className = `status-badge ${this.status.running ? '' : 'stopped'}`;
       badge.textContent = this.status.running !== false ? 'Running' : 'Stopped';
     }
-    
+
     switch (this.activeTab) {
       case 'tasks':
         content.innerHTML = this.renderTasks();
@@ -177,17 +191,30 @@ export default class ContinuityModal {
   renderTaskCard(task) {
     const lastRun = task.last_run ? this.formatTime(task.last_run) : 'Never';
     const memoryInfo = task.memory_scope && task.memory_scope !== 'none' ? `💾 ${task.memory_scope}` : '';
+    const chatInfo = task.chat_target ? `💬 ${this.escapeHtml(task.chat_target)}` : '';
+
+    // Iteration display: show live progress if running, otherwise static count
+    let iterText = '';
+    if (task.progress) {
+      iterText = `<span style="color:#4fc3f7">${task.progress.iteration}/${task.progress.total} iterations done</span>`;
+    } else if (task.running) {
+      iterText = `<span style="color:#4fc3f7">Running...</span>`;
+    } else if (task.iterations > 1) {
+      iterText = `${task.iterations} iterations`;
+    }
+
     return `
-      <div class="continuity-task-card">
-        <button class="continuity-task-toggle ${task.enabled ? 'enabled' : ''}" 
-                data-action="toggle" data-task-id="${task.id}" 
+      <div class="continuity-task-card" data-task-id="${task.id}">
+        <button class="continuity-task-toggle ${task.enabled ? 'enabled' : ''}"
+                data-action="toggle" data-task-id="${task.id}"
                 title="${task.enabled ? 'Disable' : 'Enable'}"></button>
         <div class="continuity-task-info">
           <div class="continuity-task-name">${this.escapeHtml(task.name)}</div>
           <div class="continuity-task-schedule">${this.escapeHtml(task.schedule)}</div>
           <div class="continuity-task-meta">
             ${task.chance < 100 ? `${task.chance}% chance • ` : ''}
-            ${task.iterations > 1 ? `${task.iterations} iterations • ` : ''}
+            ${iterText ? `${iterText} • ` : ''}
+            ${chatInfo ? `${chatInfo} • ` : ''}
             ${memoryInfo ? `${memoryInfo} • ` : ''}
             Last: ${lastRun}
           </div>
@@ -260,13 +287,12 @@ export default class ContinuityModal {
   async runTask(taskId) {
     const task = this.tasks.find(t => t.id === taskId);
     if (!task) return;
-    
+
     if (!confirm(`Run "${task.name}" now?`)) return;
-    
+
     try {
       await api.runTask(taskId);
-      // Reload after a delay to get updated last_run
-      setTimeout(() => this.loadData(), 1000);
+      await this.loadData();
     } catch (e) {
       alert('Error: ' + e.message);
     }
@@ -275,9 +301,9 @@ export default class ContinuityModal {
   async deleteTask(taskId) {
     const task = this.tasks.find(t => t.id === taskId);
     if (!task) return;
-    
+
     if (!confirm(`Delete "${task.name}"?`)) return;
-    
+
     try {
       await api.deleteTask(taskId);
       await this.loadData();
@@ -289,7 +315,7 @@ export default class ContinuityModal {
   async toggleTask(taskId) {
     const task = this.tasks.find(t => t.id === taskId);
     if (!task) return;
-    
+
     try {
       await api.updateTask(taskId, { enabled: !task.enabled });
       await this.loadData();
@@ -304,25 +330,25 @@ export default class ContinuityModal {
       const d = new Date(isoString);
       const now = new Date();
       const diff = now - d;
-      
+
       // Today
       if (d.toDateString() === now.toDateString()) {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       }
-      
+
       // Yesterday
       const yesterday = new Date(now);
       yesterday.setDate(yesterday.getDate() - 1);
       if (d.toDateString() === yesterday.toDateString()) {
         return 'Yesterday ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       }
-      
+
       // Within a week
       if (diff < 7 * 24 * 60 * 60 * 1000) {
-        return d.toLocaleDateString([], { weekday: 'short' }) + ' ' + 
+        return d.toLocaleDateString([], { weekday: 'short' }) + ' ' +
                d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       }
-      
+
       return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
              d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } catch {

@@ -1174,6 +1174,18 @@ Editing:
     document.addEventListener('keydown', escHandler);
 
     overlay.querySelector('.modal-save')?.addEventListener('click', async () => {
+      // Auto-add any pending new piece before saving
+      const pendingRow = overlay.querySelector('.new-piece-row');
+      if (pendingRow) {
+        const name = pendingRow.querySelector('.new-piece-name')?.value.trim();
+        const text = pendingRow.querySelector('.new-piece-text')?.value.trim();
+        if (name && text) {
+          pendingRow.querySelector('.new-piece-confirm')?.click();
+          // Wait for API save + modal refresh
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+
       const textChanges = {};
       let selectedValue;
 

@@ -163,3 +163,4 @@ class Events:
     CONTINUITY_TASK_COMPLETE = "continuity_task_complete"
     CONTINUITY_TASK_SKIPPED = "continuity_task_skipped"
     CONTINUITY_TASK_ERROR = "continuity_task_error"
+    CONTINUITY_TASK_PROGRESS = "continuity_task_progress"

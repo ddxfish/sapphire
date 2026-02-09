@@ -2594,8 +2594,8 @@ async def delete_continuity_task(task_id: str, request: Request, _=Depends(requi
 
 
 @app.post("/api/continuity/tasks/{task_id}/run")
-async def run_continuity_task(task_id: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Manually run a continuity task."""
+def run_continuity_task(task_id: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Manually run a continuity task. Sync so it runs in threadpool, not blocking event loop."""
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     result = system.continuity_scheduler.run_task_now(task_id)

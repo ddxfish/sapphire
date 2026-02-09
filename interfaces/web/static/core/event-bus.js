@@ -220,6 +220,12 @@ export const Events = {
     TTS_ERROR: 'tts_error',
     STT_ERROR: 'stt_error',
     
+    // Continuity events
+    CONTINUITY_TASK_STARTING: 'continuity_task_starting',
+    CONTINUITY_TASK_COMPLETE: 'continuity_task_complete',
+    CONTINUITY_TASK_PROGRESS: 'continuity_task_progress',
+    CONTINUITY_TASK_ERROR: 'continuity_task_error',
+
     // Connection events
     CONNECTED: 'connected',           // Server confirms SSE subscription
     BUS_CONNECTED: 'bus_connected',   // Client-side: EventSource opened

@@ -9,6 +9,7 @@ import random
 import logging
 from datetime import datetime
 from typing import Dict, Any
+from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +24,18 @@ class ContinuityExecutor:
         """
         self.system = system
     
-    def run(self, task: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, task: Dict[str, Any], progress_callback=None) -> Dict[str, Any]:
         """
         Execute a continuity task.
-        
-        For background tasks: Uses isolated_chat() - no session state changes, no UI impact.
-        For foreground tasks: Switches chat context, runs normally, restores original.
-        
+
         Args:
             task: Task definition dict
-            
+            progress_callback: Optional callable(iteration, total) for progress updates
+
         Returns:
             Result dict with success, responses, errors
         """
+        self._progress_cb = progress_callback
         result = {
             "success": False,
             "task_id": task.get("id"),
@@ -111,9 +111,13 @@ class ContinuityExecutor:
                     error_msg = f"Iteration {i+1} failed: {e}"
                     logger.error(f"[Continuity] {error_msg}")
                     result["errors"].append(error_msg)
-            
+
+                # Report progress
+                if self._progress_cb:
+                    self._progress_cb(i + 1, iterations)
+
             result["success"] = len(result["errors"]) == 0
-            
+
         except Exception as e:
             error_msg = f"Background task failed: {e}"
             logger.error(f"[Continuity] {error_msg}", exc_info=True)
@@ -184,6 +188,10 @@ class ContinuityExecutor:
                     logger.error(f"[Continuity] {error_msg}")
                     result["errors"].append(error_msg)
 
+                # Report progress
+                if self._progress_cb:
+                    self._progress_cb(i + 1, iterations)
+
             result["success"] = len(result["errors"]) == 0
 
         except Exception as e:
@@ -197,8 +205,6 @@ class ContinuityExecutor:
                 if session_manager.get_active_chat_name() != original_chat:
                     session_manager.set_active_chat(original_chat)
                     logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
-
-                    from core.event_bus import publish, Events
                     publish(Events.CHAT_SWITCHED, {"chat": original_chat})
             except Exception as e:
                 logger.error(f"[Continuity] Failed to restore chat context: {e}")
@@ -245,5 +251,4 @@ class ContinuityExecutor:
             logger.debug(f"[Continuity] Applied settings: {settings}")
         
         # Publish chat switch event so UI updates
-        from core.event_bus import publish, Events
         publish(Events.CHAT_SWITCHED, {"chat": session_manager.get_active_chat_name()})

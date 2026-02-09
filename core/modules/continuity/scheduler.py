@@ -64,6 +64,7 @@ class ContinuityScheduler:
         self._task_running: Dict[str, bool] = {}
         self._task_pending: Dict[str, int] = {}
         self._task_last_matched: Dict[str, str] = {}  # task_id -> "YYYY-MM-DD HH:MM"
+        self._task_progress: Dict[str, Dict] = {}  # task_id -> {iteration, total}
         
         self._ensure_dirs()
         self._load_tasks()
@@ -153,9 +154,20 @@ class ContinuityScheduler:
     # =========================================================================
     
     def list_tasks(self) -> List[Dict]:
-        """Get all tasks."""
+        """Get all tasks, with live progress info merged in."""
         with self._lock:
-            return list(self._tasks.values())
+            tasks = []
+            for t in self._tasks.values():
+                task = dict(t)  # shallow copy so we don't persist transient fields
+                task["running"] = self._task_running.get(t["id"], False)
+                progress = self._task_progress.get(t["id"])
+                if progress:
+                    task["progress"] = progress
+                    # Use live timestamp from progress (known to reach UI)
+                    if progress.get("timestamp"):
+                        task["last_run"] = progress["timestamp"]
+                tasks.append(task)
+            return tasks
     
     def get_task(self, task_id: str) -> Optional[Dict]:
         """Get single task by ID."""
@@ -223,6 +235,10 @@ class ContinuityScheduler:
                 if key in data:
                     task[key] = data[key]
             
+            # Reset run state — clears pending queue and allows fresh cron match
+            self._task_pending[task_id] = 0
+            self._task_last_matched.pop(task_id, None)
+
             self._save_tasks()
             logger.info(f"[Continuity] Updated task: {task['name']} ({task_id})")
             return task
@@ -235,6 +251,9 @@ class ContinuityScheduler:
             
             name = self._tasks[task_id].get("name", task_id)
             del self._tasks[task_id]
+            self._task_pending.pop(task_id, None)
+            self._task_running.pop(task_id, None)
+            self._task_last_matched.pop(task_id, None)
             self._save_tasks()
             logger.info(f"[Continuity] Deleted task: {name} ({task_id})")
             return True
@@ -267,20 +286,45 @@ class ContinuityScheduler:
             logger.error(f"[Continuity] Cron check failed for '{cron_expr}': {e}")
             return False
     
+    def _make_progress_callback(self, task_id: str):
+        """Create a progress callback for the executor."""
+        def callback(iteration: int, total: int):
+            now = datetime.now().isoformat()
+            with self._lock:
+                self._task_progress[task_id] = {
+                    "iteration": iteration,
+                    "total": total,
+                    "timestamp": now
+                }
+                if task_id in self._tasks:
+                    self._tasks[task_id]["last_run"] = now
+        return callback
+
     def _execute_task(self, task: Dict):
         """Execute a task and drain any pending queue. Runs on a worker thread."""
         task_id = task["id"]
         task_name = task.get("name", "Unnamed")
 
         while True:
+            # Re-check enabled state (task dict is shared, updated by update_task)
+            with self._lock:
+                live_task = self._tasks.get(task_id)
+                if not live_task or not live_task.get("enabled", True):
+                    logger.info(f"[Continuity] '{task_name}' disabled — stopping execution")
+                    self._task_pending[task_id] = 0
+                    self._task_running[task_id] = False
+                    self._task_progress.pop(task_id, None)
+                    break
+
             self._log_activity(task_id, task_name, "started")
             try:
-                result = self.executor.run(task)
+                result = self.executor.run(task, progress_callback=self._make_progress_callback(task_id))
 
                 with self._lock:
                     if task_id in self._tasks:
                         self._tasks[task_id]["last_run"] = datetime.now().isoformat()
                         self._save_tasks()
+                    self._task_progress.pop(task_id, None)
 
                 status = "complete" if result.get("success") else "error"
                 self._log_activity(task_id, task_name, status, {
@@ -290,6 +334,8 @@ class ContinuityScheduler:
             except Exception as e:
                 logger.error(f"[Continuity] Task '{task_name}' execution failed: {e}", exc_info=True)
                 self._log_activity(task_id, task_name, "error", {"exception": str(e)})
+                with self._lock:
+                    self._task_progress.pop(task_id, None)
 
             # Check for queued fires
             with self._lock:
@@ -376,7 +422,7 @@ class ContinuityScheduler:
         self._log_activity(task_id, task_name, "started", {"manual": True})
 
         try:
-            result = self.executor.run(task)
+            result = self.executor.run(task, progress_callback=self._make_progress_callback(task_id))
 
             with self._lock:
                 if task_id in self._tasks:
@@ -400,6 +446,7 @@ class ContinuityScheduler:
         finally:
             with self._lock:
                 self._task_running[task_id] = False
+                self._task_progress.pop(task_id, None)
     
     # =========================================================================
     # THREAD CONTROL
