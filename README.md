@@ -44,11 +44,11 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 </tr>
 <tr>
 <td><a href="docs/screenshots/private-mode.png"><img src="docs/screenshots/private-mode.png" alt="Privacy Mode"/></a></td>
-<td><strong>Privacy Mode</strong><br/>Block all cloud connections with one toggle. Only local LLMs allowed. Tools that phone home are disabled. Private prompts stay private — they only activate in privacy mode so your personal data never leaks to cloud providers.</td>
+<td><strong>Privacy Mode</strong><br/>Block all cloud connections with one toggle. Only local LLMs allowed. Tools that phone home are disabled. Private prompts stay private - they only activate in privacy mode so your personal data never leaks to cloud providers.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/story-engine.png"><img src="docs/screenshots/story-engine.png" alt="Story Engine"/></a></td>
-<td><strong>Story Engine</strong><br/>Built-in game master. Dice rolls with DCs, branching choices, progressive clues, room navigation, state tracking. Run a tabletop RPG, dungeon crawler, or interactive fiction — all from a JSON preset. See <a href="docs/STATE-ENGINE.md">Story Engine</a>.</td>
+<td><strong>Story Engine</strong><br/>Built-in game master. Dice rolls with DCs, branching choices, progressive clues, room navigation, state tracking. Run a tabletop RPG, dungeon crawler, or interactive fiction - all from a JSON preset. See <a href="docs/STATE-ENGINE.md">Story Engine</a>.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/edit-past-messages.png"><img src="docs/screenshots/edit-past-messages.png" alt="Edit Messages"/></a></td>
@@ -94,12 +94,12 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 
 ### Use Cases
 
-- **AI companion** — A persistent voice that remembers you, greets you, and grows over time
-- **Voice assistant** — Wake word, hands-free operation, smart home control via Home Assistant
-- **Game master** — Tabletop RPGs, dungeon crawlers, interactive fiction with the Story Engine
-- **Autonomous agent** — Scheduled tasks, morning briefings, dream mode, alarm clock actions
-- **Research assistant** — Web search, memory, notes, multi-step tool reasoning
-- **Privacy-first AI** — Block all cloud connections, run fully local, private prompts that never leak
+- **AI companion** - A persistent voice that remembers you, greets you, and grows over time
+- **Voice assistant** - Wake word, hands-free operation, smart home control via Home Assistant
+- **Game master** - Tabletop RPGs, dungeon crawlers, interactive fiction with the Story Engine
+- **Autonomous agent** - Scheduled tasks, morning briefings, dream mode, alarm clock actions
+- **Research assistant** - Web search, memory, notes, multi-step tool reasoning
+- **Privacy-first AI** - Block all cloud connections, run fully local, private prompts that never leak
 
 ## Quick Start
 
