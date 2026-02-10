@@ -176,7 +176,11 @@ async def setup_page(request: Request):
     """Initial password setup page."""
     if is_setup_complete():
         return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse("setup.html", {"request": request})
+    csrf_token = generate_csrf_token(request)
+    return templates.TemplateResponse("setup.html", {
+        "request": request,
+        "csrf_token": lambda: csrf_token
+    })
 
 
 @app.post("/setup")
