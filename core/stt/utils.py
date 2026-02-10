@@ -13,5 +13,5 @@ def can_transcribe(whisper_client) -> tuple[bool, str]:
     if not config.STT_ENABLED:
         return False, "Speech-to-text is disabled"
     if isinstance(whisper_client, NullWhisperClient):
-        return False, "STT enabled but not initialized — restart required to load the speech model"
+        return False, "STT enabled but not initialized — downloading or loading speech model"
     return True, ""

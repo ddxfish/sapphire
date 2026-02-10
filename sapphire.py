@@ -258,7 +258,8 @@ class VoiceChatSystem:
             # Cold start: ensure models exist, then load real components
             try:
                 from core.setup import ensure_wakeword_models
-                ensure_wakeword_models()
+                if not ensure_wakeword_models():
+                    raise RuntimeError("Failed to download wakeword models")
                 from core.wakeword.audio_recorder import AudioRecorder as RealAudioRecorder
                 from core.wakeword.wake_detector import WakeWordDetector as RealWakeWordDetector
 
@@ -291,21 +292,31 @@ class VoiceChatSystem:
                 logger.info("STT already initialized")
                 return True
 
-            # Cold start: load whisper model
+            # Cold start: import real WhisperSTT and AudioRecorder directly
+            # (module-level imports may be Null if STT was disabled at import time)
             try:
+                from core.stt.server import WhisperSTT as RealWhisperSTT
+                from core.stt.recorder import AudioRecorder as RealAudioRecorder
                 logger.info(f"Hot-loading {config.STT_ENGINE} model...")
-                self.whisper_client = WhisperSTT()
+                self.whisper_client = RealWhisperSTT()
+                self.whisper_recorder = RealAudioRecorder()
                 logger.info("STT hot-started successfully")
                 return True
+            except ImportError as e:
+                logger.error(f"STT not installed: {e}")
+                self.whisper_client = NullWhisperClient()
+                return False
             except Exception as e:
                 logger.error(f"STT hot-start failed: {e}")
                 self.whisper_client = NullWhisperClient()
                 return False
         else:
             # Swap to null (free model memory)
+            from core.stt.stt_null import NullAudioRecorder
             if not isinstance(self.whisper_client, NullWhisperClient):
                 logger.info("STT stopped, unloading model")
                 self.whisper_client = NullWhisperClient()
+                self.whisper_recorder = NullAudioRecorder()
             return True
 
     def toggle_tts(self, enabled: bool):
@@ -408,7 +419,13 @@ class VoiceChatSystem:
         if config.STT_ENABLED:
             logger.info(f"Initializing {config.STT_ENGINE} model...")
             try:
-                self.whisper_client = WhisperSTT()
+                from core.stt.server import WhisperSTT as RealWhisperSTT
+                from core.stt.recorder import AudioRecorder as RealAudioRecorder
+                self.whisper_client = RealWhisperSTT()
+                self.whisper_recorder = RealAudioRecorder()
+            except ImportError as e:
+                logger.error(f"STT not installed: {e}")
+                return False
             except RuntimeError as e:
                 logger.error(f"Failed to initialize {config.STT_ENGINE}: {e}")
                 return False

@@ -309,7 +309,7 @@ export const postAudio = async (blob) => {
     const form = new FormData();
     form.append('audio', blob, 'recording.webm');
     try {
-        return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form });
+        return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form }, 120000);
     } catch (e) {
         if (e.message.includes('No audio') || e.message.includes('empty')) throw new Error('Audio too small');
         if (e.message.includes('transcription')) throw new Error('Could not understand audio');

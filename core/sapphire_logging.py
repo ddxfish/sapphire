@@ -106,12 +106,23 @@ root_logger.addHandler(console_handler)
 logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
 
 # Windows: asyncio ProactorEventLoop logs harmless ConnectionResetError on socket cleanup
-# These are cosmetic — the response already completed successfully
-import sys
+# These are cosmetic — the response already completed successfully.
+# The error appears in exc_info (not msg), so check the full formatted record.
 if sys.platform == 'win32':
     class _WinAsyncioFilter(logging.Filter):
+        _suppress = ('ConnectionResetError', '_ProactorBasePipeTransport', 'WinError 10054')
         def filter(self, record):
-            return 'ConnectionResetError' not in str(getattr(record, 'msg', ''))
+            msg = str(getattr(record, 'msg', ''))
+            if any(s in msg for s in self._suppress):
+                return False
+            if record.exc_info:
+                exc_text = str(record.exc_info[1]) if record.exc_info[1] else ''
+                if any(s in exc_text for s in self._suppress):
+                    return False
+                exc_type = record.exc_info[0].__name__ if record.exc_info[0] else ''
+                if any(s in exc_type for s in self._suppress):
+                    return False
+            return True
     logging.getLogger('asyncio').addFilter(_WinAsyncioFilter())
 
 # Only redirect stdout/stderr when running as systemd service

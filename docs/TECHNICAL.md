@@ -197,7 +197,7 @@ Models with "thinking" in the name (Qwen3-Thinking, Kimi-K2-Thinking) return rea
 |------|--------------|----------|
 | Hot | Immediate | Names, TTS voice/speed/pitch, generation params |
 | Hot toggle | Immediate | Wakeword on/off (hot-swaps real/null detector at runtime) |
-| Component restart | Next component init | STT enabled (requires restart to load speech model) |
+| Component restart | Next component init | Port changes, model configs |
 | Full restart | App restart | Ports, model configs |
 
 ---
@@ -263,7 +263,7 @@ Started by `ProcessManager` if `TTS_ENABLED=true`. Auto-restarts on crash.
 - Recorder: `core/stt/recorder.py`
 - Guard: `core/stt/utils.py` (shared `can_transcribe()` check)
 
-Runs as thread in main process if `STT_ENABLED=true`. Requires restart to load the speech model — the status endpoint reports both `stt_enabled` (setting) and `stt_ready` (model loaded).
+Runs as thread in main process if `STT_ENABLED=true`. Supports **hot-toggle** — can be enabled/disabled at runtime without restart via `VoiceChatSystem.toggle_stt()`. The status endpoint reports both `stt_enabled` (setting) and `stt_ready` (model loaded).
 
 ### Wake Word
 
@@ -459,7 +459,7 @@ HOT RELOAD:
 - Prompts: ~2s after file change
 - Toolsets: ~2s after file change
 - Wakeword: hot-toggle on/off at runtime (no restart needed)
-- STT: setting change is hot, but model load requires restart
+- STT: hot-toggle on/off at runtime (downloads model on first enable)
 - Continuity tasks: immediate on save
 - Code changes: Require restart
 

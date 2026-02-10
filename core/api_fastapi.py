@@ -1200,7 +1200,16 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
         contents = await audio.read()
         with open(temp_path, 'wb') as f:
             f.write(contents)
-        transcribed_text = await asyncio.to_thread(system.whisper_client.transcribe_file, temp_path)
+        try:
+            transcribed_text = await asyncio.wait_for(
+                asyncio.to_thread(system.whisper_client.transcribe_file, temp_path),
+                timeout=90.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Transcription timed out (90s) — model may be too slow on CPU")
+            raise HTTPException(status_code=504, detail="Transcription timed out — try a smaller model or lower beam size in STT settings")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Transcription error: {e}")
         raise HTTPException(status_code=500, detail="Failed to process audio")
@@ -2491,7 +2500,7 @@ async def test_audio_input(request: Request, _=Depends(require_login), system=De
 
 
 @app.post("/api/audio/test-output")
-async def test_audio_output(request: Request, _=Depends(require_login)):
+async def test_audio_output(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Test audio output device."""
     data = await request.json() or {}
     device_index = data.get('device_index')
@@ -2510,39 +2519,58 @@ async def test_audio_output(request: Request, _=Depends(require_login)):
         import numpy as np
         import sounddevice as sd
 
-        sample_rate = None
-        default_rate = 44100
-        if device_index is not None:
-            try:
-                dev_info = sd.query_devices(device_index)
-                default_rate = int(dev_info['default_samplerate'])
-            except Exception:
-                pass
+        # Pause wakeword stream to avoid audio device conflict
+        wakeword_paused = False
+        try:
+            if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
+                if hasattr(system.wake_word_recorder, 'pause_recording'):
+                    wakeword_paused = system.wake_word_recorder.pause_recording()
+                    if wakeword_paused:
+                        time.sleep(0.3)
+        except Exception:
+            pass
 
-        for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
-            try:
-                stream = sd.OutputStream(device=device_index, samplerate=rate, channels=1, dtype=np.float32)
-                stream.close()
-                sample_rate = rate
-                break
-            except Exception:
-                continue
+        try:
+            sample_rate = None
+            default_rate = 44100
+            if device_index is not None:
+                try:
+                    dev_info = sd.query_devices(device_index)
+                    default_rate = int(dev_info['default_samplerate'])
+                except Exception:
+                    pass
 
-        if sample_rate is None:
-            return {'success': False, 'error': 'Device does not support any common sample rate'}
+            for rate in [default_rate, 48000, 44100, 32000, 24000, 22050, 16000]:
+                try:
+                    stream = sd.OutputStream(device=device_index, samplerate=rate, channels=1, dtype=np.float32)
+                    stream.close()
+                    sample_rate = rate
+                    break
+                except Exception:
+                    continue
 
-        t = np.linspace(0, duration, int(sample_rate * duration), False)
-        tone = np.sin(2 * np.pi * frequency * t)
-        fade_samples = int(sample_rate * 0.02)
-        fade_in = np.linspace(0, 1, fade_samples)
-        fade_out = np.linspace(1, 0, fade_samples)
-        tone[:fade_samples] *= fade_in
-        tone[-fade_samples:] *= fade_out
-        tone = (tone * 0.5 * 32767).astype(np.int16)
+            if sample_rate is None:
+                return {'success': False, 'error': 'Device does not support any common sample rate'}
 
-        sd.play(tone, sample_rate, device=device_index)
-        sd.wait()
-        return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            tone = np.sin(2 * np.pi * frequency * t)
+            fade_samples = int(sample_rate * 0.02)
+            fade_in = np.linspace(0, 1, fade_samples)
+            fade_out = np.linspace(1, 0, fade_samples)
+            tone[:fade_samples] *= fade_in
+            tone[-fade_samples:] *= fade_out
+            tone = (tone * 0.5 * 32767).astype(np.int16)
+
+            sd.play(tone, sample_rate, device=device_index)
+            sd.wait()
+            return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
+        finally:
+            if wakeword_paused:
+                try:
+                    time.sleep(0.2)
+                    system.wake_word_recorder.resume_recording()
+                except Exception:
+                    pass
 
     return await asyncio.to_thread(_test_output)
 

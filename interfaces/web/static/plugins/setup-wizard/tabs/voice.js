@@ -89,6 +89,7 @@ export default {
         if (needsDownload && pkgStatus) {
           const label = settingKey === 'WAKE_WORD_ENABLED' ? 'wakeword' : 'STT';
           pkgStatus.className = 'package-status checking';
+          pkgStatus.dataset.downloading = 'true';
           pkgStatus.innerHTML = `<span class="spinner">⏳</span> Downloading ${label} models, please wait...`;
         }
 
@@ -104,6 +105,7 @@ export default {
 
           // Clear download message on success
           if (needsDownload && pkgStatus) {
+            delete pkgStatus.dataset.downloading;
             pkgStatus.className = 'package-status installed';
             pkgStatus.innerHTML = `<span class="status-icon">✓</span> Models loaded successfully`;
           }
@@ -114,6 +116,7 @@ export default {
           console.error('Failed to update setting:', err);
           e.target.checked = !enabled;
           if (needsDownload && pkgStatus) {
+            delete pkgStatus.dataset.downloading;
             pkgStatus.className = 'package-status not-installed';
             pkgStatus.innerHTML = `<span class="status-icon">✗</span> Failed to load models`;
           }
@@ -143,6 +146,9 @@ export default {
       for (const [key, info] of Object.entries(packageStatus)) {
         const statusEl = container.querySelector(`[data-package="${key}"]`);
         if (!statusEl) continue;
+
+        // Don't overwrite active download progress messages
+        if (statusEl.dataset.downloading) continue;
 
         statusEl.classList.remove('checking');
 

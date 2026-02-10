@@ -278,16 +278,42 @@ def ensure_wakeword_models() -> bool:
     try:
         import openwakeword
         from openwakeword.utils import download_models
-        
+
         logger.info("Downloading OpenWakeWord models...")
-        download_models()
+
+        # On Windows, tqdm progress bars crash with [WinError 1] when running
+        # in a non-console thread (e.g. from asyncio.to_thread via API endpoint).
+        # Suppress stderr during download to avoid this.
+        if sys.platform == 'win32':
+            import io
+            _real_stderr = sys.stderr
+            try:
+                sys.stderr = io.StringIO()
+                download_models()
+            finally:
+                sys.stderr = _real_stderr
+        else:
+            download_models()
+
         logger.info("OpenWakeWord models ready")
         return True
     except ImportError:
         logger.warning("OpenWakeWord not installed - skipping model download")
         return False
     except Exception as e:
-        logger.error(f"Failed to download OpenWakeWord models: {e}")
+        # download_models() may fail from tqdm on Windows even though files downloaded OK.
+        # Check if the critical feature models actually exist before giving up.
+        try:
+            import openwakeword
+            models_dir = Path(openwakeword.__file__).parent / "resources" / "models"
+            needed = ["melspectrogram.onnx", "embedding_model.onnx"]
+            missing = [f for f in needed if not (models_dir / f).exists()]
+            if not missing:
+                logger.warning(f"OpenWakeWord download reported error ({e}) but models exist — continuing")
+                return True
+            logger.error(f"Failed to download OpenWakeWord models: {e} (missing: {', '.join(missing)})")
+        except Exception:
+            logger.error(f"Failed to download OpenWakeWord models: {e}")
         return False
 
 

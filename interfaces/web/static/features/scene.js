@@ -80,7 +80,7 @@ export async function updateScene() {
                 if (!status.stt_enabled) {
                     micBtn.dataset.sttTitle = 'STT disabled';
                 } else if (!status.stt_ready) {
-                    micBtn.dataset.sttTitle = 'STT enabled — restart to load model';
+                    micBtn.dataset.sttTitle = 'STT loading — downloading speech model';
                 } else {
                     micBtn.dataset.sttTitle = 'Hold to record';
                 }
