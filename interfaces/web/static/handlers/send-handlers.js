@@ -346,6 +346,7 @@ export async function handleStop() {
         }
         
         controller.abort();
+        audio.stop(true);
         ui.cancelStreaming();
         ui.hideStatus();
         setProc(false);

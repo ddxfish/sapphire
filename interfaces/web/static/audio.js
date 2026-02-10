@@ -102,33 +102,35 @@ export const isTtsPlaying = () => isStreaming;
 export const playText = async (txt, cacheKey = null) => {
     stop(true);
     isStreaming = true;
-    
+    ttsCtrl = new AbortController();
+
     // Remove think blocks (both formats + orphaned)
     let clean = txt;
     clean = clean.replace(/<(?:seed:)?think>.*?<\/(?:seed:think|seed:cot_budget_reflect|think)>\s*/gs, '');
-    
+
     const orphans = [...clean.matchAll(/<\/(?:seed:think|seed:cot_budget_reflect|think)>/g)];
     if (orphans.length > 0) {
         const last = orphans[orphans.length - 1];
         clean = clean.substring(last.index + last[0].length);
     }
-    
+
     // Filter paragraphs
     const paras = clean.split(/\n\s*\n/).filter(p => {
         const t = p.trim();
         return !t.match(/^[🧧🌁🧠💾🧠⚠️]/);
     });
-    
+
     clean = paras.join('\n\n').trim().replace(/^---\s*$/gm, '').trim();
-    
+
     if (!clean) {
         isStreaming = false;
+        ttsCtrl = null;
         return;
     }
-    
+
     ui.showStatus();
     ui.updateStatus('Generating TTS...');
-    
+
     try {
         // Check cache first
         let blob;
@@ -136,7 +138,7 @@ export const playText = async (txt, cacheKey = null) => {
             blob = ttsCache.get(cacheKey);
             ui.updateStatus('Playing cached TTS...');
         } else {
-            blob = await api.fetchAudio(clean, null);
+            blob = await api.fetchAudio(clean, ttsCtrl.signal);
             // Cache if key provided
             if (cacheKey !== null) {
                 // LRU eviction
@@ -147,31 +149,34 @@ export const playText = async (txt, cacheKey = null) => {
                 ttsCache.set(cacheKey, blob);
             }
         }
-        
+
+        // Bail if stopped while fetching
+        if (!isStreaming) return;
+
         blobUrl = URL.createObjectURL(blob);
         player = new Audio(blobUrl);
-        
+
         // Apply volume settings
         player.volume = muted ? 0 : volume;
-        
+
         player.onended = () => {
             isStreaming = false;
             ui.hideStatus();
             cleanup();
         };
-        
+
         player.onerror = e => {
             console.error('Audio error:', e);
             isStreaming = false;
             ui.hideStatus();
         };
-        
+
         await player.play();
         ui.hideStatus();
     } catch (e) {
         isStreaming = false;
         ui.hideStatus();
-        if (!e.message?.includes('cancelled') && !e.message?.includes('aborted') && 
+        if (!e.message?.includes('cancelled') && !e.message?.includes('aborted') &&
             !e.name?.includes('NotAllowedError') && !e.message?.includes('autoplay')) {
             ui.showToast(`Audio error: ${e.message}`, 'error');
         }
