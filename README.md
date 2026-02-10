@@ -144,6 +144,13 @@ Web UI: https://localhost:8073
 
 The setup wizard walks you through LLM configuration on first run.
 
+## Update
+```bash
+cd sapphire
+git pull
+pip install -r requirements.txt
+```
+
 ## Requirements
 
 - Ubuntu 22.04+ or Windows 11+
