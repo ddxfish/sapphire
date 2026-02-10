@@ -128,6 +128,25 @@ class OpenAICompatProvider(BaseProvider):
             return True
         except Exception as e:
             logger.debug(f"Health check failed for {self.base_url}: {e}")
+
+            # Auto-correct missing /v1 suffix (common with llama.cpp, Ollama, etc.)
+            base = self.base_url.rstrip('/')
+            if not base.endswith('/v1'):
+                corrected = base + '/v1'
+                try:
+                    test_client = OpenAI(
+                        base_url=corrected,
+                        api_key=self.api_key,
+                        timeout=self.request_timeout
+                    )
+                    test_client.models.list(timeout=self.health_check_timeout)
+                    logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")
+                    self.base_url = corrected
+                    self._client = test_client
+                    return True
+                except Exception:
+                    pass
+
             return False
     
     def _transform_params_for_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
