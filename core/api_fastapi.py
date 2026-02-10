@@ -3007,6 +3007,52 @@ async def test_ha_connection(request: Request, _=Depends(require_login)):
     return await asyncio.to_thread(_test)
 
 
+@app.post("/api/webui/plugins/homeassistant/test-notify")
+async def test_ha_notify(request: Request, _=Depends(require_login)):
+    """Test HA notification service."""
+    from core.credentials_manager import credentials
+
+    data = await request.json() or {}
+    url = data.get('url', '').strip().rstrip('/')
+    token = data.get('token', '').strip()
+    notify_service = data.get('notify_service', '').strip()
+
+    if not token:
+        token = credentials.get_ha_token()
+
+    if not url:
+        return {"success": False, "error": "No URL provided"}
+    if not token:
+        return {"success": False, "error": "No API token found"}
+    if not notify_service:
+        return {"success": False, "error": "No notify service specified"}
+
+    def _test():
+        import requests as req
+        try:
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            payload = {"message": "Test notification from Sapphire", "title": "Sapphire"}
+            response = req.post(
+                f"{url}/api/services/notify/{notify_service}",
+                headers=headers, json=payload, timeout=10
+            )
+            if response.status_code == 200:
+                return {"success": True}
+            elif response.status_code == 401:
+                return {"success": False, "error": "Invalid API token"}
+            elif response.status_code == 404:
+                return {"success": False, "error": f"Service 'notify.{notify_service}' not found"}
+            return {"success": False, "error": f"HTTP {response.status_code}"}
+        except req.exceptions.Timeout:
+            return {"success": False, "error": "Connection timed out"}
+        except req.exceptions.ConnectionError as e:
+            return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error: {str(e)[:100]}"}
+
+    return await asyncio.to_thread(_test)
+
+
 @app.put("/api/webui/plugins/homeassistant/token")
 async def set_ha_token(request: Request, _=Depends(require_login)):
     """Store HA token."""

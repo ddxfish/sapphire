@@ -160,8 +160,12 @@ class OpenAICompatProvider(BaseProvider):
         """
         if not params:
             return params
-        
+
         result = dict(params)
+
+        # Strip internal Sapphire params that aren't part of the OpenAI API
+        result.pop('disable_thinking', None)
+
         model_lower = (self.model or '').lower()
         
         # Detect reasoning models (GPT-5+, o1, o3)
