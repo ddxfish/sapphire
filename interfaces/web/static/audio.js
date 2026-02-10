@@ -60,6 +60,14 @@ export const stopLocalTts = async () => {
         await api.stopLocalTts();
         localTtsPlaying = false;
     } catch {}
+    // Re-check server state after a delay to catch races where TTS
+    // started after our stop (e.g. user clicked stop before playback began)
+    setTimeout(async () => {
+        try {
+            const status = await api.fetchStatus();
+            localTtsPlaying = status?.tts_playing || false;
+        } catch {}
+    }, 800);
 };
 
 const cleanup = () => {
@@ -84,8 +92,9 @@ export const stop = (force = false) => {
     }
     isStreaming = false;
     cleanup();
-    // Also stop local TTS if playing
-    if (localTtsPlaying) stopLocalTts();
+    // Always tell server to stop TTS — even if we don't think it's playing yet.
+    // Server stop is idempotent and prevents races where TTS starts after our check.
+    stopLocalTts();
 };
 
 export const isTtsPlaying = () => isStreaming;
