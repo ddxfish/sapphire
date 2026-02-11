@@ -420,6 +420,16 @@ body:not(.sidebar-collapsed) #toggle-sidebar {
     line-height: 1.3;
 }
 
+a.gallery-caption {
+    text-decoration: none;
+    color: var(--accent);
+    display: block;
+}
+
+a.gallery-caption:hover {
+    text-decoration: underline;
+}
+
 /* Gallery item without caption - full round corners */
 .image-gallery .gallery-item:not(:has(.gallery-caption)) img {
     border-radius: var(--radius-md);
@@ -429,6 +439,45 @@ body:not(.sidebar-collapsed) #toggle-sidebar {
     .image-gallery {
         columns: 1;
     }
+}
+
+/* Gallery listing - category browse with preview thumbnails */
+.gallery-listing {
+    margin: 10px 0;
+}
+
+.gallery-listing-item {
+    margin-bottom: 14px;
+}
+
+.gallery-listing-name {
+    display: block;
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+    margin-bottom: 4px;
+    font-size: var(--font-base);
+}
+
+.gallery-listing-name:hover {
+    text-decoration: underline;
+}
+
+.gallery-listing-thumbs {
+    display: flex;
+    gap: 4px;
+}
+
+.gallery-listing-thumbs img {
+    height: 64px;
+    width: auto;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
+}
+
+.gallery-listing-thumbs img:hover {
+    opacity: 0.8;
 }
 
 .message details {

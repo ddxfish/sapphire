@@ -1,6 +1,6 @@
 // ui-streaming.js - Real-time streaming with typed SSE events
 
-import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
+import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries, _createGalleryListing, _createCategoryGrid } from './ui-parsing.js';
 
 // Streaming state
 let streamMsg = null;
@@ -465,8 +465,8 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
         }
     }
 
-    // Auto-inject gallery images from if_get_gallery tool results
-    if (toolName === 'if_get_gallery' && !isError && streamMsg) {
+    // Auto-inject from tool results (marker-based, works with any tool)
+    if (!isError && streamMsg) {
         const galleryMatch = result.match(/<!--GALLERY:(\[.*\])-->/s);
         if (galleryMatch) {
             try {
@@ -487,6 +487,26 @@ const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
                 }
             } catch (e) {
                 console.warn('[Gallery] Failed to parse gallery data:', e);
+            }
+        }
+
+        const listMatch = result.match(/<!--GALLERIES:(\[.*\])-->/s);
+        if (listMatch) {
+            try {
+                const listing = _createGalleryListing(JSON.parse(listMatch[1]));
+                if (listing) toolData.acc.after(listing);
+            } catch (e) {
+                console.warn('[Gallery] Failed to parse gallery listing:', e);
+            }
+        }
+
+        const catMatch = result.match(/<!--CATEGORIES:(\[.*\])-->/s);
+        if (catMatch) {
+            try {
+                const grid = _createCategoryGrid(JSON.parse(catMatch[1]));
+                if (grid) toolData.acc.after(grid);
+            } catch (e) {
+                console.warn('[Gallery] Failed to parse category data:', e);
             }
         }
     }

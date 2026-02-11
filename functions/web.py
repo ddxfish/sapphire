@@ -114,11 +114,12 @@ TOOLS = [
         "is_local": False,
         "function": {
             "name": "get_images",
-            "description": "Extract image URLs from a webpage's content area. Returns image URLs with descriptions and captions. Header/footer/nav images are excluded. To display images to the user, use markdown in your response: ![description](url). Put multiple images on consecutive lines for gallery display.",
+            "description": "Extract image URLs from a webpage's content area. Returns image URLs with descriptions. To display images to the user, use markdown: ![description](url). Set show_to_user to auto-display all images in a gallery.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "URL to extract images from"}
+                    "url": {"type": "string", "description": "URL to extract images from"},
+                    "show_to_user": {"type": "boolean", "description": "Auto-display all images in chat gallery (default false)"}
                 },
                 "required": ["url"]
             }
@@ -677,6 +678,12 @@ def execute(function_name, arguments, config):
                     lines.append(line)
 
                 out = "\n\n".join(lines)
+
+                if arguments.get('show_to_user', False):
+                    urls = [img['url'] for img in images]
+                    return (f"Found {len(images)} images on {url}. Images are displayed in chat.\n\n{out}"
+                            f"\n<!--GALLERY:{json.dumps(urls)}-->"), True
+
                 return (f"Found {len(images)} images on {url}:\n\n{out}\n\n"
                         "To display images, use: ![description](image_url)"), True
             except ValueError as e:

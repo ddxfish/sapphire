@@ -115,6 +115,8 @@ export function handleToolbar(action, idx) {
 }
 
 export async function handleAutoRefresh() {
+    // Skip if SSE is connected — real-time events handle all updates
+    if (window.eventBus?.isConnected?.()) return;
     const histLen = getHistLen();
     const len = await chat.autoRefresh(getIsProc(), histLen, async () => {
         // Import dynamically to avoid circular dep

@@ -419,13 +419,16 @@ const processInlineMarkdown = (html) => {
     html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
     
     // Images: ![alt](url) - MUST be before links
-    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
+    // Balanced parens in URL for Wikipedia etc, tolerates space between ] and (
+    html = html.replace(/!\[([^\]]*)\]\s*\(((?:[^()]*|\([^)]*\))*)\)/g, (m, alt, url) => {
+        url = url.trim().replace(/ /g, '%20');
         if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img">`;
         return m;
     });
 
     // Links: [text](url) - block javascript:, data:, vbscript: schemes
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, text, url) => {
+    html = html.replace(/\[([^\]]+)\]\s*\(((?:[^()]*|\([^)]*\))*)\)/g, (m, text, url) => {
+        url = url.trim().replace(/ /g, '%20');
         if (/^(https?:\/\/|mailto:)/i.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
         return m;
     });
@@ -486,11 +489,35 @@ const createGallery = (imgs) => {
 export const wrapImageGalleries = (container) => {
     if (!container) return;
 
-    // Phase 1: Multi-image paragraphs (images within a single <p> separated by <br>)
+    // Phase 0: Image-heavy lists — <ol>/<ul> where most items are just images
+    Array.from(container.querySelectorAll('ol, ul')).forEach(list => {
+        const items = Array.from(list.querySelectorAll(':scope > li'));
+        const imgItems = items.filter(li => li.querySelector('.chat-img'));
+        if (imgItems.length >= 2 && imgItems.length >= items.length * 0.5) {
+            const imgs = imgItems.map(li => li.querySelector('.chat-img'));
+            list.replaceWith(createGallery(imgs));
+        }
+    });
+
+    // Phase 1: Multi-image paragraphs (2+ images in a <p>)
     Array.from(container.querySelectorAll('p')).forEach(p => {
         const imgs = Array.from(p.querySelectorAll('.chat-img'));
-        if (imgs.length >= 2 && isImageOnly(p)) {
+        if (imgs.length < 2) return;
+
+        if (isImageOnly(p)) {
+            // Pure images — replace the whole paragraph
             p.replaceWith(createGallery(imgs));
+        } else {
+            // Mixed text + images — extract images into gallery, keep text
+            const gallery = createGallery(imgs);
+            imgs.forEach(img => {
+                if (img.nextSibling && img.nextSibling.nodeName === 'BR') img.nextSibling.remove();
+                else if (img.previousSibling && img.previousSibling.nodeName === 'BR') img.previousSibling.remove();
+                img.remove();
+            });
+            while (p.firstChild && p.firstChild.nodeName === 'BR') p.firstChild.remove();
+            while (p.lastChild && p.lastChild.nodeName === 'BR') p.lastChild.remove();
+            p.after(gallery);
         }
     });
 
@@ -629,6 +656,87 @@ const addToolDeleteButton = (acc, toolCallId) => {
     summary.appendChild(deleteBtn);
 };
 
+// Create category grid from parsed category data (masonry with named captions)
+export const _createCategoryGrid = (categories) => {
+    if (!categories || categories.length === 0) return null;
+
+    const gallery = document.createElement('div');
+    gallery.className = 'image-gallery';
+
+    for (const cat of categories) {
+        if (!cat.thumb) continue;
+
+        const item = document.createElement('div');
+        item.className = 'gallery-item';
+
+        const img = document.createElement('img');
+        img.src = cat.thumb;
+        img.className = 'chat-img';
+        img.dataset.modalReady = 'true';
+        img.addEventListener('click', (e) => {
+            e.stopPropagation();
+            Images.openImageModal(cat.thumb);
+        });
+        item.appendChild(img);
+
+        const caption = document.createElement('a');
+        caption.className = 'gallery-caption';
+        caption.href = cat.url;
+        caption.target = '_blank';
+        caption.rel = 'noopener';
+        caption.textContent = cat.name;
+        item.appendChild(caption);
+
+        gallery.appendChild(item);
+    }
+
+    return gallery.children.length > 0 ? gallery : null;
+};
+
+// Create gallery listing element from parsed gallery data
+export const _createGalleryListing = (galleries) => {
+    if (!galleries || galleries.length === 0) return null;
+
+    const listing = document.createElement('div');
+    listing.className = 'gallery-listing';
+
+    for (const g of galleries) {
+        const item = document.createElement('div');
+        item.className = 'gallery-listing-item';
+
+        const nameLink = document.createElement('a');
+        nameLink.className = 'gallery-listing-name';
+        nameLink.href = g.url;
+        nameLink.target = '_blank';
+        nameLink.rel = 'noopener';
+        nameLink.textContent = g.name;
+        item.appendChild(nameLink);
+
+        if (g.thumbs && g.thumbs.length > 0) {
+            const thumbRow = document.createElement('div');
+            thumbRow.className = 'gallery-listing-thumbs';
+            for (const src of g.thumbs) {
+                const img = document.createElement('img');
+                img.src = src;
+                img.className = 'chat-img';
+                img.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const urls = g.thumbs;
+                    const idx = urls.indexOf(src);
+                    Images.openImageModal(src, urls, idx);
+                });
+                img.dataset.modalReady = 'true';
+                thumbRow.appendChild(img);
+            }
+            item.appendChild(thumbRow);
+        }
+
+        listing.appendChild(item);
+    }
+
+    return listing;
+};
+
 const renderToolResult = (el, part) => {
     const toolName = part.name || 'Unknown Tool';
     const toolCallId = part.tool_call_id;
@@ -702,29 +810,47 @@ const renderToolResult = (el, part) => {
 
     el.appendChild(acc);
 
-    // Auto-inject gallery images from if_get_gallery tool results
-    if (toolName === 'if_get_gallery') {
-        const galleryMatch = fullResult.match(/<!--GALLERY:(\[.*\])-->/s);
-        if (galleryMatch) {
-            try {
-                const imgUrls = JSON.parse(galleryMatch[1]);
-                if (imgUrls.length > 0) {
-                    const gallery = document.createElement('div');
-                    gallery.className = 'image-gallery';
-                    for (const url of imgUrls) {
-                        const item = document.createElement('div');
-                        item.className = 'gallery-item';
-                        const img = document.createElement('img');
-                        img.src = url;
-                        img.className = 'chat-img';
-                        item.appendChild(img);
-                        gallery.appendChild(item);
-                    }
-                    el.appendChild(gallery);
+    // Auto-inject from tool results (marker-based, works with any tool)
+    const galleryMatch = fullResult.match(/<!--GALLERY:(\[.*\])-->/s);
+    if (galleryMatch) {
+        try {
+            const imgUrls = JSON.parse(galleryMatch[1]);
+            if (imgUrls.length > 0) {
+                const gallery = document.createElement('div');
+                gallery.className = 'image-gallery';
+                for (const url of imgUrls) {
+                    const item = document.createElement('div');
+                    item.className = 'gallery-item';
+                    const img = document.createElement('img');
+                    img.src = url;
+                    img.className = 'chat-img';
+                    item.appendChild(img);
+                    gallery.appendChild(item);
                 }
-            } catch (e) {
-                console.warn('[Gallery] Failed to parse gallery data:', e);
+                el.appendChild(gallery);
             }
+        } catch (e) {
+            console.warn('[Gallery] Failed to parse gallery data:', e);
+        }
+    }
+
+    const listMatch = fullResult.match(/<!--GALLERIES:(\[.*\])-->/s);
+    if (listMatch) {
+        try {
+            const listing = _createGalleryListing(JSON.parse(listMatch[1]));
+            if (listing) el.appendChild(listing);
+        } catch (e) {
+            console.warn('[Gallery] Failed to parse gallery listing:', e);
+        }
+    }
+
+    const catMatch = fullResult.match(/<!--CATEGORIES:(\[.*\])-->/s);
+    if (catMatch) {
+        try {
+            const grid = _createCategoryGrid(JSON.parse(catMatch[1]));
+            if (grid) el.appendChild(grid);
+        } catch (e) {
+            console.warn('[Gallery] Failed to parse category data:', e);
         }
     }
 };
