@@ -22,6 +22,8 @@ AVAILABLE_FUNCTIONS = [
     'get_website',
     'get_wikipedia',
     'research_topic',
+    'get_site_links',
+    'get_images',
 ]
 
 TOOLS = [
@@ -86,6 +88,39 @@ TOOLS = [
                     "query": {"type": "string", "description": "Topic or question to research"}
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "network": True,
+        "is_local": False,
+        "function": {
+            "name": "get_site_links",
+            "description": "Get internal text links from a website for browsing its structure. Returns anchor text and URLs for categories, navigation, and content links. Use this to explore a site's structure before extracting images with get_images.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to browse"},
+                    "strip_nav": {"type": "boolean", "description": "Strip header/footer/nav links to focus on content area links (default true). Set false to include full site navigation."}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "network": True,
+        "is_local": False,
+        "function": {
+            "name": "get_images",
+            "description": "Extract image URLs from a webpage's content area. Returns image URLs with descriptions and captions. Header/footer/nav images are excluded. To display images to the user, use markdown in your response: ![description](url). Put multiple images on consecutive lines for gallery display.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to extract images from"}
+                },
+                "required": ["url"]
             }
         }
     }
@@ -195,6 +230,145 @@ def extract_content(html: str) -> str:
     result = '\n'.join(chunk for line in lines for chunk in line.split("  ") if chunk)
     logger.info(f"[WEB] Extracted {len(result)} chars")
     return result
+
+def _best_srcset_url(srcset: str) -> str:
+    """Pick best URL from srcset, preferring ~1920w."""
+    if not srcset:
+        return None
+    candidates = []
+    for part in srcset.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        pieces = part.split()
+        if len(pieces) >= 2:
+            url, descriptor = pieces[0], pieces[1]
+            if descriptor.endswith('w'):
+                try:
+                    candidates.append((url, int(descriptor[:-1])))
+                except ValueError:
+                    candidates.append((url, 0))
+            elif descriptor.endswith('x'):
+                try:
+                    candidates.append((url, int(float(descriptor[:-1]) * 1000)))
+                except ValueError:
+                    candidates.append((url, 0))
+        elif len(pieces) == 1:
+            candidates.append((pieces[0], 0))
+    if not candidates:
+        return None
+    # Prefer closest to 1920w, fall back to largest
+    best = min(candidates, key=lambda c: abs(c[1] - 1920) if c[1] > 0 else float('inf'))
+    return best[0]
+
+
+_JUNK_PATTERNS = ['logo', 'icon', 'sprite', 'pixel', 'badge', 'emoji', 'favicon',
+                  'avatar', '1x1', 'spacer', 'blank', 'tracking', 'spinner', 'loader']
+
+
+def extract_images(html: str, base_url: str) -> list:
+    """Extract content images from HTML, stripping nav/header/footer."""
+    soup = BeautifulSoup(html, 'html.parser')
+    for tag in soup(WORK_WEBSITE_STRIP_ELEMENTS + ['form']):
+        tag.decompose()
+
+    images = []
+    seen_urls = set()
+
+    for img in soup.find_all('img'):
+        src = (img.get('data-src') or img.get('data-lazy-src') or
+               _best_srcset_url(img.get('srcset')) or img.get('src'))
+        if not src:
+            continue
+        if src.startswith('data:') or src.endswith('.svg'):
+            continue
+
+        full_src = urllib.parse.urljoin(base_url, src)
+
+        if full_src in seen_urls:
+            continue
+        seen_urls.add(full_src)
+
+        src_lower = full_src.lower()
+        if any(p in src_lower for p in _JUNK_PATTERNS):
+            continue
+
+        # Skip tiny images
+        width, height = img.get('width', ''), img.get('height', '')
+        try:
+            if width and height and (int(width) < 80 or int(height) < 80):
+                continue
+        except (ValueError, TypeError):
+            pass
+
+        alt = img.get('alt', '').strip()
+        title = img.get('title', '').strip()
+
+        # Check for figcaption
+        caption = ''
+        figure = img.find_parent('figure')
+        if figure:
+            figcaption = figure.find('figcaption')
+            if figcaption:
+                caption = figcaption.get_text(strip=True)
+
+        # Parent link
+        parent_link = ''
+        parent_a = img.find_parent('a')
+        if parent_a and parent_a.get('href'):
+            parent_link = urllib.parse.urljoin(base_url, parent_a['href'])
+
+        images.append({
+            'url': full_src,
+            'name': caption or alt or title or '',
+            'link': parent_link
+        })
+
+    logger.info(f"[WEB] Extracted {len(images)} images from {base_url}")
+    return images[:30]
+
+
+def extract_site_links(html: str, base_url: str, strip_nav: bool = True) -> list:
+    """Extract internal text links from HTML."""
+    soup = BeautifulSoup(html, 'html.parser')
+
+    if strip_nav:
+        for tag in soup(['header', 'footer', 'nav', 'aside']):
+            tag.decompose()
+
+    parsed_base = urllib.parse.urlparse(base_url)
+    base_domain = parsed_base.netloc.lower().lstrip('www.')
+
+    seen = set()
+    links = []
+
+    for a in soup.find_all('a', href=True):
+        href = a['href'].strip()
+        if not href or href.startswith('#') or href.startswith('javascript:') or href.startswith('mailto:'):
+            continue
+
+        # Text anchors only - skip image-only links
+        text = a.get_text(strip=True)
+        if not text:
+            continue
+
+        full_url = urllib.parse.urljoin(base_url, href)
+
+        # Internal links only
+        parsed = urllib.parse.urlparse(full_url)
+        link_domain = parsed.netloc.lower().lstrip('www.')
+        if link_domain != base_domain:
+            continue
+
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+
+        links.append({'text': text, 'url': full_url})
+
+    logger.info(f"[WEB] Extracted {len(links)} internal links from {base_url}")
+    return links[:50]
+
 
 def fetch_single_site(url: str, max_chars: int = 10000) -> dict:
     logger.info(f"[WEB] Fetching site: {url}")
@@ -446,6 +620,78 @@ def execute(function_name, arguments, config):
             logger.info(f"[WEB] research_topic: Success, fetched {len(fetched)} of {len(safe_urls)} sites")
             final = "\n\n" + "="*80 + "\n\n".join(fetched)
             return f"I researched '{query}' and successfully fetched {len(fetched)} of {len(safe_urls)} website(s). Here's what I found:\n{final}", True
+
+        elif function_name == "get_site_links":
+            if not (url := arguments.get('url')):
+                logger.warning("[WEB] get_site_links: No URL provided")
+                return "I need a URL to browse.", False
+
+            strip_nav = arguments.get('strip_nav', True)
+            logger.info(f"[WEB] get_site_links: Fetching {url} (strip_nav={strip_nav})")
+            try:
+                resp = get_session().get(url, timeout=12)
+                if resp.status_code != 200:
+                    return f"Couldn't access website. HTTP {resp.status_code}", False
+
+                links = extract_site_links(resp.text, url, strip_nav)
+                if not links:
+                    return "No internal text links found on that page.", True
+
+                out = "\n".join(f"{l['text']}: {l['url']}" for l in links)
+                return f"Found {len(links)} links on {url}:\n\n{out}", True
+            except ValueError as e:
+                if "SOCKS5 is enabled" in str(e):
+                    return "Web access failed: SOCKS5 credentials not configured.", False
+                raise
+            except requests.exceptions.ProxyError as e:
+                logger.error(f"[WEB] get_site_links: SOCKS proxy error: {e}")
+                return "Web access failed: SOCKS proxy error.", False
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"[WEB] get_site_links: Connection error: {e}")
+                return "Web access failed: Connection error.", False
+            except Exception as e:
+                logger.error(f"[WEB] get_site_links: {type(e).__name__}: {e}")
+                return f"Error browsing website: {str(e)}", False
+
+        elif function_name == "get_images":
+            if not (url := arguments.get('url')):
+                logger.warning("[WEB] get_images: No URL provided")
+                return "I need a URL to get images from.", False
+
+            logger.info(f"[WEB] get_images: Fetching {url}")
+            try:
+                resp = get_session().get(url, timeout=12)
+                if resp.status_code != 200:
+                    return f"Couldn't access website. HTTP {resp.status_code}", False
+
+                images = extract_images(resp.text, url)
+                if not images:
+                    return "No images found in the content area of that page.", True
+
+                lines = []
+                for i, img in enumerate(images, 1):
+                    name = img['name'] or '(no description)'
+                    line = f"{i}. [{name}] {img['url']}"
+                    if img['link']:
+                        line += f"\n   → links to: {img['link']}"
+                    lines.append(line)
+
+                out = "\n\n".join(lines)
+                return (f"Found {len(images)} images on {url}:\n\n{out}\n\n"
+                        "To display images, use: ![description](image_url)"), True
+            except ValueError as e:
+                if "SOCKS5 is enabled" in str(e):
+                    return "Web access failed: SOCKS5 credentials not configured.", False
+                raise
+            except requests.exceptions.ProxyError as e:
+                logger.error(f"[WEB] get_images: SOCKS proxy error: {e}")
+                return "Web access failed: SOCKS proxy error.", False
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"[WEB] get_images: Connection error: {e}")
+                return "Web access failed: Connection error.", False
+            except Exception as e:
+                logger.error(f"[WEB] get_images: {type(e).__name__}: {e}")
+                return f"Error getting images: {str(e)}", False
 
         logger.warning(f"[WEB] Unknown function: {function_name}")
         return f"Unknown function: {function_name}", False

@@ -1,6 +1,6 @@
 // ui-streaming.js - Real-time streaming with typed SSE events
 
-import { createAccordion, createCodeBlock, processMarkdown } from './ui-parsing.js';
+import { createAccordion, createCodeBlock, processMarkdown, wrapImageGalleries } from './ui-parsing.js';
 
 // Streaming state
 let streamMsg = null;
@@ -429,49 +429,68 @@ export const startTool = (toolId, toolName, args, scrollCallback) => {
 
 // Internal function to actually update tool accordion
 const doEndTool = (toolId, toolName, result, isError, scrollCallback) => {
-    const toolData = state.toolAccordions[toolId];
+    let toolData = state.toolAccordions[toolId];
+
     if (!toolData) {
         // Fallback: create accordion now
-        if (streamMsg) {
-            const { acc, content, summary } = createToolAccordionElement(toolName, toolId, {});
-            acc.classList.remove('loading');
-            if (isError) acc.classList.add('error');
-            summary.innerHTML = `Tool Result: ${toolName}`;
-            content.textContent = 'Result:\n' + result;
-            
-            // Insert before current paragraph
-            if (state.curPara) {
-                streamMsg.el.insertBefore(acc, state.curPara);
-            } else {
-                streamMsg.el.appendChild(acc);
-            }
-            streamMsg.last = acc;
-            state.toolAccordions[toolId] = { acc, content, summary, toolName };
+        if (!streamMsg) {
+            if (scrollCallback) scrollCallback();
+            return;
         }
-        if (scrollCallback) scrollCallback();
-        return;
-    }
-    
-    const { acc, content, summary, toolName: storedName } = toolData;
-    
-    // Remove loading state
-    acc.classList.remove('loading');
-    if (isError) {
-        acc.classList.add('error');
-    }
-    
-    // Update summary
-    const displayName = storedName || toolName;
-    summary.innerHTML = `Tool Result: ${displayName}`;
-    
-    // Update content with result
-    const existingContent = content.textContent;
-    if (existingContent && existingContent !== 'Running...') {
-        content.textContent = existingContent + '\n\nResult:\n' + result;
-    } else {
+        const { acc, content, summary } = createToolAccordionElement(toolName, toolId, {});
+        acc.classList.remove('loading');
+        if (isError) acc.classList.add('error');
+        summary.innerHTML = `Tool Result: ${toolName}`;
         content.textContent = 'Result:\n' + result;
+
+        if (state.curPara) {
+            streamMsg.el.insertBefore(acc, state.curPara);
+        } else {
+            streamMsg.el.appendChild(acc);
+        }
+        streamMsg.last = acc;
+        toolData = { acc, content, summary, toolName };
+        state.toolAccordions[toolId] = toolData;
+    } else {
+        const { acc, content, summary, toolName: storedName } = toolData;
+        acc.classList.remove('loading');
+        if (isError) acc.classList.add('error');
+        summary.innerHTML = `Tool Result: ${storedName || toolName}`;
+
+        const existingContent = content.textContent;
+        if (existingContent && existingContent !== 'Running...') {
+            content.textContent = existingContent + '\n\nResult:\n' + result;
+        } else {
+            content.textContent = 'Result:\n' + result;
+        }
     }
-    
+
+    // Auto-inject gallery images from if_get_gallery tool results
+    if (toolName === 'if_get_gallery' && !isError && streamMsg) {
+        const galleryMatch = result.match(/<!--GALLERY:(\[.*\])-->/s);
+        if (galleryMatch) {
+            try {
+                const imgUrls = JSON.parse(galleryMatch[1]);
+                if (imgUrls.length > 0) {
+                    const gallery = document.createElement('div');
+                    gallery.className = 'image-gallery';
+                    for (const url of imgUrls) {
+                        const item = document.createElement('div');
+                        item.className = 'gallery-item';
+                        const img = document.createElement('img');
+                        img.src = url;
+                        img.className = 'chat-img';
+                        item.appendChild(img);
+                        gallery.appendChild(item);
+                    }
+                    toolData.acc.after(gallery);
+                }
+            } catch (e) {
+                console.warn('[Gallery] Failed to parse gallery data:', e);
+            }
+        }
+    }
+
     if (scrollCallback) scrollCallback();
 };
 
@@ -505,6 +524,9 @@ export const finishStreaming = (updateToolbarsCallback) => {
         contentDiv.querySelectorAll('.accordion-think.streaming').forEach(acc => {
             acc.classList.remove('streaming');
         });
+
+        // Wrap consecutive images into galleries
+        wrapImageGalleries(contentDiv);
     }
     
     if (updateToolbarsCallback) updateToolbarsCallback();

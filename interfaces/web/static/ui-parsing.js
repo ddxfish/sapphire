@@ -420,7 +420,7 @@ const processInlineMarkdown = (html) => {
     
     // Images: ![alt](url) - MUST be before links
     html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, url) => {
-        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" style="max-width:100%">`;
+        if (/^https?:\/\//i.test(url)) return `<img src="${url}" alt="${alt}" class="chat-img">`;
         return m;
     });
 
@@ -438,6 +438,116 @@ const processInlineCode = (html) => {
     // Match `code` but not inside already-escaped contexts
     return html.replace(/`([^`\n]+)`/g, (match, code) => {
         return `<code>${escapeHtml(code)}</code>`;
+    });
+};
+
+// Check if element contains only images and whitespace/br (no text content)
+const isImageOnly = (el) => {
+    for (const node of el.childNodes) {
+        if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.tagName === 'BR') continue;
+            if (node.classList?.contains('chat-img')) continue;
+            return false;
+        } else if (node.nodeType === Node.TEXT_NODE) {
+            if (node.textContent.trim() === '') continue;
+            return false;
+        }
+    }
+    return el.querySelector('.chat-img') !== null;
+};
+
+// Create a gallery div from an array of img elements
+const createGallery = (imgs) => {
+    const gallery = document.createElement('div');
+    gallery.className = 'image-gallery';
+
+    for (const img of imgs) {
+        const item = document.createElement('div');
+        item.className = 'gallery-item';
+
+        const cloned = img.cloneNode(true);
+        item.appendChild(cloned);
+
+        const alt = img.alt?.trim();
+        if (alt) {
+            const caption = document.createElement('div');
+            caption.className = 'gallery-caption';
+            caption.textContent = alt;
+            item.appendChild(caption);
+        }
+
+        gallery.appendChild(item);
+    }
+
+    return gallery;
+};
+
+// Detect consecutive images and wrap in gallery containers, add click-to-modal
+export const wrapImageGalleries = (container) => {
+    if (!container) return;
+
+    // Phase 1: Multi-image paragraphs (images within a single <p> separated by <br>)
+    Array.from(container.querySelectorAll('p')).forEach(p => {
+        const imgs = Array.from(p.querySelectorAll('.chat-img'));
+        if (imgs.length >= 2 && isImageOnly(p)) {
+            p.replaceWith(createGallery(imgs));
+        }
+    });
+
+    // Phase 2: Consecutive single-image elements
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const children = Array.from(container.children);
+
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            if (child.classList?.contains('image-gallery')) continue;
+
+            const img = child.querySelector?.('.chat-img');
+            if (!img || !isImageOnly(child)) continue;
+
+            // Collect consecutive single-image elements
+            const group = [child];
+            for (let j = i + 1; j < children.length; j++) {
+                const next = children[j];
+                if (next.classList?.contains('image-gallery')) break;
+                const nextImg = next.querySelector?.('.chat-img');
+                if (nextImg && isImageOnly(next)) {
+                    group.push(next);
+                } else {
+                    break;
+                }
+            }
+
+            if (group.length >= 2) {
+                const allImgs = group.map(el => el.querySelector('.chat-img'));
+                const gallery = createGallery(allImgs);
+                group[0].replaceWith(gallery);
+                for (let k = 1; k < group.length; k++) group[k].remove();
+                changed = true;
+                break; // Restart scan after DOM mutation
+            }
+        }
+    }
+
+    // Phase 3: Click-to-modal for ALL chat images (gallery and standalone)
+    container.querySelectorAll('.chat-img').forEach(img => {
+        if (!img.dataset.modalReady) {
+            img.dataset.modalReady = 'true';
+            img.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const gallery = img.closest('.image-gallery');
+                if (gallery) {
+                    const galleryImgs = Array.from(gallery.querySelectorAll('.gallery-item img'));
+                    const urls = galleryImgs.map(i => i.src);
+                    const idx = galleryImgs.indexOf(img);
+                    Images.openImageModal(img.src, urls, idx);
+                } else {
+                    Images.openImageModal(img.src);
+                }
+            });
+        }
     });
 };
 
@@ -479,11 +589,13 @@ export const parseContent = (el, msg, isHistoryRender = false, scrollCallback = 
             }
         });
         cloneImagesInline(el);
+        wrapImageGalleries(el);
         return;
     }
-    
+
     renderContentText(el, txt, isHistoryRender, scrollCallback, 0);
     cloneImagesInline(el);
+    wrapImageGalleries(el);
 };
 
 const addToolDeleteButton = (acc, toolCallId) => {
@@ -525,7 +637,12 @@ const renderToolResult = (el, part) => {
     // Get truncation limit based on tool
     const maxLen = toolName === 'generate_scene_image' ? 2000 :
                   toolName === 'web_search' ? 1000 :
-                  toolName === 'get_website' ? 800 : 500;
+                  toolName === 'get_website' ? 800 :
+                  toolName === 'get_images' ? 1500 :
+                  toolName === 'get_site_links' ? 1500 :
+                  toolName === 'if_get_gallery' ? 3000 :
+                  toolName === 'if_get_galleries' ? 2000 :
+                  toolName === 'if_get_categories' ? 2000 : 500;
 
     // Check for image markers
     const imgMatch = fullResult.match(/<<IMG::([^>]+)>>/);
@@ -584,6 +701,32 @@ const renderToolResult = (el, part) => {
     }
 
     el.appendChild(acc);
+
+    // Auto-inject gallery images from if_get_gallery tool results
+    if (toolName === 'if_get_gallery') {
+        const galleryMatch = fullResult.match(/<!--GALLERY:(\[.*\])-->/s);
+        if (galleryMatch) {
+            try {
+                const imgUrls = JSON.parse(galleryMatch[1]);
+                if (imgUrls.length > 0) {
+                    const gallery = document.createElement('div');
+                    gallery.className = 'image-gallery';
+                    for (const url of imgUrls) {
+                        const item = document.createElement('div');
+                        item.className = 'gallery-item';
+                        const img = document.createElement('img');
+                        img.src = url;
+                        img.className = 'chat-img';
+                        item.appendChild(img);
+                        gallery.appendChild(item);
+                    }
+                    el.appendChild(gallery);
+                }
+            } catch (e) {
+                console.warn('[Gallery] Failed to parse gallery data:', e);
+            }
+        }
+    }
 };
 
 // Helper to add expand/collapse toggle for truncated content

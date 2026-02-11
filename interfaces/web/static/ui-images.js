@@ -226,24 +226,61 @@ function await_createCodeBlock() {
 }
 
 // Image modal functions (defined before createUserImageThumbnails which uses them)
+let modalGalleryImages = [];
+let modalCurrentIndex = -1;
+
+const updateModalNav = () => {
+    const prevBtn = document.getElementById('image-modal-prev');
+    const nextBtn = document.getElementById('image-modal-next');
+    const counter = document.getElementById('image-modal-counter');
+
+    if (modalGalleryImages.length <= 1) {
+        if (prevBtn) prevBtn.style.display = 'none';
+        if (nextBtn) nextBtn.style.display = 'none';
+        if (counter) counter.style.display = 'none';
+        return;
+    }
+
+    if (prevBtn) prevBtn.style.display = modalCurrentIndex > 0 ? '' : 'none';
+    if (nextBtn) nextBtn.style.display = modalCurrentIndex < modalGalleryImages.length - 1 ? '' : 'none';
+    if (counter) {
+        counter.style.display = '';
+        counter.textContent = `${modalCurrentIndex + 1} / ${modalGalleryImages.length}`;
+    }
+};
+
+const navigateModal = (delta) => {
+    if (modalGalleryImages.length === 0) return;
+    const newIndex = modalCurrentIndex + delta;
+    if (newIndex < 0 || newIndex >= modalGalleryImages.length) return;
+    modalCurrentIndex = newIndex;
+    const modalImg = document.getElementById('image-modal-img');
+    if (modalImg) modalImg.src = modalGalleryImages[modalCurrentIndex];
+    updateModalNav();
+};
+
 export const closeImageModal = () => {
     const modal = document.getElementById('image-modal');
     if (!modal) return;
-    
+
     modal.style.display = 'none';
     document.body.style.overflow = '';
+    modalGalleryImages = [];
+    modalCurrentIndex = -1;
 };
 
-export const openImageModal = (src) => {
-    console.log('[ImageModal] Opening modal with src length:', src?.length);
+export const openImageModal = (src, galleryImages = null, currentIndex = -1) => {
     const modal = document.getElementById('image-modal');
     const modalImg = document.getElementById('image-modal-img');
-    console.log('[ImageModal] modal:', !!modal, 'modalImg:', !!modalImg);
     if (!modal || !modalImg) return;
-    
+
     modalImg.src = src;
+    modalGalleryImages = galleryImages || [];
+    modalCurrentIndex = currentIndex;
+
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
+    updateModalNav();
 };
 
 // Setup modal event listeners (call once on init)
@@ -251,15 +288,19 @@ export const setupImageModal = () => {
     const modal = document.getElementById('image-modal');
     const backdrop = modal?.querySelector('.image-modal-backdrop');
     const closeBtn = document.getElementById('image-modal-close');
-    
+    const prevBtn = document.getElementById('image-modal-prev');
+    const nextBtn = document.getElementById('image-modal-next');
+
     if (backdrop) backdrop.addEventListener('click', closeImageModal);
     if (closeBtn) closeBtn.addEventListener('click', closeImageModal);
-    
-    // Close on escape
+    if (prevBtn) prevBtn.addEventListener('click', (e) => { e.stopPropagation(); navigateModal(-1); });
+    if (nextBtn) nextBtn.addEventListener('click', (e) => { e.stopPropagation(); navigateModal(1); });
+
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && modal?.style.display === 'flex') {
-            closeImageModal();
-        }
+        if (modal?.style.display !== 'flex') return;
+        if (e.key === 'Escape') closeImageModal();
+        else if (e.key === 'ArrowLeft') navigateModal(-1);
+        else if (e.key === 'ArrowRight') navigateModal(1);
     });
 };
 
