@@ -16,6 +16,43 @@ from .llm_providers import get_provider, get_provider_for_url, get_provider_by_k
 
 logger = logging.getLogger(__name__)
 
+
+def friendly_llm_error(e):
+    """Convert LLM provider exceptions to user-friendly messages. Returns None if unrecognized."""
+    status = getattr(e, 'status_code', None)
+    if not status:
+        return None
+
+    error_str = str(e).lower()
+
+    if status == 400:
+        if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'does not exist')):
+            return "Model not found or not loaded. If using LM Studio, make sure a model is loaded and running."
+        return f"LLM request rejected (400). {str(e)[:200]}"
+
+    if status == 401:
+        return "API key is invalid or missing. Check your API key in Settings."
+
+    if status == 403:
+        return "Access denied. Your API key may not have permission for this model or resource."
+
+    if status == 404:
+        if 'model' in error_str:
+            return "Model not found. Check that the model name is correct in Settings."
+        return f"LLM endpoint not found (404). Check your API URL in Settings."
+
+    if status in (402, 429) and any(k in error_str for k in ('billing', 'quota', 'credit', 'insufficient', 'budget', 'exceeded')):
+        return "Account billing limit reached — out of credits or over budget. Check your provider's billing page."
+
+    if status == 429:
+        return "Rate limited by provider. Too many requests — wait a moment and try again."
+
+    if status == 529:
+        return "Provider is overloaded. Try again in a moment."
+
+    return None
+
+
 # Extension → language map for fenced code blocks
 TEXT_EXTENSIONS = {
     '.py': 'python', '.txt': 'text', '.md': 'markdown',
@@ -596,8 +633,11 @@ class LLMChat:
 
         except Exception as e:
             logger.error(f"Chat error: {e}", exc_info=True)
-            
-            if "timeout" in str(e).lower() or "APITimeoutError" in str(type(e).__name__):
+
+            friendly = friendly_llm_error(e)
+            if friendly:
+                error_text = friendly
+            elif "timeout" in str(e).lower() or "APITimeoutError" in str(type(e).__name__):
                 error_text = "I ran into a timeout while processing your request. Please try breaking it into smaller parts."
             elif "swarm" in str(e).lower() or (hasattr(e, '__module__') and 'httpx' in str(e.__module__)):
                 error_text = f"Local swarm server connection failed. Error: {str(e)}"

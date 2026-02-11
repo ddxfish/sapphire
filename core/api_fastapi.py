@@ -541,7 +541,9 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
         except Exception as e:
             logger.error(f"STREAMING ERROR: {e}", exc_info=True)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            from core.chat.chat import friendly_llm_error
+            msg = friendly_llm_error(e) or str(e)
+            yield f"data: {json.dumps({'error': msg})}\n\n"
 
     return StreamingResponse(
         generate(),
