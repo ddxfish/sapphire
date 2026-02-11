@@ -4,7 +4,7 @@ import * as ui from '../ui.js';
 import { getElements, getTtsEnabled } from '../core/state.js';
 import { closeAllKebabs } from './chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './scene.js';
-import { getInitDataSync } from '../shared/init-data.js';
+import { getInitData } from '../shared/init-data.js';
 
 let llmProviders = [];
 let llmMetadata = {};
@@ -20,8 +20,8 @@ export async function openSettingsModal() {
         const response = await api.getChatSettings(chatName);
         const settings = response.settings;
         
-        // Load prompts list from init data cache
-        const initData = getInitDataSync();
+        // Load prompts and abilities from init data (refreshed on SSE events)
+        const initData = await getInitData();
         if (initData?.prompts?.list) {
             const promptSelect = document.getElementById('setting-prompt');
             promptSelect.innerHTML = '';

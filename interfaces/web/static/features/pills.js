@@ -5,7 +5,7 @@ import { getElements } from '../core/state.js';
 import { updateScene } from './scene.js';
 import { openSettingsModal } from './chat-settings.js';
 import * as eventBus from '../core/event-bus.js';
-import { getInitDataSync } from '../shared/init-data.js';
+import { getInitData, getInitDataSync, refreshInitData } from '../shared/init-data.js';
 import { closeStoryDropdown } from './story.js';
 
 // Cache for dropdown data - avoids fetch on every click
@@ -21,10 +21,10 @@ export function initPillsCache() {
         abilitiesCache = initData.abilities?.list || null;
     }
 
-    // Invalidate caches when relevant events occur
-    eventBus.on(eventBus.Events.PROMPT_CHANGED, () => { promptsCache = null; });
-    eventBus.on(eventBus.Events.PROMPT_DELETED, () => { promptsCache = null; });
-    eventBus.on(eventBus.Events.ABILITY_CHANGED, () => { abilitiesCache = null; });
+    // Invalidate caches and refresh init data when relevant events occur
+    eventBus.on(eventBus.Events.PROMPT_CHANGED, () => { promptsCache = null; refreshInitData(); });
+    eventBus.on(eventBus.Events.PROMPT_DELETED, () => { promptsCache = null; refreshInitData(); });
+    eventBus.on(eventBus.Events.ABILITY_CHANGED, () => { abilitiesCache = null; refreshInitData(); });
 }
 
 export function closePillDropdowns() {
@@ -68,10 +68,10 @@ export async function showPromptDropdown(e) {
     const dropdown = promptPill.querySelector('.pill-dropdown');
     promptPill.classList.add('dropdown-open');
 
-    // Use cache if available, otherwise use init data
+    // Use cache if available, otherwise fetch fresh
     let prompts = promptsCache;
     if (!prompts) {
-        const initData = getInitDataSync();
+        const initData = await getInitData();
         prompts = initData?.prompts?.list || [];
         promptsCache = prompts;
     }
@@ -106,10 +106,10 @@ export async function showAbilityDropdown(e) {
     const dropdown = abilityPill.querySelector('.pill-dropdown');
     abilityPill.classList.add('dropdown-open');
 
-    // Use cache if available, otherwise use init data
+    // Use cache if available, otherwise fetch fresh
     let abilities = abilitiesCache;
     if (!abilities) {
-        const initData = getInitDataSync();
+        const initData = await getInitData();
         abilities = initData?.abilities?.list || [];
         abilitiesCache = abilities;
     }

@@ -357,6 +357,22 @@ Editing:
     
     try {
       const data = await API.getPrompt(name);
+
+      // Strip dead component references (imported from another system)
+      if (data.type === 'assembled' && data.components && this.components) {
+        for (const [type, value] of Object.entries(data.components)) {
+          if (!Array.isArray(value)) continue;
+          const available = this.components[type];
+          if (!available) continue;
+          const cleaned = value.filter(k => k in available);
+          if (cleaned.length !== value.length) {
+            const dead = value.filter(k => !(k in available));
+            console.warn(`[PromptManager] Stripped dead ${type} refs:`, dead);
+            data.components[type] = cleaned;
+          }
+        }
+      }
+
       this.currentPrompt = name;
       this.currentData = data;
       this.lastLoadedContentHash = this._hashPromptData(data);
@@ -892,19 +908,24 @@ Editing:
 
     const promptName = nameOverride || data.name || this.currentPrompt;
 
-    // Import components only if overwrite is enabled
-    if (overwrite && data.components) {
+    // Import components (always import new; overwrite controls existing)
+    if (data.components) {
+      const newItems = {};
       const conflicts = [];
       for (const [type, items] of Object.entries(data.components)) {
-        for (const key of Object.keys(items)) {
+        for (const [key, value] of Object.entries(items)) {
           if (this.components[type]?.[key]) {
-            conflicts.push(`${type}: ${key}`);
+            conflicts.push({ type, key, value, label: `${type}: ${key}` });
+          } else {
+            if (!newItems[type]) newItems[type] = {};
+            newItems[type][key] = value;
           }
         }
       }
 
-      if (conflicts.length > 0) {
-        const msg = `The following components already exist and will be OVERWRITTEN:\n\n${conflicts.join('\n')}\n\nProceed?`;
+      // Confirm overwrite for existing components
+      if (overwrite && conflicts.length > 0) {
+        const msg = `The following components already exist and will be OVERWRITTEN:\n\n${conflicts.map(c => c.label).join('\n')}\n\nProceed?`;
         if (!confirm(msg)) {
           showToast('Import cancelled', 'info');
           return;
@@ -912,8 +933,20 @@ Editing:
       }
 
       let imported = 0;
-      for (const [type, items] of Object.entries(data.components)) {
+      // Always import new components
+      for (const [type, items] of Object.entries(newItems)) {
         for (const [key, value] of Object.entries(items)) {
+          try {
+            await API.saveComponent(type, key, value);
+            imported++;
+          } catch (e) {
+            console.warn(`Failed to import ${type}.${key}:`, e);
+          }
+        }
+      }
+      // Overwrite existing only if checkbox is on
+      if (overwrite) {
+        for (const { type, key, value } of conflicts) {
           try {
             await API.saveComponent(type, key, value);
             imported++;
@@ -924,7 +957,10 @@ Editing:
       }
 
       if (imported > 0) {
-        showToast(`${imported} component(s) imported`, 'info');
+        const skipped = overwrite ? 0 : conflicts.length;
+        showToast(`${imported} component(s) imported${skipped ? `, ${skipped} existing skipped` : ''}`, 'info');
+      } else if (conflicts.length > 0 && !overwrite) {
+        showToast(`${conflicts.length} component(s) already exist (check overwrite to replace)`, 'info');
       }
     }
 
