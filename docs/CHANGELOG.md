@@ -6,7 +6,10 @@
 - Creates self-signed cert on app load
 - Moved STT to be its own object instead of process
 - Removed flask from TTS, uses simple http server now
-- Added file uploads (with syntax highlight)
+- Added file uploads (w syntax highlight)
+- Vectorized memory searches via nomic embeddings
+- Image search tool - AI can show you images in chat
+- Changed web ui TTS from FLAC to opus (90% size reduc)
 # 1.2.6 - Privacy mode
 - Privacy mode only allows whitelisted IP/hosts
 - Private prompts can only be used with privacy mode

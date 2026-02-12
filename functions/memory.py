@@ -1,8 +1,10 @@
 # functions/memory.py
-# Direct SQLite memory storage - no server required
+# Long-term memory with FTS5 full-text search, semantic embeddings, and labels
 
 import sqlite3
 import logging
+import re
+import numpy as np
 from pathlib import Path
 from datetime import datetime
 
@@ -14,17 +16,17 @@ ENABLED = True
 _db_path = None
 _db_initialized = False
 
-STOPWORDS = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
-             'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
-             'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
-             'would', 'should', 'could', 'may', 'might', 'can', 'this', 'that',
-             'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'}
+# Embedding model - lazy loaded
+_embedder = None
+
+SUGGESTED_LABELS = "family, preferences, technical, stories, people, places, routines, opinions, self"
 
 AVAILABLE_FUNCTIONS = [
     'save_memory',
-    'search_memory', 
+    'search_memory',
     'get_recent_memories',
     'delete_memory',
+    'list_memory_labels',
 ]
 
 TOOLS = [
@@ -33,7 +35,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": "Save important information to long-term memory for future conversations. Max 512 characters - be concise.",
+            "description": f"Save information to long-term memory. Max 512 chars - be concise. Assign a label to categorize. Suggested labels: {SUGGESTED_LABELS}. You can create new labels too. Use 'self' for your own self-knowledge.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -41,10 +43,9 @@ TOOLS = [
                         "type": "string",
                         "description": "The information to remember"
                     },
-                    "importance": {
-                        "type": "integer",
-                        "description": "Importance level 1-10 (10 = critical)",
-                        "default": 5
+                    "label": {
+                        "type": "string",
+                        "description": f"Category label (e.g. {SUGGESTED_LABELS})"
                     }
                 },
                 "required": ["content"]
@@ -56,13 +57,17 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_memory",
-            "description": "Search stored memories by keywords or topic",
+            "description": "Search stored memories using semantic similarity and full-text search. Understands meaning, not just keywords. Optionally filter by label.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "Search terms or topic"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Filter by label(s), comma-separated for multiple (e.g. 'family,people')"
                     },
                     "limit": {
                         "type": "integer",
@@ -79,7 +84,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Get the most recent memories",
+            "description": "Get the most recent memories, optionally filtered by label.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -87,6 +92,10 @@ TOOLS = [
                         "type": "integer",
                         "description": "Number of recent memories to retrieve",
                         "default": 10
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Filter by label(s), comma-separated for multiple (e.g. 'family,people')"
                     }
                 }
             }
@@ -109,82 +118,261 @@ TOOLS = [
                 "required": ["memory_id"]
             }
         }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "list_memory_labels",
+            "description": "List all memory labels with counts. Call this before saving to stay consistent with existing labels.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
 ]
 
 
+STOPWORDS = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+             'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
+             'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+             'would', 'should', 'could', 'may', 'might', 'can', 'this', 'that',
+             'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they'}
+
+EMBEDDING_MODEL = 'nomic-ai/nomic-embed-text-v1.5'
+EMBEDDING_ONNX_FILE = 'onnx/model_quantized.onnx'
+SIMILARITY_THRESHOLD = 0.40
+
+
+# ─── Embedding Engine ────────────────────────────────────────────────────────
+
+class EmbeddingEngine:
+    """Lazy-loaded nomic-embed-text-v1.5 via ONNX runtime."""
+
+    def __init__(self):
+        self.session = None
+        self.tokenizer = None
+        self.input_names = None
+
+    def _load(self):
+        if self.session is not None:
+            return
+        try:
+            import onnxruntime as ort
+            from transformers import AutoTokenizer
+            from huggingface_hub import hf_hub_download
+
+            self.tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL, trust_remote_code=True)
+            model_path = hf_hub_download(EMBEDDING_MODEL, EMBEDDING_ONNX_FILE)
+            self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+            self.input_names = [i.name for i in self.session.get_inputs()]
+            logger.info(f"Embedding model loaded: {EMBEDDING_MODEL} (quantized ONNX)")
+        except Exception as e:
+            logger.error(f"Failed to load embedding model: {e}")
+            self.session = None
+
+    def embed(self, texts, prefix='search_document'):
+        """
+        Generate embeddings for a list of texts.
+        prefix: 'search_document' for stored content, 'search_query' for queries
+        Returns numpy array of shape (n, dim) or None on failure.
+        """
+        self._load()
+        if self.session is None:
+            return None
+
+        try:
+            prefixed = [f'{prefix}: {t}' for t in texts]
+            encoded = self.tokenizer(prefixed, return_tensors='np', padding=True,
+                                     truncation=True, max_length=512)
+            inputs = {k: v for k, v in encoded.items() if k in self.input_names}
+            if 'token_type_ids' not in inputs:
+                inputs['token_type_ids'] = np.zeros_like(inputs['input_ids'])
+
+            outputs = self.session.run(None, inputs)
+            embeddings = outputs[0]
+            mask = encoded['attention_mask']
+            masked = embeddings * mask[:, :, np.newaxis]
+            pooled = masked.sum(axis=1) / mask.sum(axis=1, keepdims=True)
+            norms = np.linalg.norm(pooled, axis=1, keepdims=True)
+            return (pooled / norms).astype(np.float32)
+        except Exception as e:
+            logger.error(f"Embedding failed: {e}")
+            return None
+
+    @property
+    def available(self):
+        self._load()
+        return self.session is not None
+
+
+def _get_embedder():
+    global _embedder
+    if _embedder is None:
+        _embedder = EmbeddingEngine()
+    return _embedder
+
+
+# ─── Database ────────────────────────────────────────────────────────────────
+
 def _get_db_path():
-    """Get database path, resolving from project root."""
     global _db_path
     if _db_path is None:
-        # Resolve path relative to project root (functions/ is one level down)
         project_root = Path(__file__).parent.parent
         _db_path = project_root / "user" / "memory.db"
     return _db_path
 
 
+def _get_connection():
+    _ensure_db()
+    return sqlite3.connect(_get_db_path())
+
+
 def _ensure_db():
-    """Initialize database if needed. Called lazily on first access."""
+    """Initialize database with FTS5 + embedding column. Migrates from old schema."""
     global _db_initialized
     if _db_initialized:
         return True
-    
+
     try:
         db_path = _get_db_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
+
+        # Core table (may already exist from old schema)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                importance INTEGER DEFAULT 5 CHECK(importance >= 1 AND importance <= 10),
+                importance INTEGER DEFAULT 5,
                 keywords TEXT,
                 context TEXT
             )
         ''')
-        
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_importance ON memories(importance)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_keywords ON memories(keywords)')
-        
-        # Migration: add scope column if not exists
+
+        # Migrations: add columns if missing
         cursor.execute("PRAGMA table_info(memories)")
         columns = [row[1] for row in cursor.fetchall()]
+
         if 'scope' not in columns:
             cursor.execute("ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
-            logger.info("Migrated memories table: added scope column")
-        
+            logger.info("Migration: added scope column")
+        if 'label' not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN label TEXT")
+            logger.info("Migration: added label column")
+        if 'embedding' not in columns:
+            cursor.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
+            logger.info("Migration: added embedding column")
+
+        # Indexes
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
-        
-        # Registry table for empty scopes (so they persist before first write)
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
+
+        # FTS5 virtual table (external content, synced via triggers)
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                content, keywords, label,
+                content=memories, content_rowid=id
+            )
+        """)
+
+        # Sync triggers
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_fts_insert
+            AFTER INSERT ON memories BEGIN
+                INSERT INTO memories_fts(rowid, content, keywords, label)
+                VALUES (new.id, new.content, new.keywords, new.label);
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_fts_delete
+            AFTER DELETE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
+                VALUES ('delete', old.id, old.content, old.keywords, old.label);
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS memories_fts_update
+            AFTER UPDATE ON memories BEGIN
+                INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
+                VALUES ('delete', old.id, old.content, old.keywords, old.label);
+                INSERT INTO memories_fts(rowid, content, keywords, label)
+                VALUES (new.id, new.content, new.keywords, new.label);
+            END
+        """)
+
+        # Populate FTS5 from existing data if needed
+        cursor.execute("SELECT COUNT(*) FROM memories")
+        mem_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM memories_fts")
+        fts_count = cursor.fetchone()[0]
+
+        if mem_count > 0 and fts_count == 0:
+            logger.info(f"Populating FTS5 index from {mem_count} existing memories...")
+            cursor.execute("""
+                INSERT INTO memories_fts(rowid, content, keywords, label)
+                SELECT id, content, keywords, label FROM memories
+            """)
+
+        # Scope registry
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS memory_scopes (
                 name TEXT PRIMARY KEY,
                 created DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        
-        # Ensure 'default' scope exists in registry
         cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES ('default')")
-        
+
         conn.commit()
         conn.close()
-        
+
         _db_initialized = True
-        logger.info(f"Memory database ready at {db_path}")
+        logger.info(f"Memory database ready at {db_path} (FTS5 + embeddings)")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to initialize memory database: {e}")
         return False
 
 
+def _backfill_embeddings():
+    """Generate embeddings for memories that don't have them yet. Called lazily."""
+    embedder = _get_embedder()
+    if not embedder.available:
+        return
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, content FROM memories WHERE embedding IS NULL')
+    rows = cursor.fetchall()
+
+    if not rows:
+        conn.close()
+        return
+
+    logger.info(f"Backfilling embeddings for {len(rows)} memories...")
+    batch_size = 32
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i + batch_size]
+        ids = [r[0] for r in batch]
+        texts = [r[1] for r in batch]
+        embs = embedder.embed(texts, prefix='search_document')
+        if embs is None:
+            break
+        for row_id, emb in zip(ids, embs):
+            cursor.execute('UPDATE memories SET embedding = ? WHERE id = ?',
+                           (emb.tobytes(), row_id))
+    conn.commit()
+    conn.close()
+    logger.info(f"Backfill complete: {len(rows)} memories embedded")
+
+
 def _get_current_scope():
-    """Get current memory scope from FunctionManager. Returns None if disabled."""
     try:
         from core.chat.function_manager import FunctionManager
         return FunctionManager._current_memory_scope
@@ -193,33 +381,18 @@ def _get_current_scope():
         return 'default'
 
 
+# ─── Public API (used by api_fastapi.py) ─────────────────────────────────────
+
 def get_scopes():
-    """Get list of memory scopes with counts (includes registered empty scopes)."""
     try:
         conn = _get_connection()
         cursor = conn.cursor()
-        
-        # Get counts from memories table
-        cursor.execute('''
-            SELECT scope, COUNT(*) as count 
-            FROM memories 
-            GROUP BY scope 
-            ORDER BY scope
-        ''')
+        cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
         memory_counts = {row[0]: row[1] for row in cursor.fetchall()}
-        
-        # Get all registered scopes (including empty ones)
         cursor.execute('SELECT name FROM memory_scopes ORDER BY name')
         registered = [row[0] for row in cursor.fetchall()]
-        
         conn.close()
-        
-        # Merge: all registered scopes + any scopes with data
-        all_scopes = set(registered) | set(memory_counts.keys())
-        
-        # Always include 'default'
-        all_scopes.add('default')
-        
+        all_scopes = set(registered) | set(memory_counts.keys()) | {'default'}
         return [{"name": name, "count": memory_counts.get(name, 0)} for name in sorted(all_scopes)]
     except Exception as e:
         logger.error(f"Error getting scopes: {e}")
@@ -227,243 +400,359 @@ def get_scopes():
 
 
 def create_scope(name: str) -> bool:
-    """Register a new memory scope (persists even when empty)."""
     try:
         conn = _get_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES (?)", (name,))
         conn.commit()
-        inserted = cursor.rowcount > 0
         conn.close()
-        
-        if inserted:
-            logger.info(f"Created memory scope: {name}")
-        else:
-            logger.debug(f"Memory scope already exists: {name}")
         return True
     except Exception as e:
         logger.error(f"Failed to create scope '{name}': {e}")
         return False
 
 
-def _get_connection():
-    """Get database connection, ensuring DB exists first."""
-    _ensure_db()
-    return sqlite3.connect(_get_db_path())
-
+# ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _extract_keywords(content: str) -> str:
-    """Extract keywords from content by removing stopwords."""
     words = content.lower().split()
-    keywords = [w.strip('.,!?;:') for w in words if len(w) > 2 and w.lower() not in STOPWORDS]
+    keywords = [w.strip('.,!?;:\'\"()') for w in words if len(w) > 2 and w.lower() not in STOPWORDS]
     return ' '.join(sorted(set(keywords)))
 
 
 def _format_time_ago(timestamp_str: str) -> str:
-    """Format timestamp as simple relative time."""
     try:
         ts = datetime.fromisoformat(timestamp_str)
-        now = datetime.now()
-        diff = now - ts
-        
-        days = diff.days
-        hours = diff.seconds // 3600
-        minutes = (diff.seconds % 3600) // 60
-        
+        diff = datetime.now() - ts
+        days, hours, minutes = diff.days, diff.seconds // 3600, (diff.seconds % 3600) // 60
         if days > 0:
             return f"{days}d ago"
         elif hours > 0:
             return f"{hours}h ago"
         elif minutes > 0:
             return f"{minutes}m ago"
-        else:
-            return "just now"
+        return "just now"
     except Exception:
         return ""
 
 
+def _format_memory(row_id, content, timestamp, label):
+    time_ago = _format_time_ago(timestamp)
+    time_str = f" ({time_ago})" if time_ago else ""
+    label_str = f" [{label}]" if label else ""
+    preview = content[:150] + ('...' if len(content) > 150 else '')
+    return f"[{row_id}]{time_str}{label_str} {preview}"
+
+
+def _parse_labels(label) -> list:
+    """Parse comma-separated label string into list of lowercase labels."""
+    if not label:
+        return []
+    return [l.strip().lower() for l in label.split(',') if l.strip()]
+
+
+def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
+    sanitized = re.sub(r'[^\w\s"*]', ' ', query)
+    sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+    if not sanitized or '"' in sanitized:
+        return sanitized
+    terms = sanitized.split()
+    if use_prefix:
+        terms = [t + '*' if not t.endswith('*') else t for t in terms]
+    if use_or and len(terms) > 1:
+        return ' OR '.join(terms)
+    return ' '.join(terms)
+
+
+# ─── Core Operations ─────────────────────────────────────────────────────────
+
 MAX_MEMORY_LENGTH = 512
 
-def _save_memory(content: str, importance: int = 5, scope: str = 'default') -> tuple:
-    """Store a new memory in the given scope."""
+
+def _save_memory(content: str, label: str = None, scope: str = 'default') -> tuple:
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
-
         if len(content) > MAX_MEMORY_LENGTH:
             return f"Memory too long ({len(content)} chars). Max is {MAX_MEMORY_LENGTH}. Write a shorter, more concise memory.", False
-        
-        importance = max(1, min(10, importance))
+
+        content = content.strip()
         keywords = _extract_keywords(content)
-        
+        label = label.strip().lower() if label else None
+
+        # Generate embedding
+        embedding_blob = None
+        embedder = _get_embedder()
+        if embedder.available:
+            embs = embedder.embed([content], prefix='search_document')
+            if embs is not None:
+                embedding_blob = embs[0].tobytes()
+
         conn = _get_connection()
         cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO memories (content, importance, keywords, scope)
-            VALUES (?, ?, ?, ?)
-        ''', (content.strip(), importance, keywords, scope))
-        
+        cursor.execute(
+            'INSERT INTO memories (content, keywords, scope, label, embedding) VALUES (?, ?, ?, ?, ?)',
+            (content, keywords, scope, label, embedding_blob)
+        )
         memory_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        
-        logger.info(f"Stored memory ID {memory_id} with importance {importance} in scope '{scope}'")
-        return f"Memory saved (ID: {memory_id}, importance: {importance})", True
-        
+
+        label_str = f", label: {label}" if label else ""
+        logger.info(f"Stored memory ID {memory_id} in scope '{scope}'{label_str}")
+        return f"Memory saved (ID: {memory_id}{label_str})", True
+
     except Exception as e:
         logger.error(f"Error saving memory: {e}")
         return f"Failed to save memory: {e}", False
 
 
-def _search_memory(query: str, limit: int = 10, scope: str = 'default') -> tuple:
-    """Search memories by query string within scope. Multiple terms use AND logic."""
+def _fts_search(cursor, fts_query, scope, labels, limit):
+    if labels:
+        placeholders = ','.join('?' * len(labels))
+        cursor.execute(f'''
+            SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
+            FROM memories_fts f JOIN memories m ON f.rowid = m.id
+            WHERE memories_fts MATCH ? AND m.scope = ? AND m.label IN ({placeholders})
+            ORDER BY rank LIMIT ?
+        ''', [fts_query, scope] + labels + [limit])
+    else:
+        cursor.execute('''
+            SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
+            FROM memories_fts f JOIN memories m ON f.rowid = m.id
+            WHERE memories_fts MATCH ? AND m.scope = ?
+            ORDER BY rank LIMIT ?
+        ''', (fts_query, scope, limit))
+    return cursor.fetchall()
+
+
+def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
+    """
+    Semantic search via cosine similarity on stored embeddings.
+    Returns list of (id, content, timestamp, label, similarity) tuples.
+    """
+    embedder = _get_embedder()
+    if not embedder.available:
+        return []
+
+    query_emb = embedder.embed([query], prefix='search_query')
+    if query_emb is None:
+        return []
+    query_vec = query_emb[0]
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if labels:
+        placeholders = ','.join('?' * len(labels))
+        cursor.execute(
+            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE scope = ? AND label IN ({placeholders}) AND embedding IS NOT NULL',
+            [scope] + labels)
+    else:
+        cursor.execute(
+            'SELECT id, content, timestamp, label, embedding FROM memories WHERE scope = ? AND embedding IS NOT NULL',
+            (scope,))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return []
+
+    # Compute cosine similarity (vectors are already L2-normalized)
+    scored = []
+    for row_id, content, timestamp, lbl, emb_blob in rows:
+        emb = np.frombuffer(emb_blob, dtype=np.float32)
+        sim = float(np.dot(query_vec, emb))
+        if sim >= SIMILARITY_THRESHOLD:
+            scored.append((row_id, content, timestamp, lbl, sim))
+
+    scored.sort(key=lambda x: x[4], reverse=True)
+    return scored[:limit]
+
+
+def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 'default') -> tuple:
+    """
+    Search memories with cascading strategy:
+    1. FTS5 AND (exact token match)
+    2. FTS5 OR + prefix (broader token match)
+    3. Vector similarity (semantic match)
+    4. LIKE fallback
+    """
     try:
         if not query or not query.strip():
             return "Search query cannot be empty.", False
-        
-        query_keywords = _extract_keywords(query)
-        search_terms = query_keywords.split()
-        
-        if not search_terms:
-            # Fall back to raw query words if keyword extraction removed everything
-            search_terms = query.lower().split()[:5]
-        
+
+        labels = _parse_labels(label)
+        label_note = f" with labels '{label}'" if labels else ""
+
+        # Trigger backfill on first search (lazy, one-time)
+        _backfill_embeddings()
+
         conn = _get_connection()
         cursor = conn.cursor()
-        
-        # Build AND query - all terms must match, within scope
-        like_conditions = ' AND '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in search_terms])
-        like_params = []
-        for term in search_terms:
-            like_params.extend([f'%{term}%', f'%{term}%'])
-        
-        cursor.execute(f'''
-            SELECT id, content, timestamp, importance
-            FROM memories
-            WHERE scope = ? AND ({like_conditions})
-            ORDER BY importance DESC, timestamp DESC
-            LIMIT ?
-        ''', [scope] + like_params + [limit])
-        
-        rows = cursor.fetchall()
+
+        # Strategy 1: FTS5 exact AND
+        fts_exact = _sanitize_fts_query(query)
+        if fts_exact:
+            try:
+                rows = _fts_search(cursor, fts_exact, scope, labels, limit)
+                if rows:
+                    conn.close()
+                    results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                    return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+
+                # Strategy 2: FTS5 OR + prefix
+                fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
+                if fts_broad != fts_exact:
+                    rows = _fts_search(cursor, fts_broad, scope, labels, limit)
+                    if rows:
+                        conn.close()
+                        results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                        return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+            except sqlite3.OperationalError as e:
+                logger.warning(f"FTS5 query failed: {e}")
+
         conn.close()
-        
-        if not rows:
-            return f"No memories found matching all terms: '{query}'", True
-        
-        results = []
-        for row in rows:
-            time_ago = _format_time_ago(row[2])
-            time_str = f" ({time_ago})" if time_ago else ""
-            preview = row[1][:150] + ('...' if len(row[1]) > 150 else '')
-            results.append(f"[{row[0]}]{time_str} importance:{row[3]} - {preview}")
-        
-        return f"Found {len(rows)} memories:\n" + "\n".join(results), True
-        
+
+        # Strategy 3: Vector similarity (semantic)
+        vec_results = _vector_search(query, scope, labels, limit)
+        if vec_results:
+            results = [_format_memory(r[0], r[1], r[2], r[3]) for r in vec_results]
+            return f"Found {len(vec_results)} memories:\n" + "\n".join(results), True
+
+        # Strategy 4: LIKE fallback
+        terms = query.lower().split()[:5]
+        if terms:
+            conn = _get_connection()
+            cursor = conn.cursor()
+            conditions = ' OR '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in terms])
+            params = []
+            for term in terms:
+                params.extend([f'%{term}%', f'%{term}%'])
+            if labels:
+                placeholders = ','.join('?' * len(labels))
+                label_filter = f" AND label IN ({placeholders})"
+                params.extend(labels)
+            else:
+                label_filter = ""
+            cursor.execute(f'''
+                SELECT id, content, timestamp, label FROM memories
+                WHERE scope = ? AND ({conditions}){label_filter}
+                ORDER BY timestamp DESC LIMIT ?
+            ''', [scope] + params + [limit])
+            rows = cursor.fetchall()
+            conn.close()
+            if rows:
+                results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+
+        return f"No memories found for '{query}'{label_note}.", True
+
     except Exception as e:
         logger.error(f"Error searching memory: {e}")
         return f"Search failed: {e}", False
 
 
-def _get_recent_memories(count: int = 10, scope: str = 'default') -> tuple:
-    """Get most recent memories within scope."""
+def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'default') -> tuple:
     try:
+        labels = _parse_labels(label)
         conn = _get_connection()
         cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, content, timestamp, importance
-            FROM memories
-            WHERE scope = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        ''', (scope, count))
-        
+        if labels:
+            placeholders = ','.join('?' * len(labels))
+            cursor.execute(f'''
+                SELECT id, content, timestamp, label FROM memories
+                WHERE scope = ? AND label IN ({placeholders}) ORDER BY timestamp DESC LIMIT ?
+            ''', [scope] + labels + [count])
+        else:
+            cursor.execute('''
+                SELECT id, content, timestamp, label FROM memories
+                WHERE scope = ? ORDER BY timestamp DESC LIMIT ?
+            ''', (scope, count))
         rows = cursor.fetchall()
         conn.close()
-        
         if not rows:
-            return "No memories stored yet.", True
-        
-        results = []
-        for row in rows:
-            time_ago = _format_time_ago(row[2])
-            time_str = f" ({time_ago})" if time_ago else ""
-            preview = row[1][:150] + ('...' if len(row[1]) > 150 else '')
-            results.append(f"[{row[0]}]{time_str} importance:{row[3]} - {preview}")
-        
+            label_note = f" with labels '{label}'" if labels else ""
+            return f"No memories stored{label_note}.", True
+        results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
         return f"Recent {len(rows)} memories:\n" + "\n".join(results), True
-        
     except Exception as e:
         logger.error(f"Error getting recent memories: {e}")
         return f"Failed to retrieve memories: {e}", False
 
 
 def _delete_memory(memory_id: int, scope: str = 'default') -> tuple:
-    """Delete a memory by ID within scope."""
     try:
         if not isinstance(memory_id, int) or memory_id < 1:
             return "Invalid memory ID. Use the number shown in brackets [N].", False
-        
         conn = _get_connection()
         cursor = conn.cursor()
-        
-        # Check if memory exists in this scope
         cursor.execute('SELECT id, content FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
         row = cursor.fetchone()
-        
         if not row:
             conn.close()
             return f"Memory [{memory_id}] not found in current memory slot.", False
-        
-        # Delete it
         cursor.execute('DELETE FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
         conn.commit()
         conn.close()
-        
         preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
         logger.info(f"Deleted memory ID {memory_id} from scope '{scope}'")
         return f"Deleted memory [{memory_id}]: {preview}", True
-        
     except Exception as e:
         logger.error(f"Error deleting memory: {e}")
         return f"Failed to delete memory: {e}", False
 
 
-def execute(function_name: str, arguments: dict, config) -> tuple:
-    """Execute memory function. Returns (result_string, success_bool)."""
+def _list_memory_labels(scope: str = 'default') -> tuple:
     try:
-        # Get current memory scope from FunctionManager
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT label, COUNT(*) as count FROM memories
+            WHERE scope = ? AND label IS NOT NULL
+            GROUP BY label ORDER BY count DESC
+        ''', (scope,))
+        rows = cursor.fetchall()
+        cursor.execute('SELECT COUNT(*) FROM memories WHERE scope = ? AND label IS NULL', (scope,))
+        unlabeled = cursor.fetchone()[0]
+        conn.close()
+        if not rows and unlabeled == 0:
+            return "No memories stored yet.", True
+        lines = [f"  {row[0]}: {row[1]}" for row in rows]
+        if unlabeled > 0:
+            lines.append(f"  (unlabeled): {unlabeled}")
+        total = sum(r[1] for r in rows) + unlabeled
+        return f"Memory labels ({total} total):\n" + "\n".join(lines), True
+    except Exception as e:
+        logger.error(f"Error listing labels: {e}")
+        return f"Failed to list labels: {e}", False
+
+
+# ─── Executor ────────────────────────────────────────────────────────────────
+
+def execute(function_name: str, arguments: dict, config) -> tuple:
+    try:
         scope = _get_current_scope()
-        
-        # If scope is None, memory is disabled for this chat
         if scope is None:
             return "Memory is disabled for this chat.", False
-        
+
         if function_name == "save_memory":
-            content = arguments.get("content", "")
-            importance = arguments.get("importance", 5)
-            return _save_memory(content, importance, scope)
-        
+            return _save_memory(arguments.get("content", ""), arguments.get("label"), scope)
         elif function_name == "search_memory":
-            query = arguments.get("query", "")
-            limit = arguments.get("limit", 10)
-            return _search_memory(query, limit, scope)
-        
+            return _search_memory(arguments.get("query", ""), arguments.get("limit", 10),
+                                  arguments.get("label"), scope)
         elif function_name == "get_recent_memories":
-            count = arguments.get("count", 10)
-            return _get_recent_memories(count, scope)
-        
+            return _get_recent_memories(arguments.get("count", 10), arguments.get("label"), scope)
         elif function_name == "delete_memory":
             memory_id = arguments.get("memory_id")
             if memory_id is None:
                 return "Missing memory_id parameter.", False
             return _delete_memory(int(memory_id), scope)
-        
+        elif function_name == "list_memory_labels":
+            return _list_memory_labels(scope)
         else:
             return f"Unknown memory function: {function_name}", False
-            
     except Exception as e:
         logger.error(f"Memory function error: {e}")
         return f"Memory error: {e}", False

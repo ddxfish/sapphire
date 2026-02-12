@@ -11,7 +11,9 @@
     "SOCKS_ENABLED": false,
     "SOCKS_HOST": "",
     "SOCKS_PORT": 1080,
-    "SOCKS_TIMEOUT": 10.0
+    "SOCKS_TIMEOUT": 10.0,
+    "MOLTBOOK_PROXY_URL": "http://127.0.0.1:8074",
+    "MOLTBOOK_LOCAL_SECRET": ""
   },
 
   "privacy": {
