@@ -992,6 +992,61 @@ export function injectStyles() {
     .field-row {
       margin-bottom: 12px;
     }
+
+    /* Provider toggle rows (outside grid, fixed-height rows) */
+    .provider-toggles {
+      margin-top: 12px;
+      border-top: 1px solid var(--border);
+      padding-top: 12px;
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      min-height: 36px;
+      margin-bottom: 8px;
+    }
+
+    .toggle-row .toggle-label {
+      flex: 0 0 160px;
+      display: inline-flex;
+      margin-bottom: 0;
+    }
+
+    .toggle-row .toggle-value {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: opacity 0.15s;
+    }
+
+    .toggle-row .toggle-value.hidden {
+      visibility: hidden;
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    .toggle-row .toggle-value label {
+      display: inline;
+      margin-bottom: 0;
+      white-space: nowrap;
+      font-size: var(--font-sm);
+      color: var(--text-tertiary);
+    }
+
+    .toggle-row .toggle-value input,
+    .toggle-row .toggle-value select {
+      width: auto;
+      min-width: 100px;
+      flex: 1;
+      max-width: 200px;
+    }
+
+    .toggle-value-hint {
+      font-size: var(--font-xs);
+      color: var(--text-dim);
+    }
     
     .field-row label {
       display: block;

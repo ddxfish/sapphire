@@ -1716,9 +1716,10 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
             provider = get_provider_by_key(provider_key, providers_config, getattr(config, 'LLM_REQUEST_TIMEOUT', 30))
             if not provider:
                 return {"status": "error", "error": f"Could not create provider '{provider_key}' — check API key and settings"}
-            if provider.health_check():
-                return {"status": "success"}
-            return {"status": "error", "error": "Connection failed — provider did not respond to health check"}
+            result = provider.test_connection()
+            if result.get('ok'):
+                return {"status": "success", "response": result.get("response")}
+            return {"status": "error", "error": result.get("error", "Connection failed")}
 
         return await asyncio.to_thread(_test_provider)
     except Exception as e:

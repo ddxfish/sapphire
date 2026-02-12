@@ -176,12 +176,27 @@ class BaseProvider(ABC):
     def health_check(self) -> bool:
         """
         Check if the provider endpoint is reachable.
-        
+
         Returns:
             True if healthy, False otherwise
         """
         pass
-    
+
+    def test_connection(self) -> dict:
+        """
+        Test provider connectivity with detailed results.
+        Override for provider-specific validation (e.g., actual API call).
+
+        Returns:
+            dict with 'ok' (bool) and optionally 'response' (str) or 'error' (str)
+        """
+        try:
+            if self.health_check():
+                return {"ok": True}
+            return {"ok": False, "error": "Health check failed"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     @abstractmethod
     def chat_completion(
         self,

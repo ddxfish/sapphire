@@ -71,9 +71,10 @@ class ClaudeProvider(BaseProvider):
     def health_check(self) -> bool:
         """
         Check Claude endpoint health.
-        
+
         Claude doesn't have a models.list endpoint, so we do a minimal
-        messages request with max_tokens=1.
+        messages request with max_tokens=1. Any error (auth, billing,
+        network) means the provider is not usable.
         """
         try:
             self._client.messages.create(
@@ -83,14 +84,25 @@ class ClaudeProvider(BaseProvider):
                 timeout=self.health_check_timeout
             )
             return True
-        except anthropic.APIStatusError as e:
-            if e.status_code in (400, 401, 403):
-                return True
-            logger.debug(f"Claude health check failed: {e}")
-            return False
         except Exception as e:
             logger.debug(f"Claude health check failed: {e}")
             return False
+
+    def test_connection(self) -> dict:
+        """Test Claude with an actual API call, returning response text."""
+        try:
+            response = self._client.messages.create(
+                model=self.model,
+                max_tokens=32,
+                messages=[{"role": "user", "content": "Say hello in exactly 5 words."}],
+                timeout=self.health_check_timeout
+            )
+            text = response.content[0].text if response.content else ''
+            return {"ok": True, "response": text}
+        except anthropic.APIStatusError as e:
+            return {"ok": False, "error": f"{e.status_code}: {e.message}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
     
     def _get_cache_config(self) -> tuple:
         """

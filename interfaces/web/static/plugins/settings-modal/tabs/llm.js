@@ -169,25 +169,21 @@ export default {
       input.addEventListener('change', (e) => this.handleFieldChange(e, container));
     });
 
-    // Claude thinking toggle - show/hide budget field
+    // Claude thinking toggle - show/hide budget (visibility, not display)
     container.querySelectorAll('.thinking-toggle').forEach(toggle => {
       toggle.addEventListener('change', (e) => {
         const key = e.target.dataset.provider;
-        const budgetRow = container.querySelector(`.thinking-budget-row[data-provider="${key}"]`);
-        if (budgetRow) {
-          budgetRow.style.display = e.target.checked ? '' : 'none';
-        }
+        const val = container.querySelector(`.toggle-value[data-toggle="thinking"][data-provider="${key}"]`);
+        if (val) val.classList.toggle('hidden', !e.target.checked);
       });
     });
 
-    // Claude cache toggle - show/hide TTL field
+    // Claude cache toggle - show/hide TTL (visibility, not display)
     container.querySelectorAll('.cache-toggle').forEach(toggle => {
       toggle.addEventListener('change', (e) => {
         const key = e.target.dataset.provider;
-        const ttlRow = container.querySelector(`.cache-ttl-row[data-provider="${key}"]`);
-        if (ttlRow) {
-          ttlRow.style.display = e.target.checked ? '' : 'none';
-        }
+        const val = container.querySelector(`.toggle-value[data-toggle="cache"][data-provider="${key}"]`);
+        if (val) val.classList.toggle('hidden', !e.target.checked);
       });
     });
 
