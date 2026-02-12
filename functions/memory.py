@@ -226,7 +226,9 @@ def _get_db_path():
 
 def _get_connection():
     _ensure_db()
-    return sqlite3.connect(_get_db_path())
+    conn = sqlite3.connect(_get_db_path(), timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
 
 
 def _ensure_db():
@@ -239,8 +241,9 @@ def _ensure_db():
         db_path = _get_db_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=10)
         cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
 
         # Core table (may already exist from old schema)
         cursor.execute('''
@@ -274,12 +277,29 @@ def _ensure_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
 
         # FTS5 virtual table (external content, synced via triggers)
-        cursor.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                content, keywords, label,
-                content=memories, content_rowid=id
-            )
-        """)
+        # If corrupted, drop and recreate
+        try:
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    content, keywords, label,
+                    content=memories, content_rowid=id
+                )
+            """)
+            # Test that FTS5 table is healthy
+            cursor.execute("SELECT COUNT(*) FROM memories_fts")
+        except sqlite3.DatabaseError as e:
+            logger.warning(f"FTS5 table corrupted, rebuilding: {e}")
+            cursor.execute("DROP TABLE IF EXISTS memories_fts")
+            cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
+            cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
+            cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
+            conn.commit()
+            cursor.execute("""
+                CREATE VIRTUAL TABLE memories_fts USING fts5(
+                    content, keywords, label,
+                    content=memories, content_rowid=id
+                )
+            """)
 
         # Sync triggers
         cursor.execute("""
@@ -340,19 +360,27 @@ def _ensure_db():
         return False
 
 
+_backfill_done = False
+
 def _backfill_embeddings():
     """Generate embeddings for memories that don't have them yet. Called lazily."""
+    global _backfill_done
+    if _backfill_done:
+        return
+
     embedder = _get_embedder()
     if not embedder.available:
+        _backfill_done = True
         return
 
     conn = _get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id, content FROM memories WHERE embedding IS NULL')
     rows = cursor.fetchall()
+    conn.close()
 
     if not rows:
-        conn.close()
+        _backfill_done = True
         return
 
     logger.info(f"Backfilling embeddings for {len(rows)} memories...")
@@ -364,11 +392,16 @@ def _backfill_embeddings():
         embs = embedder.embed(texts, prefix='search_document')
         if embs is None:
             break
+        # Short-lived connection per batch to avoid holding locks
+        conn = _get_connection()
+        cursor = conn.cursor()
         for row_id, emb in zip(ids, embs):
             cursor.execute('UPDATE memories SET embedding = ? WHERE id = ?',
                            (emb.tobytes(), row_id))
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
+
+    _backfill_done = True
     logger.info(f"Backfill complete: {len(rows)} memories embedded")
 
 
