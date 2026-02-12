@@ -310,23 +310,29 @@ def _setup_fts(cursor):
         )
     """)
 
+    # Drop old triggers (may have wrong scope from previous version)
+    cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
+    cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
+    cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
+
     cursor.execute("""
-        CREATE TRIGGER IF NOT EXISTS memories_fts_insert
+        CREATE TRIGGER memories_fts_insert
         AFTER INSERT ON memories BEGIN
             INSERT INTO memories_fts(rowid, content, keywords, label)
             VALUES (new.id, new.content, new.keywords, new.label);
         END
     """)
     cursor.execute("""
-        CREATE TRIGGER IF NOT EXISTS memories_fts_delete
+        CREATE TRIGGER memories_fts_delete
         AFTER DELETE ON memories BEGIN
             INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
             VALUES ('delete', old.id, old.content, old.keywords, old.label);
         END
     """)
+    # Only fire on FTS-indexed columns, NOT on embedding updates
     cursor.execute("""
-        CREATE TRIGGER IF NOT EXISTS memories_fts_update
-        AFTER UPDATE ON memories BEGIN
+        CREATE TRIGGER memories_fts_update
+        AFTER UPDATE OF content, keywords, label ON memories BEGIN
             INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
             VALUES ('delete', old.id, old.content, old.keywords, old.label);
             INSERT INTO memories_fts(rowid, content, keywords, label)
@@ -471,6 +477,7 @@ def _backfill_embeddings():
 
     logger.info(f"Backfilling embeddings for {len(rows)} memories...")
     batch_size = 32
+    filled = 0
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i + batch_size]
         ids = [r[0] for r in batch]
@@ -478,17 +485,26 @@ def _backfill_embeddings():
         embs = embedder.embed(texts, prefix='search_document')
         if embs is None:
             break
-        # Short-lived connection per batch to avoid holding locks
-        conn = _get_connection()
-        cursor = conn.cursor()
-        for row_id, emb in zip(ids, embs):
-            cursor.execute('UPDATE memories SET embedding = ? WHERE id = ?',
-                           (emb.tobytes(), row_id))
-        conn.commit()
-        conn.close()
+        try:
+            conn = _get_connection()
+            cursor = conn.cursor()
+            for row_id, emb in zip(ids, embs):
+                cursor.execute('UPDATE memories SET embedding = ? WHERE id = ?',
+                               (emb.tobytes(), row_id))
+            conn.commit()
+            conn.close()
+            filled += len(batch)
+        except Exception as e:
+            logger.error(f"Backfill batch failed: {e}")
+            try:
+                conn.close()
+            except Exception:
+                pass
+            break
 
     _backfill_done = True
-    logger.info(f"Backfill complete: {len(rows)} memories embedded")
+    if filled:
+        logger.info(f"Backfill complete: {filled}/{len(rows)} memories embedded")
 
 
 def _get_current_scope():
