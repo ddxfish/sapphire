@@ -26,7 +26,6 @@ AVAILABLE_FUNCTIONS = [
     'search_memory',
     'get_recent_memories',
     'delete_memory',
-    'list_memory_labels',
 ]
 
 TOOLS = [
@@ -119,18 +118,6 @@ TOOLS = [
             }
         }
     },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "list_memory_labels",
-            "description": "List all memory labels with counts. Call this before saving to stay consistent with existing labels.",
-            "parameters": {
-                "type": "object",
-                "properties": {}
-            }
-        }
-    }
 ]
 
 
@@ -839,31 +826,6 @@ def _delete_memory(memory_id: int, scope: str = 'default') -> tuple:
         return f"Failed to delete memory: {e}", False
 
 
-def _list_memory_labels(scope: str = 'default') -> tuple:
-    try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT label, COUNT(*) as count FROM memories
-            WHERE scope = ? AND label IS NOT NULL
-            GROUP BY label ORDER BY count DESC
-        ''', (scope,))
-        rows = cursor.fetchall()
-        cursor.execute('SELECT COUNT(*) FROM memories WHERE scope = ? AND label IS NULL', (scope,))
-        unlabeled = cursor.fetchone()[0]
-        conn.close()
-        if not rows and unlabeled == 0:
-            return "No memories stored yet.", True
-        lines = [f"  {row[0]}: {row[1]}" for row in rows]
-        if unlabeled > 0:
-            lines.append(f"  (unlabeled): {unlabeled}")
-        total = sum(r[1] for r in rows) + unlabeled
-        return f"Memory labels ({total} total):\n" + "\n".join(lines), True
-    except Exception as e:
-        logger.error(f"Error listing labels: {e}")
-        return f"Failed to list labels: {e}", False
-
-
 # ─── Executor ────────────────────────────────────────────────────────────────
 
 def execute(function_name: str, arguments: dict, config) -> tuple:
@@ -884,8 +846,6 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             if memory_id is None:
                 return "Missing memory_id parameter.", False
             return _delete_memory(int(memory_id), scope)
-        elif function_name == "list_memory_labels":
-            return _list_memory_labels(scope)
         else:
             return f"Unknown memory function: {function_name}", False
     except Exception as e:
