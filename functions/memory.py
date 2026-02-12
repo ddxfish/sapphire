@@ -231,6 +231,123 @@ def _get_connection():
     return conn
 
 
+def _repair_db(db_path):
+    """Attempt to salvage memories from a corrupted database into a fresh one."""
+    backup_path = db_path.with_suffix('.db.corrupted')
+    try:
+        # Try to read memories from corrupted db
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+        # Grab whatever we can - ignore columns that may not exist
+        try:
+            cursor.execute('SELECT id, content, timestamp, importance, keywords, context, scope, label FROM memories')
+        except sqlite3.DatabaseError:
+            try:
+                cursor.execute('SELECT id, content, timestamp, importance, keywords, context, scope FROM memories')
+            except sqlite3.DatabaseError:
+                try:
+                    cursor.execute('SELECT id, content, timestamp, importance, keywords, context FROM memories')
+                except sqlite3.DatabaseError:
+                    conn.close()
+                    logger.error("Cannot read any data from corrupted database")
+                    db_path.rename(backup_path)
+                    logger.info(f"Corrupted database moved to {backup_path}")
+                    return
+
+        rows = cursor.fetchall()
+        col_count = len(rows[0]) if rows else 0
+        conn.close()
+
+        # Rename corrupted file
+        db_path.rename(backup_path)
+        logger.info(f"Corrupted database backed up to {backup_path}")
+
+        if not rows:
+            return
+
+        # Create fresh db and insert salvaged rows
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute('''
+            CREATE TABLE memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                importance INTEGER DEFAULT 5,
+                keywords TEXT,
+                context TEXT,
+                scope TEXT NOT NULL DEFAULT 'default',
+                label TEXT,
+                embedding BLOB
+            )
+        ''')
+        for row in rows:
+            # Pad missing columns with defaults
+            r = list(row) + [None] * (8 - len(row))
+            cursor.execute(
+                'INSERT INTO memories (id, content, timestamp, importance, keywords, context, scope, label) VALUES (?,?,?,?,?,?,?,?)',
+                r[:8]
+            )
+        conn.commit()
+        conn.close()
+        logger.info(f"Salvaged {len(rows)} memories into fresh database")
+
+    except Exception as e:
+        logger.error(f"Repair failed: {e}")
+        # Last resort - move corrupted file so fresh db can be created
+        if db_path.exists() and not backup_path.exists():
+            db_path.rename(backup_path)
+            logger.info(f"Corrupted database moved to {backup_path}")
+
+
+def _setup_fts(cursor):
+    """Create FTS5 table, triggers, and populate from existing data."""
+    cursor.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+            content, keywords, label,
+            content=memories, content_rowid=id
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_fts_insert
+        AFTER INSERT ON memories BEGIN
+            INSERT INTO memories_fts(rowid, content, keywords, label)
+            VALUES (new.id, new.content, new.keywords, new.label);
+        END
+    """)
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_fts_delete
+        AFTER DELETE ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
+            VALUES ('delete', old.id, old.content, old.keywords, old.label);
+        END
+    """)
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_fts_update
+        AFTER UPDATE ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
+            VALUES ('delete', old.id, old.content, old.keywords, old.label);
+            INSERT INTO memories_fts(rowid, content, keywords, label)
+            VALUES (new.id, new.content, new.keywords, new.label);
+        END
+    """)
+
+    # Populate if empty
+    cursor.execute("SELECT COUNT(*) FROM memories")
+    mem_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM memories_fts")
+    fts_count = cursor.fetchone()[0]
+
+    if mem_count > 0 and fts_count == 0:
+        logger.info(f"Populating FTS5 index from {mem_count} existing memories...")
+        cursor.execute("""
+            INSERT INTO memories_fts(rowid, content, keywords, label)
+            SELECT id, content, keywords, label FROM memories
+        """)
+
+
 def _ensure_db():
     """Initialize database with FTS5 + embedding column. Migrates from old schema."""
     global _db_initialized
@@ -240,6 +357,26 @@ def _ensure_db():
     try:
         db_path = _get_db_path()
         db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Health check - detect corruption before doing anything
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(db_path, timeout=10)
+                cursor = conn.cursor()
+                result = cursor.execute("PRAGMA integrity_check").fetchone()
+                conn.close()
+                if result[0] != 'ok':
+                    logger.error(f"Database integrity check failed: {result[0]}")
+                    _repair_db(db_path)
+            except sqlite3.DatabaseError as e:
+                logger.error(f"Database corrupted: {e}")
+                _repair_db(db_path)
+
+        # Clean up stale WAL/journal files if db was replaced
+        for suffix in ['-wal', '-shm', '-journal']:
+            stale = db_path.with_name(db_path.name + suffix)
+            if stale.exists() and not db_path.exists():
+                stale.unlink()
 
         conn = sqlite3.connect(db_path, timeout=10)
         cursor = conn.cursor()
@@ -276,68 +413,17 @@ def _ensure_db():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
 
-        # FTS5 virtual table (external content, synced via triggers)
-        # If corrupted, drop and recreate
+        # FTS5 - try setup, rebuild on corruption
         try:
-            cursor.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                    content, keywords, label,
-                    content=memories, content_rowid=id
-                )
-            """)
-            # Test that FTS5 table is healthy
-            cursor.execute("SELECT COUNT(*) FROM memories_fts")
+            _setup_fts(cursor)
         except sqlite3.DatabaseError as e:
-            logger.warning(f"FTS5 table corrupted, rebuilding: {e}")
+            logger.warning(f"FTS5 corrupted, rebuilding: {e}")
             cursor.execute("DROP TABLE IF EXISTS memories_fts")
             cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
             cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
             cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
             conn.commit()
-            cursor.execute("""
-                CREATE VIRTUAL TABLE memories_fts USING fts5(
-                    content, keywords, label,
-                    content=memories, content_rowid=id
-                )
-            """)
-
-        # Sync triggers
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS memories_fts_insert
-            AFTER INSERT ON memories BEGIN
-                INSERT INTO memories_fts(rowid, content, keywords, label)
-                VALUES (new.id, new.content, new.keywords, new.label);
-            END
-        """)
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS memories_fts_delete
-            AFTER DELETE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
-                VALUES ('delete', old.id, old.content, old.keywords, old.label);
-            END
-        """)
-        cursor.execute("""
-            CREATE TRIGGER IF NOT EXISTS memories_fts_update
-            AFTER UPDATE ON memories BEGIN
-                INSERT INTO memories_fts(memories_fts, rowid, content, keywords, label)
-                VALUES ('delete', old.id, old.content, old.keywords, old.label);
-                INSERT INTO memories_fts(rowid, content, keywords, label)
-                VALUES (new.id, new.content, new.keywords, new.label);
-            END
-        """)
-
-        # Populate FTS5 from existing data if needed
-        cursor.execute("SELECT COUNT(*) FROM memories")
-        mem_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM memories_fts")
-        fts_count = cursor.fetchone()[0]
-
-        if mem_count > 0 and fts_count == 0:
-            logger.info(f"Populating FTS5 index from {mem_count} existing memories...")
-            cursor.execute("""
-                INSERT INTO memories_fts(rowid, content, keywords, label)
-                SELECT id, content, keywords, label FROM memories
-            """)
+            _setup_fts(cursor)
 
         # Scope registry
         cursor.execute('''
