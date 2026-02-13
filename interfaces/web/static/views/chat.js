@@ -93,8 +93,8 @@ export default {
         });
 
         // Auto-save on any sidebar input change
-        container.querySelectorAll('.chat-sidebar select, .chat-sidebar input').forEach(el => {
-            const event = el.type === 'range' ? 'input' : 'change';
+        container.querySelectorAll('.chat-sidebar select, .chat-sidebar input, .chat-sidebar textarea').forEach(el => {
+            const event = el.type === 'range' ? 'input' : (el.tagName === 'TEXTAREA' ? 'input' : 'change');
             el.addEventListener(event, () => {
                 // Immediate visual feedback for specific elements
                 if (el.id === 'sb-pitch') {
