@@ -146,30 +146,76 @@ body {
 .nav-item.overflow-hidden { display: none !important; }
 
 /* =============================================================================
-   NAV FLYOUT
+   CHAT PICKER DROPDOWN (top bar)
    ============================================================================= */
 
-.nav-flyout {
-    position: fixed;
-    z-index: 998;
+.chat-header-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.chat-picker { position: relative; }
+
+.chat-picker-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font-weight: 500;
+    font-size: var(--font-md);
+    cursor: pointer;
+    transition: background 0.15s;
+    max-width: 200px;
+}
+
+.chat-picker-btn:hover { background: var(--bg-hover); }
+
+.chat-picker-btn #chat-header-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-picker-arrow {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.chat-picker-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    min-width: 180px;
+    max-width: 260px;
+    max-height: 300px;
+    overflow-y: auto;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-    min-width: 200px;
-    max-width: 280px;
+    box-shadow: 0 4px 12px var(--shadow-medium);
+    z-index: 1000;
     padding: 4px;
-    animation: flyout-in 0.15s ease-out;
+    opacity: 0;
+    visibility: hidden;
+    transform: scale(0.95) translateY(-4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
 }
 
-.nav-flyout.hidden { display: none; }
-
-@keyframes flyout-in {
-    from { opacity: 0; transform: translateX(-4px); }
-    to { opacity: 1; transform: translateX(0); }
+.chat-picker.open .chat-picker-dropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: scale(1) translateY(0);
 }
 
-.flyout-item {
+.chat-picker-item {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -185,43 +231,27 @@ body {
     transition: background 0.1s;
 }
 
-.flyout-item:hover { background: var(--bg-hover); }
+.chat-picker-item:hover { background: var(--bg-hover); }
 
-.flyout-new-chat {
-    color: var(--trim, #4a9eff);
-    font-weight: 500;
-}
-
-.flyout-separator {
-    height: 1px;
-    background: var(--border);
-    margin: 4px 0;
-}
-
-.flyout-chat.active {
+.chat-picker-item.active {
     background: var(--trim-light, rgba(74, 158, 255, 0.1));
     color: var(--trim, #4a9eff);
 }
 
-.flyout-check {
+.chat-picker-item-check {
     width: 16px;
     font-size: 12px;
     flex-shrink: 0;
 }
 
-.flyout-chat-name {
+.chat-picker-item-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.flyout-loading, .flyout-more {
-    color: var(--text-muted);
-    font-style: italic;
-    cursor: default;
-}
-
-.flyout-more:hover { background: transparent; }
+.header-icon-btn.danger-icon { font-size: 14px; }
+.header-icon-btn.danger-icon:hover { color: var(--error); }
 
 /* =============================================================================
    CHAT VIEW LAYOUT
@@ -245,14 +275,7 @@ body {
     flex-shrink: 0;
 }
 
-.chat-header-name {
-    font-weight: 500;
-    font-size: var(--font-md);
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
+/* chat-header-name is now inside .chat-picker-btn — styles handled there */
 
 .chat-header-actions {
     display: flex;

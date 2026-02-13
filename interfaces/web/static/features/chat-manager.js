@@ -59,10 +59,12 @@ export async function handleNewChat() {
     try {
         await api.createChat(name);
         await populateChatDropdown();
-        
+
         const normalizedName = name.toLowerCase().replace(/\s+/g, '_');
         chatSelect.value = normalizedName;
         await handleChatChange();
+        // Re-sync picker now that backend has correct active chat
+        await populateChatDropdown();
     } catch (e) {
         console.error('Failed to create chat:', e);
         if (e.message.includes('already exists')) {

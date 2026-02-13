@@ -363,17 +363,43 @@ export const hasVisibleContent = () => {
 // =============================================================================
 
 export const renderChatDropdown = (chats, activeChat) => {
+    // Update hidden select (state holder used throughout the app)
     const select = document.getElementById('chat-select');
-    if (!select) return;
-    
-    select.innerHTML = '';
-    chats.forEach(chat => {
-        const opt = document.createElement('option');
-        opt.value = chat.name;
-        opt.textContent = chat.display_name;
-        if (chat.name === activeChat) opt.selected = true;
-        select.appendChild(opt);
-    });
+    if (select) {
+        select.innerHTML = '';
+        chats.forEach(chat => {
+            const opt = document.createElement('option');
+            opt.value = chat.name;
+            opt.textContent = chat.display_name;
+            if (chat.name === activeChat) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }
+
+    // Update visible chat picker dropdown
+    const dropdown = document.getElementById('chat-picker-dropdown');
+    if (dropdown) {
+        dropdown.innerHTML = chats.map(c => `
+            <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
+                    data-chat="${c.name}">
+                <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+                <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
+            </button>
+        `).join('');
+    }
+
+    // Update header name
+    const headerName = document.getElementById('chat-header-name');
+    if (headerName) {
+        const active = chats.find(c => c.name === activeChat);
+        headerName.textContent = active?.display_name || activeChat || 'Chat';
+    }
+};
+
+const escapeHtml = (str) => {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
 };
 
 // =============================================================================

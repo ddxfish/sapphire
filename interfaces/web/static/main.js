@@ -17,7 +17,7 @@ import { getInitData } from './shared/init-data.js';
 
 // New architecture
 import { registerView, initRouter } from './core/router.js';
-import { initNavRail, updateChatFlyout, setChatHeaderName } from './core/nav-rail.js';
+import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 import chatView from './views/chat.js';
 import personasView from './views/personas.js';
 import toolsetsView from './views/toolsets.js';
@@ -120,14 +120,9 @@ async function init() {
 
         setHistLen(historyLen);
 
-        // Populate chat dropdown + nav flyout
+        // Populate chat dropdown + picker
         if (status?.chats) {
             ui.renderChatDropdown(status.chats, status.active_chat);
-            updateChatFlyout(
-                status.chats.map(c => c.name || c),
-                status.active_chat
-            );
-            setChatHeaderName(status.active_chat);
         } else {
             await populateChatDropdown();
         }

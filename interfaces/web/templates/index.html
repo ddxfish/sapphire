@@ -94,9 +94,6 @@
         <span class="nav-version">v2</span>
     </nav>
 
-    <!-- Flyout panel (chat list, etc.) -->
-    <div id="nav-flyout" class="nav-flyout hidden"></div>
-
     <!-- ================================================================
          APP CONTENT (all views live here)
          ================================================================ -->
@@ -108,7 +105,18 @@
         <div id="view-chat" class="view active">
             <!-- Chat Header Bar -->
             <div class="chat-header">
-                <span id="chat-header-name" class="chat-header-name">Chat</span>
+                <div class="chat-header-left">
+                    <!-- Chat picker dropdown -->
+                    <div class="chat-picker" id="chat-picker">
+                        <button class="chat-picker-btn" id="chat-picker-btn">
+                            <span id="chat-header-name">Chat</span>
+                            <span class="chat-picker-arrow">&#x25BE;</span>
+                        </button>
+                        <div class="chat-picker-dropdown" id="chat-picker-dropdown"></div>
+                    </div>
+                    <button id="new-chat-btn" class="header-icon-btn" title="New Chat">+</button>
+                    <button id="delete-chat-btn" class="header-icon-btn danger-icon" title="Delete Chat">&#x1F5D1;</button>
+                </div>
                 <div class="chat-header-actions">
                     <!-- Volume control -->
                     <div class="volume-compact" id="volume-compact">
@@ -121,9 +129,7 @@
                     <div class="kebab-menu" id="chat-menu">
                         <button class="header-icon-btn kebab-btn" title="Chat Menu">&#x22EE;</button>
                         <div class="kebab-dropdown">
-                            <button id="new-chat-btn">New Chat</button>
                             <button id="clear-chat-btn">Clear Chat</button>
-                            <button id="delete-chat-btn" class="danger">Delete Chat</button>
                             <hr>
                             <button id="import-chat-btn">Import</button>
                             <button id="export-chat-btn">Export</button>
