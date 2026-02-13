@@ -12,8 +12,8 @@ SPICE_POOL = prompt_manager.spices
 
 # Runtime state (not in JSON)
 _assembled_state = {
-    "persona": "sapphire",
-    "location": "default", 
+    "character": "sapphire",
+    "location": "default",
     "relationship": "friend",
     "goals": "none",
     "format": "conversational",
@@ -57,7 +57,7 @@ def get_current_state():
         return prompt_data.get('components', {})
     elif prompt_data.get('type') == 'monolith':
         return {
-            'persona': 'monolith',
+            'character': 'monolith',
             'location': 'n/a',
             'goals': 'n/a'
         }
@@ -137,7 +137,7 @@ def generate_random_assembled():
     scenario_choices = [k for k in components.get("scenario", {}).keys() if k != "default"]
     
     return {
-        "persona": random.choice(list(components.get("persona", {}).keys())),
+        "character": random.choice(list(components.get("character", {}).keys())),
         "location": random.choice(location_choices) if location_choices else "default",
         "relationship": random.choice(list(components.get("relationship", {}).keys())),
         "format": random.choice(list(components.get("format", {}).keys())),
@@ -152,8 +152,8 @@ def reset_to_defaults():
     """Reset to default assembled state."""
     global _assembled_state
     _assembled_state = {
-        "persona": "sapphire",
-        "location": "default", 
+        "character": "sapphire",
+        "location": "default",
         "relationship": "friend",
         "goals": "none",
         "format": "conversational",
@@ -232,7 +232,7 @@ def assemble_prompt():
     components = prompt_manager.components
     
     parts = [
-        components.get("persona", {}).get(_assembled_state["persona"], ""),
+        components.get("character", {}).get(_assembled_state["character"], ""),
         f"You are currently {components.get('location', {}).get(_assembled_state['location'], '')}.",
         components.get("relationship", {}).get(_assembled_state["relationship"], ""),
         components.get("goals", {}).get(_assembled_state["goals"], ""),
@@ -395,4 +395,4 @@ def apply_random_assembled():
     _assembled_state["active_preset"] = "random"
     extras = ", ".join(_assembled_state["extras"]) if _assembled_state["extras"] else "none"
     emotions = ", ".join(_assembled_state["emotions"]) if _assembled_state["emotions"] else "none"
-    return f"Random: {_assembled_state['persona']} in {_assembled_state['location']}, {_assembled_state['goals']} goals, {_assembled_state['scenario']} scenario, extras: {extras}, emotions: {emotions}"
+    return f"Random: {_assembled_state['character']} in {_assembled_state['location']}, {_assembled_state['goals']} goals, {_assembled_state['scenario']} scenario, extras: {extras}, emotions: {emotions}"

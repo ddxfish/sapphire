@@ -3,7 +3,7 @@ import { switchView } from './router.js';
 
 const NAV_ITEMS = [
     { id: 'chat', icon: '\uD83D\uDCAC', label: 'Chat' },
-    { id: 'personas', icon: '\uD83D\uDC64', label: 'Personas' },
+    { id: 'prompts', icon: '\uD83D\uDC64', label: 'Prompts' },
     { id: 'toolsets', icon: '\uD83D\uDD27', label: 'Toolsets' },
     { id: 'spices', icon: '\uD83C\uDF36\uFE0F', label: 'Spices' },
     { id: 'schedule', icon: '\u23F0', label: 'Schedule' },

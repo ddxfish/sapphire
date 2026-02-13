@@ -100,7 +100,7 @@ def prompts_dir(tmp_path):
     # Create sample prompt files
     pieces = {
         "components": {
-            "persona": {"default": "You are a helpful AI assistant."},
+            "character": {"default": "You are a helpful AI assistant."},
             "goals": {"helpful": "Be helpful and informative."},
             "location": {},
             "relationship": {},

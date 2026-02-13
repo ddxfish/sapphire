@@ -19,7 +19,7 @@ import { getInitData } from './shared/init-data.js';
 import { registerView, initRouter } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 import chatView from './views/chat.js';
-import personasView from './views/personas.js';
+import promptsView from './views/prompts.js';
 import toolsetsView from './views/toolsets.js';
 import spicesView from './views/spices.js';
 import scheduleView from './views/schedule.js';
@@ -93,7 +93,7 @@ async function init() {
 
         // Register views with router
         registerView('chat', chatView);
-        registerView('personas', personasView);
+        registerView('prompts', promptsView);
         registerView('toolsets', toolsetsView);
         registerView('spices', spicesView);
         registerView('schedule', scheduleView);

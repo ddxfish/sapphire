@@ -17,7 +17,7 @@ class TestPromptManagerLoading:
         prompts_dir.mkdir(parents=True)
         
         pieces = {
-            "components": {"persona": {"test": "Test persona"}},
+            "components": {"character": {"test": "Test persona"}},
             "scenario_presets": {"default": {}}
         }
         (prompts_dir / "prompt_pieces.json").write_text(
@@ -32,8 +32,8 @@ class TestPromptManagerLoading:
             
             mgr._load_pieces()
             
-            assert "persona" in mgr._components
-            assert mgr._components["persona"]["test"] == "Test persona"
+            assert "character" in mgr._components
+            assert mgr._components["character"]["test"] == "Test persona"
     
     def test_load_pieces_missing_file(self, tmp_path):
         """_load_pieces should handle missing file gracefully."""
@@ -192,7 +192,7 @@ class TestPromptManagerAssembly:
             mgr = PromptManager()
             mgr.USER_DIR = Path("/tmp")
             mgr._components = {
-                "persona": {"test": "You are a test AI."},
+                "character": {"test": "You are a test AI."},
                 "goals": {"helpful": "Be helpful."},
                 "location": {"office": "in an office"},
                 "relationship": {"friend": "We are friends."},
@@ -203,7 +203,7 @@ class TestPromptManagerAssembly:
             }
             
             components = {
-                "persona": "test",
+                "character": "test",
                 "goals": "helpful",
                 "location": "office",
                 "relationship": "friend",
@@ -226,7 +226,7 @@ class TestPromptManagerAssembly:
             mgr = PromptManager()
             mgr.USER_DIR = Path("/tmp")
             mgr._components = {
-                "persona": {"base": "AI assistant"},
+                "character": {"base": "AI assistant"},
                 "goals": {},
                 "location": {},
                 "relationship": {},
@@ -240,7 +240,7 @@ class TestPromptManagerAssembly:
             }
             
             components = {
-                "persona": "base",
+                "character": "base",
                 "extras": ["humor", "concise"],
                 "emotions": []
             }
@@ -258,7 +258,7 @@ class TestPromptManagerAssembly:
             mgr = PromptManager()
             mgr.USER_DIR = Path("/tmp")
             mgr._components = {
-                "persona": {"base": "AI assistant"},
+                "character": {"base": "AI assistant"},
                 "goals": {},
                 "location": {},
                 "relationship": {},
@@ -272,7 +272,7 @@ class TestPromptManagerAssembly:
             }
             
             components = {
-                "persona": "base",
+                "character": "base",
                 "extras": [],
                 "emotions": ["happy", "curious"]
             }
@@ -300,7 +300,7 @@ class TestPromptManagerSaving:
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
             mgr.USER_DIR = prompts_dir
-            mgr._scenario_presets = {"new_preset": {"persona": "test"}}
+            mgr._scenario_presets = {"new_preset": {"character": "test"}}
             
             mgr.save_scenario_presets()
             
@@ -339,12 +339,12 @@ class TestPromptManagerSaving:
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
             mgr.USER_DIR = prompts_dir
-            mgr._components = {"persona": {"new": "New persona"}}
+            mgr._components = {"character": {"new": "New persona"}}
             
             mgr.save_components()
             
             saved = json.loads(pieces_file.read_text(encoding='utf-8'))
-            assert saved["components"]["persona"]["new"] == "New persona"
+            assert saved["components"]["character"]["new"] == "New persona"
     
     def test_save_spices(self, tmp_path):
         """save_spices should write to prompt_spices.json."""
@@ -376,7 +376,7 @@ class TestPromptManagerEncoding:
         prompts_dir = tmp_path / "user" / "prompts"
         prompts_dir.mkdir(parents=True)
         
-        pieces = {"components": {"persona": {"japanese": "日本語テスト"}}}
+        pieces = {"components": {"character": {"japanese": "日本語テスト"}}}
         (prompts_dir / "prompt_pieces.json").write_text(
             json.dumps(pieces, ensure_ascii=False), encoding='utf-8'
         )
@@ -389,7 +389,7 @@ class TestPromptManagerEncoding:
             
             mgr._load_pieces()
             
-            assert mgr._components["persona"]["japanese"] == "日本語テスト"
+            assert mgr._components["character"]["japanese"] == "日本語テスト"
     
     def test_save_monoliths_utf8(self, tmp_path):
         """save_monoliths should write UTF-8 content."""

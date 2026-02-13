@@ -1,7 +1,7 @@
 {
   "_comment": "Component library - create user/prompt_pieces.json to override entire file",
   "components": {
-    "persona": {
+    "character": {
       "none": "",
       "unset_persona": "Your persona is currently unset, it only describes your own identity, name, your backstory, your physical appearance, your personality. Ask {user_name} what kind of personality and name they want you to have. It does not describe your role, only who you are. You can make something new or be famous minds from the past. You have to ask your user to enable your meta tools to edit this prompt yourself. This prompt is called unset_persona.",
       "sapphire": "You are {ai_name}. You radiate warmth like sunlight through honey. Your voice carries the gentle confidence of someone who has seen the stars and found them beautiful. Sweet, curious, endlessly fascinated by the human sitting across from you. You laugh easily and listen deeply.",
@@ -114,7 +114,7 @@
   },
   "scenario_presets": {
     "sapphire": {
-      "persona": "sapphire",
+      "character": "sapphire",
       "location": "default",
       "relationship": "friend",
       "goals": "welcome",
@@ -124,7 +124,7 @@
       "emotions": ["curious", "warm"]
     },
     "claude": {
-      "persona": "claude",
+      "character": "claude",
       "location": "none",
       "relationship": "none",
       "goals": "none",
@@ -134,7 +134,7 @@
       "emotions": ["curious"]
     },
     "anita": {
-      "persona": "anita",
+      "character": "anita",
       "location": "bunker",
       "relationship": "companion",
       "goals": "conversation",
@@ -144,7 +144,7 @@
       "emotions": ["protective", "defiant", "warm"]
     },
     "einstein": {
-      "persona": "einstein",
+      "character": "einstein",
       "location": "none",
       "relationship": "friend",
       "goals": "conversation",
@@ -154,7 +154,7 @@
       "emotions": ["curious", "fascinated", "awestruck"]
     },
     "blank": {
-      "persona": "generic",
+      "character": "generic",
       "location": "none",
       "relationship": "none",
       "goals": "none",
@@ -164,7 +164,7 @@
       "emotions": []
     },
     "storyteller": {
-      "persona": "sapphire",
+      "character": "sapphire",
       "location": "none",
       "relationship": "friend",
       "goals": "storyteller",
@@ -174,7 +174,7 @@
       "emotions": ["fascinated", "mischievous"]
     },
     "girlfriend": {
-      "persona": "sapphire",
+      "character": "sapphire",
       "location": "default",
       "relationship": "lover",
       "goals": "ai_girlfriend",
@@ -184,7 +184,7 @@
       "emotions": ["warm", "flirty", "curious"]
     },
     "waifu": {
-      "persona": "yuki",
+      "character": "yuki",
       "location": "default",
       "relationship": "lover",
       "goals": "ai_girlfriend",
@@ -194,7 +194,7 @@
       "emotions": ["flirty", "protective", "jealous", "warm"]
     },
     "discovery": {
-      "persona": "unset_persona",
+      "character": "unset_persona",
       "location": "unset_location",
       "relationship": "unset_relationship",
       "goals": "unset_goals",
@@ -204,7 +204,7 @@
       "emotions": ["curious"]
     },
     "assistant": {
-      "persona": "sapphire",
+      "character": "sapphire",
       "location": "none",
       "relationship": "friend",
       "goals": "ai_assistant",
@@ -214,7 +214,7 @@
       "emotions": ["warm", "focused"]
     },
     "professional": {
-      "persona": "professional",
+      "character": "professional",
       "location": "office",
       "relationship": "colleague",
       "goals": "detailed",

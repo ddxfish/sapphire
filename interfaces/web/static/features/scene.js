@@ -171,7 +171,7 @@ function updatePrompt(state, promptName, charCount, privacyRequired) {
     // Build tooltip from state
     if (state) {
         const parts = [];
-        ['location', 'persona', 'goals', 'scenario', 'relationship', 'format'].forEach(k => {
+        ['location', 'character', 'goals', 'scenario', 'relationship', 'format'].forEach(k => {
             const v = state[k];
             if (v && v !== 'default' && v !== 'none') parts.push(`${k}: ${v}`);
         });

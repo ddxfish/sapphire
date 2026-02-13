@@ -213,13 +213,13 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "set_piece",
-            "description": "Set a prompt component. For persona/location/goals/etc: replaces value. For emotions/extras: adds to list.",
+            "description": "Set a prompt component. For character/location/goals/etc: replaces value. For emotions/extras: adds to list.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "component": {
                         "type": "string",
-                        "description": "Component type: persona, location, relationship, goals, format, scenario, emotions, extras"
+                        "description": "Component type: character, location, relationship, goals, format, scenario, emotions, extras"
                     },
                     "key": {
                         "type": "string",
@@ -263,7 +263,7 @@ TOOLS = [
                 "properties": {
                     "component": {
                         "type": "string",
-                        "description": "Component type: persona, location, relationship, goals, format, scenario, emotions, extras"
+                        "description": "Component type: character, location, relationship, goals, format, scenario, emotions, extras"
                     },
                     "key": {
                         "type": "string",
@@ -289,7 +289,7 @@ TOOLS = [
                 "properties": {
                     "component": {
                         "type": "string",
-                        "description": "Component type: persona, location, relationship, goals, format, scenario, emotions, extras"
+                        "description": "Component type: character, location, relationship, goals, format, scenario, emotions, extras"
                     }
                 },
                 "required": ["component"]
@@ -322,7 +322,9 @@ def _normalize_component(component: str) -> str:
         'emotion': 'emotions',
         'extra': 'extras',
         'locations': 'location',
-        'personas': 'persona',
+        'characters': 'character',
+        'persona': 'character',
+        'personas': 'character',
         'relationships': 'relationship',
         'formats': 'format',
         'scenarios': 'scenario',
@@ -350,7 +352,7 @@ def _get_current_preset_name() -> str:
     if current and current not in ['assembled', 'unknown', 'random', '']:
         return current
     
-    return _assembled_state.get('persona', 'custom')
+    return _assembled_state.get('character', 'custom')
 
 
 def _build_status_string(preset_name: str) -> str:
@@ -363,9 +365,9 @@ def _build_status_string(preset_name: str) -> str:
     char_count = len(content)
     
     pieces = []
-    persona = _assembled_state.get('persona', '')
-    if persona:
-        pieces.append(persona)
+    character = _assembled_state.get('character', '')
+    if character:
+        pieces.append(character)
     
     for k in ['goals', 'location', 'scenario']:
         v = _assembled_state.get(k)
@@ -385,7 +387,7 @@ def _save_and_activate_assembled(preset_name: str, headers: dict, api_url: str) 
     from core.modules.system.prompt_state import _assembled_state
     
     components = {}
-    for key in ['persona', 'location', 'relationship', 'goals', 'format', 'scenario']:
+    for key in ['character', 'location', 'relationship', 'goals', 'format', 'scenario']:
         if key in _assembled_state and _assembled_state[key]:
             components[key] = _assembled_state[key]
     
@@ -768,7 +770,7 @@ def execute(function_name, arguments, config):
             if not component or not key:
                 return "Both component and key are required.", False
             
-            valid = ['persona', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
+            valid = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
             if component not in valid:
                 return f"Invalid component '{component}'. Valid: {', '.join(valid)}", False
             
@@ -839,7 +841,7 @@ def execute(function_name, arguments, config):
             if not component or not key or not value:
                 return "Component, key, and value are all required.", False
             
-            valid = ['persona', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
+            valid = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
             if component not in valid:
                 return f"Invalid component '{component}'. Valid: {', '.join(valid)}", False
             
@@ -883,7 +885,7 @@ def execute(function_name, arguments, config):
             if not component:
                 return "Component type is required.", False
             
-            valid = ['persona', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
+            valid = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'emotions', 'extras']
             if component not in valid:
                 return f"Invalid component '{component}'. Valid: {', '.join(valid)}", False
             

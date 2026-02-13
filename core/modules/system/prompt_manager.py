@@ -203,11 +203,11 @@ class PromptManager:
         """Assemble prompt text from component structure."""
         prompt_parts = []
         
-        # Add persona (main character description)
-        persona_key = components.get('persona', 'sapphire')
-        if 'persona' in self._components:
-            if persona_key in self._components['persona']:
-                prompt_parts.append(self._components['persona'][persona_key])
+        # Add character (main character description)
+        character_key = components.get('character', 'sapphire')
+        if 'character' in self._components:
+            if character_key in self._components['character']:
+                prompt_parts.append(self._components['character'][character_key])
         
         # Add structured components
         components_text = []

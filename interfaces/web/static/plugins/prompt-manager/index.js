@@ -492,7 +492,7 @@ Editing:
   
   bindComponentButtons() {
     // Auto-save when any component dropdown changes
-    const componentSelects = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+    const componentSelects = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
     componentSelects.forEach(type => {
       const select = document.getElementById(`pm-${type}`);
       if (select) {
@@ -544,7 +544,7 @@ Editing:
         [data['prompt-type'] === 'monolith' ? 'content' : 'components']: 
           data['prompt-type'] === 'monolith' 
             ? 'Enter your prompt here...' 
-            : { persona: 'sapphire', location: 'default', goals: 'none', relationship: 'friend', format: 'conversational', scenario: 'default', extras: [], emotions: [] }
+            : { character: 'sapphire', location: 'default', goals: 'none', relationship: 'friend', format: 'conversational', scenario: 'default', extras: [], emotions: [] }
       };
       
       try {
@@ -602,7 +602,7 @@ Editing:
         type: 'assembled',
         privacy_required: privacyRequired,
         components: {
-          persona: document.getElementById('pm-persona')?.value || 'default',
+          character: document.getElementById('pm-character')?.value || 'default',
           location: document.getElementById('pm-location')?.value || 'default',
           goals: document.getElementById('pm-goals')?.value || 'default',
           relationship: document.getElementById('pm-relationship')?.value || 'default',
@@ -750,7 +750,7 @@ Editing:
     // For assembled prompts, include referenced component definitions
     if (this.currentData.type === 'assembled' && this.currentData.components) {
       const comp = this.currentData.components;
-      const types = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+      const types = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
       
       types.forEach(type => {
         const key = comp[type];

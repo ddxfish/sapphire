@@ -52,7 +52,7 @@ function buildAssembledEditor(data, components) {
   const comp = data.components || {};
 
   // Single-select components: dropdown + pencil
-  const singleSelectTypes = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+  const singleSelectTypes = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
   const singleSelectHTML = singleSelectTypes.map(type => `
     <div class="pm-component">
       <label>${type.charAt(0).toUpperCase() + type.slice(1)}</label>
@@ -110,7 +110,7 @@ function buildOptions(componentOptions, selected) {
 
 export function buildComponentSelectOptions(components) {
   const options = [];
-  const types = ['persona', 'location', 'relationship', 'goals', 'format', 'scenario', 'extras', 'emotions'];
+  const types = ['character', 'location', 'relationship', 'goals', 'format', 'scenario', 'extras', 'emotions'];
   
   types.forEach(type => {
     if (components[type]) {

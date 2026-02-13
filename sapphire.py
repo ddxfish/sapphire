@@ -40,6 +40,10 @@ ensure_prompt_files()
 ensure_chat_defaults()
 ensure_state_presets()
 
+# Run data migrations (e.g. persona -> character rename)
+from core.migration import run_all as run_migrations
+run_migrations()
+
 # Wrap all further imports to catch errors
 try:
     from core.stt import WhisperSTT

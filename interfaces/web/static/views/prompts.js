@@ -1,4 +1,4 @@
-// views/personas.js - Prompt/persona editor view
+// views/prompts.js - Prompt editor view
 import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt, saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
@@ -11,7 +11,7 @@ let selectedData = null;
 let saveTimer = null;
 let activePromptName = null;
 
-const SINGLE_TYPES = ['persona', 'location', 'goals', 'relationship', 'format', 'scenario'];
+const SINGLE_TYPES = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
 const MULTI_TYPES = ['extras', 'emotions'];
 
 export default {
@@ -52,7 +52,7 @@ async function loadAll() {
             } catch { selectedData = null; }
         }
     } catch (e) {
-        console.warn('Personas load failed:', e);
+        console.warn('Prompts load failed:', e);
     }
 }
 
@@ -62,11 +62,11 @@ function render() {
     container.innerHTML = `
         <div class="two-panel">
             <div class="panel-right panel-detail">
-                ${selected ? renderDetail() : '<div class="view-placeholder"><p>Select a persona</p></div>'}
+                ${selected ? renderDetail() : '<div class="view-placeholder"><p>Select a prompt</p></div>'}
             </div>
             <div class="panel-left panel-roster">
                 <div class="panel-list-header">
-                    <span class="panel-list-title">Personas</span>
+                    <span class="panel-list-title">Prompts</span>
                     <button class="btn-sm" id="ps-new">+</button>
                 </div>
                 <div class="panel-list-items" id="ps-list">
@@ -170,13 +170,13 @@ function bindEvents() {
 
     // New prompt
     container.querySelector('#ps-new')?.addEventListener('click', async () => {
-        const name = prompt('New persona name:');
+        const name = prompt('New prompt name:');
         if (!name?.trim()) return;
         const type = confirm('Create as Assembled prompt?\n\nOK = Assembled (components)\nCancel = Monolith (free text)') ? 'assembled' : 'monolith';
 
         const data = type === 'monolith'
             ? { type: 'monolith', content: 'Enter your prompt here...', privacy_required: false }
-            : { type: 'assembled', components: { persona: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
+            : { type: 'assembled', components: { character: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
 
         try {
             await savePrompt(name.trim(), data);
@@ -457,7 +457,7 @@ function openImportExport() {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${selected}.persona.json`;
+        a.download = `${selected}.prompt.json`;
         a.click();
         URL.revokeObjectURL(url);
         ui.showToast('Downloaded', 'success');

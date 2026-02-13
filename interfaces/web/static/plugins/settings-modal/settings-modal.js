@@ -559,10 +559,10 @@ class SettingsModal {
   }
 
   async resetPrompts() {
-    if (!confirm('⚠️ Reset ALL prompts to factory defaults?\n\nThis will overwrite your custom personas, scenarios, and spices!')) return;
-    
+    if (!confirm('⚠️ Reset ALL prompts to factory defaults?\n\nThis will overwrite your custom prompts, scenarios, and spices!')) return;
+
     const confirmText = prompt(
-      'This will delete ALL custom prompts, personas, and spices.\n\n' +
+      'This will delete ALL custom prompts and spices.\n\n' +
       'Type RESET to confirm:'
     );
     

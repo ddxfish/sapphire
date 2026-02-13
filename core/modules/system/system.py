@@ -107,8 +107,9 @@ class System:
                 return result
             
             # Component changes (location, persona, etc)
-            if cmd in ["persona", "location", "relationship", "goals", "format", "scenario", "extras", "emotions"]:
-                result = prompts.set_component(cmd, value)
+            if cmd in ["character", "persona", "location", "relationship", "goals", "format", "scenario", "extras", "emotions"]:
+                comp = "character" if cmd == "persona" else cmd
+                result = prompts.set_component(comp, value)
                 if any(x in result for x in ["Set", "Added"]):
                     self._apply_prompt_and_update_json('assembled')
                 return result
