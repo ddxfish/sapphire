@@ -26,10 +26,13 @@ export function initNavRail() {
     initMobileOverflow(rail);
 }
 
-// Update the chat name shown in header
+// Update the chat name shown in header and sidebar
 export function setChatHeaderName(name) {
+    const display = name || 'Chat';
     const el = document.getElementById('chat-header-name');
-    if (el) el.textContent = name || 'Chat';
+    if (el) el.textContent = display;
+    const sb = document.getElementById('sb-chat-name');
+    if (sb) sb.textContent = display;
 }
 
 function initMobileOverflow(rail) {

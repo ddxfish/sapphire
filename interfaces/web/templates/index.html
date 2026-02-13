@@ -105,18 +105,6 @@
         <div id="view-chat" class="view active">
             <!-- Chat Header Bar -->
             <div class="chat-header">
-                <div class="chat-header-left">
-                    <!-- Chat picker dropdown -->
-                    <div class="chat-picker" id="chat-picker">
-                        <button class="chat-picker-btn" id="chat-picker-btn">
-                            <span id="chat-header-name">Chat</span>
-                            <span class="chat-picker-arrow">&#x25BE;</span>
-                        </button>
-                        <div class="chat-picker-dropdown" id="chat-picker-dropdown"></div>
-                    </div>
-                    <button id="new-chat-btn" class="header-icon-btn" title="New Chat">+</button>
-                    <button id="delete-chat-btn" class="header-icon-btn danger-icon" title="Delete Chat">&#x1F5D1;</button>
-                </div>
                 <div class="chat-header-actions">
                     <!-- Volume control -->
                     <div class="volume-compact" id="volume-compact">
@@ -173,6 +161,20 @@
                 <!-- Chat Settings Sidebar (right) -->
                 <aside class="chat-sidebar">
                     <div class="chat-sidebar-inner">
+                        <!-- Chat header: accent circle + chat name + add/delete -->
+                        <div class="sb-chat-header">
+                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color">
+                            <div class="sb-chat-picker" id="sb-chat-picker">
+                                <button class="sb-chat-picker-btn" id="sb-chat-picker-btn">
+                                    <span id="sb-chat-name">Chat</span>
+                                    <span class="sb-chat-arrow">&#x25BE;</span>
+                                </button>
+                                <div class="sb-chat-picker-dropdown" id="sb-chat-picker-dropdown"></div>
+                            </div>
+                            <button type="button" id="sb-new-chat" class="sb-icon-btn" title="New Chat">+</button>
+                            <button type="button" id="sb-delete-chat" class="sb-icon-btn sb-icon-danger" title="Delete Chat">&#x1F5D1;</button>
+                        </div>
+
                         <div class="sidebar-section">
                             <div class="sb-field">
                                 <label for="sb-prompt">prompt</label>
@@ -222,13 +224,6 @@
                                 <div class="sb-field-row">
                                     <select id="sb-memory-scope"><option value="none">None</option><option value="default">default</option></select>
                                     <button type="button" id="sb-new-scope" class="sb-btn-sm" title="New slot">+</button>
-                                </div>
-                            </div>
-                            <div class="sb-field">
-                                <label for="sb-trim-color">accent</label>
-                                <div class="sb-field-row">
-                                    <input type="color" id="sb-trim-color" value="#4a9eff">
-                                    <button type="button" id="sb-reset-trim" class="sb-btn-sm" title="Reset">Reset</button>
                                 </div>
                             </div>
                         </div>

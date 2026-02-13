@@ -400,6 +400,115 @@ body {
     min-width: 236px; /* Prevent content reflow during collapse */
 }
 
+/* Sidebar chat header: accent circle + chat picker + add/delete */
+.sb-chat-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.sb-accent-circle {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    cursor: pointer;
+    background: transparent;
+    flex-shrink: 0;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.sb-accent-circle::-webkit-color-swatch-wrapper { padding: 0; }
+.sb-accent-circle::-webkit-color-swatch {
+    border: none;
+    border-radius: 50%;
+}
+.sb-accent-circle::-moz-color-swatch {
+    border: none;
+    border-radius: 50%;
+}
+
+.sb-chat-picker { position: relative; flex: 1; min-width: 0; }
+
+.sb-chat-picker-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font-weight: 600;
+    font-size: var(--font-md);
+    cursor: pointer;
+    transition: background 0.15s;
+    width: 100%;
+    max-width: 100%;
+}
+
+.sb-chat-picker-btn:hover { background: var(--bg-hover); }
+
+.sb-chat-picker-btn #sb-chat-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    text-align: left;
+}
+
+.sb-chat-arrow {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.sb-chat-picker-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    margin-top: 4px;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 12px var(--shadow-medium);
+    z-index: 1000;
+    padding: 4px;
+    opacity: 0;
+    visibility: hidden;
+    transform: scale(0.95) translateY(-4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+}
+
+.sb-chat-picker.open .sb-chat-picker-dropdown {
+    opacity: 1;
+    visibility: visible;
+    transform: scale(1) translateY(0);
+}
+
+.sb-icon-btn {
+    padding: 2px 6px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.sb-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.sb-icon-danger:hover { color: var(--error); }
+
 .sidebar-section {
     margin-bottom: 8px;
 }

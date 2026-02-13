@@ -4,6 +4,7 @@ import * as ui from '../ui.js';
 import { getElements } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from '../features/scene.js';
 import { applyTrimColor } from '../features/chat-settings.js';
+import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData } from '../shared/init-data.js';
 
 let sidebarLoaded = false;
@@ -31,6 +32,54 @@ export default {
                 const open = header.classList.toggle('open');
                 content.style.display = open ? 'block' : 'none';
             });
+        });
+
+        // Sidebar chat picker
+        const sbPicker = container.querySelector('#sb-chat-picker');
+        const sbPickerBtn = container.querySelector('#sb-chat-picker-btn');
+        if (sbPicker && sbPickerBtn) {
+            sbPickerBtn.addEventListener('click', e => {
+                e.stopPropagation();
+                sbPicker.classList.toggle('open');
+            });
+            const sbDropdown = container.querySelector('#sb-chat-picker-dropdown');
+            if (sbDropdown) {
+                sbDropdown.addEventListener('click', e => {
+                    const item = e.target.closest('.chat-picker-item');
+                    if (!item) return;
+                    const chatName = item.dataset.chat;
+                    if (!chatName) return;
+                    sbPicker.classList.remove('open');
+
+                    // Update active states in dropdown
+                    sbDropdown.querySelectorAll('.chat-picker-item').forEach(i => {
+                        const active = i.dataset.chat === chatName;
+                        i.classList.toggle('active', active);
+                        i.querySelector('.chat-picker-item-check').textContent = active ? '\u2713' : '';
+                    });
+
+                    // Update sidebar chat name
+                    const displayName = item.querySelector('.chat-picker-item-name')?.textContent || chatName;
+                    const nameEl = container.querySelector('#sb-chat-name');
+                    if (nameEl) nameEl.textContent = displayName;
+
+                    // Sync hidden select and trigger change
+                    const chatSelect = getElements().chatSelect;
+                    if (chatSelect) chatSelect.value = chatName;
+                    handleChatChange();
+                });
+            }
+        }
+
+        // Sidebar new/delete chat
+        container.querySelector('#sb-new-chat')?.addEventListener('click', () => handleNewChat());
+        container.querySelector('#sb-delete-chat')?.addEventListener('click', () => handleDeleteChat());
+
+        // Close sidebar picker on outside click
+        document.addEventListener('click', e => {
+            if (!e.target.closest('#sb-chat-picker')) {
+                container.querySelector('#sb-chat-picker')?.classList.remove('open');
+            }
         });
 
         // Toggle buttons (Spice, Date/Time)
@@ -73,14 +122,13 @@ export default {
             });
         });
 
-        // Trim reset button
-        const resetTrim = container.querySelector('#sb-reset-trim');
-        if (resetTrim) {
-            resetTrim.addEventListener('click', () => {
-                const input = container.querySelector('#sb-trim-color');
+        // Accent circle: double-click to reset to global default
+        const accentCircle = container.querySelector('#sb-trim-color');
+        if (accentCircle) {
+            accentCircle.addEventListener('dblclick', () => {
                 const globalTrim = localStorage.getItem('sapphire-trim') || '#4a9eff';
-                input.value = globalTrim;
-                input.dataset.cleared = 'true';
+                accentCircle.value = globalTrim;
+                accentCircle.dataset.cleared = 'true';
                 applyTrimColor('');
                 debouncedSave(container);
             });
@@ -178,6 +226,11 @@ async function loadSidebar() {
         const llmData = llmResp.status === 'fulfilled' ? llmResp.value : null;
         const scopesData = scopesResp.status === 'fulfilled' ? scopesResp.value : null;
         const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
+
+        // Sync sidebar chat name from hidden select
+        const selectedOpt = chatSelect?.options?.[chatSelect.selectedIndex];
+        const sbName = container.querySelector('#sb-chat-name');
+        if (sbName && selectedOpt) sbName.textContent = selectedOpt.text;
 
         // Populate prompt dropdown
         const promptSel = container.querySelector('#sb-prompt');

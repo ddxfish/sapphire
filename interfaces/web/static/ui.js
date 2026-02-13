@@ -376,24 +376,31 @@ export const renderChatDropdown = (chats, activeChat) => {
         });
     }
 
-    // Update visible chat picker dropdown
-    const dropdown = document.getElementById('chat-picker-dropdown');
-    if (dropdown) {
-        dropdown.innerHTML = chats.map(c => `
-            <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
-                    data-chat="${c.name}">
-                <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
-                <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
-            </button>
-        `).join('');
-    }
+    const itemsHtml = chats.map(c => `
+        <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
+                data-chat="${c.name}">
+            <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+            <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
+        </button>
+    `).join('');
 
-    // Update header name
+    // Update top bar chat picker dropdown
+    const dropdown = document.getElementById('chat-picker-dropdown');
+    if (dropdown) dropdown.innerHTML = itemsHtml;
+
+    // Update sidebar chat picker dropdown
+    const sbDropdown = document.getElementById('sb-chat-picker-dropdown');
+    if (sbDropdown) sbDropdown.innerHTML = itemsHtml;
+
+    // Update header names
+    const active = chats.find(c => c.name === activeChat);
+    const displayName = active?.display_name || activeChat || 'Chat';
+
     const headerName = document.getElementById('chat-header-name');
-    if (headerName) {
-        const active = chats.find(c => c.name === activeChat);
-        headerName.textContent = active?.display_name || activeChat || 'Chat';
-    }
+    if (headerName) headerName.textContent = displayName;
+
+    const sbName = document.getElementById('sb-chat-name');
+    if (sbName) sbName.textContent = displayName;
 };
 
 const escapeHtml = (str) => {
