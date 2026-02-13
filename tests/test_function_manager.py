@@ -38,13 +38,13 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
-            mgr.current_ability_name = "none"
+            mgr.current_toolset_name = "none"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
                 mgr.update_enabled_functions(['all'])
             
-            assert mgr.current_ability_name == "all"
+            assert mgr.current_toolset_name == "all"
             assert len(mgr._enabled_tools) == 3
     
     def test_ability_none_disables_everything(self):
@@ -55,13 +55,13 @@ class TestAbilityResolution:
             mgr._enabled_tools = mgr.all_possible_tools.copy()
             mgr._mode_filters = {}
             mgr.function_modules = {}
-            mgr.current_ability_name = "all"
+            mgr.current_toolset_name = "all"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
                 mgr.update_enabled_functions(['none'])
             
-            assert mgr.current_ability_name == "none"
+            assert mgr.current_toolset_name == "none"
             assert len(mgr._enabled_tools) == 0
     
     def test_ability_module_name_loads_module_functions(self):
@@ -80,13 +80,13 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
-            mgr.current_ability_name = "none"
+            mgr.current_toolset_name = "none"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
                 mgr.update_enabled_functions(['web'])
             
-            assert mgr.current_ability_name == "web"
+            assert mgr.current_toolset_name == "web"
             enabled_names = [t['function']['name'] for t in mgr._enabled_tools]
             assert 'search' in enabled_names
             assert 'fetch' in enabled_names
@@ -104,14 +104,14 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
-            mgr.current_ability_name = "none"
+            mgr.current_toolset_name = "none"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = True
                 mock_ts.get_toolset_functions.return_value = ['test_func']
                 mgr.update_enabled_functions(['basic'])
             
-            assert mgr.current_ability_name == "basic"
+            assert mgr.current_toolset_name == "basic"
             enabled_names = [t['function']['name'] for t in mgr._enabled_tools]
             assert 'test_func' in enabled_names
             assert len(enabled_names) == 1
@@ -128,13 +128,13 @@ class TestAbilityResolution:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
-            mgr.current_ability_name = "none"
+            mgr.current_toolset_name = "none"
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
                 mgr.update_enabled_functions(['func_a', 'func_c'])
             
-            assert mgr.current_ability_name == "custom"
+            assert mgr.current_toolset_name == "custom"
             enabled_names = [t['function']['name'] for t in mgr._enabled_tools]
             assert enabled_names == ['func_a', 'func_c']
 
@@ -146,7 +146,7 @@ class TestAbilityResolution:
 class TestValidation:
     """Test ability validation methods."""
     
-    def test_is_valid_ability_special_names(self):
+    def test_is_valid_toolset_special_names(self):
         """'all' and 'none' should always be valid."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -154,10 +154,10 @@ class TestValidation:
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
-                assert mgr.is_valid_ability('all') is True
-                assert mgr.is_valid_ability('none') is True
+                assert mgr.is_valid_toolset('all') is True
+                assert mgr.is_valid_toolset('none') is True
     
-    def test_is_valid_ability_module_name(self):
+    def test_is_valid_toolset_module_name(self):
         """Module names should be valid abilities."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -165,11 +165,11 @@ class TestValidation:
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
-                assert mgr.is_valid_ability('web') is True
-                assert mgr.is_valid_ability('meta') is True
-                assert mgr.is_valid_ability('nonexistent') is False
+                assert mgr.is_valid_toolset('web') is True
+                assert mgr.is_valid_toolset('meta') is True
+                assert mgr.is_valid_toolset('nonexistent') is False
     
-    def test_is_valid_ability_toolset_name(self):
+    def test_is_valid_toolset_toolset_name(self):
         """Toolset names should be valid abilities."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -177,11 +177,11 @@ class TestValidation:
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.side_effect = lambda n: n in ['basic', 'research']
-                assert mgr.is_valid_ability('basic') is True
-                assert mgr.is_valid_ability('research') is True
-                assert mgr.is_valid_ability('fake_toolset') is False
+                assert mgr.is_valid_toolset('basic') is True
+                assert mgr.is_valid_toolset('research') is True
+                assert mgr.is_valid_toolset('fake_toolset') is False
     
-    def test_get_available_abilities(self):
+    def test_get_available_toolsets(self):
         """Should return all valid ability names."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -189,7 +189,7 @@ class TestValidation:
             
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.get_toolset_names.return_value = ['basic', 'research']
-                abilities = mgr.get_available_abilities()
+                abilities = mgr.get_available_toolsets()
             
             assert 'all' in abilities
             assert 'none' in abilities
@@ -475,12 +475,12 @@ class TestEnabledFunctionNames:
 class TestAbilityInfo:
     """Test ability info reporting."""
     
-    def test_get_current_ability_info_basic(self):
+    def test_get_current_toolset_info_basic(self):
         """Should return structured info about current ability."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
 
-            mgr.current_ability_name = "web"
+            mgr.current_toolset_name = "web"
             mgr._enabled_tools = [
                 {'function': {'name': 'search'}},
                 {'function': {'name': 'fetch'}},
@@ -496,7 +496,7 @@ class TestAbilityInfo:
             with patch.object(mgr, '_get_current_prompt_mode', return_value='monolith'):
                 with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                     mock_ts.toolset_exists.return_value = False
-                    info = mgr.get_current_ability_info()
+                    info = mgr.get_current_toolset_info()
             
             assert info['name'] == 'web'
             assert info['function_count'] == 2
@@ -519,13 +519,13 @@ class TestIntegration:
         """FunctionManager should have all expected public methods."""
         expected_methods = [
             'update_enabled_functions',
-            'is_valid_ability',
-            'get_available_abilities',
+            'is_valid_toolset',
+            'get_available_toolsets',
             'execute_function',
             'get_enabled_function_names',
             'has_network_tools_enabled',
             'get_network_functions',
-            'get_current_ability_info',
+            'get_current_toolset_info',
         ]
         
         for method in expected_methods:

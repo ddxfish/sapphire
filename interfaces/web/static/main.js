@@ -1,16 +1,13 @@
-// main.js - Application orchestrator (optimized for parallel loading)
+// main.js - Application orchestrator
 import * as audio from './audio.js';
 import * as ui from './ui.js';
-import * as api from './api.js';
-import { initElements, initAvatar, refresh, setHistLen, getElements, getIsProc } from './core/state.js';
+import { initElements, refresh, setHistLen, getElements, getIsProc } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
-import { initPillsCache } from './features/pills.js';
-import { initStoryIndicator } from './features/story.js';
 import { initPrivacy } from './features/privacy.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
@@ -18,27 +15,36 @@ import { setupImageModal } from './ui-images.js';
 import * as eventBus from './core/event-bus.js';
 import { getInitData } from './shared/init-data.js';
 
+// New architecture
+import { registerView, initRouter } from './core/router.js';
+import { initNavRail, updateChatFlyout, setChatHeaderName } from './core/nav-rail.js';
+import chatView from './views/chat.js';
+import personasView from './views/personas.js';
+import toolsetsView from './views/toolsets.js';
+import spicesView from './views/spices.js';
+import scheduleView from './views/schedule.js';
+import settingsView from './views/settings.js';
+
 // Initialize appearance settings from localStorage (theme, density, font, trim)
 function initAppearance() {
     const root = document.documentElement;
-    
+
     // Density
     const density = localStorage.getItem('sapphire-density');
     if (density && density !== 'default') {
         root.setAttribute('data-density', density);
     }
-    
+
     // Font
     const font = localStorage.getItem('sapphire-font');
     if (font && font !== 'system') {
         root.setAttribute('data-font', font);
     }
-    
+
     // Trim color - apply if explicitly set
     const trim = localStorage.getItem('sapphire-trim');
     if (trim) {
         root.style.setProperty('--trim', trim);
-        // Generate derived colors
         const r = parseInt(trim.slice(1, 3), 16);
         const g = parseInt(trim.slice(3, 5), 16);
         const b = parseInt(trim.slice(5, 7), 16);
@@ -49,18 +55,10 @@ function initAppearance() {
         root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
         root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
     }
-    // If trim not set, CSS defaults from shared.css apply (blue)
-    
-    // Sidebar width
-    const sidebarWidth = localStorage.getItem('sapphire-sidebar-width');
-    if (sidebarWidth) {
-        root.style.setProperty('--sidebar-width', sidebarWidth + 'px');
-    }
-    
+
     // Send button trim preference
     const sendBtnTrim = localStorage.getItem('sapphire-send-btn-trim');
     if (sendBtnTrim === 'true') {
-        // Apply after DOM ready
         requestAnimationFrame(() => {
             const sendBtn = document.getElementById('send-btn');
             if (sendBtn) sendBtn.classList.add('use-trim');
@@ -68,138 +66,88 @@ function initAppearance() {
     }
 }
 
-// Initialize draggable sidebar resize handle
-function initSidebarResize() {
-    const sidebar = document.querySelector('.sidebar');
-    if (!sidebar || window.innerWidth <= 768) return;
-    
-    // Create resize handle
-    const handle = document.createElement('div');
-    handle.className = 'sidebar-resize-handle';
-    sidebar.appendChild(handle);
-    
-    let startX, startWidth;
-    
-    function onMouseDown(e) {
-        e.preventDefault();
-        startX = e.clientX;
-        startWidth = sidebar.offsetWidth;
-        handle.classList.add('dragging');
-        document.body.classList.add('sidebar-resizing');
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-    }
-    
-    function onMouseMove(e) {
-        const delta = e.clientX - startX;
-        const newWidth = Math.min(Math.max(200, startWidth + delta), 500);
-        document.documentElement.style.setProperty('--sidebar-width', newWidth + 'px');
-    }
-    
-    function onMouseUp() {
-        handle.classList.remove('dragging');
-        document.body.classList.remove('sidebar-resizing');
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        // Save to localStorage
-        const currentWidth = sidebar.offsetWidth;
-        localStorage.setItem('sapphire-sidebar-width', currentWidth);
-    }
-    
-    handle.addEventListener('mousedown', onMouseDown);
-    
-    // Double-click to reset to default
-    handle.addEventListener('dblclick', () => {
-        localStorage.removeItem('sapphire-sidebar-width');
-        document.documentElement.style.removeProperty('--sidebar-width');
-    });
-}
-
 async function init() {
     const t0 = performance.now();
-    
+
     try {
-        // Initialize appearance settings first (sync, instant)
         initAppearance();
-        
-        // Initialize DOM references (sync, instant)
         initElements();
-        
-        // Sidebar starts collapsed (in HTML). Open on desktop.
-        if (window.innerWidth > 768) {
-            document.body.classList.remove('sidebar-collapsed');
-        }
-        
+
         const { form, sendBtn, micBtn, input } = getElements();
-        
-        // CRITICAL: Prevent form submission immediately before any async work
-        // This prevents page reload if user clicks Send before handlers are bound
+
+        // Prevent form submission immediately
         form.addEventListener('submit', e => e.preventDefault());
-        
-        // Disable interactive input elements until fully loaded
+
+        // Disable input until loaded
         sendBtn.disabled = true;
-        sendBtn.textContent = '⏳';
+        sendBtn.textContent = '\u23F3';
         if (micBtn) {
             micBtn.disabled = true;
             micBtn.style.opacity = '0.5';
         }
         input.placeholder = 'Loading Web UI...';
         input.classList.add('loading');
-        
-        // Show loading status in chat area
+
         ui.showStatus();
         ui.updateStatus('Loading...');
 
-        // Fetch init data first - contains avatars, settings, plugins config
-        // This single call replaces multiple separate API calls
+        // Register views with router
+        registerView('chat', chatView);
+        registerView('personas', personasView);
+        registerView('toolsets', toolsetsView);
+        registerView('spices', spicesView);
+        registerView('schedule', scheduleView);
+        registerView('settings', settingsView);
+
+        // Init nav rail + router
+        initNavRail();
+        initRouter('chat');
+
+        // Fetch init data
         let initData = null;
         try {
             initData = await getInitData();
-            // Initialize ui.js with avatar paths and settings from init data
             ui.initFromInitData(initData);
         } catch (e) {
-            console.warn('[Init] Could not fetch init data, will use fallbacks:', e);
+            console.warn('[Init] Could not fetch init data:', e);
         }
 
-        // Parallel initialization - use combined status endpoint
-        // updateScene() now returns chats and settings too, reducing API calls
+        // Parallel initialization
         const [status, historyLen] = await Promise.all([
-            updateScene(),           // Fetch system status (includes chats + settings now)
-            refresh(false)           // Fetch chat history
+            updateScene(),
+            refresh(false)
         ]);
-        
+
         setHistLen(historyLen);
-        
-        // Use chats from combined status response
+
+        // Populate chat dropdown + nav flyout
         if (status?.chats) {
             ui.renderChatDropdown(status.chats, status.active_chat);
+            updateChatFlyout(
+                status.chats.map(c => c.name || c),
+                status.active_chat
+            );
+            setChatHeaderName(status.active_chat);
         } else {
-            // Fallback to separate call if status doesn't include chats
             await populateChatDropdown();
         }
-        
-        // Use settings from combined status response
+
+        // Apply chat settings
         const settings = status?.chat_settings || {};
         updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
         applyTrimColor(settings.trim_color || '');
-        
-        // These are fast sync operations
+
+        // Sync operations
         initVolumeControls();
-        initSidebarResize();
         startMicIconPolling();
         bindAllEvents();
         setupImageHandlers();
         setupImageModal();
-        initStoryIndicator();
         initPrivacy();
-        
-        // Connect to event bus for real-time updates
+
         initEventBus();
 
-        // Initialize pill dropdown caches (uses event bus for invalidation)
-        initPillsCache();
-
-        // Re-enable input elements now that everything is loaded
+        // Re-enable input
         sendBtn.disabled = false;
         sendBtn.textContent = 'Send';
         if (micBtn) {
@@ -209,33 +157,21 @@ async function init() {
         input.placeholder = 'Type message... (paste or drop images)';
         input.classList.remove('loading');
         ui.hideStatus();
-        
+
         // Scroll to bottom after render
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
                 ui.forceScrollToBottom();
             });
         });
-        
-        // LAZY: Load plugins in background AFTER UI is interactive
-        // This prevents plugin loading from blocking the main UI
-        // Pass init data to avoid separate plugins config fetch
-        setTimeout(() => {
-            initAvatar(initData).then(() => {
-                console.log('[Init] Plugins loaded in background');
-            }).catch(e => {
-                console.warn('[Init] Plugin loading failed:', e);
-            });
-        }, 100);
-        
-        // Start auto-refresh interval (fallback sync - events handle most updates)
+
+        // Auto-refresh interval (fallback - events handle most updates)
         setInterval(handleAutoRefresh, 30000);
-        
+
         console.log(`[Init] Complete in ${(performance.now() - t0).toFixed(0)}ms`);
-        
+
     } catch (e) {
         console.error('Init error:', e);
-        // Re-enable on error so user isn't stuck
         const { sendBtn, micBtn, input } = getElements();
         if (sendBtn) {
             sendBtn.disabled = false;
@@ -261,146 +197,80 @@ function initEventBus() {
         refreshTimer = setTimeout(() => {
             refreshTimer = null;
             if (!getIsProc()) refresh(false);
-        }, 100);  // 100ms debounce
+        }, 100);
     };
-    
-    // Register event handlers
-    
+
     // AI typing events
     eventBus.on(eventBus.Events.AI_TYPING_START, () => {
         console.log('[EventBus] AI typing started');
     });
-    
+
     eventBus.on(eventBus.Events.AI_TYPING_END, () => {
         console.log('[EventBus] AI typing ended');
         debouncedRefresh();
     });
-    
+
     // TTS events
     eventBus.on(eventBus.Events.TTS_PLAYING, () => {
-        console.log('[EventBus] TTS playing');
         audio.setLocalTtsPlaying(true);
         updateMicButtonState();
     });
-    
+
     eventBus.on(eventBus.Events.TTS_STOPPED, () => {
-        console.log('[EventBus] TTS stopped');
         audio.setLocalTtsPlaying(false);
         updateMicButtonState();
     });
-    
-    // Message events - debounced to prevent multiple /api/history calls
-    eventBus.on(eventBus.Events.MESSAGE_ADDED, (data) => {
-        console.log('[EventBus] Message added:', data?.role);
-        debouncedRefresh();
-    });
-    
-    eventBus.on(eventBus.Events.MESSAGE_REMOVED, () => {
-        console.log('[EventBus] Message removed');
-        debouncedRefresh();
-    });
-    
-    eventBus.on(eventBus.Events.CHAT_CLEARED, () => {
-        console.log('[EventBus] Chat cleared');
-        debouncedRefresh();
-    });
-    
-    // Debounced updateScene - prevents multiple /api/status calls from racing
+
+    // Message events
+    eventBus.on(eventBus.Events.MESSAGE_ADDED, () => debouncedRefresh());
+    eventBus.on(eventBus.Events.MESSAGE_REMOVED, () => debouncedRefresh());
+    eventBus.on(eventBus.Events.CHAT_CLEARED, () => debouncedRefresh());
+
+    // Debounced updateScene
     let sceneTimer = null;
     const debouncedUpdateScene = () => {
         if (sceneTimer) clearTimeout(sceneTimer);
         sceneTimer = setTimeout(() => {
             sceneTimer = null;
             updateScene();
-        }, 100);  // 100ms debounce
+        }, 100);
     };
-    
-    // System state events - debounced to prevent duplicate updateScene calls
-    eventBus.on(eventBus.Events.PROMPT_CHANGED, () => {
-        console.log('[EventBus] Prompt changed');
-        debouncedUpdateScene();
-    });
-    
-    eventBus.on(eventBus.Events.ABILITY_CHANGED, () => {
-        console.log('[EventBus] Ability changed');
-        debouncedUpdateScene();
-    });
-    
-    eventBus.on(eventBus.Events.SPICE_CHANGED, () => {
-        console.log('[EventBus] Spice changed');
-        debouncedUpdateScene();
-    });
-    
-    eventBus.on(eventBus.Events.COMPONENTS_CHANGED, () => {
-        console.log('[EventBus] Components changed');
-        debouncedUpdateScene();
-    });
-    
-    eventBus.on(eventBus.Events.PROMPT_DELETED, () => {
-        console.log('[EventBus] Prompt deleted');
-        debouncedUpdateScene();
-    });
-    
-    eventBus.on(eventBus.Events.SETTINGS_CHANGED, (data) => {
-        console.log('[EventBus] Settings changed:', data?.key);
-        // Settings changes may affect display
-        debouncedUpdateScene();
-    });
-    
-    eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, (data) => {
-        console.log('[EventBus] Chat settings changed:', data?.chat);
-        // Chat settings affect ability/prompt pills
-        debouncedUpdateScene();
-    });
-    
+
+    // System state events
+    eventBus.on(eventBus.Events.PROMPT_CHANGED, () => debouncedUpdateScene());
+    eventBus.on(eventBus.Events.TOOLSET_CHANGED, () => debouncedUpdateScene());
+    eventBus.on(eventBus.Events.SPICE_CHANGED, () => debouncedUpdateScene());
+    eventBus.on(eventBus.Events.COMPONENTS_CHANGED, () => debouncedUpdateScene());
+    eventBus.on(eventBus.Events.PROMPT_DELETED, () => debouncedUpdateScene());
+    eventBus.on(eventBus.Events.SETTINGS_CHANGED, () => debouncedUpdateScene());
+    eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, () => debouncedUpdateScene());
+
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
-        console.log('[EventBus] Chat switched');
-        // Only update dropdown - refresh/scene handled by initiator (handleChatChange)
-        // This event is mainly for syncing OTHER browser tabs
         populateChatDropdown();
     });
-    
-    // STT events (for avatar/UI feedback)
-    eventBus.on(eventBus.Events.STT_RECORDING_START, () => {
-        console.log('[EventBus] STT recording started');
-    });
-    
-    eventBus.on(eventBus.Events.STT_RECORDING_END, () => {
-        console.log('[EventBus] STT recording ended');
-    });
-    
-    eventBus.on(eventBus.Events.STT_PROCESSING, () => {
-        console.log('[EventBus] STT processing');
-    });
-    
-    // Wakeword event
-    eventBus.on(eventBus.Events.WAKEWORD_DETECTED, () => {
-        console.log('[EventBus] Wakeword detected');
-    });
-    
-    // Tool events (for avatar "working" state)
-    eventBus.on(eventBus.Events.TOOL_EXECUTING, (data) => {
-        console.log('[EventBus] Tool executing:', data?.name);
-    });
-    
-    eventBus.on(eventBus.Events.TOOL_COMPLETE, (data) => {
-        console.log('[EventBus] Tool complete:', data?.name, data?.success);
-    });
-    
+
+    // STT events
+    eventBus.on(eventBus.Events.STT_RECORDING_START, () => {});
+    eventBus.on(eventBus.Events.STT_RECORDING_END, () => {});
+    eventBus.on(eventBus.Events.STT_PROCESSING, () => {});
+    eventBus.on(eventBus.Events.WAKEWORD_DETECTED, () => {});
+
+    // Tool events
+    eventBus.on(eventBus.Events.TOOL_EXECUTING, () => {});
+    eventBus.on(eventBus.Events.TOOL_COMPLETE, () => {});
+
     // Error events
     eventBus.on(eventBus.Events.LLM_ERROR, (data) => {
         console.warn('[EventBus] LLM error:', data);
     });
-    
+
     eventBus.on(eventBus.Events.STT_ERROR, (data) => {
         console.warn('[EventBus] STT error:', data);
         if (data?.message) ui.showToast(data.message, 'error');
     });
-    
+
     // Connect to server
     eventBus.connect(false);
-    
-    // Expose for debugging
     window.eventBus = eventBus;
 }
 

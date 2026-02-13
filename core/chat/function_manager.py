@@ -41,7 +41,7 @@ class FunctionManager:
         self._turn_getter = None  # Callable that returns current turn number
         
         # Track what was REQUESTED, not reverse-engineered
-        self.current_ability_name = "none"
+        self.current_toolset_name = "none"
         
         self._load_function_modules()
         
@@ -206,14 +206,14 @@ class FunctionManager:
         
         # Special case: "all" loads every function from every module
         if len(enabled_names) == 1 and enabled_names[0] == "all":
-            self.current_ability_name = "all"
+            self.current_toolset_name = "all"
             self._enabled_tools = self.all_possible_tools.copy()
             logger.info(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
             return
         
         # Special case: "none" disables all functions
         if len(enabled_names) == 1 and enabled_names[0] == "none":
-            self.current_ability_name = "none"
+            self.current_toolset_name = "none"
             self._enabled_tools = []
             logger.info(f"Ability 'none' - all functions disabled")
             return
@@ -221,7 +221,7 @@ class FunctionManager:
         # Check if this is a module ability name
         if len(enabled_names) == 1 and enabled_names[0] in self.function_modules:
             ability_name = enabled_names[0]
-            self.current_ability_name = ability_name
+            self.current_toolset_name = ability_name
             module_info = self.function_modules[ability_name]
             enabled_names = module_info['available_functions']
             logger.info(f"Ability '{ability_name}' (module) requesting {len(enabled_names)} functions")
@@ -229,13 +229,13 @@ class FunctionManager:
         # Check if this is a toolset name
         elif len(enabled_names) == 1 and toolset_manager.toolset_exists(enabled_names[0]):
             toolset_name = enabled_names[0]
-            self.current_ability_name = toolset_name
+            self.current_toolset_name = toolset_name
             enabled_names = toolset_manager.get_toolset_functions(toolset_name)
             logger.info(f"Ability '{toolset_name}' (toolset) requesting {len(enabled_names)} functions")
         
         # Otherwise treat as direct function name list (custom)
         else:
-            self.current_ability_name = "custom"
+            self.current_toolset_name = "custom"
         
         # Store expected count before filtering
         expected_count = len(enabled_names)
@@ -250,13 +250,13 @@ class FunctionManager:
         missing = set(enabled_names) - set(actual_names)
         
         if missing:
-            logger.warning(f"Ability '{self.current_ability_name}' missing functions: {missing}")
-        
-        logger.info(f"Ability '{self.current_ability_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
+            logger.warning(f"Toolset '{self.current_toolset_name}' missing functions: {missing}")
+
+        logger.info(f"Toolset '{self.current_toolset_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
         logger.debug(f"Enabled: {actual_names}")
 
-    def is_valid_ability(self, ability_name: str) -> bool:
-        """Check if an ability name is valid (exists in toolsets, modules, or is special)."""
+    def is_valid_toolset(self, ability_name: str) -> bool:
+        """Check if a toolset name is valid (exists in toolsets, modules, or is special)."""
         if ability_name in ["all", "none"]:
             return True
         if ability_name in self.function_modules:
@@ -265,12 +265,12 @@ class FunctionManager:
             return True
         return False
     
-    def get_available_abilities(self) -> list:
-        """Get list of all available ability names."""
-        abilities = ["all", "none"]
-        abilities.extend(list(self.function_modules.keys()))
-        abilities.extend(toolset_manager.get_toolset_names())
-        return sorted(set(abilities))
+    def get_available_toolsets(self) -> list:
+        """Get list of all available toolset names."""
+        toolsets = ["all", "none"]
+        toolsets.extend(list(self.function_modules.keys()))
+        toolsets.extend(toolset_manager.get_toolset_names())
+        return sorted(set(toolsets))
 
     def get_enabled_function_names(self):
         """Get list of currently enabled function names (mode-filtered)."""
@@ -285,25 +285,25 @@ class FunctionManager:
         """Get list of all functions that require network access."""
         return list(self._network_functions)
 
-    def get_current_ability_info(self):
-        """Get info about current ability configuration."""
+    def get_current_toolset_info(self):
+        """Get info about current toolset configuration."""
         actual_count = len(self.enabled_tools)  # Uses property, so mode-filtered
         base_count = len(self._enabled_tools)   # Pre-mode-filter count
         expected_count = base_count
         
-        if self.current_ability_name == "all":
+        if self.current_toolset_name == "all":
             expected_count = len(self.all_possible_tools)
-        elif self.current_ability_name == "none":
+        elif self.current_toolset_name == "none":
             expected_count = 0
-        elif self.current_ability_name in self.function_modules:
-            expected_count = len(self.function_modules[self.current_ability_name]['available_functions'])
-        elif toolset_manager.toolset_exists(self.current_ability_name):
-            expected_count = len(toolset_manager.get_toolset_functions(self.current_ability_name))
+        elif self.current_toolset_name in self.function_modules:
+            expected_count = len(self.function_modules[self.current_toolset_name]['available_functions'])
+        elif toolset_manager.toolset_exists(self.current_toolset_name):
+            expected_count = len(toolset_manager.get_toolset_functions(self.current_toolset_name))
         
         mode = self._get_current_prompt_mode()
         
         return {
-            "name": self.current_ability_name,
+            "name": self.current_toolset_name,
             "function_count": actual_count,
             "base_count": base_count,
             "expected_count": expected_count,

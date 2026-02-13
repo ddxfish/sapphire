@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
 SYSTEM_DEFAULTS = {
     "prompt": "default",  
-    "ability": "default", 
+    "toolset": "default",
     "voice": "af_heart",
     "pitch": 0.98,
     "speed": 1.3,

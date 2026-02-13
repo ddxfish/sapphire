@@ -13,9 +13,10 @@ class System:
             'voice': lambda args: voice.change_voice(self.voice_chat_system, args),
             'speed': lambda args: speed_pitch.change_speed(self.voice_chat_system, args),
             'pitch': lambda args: speed_pitch.change_pitch(self.voice_chat_system, args),
-            'ability': lambda args: self.ability_manager.process(args),
+            'toolset': lambda args: self.ability_manager.process(args),
+            'ability': lambda args: self.ability_manager.process(args),  # backward compat alias
             'chat': lambda args: self.chat_switcher.process(args),
-            'help': lambda _: "Commands: prompt [name|status|state|reset|random], voice [name], speed [value], pitch [value], ability [name], chat [name]"
+            'help': lambda _: "Commands: prompt [name|status|state|reset|random], voice [name], speed [value], pitch [value], toolset [name], chat [name]"
         }
     
     def process(self, user_input, llm_client=None):

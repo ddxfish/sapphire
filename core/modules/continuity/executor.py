@@ -229,7 +229,7 @@ class ContinuityExecutor:
                 prompts.set_active_preset_name(task["prompt"])
         
         if task.get("toolset"):
-            settings["ability"] = task["toolset"]
+            settings["toolset"] = task["toolset"]
             # Apply to function manager
             self.system.llm_chat.function_manager.update_enabled_functions([task["toolset"]])
         

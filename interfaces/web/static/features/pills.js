@@ -10,7 +10,7 @@ import { closeStoryDropdown } from './story.js';
 
 // Cache for dropdown data - avoids fetch on every click
 let promptsCache = null;
-let abilitiesCache = null;
+let toolsetsCache = null;
 
 // Initialize cache and subscribe to SSE events for invalidation
 export function initPillsCache() {
@@ -18,13 +18,13 @@ export function initPillsCache() {
     const initData = getInitDataSync();
     if (initData) {
         promptsCache = initData.prompts?.list || null;
-        abilitiesCache = initData.abilities?.list || null;
+        toolsetsCache = initData.toolsets?.list || null;
     }
 
     // Invalidate caches and refresh init data when relevant events occur
     eventBus.on(eventBus.Events.PROMPT_CHANGED, () => { promptsCache = null; refreshInitData(); });
     eventBus.on(eventBus.Events.PROMPT_DELETED, () => { promptsCache = null; refreshInitData(); });
-    eventBus.on(eventBus.Events.ABILITY_CHANGED, () => { abilitiesCache = null; refreshInitData(); });
+    eventBus.on(eventBus.Events.TOOLSET_CHANGED, () => { toolsetsCache = null; refreshInitData(); });
 }
 
 export function closePillDropdowns() {
@@ -107,17 +107,17 @@ export async function showAbilityDropdown(e) {
     abilityPill.classList.add('dropdown-open');
 
     // Use cache if available, otherwise fetch fresh
-    let abilities = abilitiesCache;
-    if (!abilities) {
+    let tsList = toolsetsCache;
+    if (!tsList) {
         const initData = await getInitData();
-        abilities = initData?.abilities?.list || [];
-        abilitiesCache = abilities;
+        tsList = initData?.toolsets?.list || [];
+        toolsetsCache = tsList;
     }
 
-    const currentAbility = abilityPill.querySelector('.pill-text').textContent.split(' (')[0];
+    const currentToolset = abilityPill.querySelector('.pill-text').textContent.split(' (')[0];
 
-    dropdown.innerHTML = abilities.map(a =>
-        `<button class="pill-dropdown-item${a.name === currentAbility ? ' active' : ''}" data-name="${a.name}">${a.name} (${a.function_count})</button>`
+    dropdown.innerHTML = tsList.map(t =>
+        `<button class="pill-dropdown-item${t.name === currentToolset ? ' active' : ''}" data-name="${t.name}">${t.name} (${t.function_count})</button>`
     ).join('');
 
     dropdown.querySelectorAll('.pill-dropdown-item').forEach(btn => {
@@ -125,10 +125,10 @@ export async function showAbilityDropdown(e) {
             e.stopPropagation();
             const name = btn.dataset.name;
             try {
-                await fetch(`/api/abilities/${encodeURIComponent(name)}/activate`, { method: 'POST' });
+                await fetch(`/api/toolsets/${encodeURIComponent(name)}/activate`, { method: 'POST' });
                 closePillDropdowns();
                 await updateScene();
-                ui.showToast(`Ability: ${name}`, 'success');
+                ui.showToast(`Toolset: ${name}`, 'success');
             } catch (err) {
                 ui.showToast(`Failed: ${err.message}`, 'error');
             }

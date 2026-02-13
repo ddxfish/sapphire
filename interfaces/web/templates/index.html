@@ -7,11 +7,11 @@
     <title>Sapphire</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/shared.css">
-    
+
     <!-- Syntax Highlighting (local) -->
     <link rel="stylesheet" href="/static/vendor/highlight-atom-one-dark.min.css">
     <script src="/static/vendor/highlight.min.js"></script>
-    
+
     <!-- PWA -->
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#4a9eff">
@@ -50,339 +50,305 @@
     </script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="sidebar-collapsed">
-    <button id="toggle-sidebar" title="Toggle Sidebar">›</button>
-    
-    <div class="sidebar">
-        <!-- Row 1: Title + App Menu -->
-        <div class="sidebar-row-1">
-            <h1>Sapphire</h1>
-            <div class="header-actions">
-                <div class="kebab-menu" id="app-menu">
-                    <button class="kebab-btn" title="App Menu">⚙️</button>
-                    <div class="kebab-dropdown">
-                        <div id="plugin-icon-area"></div>
-                        <button id="setup-wizard-btn">Setup Wizard</button>
-                        <button id="restart-btn">Restart Sapphire</button>
-                        <button id="logout-btn">Logout</button>
-                    </div>
-                </div>
-            </div>
-        </div>
+<body>
+    <!-- ================================================================
+         NAV RAIL (left, 64px desktop / bottom bar mobile)
+         ================================================================ -->
+    <nav id="nav-rail">
+        <div class="nav-logo" title="Sapphire">S</div>
 
-        <!-- Row 2: Chat selector + Chat Menu -->
-        <div class="sidebar-row-2">
-            <select id="chat-select">
-                <option value="default">Default</option>
-            </select>
-            <div class="kebab-menu" id="chat-menu">
-                <button class="kebab-btn" title="Chat Menu">⋮</button>
-                <div class="kebab-dropdown">
-                    <button id="new-chat-btn">New Chat</button>
-                    <button id="clear-chat-btn">Clear Chat</button>
-                    <button id="delete-chat-btn" class="danger">Delete Chat</button>
-                    <hr>
-                    <button id="import-chat-btn">Import</button>
-                    <button id="export-chat-btn">Export</button>
-                    <hr>
-                    <button id="settings-gear-btn">Chat Settings</button>
-                </div>
-            </div>
-        </div>
+        <button class="nav-item active" data-view="chat">
+            <span class="nav-icon">&#x1F4AC;</span>
+            <span class="nav-label">Chat</span>
+        </button>
+        <button class="nav-item" data-view="personas">
+            <span class="nav-icon">&#x1F464;</span>
+            <span class="nav-label">Personas</span>
+        </button>
+        <button class="nav-item" data-view="toolsets">
+            <span class="nav-icon">&#x1F527;</span>
+            <span class="nav-label">Toolsets</span>
+        </button>
+        <button class="nav-item" data-view="spices">
+            <span class="nav-icon">&#x1F336;&#xFE0F;</span>
+            <span class="nav-label">Spices</span>
+        </button>
+        <button class="nav-item" data-view="schedule">
+            <span class="nav-icon">&#x23F0;</span>
+            <span class="nav-label">Schedule</span>
+        </button>
+        <button class="nav-item" data-view="settings">
+            <span class="nav-icon">&#x2699;&#xFE0F;</span>
+            <span class="nav-label">Settings</span>
+        </button>
 
-        <!-- Row 3: Volume controls -->
-        <div class="sidebar-row-3">
-            <button id="mute-btn" title="Mute/Unmute">🔊</button>
-            <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
-        </div>
+        <div class="nav-spacer"></div>
 
-        <div class="plugin-container" id="sidebar-plugin-area"></div>
-    </div>
+        <!-- Mobile overflow (6th+ items) -->
+        <button class="nav-item nav-overflow" style="display:none" title="More">
+            <span class="nav-icon">&#x2026;</span>
+            <span class="nav-label">More</span>
+        </button>
+        <div class="nav-overflow-menu hidden"></div>
 
-    <div class="main">
-        <div id="chatbg">
-            <div id="chatbg-overlay">
-                <div id="chat-container"></div>
-            </div>
-        </div>
-        <div class="form-wrapper">
-            <div id="context-bar"></div>
-            <div id="image-preview-area" style="display: none;"></div>
-            <form id="chat-form">
-                <button type="button" id="mic-btn" title="Hold to record">🎤</button>
-                <div class="textarea-wrapper">
-                    <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">📎</button>
-                    <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
-                </div>
-                <input type="file" id="image-upload-input" accept="image/*,.py,.txt,.md,.js,.ts,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.sh,.bash,.html,.css,.xml,.csv,.log,.env,.rs,.go,.java,.c,.cpp,.h" multiple style="display: none;">
-                <div class="send-btn-wrapper">
-                    <button type="submit" id="send-btn">Send</button>
-                    <button type="button" id="stop-btn" style="display: none;">Stop</button>
-                    <span id="llm-indicator"></span>
-                </div>
-            </form>
-            <div class="pill-bar">
-                <button class="spice-indicator" id="spice-indicator" title="Spice disabled">
-                    <span class="spice-icon">🌶️</span>
-                    <span class="spice-tooltip"></span>
-                </button>
-                <button class="pill" id="prompt-pill">
-                    <span class="pill-icon">✏️</span>
-                    <span class="pill-text">Loading...</span>
-                    <span class="pill-tooltip"></span>
-                    <div class="pill-dropdown"></div>
-                </button>
-                <button class="pill" id="ability-pill">
-                    <span class="pill-icon">🔧</span>
-                    <span class="pill-text">Loading...</span>
-                    <span class="pill-tooltip"></span>
-                    <div class="pill-dropdown"></div>
-                </button>
-                <div class="story-menu" id="story-indicator">
-                    <button class="story-btn" title="Story Engine">
-                        <span class="story-icon">📖</span>
-                    </button>
-                    <span class="story-tooltip"></span>
-                    <div class="story-dropdown">
-                        <div class="story-dropdown-header has-submenu">
-                            <span class="story-dropdown-header-text"></span>
-                            <span class="story-dropdown-arrow">›</span>
-                            <div class="story-preset-submenu"></div>
+        <span class="nav-version">v2</span>
+    </nav>
+
+    <!-- Flyout panel (chat list, etc.) -->
+    <div id="nav-flyout" class="nav-flyout hidden"></div>
+
+    <!-- ================================================================
+         APP CONTENT (all views live here)
+         ================================================================ -->
+    <div id="app-content">
+
+        <!-- ============================================================
+             CHAT VIEW
+             ============================================================ -->
+        <div id="view-chat" class="view active">
+            <!-- Chat Header Bar -->
+            <div class="chat-header">
+                <span id="chat-header-name" class="chat-header-name">Chat</span>
+                <div class="chat-header-actions">
+                    <!-- Volume control -->
+                    <div class="volume-compact" id="volume-compact">
+                        <button id="mute-btn" class="header-icon-btn" title="Mute/Unmute">&#x1F50A;</button>
+                        <div class="volume-popover" id="volume-popover">
+                            <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
                         </div>
-                        <div class="story-dropdown-active">
-                            <div class="story-dropdown-header has-submenu">
-                                <span>💾 Save Game</span>
-                                <span class="story-dropdown-arrow">›</span>
-                                <div class="story-save-submenu story-slot-submenu"></div>
-                            </div>
-                            <div class="story-dropdown-header has-submenu">
-                                <span>📂 Load Game</span>
-                                <span class="story-dropdown-arrow">›</span>
-                                <div class="story-load-submenu story-slot-submenu"></div>
-                            </div>
+                    </div>
+                    <!-- Chat menu -->
+                    <div class="kebab-menu" id="chat-menu">
+                        <button class="header-icon-btn kebab-btn" title="Chat Menu">&#x22EE;</button>
+                        <div class="kebab-dropdown">
+                            <button id="new-chat-btn">New Chat</button>
+                            <button id="clear-chat-btn">Clear Chat</button>
+                            <button id="delete-chat-btn" class="danger">Delete Chat</button>
                             <hr>
-                            <button class="story-dropdown-item" data-action="view">View State</button>
-                            <button class="story-dropdown-item" data-action="history">History</button>
-                            <button class="story-dropdown-item" data-action="reset">Reset Progress</button>
-                            <hr>
-                            <button class="story-dropdown-item danger" data-action="disable">Disable Story</button>
-                        </div>
-                        <div class="story-dropdown-inactive" style="display: none;">
-                            <button class="story-dropdown-item" data-action="enable">Enable Story</button>
+                            <button id="import-chat-btn">Import</button>
+                            <button id="export-chat-btn">Export</button>
                         </div>
                     </div>
+                    <!-- Sidebar toggle -->
+                    <button id="chat-sidebar-toggle" class="header-icon-btn" title="Toggle Settings">&#x25C0;</button>
                 </div>
             </div>
-            <div id="prompt-display"></div>
-            <div id="functions-display"></div>
-        </div>
-        <div id="toast-container"></div>
-    </div>
 
-    <!-- Hidden file input for import -->
-    <input type="file" id="import-file-input" accept=".json" style="display:none">
+            <!-- Chat Content + Settings Sidebar -->
+            <div class="chat-body">
+                <!-- Messages area -->
+                <div class="chat-main">
+                    <div id="chatbg">
+                        <div id="chatbg-overlay">
+                            <div id="chat-container"></div>
+                        </div>
+                    </div>
+                    <div class="form-wrapper">
+                        <div id="context-bar"></div>
+                        <div id="image-preview-area" style="display: none;"></div>
+                        <form id="chat-form">
+                            <button type="button" id="mic-btn" title="Hold to record">&#x1F3A4;</button>
+                            <div class="textarea-wrapper">
+                                <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">&#x1F4CE;</button>
+                                <textarea id="prompt-input" placeholder="Type message... (paste or drop images)" rows="1"></textarea>
+                            </div>
+                            <input type="file" id="image-upload-input" accept="image/*,.py,.txt,.md,.js,.ts,.json,.yaml,.yml,.toml,.ini,.cfg,.conf,.sh,.bash,.html,.css,.xml,.csv,.log,.env,.rs,.go,.java,.c,.cpp,.h" multiple style="display: none;">
+                            <div class="send-btn-wrapper">
+                                <button type="submit" id="send-btn">Send</button>
+                                <button type="button" id="stop-btn" style="display: none;">Stop</button>
+                                <span id="llm-indicator"></span>
+                            </div>
+                        </form>
+                        <div id="prompt-display"></div>
+                        <div id="functions-display"></div>
+                    </div>
+                </div>
 
-    <!-- Settings Modal (uses shared modal pattern) -->
-    <div id="settings-modal" class="modal-overlay" style="display: none">
-        <div class="modal-base">
-            <div class="modal-header">
-                <h2>Chat Settings</h2>
-                <button class="close-btn" id="cancel-settings">&times;</button>
-            </div>
-            
-            <div class="modal-body">
-                <div class="modal-grid">
-                    <!-- Primary Options (always visible) -->
-                    <div class="form-group">
-                        <label for="setting-prompt">Prompt:</label>
-                        <select id="setting-prompt" class="form-control">
-                            <option value="sapphire">Sapphire (Default)</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="setting-ability">Ability Set:</label>
-                        <select id="setting-ability" class="form-control">
-                            <option value="default">Default</option>
-                            <option value="none">None</option>
-                            <option value="all">All</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="setting-llm-primary">Provider:</label>
-                        <select id="setting-llm-primary" class="form-control">
-                            <option value="auto">Auto</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group" id="model-select-group" style="display: none;">
-                        <label for="setting-llm-model">Model:</label>
-                        <select id="setting-llm-model" class="form-control"></select>
-                    </div>
-                    
-                    <div class="form-group" id="model-custom-group" style="display: none;">
-                        <label for="setting-llm-model-custom">Model:</label>
-                        <input type="text" id="setting-llm-model-custom" class="form-control" placeholder="Model name">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="setting-memory-scope">Memory Slot:</label>
-                        <div class="memory-scope-row">
-                            <select id="setting-memory-scope" class="form-control">
-                                <option value="none">None (disabled)</option>
-                                <option value="default">default</option>
-                            </select>
-                            <button type="button" id="new-memory-scope-btn" class="btn btn-small" title="New slot">+</button>
+                <!-- Chat Settings Sidebar (right) -->
+                <aside class="chat-sidebar">
+                    <div class="chat-sidebar-inner">
+                        <div class="sidebar-section">
+                            <div class="sb-field">
+                                <label for="sb-prompt">Prompt</label>
+                                <select id="sb-prompt"><option value="sapphire">Sapphire</option></select>
+                            </div>
+                            <div class="sb-field">
+                                <label for="sb-toolset">Toolset</label>
+                                <select id="sb-toolset"><option value="default">Default</option></select>
+                            </div>
+                            <div class="sb-field">
+                                <label for="sb-llm-primary">Provider</label>
+                                <select id="sb-llm-primary"><option value="auto">Auto</option></select>
+                            </div>
+                            <div class="sb-field" id="sb-model-group" style="display:none">
+                                <label for="sb-llm-model">Model</label>
+                                <select id="sb-llm-model"></select>
+                            </div>
+                            <div class="sb-field" id="sb-model-custom-group" style="display:none">
+                                <label for="sb-llm-model-custom">Model</label>
+                                <input type="text" id="sb-llm-model-custom" placeholder="Model name">
+                            </div>
+                            <div class="sb-field">
+                                <label for="sb-memory-scope">Memory</label>
+                                <div class="sb-field-row">
+                                    <select id="sb-memory-scope"><option value="none">None</option><option value="default">default</option></select>
+                                    <button type="button" id="sb-new-scope" class="sb-btn-sm" title="New slot">+</button>
+                                </div>
+                            </div>
+                            <div class="sb-field">
+                                <label for="sb-trim-color">Accent</label>
+                                <div class="sb-field-row">
+                                    <input type="color" id="sb-trim-color" value="#4a9eff">
+                                    <button type="button" id="sb-reset-trim" class="sb-btn-sm" title="Reset">Reset</button>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="setting-trim-color">Accent Color:</label>
-                        <div class="color-picker-row">
-                            <input type="color" id="setting-trim-color" class="form-control color-input" value="#4a9eff">
-                            <button type="button" id="reset-trim-color" class="btn btn-small" title="Reset to theme default">Reset</button>
-                        </div>
-                    </div>
-                    
-                    <!-- TTS Accordion -->
-                    <div class="form-group full-width accordion-section" id="tts-accordion-section">
-                        <div class="accordion-header" id="tts-header">
-                            <span class="accordion-arrow">▶</span>
-                            <span>Text-to-Speech</span>
-                        </div>
-                        <div class="accordion-content" id="tts-content" style="display: none;">
-                            <div class="accordion-inner">
-                                <div class="form-group">
-                                    <label for="setting-voice">Voice:</label>
-                                    <select id="setting-voice" class="form-control">
-                                        <option value="am_adam">🇺🇸👨 Adam</option>
-                                        <option value="am_eric">🇺🇸👨 Eric</option>
-                                        <option value="am_liam">🇺🇸👨 Liam</option>
-                                        <option value="am_michael">🇺🇸👨 Michael</option>
-                                        <option value="af_bella">🇺🇸👩 Bella</option>
-                                        <option value="af_nicole">🇺🇸👩 Nicole</option>
-                                        <option value="af_heart">🇺🇸👩 Heart</option>
-                                        <option value="af_jessica">🇺🇸👩 Jessica</option>
-                                        <option value="af_sarah">🇺🇸👩 Sarah</option>
-                                        <option value="af_river">🇺🇸👩 River</option>
-                                        <option value="af_sky">🇺🇸👩 Sky</option>
-                                        <option value="bf_emma">🇬🇧👩 Emma</option>
-                                        <option value="bf_isabella">🇬🇧👩 Isabella</option>
-                                        <option value="bf_alice">🇬🇧👩 Alice</option>
-                                        <option value="bf_lily">🇬🇧👩 Lily</option>
-                                        <option value="bm_george">🇬🇧👨 George</option>
-                                        <option value="bm_daniel">🇬🇧👨 Daniel</option>
-                                        <option value="bm_lewis">🇬🇧👨 Lewis</option>
+
+                        <!-- TTS Accordion -->
+                        <div class="sidebar-section sidebar-accordion">
+                            <div class="sidebar-accordion-header">
+                                <span class="accordion-arrow">&#x25B6;</span>
+                                <span>Text-to-Speech</span>
+                            </div>
+                            <div class="sidebar-accordion-content" style="display:none">
+                                <div class="sb-field">
+                                    <label for="sb-voice">Voice</label>
+                                    <select id="sb-voice">
+                                        <option value="am_adam">&#x1F1FA;&#x1F1F8;&#x1F468; Adam</option>
+                                        <option value="am_eric">&#x1F1FA;&#x1F1F8;&#x1F468; Eric</option>
+                                        <option value="am_liam">&#x1F1FA;&#x1F1F8;&#x1F468; Liam</option>
+                                        <option value="am_michael">&#x1F1FA;&#x1F1F8;&#x1F468; Michael</option>
+                                        <option value="af_bella">&#x1F1FA;&#x1F1F8;&#x1F469; Bella</option>
+                                        <option value="af_nicole">&#x1F1FA;&#x1F1F8;&#x1F469; Nicole</option>
+                                        <option value="af_heart">&#x1F1FA;&#x1F1F8;&#x1F469; Heart</option>
+                                        <option value="af_jessica">&#x1F1FA;&#x1F1F8;&#x1F469; Jessica</option>
+                                        <option value="af_sarah">&#x1F1FA;&#x1F1F8;&#x1F469; Sarah</option>
+                                        <option value="af_river">&#x1F1FA;&#x1F1F8;&#x1F469; River</option>
+                                        <option value="af_sky">&#x1F1FA;&#x1F1F8;&#x1F469; Sky</option>
+                                        <option value="bf_emma">&#x1F1EC;&#x1F1E7;&#x1F469; Emma</option>
+                                        <option value="bf_isabella">&#x1F1EC;&#x1F1E7;&#x1F469; Isabella</option>
+                                        <option value="bf_alice">&#x1F1EC;&#x1F1E7;&#x1F469; Alice</option>
+                                        <option value="bf_lily">&#x1F1EC;&#x1F1E7;&#x1F469; Lily</option>
+                                        <option value="bm_george">&#x1F1EC;&#x1F1E7;&#x1F468; George</option>
+                                        <option value="bm_daniel">&#x1F1EC;&#x1F1E7;&#x1F468; Daniel</option>
+                                        <option value="bm_lewis">&#x1F1EC;&#x1F1E7;&#x1F468; Lewis</option>
                                     </select>
                                 </div>
-                                
-                                <div class="form-group">
-                                    <label for="setting-pitch">Pitch: <span id="pitch-value">0.94</span></label>
-                                    <input type="range" id="setting-pitch" class="form-control" min="0.5" max="1.5" step="0.02" value="0.94">
+                                <div class="sb-field">
+                                    <label>Pitch: <span id="sb-pitch-val">0.94</span></label>
+                                    <input type="range" id="sb-pitch" min="0.5" max="1.5" step="0.02" value="0.94">
                                 </div>
-                                
-                                <div class="form-group">
-                                    <label for="setting-speed">Speed: <span id="speed-value">1.3</span></label>
-                                    <input type="range" id="setting-speed" class="form-control" min="0.5" max="2.5" step="0.1" value="1.3">
+                                <div class="sb-field">
+                                    <label>Speed: <span id="sb-speed-val">1.3</span></label>
+                                    <input type="range" id="sb-speed" min="0.5" max="2.5" step="0.1" value="1.3">
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    
-                    <!-- System Prompt Accordion -->
-                    <div class="form-group full-width accordion-section">
-                        <div class="accordion-header" id="system-prompt-header">
-                            <span class="accordion-arrow">▶</span>
-                            <span>System Prompt</span>
-                        </div>
-                        <div class="accordion-content" id="system-prompt-content" style="display: none;">
-                            <div class="accordion-inner">
-                                <div class="form-group">
+
+                        <!-- System Prompt Accordion -->
+                        <div class="sidebar-section sidebar-accordion">
+                            <div class="sidebar-accordion-header">
+                                <span class="accordion-arrow">&#x25B6;</span>
+                                <span>System Prompt</span>
+                            </div>
+                            <div class="sidebar-accordion-content" style="display:none">
+                                <div class="sb-field">
                                     <label>
-                                        <input type="checkbox" id="setting-spice" checked>
-                                        Spice every <input type="number" id="setting-spice-turns" min="1" max="20" value="3" style="width: 3em;"> turns
+                                        <input type="checkbox" id="sb-spice" checked>
+                                        Spice every <input type="number" id="sb-spice-turns" min="1" max="20" value="3" style="width:3em"> turns
                                     </label>
                                 </div>
-                                
-                                <div class="form-group">
+                                <div class="sb-field">
                                     <label>
-                                        <input type="checkbox" id="setting-datetime">
+                                        <input type="checkbox" id="sb-datetime">
                                         Inject Date/Time
                                     </label>
                                 </div>
-                                
-                                <div class="form-group">
-                                    <label for="setting-custom-context">Custom Context:</label>
-                                    <textarea id="setting-custom-context" class="form-control" rows="3" placeholder="Custom text injected into system prompt..."></textarea>
+                                <div class="sb-field">
+                                    <label for="sb-custom-context">Custom Context</label>
+                                    <textarea id="sb-custom-context" rows="3" placeholder="Injected into system prompt..."></textarea>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    
-                    <!-- State Engine Accordion -->
-                    <div class="form-group full-width accordion-section">
-                        <div class="accordion-header" id="state-engine-header">
-                            <span class="accordion-arrow">▶</span>
-                            <span>State Engine</span>
-                            <span class="accordion-badge" id="state-badge" style="display: none;">Active</span>
-                        </div>
-                        <div class="accordion-content" id="state-engine-content" style="display: none;">
-                            <div class="accordion-inner">
-                                <div class="form-group">
-                                    <label>
-                                        <input type="checkbox" id="setting-state-enabled">
-                                        Enable State Engine
-                                    </label>
+
+                        <!-- State Engine Accordion -->
+                        <div class="sidebar-section sidebar-accordion">
+                            <div class="sidebar-accordion-header">
+                                <span class="accordion-arrow">&#x25B6;</span>
+                                <span>State Engine</span>
+                            </div>
+                            <div class="sidebar-accordion-content" style="display:none">
+                                <div class="sb-field">
+                                    <label><input type="checkbox" id="sb-state-enabled"> Enable</label>
                                 </div>
-                                
-                                <div class="form-group" id="state-preset-group">
-                                    <label for="setting-state-preset">Preset:</label>
-                                    <select id="setting-state-preset" class="form-control">
-                                        <option value="">None</option>
-                                    </select>
+                                <div class="sb-field">
+                                    <label for="sb-state-preset">Preset</label>
+                                    <select id="sb-state-preset"><option value="">None</option></select>
                                 </div>
-                                
-                                <div class="form-group">
-                                    <label title="Include story/chapter text in prompt. Cache-friendly - only changes on scene advance.">
-                                        <input type="checkbox" id="setting-state-story-in-prompt" checked>
-                                        Story in prompt
-                                    </label>
+                                <div class="sb-field">
+                                    <label><input type="checkbox" id="sb-state-story" checked> Story in prompt</label>
                                 </div>
-                                
-                                <div class="form-group">
-                                    <label title="Include state variables in prompt. ⚠️ Breaks prompt caching - variables change each turn.">
-                                        <input type="checkbox" id="setting-state-vars-in-prompt">
-                                        Variables in prompt <span style="opacity:0.6;font-size:0.85em">(no cache)</span>
-                                    </label>
+                                <div class="sb-field">
+                                    <label><input type="checkbox" id="sb-state-vars"> Variables in prompt</label>
                                 </div>
-                                
-                                <div class="state-info" id="state-info" style="display: none;">
-                                    <span id="state-turn-info">Turn: 0</span>
-                                    <span id="state-key-info">Keys: 0</span>
-                                </div>
-                                
-                                <div class="state-actions" id="state-actions" style="display: none;">
-                                    <button type="button" id="state-view-btn" class="btn btn-small">View</button>
-                                    <button type="button" id="state-reset-btn" class="btn btn-small">Reset</button>
-                                    <button type="button" id="state-history-btn" class="btn btn-small">History</button>
+                                <div class="sb-field sb-actions">
+                                    <button type="button" id="sb-state-view" class="sb-btn-sm">View</button>
+                                    <button type="button" id="sb-state-reset" class="sb-btn-sm">Reset</button>
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Save as Defaults -->
+                        <div class="sidebar-section sb-footer">
+                            <button type="button" id="sb-save-defaults" class="sb-btn-full">Save as Defaults</button>
+                        </div>
                     </div>
-                </div>
+                </aside>
             </div>
-            
-            <div class="modal-footer">
-                <button id="save-as-defaults" class="btn btn-secondary" title="Save current settings as default for new chats">Set as Default</button>
-                <div style="flex: 1;"></div>
-                <button id="modal-cancel-btn" class="btn btn-secondary">Cancel</button>
-                <button id="save-settings" class="btn btn-primary">Save</button>
+
+            <div id="toast-container"></div>
+        </div>
+
+        <!-- ============================================================
+             PLACEHOLDER VIEWS (content in later steps)
+             ============================================================ -->
+        <div id="view-personas" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Personas</h2>
+                <p>Prompt editor - coming next</p>
+            </div>
+        </div>
+        <div id="view-toolsets" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Toolsets</h2>
+                <p>Ability manager - coming next</p>
+            </div>
+        </div>
+        <div id="view-spices" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Spices</h2>
+                <p>Spice manager - coming next</p>
+            </div>
+        </div>
+        <div id="view-schedule" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Schedule</h2>
+                <p>Continuity manager - coming next</p>
+            </div>
+        </div>
+        <div id="view-settings" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Settings</h2>
+                <p>System settings - coming next</p>
             </div>
         </div>
     </div>
 
+    <!-- Hidden elements kept for compatibility -->
+    <select id="chat-select" style="display:none"><option value="default">Default</option></select>
+    <input type="file" id="import-file-input" accept=".json" style="display:none">
 
+    <!-- Templates -->
     <template id="message-template">
         <div class="message">
             <img src="" alt="Avatar" class="msg-avatar" loading="lazy">
@@ -415,8 +381,6 @@
         </div>
     </div>
 
-    <!-- Script loads sequentially - more reliable than modulepreload with Flask dev server -->
-    <!-- Version string (v=) busts cache on updates - increment when deploying JS changes -->
-    <script type="module" src="/static/main.js?v=20260204a"></script>
+    <script type="module" src="/static/main.js?v=20260212a"></script>
 </body>
 </html>

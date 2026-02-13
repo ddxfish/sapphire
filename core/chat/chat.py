@@ -369,7 +369,7 @@ class LLMChat:
             # DIAGNOSTIC: Log what tools are being sent
             enabled_names = [t['function']['name'] for t in enabled_tools] if enabled_tools else []
             logger.info(f"[TOOLS] Sending {len(enabled_names)} tools to LLM: {enabled_names}")
-            logger.info(f"[TOOLS] Current ability: {self.function_manager.current_ability_name}")
+            logger.info(f"[TOOLS] Current toolset: {self.function_manager.current_toolset_name}")
             logger.info(f"[TOOLS] Prompt mode: {self.function_manager._get_current_prompt_mode()}")
             
             provider_key, provider, model_override = self._select_provider()

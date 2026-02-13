@@ -97,7 +97,7 @@ export async function updateScene() {
         
         updatePrompt(status?.prompt, status?.prompt_name, status?.prompt_char_count, status?.prompt_privacy_required);
         setPromptPrivacyRequired(status?.prompt_privacy_required || false);
-        updateFuncs(status?.functions, status?.ability, hasCloudTools, status?.state_tools);
+        updateFuncs(status?.functions, status?.toolset, hasCloudTools, status?.state_tools);
         updateSpice(status?.spice);
         updateStoryIndicator(status?.story);
 
@@ -183,7 +183,7 @@ function updatePrompt(state, promptName, charCount, privacyRequired) {
     }
 }
 
-function updateFuncs(funcs, ability, cloudTools, stateTools) {
+function updateFuncs(funcs, toolset, cloudTools, stateTools) {
     const { abilityPill } = getElements();
     if (!abilityPill) return;
 
@@ -200,7 +200,7 @@ function updateFuncs(funcs, ability, cloudTools, stateTools) {
         return;
     }
 
-    const name = ability?.name || 'Custom';
+    const name = toolset?.name || 'Custom';
     textEl.textContent = `${name} (${totalCount})`;
 
     // Build tooltip with sections

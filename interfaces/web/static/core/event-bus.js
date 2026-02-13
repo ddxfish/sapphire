@@ -206,7 +206,7 @@ export const Events = {
     PROMPT_CHANGED: 'prompt_changed',
     PROMPT_DELETED: 'prompt_deleted',
     COMPONENTS_CHANGED: 'components_changed',
-    ABILITY_CHANGED: 'ability_changed',
+    TOOLSET_CHANGED: 'toolset_changed',
     SPICE_CHANGED: 'spice_changed',
     SETTINGS_CHANGED: 'settings_changed',
     CHAT_SETTINGS_CHANGED: 'chat_settings_changed',

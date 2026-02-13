@@ -33,15 +33,15 @@ export async function openSettingsModal() {
             });
         }
 
-        // Load abilities list from init data cache
-        if (initData?.abilities?.list) {
-            const abilitySelect = document.getElementById('setting-ability');
-            abilitySelect.innerHTML = '';
-            initData.abilities.list.forEach(a => {
+        // Load toolsets list from init data cache
+        if (initData?.toolsets?.list) {
+            const toolsetSelect = document.getElementById('setting-toolset');
+            toolsetSelect.innerHTML = '';
+            initData.toolsets.list.forEach(t => {
                 const opt = document.createElement('option');
-                opt.value = a.name;
-                opt.textContent = `${a.name} (${a.function_count} functions)`;
-                abilitySelect.appendChild(opt);
+                opt.value = t.name;
+                opt.textContent = `${t.name} (${t.function_count} functions)`;
+                toolsetSelect.appendChild(opt);
             });
         }
         
@@ -89,7 +89,7 @@ export async function openSettingsModal() {
         
         // Populate form
         document.getElementById('setting-prompt').value = settings.prompt || 'sapphire';
-        document.getElementById('setting-ability').value = settings.ability || 'default';
+        document.getElementById('setting-toolset').value = settings.toolset || settings.ability || 'default';
         document.getElementById('setting-voice').value = settings.voice || 'af_heart';
         document.getElementById('setting-pitch').value = settings.pitch || 0.94;
         document.getElementById('setting-speed').value = settings.speed || 1.3;
@@ -333,7 +333,7 @@ export async function saveSettings() {
         
         const settings = {
             prompt: document.getElementById('setting-prompt').value,
-            ability: document.getElementById('setting-ability').value,
+            toolset: document.getElementById('setting-toolset').value,
             voice: document.getElementById('setting-voice').value,
             pitch: parseFloat(document.getElementById('setting-pitch').value),
             speed: parseFloat(document.getElementById('setting-speed').value),
@@ -423,7 +423,7 @@ export async function saveAsDefaults() {
         
         const settings = {
             prompt: document.getElementById('setting-prompt').value,
-            ability: document.getElementById('setting-ability').value,
+            toolset: document.getElementById('setting-toolset').value,
             voice: document.getElementById('setting-voice').value,
             pitch: parseFloat(document.getElementById('setting-pitch').value),
             speed: parseFloat(document.getElementById('setting-speed').value),

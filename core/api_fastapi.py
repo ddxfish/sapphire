@@ -409,20 +409,21 @@ def _apply_chat_settings(system, settings: dict):
 
                 logger.info(f"Applied prompt: {prompt_name}")
 
-        if "ability" in settings:
-            ability_name = settings["ability"]
-            system.llm_chat.function_manager.update_enabled_functions([ability_name])
-            logger.info(f"Applied ability: {ability_name}")
-            publish(Events.ABILITY_CHANGED, {"name": ability_name})
+        toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
+        if toolset_key:
+            toolset_name = settings[toolset_key]
+            system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+            logger.info(f"Applied toolset: {toolset_name}")
+            publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
 
         system.llm_chat._update_state_engine()
 
         if settings.get('state_engine_enabled') is not None:
-            ability_info = system.llm_chat.function_manager.get_current_ability_info()
-            publish(Events.ABILITY_CHANGED, {
-                "name": ability_info.get("name", "custom"),
+            toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
+            publish(Events.TOOLSET_CHANGED, {
+                "name": toolset_info.get("name", "custom"),
                 "action": "state_engine_update",
-                "function_count": ability_info.get("function_count", 0)
+                "function_count": toolset_info.get("function_count", 0)
             })
 
     except Exception as e:
@@ -608,7 +609,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         is_assembled = prompts.is_assembled_mode()
 
         function_names = system.llm_chat.function_manager.get_enabled_function_names()
-        ability_info = system.llm_chat.function_manager.get_current_ability_info()
+        toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
         has_cloud_tools = system.llm_chat.function_manager.has_network_tools_enabled()
 
         spice_enabled = chat_settings.get('spice_enabled', True)
@@ -666,7 +667,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "prompt_char_count": prompt_char_count,
             "prompt_privacy_required": prompt_privacy_required,
             "prompt": prompt_state,
-            "ability": ability_info,
+            "toolset": toolset_info,
             "functions": user_tools,
             "state_tools": state_tools,
             "has_cloud_tools": has_cloud_tools,
@@ -709,46 +710,46 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         function_manager = system.llm_chat.function_manager
         session_manager = system.llm_chat.session_manager
 
-        # Abilities data
-        abilities_set = set()
-        abilities_set.update(function_manager.get_available_abilities())
-        abilities_set.update(toolset_manager.get_toolset_names())
+        # Toolsets data
+        toolsets_set = set()
+        toolsets_set.update(function_manager.get_available_toolsets())
+        toolsets_set.update(toolset_manager.get_toolset_names())
         network_functions = set(function_manager.get_network_functions())
 
-        abilities_list = []
-        for ability_name in sorted(abilities_set):
-            if ability_name in ['all', 'none']:
-                ability_type = 'builtin'
-            elif ability_name in function_manager.function_modules:
-                ability_type = 'module'
-            elif toolset_manager.toolset_exists(ability_name):
-                ability_type = 'user'
+        toolsets_list = []
+        for ts_name in sorted(toolsets_set):
+            if ts_name in ['all', 'none']:
+                ts_type = 'builtin'
+            elif ts_name in function_manager.function_modules:
+                ts_type = 'module'
+            elif toolset_manager.toolset_exists(ts_name):
+                ts_type = 'user'
             else:
-                ability_type = 'unknown'
+                ts_type = 'unknown'
 
-            if ability_name == "all":
+            if ts_name == "all":
                 func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
-            elif ability_name == "none":
+            elif ts_name == "none":
                 func_list = []
-            elif ability_name in function_manager.function_modules:
-                func_list = function_manager.function_modules[ability_name]['available_functions']
-            elif toolset_manager.toolset_exists(ability_name):
-                func_list = toolset_manager.get_toolset_functions(ability_name)
+            elif ts_name in function_manager.function_modules:
+                func_list = function_manager.function_modules[ts_name]['available_functions']
+            elif toolset_manager.toolset_exists(ts_name):
+                func_list = toolset_manager.get_toolset_functions(ts_name)
             else:
                 func_list = []
 
-            abilities_list.append({
-                "name": ability_name,
+            toolsets_list.append({
+                "name": ts_name,
                 "function_count": len(func_list),
-                "type": ability_type,
+                "type": ts_type,
                 "functions": func_list,
                 "has_network_tools": bool(set(func_list) & network_functions)
             })
 
-        ability_info = function_manager.get_current_ability_info()
-        current_ability = {
-            "name": ability_info.get("name", "custom"),
-            "function_count": ability_info.get("function_count", 0),
+        toolset_info = function_manager.get_current_toolset_info()
+        current_toolset = {
+            "name": toolset_info.get("name", "custom"),
+            "function_count": toolset_info.get("function_count", 0),
             "enabled_functions": function_manager.get_enabled_function_names(),
             "has_network_tools": function_manager.has_network_tools_enabled()
         }
@@ -823,9 +824,9 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         plugins_config = _get_merged_plugins()
 
         return {
-            "abilities": {
-                "list": abilities_list,
-                "current": current_ability
+            "toolsets": {
+                "list": toolsets_list,
+                "current": current_toolset
             },
             "functions": {
                 "modules": modules
@@ -1286,7 +1287,7 @@ async def get_system_status(request: Request, _=Depends(require_login), system=D
     try:
         prompt_state = prompts.get_current_state()
         function_names = system.llm_chat.function_manager.get_enabled_function_names()
-        ability_info = system.llm_chat.function_manager.get_current_ability_info()
+        toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
         has_cloud_tools = system.llm_chat.function_manager.has_network_tools_enabled()
 
         chat_settings = system.llm_chat.session_manager.get_chat_settings()
@@ -1300,7 +1301,7 @@ async def get_system_status(request: Request, _=Depends(require_login), system=D
             "prompt_name": prompts.get_active_preset_name(),
             "prompt_char_count": prompts.get_prompt_char_count(),
             "functions": function_names,
-            "ability": ability_info,
+            "toolset": toolset_info,
             "tts_enabled": config.TTS_ENABLED,
             "has_cloud_tools": has_cloud_tools,
             "spice": {"current": current_spice, "next": next_spice, "enabled": spice_enabled, "available": is_assembled}
@@ -1860,62 +1861,62 @@ async def reset_prompts_chat_defaults(request: Request, _=Depends(require_login)
 
 
 # =============================================================================
-# ABILITIES ROUTES (from abilities_api.py)
+# TOOLSET ROUTES
 # =============================================================================
 
-@app.get("/api/abilities")
-async def list_abilities(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """List all abilities."""
+@app.get("/api/toolsets")
+async def list_toolsets(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """List all toolsets."""
     from core.modules.system.toolsets import toolset_manager
     function_manager = system.llm_chat.function_manager
-    abilities_set = set()
-    abilities_set.update(function_manager.get_available_abilities())
-    abilities_set.update(toolset_manager.get_toolset_names())
+    ts_set = set()
+    ts_set.update(function_manager.get_available_toolsets())
+    ts_set.update(toolset_manager.get_toolset_names())
     network_functions = set(function_manager.get_network_functions())
 
-    abilities = []
-    for name in sorted(abilities_set):
+    toolsets = []
+    for name in sorted(ts_set):
         if name == "all":
             func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
-            ability_type = "builtin"
+            ts_type = "builtin"
         elif name == "none":
             func_list = []
-            ability_type = "builtin"
+            ts_type = "builtin"
         elif name in function_manager.function_modules:
             func_list = function_manager.function_modules[name]['available_functions']
-            ability_type = "module"
+            ts_type = "module"
         elif toolset_manager.toolset_exists(name):
             func_list = toolset_manager.get_toolset_functions(name)
-            ability_type = "user"
+            ts_type = "user"
         else:
             func_list = []
-            ability_type = "unknown"
+            ts_type = "unknown"
 
-        abilities.append({
+        toolsets.append({
             "name": name,
-            "type": ability_type,
+            "type": ts_type,
             "function_count": len(func_list),
             "functions": func_list,
             "has_network_tools": bool(set(func_list) & network_functions)
         })
-    return {"abilities": abilities}
+    return {"toolsets": toolsets}
 
 
-@app.get("/api/abilities/current")
-async def get_current_ability(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Get current ability."""
-    info = system.llm_chat.function_manager.get_current_ability_info()
+@app.get("/api/toolsets/current")
+async def get_current_toolset(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Get current toolset."""
+    info = system.llm_chat.function_manager.get_current_toolset_info()
     return info
 
 
-@app.post("/api/abilities/{ability_name}/activate")
-async def activate_ability(ability_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Activate an ability."""
-    system.llm_chat.function_manager.update_enabled_functions([ability_name])
-    publish(Events.ABILITY_CHANGED, {"name": ability_name})
+@app.post("/api/toolsets/{toolset_name}/activate")
+async def activate_toolset(toolset_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Activate a toolset."""
+    system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+    publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
     # Persist to chat settings so it survives restart
-    system.llm_chat.session_manager.update_chat_settings({"ability": ability_name})
-    return {"status": "success", "ability": ability_name}
+    system.llm_chat.session_manager.update_chat_settings({"toolset": toolset_name})
+    return {"status": "success", "toolset": toolset_name}
 
 
 @app.get("/api/functions")
@@ -1944,14 +1945,14 @@ async def enable_functions(request: Request, _=Depends(require_login), system=De
     """Enable specific functions."""
     data = await request.json()
     functions = data.get('functions', [])
-    system.llm_chat.function_manager.set_enabled_functions(functions)
-    publish(Events.ABILITY_CHANGED, {"name": "custom", "functions": functions})
+    system.llm_chat.function_manager.update_enabled_functions(functions)
+    publish(Events.TOOLSET_CHANGED, {"name": "custom", "functions": functions})
     return {"status": "success", "enabled": functions}
 
 
-@app.post("/api/abilities/custom")
-async def save_custom_ability(request: Request, _=Depends(require_login)):
-    """Save a custom ability/toolset."""
+@app.post("/api/toolsets/custom")
+async def save_custom_toolset(request: Request, _=Depends(require_login)):
+    """Save a custom toolset."""
     from core.modules.system.toolsets import toolset_manager
     data = await request.json()
     name = data.get('name')
@@ -1964,12 +1965,12 @@ async def save_custom_ability(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=500, detail="Failed to save toolset")
 
 
-@app.delete("/api/abilities/{ability_name}")
-async def delete_ability(ability_name: str, request: Request, _=Depends(require_login)):
-    """Delete a custom ability."""
+@app.delete("/api/toolsets/{toolset_name}")
+async def delete_toolset(toolset_name: str, request: Request, _=Depends(require_login)):
+    """Delete a custom toolset."""
     from core.modules.system.toolsets import toolset_manager
-    if toolset_manager.delete_toolset(ability_name):
-        return {"status": "success", "name": ability_name}
+    if toolset_manager.delete_toolset(toolset_name):
+        return {"status": "success", "name": toolset_name}
     else:
         raise HTTPException(status_code=404, detail="Toolset not found or cannot delete")
 

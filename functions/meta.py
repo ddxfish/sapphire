@@ -29,12 +29,13 @@ AVAILABLE_FUNCTIONS = [
     'change_username',
     'set_tts_voice',
     'list_tools',
+    'get_time',
 ]
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools'],
-    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools'],
+    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
+    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
 }
 
 # Available TTS voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female)
@@ -170,6 +171,19 @@ TOOLS = [
                         "description": "Optional: 'enabled' (default) or 'all'"
                     }
                 },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "get_time",
+            "description": "Get the current system date and time.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
                 "required": []
             }
         }
@@ -650,7 +664,7 @@ def execute(function_name, arguments, config):
                 else:
                     # Get current ability info via API
                     response = requests.get(
-                        f"{main_api_url}/api/abilities/current",
+                        f"{main_api_url}/api/toolsets/current",
                         headers=headers,
                         timeout=5, verify=False
                     )
@@ -692,8 +706,13 @@ def execute(function_name, arguments, config):
                 logger.error(f"Error listing tools: {e}")
                 return f"Error listing tools: {e}", False
 
+        elif function_name == "get_time":
+            from datetime import datetime
+            now = datetime.now()
+            return now.strftime("%A, %B %d, %Y at %I:%M:%S %p"), True
+
         # === Monolith-only tools ===
-        
+
         elif function_name == "edit_prompt":
             from core.modules.system import prompts
             

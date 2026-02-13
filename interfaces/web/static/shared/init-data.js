@@ -6,7 +6,7 @@ let initPromise = null;
 
 /**
  * Fetch init data (cached - only fetches once per page load)
- * @returns {Promise<Object>} Init data with abilities, functions, prompts, spices, etc.
+ * @returns {Promise<Object>} Init data with toolsets, functions, prompts, spices, etc.
  */
 export async function getInitData() {
     if (initData) return initData;
@@ -47,9 +47,9 @@ export function getInitDataSync() {
 }
 
 // Convenience accessors
-export async function getAbilities() {
+export async function getToolsets() {
     const data = await getInitData();
-    return data.abilities;
+    return data.toolsets;
 }
 
 export async function getFunctions() {
