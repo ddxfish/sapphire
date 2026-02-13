@@ -482,12 +482,10 @@ function setToggle(c, sel, active, label) {
     if (label) el.textContent = label;
 }
 
+// Sets --pct on slider; CSS handles the gradient rendering.
 function updateSliderFill(slider) {
     const min = parseFloat(slider.min) || 0;
     const max = parseFloat(slider.max) || 100;
     const pct = ((parseFloat(slider.value) - min) / (max - min)) * 100;
-    const styles = getComputedStyle(document.documentElement);
-    const fill = styles.getPropertyValue('--trim').trim() || '#4a9eff';
-    const bg = styles.getPropertyValue('--bg-tertiary').trim() || '#2a2a2a';
-    slider.style.background = `linear-gradient(to right, ${fill} ${pct}%, ${bg} ${pct}%)`;
+    slider.style.setProperty('--pct', `${pct}%`);
 }

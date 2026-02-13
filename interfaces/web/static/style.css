@@ -277,6 +277,9 @@ body {
     cursor: pointer;
     font-size: var(--font-md);
     transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .vol-btn:hover { background: var(--bg-hover); color: var(--text); }
@@ -643,14 +646,36 @@ body {
     box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
+/*
+ * Sidebar sliders use --pct custom property (set by JS) for fill color.
+ * JS sets: slider.style.setProperty('--pct', '45%')
+ * CSS renders: gradient from trim color to bg-tertiary at that percentage.
+ * No inline style.background hacks. No pseudo-element conflicts.
+ */
 .sb-field input[type="range"] {
+    --pct: 50%;
     width: 100%;
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
-    background: var(--bg-tertiary);
+    background: linear-gradient(to right,
+        var(--trim, var(--accent-blue)) var(--pct),
+        var(--bg-tertiary) var(--pct)) !important;
+}
+
+.sb-field input[type="range"]::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+}
+
+.sb-field input[type="range"]::-moz-range-track {
+    height: 6px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: none;
 }
 
 .sb-field input[type="range"]::-webkit-slider-thumb {
