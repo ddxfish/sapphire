@@ -36,11 +36,14 @@ export function setChatHeaderName(name) {
 }
 
 function initMobileOverflow(rail) {
+    const menu = rail.querySelector('.nav-overflow-menu');
+    const overflow = rail.querySelector('.nav-overflow');
+
     const check = () => {
         if (!isMobile()) {
             rail.querySelectorAll('.nav-item').forEach(i => i.classList.remove('overflow-hidden'));
-            const overflow = rail.querySelector('.nav-overflow');
             if (overflow) overflow.style.display = 'none';
+            if (menu) menu.classList.add('hidden');
             return;
         }
 
@@ -49,22 +52,54 @@ function initMobileOverflow(rail) {
             item.classList.toggle('overflow-hidden', i >= MOBILE_MAX_VISIBLE);
         });
 
-        const overflow = rail.querySelector('.nav-overflow');
         if (overflow) {
             overflow.style.display = items.length > MOBILE_MAX_VISIBLE ? '' : 'none';
+        }
+
+        // Populate overflow menu with hidden items
+        if (menu) {
+            menu.innerHTML = '';
+            items.forEach((item, i) => {
+                if (i < MOBILE_MAX_VISIBLE) return;
+                const viewId = item.dataset.view;
+                const icon = item.querySelector('.nav-icon')?.textContent || '';
+                const label = item.querySelector('.nav-label')?.textContent || viewId;
+                const btn = document.createElement('button');
+                btn.className = 'nav-overflow-item';
+                btn.dataset.view = viewId;
+                btn.innerHTML = `<span>${icon}</span><span>${label}</span>`;
+                menu.appendChild(btn);
+            });
         }
     };
 
     window.addEventListener('resize', check);
     check();
 
-    const overflow = rail.querySelector('.nav-overflow');
     if (overflow) {
-        overflow.addEventListener('click', () => {
-            const menu = rail.querySelector('.nav-overflow-menu');
+        overflow.addEventListener('click', e => {
+            e.stopPropagation();
             if (menu) menu.classList.toggle('hidden');
         });
     }
+
+    // Overflow menu item clicks
+    if (menu) {
+        menu.addEventListener('click', e => {
+            const item = e.target.closest('.nav-overflow-item');
+            if (!item) return;
+            const viewId = item.dataset.view;
+            if (viewId) switchView(viewId);
+            menu.classList.add('hidden');
+        });
+    }
+
+    // Close on outside click
+    document.addEventListener('click', e => {
+        if (menu && !menu.classList.contains('hidden') && !e.target.closest('.nav-overflow') && !e.target.closest('.nav-overflow-menu')) {
+            menu.classList.add('hidden');
+        }
+    });
 }
 
 function isMobile() {

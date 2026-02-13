@@ -145,6 +145,39 @@ body {
 /* Mobile overflow */
 .nav-item.overflow-hidden { display: none !important; }
 
+/* Mobile overflow dropup menu */
+.nav-overflow-menu {
+    position: absolute;
+    bottom: 100%;
+    right: 4px;
+    margin-bottom: 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    min-width: 140px;
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+}
+.nav-overflow-menu.hidden { display: none; }
+.nav-overflow-menu .nav-overflow-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 14px;
+    border: none;
+    background: none;
+    color: var(--text);
+    font-size: var(--font-base);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+}
+.nav-overflow-menu .nav-overflow-item:hover {
+    background: var(--bg-hover);
+}
+
 /* =============================================================================
    CHAT PICKER DROPDOWN (top bar)
    ============================================================================= */
@@ -1564,9 +1597,7 @@ body {
 }
 .avatar-col h4 { margin: 0 0 8px; font-size: var(--font-sm); }
 
-@media (max-width: 960px) {
-    .avatar-section { grid-template-columns: 1fr; }
-}
+/* Avatar section stays 2-column at all widths (images are small) */
 .avatar-preview {
     display: flex;
     gap: 24px;
@@ -1651,14 +1682,13 @@ body {
         gap: 2px;
     }
     .settings-nav-item {
-        flex-shrink: 0;
-        padding: 6px 12px;
+        padding: 6px 8px;
         font-size: var(--font-xs);
         border-radius: var(--radius-sm);
     }
     .settings-nav-label { display: none; }
     .settings-nav-icon { font-size: 1.2em; }
-    .setting-row { grid-template-columns: 1fr; gap: 4px; }
+    .setting-row { grid-template-columns: 1fr auto; gap: 4px; }
     .settings-content { padding: 12px; }
 }
 
@@ -3156,6 +3186,7 @@ a.gallery-caption:hover {
 
     #app-content {
         margin-left: 0;
+        width: 100%;
         margin-bottom: 56px;
         height: calc(100% - 56px);
     }

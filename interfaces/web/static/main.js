@@ -18,12 +18,40 @@ import { getInitData } from './shared/init-data.js';
 // New architecture
 import { registerView, initRouter } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
-import chatView from './views/chat.js';
-import promptsView from './views/prompts.js';
-import toolsetsView from './views/toolsets.js';
-import spicesView from './views/spices.js';
-import scheduleView from './views/schedule.js';
-import settingsView from './views/settings.js';
+
+// View modules loaded dynamically — a broken view cannot kill the app
+const VIEW_MODULES = {
+    chat:     './views/chat.js',
+    prompts:  './views/prompts.js',
+    toolsets: './views/toolsets.js',
+    spices:   './views/spices.js',
+    schedule: './views/schedule.js',
+    settings: './views/settings.js',
+};
+
+async function loadViews() {
+    await Promise.allSettled(
+        Object.entries(VIEW_MODULES).map(async ([id, path]) => {
+            try {
+                const mod = await import(path);
+                registerView(id, mod.default);
+            } catch (e) {
+                console.error(`[Views] Failed to load '${id}' from ${path}:`, e);
+                registerView(id, {
+                    init(el) {
+                        el.innerHTML = `<div class="view-placeholder">
+                            <h2>Failed to load ${id}</h2>
+                            <p style="color:var(--text-muted);font-size:var(--font-sm)">${e.message}</p>
+                            <p style="color:var(--text-muted);font-size:var(--font-sm)">Try a hard refresh (Ctrl+Shift+R)</p>
+                        </div>`;
+                    },
+                    show() {},
+                    hide() {}
+                });
+            }
+        })
+    );
+}
 
 // Initialize appearance settings from localStorage (theme, density, font, trim)
 function initAppearance() {
@@ -91,13 +119,8 @@ async function init() {
         ui.showStatus();
         ui.updateStatus('Loading...');
 
-        // Register views with router
-        registerView('chat', chatView);
-        registerView('prompts', promptsView);
-        registerView('toolsets', toolsetsView);
-        registerView('spices', spicesView);
-        registerView('schedule', scheduleView);
-        registerView('settings', settingsView);
+        // Load views dynamically (isolated — one broken view won't kill the app)
+        await loadViews();
 
         // Init nav rail + router
         initNavRail();
