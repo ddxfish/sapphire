@@ -89,7 +89,7 @@ export async function openSettingsModal() {
         
         // Populate form
         document.getElementById('setting-prompt').value = settings.prompt || 'sapphire';
-        document.getElementById('setting-toolset').value = settings.toolset || settings.ability || 'default';
+        document.getElementById('setting-toolset').value = settings.toolset || settings.ability || 'all';
         document.getElementById('setting-voice').value = settings.voice || 'af_heart';
         document.getElementById('setting-pitch').value = settings.pitch || 0.94;
         document.getElementById('setting-speed').value = settings.speed || 1.3;

@@ -33,6 +33,16 @@ export default {
             });
         });
 
+        // Toggle buttons (Spice, Date/Time)
+        container.querySelectorAll('.sb-toggle').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const active = btn.dataset.active !== 'true';
+                btn.dataset.active = active;
+                btn.classList.toggle('active', active);
+                debouncedSave(container);
+            });
+        });
+
         // Auto-save on any sidebar input change
         container.querySelectorAll('.chat-sidebar select, .chat-sidebar input').forEach(el => {
             const event = el.type === 'range' ? 'input' : 'change';
@@ -54,6 +64,10 @@ export default {
                 if (el.id === 'sb-trim-color') {
                     el.dataset.cleared = 'false';
                     applyTrimColor(el.value);
+                }
+                if (el.id === 'sb-spice-turns') {
+                    const toggle = container.querySelector('#sb-spice-toggle');
+                    if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
                 }
                 debouncedSave(container);
             });
@@ -180,7 +194,7 @@ async function loadSidebar() {
             toolsetSel.innerHTML = init.toolsets.list.map(t =>
                 `<option value="${t.name}">${t.name} (${t.function_count})</option>`
             ).join('');
-            toolsetSel.value = settings.toolset || settings.ability || 'default';
+            toolsetSel.value = settings.toolset || settings.ability || 'all';
         }
 
         // Populate LLM dropdown
@@ -222,10 +236,13 @@ async function loadSidebar() {
         setVal(container, '#sb-voice', settings.voice || 'af_heart');
         setVal(container, '#sb-pitch', settings.pitch || 0.94);
         setVal(container, '#sb-speed', settings.speed || 1.3);
-        setChecked(container, '#sb-spice', settings.spice_enabled !== false);
         setVal(container, '#sb-spice-turns', settings.spice_turns || 3);
-        setChecked(container, '#sb-datetime', settings.inject_datetime === true);
         setVal(container, '#sb-custom-context', settings.custom_context || '');
+
+        // Toggle buttons
+        setToggle(container, '#sb-spice-toggle', settings.spice_enabled !== false,
+            `Spice \u00b7 ${settings.spice_turns || 3}`);
+        setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
         setChecked(container, '#sb-state-enabled', settings.state_engine_enabled === true);
         setChecked(container, '#sb-state-story', settings.state_story_in_prompt !== false);
         setChecked(container, '#sb-state-vars', settings.state_vars_in_prompt === true);
@@ -290,9 +307,9 @@ function collectSettings(container) {
         voice: getVal(container, '#sb-voice'),
         pitch: parseFloat(getVal(container, '#sb-pitch')) || 0.94,
         speed: parseFloat(getVal(container, '#sb-speed')) || 1.3,
-        spice_enabled: getChecked(container, '#sb-spice'),
+        spice_enabled: getToggle(container, '#sb-spice-toggle'),
         spice_turns: parseInt(getVal(container, '#sb-spice-turns')) || 3,
-        inject_datetime: getChecked(container, '#sb-datetime'),
+        inject_datetime: getToggle(container, '#sb-datetime-toggle'),
         custom_context: getVal(container, '#sb-custom-context'),
         llm_primary: getVal(container, '#sb-llm-primary') || 'auto',
         llm_model: getSelectedModel(container),
@@ -390,6 +407,14 @@ function getVal(c, sel) { return c.querySelector(sel)?.value || ''; }
 function setVal(c, sel, v) { const el = c.querySelector(sel); if (el) el.value = v; }
 function getChecked(c, sel) { return c.querySelector(sel)?.checked || false; }
 function setChecked(c, sel, v) { const el = c.querySelector(sel); if (el) el.checked = v; }
+function getToggle(c, sel) { return c.querySelector(sel)?.dataset.active === 'true'; }
+function setToggle(c, sel, active, label) {
+    const el = c.querySelector(sel);
+    if (!el) return;
+    el.dataset.active = active;
+    el.classList.toggle('active', active);
+    if (label) el.textContent = label;
+}
 
 function updateSliderFill(slider) {
     const min = parseFloat(slider.min) || 0;

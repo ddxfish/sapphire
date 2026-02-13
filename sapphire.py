@@ -188,10 +188,11 @@ class VoiceChatSystem:
             
             # Prompt already handled by _prime_default_prompt (checks chat settings first)
 
-            if "ability" in settings:
-                ability_name = settings["ability"]
-                self.llm_chat.function_manager.update_enabled_functions([ability_name])
-                logger.info(f"Applied ability on startup: {ability_name}")
+            toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
+            if toolset_key:
+                toolset_name = settings[toolset_key]
+                self.llm_chat.function_manager.update_enabled_functions([toolset_name])
+                logger.info(f"Applied toolset on startup: {toolset_name}")
             
             logger.info(f"Applied chat settings on startup")
         except Exception as e:

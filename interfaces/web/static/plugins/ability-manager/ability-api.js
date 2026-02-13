@@ -8,17 +8,17 @@ let _initialLoad = true;
 export async function getAbilities() {
   if (_initialLoad) {
     const init = await getInitData();
-    return { abilities: init.abilities.list, count: init.abilities.list.length };
+    return { abilities: init.toolsets.list, count: init.toolsets.list.length };
   }
-  return fetchWithTimeout('/api/abilities');
+  return fetchWithTimeout('/api/toolsets');
 }
 
 export async function getCurrentAbility() {
   if (_initialLoad) {
     const init = await getInitData();
-    return init.abilities.current;
+    return init.toolsets.current;
   }
-  return fetchWithTimeout('/api/abilities/current');
+  return fetchWithTimeout('/api/toolsets/current');
 }
 
 export async function getFunctions() {
@@ -32,7 +32,7 @@ export async function getFunctions() {
 
 // These still need direct API calls (mutations)
 export async function activateAbility(name) {
-  const res = await fetch(`/api/abilities/${encodeURIComponent(name)}/activate`, {
+  const res = await fetch(`/api/toolsets/${encodeURIComponent(name)}/activate`, {
     method: 'POST'
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -50,7 +50,7 @@ export async function enableFunctions(functionList) {
 }
 
 export async function saveCustomAbility(name, functionList) {
-  const res = await fetch('/api/abilities/custom', {
+  const res = await fetch('/api/toolsets/custom', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, functions: functionList })
@@ -60,7 +60,7 @@ export async function saveCustomAbility(name, functionList) {
 }
 
 export async function deleteAbility(name) {
-  const res = await fetch(`/api/abilities/${encodeURIComponent(name)}`, {
+  const res = await fetch(`/api/toolsets/${encodeURIComponent(name)}`, {
     method: 'DELETE'
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

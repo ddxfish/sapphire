@@ -401,30 +401,63 @@ body {
 }
 
 .sidebar-section {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 
 .sb-field {
-    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
 }
 
 .sb-field > label:first-child {
-    display: block;
-    margin-bottom: 4px;
+    width: 56px;
+    flex-shrink: 0;
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    text-transform: lowercase;
+}
+
+/* Checkbox labels take full width (state engine toggles) */
+.sb-field > label:first-child:has(input[type="checkbox"]) {
+    width: auto;
     font-size: var(--font-sm);
     color: var(--text-secondary);
+    text-transform: none;
 }
 
 .sb-field select,
-.sb-field input[type="text"],
-.sb-field textarea {
-    width: 100%;
-    padding: 6px 8px;
+.sb-field input[type="text"] {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 6px;
     background: var(--input-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text);
     font-size: var(--font-sm);
+}
+
+.sb-field textarea {
+    width: 100%;
+    padding: 5px 6px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--font-sm);
+}
+
+/* Stacked variant for sliders and textareas */
+.sb-field-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+}
+
+.sb-field-stack > label:first-child {
+    width: auto;
 }
 
 .sb-field select:focus,
@@ -479,13 +512,55 @@ body {
     margin-right: 6px;
 }
 
+.sb-field input[type="number"] {
+    width: 56px;
+    padding: 5px 6px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--font-sm);
+}
+
 .sb-field-row {
     display: flex;
     gap: 6px;
     align-items: center;
+    flex: 1;
+    min-width: 0;
 }
 
-.sb-field-row select { flex: 1; }
+.sb-field-row select { flex: 1; min-width: 0; }
+
+/* Quick toggle buttons */
+.sb-toggles {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.sb-toggle {
+    flex: 1;
+    padding: 4px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+}
+
+.sb-toggle:hover {
+    background: var(--bg-hover);
+}
+
+.sb-toggle.active {
+    border-color: var(--trim, var(--accent-blue));
+    color: var(--text);
+    background: var(--trim-light, rgba(74, 158, 255, 0.1));
+}
 
 .sb-btn-sm {
     padding: 4px 10px;
@@ -526,25 +601,30 @@ body {
 }
 
 /* Sidebar accordions */
+.sidebar-accordion {
+    margin-bottom: 2px;
+}
+
 .sidebar-accordion-header {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px;
+    padding: 5px 8px;
     cursor: pointer;
     border-radius: var(--radius-sm);
-    font-size: var(--font-sm);
-    color: var(--text-secondary);
+    font-size: var(--font-xs);
+    color: var(--text-muted);
     transition: background 0.15s;
     user-select: none;
 }
 
 .sidebar-accordion-header:hover {
     background: var(--bg-hover);
+    color: var(--text-secondary);
 }
 
 .sidebar-accordion-header .accordion-arrow {
-    font-size: 8px;
+    font-size: 7px;
     transition: transform 0.2s;
 }
 
@@ -553,7 +633,7 @@ body {
 }
 
 .sidebar-accordion-content {
-    padding: 4px 0 4px 8px;
+    padding: 4px 0 4px 6px;
 }
 
 /* Kebab buttons */

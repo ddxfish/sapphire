@@ -175,34 +175,57 @@
                     <div class="chat-sidebar-inner">
                         <div class="sidebar-section">
                             <div class="sb-field">
-                                <label for="sb-prompt">Prompt</label>
+                                <label for="sb-prompt">prompt</label>
                                 <select id="sb-prompt"><option value="sapphire">Sapphire</option></select>
                             </div>
                             <div class="sb-field">
-                                <label for="sb-toolset">Toolset</label>
-                                <select id="sb-toolset"><option value="default">Default</option></select>
+                                <label for="sb-toolset">toolset</label>
+                                <select id="sb-toolset"><option value="all">All</option></select>
                             </div>
                             <div class="sb-field">
-                                <label for="sb-llm-primary">Provider</label>
+                                <label for="sb-voice">voice</label>
+                                <select id="sb-voice">
+                                    <option value="am_adam">&#x1F1FA;&#x1F1F8;&#x1F468; Adam</option>
+                                    <option value="am_eric">&#x1F1FA;&#x1F1F8;&#x1F468; Eric</option>
+                                    <option value="am_liam">&#x1F1FA;&#x1F1F8;&#x1F468; Liam</option>
+                                    <option value="am_michael">&#x1F1FA;&#x1F1F8;&#x1F468; Michael</option>
+                                    <option value="af_bella">&#x1F1FA;&#x1F1F8;&#x1F469; Bella</option>
+                                    <option value="af_nicole">&#x1F1FA;&#x1F1F8;&#x1F469; Nicole</option>
+                                    <option value="af_heart">&#x1F1FA;&#x1F1F8;&#x1F469; Heart</option>
+                                    <option value="af_jessica">&#x1F1FA;&#x1F1F8;&#x1F469; Jessica</option>
+                                    <option value="af_sarah">&#x1F1FA;&#x1F1F8;&#x1F469; Sarah</option>
+                                    <option value="af_river">&#x1F1FA;&#x1F1F8;&#x1F469; River</option>
+                                    <option value="af_sky">&#x1F1FA;&#x1F1F8;&#x1F469; Sky</option>
+                                    <option value="bf_emma">&#x1F1EC;&#x1F1E7;&#x1F469; Emma</option>
+                                    <option value="bf_isabella">&#x1F1EC;&#x1F1E7;&#x1F469; Isabella</option>
+                                    <option value="bf_alice">&#x1F1EC;&#x1F1E7;&#x1F469; Alice</option>
+                                    <option value="bf_lily">&#x1F1EC;&#x1F1E7;&#x1F469; Lily</option>
+                                    <option value="bm_george">&#x1F1EC;&#x1F1E7;&#x1F468; George</option>
+                                    <option value="bm_daniel">&#x1F1EC;&#x1F1E7;&#x1F468; Daniel</option>
+                                    <option value="bm_lewis">&#x1F1EC;&#x1F1E7;&#x1F468; Lewis</option>
+                                </select>
+                            </div>
+                            <div class="sb-field">
+                                <label for="sb-llm-primary">provider</label>
                                 <select id="sb-llm-primary"><option value="auto">Auto</option></select>
                             </div>
                             <div class="sb-field" id="sb-model-group" style="display:none">
-                                <label for="sb-llm-model">Model</label>
+                                <label for="sb-llm-model">model</label>
                                 <select id="sb-llm-model"></select>
                             </div>
                             <div class="sb-field" id="sb-model-custom-group" style="display:none">
-                                <label for="sb-llm-model-custom">Model</label>
+                                <label for="sb-llm-model-custom">model</label>
                                 <input type="text" id="sb-llm-model-custom" placeholder="Model name">
                             </div>
                             <div class="sb-field">
-                                <label for="sb-memory-scope">Memory</label>
+                                <label for="sb-memory-scope">memory</label>
                                 <div class="sb-field-row">
                                     <select id="sb-memory-scope"><option value="none">None</option><option value="default">default</option></select>
                                     <button type="button" id="sb-new-scope" class="sb-btn-sm" title="New slot">+</button>
                                 </div>
                             </div>
                             <div class="sb-field">
-                                <label for="sb-trim-color">Accent</label>
+                                <label for="sb-trim-color">accent</label>
                                 <div class="sb-field-row">
                                     <input type="color" id="sb-trim-color" value="#4a9eff">
                                     <button type="button" id="sb-reset-trim" class="sb-btn-sm" title="Reset">Reset</button>
@@ -210,41 +233,24 @@
                             </div>
                         </div>
 
-                        <!-- TTS Accordion -->
+                        <!-- Quick toggles -->
+                        <div class="sb-toggles">
+                            <button type="button" class="sb-toggle active" id="sb-spice-toggle" data-active="true">Spice &middot; 3</button>
+                            <button type="button" class="sb-toggle" id="sb-datetime-toggle" data-active="false">Date/Time</button>
+                        </div>
+
+                        <!-- TTS Tuning Accordion -->
                         <div class="sidebar-section sidebar-accordion">
                             <div class="sidebar-accordion-header">
                                 <span class="accordion-arrow">&#x25B6;</span>
-                                <span>Text-to-Speech</span>
+                                <span>TTS Tuning</span>
                             </div>
                             <div class="sidebar-accordion-content" style="display:none">
-                                <div class="sb-field">
-                                    <label for="sb-voice">Voice</label>
-                                    <select id="sb-voice">
-                                        <option value="am_adam">&#x1F1FA;&#x1F1F8;&#x1F468; Adam</option>
-                                        <option value="am_eric">&#x1F1FA;&#x1F1F8;&#x1F468; Eric</option>
-                                        <option value="am_liam">&#x1F1FA;&#x1F1F8;&#x1F468; Liam</option>
-                                        <option value="am_michael">&#x1F1FA;&#x1F1F8;&#x1F468; Michael</option>
-                                        <option value="af_bella">&#x1F1FA;&#x1F1F8;&#x1F469; Bella</option>
-                                        <option value="af_nicole">&#x1F1FA;&#x1F1F8;&#x1F469; Nicole</option>
-                                        <option value="af_heart">&#x1F1FA;&#x1F1F8;&#x1F469; Heart</option>
-                                        <option value="af_jessica">&#x1F1FA;&#x1F1F8;&#x1F469; Jessica</option>
-                                        <option value="af_sarah">&#x1F1FA;&#x1F1F8;&#x1F469; Sarah</option>
-                                        <option value="af_river">&#x1F1FA;&#x1F1F8;&#x1F469; River</option>
-                                        <option value="af_sky">&#x1F1FA;&#x1F1F8;&#x1F469; Sky</option>
-                                        <option value="bf_emma">&#x1F1EC;&#x1F1E7;&#x1F469; Emma</option>
-                                        <option value="bf_isabella">&#x1F1EC;&#x1F1E7;&#x1F469; Isabella</option>
-                                        <option value="bf_alice">&#x1F1EC;&#x1F1E7;&#x1F469; Alice</option>
-                                        <option value="bf_lily">&#x1F1EC;&#x1F1E7;&#x1F469; Lily</option>
-                                        <option value="bm_george">&#x1F1EC;&#x1F1E7;&#x1F468; George</option>
-                                        <option value="bm_daniel">&#x1F1EC;&#x1F1E7;&#x1F468; Daniel</option>
-                                        <option value="bm_lewis">&#x1F1EC;&#x1F1E7;&#x1F468; Lewis</option>
-                                    </select>
-                                </div>
-                                <div class="sb-field">
+                                <div class="sb-field sb-field-stack">
                                     <label>Pitch: <span id="sb-pitch-val">0.94</span></label>
                                     <input type="range" id="sb-pitch" min="0.5" max="1.5" step="0.02" value="0.94">
                                 </div>
-                                <div class="sb-field">
+                                <div class="sb-field sb-field-stack">
                                     <label>Speed: <span id="sb-speed-val">1.3</span></label>
                                     <input type="range" id="sb-speed" min="0.5" max="2.5" step="0.1" value="1.3">
                                 </div>
@@ -259,18 +265,10 @@
                             </div>
                             <div class="sidebar-accordion-content" style="display:none">
                                 <div class="sb-field">
-                                    <label>
-                                        <input type="checkbox" id="sb-spice" checked>
-                                        Spice every <input type="number" id="sb-spice-turns" min="1" max="20" value="3" style="width:3em"> turns
-                                    </label>
+                                    <label for="sb-spice-turns">spice turns</label>
+                                    <input type="number" id="sb-spice-turns" min="1" max="20" value="3">
                                 </div>
-                                <div class="sb-field">
-                                    <label>
-                                        <input type="checkbox" id="sb-datetime">
-                                        Inject Date/Time
-                                    </label>
-                                </div>
-                                <div class="sb-field">
+                                <div class="sb-field sb-field-stack">
                                     <label for="sb-custom-context">Custom Context</label>
                                     <textarea id="sb-custom-context" rows="3" placeholder="Injected into system prompt..."></textarea>
                                 </div>
@@ -288,7 +286,7 @@
                                     <label><input type="checkbox" id="sb-state-enabled"> Enable</label>
                                 </div>
                                 <div class="sb-field">
-                                    <label for="sb-state-preset">Preset</label>
+                                    <label for="sb-state-preset">preset</label>
                                     <select id="sb-state-preset"><option value="">None</option></select>
                                 </div>
                                 <div class="sb-field">
