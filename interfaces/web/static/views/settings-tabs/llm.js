@@ -31,9 +31,10 @@ export default {
         const ordered = [...fallbackOrder];
         Object.keys(providers).forEach(k => { if (!ordered.includes(k)) ordered.push(k); });
 
+        // Use pre-fetched metadata from ctx, fall back to local cache
+        const meta = ctx.providerMeta || providerMetadata;
         const cards = ordered.filter(k => providers[k]).map((k, i) => {
-            const meta = providerMetadata[k] || {};
-            return renderProviderCard(k, providers[k], meta, i, generationProfiles);
+            return renderProviderCard(k, providers[k], meta[k] || {}, i, generationProfiles);
         }).join('');
 
         return `
@@ -48,23 +49,10 @@ export default {
     },
 
     async attachListeners(ctx, el) {
-        // Load metadata from API
-        try {
-            const data = await fetchProviderData();
-            providerMetadata = data.metadata || {};
-            // Refresh model dropdowns with real metadata
-            el.querySelectorAll('.model-select').forEach(select => {
-                const key = select.dataset.provider;
-                const meta = providerMetadata[key];
-                if (!meta?.model_options) return;
-                const cur = select.value;
-                const isCustom = cur === '__custom__' || (cur && !Object.keys(meta.model_options).includes(cur));
-                select.innerHTML = Object.entries(meta.model_options)
-                    .map(([m, label]) => `<option value="${m}" ${cur === m ? 'selected' : ''}>${label}</option>`)
-                    .join('') + `<option value="__custom__" ${isCustom ? 'selected' : ''}>Other (custom)</option>`;
-                if (isCustom && cur !== '__custom__') select.value = '__custom__';
-            });
-        } catch {}
+        // Sync local metadata cache from ctx (pre-fetched in loadData)
+        if (ctx.providerMeta && Object.keys(ctx.providerMeta).length) {
+            providerMetadata = ctx.providerMeta;
+        }
 
         refreshProviderKeyStatus(el);
 

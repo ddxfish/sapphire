@@ -23,7 +23,7 @@ export default {
         const font = localStorage.getItem('sapphire-font') || 'system';
         const trim = localStorage.getItem('sapphire-trim') || '#4a9eff';
 
-        return `
+        return `<div class="settings-grid">
             <div class="setting-row">
                 <div class="setting-label"><label>Theme</label><div class="setting-help">Color scheme</div></div>
                 <div class="setting-input">
@@ -70,7 +70,7 @@ export default {
                     </label>
                 </div>
             </div>
-        `;
+        </div>`;
     },
 
     attachListeners(ctx, el) {

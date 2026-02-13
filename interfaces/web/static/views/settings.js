@@ -26,6 +26,7 @@ let pendingChanges = {};
 let wakewordModels = [];
 let availableThemes = ['dark'];
 let avatarPaths = { user: null, assistant: null };
+let providerMeta = {};
 
 export default {
     init(el) { container = el; },
@@ -48,7 +49,7 @@ async function loadData() {
         overrides = settingsData.user_overrides || [];
         help = helpData.help || {};
 
-        await Promise.all([loadThemes(), loadWakewordModels(), loadAvatarPaths()]);
+        await Promise.all([loadThemes(), loadWakewordModels(), loadAvatarPaths(), loadProviderMeta()]);
     } catch (e) {
         console.warn('Settings load failed:', e);
     }
@@ -65,6 +66,13 @@ async function loadWakewordModels() {
     try {
         const res = await fetch('/api/settings/wakeword-models');
         if (res.ok) { const d = await res.json(); wakewordModels = d.all || []; }
+    } catch {}
+}
+
+async function loadProviderMeta() {
+    try {
+        const res = await fetch('/api/llm/providers');
+        if (res.ok) { const d = await res.json(); providerMeta = d.metadata || {}; }
     } catch {}
 }
 
@@ -139,7 +147,7 @@ function renderTabContent() {
 function createCtx() {
     return {
         settings, help, overrides, pendingChanges,
-        wakewordModels, availableThemes, avatarPaths,
+        wakewordModels, availableThemes, avatarPaths, providerMeta,
         renderFields, renderAccordion, renderInput, formatLabel,
         attachAccordionListeners,
         markChanged(key, value) { pendingChanges[key] = value; },
@@ -153,7 +161,7 @@ function createCtx() {
 // ── Generic Field Renderer ──
 
 function renderFields(keys) {
-    return keys.map(key => {
+    const rows = keys.map(key => {
         const value = settings[key];
         if (value === undefined) return '';
 
@@ -161,8 +169,9 @@ function renderFields(keys) {
         const inputType = api.getInputType(value);
         const h = help[key];
 
+        const isFullWidth = key.endsWith('_ENABLED');
         return `
-            <div class="setting-row${isOverridden ? ' overridden' : ''}" data-key="${key}">
+            <div class="setting-row${isOverridden ? ' overridden' : ''}${isFullWidth ? ' full-width' : ''}" data-key="${key}">
                 <div class="setting-label">
                     <div class="setting-label-row">
                         <label>${formatLabel(key)}</label>
@@ -180,6 +189,7 @@ function renderFields(keys) {
             </div>
         `;
     }).join('');
+    return `<div class="settings-grid">${rows}</div>`;
 }
 
 function renderInput(key, value, type) {

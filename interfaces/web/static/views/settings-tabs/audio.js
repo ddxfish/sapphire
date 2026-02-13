@@ -11,25 +11,27 @@ export default {
 
     render(ctx) {
         return `
-            <div class="audio-section">
-                <h4>Input Device (Microphone)</h4>
-                <div style="display:flex;gap:8px;margin-bottom:8px">
-                    <select id="audio-input-select" style="flex:1;padding:6px 8px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm)">
-                        <option value="auto">Auto-detect</option>
-                    </select>
-                    <button class="btn-sm" data-test="input">\uD83C\uDF99 Test</button>
+            <div class="audio-grid">
+                <div class="audio-section">
+                    <h4>Input Device (Microphone)</h4>
+                    <div style="display:flex;gap:8px;margin-bottom:8px">
+                        <select id="audio-input-select" style="flex:1;padding:6px 8px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm)">
+                            <option value="auto">Auto-detect</option>
+                        </select>
+                        <button class="btn-sm" data-test="input">\uD83C\uDF99 Test</button>
+                    </div>
+                    <div class="test-result" data-result="input"></div>
                 </div>
-                <div class="test-result" data-result="input"></div>
-            </div>
-            <div class="audio-section">
-                <h4>Output Device (Speakers)</h4>
-                <div style="display:flex;gap:8px;margin-bottom:8px">
-                    <select id="audio-output-select" style="flex:1;padding:6px 8px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm)">
-                        <option value="auto">System default</option>
-                    </select>
-                    <button class="btn-sm" data-test="output">\uD83D\uDD0A Test</button>
+                <div class="audio-section">
+                    <h4>Output Device (Speakers)</h4>
+                    <div style="display:flex;gap:8px;margin-bottom:8px">
+                        <select id="audio-output-select" style="flex:1;padding:6px 8px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm)">
+                            <option value="auto">System default</option>
+                        </select>
+                        <button class="btn-sm" data-test="output">\uD83D\uDD0A Test</button>
+                    </div>
+                    <div class="test-result" data-result="output"></div>
                 </div>
-                <div class="test-result" data-result="output"></div>
             </div>
             ${ctx.renderAccordion('audio-adv', this.advancedKeys)}
         `;
@@ -41,6 +43,5 @@ export default {
             onInputChange: v => { ctx.settings.AUDIO_INPUT_DEVICE = v; ctx.markChanged('AUDIO_INPUT_DEVICE', v); },
             onOutputChange: v => { ctx.settings.AUDIO_OUTPUT_DEVICE = v; ctx.markChanged('AUDIO_OUTPUT_DEVICE', v); }
         });
-        ctx.attachAccordionListeners(el);
     }
 };

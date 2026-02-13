@@ -40,8 +40,6 @@ export default {
     },
 
     attachListeners(ctx, el) {
-        ctx.attachAccordionListeners(el);
-
         el.querySelector('#dz-reset-all')?.addEventListener('click', async () => {
             if (!confirm('Reset ALL settings to defaults?')) return;
             const t = prompt('Type RESET to confirm:');
