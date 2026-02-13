@@ -402,9 +402,7 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-bottom: 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
 }
 
 .sb-accent-circle {
@@ -436,13 +434,13 @@ body {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 2px 6px;
+    padding: 4px 6px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text);
     font-weight: 600;
-    font-size: var(--font-md);
+    font-size: var(--font-base);
     cursor: pointer;
     transition: background 0.15s;
     width: 100%;
@@ -504,11 +502,12 @@ body {
 }
 
 .sb-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+.sb-icon-danger { font-size: 12px; line-height: 1; }
 .sb-icon-danger:hover { color: var(--error); }
 
 .sb-collapse-btn {
-    font-size: 10px;
-    color: var(--text-dim);
+    font-size: 12px;
+    color: var(--text-muted);
     transition: transform 0.2s, background 0.15s, color 0.15s;
 }
 
@@ -516,11 +515,26 @@ body {
 .sb-chat-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    justify-content: flex-end;
+    gap: 3px;
+    padding-bottom: 6px;
     margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
 }
 
-.sb-kebab { position: relative; margin-left: auto; }
+.sb-chat-actions > .sb-icon-btn,
+.sb-chat-actions > .sb-kebab > .sb-icon-btn {
+    width: 28px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.sb-kebab { position: relative; }
 
 .sb-kebab .kebab-dropdown {
     position: absolute;
