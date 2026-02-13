@@ -13,9 +13,12 @@ import llmTab from './settings-tabs/llm.js';
 import toolsTab from './settings-tabs/tools.js';
 import networkTab from './settings-tabs/network.js';
 import wakewordTab from './settings-tabs/wakeword.js';
+import pluginsTab from './settings-tabs/plugins.js';
 import systemTab from './settings-tabs/system.js';
 
-const TABS = [identityTab, appearanceTab, audioTab, ttsTab, sttTab, llmTab, toolsTab, networkTab, wakewordTab, systemTab];
+import { getRegisteredTabs } from '../plugins/plugins-modal/plugin-registry.js';
+
+const STATIC_TABS = [identityTab, appearanceTab, audioTab, ttsTab, sttTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, systemTab];
 
 let container = null;
 let activeTab = 'identity';
@@ -27,6 +30,9 @@ let wakewordModels = [];
 let availableThemes = ['dark'];
 let avatarPaths = { user: null, assistant: null };
 let providerMeta = {};
+let dynamicTabs = [];
+let pluginList = [];
+let lockedPlugins = [];
 
 export default {
     init(el) { container = el; },
@@ -49,10 +55,72 @@ async function loadData() {
         overrides = settingsData.user_overrides || [];
         help = helpData.help || {};
 
-        await Promise.all([loadThemes(), loadWakewordModels(), loadAvatarPaths(), loadProviderMeta()]);
+        await Promise.all([loadThemes(), loadWakewordModels(), loadAvatarPaths(), loadProviderMeta(), loadPluginList()]);
     } catch (e) {
         console.warn('Settings load failed:', e);
     }
+}
+
+async function loadPluginList() {
+    try {
+        const res = await fetch('/api/webui/plugins');
+        if (res.ok) {
+            const d = await res.json();
+            pluginList = d.plugins || [];
+            lockedPlugins = d.locked || [];
+            // Auto-load settings tabs for enabled plugins
+            for (const p of pluginList) {
+                if (p.enabled) await loadPluginTab(p.name).catch(() => {});
+            }
+        }
+    } catch {}
+}
+
+async function loadPluginTab(name) {
+    try {
+        const mod = await import(`/static/plugins/${name}/index.js`);
+        const plugin = mod.default;
+        if (plugin?.init) {
+            const dummy = document.createElement('div');
+            plugin.init(dummy);
+        }
+        syncDynamicTabs();
+    } catch {
+        // Plugin has no settings tab — that's fine
+    }
+}
+
+function syncDynamicTabs() {
+    const registered = getRegisteredTabs();
+    dynamicTabs = registered.map(reg => ({
+        id: reg.id,
+        name: reg.name,
+        icon: reg.icon,
+        description: reg.helpText || `${reg.name} plugin settings`,
+        isPlugin: true,
+        _reg: reg,
+        render(ctx) {
+            return `<div class="plugin-tab-container" id="ptab-${reg.id}"></div>`;
+        },
+        async attachListeners(ctx, el) {
+            const box = el.querySelector(`#ptab-${reg.id}`);
+            if (!box) return;
+            try {
+                const settings = await reg.load();
+                reg.render(box, settings);
+            } catch (e) {
+                box.innerHTML = `<p style="color:var(--error)">Failed to load: ${e.message}</p>`;
+            }
+        }
+    }));
+}
+
+function getAllTabs() {
+    // Insert dynamic tabs between plugins and system
+    const idx = STATIC_TABS.findIndex(t => t.id === 'system');
+    const before = STATIC_TABS.slice(0, idx);
+    const after = STATIC_TABS.slice(idx);
+    return [...before, ...dynamicTabs, ...after];
 }
 
 async function loadThemes() {
@@ -93,11 +161,12 @@ function render() {
     if (!container) return;
     const meta = getTabMeta();
 
+    const tabs = getAllTabs();
     container.innerHTML = `
         <div class="settings-view">
             <div class="settings-sidebar">
-                ${TABS.map(t => `
-                    <button class="settings-nav-item${t.id === activeTab ? ' active' : ''}" data-tab="${t.id}">
+                ${tabs.map(t => `
+                    <button class="settings-nav-item${t.id === activeTab ? ' active' : ''}${t.isPlugin ? ' plugin-tab' : ''}" data-tab="${t.id}">
                         <span class="settings-nav-icon">${t.icon}</span>
                         <span class="settings-nav-label">${t.name}</span>
                     </button>
@@ -124,7 +193,7 @@ function render() {
 }
 
 function getTabMeta() {
-    return TABS.find(t => t.id === activeTab) || TABS[0];
+    return getAllTabs().find(t => t.id === activeTab) || STATIC_TABS[0];
 }
 
 function renderTabContent() {
@@ -148,13 +217,17 @@ function createCtx() {
     return {
         settings, help, overrides, pendingChanges,
         wakewordModels, availableThemes, avatarPaths, providerMeta,
+        pluginList, lockedPlugins,
         renderFields, renderAccordion, renderInput, formatLabel,
         attachAccordionListeners,
         markChanged(key, value) { pendingChanges[key] = value; },
         async refreshTab() {
             await loadData();
             renderTabContent();
-        }
+        },
+        loadPluginTab,
+        syncDynamicTabs,
+        refreshSidebar() { render(); }
     };
 }
 
@@ -325,6 +398,27 @@ function attachAccordionListeners(el) {
 // ── Save ──
 
 async function saveChanges() {
+    // Plugin tabs have their own save flow
+    const tab = getTabMeta();
+    if (tab.isPlugin && tab._reg) {
+        const reg = tab._reg;
+        const box = container?.querySelector(`#ptab-${reg.id}`);
+        if (box && reg.getSettings && reg.save) {
+            const saveBtn = container?.querySelector('#settings-save');
+            if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+            try {
+                const s = reg.getSettings(box);
+                await reg.save(s);
+                ui.showToast(`${reg.name} settings saved`, 'success');
+            } catch (e) {
+                ui.showToast(`Save failed: ${e.message}`, 'error');
+            } finally {
+                if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
+            }
+        }
+        return;
+    }
+
     const valid = {};
     for (const [key, value] of Object.entries(pendingChanges)) {
         if (key && key !== 'undefined') valid[key] = value;

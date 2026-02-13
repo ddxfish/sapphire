@@ -3662,3 +3662,62 @@ a.gallery-caption:hover {
     width: 100%;
     text-align: left;
 }
+
+/* =============================================================================
+   PLUGIN TOGGLES (Settings → Plugins tab)
+   ============================================================================= */
+
+.plugin-toggles-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.plugin-toggle-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: var(--radius-md);
+    transition: border-color 0.15s ease;
+}
+
+.plugin-toggle-item.enabled {
+    border-color: var(--trim-border, rgba(74,158,255,0.3));
+}
+
+.plugin-toggle-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.plugin-toggle-name {
+    font-weight: 500;
+}
+
+.plugin-toggle-badge {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+}
+
+.plugin-tab-container {
+    min-height: 100px;
+}
+
+.settings-nav-item.plugin-tab {
+    font-size: 0.92em;
+    opacity: 0.85;
+}
+.settings-nav-item.plugin-tab:hover,
+.settings-nav-item.plugin-tab.active {
+    opacity: 1;
+}

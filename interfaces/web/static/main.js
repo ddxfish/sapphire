@@ -103,6 +103,9 @@ async function init() {
         initNavRail();
         initRouter('chat');
 
+        // Hide nav items for disabled plugins (non-blocking)
+        syncNavWithPlugins();
+
         // Fetch init data
         let initData = null;
         try {
@@ -182,6 +185,22 @@ async function init() {
         }
         ui.hideStatus();
     }
+}
+
+// Plugins that own a nav-rail view — hide nav if plugin disabled
+const PLUGIN_NAV_MAP = { continuity: 'schedule' };
+
+function syncNavWithPlugins() {
+    fetch('/api/webui/plugins').then(r => r.ok ? r.json() : null).then(d => {
+        if (!d?.plugins) return;
+        for (const [plugin, view] of Object.entries(PLUGIN_NAV_MAP)) {
+            const p = d.plugins.find(x => x.name === plugin);
+            if (p && !p.enabled) {
+                const btn = document.querySelector(`.nav-item[data-view="${view}"]`);
+                if (btn) btn.style.display = 'none';
+            }
+        }
+    }).catch(() => {});
 }
 
 function initEventBus() {
