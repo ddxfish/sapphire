@@ -16,14 +16,20 @@ const SAVE_DEBOUNCE = 500;
 
 export default {
     init(container) {
-        // Sidebar collapse toggle
+        // Sidebar collapse/expand
         const toggle = container.querySelector('#chat-sidebar-toggle');
         if (toggle) toggle.addEventListener('click', () => toggleSidebar(container));
+        const expand = container.querySelector('#chat-sidebar-expand');
+        if (expand) expand.addEventListener('click', () => toggleSidebar(container));
 
         // Restore sidebar state
         const collapsed = localStorage.getItem('sapphire-chat-sidebar') === 'collapsed';
         const sidebar = container.querySelector('.chat-sidebar');
         if (sidebar && collapsed) sidebar.classList.add('collapsed');
+
+        // Reload sidebar settings whenever active chat changes
+        const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
+        if (chatSelect) chatSelect.addEventListener('change', () => loadSidebar());
 
         // Accordion headers in sidebar
         container.querySelectorAll('.sidebar-accordion-header').forEach(header => {
@@ -44,7 +50,7 @@ export default {
             });
             const sbDropdown = container.querySelector('#sb-chat-picker-dropdown');
             if (sbDropdown) {
-                sbDropdown.addEventListener('click', e => {
+                sbDropdown.addEventListener('click', async e => {
                     const item = e.target.closest('.chat-picker-item');
                     if (!item) return;
                     const chatName = item.dataset.chat;
@@ -66,14 +72,21 @@ export default {
                     // Sync hidden select and trigger change
                     const chatSelect = getElements().chatSelect;
                     if (chatSelect) chatSelect.value = chatName;
-                    handleChatChange();
+                    await handleChatChange();
+                    await loadSidebar();
                 });
             }
         }
 
         // Sidebar new/delete chat
-        container.querySelector('#sb-new-chat')?.addEventListener('click', () => handleNewChat());
-        container.querySelector('#sb-delete-chat')?.addEventListener('click', () => handleDeleteChat());
+        container.querySelector('#sb-new-chat')?.addEventListener('click', async () => {
+            await handleNewChat();
+            await loadSidebar();
+        });
+        container.querySelector('#sb-delete-chat')?.addEventListener('click', async () => {
+            await handleDeleteChat();
+            await loadSidebar();
+        });
 
         // Close sidebar picker on outside click
         document.addEventListener('click', e => {

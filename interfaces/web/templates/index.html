@@ -103,31 +103,6 @@
              CHAT VIEW
              ============================================================ -->
         <div id="view-chat" class="view active">
-            <!-- Chat Header Bar -->
-            <div class="chat-header">
-                <div class="chat-header-actions">
-                    <!-- Volume control -->
-                    <div class="volume-compact" id="volume-compact">
-                        <button id="mute-btn" class="header-icon-btn" title="Mute/Unmute">&#x1F50A;</button>
-                        <div class="volume-popover" id="volume-popover">
-                            <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
-                        </div>
-                    </div>
-                    <!-- Chat menu -->
-                    <div class="kebab-menu" id="chat-menu">
-                        <button class="header-icon-btn kebab-btn" title="Chat Menu">&#x22EE;</button>
-                        <div class="kebab-dropdown">
-                            <button id="clear-chat-btn">Clear Chat</button>
-                            <hr>
-                            <button id="import-chat-btn">Import</button>
-                            <button id="export-chat-btn">Export</button>
-                        </div>
-                    </div>
-                    <!-- Sidebar toggle -->
-                    <button id="chat-sidebar-toggle" class="header-icon-btn" title="Toggle Settings">&#x25C0;</button>
-                </div>
-            </div>
-
             <!-- Chat Content + Settings Sidebar -->
             <div class="chat-body">
                 <!-- Messages area -->
@@ -141,6 +116,12 @@
                         <div id="context-bar"></div>
                         <div id="image-preview-area" style="display: none;"></div>
                         <form id="chat-form">
+                            <div class="volume-compact" id="volume-compact">
+                                <button type="button" id="mute-btn" class="vol-btn" title="Volume">&#x1F50A;</button>
+                                <div class="volume-popover" id="volume-popover">
+                                    <input type="range" id="volume-slider" min="0" max="100" value="100" title="Volume">
+                                </div>
+                            </div>
                             <button type="button" id="mic-btn" title="Hold to record">&#x1F3A4;</button>
                             <div class="textarea-wrapper">
                                 <button type="button" id="image-upload-btn" title="Attach image (or paste/drop)">&#x1F4CE;</button>
@@ -161,9 +142,9 @@
                 <!-- Chat Settings Sidebar (right) -->
                 <aside class="chat-sidebar">
                     <div class="chat-sidebar-inner">
-                        <!-- Chat header: accent circle + chat name + add/delete -->
+                        <!-- Row 1: accent circle + chat name + collapse -->
                         <div class="sb-chat-header">
-                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color">
+                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color (double-click to reset)">
                             <div class="sb-chat-picker" id="sb-chat-picker">
                                 <button class="sb-chat-picker-btn" id="sb-chat-picker-btn">
                                     <span id="sb-chat-name">Chat</span>
@@ -171,8 +152,20 @@
                                 </button>
                                 <div class="sb-chat-picker-dropdown" id="sb-chat-picker-dropdown"></div>
                             </div>
+                            <button type="button" id="chat-sidebar-toggle" class="sb-icon-btn sb-collapse-btn" title="Hide sidebar">&#x25B6;</button>
+                        </div>
+                        <!-- Row 2: chat actions -->
+                        <div class="sb-chat-actions">
                             <button type="button" id="sb-new-chat" class="sb-icon-btn" title="New Chat">+</button>
                             <button type="button" id="sb-delete-chat" class="sb-icon-btn sb-icon-danger" title="Delete Chat">&#x1F5D1;</button>
+                            <button type="button" id="clear-chat-btn" class="sb-icon-btn" title="Clear Chat">&#x2715;</button>
+                            <div class="sb-kebab kebab-menu" id="chat-menu">
+                                <button type="button" class="sb-icon-btn kebab-btn" title="More">&#x22EE;</button>
+                                <div class="kebab-dropdown">
+                                    <button id="import-chat-btn">Import</button>
+                                    <button id="export-chat-btn">Export</button>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="sidebar-section">
@@ -303,6 +296,8 @@
                         </div>
                     </div>
                 </aside>
+                <!-- Sidebar expand tab (visible when collapsed) -->
+                <button type="button" id="chat-sidebar-expand" class="sb-expand-tab" title="Show settings">&#x25C0;</button>
             </div>
 
             <div id="toast-container"></div>
