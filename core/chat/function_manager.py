@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 class FunctionManager:
     # Class-level memory scope - accessible from memory module
     _current_memory_scope = 'default'
+    # Class-level goal scope - accessible from goals module
+    _current_goal_scope = 'default'
     
     def __init__(self):
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
@@ -34,6 +36,8 @@ class FunctionManager:
         
         # Memory scope for current execution context (None = disabled)
         self._memory_scope = 'default'
+        # Goal scope for current execution context (None = disabled)
+        self._goal_scope = 'default'
         
         # State engine for games/simulations (None = disabled)
         self._state_engine = None
@@ -321,6 +325,16 @@ class FunctionManager:
     def get_memory_scope(self) -> str:
         """Get current memory scope. Returns None if memory disabled."""
         return self._memory_scope
+
+    def set_goal_scope(self, scope: str):
+        """Set goal scope for current execution context. None = disabled."""
+        self._goal_scope = scope
+        FunctionManager._current_goal_scope = scope
+        logger.debug(f"Goal scope set to: {scope}")
+
+    def get_goal_scope(self) -> str:
+        """Get current goal scope. Returns None if goals disabled."""
+        return self._goal_scope
 
     def set_state_engine(self, engine, turn_getter=None):
         """

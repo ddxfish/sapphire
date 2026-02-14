@@ -358,10 +358,12 @@ class LLMChat:
             messages = self._build_base_messages(user_input)
             self.session_manager.add_user_message(user_input)
             
-            # Set memory scope for this chat context
+            # Set memory and goal scopes for this chat context
             chat_settings = self.session_manager.get_chat_settings()
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
+            goal_scope = chat_settings.get('goal_scope', 'default')
+            self.function_manager.set_goal_scope(goal_scope if goal_scope != 'none' else None)
             
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.function_manager.enabled_tools
@@ -809,9 +811,11 @@ class LLMChat:
             tools = None
             toolset = task_settings.get("toolset")
             if toolset and toolset not in ("none", ""):
-                # Temporarily set memory scope for tool execution
+                # Temporarily set memory and goal scopes for tool execution
                 memory_scope = task_settings.get("memory_scope", "default")
                 self.function_manager.set_memory_scope(memory_scope if memory_scope != "none" else None)
+                goal_scope = task_settings.get("goal_scope", "default")
+                self.function_manager.set_goal_scope(goal_scope if goal_scope != "none" else None)
                 self.function_manager.update_enabled_functions([toolset])
                 tools = self.function_manager.enabled_tools
                 logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")

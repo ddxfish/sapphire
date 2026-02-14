@@ -2184,6 +2184,33 @@ async def create_memory_scope(request: Request, _=Depends(require_login)):
 
 
 # =============================================================================
+# GOAL SCOPE ROUTES
+# =============================================================================
+
+@app.get("/api/goals/scopes")
+async def get_goal_scopes(request: Request, _=Depends(require_login)):
+    """Get list of goal scopes."""
+    from functions import goals
+    scopes = goals.get_scopes()
+    return {"scopes": scopes}
+
+
+@app.post("/api/goals/scopes")
+async def create_goal_scope(request: Request, _=Depends(require_login)):
+    """Create a new goal scope."""
+    import re
+    from functions import goals
+    data = await request.json()
+    name = data.get('name', '').strip().lower()
+    if not name or not re.match(r'^[a-z0-9_]{1,32}$', name):
+        raise HTTPException(status_code=400, detail="Invalid scope name")
+    if goals.create_scope(name):
+        return {"created": name}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to create scope")
+
+
+# =============================================================================
 # STATE ENGINE ROUTES
 # =============================================================================
 

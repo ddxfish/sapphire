@@ -46,9 +46,10 @@ export async function openSettingsModal() {
         }
         
         // Fetch supplemental data in parallel to avoid HTTP/1.1 connection queuing
-        const [llmResult, scopesResult, presetsResult] = await Promise.allSettled([
+        const [llmResult, scopesResult, goalScopesResult, presetsResult] = await Promise.allSettled([
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/state/presets').then(r => r.ok ? r.json() : null).catch(() => null)
         ]);
 
@@ -70,6 +71,21 @@ export async function openSettingsModal() {
                 scopeSelect.appendChild(opt);
             });
             scopeSelect.value = settings.memory_scope || 'default';
+        }
+
+        // Process goal scopes
+        if (goalScopesResult.status === 'fulfilled' && goalScopesResult.value) {
+            const goalScopeSelect = document.getElementById('setting-goal-scope');
+            if (goalScopeSelect) {
+                goalScopeSelect.innerHTML = '<option value="none">None (disabled)</option>';
+                (goalScopesResult.value.scopes || []).forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = `${s.name} (${s.count})`;
+                    goalScopeSelect.appendChild(opt);
+                });
+                goalScopeSelect.value = settings.goal_scope || 'default';
+            }
         }
 
         // Process state presets
@@ -345,6 +361,7 @@ export async function saveSettings() {
             llm_model: getSelectedModel(),
             trim_color: trimColor,
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
+            goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
             state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
@@ -435,6 +452,7 @@ export async function saveAsDefaults() {
             llm_model: getSelectedModel(),
             trim_color: trimColor,
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
+            goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
             state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,

@@ -118,7 +118,7 @@ TOOLS = [
                     },
                     "progress_note": {
                         "type": "string",
-                        "description": "Journal entry about progress made (max 500 chars). Timestamped and appended to history."
+                        "description": "Journal entry about progress made (max 1024 chars). Timestamped and appended to history. Use for status updates, completion summaries, and lessons learned."
                     }
                 },
                 "required": ["goal_id"]
@@ -209,6 +209,15 @@ def _ensure_db():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_parent ON goals(parent_id)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_progress_goal ON goal_progress(goal_id)')
 
+    # Scope registry (mirrors memory_scopes pattern)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS goal_scopes (
+            name TEXT PRIMARY KEY,
+            created DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute("INSERT OR IGNORE INTO goal_scopes (name) VALUES ('default')")
+
     conn.commit()
     conn.close()
     _db_initialized = True
@@ -218,9 +227,40 @@ def _ensure_db():
 def _get_current_scope():
     try:
         from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_memory_scope
+        return FunctionManager._current_goal_scope
     except Exception:
         return 'default'
+
+
+# ─── Public API (used by api_fastapi.py) ──────────────────────────────────────
+
+def get_scopes():
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT scope, COUNT(*) FROM goals WHERE parent_id IS NULL GROUP BY scope')
+        goal_counts = {row[0]: row[1] for row in cursor.fetchall()}
+        cursor.execute('SELECT name FROM goal_scopes ORDER BY name')
+        registered = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        all_scopes = set(registered) | set(goal_counts.keys()) | {'default'}
+        return [{"name": name, "count": goal_counts.get(name, 0)} for name in sorted(all_scopes)]
+    except Exception as e:
+        logger.error(f"Error getting goal scopes: {e}")
+        return [{"name": "default", "count": 0}]
+
+
+def create_scope(name: str) -> bool:
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO goal_scopes (name) VALUES (?)", (name,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create goal scope '{name}': {e}")
+        return False
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -259,12 +299,11 @@ def _format_goal_full(goal, subtasks, progress_notes):
         lines.append(f'    "{desc}"')
 
     if subtasks:
-        sub_parts = []
+        lines.append("    Subtasks:")
         for s in subtasks:
             sid, stitle, spri, sstatus = s
             mark = 'x' if sstatus == 'completed' else '-' if sstatus == 'abandoned' else ' '
-            sub_parts.append(f"[{mark}] [{sid}] {stitle} ({sstatus})")
-        lines.append("    Subtasks: " + " | ".join(sub_parts))
+            lines.append(f"      [{mark}] [{sid}] {stitle} ({sstatus})")
     else:
         lines.append("    (no subtasks)")
 
@@ -408,16 +447,14 @@ def _list_goals(goal_id=None, status='active', scope='default'):
         conn.close()
         return f"Invalid status filter '{status_filter}'. Choose from: active, completed, abandoned, all.", False
 
+    # For 'all' view: split into sections by status
     if status_filter == 'all':
-        cursor.execute(
-            'SELECT * FROM goals WHERE parent_id IS NULL AND scope = ? ORDER BY updated_at DESC',
-            (scope,)
-        )
-    else:
-        cursor.execute(
-            'SELECT * FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
-            (scope, status_filter)
-        )
+        return _list_goals_all(cursor, conn, scope)
+
+    cursor.execute(
+        'SELECT * FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
+        (scope, status_filter)
+    )
     top_level = cursor.fetchall()
 
     if not top_level:
@@ -429,7 +466,7 @@ def _list_goals(goal_id=None, status='active', scope='default'):
     full_goals = top_level[:3]
     summary_goals = top_level[3:10]
 
-    lines = [f"=== {'All' if status_filter == 'all' else status_filter.capitalize()} Goals (scope: {scope}) ===\n"]
+    lines = [f"=== {status_filter.capitalize()} Goals (scope: {scope}) ===\n"]
 
     for goal in full_goals:
         gid = goal[0]
@@ -460,6 +497,110 @@ def _list_goals(goal_id=None, status='active', scope='default'):
     remaining = len(top_level) - 10
     if remaining > 0:
         lines.append(f"... and {remaining} more (use list_goals with goal_id for details)")
+
+    # Append recently completed goals when showing active view (the dashboard)
+    if status_filter == 'active':
+        _append_recently_completed(cursor, lines, scope)
+
+    conn.close()
+    return '\n'.join(lines), True
+
+
+def _append_recently_completed(cursor, lines, scope, limit=5):
+    """Append a recently completed section to the output lines."""
+    cursor.execute(
+        'SELECT id, title, completed_at FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY completed_at DESC LIMIT ?',
+        (scope, 'completed', limit)
+    )
+    completed = cursor.fetchall()
+    if not completed:
+        return
+    lines.append("")
+    lines.append("--- Recently Completed ---")
+    for gid, gtitle, completed_at in completed:
+        cursor.execute(
+            'SELECT note FROM goal_progress WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1',
+            (gid,)
+        )
+        last_note = cursor.fetchone()
+        ago = _time_ago(completed_at) if completed_at else ""
+        note_preview = ""
+        if last_note and last_note[0]:
+            preview = last_note[0][:150] + ('...' if len(last_note[0]) > 150 else '')
+            note_preview = f"\n      {preview}"
+        lines.append(f"  [x] [{gid}] {gtitle} — completed {ago}{note_preview}")
+
+
+def _list_goals_all(cursor, conn, scope):
+    """Show all goals split into clear Active / Completed / Abandoned sections."""
+    lines = [f"=== All Goals (scope: {scope}) ==="]
+
+    # ── Active section ──
+    cursor.execute(
+        'SELECT * FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
+        (scope, 'active')
+    )
+    active = cursor.fetchall()
+
+    if active:
+        lines.append("")
+        lines.append(f"# Active ({len(active)})")
+        # Top 3 full
+        for goal in active[:3]:
+            gid = goal[0]
+            cursor.execute('SELECT id, title, priority, status FROM goals WHERE parent_id = ? ORDER BY created_at', (gid,))
+            subtasks = cursor.fetchall()
+            cursor.execute('SELECT note, created_at FROM goal_progress WHERE goal_id = ? ORDER BY created_at DESC LIMIT 3', (gid,))
+            progress = cursor.fetchall()
+            lines.append(_format_goal_full(goal, subtasks, progress))
+            lines.append("")
+        # Rest summarized
+        for goal in active[3:10]:
+            gid = goal[0]
+            cursor.execute('SELECT COUNT(*) FROM goals WHERE parent_id = ?', (gid,))
+            sub_count = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM goals WHERE parent_id = ? AND status = ?', (gid, 'completed'))
+            sub_done = cursor.fetchone()[0]
+            summary = (gid, goal[1], goal[3], goal[4], goal[8])
+            lines.append(_format_goal_summary(summary, sub_count, sub_done))
+        if len(active) > 10:
+            lines.append(f"... and {len(active) - 10} more active")
+    else:
+        lines.append("\n# Active (0)")
+
+    # ── Completed section ──
+    cursor.execute(
+        'SELECT id, title, completed_at FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY completed_at DESC LIMIT 10',
+        (scope, 'completed')
+    )
+    completed = cursor.fetchall()
+
+    if completed:
+        lines.append("")
+        lines.append(f"# Completed ({len(completed)})")
+        for gid, gtitle, completed_at in completed:
+            cursor.execute('SELECT note FROM goal_progress WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1', (gid,))
+            last_note = cursor.fetchone()
+            ago = _time_ago(completed_at) if completed_at else ""
+            note_preview = ""
+            if last_note and last_note[0]:
+                preview = last_note[0][:150] + ('...' if len(last_note[0]) > 150 else '')
+                note_preview = f"\n      {preview}"
+            lines.append(f"  [x] [{gid}] {gtitle} — completed {ago}{note_preview}")
+
+    # ── Abandoned section ──
+    cursor.execute(
+        'SELECT id, title, updated_at FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC LIMIT 5',
+        (scope, 'abandoned')
+    )
+    abandoned = cursor.fetchall()
+
+    if abandoned:
+        lines.append("")
+        lines.append(f"# Abandoned ({len(abandoned)})")
+        for gid, gtitle, updated_at in abandoned:
+            ago = _time_ago(updated_at) if updated_at else ""
+            lines.append(f"  [-] [{gid}] {gtitle} — {ago}")
 
     conn.close()
     return '\n'.join(lines), True
@@ -520,7 +661,7 @@ def _update_goal(goal_id, scope='default', **kwargs):
         if not progress_note:
             conn.close()
             return "Progress note cannot be empty. Describe what was done or learned.", False
-        err = _validate_length(progress_note, 'Progress note', 500)
+        err = _validate_length(progress_note, 'Progress note', 1024)
         if err:
             conn.close()
             return err, False
