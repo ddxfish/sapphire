@@ -152,6 +152,10 @@ async def security_headers(request: Request, call_next):
     # Import map in index.html ensures ALL JS modules get versioned URLs
     if request.url.path.startswith('/static/'):
         response.headers['Cache-Control'] = 'public, max-age=3600'
+    elif 'cache-control' not in response.headers:
+        # API responses must never be cached — prevents stale fetch() after hard refresh
+        # (Ctrl+Shift+R only bypasses cache for HTML, not JS fetch() calls)
+        response.headers['Cache-Control'] = 'no-store'
 
     response.headers['Connection'] = 'keep-alive'
     return response

@@ -33,7 +33,6 @@ export function switchView(viewId) {
     entry.module.show?.();
 
     currentView = viewId;
-
     // Update nav rail active state
     document.querySelectorAll('.nav-item').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.view === viewId);
@@ -50,6 +49,10 @@ export function getCurrentView() {
 }
 
 export function initRouter(defaultView = 'chat') {
+    // Hide ALL views before first switch — prevents dual-display when hash
+    // restores a non-default view (chat starts visible in HTML, others display:none)
+    document.querySelectorAll('.view').forEach(v => { v.style.display = 'none'; });
+
     // Listen for hash changes (back/forward)
     window.addEventListener('hashchange', () => {
         const hash = location.hash.slice(1);
