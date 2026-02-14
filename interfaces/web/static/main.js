@@ -130,7 +130,7 @@ async function init() {
         // Hide nav items for disabled plugins (non-blocking)
         syncNavWithPlugins();
 
-        // Fetch init data
+        // === DATA FETCH (can fail without killing the app) ===
         let initData = null;
         try {
             initData = await getInitData();
@@ -139,11 +139,17 @@ async function init() {
             console.warn('[Init] Could not fetch init data:', e);
         }
 
-        // Parallel initialization
-        const [status, historyLen] = await Promise.all([
+        // Use allSettled so one failure doesn't kill the other
+        const [sceneResult, refreshResult] = await Promise.allSettled([
             updateScene(),
             refresh(false)
         ]);
+
+        const status = sceneResult.status === 'fulfilled' ? sceneResult.value : null;
+        const historyLen = refreshResult.status === 'fulfilled' ? refreshResult.value : 0;
+
+        if (sceneResult.status === 'rejected') console.warn('[Init] updateScene failed:', sceneResult.reason);
+        if (refreshResult.status === 'rejected') console.warn('[Init] refresh failed:', refreshResult.reason);
 
         setHistLen(historyLen);
 
@@ -151,7 +157,7 @@ async function init() {
         if (status?.chats) {
             ui.renderChatDropdown(status.chats, status.active_chat);
         } else {
-            await populateChatDropdown();
+            try { await populateChatDropdown(); } catch (e) { console.warn('[Init] Chat dropdown failed:', e); }
         }
 
         // Apply chat settings
@@ -159,7 +165,7 @@ async function init() {
         updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
         applyTrimColor(settings.trim_color || '');
 
-        // Sync operations
+        // === UI WIRING (must always run) ===
         initVolumeControls();
         startMicIconPolling();
         bindAllEvents();
@@ -208,6 +214,19 @@ async function init() {
             input.classList.remove('loading');
         }
         ui.hideStatus();
+
+        // Still wire up core UI even on error
+        try {
+            initVolumeControls();
+            startMicIconPolling();
+            bindAllEvents();
+            setupImageHandlers();
+            setupImageModal();
+            initPrivacy();
+            initEventBus();
+        } catch (e2) {
+            console.error('UI wiring failed:', e2);
+        }
     }
 }
 

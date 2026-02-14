@@ -3,6 +3,12 @@ import { getToolsets, getCurrentToolset, getFunctions, activateToolset, saveCust
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
+const MODULE_ICONS = {
+    meta: '\u{1F9E0}', web: '\u{1F310}', memory: '\u{1F4BE}', network: '\u{1F4E1}',
+    docs: '\u{1F4DA}', ai: '\u{1F916}', image: '\u{1F3A8}', notepad: '\u{1F4DD}',
+    homeassistant: '\u{1F3E0}'
+};
+
 let container = null;
 let toolsets = [];
 let currentToolset = null;
@@ -55,7 +61,7 @@ function render() {
                 <div class="panel-list-items" id="ts-list">
                     ${toolsets.map(t => `
                         <button class="panel-list-item${t.name === selectedName ? ' active' : ''}" data-name="${t.name}">
-                            <span class="ts-item-name">${typeIcon(t.type)} ${t.name}</span>
+                            <span class="ts-item-name">${typeIcon(t.type, t.name)} ${t.name}</span>
                             <span class="ts-item-count">${t.function_count}</span>
                         </button>
                     `).join('')}
@@ -110,7 +116,7 @@ function renderFunctions(selected, isEditable) {
                         <input type="checkbox" data-action="toggle-module" data-module="${modName}"
                             ${allChecked ? 'checked' : ''} ${someChecked ? 'data-indeterminate="true"' : ''}
                             ${!isEditable ? 'disabled' : ''}>
-                        <span class="ts-module-name">${modName}</span>
+                        <span class="ts-module-name">${MODULE_ICONS[modName] || '\u{1F527}'} ${modName}</span>
                         <span class="ts-module-count">(${enabledCount}/${funcs.length})</span>
                     </label>
                 </div>
@@ -232,10 +238,10 @@ function debouncedSave() {
     }, 300);
 }
 
-function typeIcon(type) {
-    if (type === 'user') return '\uD83D\uDC64';
-    if (type === 'module') return '\uD83D\uDCE6';
-    return '\uD83D\uDD27';
+function typeIcon(type, name) {
+    if (type === 'user') return '\u{1F6E0}\u{FE0F}';
+    if (type === 'module') return MODULE_ICONS[name] || '\u{1F9E9}';
+    return '\u{1F527}';
 }
 
 function escapeHtml(str) {
