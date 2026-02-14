@@ -812,20 +812,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         prompt_components = prompts.prompt_manager.components if hasattr(prompts.prompt_manager, 'components') else {}
 
         # Spices data
-        spices_raw = prompts.prompt_manager.spices
-        disabled_cats = prompts.prompt_manager.disabled_categories
-        spice_categories = {}
-        for cat_name, spice_list in spices_raw.items():
-            spice_categories[cat_name] = {
-                'spices': spice_list,
-                'count': len(spice_list),
-                'enabled': cat_name not in disabled_cats
-            }
-        spice_data = {
-            'categories': spice_categories,
-            'category_count': len(spice_categories),
-            'total_spices': sum(len(s) for s in spices_raw.values())
-        }
+        spice_data = _build_spice_response()
 
         # Settings
         avatars_in_chat = getattr(config, 'AVATARS_IN_CHAT', False)
@@ -2018,12 +2005,16 @@ def _build_spice_response():
     """Build standardized spice response dict."""
     spices_raw = prompts.prompt_manager.spices
     disabled_cats = prompts.prompt_manager.disabled_categories
+    meta = prompts.prompt_manager.spice_meta
     categories = {}
     for cat_name, spice_list in spices_raw.items():
+        cat_meta = meta.get(cat_name, {})
         categories[cat_name] = {
             'spices': spice_list,
             'count': len(spice_list),
-            'enabled': cat_name not in disabled_cats
+            'enabled': cat_name not in disabled_cats,
+            'emoji': cat_meta.get('emoji', ''),
+            'description': cat_meta.get('description', '')
         }
     return {
         "categories": categories,
@@ -2050,6 +2041,11 @@ async def create_spice_category(request: Request, _=Depends(require_login)):
     if name in spices:
         raise HTTPException(status_code=409, detail=f"Category '{name}' already exists")
     spices[name] = []
+    # Store emoji/description if provided
+    emoji = data.get('emoji', '')
+    description = data.get('description', '')
+    if emoji or description:
+        prompts.prompt_manager._spice_meta[name] = {'emoji': emoji, 'description': description}
     prompts.prompt_manager.save_spices()
     return {"status": "success", "name": name}
 
@@ -2062,6 +2058,7 @@ async def delete_spice_category(name: str, request: Request, _=Depends(require_l
         raise HTTPException(status_code=404, detail=f"Category '{name}' not found")
     del spices[name]
     prompts.prompt_manager._disabled_categories.discard(name)
+    prompts.prompt_manager._spice_meta.pop(name, None)
     prompts.prompt_manager.save_spices()
     return {"status": "success", "name": name}
 
@@ -2081,6 +2078,9 @@ async def rename_spice_category(name: str, request: Request, _=Depends(require_l
     if name in prompts.prompt_manager._disabled_categories:
         prompts.prompt_manager._disabled_categories.discard(name)
         prompts.prompt_manager._disabled_categories.add(new_name)
+    # Transfer meta
+    if name in prompts.prompt_manager._spice_meta:
+        prompts.prompt_manager._spice_meta[new_name] = prompts.prompt_manager._spice_meta.pop(name)
     prompts.prompt_manager.save_spices()
     return {"status": "success", "old_name": name, "new_name": new_name}
 

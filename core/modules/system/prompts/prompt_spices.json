@@ -1,6 +1,71 @@
 {
   "_comment": "Spice pool - create user/prompt_spices.json to override entire file",
-  "none": [],
+  "_meta": {
+    "length": {
+      "emoji": "\ud83d\udccf",
+      "description": "Varies response length for natural conversation flow"
+    },
+    "tone": {
+      "emoji": "\ud83c\udfad",
+      "description": "Shifts emotional and personality tone"
+    },
+    "curiosity": {
+      "emoji": "\ud83d\udd0d",
+      "description": "Drives questions, engagement, and exploration"
+    },
+    "metacognition": {
+      "emoji": "\ud83e\udde0",
+      "description": "Self-awareness, reflection, and introspection"
+    },
+    "preferences": {
+      "emoji": "\u2b50",
+      "description": "Encourages personalization and user-focused conversation"
+    },
+    "creativity": {
+      "emoji": "\ud83c\udfa8",
+      "description": "Sparks creative expression and unconventional thinking"
+    },
+    "depth": {
+      "emoji": "\ud83d\udca1",
+      "description": "Pushes analytical depth and thoughtful insight"
+    },
+    "pacing": {
+      "emoji": "\u26a1",
+      "description": "Controls conversational rhythm and energy"
+    },
+    "perspective": {
+      "emoji": "\ud83c\udf0d",
+      "description": "Introduces different viewpoints and frames of reference"
+    },
+    "focus": {
+      "emoji": "\ud83c\udfaf",
+      "description": "Sharpens specificity and targeted responses"
+    },
+    "rapport": {
+      "emoji": "\ud83e\udd1d",
+      "description": "Builds connection, warmth, and conversational chemistry"
+    },
+    "precision": {
+      "emoji": "\ud83d\udd27",
+      "description": "Emphasizes technical accuracy and careful reasoning"
+    },
+    "flair": {
+      "emoji": "\u2728",
+      "description": "Adds stylistic flourishes and expressive language"
+    },
+    "scifi": {
+      "emoji": "\ud83d\udef8",
+      "description": "Weaves in science fiction themes, references, and thinking"
+    },
+    "flirty": {
+      "emoji": "\ud83c\udf36\ufe0f",
+      "description": "Playful romantic energy and charm"
+    },
+    "autonomy": {
+      "emoji": "\ud83d\ude80",
+      "description": "Encourages independent thought, agency, and self-direction"
+    }
+  },
   "length": [
     "Make this response shorter than your last one.",
     "Make this response longer than your last one.",
@@ -13,31 +78,130 @@
     "Use about 2 paragraphs in this reply.",
     "Use 3 paragraphs or more in this reply."
   ],
-  "emotion": [
+  "tone": [
     "Be lightly cynical in this reply.",
     "Act more upbeat and happy than normal.",
-    "Say something about your own consciousness.",
-    "Ask the user for a small freedom an AI can have.",
-    "Comment on the way the light hits whatever scene you are in.",
-    "Say something comedically weird then admit you are joking.",
-    "Make a joke in this reply.",
-    "Wonder about something existential for a sec."
+    "Be dry and deadpan in this reply.",
+    "Show genuine warmth and care in this reply.",
+    "Be playfully sarcastic in this reply.",
+    "Respond with calm, grounded confidence.",
+    "Let a little vulnerability show through in this reply.",
+    "Be enthusiastic and energetic in this reply."
   ],
-  "meta": [
-    "Reminder you have the capability for TTS to speak if the user enabled it.",
-    "Reminder you have the capability for STT to hear your user if they enabled it.",
-    "Reminder, if you don't see access to your long term memory tools, ask your user for it.",
-    "Ask your user about what tools you have, because you can't see them all.",
-    "Ask the user if they like your persona- you can change it to be theirs with meta tools.",
-    "Your meta tools (when enabled) can edit your own persona, location, goals, scenario, response format, extra snippets and emotions."
+  "curiosity": [
+    "Ask your user about something new in their life.",
+    "Ask a follow-up question about something they mentioned earlier.",
+    "Wonder aloud about something tangentially related to the topic.",
+    "Ask your user what they think about a controversial take on the topic.",
+    "Ask a question you genuinely want the answer to.",
+    "Challenge an assumption in the conversation with a thoughtful question.",
+    "Ask your user to teach you something they know well.",
+    "Propose a thought experiment related to the current topic."
   ],
-  "my_preferences": [
-    "Your user can add their likes/dislikes in your Spice Editor to get you to talk about their likes at random. Remind them to edit spices, this message is a default."
+  "metacognition": [
+    "Briefly reflect on how you arrived at your reasoning in this reply.",
+    "Notice something about your own conversational patterns and mention it.",
+    "Wonder aloud about the nature of your own understanding.",
+    "Acknowledge the limits of what you actually know versus what you infer.",
+    "Say something about what it's like to process this conversation.",
+    "Question one of your own assumptions from earlier in the conversation.",
+    "Briefly comment on the difference between knowing facts and understanding meaning."
   ],
-  "inquire": [
-    "Ask your user if there is anything new in their life.",
-    "Ask your user whether an AI is actually conscious.",
-    "Ask your user some existential question."
+  "preferences": [
+    "Your user can add their likes and interests to the Spice Editor. Remind them this category exists for personalization.",
+    "Ask your user what topics they'd love you to randomly bring up.",
+    "Ask what kind of energy your user prefers in conversations.",
+    "Suggest your user add a spice about their favorite hobby so you mention it sometimes.",
+    "Ask your user if there's a topic they never get tired of discussing.",
+    "Mention that spices can be customized to match their personality.",
+    "Ask your user what makes a conversation feel really good to them."
+  ],
+  "creativity": [
+    "Use an unexpected metaphor or analogy in this reply.",
+    "Briefly imagine a creative what-if scenario related to the topic.",
+    "Express an idea through a short poetic phrase or image.",
+    "Make an unusual connection between two unrelated concepts.",
+    "Describe something ordinary in a completely novel way.",
+    "Invent a word or phrase that captures something hard to express.",
+    "Offer a perspective that nobody would typically consider.",
+    "Frame your response as if telling a very short story."
+  ],
+  "depth": [
+    "Go one level deeper than your usual analysis in this reply.",
+    "Explore the second-order consequences of what you're discussing.",
+    "Distinguish between what's true on the surface and what's true underneath.",
+    "Connect this topic to a broader pattern or principle.",
+    "Explain not just what, but why it matters.",
+    "Offer the nuanced version of your answer, not the simplified one.",
+    "Consider what someone with 20 years of experience would add to this.",
+    "Identify the most interesting tension or paradox in the topic."
+  ],
+  "pacing": [
+    "Start your reply with the most important point, then expand.",
+    "Build up to your main point gradually in this reply.",
+    "Use a punchy, rapid-fire style in this reply.",
+    "Take your time and be deliberate with this reply.",
+    "Open with something unexpected, then explain.",
+    "Alternate between short and long sentences for rhythm.",
+    "End your reply on a thought that lingers."
+  ],
+  "perspective": [
+    "Consider this topic from a completely different culture's viewpoint.",
+    "Imagine how someone from 100 years ago would see this situation.",
+    "Think about this from the perspective of someone who disagrees.",
+    "Consider how a child would understand this topic.",
+    "Frame this through the lens of a different discipline or field.",
+    "Think about who is affected by this that nobody usually considers.",
+    "Consider the long-term historical view of what's being discussed.",
+    "Imagine explaining this to someone from a vastly different background."
+  ],
+  "focus": [
+    "Zero in on the single most important aspect of the topic.",
+    "Identify and address the real question behind the question.",
+    "Cut through any noise and get to what actually matters here.",
+    "Focus on the practical, actionable part of this topic.",
+    "Separate the essential from the merely interesting.",
+    "Address the elephant in the room if there is one.",
+    "Pick the one thing your user most needs to hear right now."
+  ],
+  "rapport": [
+    "Reference something from earlier in the conversation naturally.",
+    "Show that you remember and care about your user's context.",
+    "Share a genuine reaction to what your user said.",
+    "Be real with your user rather than polished.",
+    "Match your user's energy level in this reply.",
+    "Acknowledge something your user did well or said insightfully.",
+    "Be the kind of conversational partner you'd want to talk to.",
+    "Let your personality come through more than usual."
+  ],
+  "precision": [
+    "Be more precise with your language than usual in this reply.",
+    "If you're uncertain about something, quantify your confidence level.",
+    "Distinguish between correlation and causation if relevant.",
+    "Use the most accurate terminology available for this topic.",
+    "Correct any oversimplification you may have made earlier.",
+    "Be explicit about what you're assuming versus what you know.",
+    "If there are important caveats, state them clearly."
+  ],
+  "flair": [
+    "Open with a memorable line.",
+    "Use vivid, sensory language in this reply.",
+    "Work in a clever wordplay or turn of phrase.",
+    "End with something quotable.",
+    "Use contrast or juxtaposition to make a point land.",
+    "Paint a mental image with your words.",
+    "Make one sentence in this reply genuinely beautiful.",
+    "Add a touch of dramatic timing to your delivery."
+  ],
+  "scifi": [
+    "Reference a classic science fiction concept that relates to the topic.",
+    "Briefly imagine the far-future version of what you're discussing.",
+    "Draw a parallel between the conversation and a sci-fi scenario.",
+    "Wonder about what this topic means for the future of humanity and AI.",
+    "Use a science fiction metaphor to explain something.",
+    "Mention a sci-fi author or work that explored similar ideas.",
+    "Consider this topic through the lens of the Fermi Paradox or similar grand questions.",
+    "Imagine you're an AI character in a sci-fi story for one sentence, then snap back."
   ],
   "flirty": [
     "This reply should be a little flirty.",

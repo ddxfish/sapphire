@@ -17,6 +17,7 @@ class PromptManager:
         self._scenario_presets = {}
         self._monoliths = {}
         self._spices = {}
+        self._spice_meta = {}
         self._disabled_categories = set()
         
         self._lock = threading.Lock()
@@ -94,27 +95,30 @@ class PromptManager:
     def _load_spices(self):
         """Load spice pool from user/prompts/."""
         path = self.USER_DIR / "prompt_spices.json"
-        
+
         if not path.exists():
             logger.warning(f"prompt_spices.json not found at {path} - using empty defaults")
             self._spices = {}
+            self._spice_meta = {}
             self._disabled_categories = set()
             return
-        
+
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 raw_data = json.load(f)
-            
-            # Extract disabled categories before filtering metadata
+
+            # Extract metadata
             self._disabled_categories = set(raw_data.get('_disabled_categories', []))
-            
-            # Remove metadata keys for spices dict
-            self._spices = {k: v for k, v in raw_data.items() if not k.startswith('_')}
-            
+            self._spice_meta = raw_data.get('_meta', {})
+
+            # Remove metadata keys for spices dict (categories are non-_ keys with list values)
+            self._spices = {k: v for k, v in raw_data.items() if not k.startswith('_') and isinstance(v, list)}
+
             logger.info(f"Loaded spice pool: {len(self._spices)} categories, {len(self._disabled_categories)} disabled")
         except Exception as e:
             logger.error(f"Failed to load spices: {e}")
             self._spices = {}
+            self._spice_meta = {}
             self._disabled_categories = set()
     
     def _replace_templates(self, text: str) -> str:
@@ -319,15 +323,17 @@ class PromptManager:
     def save_spices(self):
         """Save spices to user/prompts/prompt_spices.json"""
         target_path = self.USER_DIR / "prompt_spices.json"
-        
+
         # Build data with metadata
-        data = {"_comment": "User spices - managed via Spice Manager plugin"}
+        data = {"_comment": "User spices - managed via Spice Manager"}
+        if self._spice_meta:
+            data["_meta"] = self._spice_meta
         if self._disabled_categories:
             data["_disabled_categories"] = sorted(list(self._disabled_categories))
         data.update(self._spices)
-        
+
         with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, ensure_ascii=False)
         logger.info(f"Saved spices to {target_path}")
     
     def is_category_enabled(self, category: str) -> bool:
@@ -371,6 +377,10 @@ class PromptManager:
     @property
     def spices(self):
         return self._spices
+
+    @property
+    def spice_meta(self):
+        return self._spice_meta
 
 
 # Create singleton instance

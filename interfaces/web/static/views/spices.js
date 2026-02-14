@@ -52,12 +52,14 @@ async function render() {
 
 function renderCategory(name, cat) {
     const spices = cat.spices || [];
+    const emoji = cat.emoji || '';
+    const desc = cat.description || '';
     return `
         <div class="spice-card" data-category="${name}">
             <div class="spice-card-header">
                 <label class="spice-toggle">
                     <input type="checkbox" ${cat.enabled ? 'checked' : ''} data-action="toggle-cat" data-cat="${name}">
-                    <span class="spice-cat-name">${name}</span>
+                    <span class="spice-cat-name">${emoji ? emoji + ' ' : ''}${name}</span>
                     <span class="spice-cat-count">(${spices.length})</span>
                 </label>
                 <div class="spice-card-actions">
@@ -66,6 +68,7 @@ function renderCategory(name, cat) {
                     <button class="btn-icon danger" data-action="delete-cat" data-cat="${name}" title="Delete category">&times;</button>
                 </div>
             </div>
+            ${desc ? `<div class="spice-cat-desc">${escapeHtml(desc)}</div>` : ''}
             <div class="spice-card-body${cat.enabled ? '' : ' disabled'}">
                 ${spices.length === 0 ? '<div class="text-muted" style="padding:8px;font-size:var(--font-sm)">Empty</div>' :
                 spices.map((text, i) => `
