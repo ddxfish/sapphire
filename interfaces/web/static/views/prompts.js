@@ -21,8 +21,8 @@ const SINGLE_TYPES = ['character', 'location', 'goals', 'relationship', 'format'
 const MULTI_TYPES  = ['extras', 'emotions'];
 const ALL_TYPES    = [...SINGLE_TYPES, ...MULTI_TYPES];
 const ICONS = {
-    character: '\u{1F464}', location: '\u{1F4CD}', goals: '\u{1F3AF}', relationship: '\u{1F4AC}',
-    format: '\u{1F4DD}', scenario: '\u{1F3AD}', extras: '\u{2728}', emotions: '\u{1F4AD}'
+    character: '\u{1F464}', location: '\u{1F3E0}', goals: '\u{1F3AF}', relationship: '\u{1F49C}',
+    format: '\u{1F4DD}', scenario: '\u{1F30D}', extras: '\u{1F9E9}', emotions: '\u{2728}'
 };
 
 export default {
