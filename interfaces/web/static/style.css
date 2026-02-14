@@ -1504,10 +1504,21 @@ body {
     letter-spacing: 0.3px;
 }
 
-.sched-hb-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.sched-hb-item { display: flex; flex-direction: column; gap: 2px; }
-.sched-hb-label { font-size: var(--font-xs); color: var(--text-muted); }
-.sched-hb-value { font-size: var(--font-sm); font-weight: 500; }
+.sched-hb-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s;
+}
+.sched-hb-entry:hover { background: var(--bg-primary); margin: 0 -8px; padding: 5px 8px; }
+.sched-hb-heart { font-size: 16px; flex-shrink: 0; }
+.sched-hb-name { font-size: var(--font-sm); font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sched-hb-status { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; }
+.sched-hb-status.active { color: var(--success, #22c55e); }
+.sched-hb-status.paused { color: var(--text-muted); font-style: italic; }
 
 .sched-up-item { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: var(--font-sm); }
 .sched-up-time { font-family: var(--font-mono); font-size: var(--font-xs); color: var(--text-muted); min-width: 65px; }
@@ -1560,6 +1571,19 @@ body {
     border-bottom: 1px solid var(--border);
 }
 .sched-editor-header h3 { margin: 0; }
+.sched-hb-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-sm);
+    cursor: pointer;
+    margin-left: auto;
+    margin-right: 12px;
+    color: var(--text-muted);
+    transition: color 0.15s;
+}
+.sched-hb-toggle:has(input:checked) { color: var(--text); }
+.sched-hb-toggle input { accent-color: var(--trim, #e44); }
 
 .sched-editor-body {
     padding: 16px 20px;

@@ -125,11 +125,9 @@ function renderTaskList() {
 // ── Mission Control (right panel) ──
 
 function renderMission() {
-    const lastAct = activity.length > 0 ? activity[activity.length - 1] : null;
-    const lastPulse = lastAct ? timeAgo(lastAct.timestamp) : 'No activity';
-    const nextFire = timeline.length > 0 ? timeline[0] : null;
-    const nextStr = nextFire ? formatTime(nextFire.scheduled_for) : 'None';
-    const nextName = nextFire ? escapeHtml(nextFire.task_name) : '';
+    const hearts = ['\u2764\uFE0F', '\uD83E\uDE77', '\uD83E\uDDE1', '\uD83D\uDC9B', '\uD83D\uDC9A', '\uD83D\uDC99'];
+    const hbTasks = tasks.filter(t => t.heartbeat);
+    const nextHb = timeline.find(t => hbTasks.some(h => h.id === t.task_id));
 
     const today = new Date().toDateString();
     const todayActs = activity.filter(a => {
@@ -142,25 +140,16 @@ function renderMission() {
 
     return `
         <div class="sched-panel">
-            <div class="sched-section-title">\u2764 Heartbeat</div>
-            <div class="sched-hb-grid">
-                <div class="sched-hb-item">
-                    <span class="sched-hb-label">Status</span>
-                    <span class="sched-hb-value"><span class="sched-status-dot ${status.running ? 'running' : 'stopped'} ${status.running ? 'pulse' : ''}"></span> ${status.running ? 'Active' : 'Stopped'}</span>
-                </div>
-                <div class="sched-hb-item">
-                    <span class="sched-hb-label">Last pulse</span>
-                    <span class="sched-hb-value">${lastPulse}</span>
-                </div>
-                <div class="sched-hb-item">
-                    <span class="sched-hb-label">Next fire</span>
-                    <span class="sched-hb-value">${nextStr}${nextName ? `<br><span class="text-muted" style="font-size:var(--font-xs)">${nextName}</span>` : ''}</span>
-                </div>
-                <div class="sched-hb-item">
-                    <span class="sched-hb-label">Today</span>
-                    <span class="sched-hb-value">${todayStr}</span>
-                </div>
-            </div>
+            <div class="sched-section-title">\u2764 Heartbeats</div>
+            ${hbTasks.length === 0 ?
+                '<div class="text-muted" style="font-size:var(--font-sm);padding:4px 0">No heartbeats yet — toggle \u2764\uFE0F in any task</div>' :
+                hbTasks.slice(0, 6).map((t, i) => `
+                    <div class="sched-hb-entry" data-action="edit" data-id="${t.id}">
+                        <span class="sched-hb-heart">${hearts[i] || hearts[hearts.length - 1]}</span>
+                        <span class="sched-hb-name">${escapeHtml(t.name)}</span>
+                        <span class="sched-hb-status ${t.enabled ? 'active' : 'paused'}">${t.enabled ? describeCron(t.schedule) : 'Paused'}</span>
+                    </div>
+                `).join('')}
         </div>
         <div class="sched-panel">
             <div class="sched-section-title">Coming Up</div>
@@ -284,6 +273,10 @@ async function openEditor(task) {
         <div class="sched-editor">
             <div class="sched-editor-header">
                 <h3>${isEdit ? 'Edit Task' : 'New Task'}</h3>
+                <label class="sched-hb-toggle">
+                    <input type="checkbox" id="ed-heartbeat" ${t.heartbeat ? 'checked' : ''}>
+                    <span>\u2764\uFE0F Heartbeat</span>
+                </label>
                 <button class="btn-icon" data-action="close">&times;</button>
             </div>
             <div class="sched-editor-body">
@@ -579,7 +572,8 @@ async function openEditor(task) {
             model: modelValue,
             memory_scope: modal.querySelector('#ed-memory').value,
             tts_enabled: modal.querySelector('#ed-tts').checked,
-            inject_datetime: modal.querySelector('#ed-datetime').checked
+            inject_datetime: modal.querySelector('#ed-datetime').checked,
+            heartbeat: modal.querySelector('#ed-heartbeat').checked
         };
 
         if (!data.name) { alert('Task name is required'); return; }

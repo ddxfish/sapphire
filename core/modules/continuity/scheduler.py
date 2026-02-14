@@ -193,6 +193,7 @@ class ContinuityScheduler:
             "inject_datetime": data.get("inject_datetime", False),
             "memory_scope": data.get("memory_scope", "default"),
             "cooldown_minutes": data.get("cooldown_minutes", 1),
+            "heartbeat": data.get("heartbeat", False),
             "last_run": None,
             "created": datetime.now().isoformat()
         }
@@ -229,7 +230,8 @@ class ContinuityScheduler:
             allowed = {
                 "name", "enabled", "schedule", "chance", "iterations",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "tts_enabled", "inject_datetime", "memory_scope", "cooldown_minutes"
+                "initial_message", "tts_enabled", "inject_datetime", "memory_scope", "cooldown_minutes",
+                "heartbeat"
             }
             for key in allowed:
                 if key in data:
