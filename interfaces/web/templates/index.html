@@ -77,6 +77,10 @@
             <span class="nav-icon">&#x23F0;</span>
             <span class="nav-label">Schedule</span>
         </button>
+        <button class="nav-item" data-view="mind">
+            <span class="nav-icon">&#x1F9E0;</span>
+            <span class="nav-label">Mind</span>
+        </button>
         <button class="nav-item" data-view="settings">
             <span class="nav-icon">&#x2699;&#xFE0F;</span>
             <span class="nav-label">Settings</span>
@@ -226,6 +230,13 @@
                                     <button type="button" id="sb-new-goal-scope" class="sb-btn-sm" title="New goal slot">+</button>
                                 </div>
                             </div>
+                            <div class="sb-field">
+                                <label for="sb-knowledge-scope">knowl.</label>
+                                <div class="sb-field-row">
+                                    <select id="sb-knowledge-scope"><option value="none">None</option><option value="default">default</option></select>
+                                    <button type="button" id="sb-new-knowledge-scope" class="sb-btn-sm" title="New knowledge slot">+</button>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Quick toggles -->
@@ -335,6 +346,12 @@
             <div class="view-placeholder">
                 <h2>Schedule</h2>
                 <p>Continuity manager - coming next</p>
+            </div>
+        </div>
+        <div id="view-mind" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Mind</h2>
+                <p>Knowledge base - loading...</p>
             </div>
         </div>
         <div id="view-settings" class="view" style="display:none">

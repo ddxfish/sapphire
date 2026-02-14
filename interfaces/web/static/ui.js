@@ -314,6 +314,7 @@ export const startTool = (toolId, toolName, args) => {
 // Tool names that affect scope counts
 const GOAL_TOOLS = ['create_goal', 'update_goal', 'delete_goal'];
 const MEMORY_TOOLS = ['save_memory', 'delete_memory'];
+const KNOWLEDGE_TOOLS = ['save_person', 'save_knowledge'];
 
 const refreshScopeCounts = async (selectId, apiPath) => {
     try {
@@ -335,6 +336,7 @@ export const endTool = (toolId, toolName, result, isError) => {
     if (!isError) {
         if (GOAL_TOOLS.includes(toolName)) refreshScopeCounts('#sb-goal-scope', '/api/goals/scopes');
         if (MEMORY_TOOLS.includes(toolName)) refreshScopeCounts('#sb-memory-scope', '/api/memory/scopes');
+        if (KNOWLEDGE_TOOLS.includes(toolName)) refreshScopeCounts('#sb-knowledge-scope', '/api/knowledge/scopes');
     }
 };
 

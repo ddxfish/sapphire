@@ -27,6 +27,7 @@ const VIEW_MODULES = {
     toolsets: `./views/toolsets.js${_v}`,
     spices:   `./views/spices.js${_v}`,
     schedule: `./views/schedule.js${_v}`,
+    mind:     `./views/mind.js${_v}`,
     settings: `./views/settings.js${_v}`,
 };
 

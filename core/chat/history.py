@@ -33,7 +33,8 @@ SYSTEM_DEFAULTS = {
     "state_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
     "state_story_in_prompt": True,  # Include story segments in prompt (cache-friendly)
     "memory_scope": "default",
-    "goal_scope": "default"
+    "goal_scope": "default",
+    "knowledge_scope": "default"
 }
 
 def get_user_defaults() -> Dict[str, Any]:

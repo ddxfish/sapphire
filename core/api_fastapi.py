@@ -447,6 +447,9 @@ def _apply_chat_settings(system, settings: dict):
         if "goal_scope" in settings:
             scope = settings["goal_scope"]
             system.llm_chat.function_manager.set_goal_scope(scope if scope != "none" else None)
+        if "knowledge_scope" in settings:
+            scope = settings["knowledge_scope"]
+            system.llm_chat.function_manager.set_knowledge_scope(scope if scope != "none" else None)
 
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
@@ -2190,6 +2193,19 @@ async def create_memory_scope(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=500, detail="Failed to create scope")
 
 
+@app.delete("/api/memory/scopes/{scope_name}")
+async def delete_memory_scope(scope_name: str, request: Request, _=Depends(require_login)):
+    """Delete a memory scope and ALL its memories. Requires confirmation token."""
+    from functions import memory
+    data = await request.json()
+    if data.get('confirm') != 'DELETE':
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    result = memory.delete_scope(scope_name)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 # =============================================================================
 # GOAL SCOPE ROUTES
 # =============================================================================
@@ -2215,6 +2231,228 @@ async def create_goal_scope(request: Request, _=Depends(require_login)):
         return {"created": name}
     else:
         raise HTTPException(status_code=500, detail="Failed to create scope")
+
+
+# =============================================================================
+# KNOWLEDGE BASE ROUTES
+# =============================================================================
+
+@app.get("/api/knowledge/scopes")
+async def get_knowledge_scopes(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    scopes = knowledge.get_scopes()
+    return {"scopes": scopes}
+
+
+@app.post("/api/knowledge/scopes")
+async def create_knowledge_scope(request: Request, _=Depends(require_login)):
+    import re as _re
+    from functions import knowledge
+    data = await request.json()
+    name = data.get('name', '').strip().lower()
+    if not name or not _re.match(r'^[a-z0-9_]{1,32}$', name):
+        raise HTTPException(status_code=400, detail="Invalid scope name")
+    if knowledge.create_scope(name):
+        return {"created": name}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to create scope")
+
+
+@app.delete("/api/knowledge/scopes/{scope_name}")
+async def delete_knowledge_scope(scope_name: str, request: Request, _=Depends(require_login)):
+    """Delete a knowledge scope, ALL its tabs, and ALL entries. Requires confirmation token."""
+    from functions import knowledge
+    data = await request.json()
+    if data.get('confirm') != 'DELETE':
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    result = knowledge.delete_scope(scope_name)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/knowledge/people")
+async def list_people(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    return {"people": knowledge.get_people()}
+
+
+@app.post("/api/knowledge/people")
+async def save_person(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    name = data.get('name', '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    pid, is_new = knowledge.create_or_update_person(
+        name=name,
+        relationship=data.get('relationship'),
+        phone=data.get('phone'),
+        email=data.get('email'),
+        address=data.get('address'),
+        notes=data.get('notes'),
+    )
+    return {"id": pid, "created": is_new}
+
+
+@app.delete("/api/knowledge/people/{person_id}")
+async def remove_person(person_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    if knowledge.delete_person(person_id):
+        return {"deleted": person_id}
+    raise HTTPException(status_code=404, detail="Person not found")
+
+
+@app.get("/api/knowledge/tabs")
+async def list_tabs(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    scope = request.query_params.get('scope', 'default')
+    tab_type = request.query_params.get('type')
+    return {"tabs": knowledge.get_tabs(scope, tab_type)}
+
+
+@app.get("/api/knowledge/tabs/{tab_id}")
+async def get_tab(tab_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    entries = knowledge.get_tab_entries(tab_id)
+    return {"entries": entries}
+
+
+@app.post("/api/knowledge/tabs")
+async def create_knowledge_tab(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    name = data.get('name', '').strip()
+    scope = data.get('scope', 'default')
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    tab_id = knowledge.create_tab(name, scope, data.get('description'), data.get('type', 'user'))
+    if tab_id:
+        return {"id": tab_id}
+    raise HTTPException(status_code=409, detail="Tab already exists in this scope")
+
+
+@app.put("/api/knowledge/tabs/{tab_id}")
+async def update_knowledge_tab(tab_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    if knowledge.update_tab(tab_id, data.get('name'), data.get('description')):
+        return {"updated": tab_id}
+    raise HTTPException(status_code=404, detail="Tab not found")
+
+
+@app.delete("/api/knowledge/tabs/{tab_id}")
+async def delete_knowledge_tab(tab_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    if knowledge.delete_tab(tab_id):
+        return {"deleted": tab_id}
+    raise HTTPException(status_code=404, detail="Tab not found")
+
+
+@app.post("/api/knowledge/tabs/{tab_id}/entries")
+async def add_knowledge_entry(tab_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    content = data.get('content', '').strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+    entry_id = knowledge.add_entry(tab_id, content, source_filename=data.get('source_filename'))
+    return {"id": entry_id}
+
+
+@app.put("/api/knowledge/entries/{entry_id}")
+async def update_knowledge_entry(entry_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    content = data.get('content', '').strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+    if knowledge.update_entry(entry_id, content):
+        return {"updated": entry_id}
+    raise HTTPException(status_code=404, detail="Entry not found")
+
+
+@app.delete("/api/knowledge/entries/{entry_id}")
+async def delete_knowledge_entry(entry_id: int, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    if knowledge.delete_entry(entry_id):
+        return {"deleted": entry_id}
+    raise HTTPException(status_code=404, detail="Entry not found")
+
+
+# =============================================================================
+# MEMORY CRUD ROUTES (for Mind view management)
+# =============================================================================
+
+@app.get("/api/memory/list")
+async def list_memories(request: Request, _=Depends(require_login)):
+    """List memories grouped by label for the Mind view."""
+    from functions import memory
+    scope = request.query_params.get('scope', 'default')
+    conn = memory._get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id, content, timestamp, label FROM memories WHERE scope = ? ORDER BY label, timestamp DESC',
+        (scope,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    grouped = {}
+    for mid, content, ts, label in rows:
+        key = label or 'unlabeled'
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append({"id": mid, "content": content, "timestamp": ts, "label": label})
+    return {"memories": grouped, "total": len(rows)}
+
+
+@app.put("/api/memory/{memory_id}")
+async def update_memory(memory_id: int, request: Request, _=Depends(require_login)):
+    """Update memory content and re-embed."""
+    from functions import memory
+    data = await request.json()
+    content = data.get('content', '').strip()
+    scope = data.get('scope', 'default')
+    if not content:
+        raise HTTPException(status_code=400, detail="Content is required")
+    if len(content) > memory.MAX_MEMORY_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Max {memory.MAX_MEMORY_LENGTH} chars")
+
+    conn = memory._get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Memory not found")
+
+    keywords = memory._extract_keywords(content)
+    label = data.get('label')
+
+    embedding_blob = None
+    embedder = memory._get_embedder()
+    if embedder.available:
+        embs = embedder.embed([content], prefix='search_document')
+        if embs is not None:
+            embedding_blob = embs[0].tobytes()
+
+    cursor.execute(
+        'UPDATE memories SET content = ?, keywords = ?, label = ?, embedding = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ? AND scope = ?',
+        (content, keywords, label, embedding_blob, memory_id, scope)
+    )
+    conn.commit()
+    conn.close()
+    return {"updated": memory_id}
+
+
+@app.delete("/api/memory/{memory_id}")
+async def delete_memory_api(memory_id: int, request: Request, _=Depends(require_login)):
+    """Delete a memory by ID."""
+    from functions import memory
+    scope = request.query_params.get('scope', 'default')
+    result, success = memory._delete_memory(memory_id, scope)
+    if success:
+        return {"deleted": memory_id}
+    raise HTTPException(status_code=404, detail=result)
 
 
 # =============================================================================

@@ -46,10 +46,11 @@ export async function openSettingsModal() {
         }
         
         // Fetch supplemental data in parallel to avoid HTTP/1.1 connection queuing
-        const [llmResult, scopesResult, goalScopesResult, presetsResult] = await Promise.allSettled([
+        const [llmResult, scopesResult, goalScopesResult, knowledgeScopesResult, presetsResult] = await Promise.allSettled([
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/state/presets').then(r => r.ok ? r.json() : null).catch(() => null)
         ]);
 
@@ -85,6 +86,21 @@ export async function openSettingsModal() {
                     goalScopeSelect.appendChild(opt);
                 });
                 goalScopeSelect.value = settings.goal_scope || 'default';
+            }
+        }
+
+        // Process knowledge scopes
+        if (knowledgeScopesResult.status === 'fulfilled' && knowledgeScopesResult.value) {
+            const knowledgeScopeSelect = document.getElementById('setting-knowledge-scope');
+            if (knowledgeScopeSelect) {
+                knowledgeScopeSelect.innerHTML = '<option value="none">None (disabled)</option>';
+                (knowledgeScopesResult.value.scopes || []).forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = `${s.name} (${s.count})`;
+                    knowledgeScopeSelect.appendChild(opt);
+                });
+                knowledgeScopeSelect.value = settings.knowledge_scope || 'default';
             }
         }
 
@@ -362,12 +378,13 @@ export async function saveSettings() {
             trim_color: trimColor,
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
             goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
+            knowledge_scope: document.getElementById('setting-knowledge-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
             state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
             state_vars_in_prompt: document.getElementById('setting-state-vars-in-prompt')?.checked || false
         };
-        
+
         await api.updateChatSettings(chatName, settings);
         closeSettingsModal();
         ui.showToast('Settings saved', 'success');
@@ -453,12 +470,13 @@ export async function saveAsDefaults() {
             trim_color: trimColor,
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
             goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
+            knowledge_scope: document.getElementById('setting-knowledge-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
             state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
             state_vars_in_prompt: document.getElementById('setting-state-vars-in-prompt')?.checked || false
         };
-        
+
         const res = await fetch('/api/settings/chat-defaults', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },

@@ -150,11 +150,22 @@ class EmbeddingEngine:
             from transformers import AutoTokenizer
             from huggingface_hub import hf_hub_download
 
-            self.tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL, trust_remote_code=True)
-            model_path = hf_hub_download(EMBEDDING_MODEL, EMBEDDING_ONNX_FILE)
+            # Try local cache first to avoid phoning home to HuggingFace
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    EMBEDDING_MODEL, trust_remote_code=True, local_files_only=True)
+                model_path = hf_hub_download(
+                    EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, local_files_only=True)
+            except Exception:
+                # First run — download and cache
+                logger.info(f"Downloading embedding model: {EMBEDDING_MODEL}")
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    EMBEDDING_MODEL, trust_remote_code=True)
+                model_path = hf_hub_download(EMBEDDING_MODEL, EMBEDDING_ONNX_FILE)
+
             self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
             self.input_names = [i.name for i in self.session.get_inputs()]
-            logger.info(f"Embedding model loaded: {EMBEDDING_MODEL} (quantized ONNX)")
+            logger.info(f"Embedding model loaded: {EMBEDDING_MODEL} (quantized ONNX, local cache)")
         except Exception as e:
             logger.error(f"Failed to load embedding model: {e}")
             self.session = None
@@ -532,6 +543,26 @@ def create_scope(name: str) -> bool:
     except Exception as e:
         logger.error(f"Failed to create scope '{name}': {e}")
         return False
+
+
+def delete_scope(name: str) -> dict:
+    """Delete a memory scope and ALL memories in it. Returns {deleted_count}."""
+    if name == 'default':
+        return {"error": "Cannot delete the default scope"}
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM memories WHERE scope = ?', (name,))
+        count = cursor.fetchone()[0]
+        cursor.execute('DELETE FROM memories WHERE scope = ?', (name,))
+        cursor.execute('DELETE FROM memory_scopes WHERE name = ?', (name,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Deleted memory scope '{name}' with {count} memories")
+        return {"deleted_count": count}
+    except Exception as e:
+        logger.error(f"Failed to delete memory scope '{name}': {e}")
+        return {"error": str(e)}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────

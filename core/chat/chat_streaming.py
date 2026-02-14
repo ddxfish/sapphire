@@ -146,7 +146,9 @@ class StreamingChat:
             self.main_chat.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
             goal_scope = chat_settings.get('goal_scope', 'default')
             self.main_chat.function_manager.set_goal_scope(goal_scope if goal_scope != 'none' else None)
-            
+            knowledge_scope = chat_settings.get('knowledge_scope', 'default')
+            self.main_chat.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != 'none' else None)
+
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider, model_override = self.main_chat._select_provider()
