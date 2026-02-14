@@ -1,248 +1,306 @@
-// views/prompts.js - Prompt editor view
-import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt, saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
+// views/prompts.js - Prompt editor view (accordion-based inline editing)
+import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt,
+         saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
+// ── State ──
 let container = null;
 let prompts = [];
 let components = {};
+let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
 let selectedData = null;
-let saveTimer = null;
 let activePromptName = null;
+let openAccordion = null;
+let editTarget = {};        // { type: key } per-type editing target
+let saveTimer = null;
+let compSaveTimers = {};
 
 const SINGLE_TYPES = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
-const MULTI_TYPES = ['extras', 'emotions'];
+const MULTI_TYPES  = ['extras', 'emotions'];
+const ALL_TYPES    = [...SINGLE_TYPES, ...MULTI_TYPES];
+const ICONS = {
+    character: '\u{1F464}', location: '\u{1F4CD}', goals: '\u{1F3AF}', relationship: '\u{1F4AC}',
+    format: '\u{1F4DD}', scenario: '\u{1F3AD}', extras: '\u{2728}', emotions: '\u{1F4AD}'
+};
 
 export default {
-    init(el) {
-        container = el;
-    },
-
-    async show() {
-        await loadAll();
-        render();
-    },
-
+    init(el) { container = el; },
+    async show() { await loadAll(); render(); },
     hide() {}
 };
 
+// ── Data ──
 async function loadAll() {
     try {
-        const [pList, comps] = await Promise.all([
-            listPrompts(),
-            getComponents()
-        ]);
+        const [pList, comps] = await Promise.all([listPrompts(), getComponents()]);
         prompts = pList || [];
         components = comps || {};
 
-        // Find active prompt
         const active = prompts.find(p => p.active);
         activePromptName = active?.name || null;
 
-        if (!selected && activePromptName) {
-            selected = activePromptName;
-        } else if (!selected && prompts.length > 0) {
-            selected = prompts[0].name;
-        }
+        if (!selected && activePromptName) selected = activePromptName;
+        else if (!selected && prompts.length > 0) selected = prompts[0].name;
 
-        if (selected) {
-            try {
-                selectedData = await getPrompt(selected);
-            } catch { selectedData = null; }
+        // Fetch details for all prompts in parallel (for sidebar meta)
+        const results = await Promise.allSettled(prompts.map(p => getPrompt(p.name)));
+        results.forEach((r, i) => {
+            if (r.status === 'fulfilled' && r.value) {
+                promptDetails[prompts[i].name] = r.value;
+            }
+        });
+
+        // Use already-fetched data for selected prompt
+        if (selected && promptDetails[selected]) {
+            selectedData = promptDetails[selected];
+        } else if (selected) {
+            try { selectedData = await getPrompt(selected); } catch { selectedData = null; }
         }
     } catch (e) {
         console.warn('Prompts load failed:', e);
     }
 }
 
+// ── Main Render ──
 function render() {
     if (!container) return;
 
     container.innerHTML = `
-        <div class="two-panel">
-            <div class="panel-right panel-detail">
-                ${selected ? renderDetail() : '<div class="view-placeholder"><p>Select a prompt</p></div>'}
+        <div class="prompts-layout">
+            <div class="pr-editor">
+                ${selected ? renderEditor() : '<div class="view-placeholder"><p>Select a prompt</p></div>'}
             </div>
-            <div class="panel-left panel-roster">
-                <div class="panel-list-header">
-                    <span class="panel-list-title">Prompts</span>
-                    <button class="btn-sm" id="ps-new">+</button>
-                </div>
-                <div class="panel-list-items" id="ps-list">
-                    ${prompts.map(p => `
-                        <button class="panel-list-item${p.name === selected ? ' active' : ''}" data-name="${p.name}">
-                            <span class="ps-item-name">${p.privacy_required ? '\uD83D\uDD12 ' : ''}${p.name}</span>
-                            <span class="ps-item-type">${p.type === 'monolith' ? 'M' : 'A'}</span>
-                        </button>
-                    `).join('')}
-                </div>
+            <div class="pr-preview">
+                ${selected ? renderPreview() : ''}
+            </div>
+            <div class="pr-roster">
+                ${renderRoster()}
             </div>
         </div>
     `;
-
     bindEvents();
 }
 
-function renderDetail() {
-    if (!selectedData) return '<div class="view-placeholder"><p>Loading...</p></div>';
+function renderRoster() {
+    return `
+        <div class="panel-list-header">
+            <span class="panel-list-title">Prompts</span>
+            <button class="btn-sm" id="pr-new" title="New prompt">+</button>
+        </div>
+        <div class="panel-list-items" id="pr-list">
+            ${prompts.map(p => {
+                const d = promptDetails[p.name];
+                const tokens = d?.token_count || p.token_count;
+                const tokenStr = tokens ? formatCount(tokens) + ' tokens' : '';
+                const typeName = p.type === 'monolith' ? 'Monolith' : 'Assembled';
+                const character = d?.components?.character;
+                const meta = [typeName, character ? '\u{1F464} ' + character : ''].filter(Boolean).join(' \u00B7 ');
+                const isActive = p.name === activePromptName;
+                return `
+                    <button class="panel-list-item${p.name === selected ? ' selected' : ''}${isActive ? ' active-prompt' : ''}" data-name="${p.name}">
+                        <div class="pr-item-info">
+                            <span class="pr-item-name">${p.privacy_required ? '\u{1F512} ' : ''}${p.name}${isActive ? ' \u25CF' : ''}</span>
+                            ${tokenStr ? `<span class="pr-item-tokens">${tokenStr}</span>` : ''}
+                            <span class="pr-item-meta">${meta}</span>
+                        </div>
+                    </button>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
 
+function renderEditor() {
+    if (!selectedData) return '<div class="view-placeholder"><p>Loading...</p></div>';
     const p = selectedData;
     const isActive = selected === activePromptName;
     const isMonolith = p.type === 'monolith';
 
     return `
-        <div class="view-header">
-            <div class="view-header-left">
-                <h2>${p.privacy_required ? '\uD83D\uDD12 ' : ''}${selected}</h2>
-                <span class="view-subtitle">${p.type === 'monolith' ? 'Monolith' : 'Assembled'}${p.char_count ? ` \u2022 ${formatCount(p.char_count)} chars` : ''}</span>
+        <div class="pr-header">
+            <div class="pr-header-left">
+                <h2>${p.privacy_required ? '\u{1F512} ' : ''}${selected}</h2>
+                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}</span>
             </div>
-            <div class="view-header-actions">
-                ${!isActive ? `<button class="btn-primary" id="ps-activate">Activate</button>` : '<span class="badge badge-active">Active</span>'}
-                <button class="btn-sm" id="ps-io" title="Import/Export">Import/Export</button>
-                <button class="btn-sm" id="ps-preview" title="Preview compiled prompt">Preview</button>
-                <button class="btn-sm danger" id="ps-delete">Delete</button>
+            <div class="pr-header-actions">
+                ${!isActive ? '<button class="btn-primary" id="pr-activate">Activate</button>' : '<span class="badge badge-active">Active</span>'}
+                <button class="btn-sm" id="pr-io" title="Import / Export">\u21C4</button>
+                <button class="btn-sm danger" id="pr-delete" title="Delete prompt">\u2715</button>
             </div>
         </div>
-        <div class="view-body view-scroll">
-            <div class="ps-editor">
-                ${isMonolith ? renderMonolith(p) : renderAssembled(p)}
-                <div class="ps-privacy-row">
-                    <label><input type="checkbox" id="ps-privacy" ${p.privacy_required ? 'checked' : ''}> Private only (requires Privacy Mode)</label>
-                </div>
+        <div class="pr-body">
+            ${isMonolith ? renderMonolith(p) : renderAssembled(p)}
+            <div class="pr-privacy">
+                <label><input type="checkbox" id="pr-privacy" ${p.privacy_required ? 'checked' : ''}> Private only (requires Privacy Mode)</label>
             </div>
         </div>
     `;
 }
 
 function renderMonolith(p) {
-    return `
-        <div class="ps-monolith">
-            <textarea id="ps-content" class="ps-textarea" placeholder="Enter your prompt here...">${escapeHtml(p.content || '')}</textarea>
-        </div>
-    `;
+    return `<textarea id="pr-content" class="pr-textarea" placeholder="Enter your prompt...">${esc(p.content || '')}</textarea>`;
 }
 
 function renderAssembled(p) {
     const comps = p.components || {};
+
+    // Default edit targets to current selections
+    for (const t of SINGLE_TYPES) {
+        if (!editTarget[t]) editTarget[t] = comps[t] || '';
+    }
+    for (const t of MULTI_TYPES) {
+        if (!editTarget[t]) {
+            const sel = comps[t] || [];
+            editTarget[t] = sel[0] || Object.keys(components[t] || {})[0] || '';
+        }
+    }
+
     return `
-        <div class="ps-assembled">
-            ${SINGLE_TYPES.map(type => {
-                const options = components[type] ? Object.keys(components[type]) : [];
-                const current = comps[type] || '';
-                return `
-                    <div class="ps-comp-row">
-                        <label class="ps-comp-label">${type}</label>
-                        <select class="ps-comp-select" data-comp="${type}">
-                            <option value="">None</option>
-                            ${options.map(k => `<option value="${k}" ${k === current ? 'selected' : ''}>${k}</option>`).join('')}
-                        </select>
-                        <button class="btn-icon" data-action="edit-comp" data-type="${type}" title="Edit definitions">&#x270F;</button>
-                    </div>
-                `;
-            }).join('')}
-            ${MULTI_TYPES.map(type => {
-                const options = components[type] ? Object.keys(components[type]) : [];
-                const current = comps[type] || [];
-                return `
-                    <div class="ps-comp-row">
-                        <label class="ps-comp-label">${type}</label>
-                        <span class="ps-multi-display" data-comp="${type}">${current.length ? current.join(', ') : 'none'}</span>
-                        <button class="btn-icon" data-action="edit-multi" data-type="${type}" title="Edit selections">&#x270F;</button>
-                    </div>
-                `;
-            }).join('')}
+        <div class="pr-accordions">
+            ${SINGLE_TYPES.map(t => renderSingleAccordion(t, comps)).join('')}
+            ${MULTI_TYPES.map(t => renderMultiAccordion(t, comps)).join('')}
         </div>
     `;
 }
 
+function renderSingleAccordion(type, comps) {
+    const current = comps[type] || '';
+    const isOpen = openAccordion === type;
+    const defs = components[type] || {};
+    const keys = Object.keys(defs);
+    const target = editTarget[type] || current || keys[0] || '';
+    const targetText = defs[target] || '';
+
+    return `
+        <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
+            <div class="pr-accordion-header" data-type="${type}">
+                <span class="pr-acc-icon">${ICONS[type]}</span>
+                <span class="pr-acc-label">${cap(type)}</span>
+                <span class="pr-acc-value">${current || 'none'}</span>
+                <span class="pr-acc-arrow">${isOpen ? '\u25BE' : '\u25B8'}</span>
+            </div>
+            ${isOpen ? `
+                <div class="pr-accordion-body">
+                    <div class="pr-dual-select">
+                        <div class="pr-select-group">
+                            <label>Using</label>
+                            <select data-type="${type}" data-role="using">
+                                <option value="">None</option>
+                                ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="pr-select-group">
+                            <label>Editing</label>
+                            <select data-type="${type}" data-role="editing">
+                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    ${target ? renderDefEditor(type, target, targetText) : '<p class="text-muted" style="font-size:var(--font-sm)">No definitions yet. Click + New to create one.</p>'}
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function renderMultiAccordion(type, comps) {
+    const current = comps[type] || [];
+    const isOpen = openAccordion === type;
+    const defs = components[type] || {};
+    const keys = Object.keys(defs);
+    const target = editTarget[type] || current[0] || keys[0] || '';
+    const targetText = defs[target] || '';
+
+    return `
+        <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
+            <div class="pr-accordion-header" data-type="${type}">
+                <span class="pr-acc-icon">${ICONS[type]}</span>
+                <span class="pr-acc-label">${cap(type)}</span>
+                <span class="pr-acc-value">${current.length} selected</span>
+                <span class="pr-acc-arrow">${isOpen ? '\u25BE' : '\u25B8'}</span>
+            </div>
+            ${isOpen ? `
+                <div class="pr-accordion-body">
+                    <div class="pr-chips">
+                        ${keys.map(k => `
+                            <label class="pr-chip${current.includes(k) ? ' active' : ''}">
+                                <input type="checkbox" data-type="${type}" data-key="${k}" ${current.includes(k) ? 'checked' : ''}>
+                                <span>${k}</span>
+                            </label>
+                        `).join('')}
+                    </div>
+                    <div class="pr-select-group pr-edit-pick">
+                        <label>Editing</label>
+                        <select data-type="${type}" data-role="editing">
+                            ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}</option>`).join('')}
+                        </select>
+                    </div>
+                    ${target ? renderDefEditor(type, target, targetText) : '<p class="text-muted" style="font-size:var(--font-sm)">No definitions yet.</p>'}
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+function renderDefEditor(type, key, text) {
+    return `
+        <div class="pr-def-editor">
+            <div class="pr-def-name-row">
+                <input type="text" class="pr-def-name" data-type="${type}" data-orig="${escAttr(key)}" value="${escAttr(key)}" placeholder="Name" spellcheck="false">
+            </div>
+            <textarea class="pr-def-text" data-type="${type}" data-key="${key}" rows="4" placeholder="Definition text...">${esc(text)}</textarea>
+            <div class="pr-def-actions">
+                <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
+                <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${key}">Duplicate</button>
+                <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${key}">Delete</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderPreview() {
+    const text = selectedData?.compiled || selectedData?.content || '';
+    if (!text) return '<div class="pr-preview-empty">No preview available</div>';
+    return `
+        <div class="pr-preview-header">
+            <h3>Compiled Prompt</h3>
+            <span class="view-subtitle">${formatCount(text.length)} chars</span>
+        </div>
+        <div class="pr-preview-body">
+            <pre class="pr-preview-text">${esc(text)}</pre>
+        </div>
+    `;
+}
+
+// ── Events ──
 function bindEvents() {
-    // Roster selection
-    container.querySelector('#ps-list')?.addEventListener('click', async e => {
+    if (!container) return;
+    const layout = container.querySelector('.prompts-layout');
+    if (!layout) return;
+
+    // --- Roster ---
+    layout.querySelector('#pr-list')?.addEventListener('click', async e => {
         const item = e.target.closest('.panel-list-item');
         if (!item) return;
         selected = item.dataset.name;
-        try {
-            selectedData = await getPrompt(selected);
-        } catch { selectedData = null; }
+        openAccordion = null;
+        editTarget = {};
+        try { selectedData = await getPrompt(selected); } catch { selectedData = null; }
         render();
     });
 
     // New prompt
-    container.querySelector('#ps-new')?.addEventListener('click', async () => {
-        const name = prompt('New prompt name:');
-        if (!name?.trim()) return;
-        const type = confirm('Create as Assembled prompt?\n\nOK = Assembled (components)\nCancel = Monolith (free text)') ? 'assembled' : 'monolith';
+    layout.querySelector('#pr-new')?.addEventListener('click', createPrompt);
 
-        const data = type === 'monolith'
-            ? { type: 'monolith', content: 'Enter your prompt here...', privacy_required: false }
-            : { type: 'assembled', components: { character: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
+    // --- Header actions ---
+    layout.querySelector('#pr-activate')?.addEventListener('click', activateCurrentPrompt);
+    layout.querySelector('#pr-delete')?.addEventListener('click', deleteCurrentPrompt);
+    layout.querySelector('#pr-io')?.addEventListener('click', () => openImportExport());
 
-        try {
-            await savePrompt(name.trim(), data);
-            selected = name.trim();
-            await loadAll();
-            render();
-            ui.showToast(`Created: ${name.trim()}`, 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
-    });
-
-    // Activate
-    container.querySelector('#ps-activate')?.addEventListener('click', async () => {
-        try {
-            await loadPrompt(selected);
-            activePromptName = selected;
-            ui.showToast(`Activated: ${selected}`, 'success');
-            updateScene();
-            render();
-        } catch (e) {
-            if (e.privacyRequired) {
-                ui.showToast('Privacy Mode required for this prompt', 'error');
-            } else {
-                ui.showToast(e.message || 'Failed', 'error');
-            }
-        }
-    });
-
-    // Delete
-    container.querySelector('#ps-delete')?.addEventListener('click', async () => {
-        if (!confirm(`Delete "${selected}"?`)) return;
-        try {
-            await deletePrompt(selected);
-            selected = null;
-            selectedData = null;
-            await loadAll();
-            render();
-            updateScene();
-            ui.showToast('Deleted', 'success');
-        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
-    });
-
-    // Preview
-    container.querySelector('#ps-preview')?.addEventListener('click', async () => {
-        try {
-            const data = await getPrompt(selected);
-            const text = data.compiled || data.content || '(empty)';
-            const pre = document.createElement('pre');
-            pre.textContent = text;
-            pre.style.cssText = 'max-height:60vh;overflow:auto;white-space:pre-wrap;font-size:var(--font-sm);padding:16px;background:var(--bg-tertiary);border-radius:var(--radius-md)';
-            const modal = document.createElement('div');
-            modal.className = 'modal-base';
-            modal.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6)';
-            modal.innerHTML = `<div style="background:var(--bg-secondary);border-radius:var(--radius-lg);padding:20px;max-width:700px;width:90%;max-height:80vh;overflow:auto">
-                <div style="display:flex;justify-content:space-between;margin-bottom:12px"><h3 style="margin:0">Preview: ${selected} (${formatCount(text.length)} chars)</h3><button style="background:none;border:none;color:var(--text);font-size:20px;cursor:pointer" id="ps-preview-close">&times;</button></div></div>`;
-            modal.querySelector('div > div').appendChild(pre);
-            document.body.appendChild(modal);
-            modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-            modal.querySelector('#ps-preview-close').addEventListener('click', () => modal.remove());
-        } catch (e) { ui.showToast('Preview failed', 'error'); }
-    });
-
-    // Import/Export
-    container.querySelector('#ps-io')?.addEventListener('click', () => openImportExport());
-
-    // Privacy toggle
-    container.querySelector('#ps-privacy')?.addEventListener('change', e => {
+    // Privacy
+    layout.querySelector('#pr-privacy')?.addEventListener('change', e => {
         if (selectedData) {
             selectedData.privacy_required = e.target.checked;
             debouncedSavePrompt();
@@ -250,181 +308,423 @@ function bindEvents() {
     });
 
     // Monolith content
-    container.querySelector('#ps-content')?.addEventListener('input', () => {
+    layout.querySelector('#pr-content')?.addEventListener('input', e => {
         if (selectedData) {
-            selectedData.content = container.querySelector('#ps-content').value;
+            selectedData.content = e.target.value;
             debouncedSavePrompt();
         }
     });
 
-    // Assembled component dropdowns
-    container.querySelectorAll('.ps-comp-select').forEach(sel => {
-        sel.addEventListener('change', () => {
-            if (selectedData?.components) {
-                selectedData.components[sel.dataset.comp] = sel.value;
-                debouncedSavePrompt();
-            }
-        });
-    });
-
-    // Edit component definitions
-    container.querySelectorAll('[data-action="edit-comp"]').forEach(btn => {
-        btn.addEventListener('click', () => openCompEditor(btn.dataset.type, false));
-    });
-
-    // Edit multi-select
-    container.querySelectorAll('[data-action="edit-multi"]').forEach(btn => {
-        btn.addEventListener('click', () => openCompEditor(btn.dataset.type, true));
-    });
-}
-
-function openCompEditor(type, isMulti) {
-    const defs = components[type] || {};
-    const keys = Object.keys(defs);
-    const currentSelection = isMulti
-        ? (selectedData?.components?.[type] || [])
-        : [selectedData?.components?.[type] || ''];
-
-    const modal = document.createElement('div');
-    modal.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6)';
-    modal.innerHTML = `
-        <div style="background:var(--bg-secondary);border-radius:var(--radius-lg);padding:20px;max-width:600px;width:90%;max-height:80vh;overflow:auto">
-            <div style="display:flex;justify-content:space-between;margin-bottom:12px">
-                <h3 style="margin:0">Edit: ${type}</h3>
-                <button class="comp-close" style="background:none;border:none;color:var(--text);font-size:20px;cursor:pointer">&times;</button>
-            </div>
-            <div class="comp-items">
-                ${keys.map(k => `
-                    <div class="comp-item" data-key="${k}">
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                            <input type="${isMulti ? 'checkbox' : 'radio'}" name="comp-sel" value="${k}"
-                                ${currentSelection.includes(k) ? 'checked' : ''}>
-                            <strong>${k}</strong>
-                            <button class="btn-icon danger comp-del" data-key="${k}" style="margin-left:auto">&times;</button>
-                        </div>
-                        <textarea class="comp-text" data-key="${k}" rows="2" style="width:100%;padding:6px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm);resize:vertical">${escapeHtml(defs[k] || '')}</textarea>
-                    </div>
-                `).join('')}
-            </div>
-            <div style="display:flex;gap:8px;margin-top:12px">
-                <button class="btn-sm" id="comp-add">+ Add New</button>
-                <div style="flex:1"></div>
-                <button class="btn-sm" id="comp-cancel">Cancel</button>
-                <button class="btn-primary" id="comp-save">Save</button>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(modal);
-
-    // Close
-    const close = () => modal.remove();
-    modal.addEventListener('click', e => { if (e.target === modal) close(); });
-    modal.querySelector('.comp-close').addEventListener('click', close);
-    modal.querySelector('#comp-cancel').addEventListener('click', close);
-
-    // Delete component
-    modal.querySelectorAll('.comp-del').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const key = btn.dataset.key;
-            if (!confirm(`Delete "${key}" from ${type}?`)) return;
-            try {
-                await deleteComponent(type, key);
-                delete components[type][key];
-                btn.closest('.comp-item').remove();
-                ui.showToast('Deleted', 'success');
-            } catch (e) { ui.showToast('Failed', 'error'); }
-        });
-    });
-
-    // Add new
-    modal.querySelector('#comp-add').addEventListener('click', () => {
-        const name = prompt(`New ${type} name:`);
-        if (!name?.trim()) return;
-        const div = document.createElement('div');
-        div.className = 'comp-item';
-        div.dataset.key = name.trim();
-        div.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-                <input type="${isMulti ? 'checkbox' : 'radio'}" name="comp-sel" value="${name.trim()}" checked>
-                <strong>${name.trim()}</strong>
-            </div>
-            <textarea class="comp-text" data-key="${name.trim()}" rows="2" style="width:100%;padding:6px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm);resize:vertical" placeholder="Enter definition..."></textarea>
-        `;
-        modal.querySelector('.comp-items').appendChild(div);
-    });
-
-    // Save
-    modal.querySelector('#comp-save').addEventListener('click', async () => {
-        try {
-            // Save all text changes
-            const textareas = modal.querySelectorAll('.comp-text');
-            for (const ta of textareas) {
-                const key = ta.dataset.key;
-                const newText = ta.value;
-                if (!components[type]) components[type] = {};
-                if (components[type][key] !== newText) {
-                    await saveComponent(type, key, newText);
-                    components[type][key] = newText;
-                }
-            }
-
-            // Update selection
-            if (selectedData?.components) {
-                if (isMulti) {
-                    const checked = [];
-                    modal.querySelectorAll('input[name="comp-sel"]:checked').forEach(cb => checked.push(cb.value));
-                    selectedData.components[type] = checked;
-                } else {
-                    const sel = modal.querySelector('input[name="comp-sel"]:checked');
-                    selectedData.components[type] = sel?.value || '';
-                }
-                await savePrompt(selected, selectedData);
-                if (selected === activePromptName) await loadPrompt(selected);
-            }
-
-            ui.showToast('Saved', 'success');
-            close();
+    // --- Accordion headers ---
+    layout.querySelectorAll('.pr-accordion-header').forEach(hdr => {
+        hdr.addEventListener('click', () => {
+            const type = hdr.dataset.type;
+            openAccordion = openAccordion === type ? null : type;
             render();
-            updateScene();
-        } catch (e) { ui.showToast(e.message || 'Save failed', 'error'); }
+        });
+    });
+
+    // --- Inside accordion bodies (event delegation) ---
+    layout.querySelectorAll('.pr-accordion-body').forEach(body => {
+        const acc = body.closest('.pr-accordion');
+        const type = acc?.dataset.type;
+        if (!type) return;
+
+        // "Using" dropdown (single-select prompt selection)
+        body.querySelector('[data-role="using"]')?.addEventListener('change', e => {
+            if (selectedData?.components) {
+                selectedData.components[type] = e.target.value;
+                debouncedSavePrompt();
+                // Sync editing target to follow using
+                editTarget[type] = e.target.value;
+                renderAccordionBody(type);
+            }
+        });
+
+        // "Editing" dropdown
+        body.querySelector('[data-role="editing"]')?.addEventListener('change', e => {
+            editTarget[type] = e.target.value;
+            renderAccordionBody(type);
+        });
+
+        // Multi-select chip toggles
+        body.querySelectorAll('.pr-chip input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                if (!selectedData?.components) return;
+                const key = cb.dataset.key;
+                const current = selectedData.components[type] || [];
+                if (cb.checked) {
+                    if (!current.includes(key)) current.push(key);
+                } else {
+                    const idx = current.indexOf(key);
+                    if (idx >= 0) current.splice(idx, 1);
+                }
+                selectedData.components[type] = current;
+                // Update chip visual
+                cb.closest('.pr-chip').classList.toggle('active', cb.checked);
+                debouncedSavePrompt();
+            });
+        });
+
+        // Definition name rename (on blur)
+        body.querySelector('.pr-def-name')?.addEventListener('blur', async e => {
+            const origKey = e.target.dataset.orig;
+            const newKey = e.target.value.trim();
+            if (!newKey || newKey === origKey) {
+                e.target.value = origKey;
+                return;
+            }
+            await renameDefinition(type, origKey, newKey);
+        });
+
+        // Definition name rename (on Enter)
+        body.querySelector('.pr-def-name')?.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+        });
+
+        // Definition text (debounced save)
+        body.querySelector('.pr-def-text')?.addEventListener('input', e => {
+            const key = e.target.dataset.key;
+            debouncedSaveComponent(type, key, e.target.value);
+        });
+
+        // Action buttons
+        body.querySelectorAll('[data-action]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const action = btn.dataset.action;
+                const key = btn.dataset.key;
+                if (action === 'new-def') newDefinition(type);
+                else if (action === 'dup-def') duplicateDefinition(type, key);
+                else if (action === 'del-def') deleteDefinition(type, key);
+            });
+        });
     });
 }
 
+// Re-render just one accordion's body without full page re-render
+function renderAccordionBody(type) {
+    const acc = container.querySelector(`.pr-accordion[data-type="${type}"]`);
+    if (!acc) return;
+    const comps = selectedData?.components || {};
+
+    // Re-render the whole accordion (simpler than partial updates)
+    const isMulti = MULTI_TYPES.includes(type);
+    const html = isMulti ? renderMultiAccordion(type, comps) : renderSingleAccordion(type, comps);
+
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    const newAcc = temp.firstElementChild;
+    acc.replaceWith(newAcc);
+
+    // Re-bind events for this accordion
+    bindAccordionEvents(newAcc);
+}
+
+function bindAccordionEvents(acc) {
+    const type = acc.dataset.type;
+    if (!type) return;
+
+    // Accordion header
+    acc.querySelector('.pr-accordion-header')?.addEventListener('click', () => {
+        openAccordion = openAccordion === type ? null : type;
+        render();
+    });
+
+    const body = acc.querySelector('.pr-accordion-body');
+    if (!body) return;
+
+    body.querySelector('[data-role="using"]')?.addEventListener('change', e => {
+        if (selectedData?.components) {
+            selectedData.components[type] = e.target.value;
+            debouncedSavePrompt();
+            editTarget[type] = e.target.value;
+            renderAccordionBody(type);
+        }
+    });
+
+    body.querySelector('[data-role="editing"]')?.addEventListener('change', e => {
+        editTarget[type] = e.target.value;
+        renderAccordionBody(type);
+    });
+
+    body.querySelectorAll('.pr-chip input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => {
+            if (!selectedData?.components) return;
+            const key = cb.dataset.key;
+            const current = selectedData.components[type] || [];
+            if (cb.checked) {
+                if (!current.includes(key)) current.push(key);
+            } else {
+                const idx = current.indexOf(key);
+                if (idx >= 0) current.splice(idx, 1);
+            }
+            selectedData.components[type] = current;
+            cb.closest('.pr-chip').classList.toggle('active', cb.checked);
+            debouncedSavePrompt();
+        });
+    });
+
+    body.querySelector('.pr-def-name')?.addEventListener('blur', async e => {
+        const origKey = e.target.dataset.orig;
+        const newKey = e.target.value.trim();
+        if (!newKey || newKey === origKey) { e.target.value = origKey; return; }
+        await renameDefinition(type, origKey, newKey);
+    });
+
+    body.querySelector('.pr-def-name')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    });
+
+    body.querySelector('.pr-def-text')?.addEventListener('input', e => {
+        const key = e.target.dataset.key;
+        debouncedSaveComponent(type, key, e.target.value);
+    });
+
+    body.querySelectorAll('[data-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.action;
+            const key = btn.dataset.key;
+            if (action === 'new-def') newDefinition(type);
+            else if (action === 'dup-def') duplicateDefinition(type, key);
+            else if (action === 'del-def') deleteDefinition(type, key);
+        });
+    });
+}
+
+// ── Prompt CRUD ──
+async function createPrompt() {
+    const name = prompt('New prompt name:');
+    if (!name?.trim()) return;
+    const type = confirm('Create as Assembled prompt?\n\nOK = Assembled (components)\nCancel = Monolith (free text)') ? 'assembled' : 'monolith';
+
+    const data = type === 'monolith'
+        ? { type: 'monolith', content: '', privacy_required: false }
+        : { type: 'assembled', components: { character: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
+
+    try {
+        await savePrompt(name.trim(), data);
+        selected = name.trim();
+        openAccordion = null;
+        editTarget = {};
+        await loadAll();
+        render();
+        ui.showToast(`Created: ${name.trim()}`, 'success');
+    } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+}
+
+async function activateCurrentPrompt() {
+    try {
+        await loadPrompt(selected);
+        activePromptName = selected;
+        ui.showToast(`Activated: ${selected}`, 'success');
+        updateScene();
+        render();
+    } catch (e) {
+        ui.showToast(e.privacyRequired ? 'Privacy Mode required' : (e.message || 'Failed'), 'error');
+    }
+}
+
+async function deleteCurrentPrompt() {
+    if (!confirm(`Delete "${selected}"?`)) return;
+    try {
+        await deletePrompt(selected);
+        selected = null;
+        selectedData = null;
+        openAccordion = null;
+        editTarget = {};
+        await loadAll();
+        render();
+        updateScene();
+        ui.showToast('Deleted', 'success');
+    } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+}
+
+// ── Definition CRUD ──
+async function newDefinition(type) {
+    const name = prompt(`New ${type} name:`);
+    if (!name?.trim()) return;
+    try {
+        await saveComponent(type, name.trim(), '');
+        if (!components[type]) components[type] = {};
+        components[type][name.trim()] = '';
+        editTarget[type] = name.trim();
+        renderAccordionBody(type);
+        ui.showToast(`Created: ${name.trim()}`, 'success');
+    } catch (e) { ui.showToast('Failed', 'error'); }
+}
+
+async function duplicateDefinition(type, key) {
+    const defs = components[type] || {};
+    const text = defs[key] || '';
+    const newName = key + '-copy';
+    try {
+        await saveComponent(type, newName, text);
+        if (!components[type]) components[type] = {};
+        components[type][newName] = text;
+        editTarget[type] = newName;
+        renderAccordionBody(type);
+        ui.showToast(`Duplicated as: ${newName}`, 'success');
+    } catch (e) { ui.showToast('Failed', 'error'); }
+}
+
+async function deleteDefinition(type, key) {
+    if (!confirm(`Delete "${key}" from ${type}?`)) return;
+    try {
+        await deleteComponent(type, key);
+        delete components[type][key];
+
+        // If prompt was using this definition, clear it
+        if (selectedData?.components) {
+            if (MULTI_TYPES.includes(type)) {
+                const arr = selectedData.components[type] || [];
+                const idx = arr.indexOf(key);
+                if (idx >= 0) { arr.splice(idx, 1); await savePrompt(selected, selectedData); }
+            } else {
+                if (selectedData.components[type] === key) {
+                    selectedData.components[type] = '';
+                    await savePrompt(selected, selectedData);
+                }
+            }
+        }
+
+        // Move edit target
+        const remaining = Object.keys(components[type] || {});
+        editTarget[type] = remaining[0] || '';
+        renderAccordionBody(type);
+        refreshPreview();
+        ui.showToast('Deleted', 'success');
+    } catch (e) { ui.showToast('Failed', 'error'); }
+}
+
+async function renameDefinition(type, oldKey, newKey) {
+    const defs = components[type] || {};
+    if (defs[newKey]) {
+        ui.showToast(`"${newKey}" already exists`, 'error');
+        return;
+    }
+    try {
+        const text = defs[oldKey] || '';
+        await saveComponent(type, newKey, text);
+        await deleteComponent(type, oldKey);
+
+        // Update local state
+        components[type][newKey] = text;
+        delete components[type][oldKey];
+
+        // Update prompt reference
+        if (selectedData?.components) {
+            if (MULTI_TYPES.includes(type)) {
+                const arr = selectedData.components[type] || [];
+                const idx = arr.indexOf(oldKey);
+                if (idx >= 0) { arr[idx] = newKey; await savePrompt(selected, selectedData); }
+            } else {
+                if (selectedData.components[type] === oldKey) {
+                    selectedData.components[type] = newKey;
+                    await savePrompt(selected, selectedData);
+                }
+            }
+        }
+
+        editTarget[type] = newKey;
+        renderAccordionBody(type);
+        refreshPreview();
+        ui.showToast(`Renamed to: ${newKey}`, 'success');
+    } catch (e) { ui.showToast('Rename failed', 'error'); }
+}
+
+// ── Auto-save ──
+function debouncedSavePrompt() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+        if (!selected || !selectedData) return;
+        try {
+            await savePrompt(selected, selectedData);
+            if (selected === activePromptName) await loadPrompt(selected);
+            updateScene();
+            refreshPreview();
+        } catch (e) {
+            ui.showToast('Save failed', 'error');
+        }
+    }, 600);
+}
+
+function debouncedSaveComponent(type, key, value) {
+    const timerId = `${type}:${key}`;
+    clearTimeout(compSaveTimers[timerId]);
+    compSaveTimers[timerId] = setTimeout(async () => {
+        try {
+            await saveComponent(type, key, value);
+            if (components[type]) components[type][key] = value;
+            // If this component is used by the current prompt, refresh preview
+            if (selectedData?.components) {
+                const sel = selectedData.components[type];
+                const isUsed = Array.isArray(sel) ? sel.includes(key) : sel === key;
+                if (isUsed && selected === activePromptName) {
+                    await loadPrompt(selected);
+                }
+                if (isUsed) refreshPreview();
+            }
+        } catch (e) {
+            ui.showToast('Save failed', 'error');
+        }
+    }, 600);
+}
+
+async function refreshPreview() {
+    if (!selected) return;
+    try {
+        const fresh = await getPrompt(selected);
+        if (fresh) {
+            selectedData.compiled = fresh.compiled;
+            selectedData.char_count = fresh.char_count;
+        }
+    } catch { /* ignore */ }
+
+    const previewEl = container?.querySelector('.pr-preview');
+    if (previewEl) previewEl.innerHTML = renderPreview();
+
+    // Update char count in header subtitle
+    const subtitle = container?.querySelector('.pr-header .view-subtitle');
+    if (subtitle && selectedData) {
+        const isMonolith = selectedData.type === 'monolith';
+        subtitle.textContent = `${isMonolith ? 'Monolith' : 'Assembled'}${selectedData.char_count ? ' \u00B7 ' + formatCount(selectedData.char_count) + ' chars' : ''}`;
+    }
+}
+
+// ── Import / Export (modal) ──
 function openImportExport() {
     const modal = document.createElement('div');
-    modal.style.cssText = 'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6)';
+    modal.className = 'pr-modal-overlay';
     modal.innerHTML = `
-        <div style="background:var(--bg-secondary);border-radius:var(--radius-lg);padding:20px;max-width:550px;width:90%;max-height:80vh;overflow:auto">
-            <div style="display:flex;justify-content:space-between;margin-bottom:16px">
-                <h3 style="margin:0">Import / Export: ${selected}</h3>
-                <button class="io-close" style="background:none;border:none;color:var(--text);font-size:20px;cursor:pointer">&times;</button>
+        <div class="pr-modal">
+            <div class="pr-modal-header">
+                <h3>Import / Export: ${selected}</h3>
+                <button class="btn-icon" id="pr-io-close">\u2715</button>
             </div>
-
-            <div style="margin-bottom:16px">
-                <h4 style="margin:0 0 8px;font-size:var(--font-sm);color:var(--text-secondary)">Export</h4>
-                <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:var(--font-sm)">
-                    <input type="checkbox" id="io-export-pieces" checked> Include prompt pieces (component definitions)
-                </label>
-                <div style="display:flex;gap:8px">
-                    <button class="btn-sm" id="io-export-clip">Copy to Clipboard</button>
-                    <button class="btn-sm" id="io-export-file">Download File</button>
+            <div class="pr-modal-body">
+                <div class="pr-io-section">
+                    <h4>Export</h4>
+                    <label class="pr-io-option">
+                        <input type="checkbox" id="io-export-pieces" checked> Include prompt pieces (component definitions)
+                    </label>
+                    <div class="pr-io-buttons">
+                        <button class="btn-sm" id="io-export-clip">Copy to Clipboard</button>
+                        <button class="btn-sm" id="io-export-file">Download File</button>
+                    </div>
                 </div>
-            </div>
-
-            <hr style="border:none;border-top:1px solid var(--border);margin:16px 0">
-
-            <div>
-                <h4 style="margin:0 0 8px;font-size:var(--font-sm);color:var(--text-secondary)">Import</h4>
-                <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:var(--font-sm)">
-                    <input type="checkbox" id="io-import-pieces"> Overwrite prompt pieces with imported definitions
-                </label>
-                <div style="display:flex;gap:8px;margin-bottom:8px">
-                    <button class="btn-sm" id="io-import-clip">Paste from Clipboard</button>
-                    <button class="btn-sm" id="io-import-file">Upload File</button>
-                    <input type="file" id="io-file-input" accept=".json" style="display:none">
+                <hr class="pr-io-divider">
+                <div class="pr-io-section">
+                    <h4>Import</h4>
+                    <label class="pr-io-option">
+                        <input type="checkbox" id="io-import-pieces"> Overwrite prompt pieces with imported definitions
+                    </label>
+                    <div class="pr-io-buttons">
+                        <button class="btn-sm" id="io-import-clip">Paste from Clipboard</button>
+                        <button class="btn-sm" id="io-import-file">Upload File</button>
+                        <input type="file" id="io-file-input" accept=".json" style="display:none">
+                    </div>
+                    <div id="io-status" class="pr-io-status"></div>
                 </div>
-                <div id="io-status" style="font-size:var(--font-sm);color:var(--text-muted)"></div>
             </div>
         </div>
     `;
@@ -432,14 +732,12 @@ function openImportExport() {
     document.body.appendChild(modal);
     const close = () => modal.remove();
     modal.addEventListener('click', e => { if (e.target === modal) close(); });
-    modal.querySelector('.io-close').addEventListener('click', close);
+    modal.querySelector('#pr-io-close').addEventListener('click', close);
 
-    // --- Export ---
+    // Export
     async function buildExport() {
         const bundle = { name: selected, prompt: selectedData };
-        if (modal.querySelector('#io-export-pieces').checked) {
-            bundle.components = components;
-        }
+        if (modal.querySelector('#io-export-pieces').checked) bundle.components = components;
         return bundle;
     }
 
@@ -448,7 +746,7 @@ function openImportExport() {
             const data = await buildExport();
             await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
             ui.showToast('Copied to clipboard', 'success');
-        } catch (e) { ui.showToast('Copy failed', 'error'); }
+        } catch { ui.showToast('Copy failed', 'error'); }
     });
 
     modal.querySelector('#io-export-file').addEventListener('click', async () => {
@@ -456,25 +754,20 @@ function openImportExport() {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = `${selected}.prompt.json`;
-        a.click();
+        a.href = url; a.download = `${selected}.prompt.json`; a.click();
         URL.revokeObjectURL(url);
         ui.showToast('Downloaded', 'success');
     });
 
-    // --- Import ---
+    // Import
     async function doImport(json) {
         const status = modal.querySelector('#io-status');
         try {
             const data = JSON.parse(json);
             if (!data.prompt) { status.textContent = 'Invalid format: missing prompt data'; return; }
-
             const name = data.name || selected;
             status.textContent = `Importing "${name}"...`;
-
             await savePrompt(name, data.prompt);
-
             const importPieces = data.components || data.pieces;
             if (modal.querySelector('#io-import-pieces').checked && importPieces) {
                 for (const [type, defs] of Object.entries(importPieces)) {
@@ -483,7 +776,6 @@ function openImportExport() {
                     }
                 }
             }
-
             if (name === activePromptName) await loadPrompt(name);
             selected = name;
             await loadAll();
@@ -491,24 +783,17 @@ function openImportExport() {
             updateScene();
             close();
             ui.showToast(`Imported: ${name}`, 'success');
-        } catch (e) {
-            status.textContent = `Error: ${e.message}`;
-        }
+        } catch (e) { status.textContent = `Error: ${e.message}`; }
     }
 
     modal.querySelector('#io-import-clip').addEventListener('click', async () => {
         try {
             const text = await navigator.clipboard.readText();
             await doImport(text);
-        } catch (e) {
-            modal.querySelector('#io-status').textContent = 'Clipboard read failed (check permissions)';
-        }
+        } catch { modal.querySelector('#io-status').textContent = 'Clipboard read failed (check permissions)'; }
     });
 
-    modal.querySelector('#io-import-file').addEventListener('click', () => {
-        modal.querySelector('#io-file-input').click();
-    });
-
+    modal.querySelector('#io-import-file').addEventListener('click', () => modal.querySelector('#io-file-input').click());
     modal.querySelector('#io-file-input').addEventListener('change', e => {
         const file = e.target.files[0];
         if (!file) return;
@@ -518,26 +803,16 @@ function openImportExport() {
     });
 }
 
-function debouncedSavePrompt() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-        if (!selected || !selectedData) return;
-        try {
-            await savePrompt(selected, selectedData);
-            if (selected === activePromptName) await loadPrompt(selected);
-            updateScene();
-        } catch (e) {
-            ui.showToast('Save failed', 'error');
-        }
-    }, 800);
+// ── Helpers ──
+function formatCount(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n; }
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
 }
 
-function formatCount(n) {
-    return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
-}
-
-function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+function escAttr(str) {
+    return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

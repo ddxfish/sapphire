@@ -1748,14 +1748,17 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
 @app.get("/api/prompts")
 async def list_prompts(request: Request, _=Depends(require_login)):
     """List all prompts."""
+    from core.chat.history import count_tokens
     prompt_names = prompts.list_prompts()
     prompt_list = []
     for name in prompt_names:
         pdata = prompts.get_prompt(name)
+        content = pdata.get('content', '') if isinstance(pdata, dict) else str(pdata)
         prompt_list.append({
             'name': name,
             'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
-            'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata)),
+            'char_count': len(content),
+            'token_count': count_tokens(content),
             'privacy_required': pdata.get('privacy_required', False) if isinstance(pdata, dict) else False
         })
     return {"prompts": prompt_list, "current": prompts.get_active_preset_name()}
@@ -1777,9 +1780,13 @@ async def get_prompt_components(request: Request, _=Depends(require_login)):
 @app.get("/api/prompts/{name}")
 async def get_prompt(name: str, request: Request, _=Depends(require_login)):
     """Get a specific prompt."""
+    from core.chat.history import count_tokens
     pdata = prompts.get_prompt(name)
     if not pdata:
         raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
+    content = pdata.get('content', '') if isinstance(pdata, dict) else str(pdata)
+    pdata['char_count'] = len(content)
+    pdata['token_count'] = count_tokens(content)
     return {"name": name, "data": pdata}
 
 
