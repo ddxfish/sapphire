@@ -32,6 +32,9 @@ from core.wakeword.wakeword_null import NullWakeWordDetector as _NullWakeWordDet
 
 logger = logging.getLogger(__name__)
 
+# Cache-bust version — changes every server restart so browsers fetch fresh assets
+BOOT_VERSION = str(int(time.time()))
+
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "interfaces" / "web" / "templates"
@@ -133,6 +136,7 @@ async def security_headers(request: Request, call_next):
     response.headers['X-XSS-Protection'] = '1; mode=block'
 
     # Static assets: revalidate every request (ETag handles 304s for unchanged files)
+    # HTML pages get no-cache headers directly on the response (see _no_cache_html)
     if request.url.path.startswith('/static/'):
         response.headers['Cache-Control'] = 'no-cache'
 
@@ -161,13 +165,23 @@ async def favicon():
     return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
 
+def _no_cache_html(template: str, context: dict):
+    """TemplateResponse with aggressive no-cache headers (bypass middleware issues)."""
+    resp = templates.TemplateResponse(template, context)
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
+
+
 @app.get("/")
 async def index(request: Request, _=Depends(require_login)):
     """Main chat page."""
     csrf_token = generate_csrf_token(request)
-    return templates.TemplateResponse("index.html", {
+    return _no_cache_html("index.html", {
         "request": request,
-        "csrf_token": lambda: csrf_token
+        "csrf_token": lambda: csrf_token,
+        "v": BOOT_VERSION
     })
 
 
@@ -177,7 +191,7 @@ async def setup_page(request: Request):
     if is_setup_complete():
         return RedirectResponse(url="/login", status_code=302)
     csrf_token = generate_csrf_token(request)
-    return templates.TemplateResponse("setup.html", {
+    return _no_cache_html("setup.html", {
         "request": request,
         "csrf_token": lambda: csrf_token
     })
@@ -219,7 +233,7 @@ async def login_page(request: Request, _=Depends(require_setup)):
     if request.session.get('logged_in'):
         return RedirectResponse(url="/", status_code=302)
     csrf_token = generate_csrf_token(request)
-    return templates.TemplateResponse("login.html", {
+    return _no_cache_html("login.html", {
         "request": request,
         "csrf_token": lambda: csrf_token
     })

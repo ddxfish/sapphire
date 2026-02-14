@@ -33,6 +33,7 @@ let providerMeta = {};
 let dynamicTabs = [];
 let pluginList = [];
 let lockedPlugins = [];
+let mobileMenuCleanup = null;
 
 export default {
     init(el) { container = el; },
@@ -173,6 +174,21 @@ function render() {
                 `).join('')}
             </div>
             <div class="settings-main">
+                <div class="settings-mobile-nav">
+                    <button class="settings-mobile-trigger" id="settings-mobile-trigger">
+                        <span class="settings-mobile-icon">${meta.icon}</span>
+                        <span class="settings-mobile-label">${meta.name}</span>
+                        <span class="settings-mobile-arrow">&#x25BE;</span>
+                    </button>
+                    <div class="settings-mobile-menu hidden" id="settings-mobile-menu">
+                        ${tabs.map(t => `
+                            <button class="settings-mobile-option${t.id === activeTab ? ' active' : ''}" data-tab="${t.id}">
+                                <span class="settings-mobile-opt-icon">${t.icon}</span>
+                                <span>${t.name}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
                 <div class="settings-header">
                     <div class="view-header-left">
                         <h2 id="stab-title">${meta.icon} ${meta.name}</h2>
@@ -328,6 +344,56 @@ function bindShellEvents() {
 
         renderTabContent();
     });
+
+    // Mobile tab dropdown
+    if (mobileMenuCleanup) mobileMenuCleanup();
+    const mobileTrigger = container.querySelector('#settings-mobile-trigger');
+    const mobileMenu = container.querySelector('#settings-mobile-menu');
+    if (mobileTrigger && mobileMenu) {
+        mobileTrigger.addEventListener('click', () => {
+            mobileMenu.classList.toggle('hidden');
+            mobileTrigger.querySelector('.settings-mobile-arrow').textContent =
+                mobileMenu.classList.contains('hidden') ? '\u25BE' : '\u25B4';
+        });
+
+        mobileMenu.addEventListener('click', e => {
+            const opt = e.target.closest('.settings-mobile-option');
+            if (!opt) return;
+            activeTab = opt.dataset.tab;
+
+            // Sync desktop sidebar
+            container.querySelectorAll('.settings-nav-item').forEach(b =>
+                b.classList.toggle('active', b.dataset.tab === activeTab));
+
+            // Update mobile trigger + header
+            const meta = getTabMeta();
+            mobileTrigger.querySelector('.settings-mobile-icon').textContent = meta.icon;
+            mobileTrigger.querySelector('.settings-mobile-label').textContent = meta.name;
+            mobileTrigger.querySelector('.settings-mobile-arrow').textContent = '\u25BE';
+
+            const title = container.querySelector('#stab-title');
+            const desc = container.querySelector('#stab-desc');
+            if (title) title.textContent = `${meta.icon} ${meta.name}`;
+            if (desc) desc.textContent = meta.description || '';
+
+            // Update menu active states
+            mobileMenu.querySelectorAll('.settings-mobile-option').forEach(o =>
+                o.classList.toggle('active', o.dataset.tab === activeTab));
+
+            mobileMenu.classList.add('hidden');
+            renderTabContent();
+        });
+
+        const outsideHandler = e => {
+            if (!mobileMenu.classList.contains('hidden') && !e.target.closest('.settings-mobile-nav')) {
+                mobileMenu.classList.add('hidden');
+                const arrow = mobileTrigger.querySelector('.settings-mobile-arrow');
+                if (arrow) arrow.textContent = '\u25BE';
+            }
+        };
+        document.addEventListener('click', outsideHandler);
+        mobileMenuCleanup = () => document.removeEventListener('click', outsideHandler);
+    }
 
     container.querySelector('#settings-save')?.addEventListener('click', saveChanges);
 

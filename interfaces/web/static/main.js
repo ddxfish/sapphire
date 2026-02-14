@@ -20,13 +20,14 @@ import { registerView, initRouter } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 
 // View modules loaded dynamically — a broken view cannot kill the app
+const _v = window.__v ? `?v=${window.__v}` : '';
 const VIEW_MODULES = {
-    chat:     './views/chat.js',
-    prompts:  './views/prompts.js',
-    toolsets: './views/toolsets.js',
-    spices:   './views/spices.js',
-    schedule: './views/schedule.js',
-    settings: './views/settings.js',
+    chat:     `./views/chat.js${_v}`,
+    prompts:  `./views/prompts.js${_v}`,
+    toolsets: `./views/toolsets.js${_v}`,
+    spices:   `./views/spices.js${_v}`,
+    schedule: `./views/schedule.js${_v}`,
+    settings: `./views/settings.js${_v}`,
 };
 
 async function loadViews() {

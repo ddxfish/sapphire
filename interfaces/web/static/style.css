@@ -1464,7 +1464,7 @@ body {
 .settings-grid {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 4px 20px;
+    gap: 12px 20px;
 }
 
 /* Setting rows — stacked: label above input */
@@ -1487,8 +1487,16 @@ body {
 .setting-input { min-width: 0; }
 .setting-actions { align-self: end; }
 
-/* Full-width setting row (e.g. enable toggles) */
-.setting-row.full-width { grid-column: 1 / -1; }
+/* Full-width setting row (e.g. enable toggles) — single inline row */
+.setting-row.full-width {
+    grid-column: 1 / -1;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+}
+.setting-row.full-width .setting-label {
+    grid-column: auto;
+}
+.setting-row.full-width .setting-help { display: none; }
 .setting-input input[type="text"],
 .setting-input input[type="number"],
 .setting-input select {
@@ -1668,26 +1676,71 @@ body {
     min-height: 1.2em;
 }
 
-/* Mobile responsive */
+/* Mobile settings dropdown nav (replaces sidebar on mobile) */
+.settings-mobile-nav { display: none; }
+
 @media (max-width: 768px) {
-    .settings-view { flex-direction: column; }
-    .settings-sidebar {
-        width: 100%;
-        flex-direction: row;
-        display: flex;
-        overflow-x: auto;
-        border-right: none;
+    .settings-sidebar { display: none; }
+    .settings-mobile-nav {
+        display: block;
+        position: relative;
         border-bottom: 1px solid var(--border);
-        padding: 4px 8px;
-        gap: 2px;
     }
-    .settings-nav-item {
-        padding: 6px 8px;
-        font-size: var(--font-xs);
-        border-radius: var(--radius-sm);
+    .settings-mobile-trigger {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        width: 100%;
+        padding: 12px 16px;
+        border: none;
+        background: var(--bg-primary);
+        color: var(--text);
+        font-size: var(--font-base);
+        font-weight: 600;
+        cursor: pointer;
     }
-    .settings-nav-label { display: none; }
-    .settings-nav-icon { font-size: 1.2em; }
+    .settings-mobile-icon { font-size: 1.2em; }
+    .settings-mobile-arrow {
+        font-size: 1.1em;
+        color: var(--text-muted);
+    }
+    .settings-header .view-header-left { display: none; }
+    .settings-mobile-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-top: none;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        z-index: 50;
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+    .settings-mobile-menu.hidden { display: none; }
+    .settings-mobile-option {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        padding: 12px 16px;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: var(--font-sm);
+        cursor: pointer;
+        text-align: left;
+        transition: background 0.15s;
+    }
+    .settings-mobile-option:hover { background: var(--bg-hover); }
+    .settings-mobile-option.active {
+        background: var(--trim-light, rgba(99,102,241,0.15));
+        color: var(--trim, var(--text));
+        font-weight: 600;
+    }
+    .settings-mobile-opt-icon { font-size: 1.2em; width: 1.6em; text-align: center; }
     .setting-row { grid-template-columns: 1fr auto; gap: 4px; }
     .settings-content { padding: 12px; }
 }

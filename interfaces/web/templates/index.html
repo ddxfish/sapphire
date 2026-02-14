@@ -6,7 +6,7 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Sapphire</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
-    <link rel="stylesheet" href="/static/shared.css">
+    <link rel="stylesheet" href="/static/shared.css?v={{ v }}">
 
     <!-- Syntax Highlighting (local) -->
     <link rel="stylesheet" href="/static/vendor/highlight-atom-one-dark.min.css">
@@ -30,7 +30,7 @@
             const link = document.createElement('link');
             link.id = 'theme-stylesheet';
             link.rel = 'stylesheet';
-            link.href = '/static/themes/' + saved + '.css';
+            link.href = '/static/themes/' + saved + '.css?v={{ v }}';
             document.head.appendChild(link);
         })();
     </script>
@@ -48,7 +48,7 @@
             };
         })();
     </script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ v }}">
 </head>
 <body>
     <!-- ================================================================
@@ -375,6 +375,11 @@
         </div>
     </div>
 
-    <script type="module" src="/static/main.js?v=20260212a"></script>
+    <script>
+        window.__v='{{ v }}';
+        // Unregister any stale service workers (PWA manifest can trigger phantom caching)
+        if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(r => r.forEach(sw => sw.unregister()));
+    </script>
+    <script type="module" src="/static/main.js?v={{ v }}"></script>
 </body>
 </html>

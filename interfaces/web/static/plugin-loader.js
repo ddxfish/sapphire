@@ -2,8 +2,8 @@
 // Supports lazy loading: plugins marked lazy=true only load when triggered
 import { showHelpModal } from './shared/modal.js';
 
-// Cache buster - increment to force fresh plugin loads
-const PLUGIN_VERSION = '20260203b';
+// Cache buster — auto-versioned from server boot time
+const PLUGIN_VERSION = window.__v || '';
 
 class PluginLoader {
   constructor(containerSelector) {
