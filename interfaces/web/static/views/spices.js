@@ -55,33 +55,40 @@ function renderCategory(name, cat) {
     const emoji = cat.emoji || '';
     const desc = cat.description || '';
     return `
-        <div class="spice-card" data-category="${name}">
-            <div class="spice-card-header">
-                <label class="spice-toggle">
-                    <input type="checkbox" ${cat.enabled ? 'checked' : ''} data-action="toggle-cat" data-cat="${name}">
-                    <span class="spice-cat-name">${emoji ? emoji + ' ' : ''}${name}</span>
-                    <span class="spice-cat-count">(${spices.length})</span>
-                </label>
-                <div class="spice-card-actions">
-                    <button class="btn-icon" data-action="add-spice" data-cat="${name}" title="Add spice">+</button>
-                    <button class="btn-icon" data-action="rename-cat" data-cat="${name}" title="Rename">&#x270F;</button>
-                    <button class="btn-icon danger" data-action="delete-cat" data-cat="${name}" title="Delete category">&times;</button>
+        <details class="spice-cat" data-category="${name}">
+            <summary class="spice-cat-header">
+                <span class="spice-cat-icon">${emoji || '🧂'}</span>
+                <div class="spice-cat-info">
+                    <span class="spice-cat-name">${name} <span class="spice-cat-count">(${spices.length})</span></span>
+                    ${desc ? `<span class="spice-cat-desc">${escapeHtml(desc)}</span>` : ''}
+                </div>
+                <div class="spice-cat-controls" onclick="event.stopPropagation()">
+                    <label class="toggle-switch" onclick="event.stopPropagation()">
+                        <input type="checkbox" ${cat.enabled ? 'checked' : ''} data-action="toggle-cat" data-cat="${name}">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </summary>
+            <div class="spice-cat-body">
+                <div class="spice-cat-inner${cat.enabled ? '' : ' disabled'}">
+                    <div class="spice-cat-actions">
+                        <button class="btn-sm" data-action="add-spice" data-cat="${name}">+ Spice</button>
+                        <button class="btn-icon" data-action="rename-cat" data-cat="${name}" title="Rename">&#x270F;</button>
+                        <button class="btn-icon danger" data-action="delete-cat" data-cat="${name}" title="Delete category">&times;</button>
+                    </div>
+                    ${spices.length === 0 ? '<div class="text-muted" style="padding:8px;font-size:var(--font-sm)">Empty — add a spice above</div>' :
+                    spices.map((text, i) => `
+                        <div class="spice-item">
+                            <span class="spice-text">${escapeHtml(text)}</span>
+                            <div class="spice-item-actions">
+                                <button class="btn-icon" data-action="edit-spice" data-cat="${name}" data-idx="${i}" title="Edit">&#x270E;</button>
+                                <button class="btn-icon danger" data-action="delete-spice" data-cat="${name}" data-idx="${i}" title="Delete">&times;</button>
+                            </div>
+                        </div>
+                    `).join('')}
                 </div>
             </div>
-            ${desc ? `<div class="spice-cat-desc">${escapeHtml(desc)}</div>` : ''}
-            <div class="spice-card-body${cat.enabled ? '' : ' disabled'}">
-                ${spices.length === 0 ? '<div class="text-muted" style="padding:8px;font-size:var(--font-sm)">Empty</div>' :
-                spices.map((text, i) => `
-                    <div class="spice-item">
-                        <span class="spice-text">${escapeHtml(text)}</span>
-                        <div class="spice-item-actions">
-                            <button class="btn-icon" data-action="edit-spice" data-cat="${name}" data-idx="${i}" title="Edit">&#x270E;</button>
-                            <button class="btn-icon danger" data-action="delete-spice" data-cat="${name}" data-idx="${i}" title="Delete">&times;</button>
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        </div>
+        </details>
     `;
 }
 
