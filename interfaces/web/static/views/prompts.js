@@ -146,10 +146,7 @@ function renderMonolith(p) {
 function renderAssembled(p) {
     const comps = p.components || {};
 
-    // Default edit targets to current selections
-    for (const t of SINGLE_TYPES) {
-        if (!editTarget[t]) editTarget[t] = comps[t] || '';
-    }
+    // Only multi-select types need a separate edit target
     for (const t of MULTI_TYPES) {
         if (!editTarget[t]) {
             const sel = comps[t] || [];
@@ -170,8 +167,7 @@ function renderSingleAccordion(type, comps) {
     const isOpen = openAccordion === type;
     const defs = components[type] || {};
     const keys = Object.keys(defs);
-    const target = editTarget[type] || current || keys[0] || '';
-    const targetText = defs[target] || '';
+    const currentText = defs[current] || '';
 
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
@@ -183,22 +179,22 @@ function renderSingleAccordion(type, comps) {
             </div>
             ${isOpen ? `
                 <div class="pr-accordion-body">
-                    <div class="pr-dual-select">
-                        <div class="pr-select-group">
-                            <label>Using</label>
-                            <select data-type="${type}" data-role="using">
-                                <option value="">None</option>
-                                ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}</option>`).join('')}
-                            </select>
-                        </div>
-                        <div class="pr-select-group">
-                            <label>Editing</label>
-                            <select data-type="${type}" data-role="editing">
-                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}</option>`).join('')}
-                            </select>
-                        </div>
+                    <div class="pr-piece-row">
+                        <select class="pr-piece-select" data-type="${type}">
+                            <option value="">None</option>
+                            ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}</option>`).join('')}
+                        </select>
+                        ${current ? `<button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${current}" title="Rename">\u270F</button>` : ''}
                     </div>
-                    ${target ? renderDefEditor(type, target, targetText) : '<p class="text-muted" style="font-size:var(--font-sm)">No definitions yet. Click + New to create one.</p>'}
+                    ${current ? `
+                        <textarea class="pr-def-text" data-type="${type}" data-key="${current}" rows="4" placeholder="Definition text...">${esc(currentText)}</textarea>
+                        <div class="pr-def-actions">
+                            <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
+                            <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${current}">Duplicate</button>
+                            <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${current}">Delete</button>
+                        </div>
+                    ` : `<p class="text-muted" style="font-size:var(--font-sm)">Select a piece above or click + New.</p>
+                         <div class="pr-def-actions"><button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button></div>`}
                 </div>
             ` : ''}
         </div>
@@ -231,31 +227,22 @@ function renderMultiAccordion(type, comps) {
                             </label>
                         `).join('')}
                     </div>
-                    <div class="pr-select-group pr-edit-pick">
-                        <label>Editing</label>
-                        <select data-type="${type}" data-role="editing">
-                            ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}</option>`).join('')}
-                        </select>
-                    </div>
-                    ${target ? renderDefEditor(type, target, targetText) : '<p class="text-muted" style="font-size:var(--font-sm)">No definitions yet.</p>'}
+                    ${keys.length ? `
+                        <div class="pr-piece-row">
+                            <select class="pr-piece-select" data-type="${type}">
+                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}</option>`).join('')}
+                            </select>
+                            <button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${target}" title="Rename">\u270F</button>
+                        </div>
+                        <textarea class="pr-def-text" data-type="${type}" data-key="${target}" rows="3" placeholder="Definition text...">${esc(targetText)}</textarea>
+                        <div class="pr-def-actions">
+                            <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
+                            <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${target}">Duplicate</button>
+                            <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${target}">Delete</button>
+                        </div>
+                    ` : `<div class="pr-def-actions"><button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button></div>`}
                 </div>
             ` : ''}
-        </div>
-    `;
-}
-
-function renderDefEditor(type, key, text) {
-    return `
-        <div class="pr-def-editor">
-            <div class="pr-def-name-row">
-                <input type="text" class="pr-def-name" data-type="${type}" data-orig="${escAttr(key)}" value="${escAttr(key)}" placeholder="Name" spellcheck="false">
-            </div>
-            <textarea class="pr-def-text" data-type="${type}" data-key="${key}" rows="4" placeholder="Definition text...">${esc(text)}</textarea>
-            <div class="pr-def-actions">
-                <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
-                <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${key}">Duplicate</button>
-                <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${key}">Delete</button>
-            </div>
         </div>
     `;
 }
@@ -324,129 +311,31 @@ function bindEvents() {
         });
     });
 
-    // --- Inside accordion bodies (event delegation) ---
+    // --- Inside accordion bodies ---
     layout.querySelectorAll('.pr-accordion-body').forEach(body => {
-        const acc = body.closest('.pr-accordion');
-        const type = acc?.dataset.type;
-        if (!type) return;
-
-        // "Using" dropdown (single-select prompt selection)
-        body.querySelector('[data-role="using"]')?.addEventListener('change', e => {
-            if (selectedData?.components) {
-                selectedData.components[type] = e.target.value;
-                debouncedSavePrompt();
-                // Sync editing target to follow using
-                editTarget[type] = e.target.value;
-                renderAccordionBody(type);
-            }
-        });
-
-        // "Editing" dropdown
-        body.querySelector('[data-role="editing"]')?.addEventListener('change', e => {
-            editTarget[type] = e.target.value;
-            renderAccordionBody(type);
-        });
-
-        // Multi-select chip toggles
-        body.querySelectorAll('.pr-chip input[type="checkbox"]').forEach(cb => {
-            cb.addEventListener('change', () => {
-                if (!selectedData?.components) return;
-                const key = cb.dataset.key;
-                const current = selectedData.components[type] || [];
-                if (cb.checked) {
-                    if (!current.includes(key)) current.push(key);
-                } else {
-                    const idx = current.indexOf(key);
-                    if (idx >= 0) current.splice(idx, 1);
-                }
-                selectedData.components[type] = current;
-                // Update chip visual
-                cb.closest('.pr-chip').classList.toggle('active', cb.checked);
-                debouncedSavePrompt();
-            });
-        });
-
-        // Definition name rename (on blur)
-        body.querySelector('.pr-def-name')?.addEventListener('blur', async e => {
-            const origKey = e.target.dataset.orig;
-            const newKey = e.target.value.trim();
-            if (!newKey || newKey === origKey) {
-                e.target.value = origKey;
-                return;
-            }
-            await renameDefinition(type, origKey, newKey);
-        });
-
-        // Definition name rename (on Enter)
-        body.querySelector('.pr-def-name')?.addEventListener('keydown', e => {
-            if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-        });
-
-        // Definition text (debounced save)
-        body.querySelector('.pr-def-text')?.addEventListener('input', e => {
-            const key = e.target.dataset.key;
-            debouncedSaveComponent(type, key, e.target.value);
-        });
-
-        // Action buttons
-        body.querySelectorAll('[data-action]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const action = btn.dataset.action;
-                const key = btn.dataset.key;
-                if (action === 'new-def') newDefinition(type);
-                else if (action === 'dup-def') duplicateDefinition(type, key);
-                else if (action === 'del-def') deleteDefinition(type, key);
-            });
-        });
+        const type = body.closest('.pr-accordion')?.dataset.type;
+        if (type) bindAccordionBodyEvents(body, type);
     });
 }
 
-// Re-render just one accordion's body without full page re-render
-function renderAccordionBody(type) {
-    const acc = container.querySelector(`.pr-accordion[data-type="${type}"]`);
-    if (!acc) return;
-    const comps = selectedData?.components || {};
+// Shared accordion body event binding (used by both initial render and partial re-render)
+function bindAccordionBodyEvents(body, type) {
+    const isSingle = SINGLE_TYPES.includes(type);
 
-    // Re-render the whole accordion (simpler than partial updates)
-    const isMulti = MULTI_TYPES.includes(type);
-    const html = isMulti ? renderMultiAccordion(type, comps) : renderSingleAccordion(type, comps);
-
-    const temp = document.createElement('div');
-    temp.innerHTML = html;
-    const newAcc = temp.firstElementChild;
-    acc.replaceWith(newAcc);
-
-    // Re-bind events for this accordion
-    bindAccordionEvents(newAcc);
-}
-
-function bindAccordionEvents(acc) {
-    const type = acc.dataset.type;
-    if (!type) return;
-
-    // Accordion header
-    acc.querySelector('.pr-accordion-header')?.addEventListener('click', () => {
-        openAccordion = openAccordion === type ? null : type;
-        render();
-    });
-
-    const body = acc.querySelector('.pr-accordion-body');
-    if (!body) return;
-
-    body.querySelector('[data-role="using"]')?.addEventListener('change', e => {
-        if (selectedData?.components) {
+    // Piece dropdown — single-select: saves prompt selection + shows text
+    //                  multi-select: switches which definition to edit
+    body.querySelector('.pr-piece-select')?.addEventListener('change', e => {
+        if (isSingle && selectedData?.components) {
             selectedData.components[type] = e.target.value;
             debouncedSavePrompt();
+            renderAccordionBody(type);
+        } else {
             editTarget[type] = e.target.value;
             renderAccordionBody(type);
         }
     });
 
-    body.querySelector('[data-role="editing"]')?.addEventListener('change', e => {
-        editTarget[type] = e.target.value;
-        renderAccordionBody(type);
-    });
-
+    // Multi-select chip toggles
     body.querySelectorAll('.pr-chip input[type="checkbox"]').forEach(cb => {
         cb.addEventListener('change', () => {
             if (!selectedData?.components) return;
@@ -464,22 +353,52 @@ function bindAccordionEvents(acc) {
         });
     });
 
-    body.querySelector('.pr-def-name')?.addEventListener('blur', async e => {
-        const origKey = e.target.dataset.orig;
-        const newKey = e.target.value.trim();
-        if (!newKey || newKey === origKey) { e.target.value = origKey; return; }
-        await renameDefinition(type, origKey, newKey);
+    // Pencil rename — inline: replaces select with text input
+    body.querySelector('.pr-rename-btn')?.addEventListener('click', e => {
+        const key = e.currentTarget.dataset.key;
+        if (!key) return;
+        const row = body.querySelector('.pr-piece-row');
+        const select = row.querySelector('.pr-piece-select');
+        const pencil = e.currentTarget;
+
+        select.hidden = true;
+        pencil.hidden = true;
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'pr-piece-select';
+        input.value = key;
+        input.spellcheck = false;
+        row.prepend(input);
+        input.focus();
+        input.select();
+
+        let cancelled = false;
+
+        input.addEventListener('keydown', ev => {
+            if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+            if (ev.key === 'Escape') { cancelled = true; input.blur(); }
+        });
+
+        input.addEventListener('blur', async () => {
+            const newKey = input.value.trim();
+            if (!cancelled && newKey && newKey !== key) {
+                await renameDefinition(type, key, newKey);
+            } else {
+                input.remove();
+                select.hidden = false;
+                pencil.hidden = false;
+            }
+        }, { once: true });
     });
 
-    body.querySelector('.pr-def-name')?.addEventListener('keydown', e => {
-        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
-    });
-
+    // Definition text (debounced save)
     body.querySelector('.pr-def-text')?.addEventListener('input', e => {
         const key = e.target.dataset.key;
         debouncedSaveComponent(type, key, e.target.value);
     });
 
+    // Action buttons
     body.querySelectorAll('[data-action]').forEach(btn => {
         btn.addEventListener('click', () => {
             const action = btn.dataset.action;
@@ -489,6 +408,29 @@ function bindAccordionEvents(acc) {
             else if (action === 'del-def') deleteDefinition(type, key);
         });
     });
+}
+
+// Re-render just one accordion without full page re-render
+function renderAccordionBody(type) {
+    const acc = container.querySelector(`.pr-accordion[data-type="${type}"]`);
+    if (!acc) return;
+    const comps = selectedData?.components || {};
+
+    const isMulti = MULTI_TYPES.includes(type);
+    const html = isMulti ? renderMultiAccordion(type, comps) : renderSingleAccordion(type, comps);
+
+    const temp = document.createElement('div');
+    temp.innerHTML = html;
+    const newAcc = temp.firstElementChild;
+    acc.replaceWith(newAcc);
+
+    // Re-bind events
+    newAcc.querySelector('.pr-accordion-header')?.addEventListener('click', () => {
+        openAccordion = openAccordion === type ? null : type;
+        render();
+    });
+    const body = newAcc.querySelector('.pr-accordion-body');
+    if (body) bindAccordionBodyEvents(body, type);
 }
 
 // ── Prompt CRUD ──

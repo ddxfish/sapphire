@@ -1183,55 +1183,25 @@ body {
     background: var(--bg-primary);
 }
 
-/* Dual select row (Using / Editing) */
-.pr-dual-select {
-    display: flex;
-    gap: 12px;
-    margin-bottom: 14px;
-}
-
-.pr-select-group {
-    flex: 1;
+/* Piece selector row (dropdown + pencil) */
+.pr-piece-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    margin-bottom: 12px;
 }
-.pr-select-group label {
-    font-size: var(--font-xs);
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    flex-shrink: 0;
-    width: 48px;
-}
-.pr-select-group select {
+.pr-piece-select {
     flex: 1;
-    padding: 6px 8px;
+    padding: 7px 10px;
     background: var(--input-bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     color: var(--text);
     font-size: var(--font-sm);
 }
-.pr-select-group select:focus { outline: none; border-color: var(--input-focus-border); }
+.pr-piece-select:focus { outline: none; border-color: var(--input-focus-border); box-shadow: 0 0 0 2px var(--focus-ring); }
 
-.pr-edit-pick { margin-bottom: 12px; }
-
-/* Definition editor */
-.pr-def-editor { border-top: 1px solid var(--border-light); padding-top: 12px; }
-
-.pr-def-name-row { margin-bottom: 8px; }
-.pr-def-name {
-    width: 100%;
-    padding: 6px 10px;
-    background: var(--input-bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    font-size: var(--font-sm);
-    font-weight: 500;
-}
-.pr-def-name:focus { outline: none; border-color: var(--input-focus-border); box-shadow: 0 0 0 2px var(--focus-ring); }
+.pr-rename-btn { font-size: 14px; }
 
 .pr-def-text {
     width: 100%;
