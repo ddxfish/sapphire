@@ -311,8 +311,31 @@ export const startTool = (toolId, toolName, args) => {
     Streaming.startTool(toolId, toolName, args, scrollToBottomIfSticky);
 };
 
+// Tool names that affect scope counts
+const GOAL_TOOLS = ['create_goal', 'update_goal', 'delete_goal'];
+const MEMORY_TOOLS = ['save_memory', 'delete_memory'];
+
+const refreshScopeCounts = async (selectId, apiPath) => {
+    try {
+        const sel = document.querySelector(selectId);
+        if (!sel) return;
+        const current = sel.value;
+        const resp = await fetch(apiPath);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const scopes = data.scopes || [];
+        sel.innerHTML = '<option value="none">None</option>' +
+            scopes.map(s => `<option value="${s.name}">${s.name} (${s.count})</option>`).join('');
+        sel.value = current;
+    } catch (e) { /* silent */ }
+};
+
 export const endTool = (toolId, toolName, result, isError) => {
     Streaming.endTool(toolId, toolName, result, isError, scrollToBottomIfSticky);
+    if (!isError) {
+        if (GOAL_TOOLS.includes(toolName)) refreshScopeCounts('#sb-goal-scope', '/api/goals/scopes');
+        if (MEMORY_TOOLS.includes(toolName)) refreshScopeCounts('#sb-memory-scope', '/api/memory/scopes');
+    }
 };
 
 export const finishStreaming = async (ephemeral = false) => {
