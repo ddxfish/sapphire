@@ -101,7 +101,7 @@ function renderRoster() {
                 return `
                     <button class="panel-list-item${p.name === selected ? ' selected' : ''}${isActive ? ' active-prompt' : ''}" data-name="${p.name}">
                         <div class="pr-item-info">
-                            <span class="pr-item-name">${p.privacy_required ? '\u{1F512} ' : ''}${p.name}${isActive ? ' \u25CF' : ''}</span>
+                            <span class="pr-item-name">${p.privacy_required ? '\u{1F512} ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
                             ${tokenStr ? `<span class="pr-item-tokens">${tokenStr}</span>` : ''}
                             <span class="pr-item-meta">${meta}</span>
                         </div>
@@ -166,15 +166,17 @@ function renderSingleAccordion(type, comps) {
     const current = comps[type] || '';
     const isOpen = openAccordion === type;
     const defs = components[type] || {};
-    const keys = Object.keys(defs);
+    const keys = Object.keys(defs).sort();
     const currentText = defs[current] || '';
 
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
             <div class="pr-accordion-header" data-type="${type}">
                 <span class="pr-acc-icon">${ICONS[type]}</span>
-                <span class="pr-acc-label">${cap(type)}</span>
-                <span class="pr-acc-value">${current || 'none'}</span>
+                <div class="pr-acc-text">
+                    <span class="pr-acc-label">${cap(type)}</span>
+                    <span class="pr-acc-value">${current || 'none'}</span>
+                </div>
                 <span class="pr-acc-arrow">${isOpen ? '\u25BE' : '\u25B8'}</span>
             </div>
             ${isOpen ? `
@@ -205,23 +207,26 @@ function renderMultiAccordion(type, comps) {
     const current = comps[type] || [];
     const isOpen = openAccordion === type;
     const defs = components[type] || {};
-    const keys = Object.keys(defs);
+    const keys = Object.keys(defs).sort();
     const target = editTarget[type] || current[0] || keys[0] || '';
     const targetText = defs[target] || '';
+    const headerValue = current.length ? current.slice().sort().join(', ') : 'none';
 
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
             <div class="pr-accordion-header" data-type="${type}">
                 <span class="pr-acc-icon">${ICONS[type]}</span>
-                <span class="pr-acc-label">${cap(type)}</span>
-                <span class="pr-acc-value">${current.length} selected</span>
+                <div class="pr-acc-text">
+                    <span class="pr-acc-label">${cap(type)}</span>
+                    <span class="pr-acc-value">${headerValue}</span>
+                </div>
                 <span class="pr-acc-arrow">${isOpen ? '\u25BE' : '\u25B8'}</span>
             </div>
             ${isOpen ? `
                 <div class="pr-accordion-body">
                     <div class="pr-chips">
                         ${keys.map(k => `
-                            <label class="pr-chip${current.includes(k) ? ' active' : ''}">
+                            <label class="pr-chip${current.includes(k) ? ' active' : ''}" title="${escAttr(defs[k] || '')}">
                                 <input type="checkbox" data-type="${type}" data-key="${k}" ${current.includes(k) ? 'checked' : ''}>
                                 <span>${k}</span>
                             </label>
@@ -489,7 +494,15 @@ async function newDefinition(type) {
         await saveComponent(type, name.trim(), '');
         if (!components[type]) components[type] = {};
         components[type][name.trim()] = '';
-        editTarget[type] = name.trim();
+
+        // Single-select: switch prompt to use the new piece
+        if (SINGLE_TYPES.includes(type) && selectedData?.components) {
+            selectedData.components[type] = name.trim();
+            debouncedSavePrompt();
+        } else {
+            editTarget[type] = name.trim();
+        }
+
         renderAccordionBody(type);
         ui.showToast(`Created: ${name.trim()}`, 'success');
     } catch (e) { ui.showToast('Failed', 'error'); }
@@ -498,14 +511,23 @@ async function newDefinition(type) {
 async function duplicateDefinition(type, key) {
     const defs = components[type] || {};
     const text = defs[key] || '';
-    const newName = key + '-copy';
+    const newName = prompt(`Duplicate "${key}" as:`, key + '-copy');
+    if (!newName?.trim() || newName.trim() === key) return;
     try {
-        await saveComponent(type, newName, text);
+        await saveComponent(type, newName.trim(), text);
         if (!components[type]) components[type] = {};
-        components[type][newName] = text;
-        editTarget[type] = newName;
+        components[type][newName.trim()] = text;
+
+        // Single-select: switch prompt to use the copy
+        if (SINGLE_TYPES.includes(type) && selectedData?.components) {
+            selectedData.components[type] = newName.trim();
+            debouncedSavePrompt();
+        } else {
+            editTarget[type] = newName.trim();
+        }
+
         renderAccordionBody(type);
-        ui.showToast(`Duplicated as: ${newName}`, 'success');
+        ui.showToast(`Duplicated as: ${newName.trim()}`, 'success');
     } catch (e) { ui.showToast('Failed', 'error'); }
 }
 
