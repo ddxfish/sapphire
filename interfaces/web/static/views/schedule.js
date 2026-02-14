@@ -1,9 +1,8 @@
-// views/schedule.js - Continuity task scheduler view
+// views/schedule.js - Scheduler view
 import { fetchTasks, fetchStatus, fetchTimeline, fetchActivity, createTask, updateTask, deleteTask, runTask, fetchPrompts, fetchToolsets, fetchLLMProviders, fetchMemoryScopes } from '../shared/continuity-api.js';
 import * as ui from '../ui.js';
 
 let container = null;
-let activeTab = 'tasks';
 let tasks = [];
 let status = {};
 let timeline = [];
@@ -11,214 +10,196 @@ let activity = [];
 let pollTimer = null;
 
 export default {
-    init(el) {
-        container = el;
-    },
-
+    init(el) { container = el; },
     async show() {
         await loadData();
         render();
         startPolling();
     },
-
-    hide() {
-        stopPolling();
-    }
+    hide() { stopPolling(); }
 };
 
 function startPolling() {
     stopPolling();
     pollTimer = setInterval(async () => {
         await loadData();
-        renderContent();
+        updateContent();
     }, 5000);
 }
 
 function stopPolling() {
-    if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-    }
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
 async function loadData() {
     try {
         const [t, s, tl, a] = await Promise.all([
-            fetchTasks(),
-            fetchStatus(),
-            fetchTimeline(24),
-            fetchActivity(20)
+            fetchTasks(), fetchStatus(), fetchTimeline(24), fetchActivity(20)
         ]);
-        tasks = t;
-        status = s;
-        timeline = tl;
-        activity = a;
-    } catch (e) {
-        console.warn('Schedule load failed:', e);
-    }
+        tasks = t; status = s; timeline = tl; activity = a;
+    } catch (e) { console.warn('Schedule load failed:', e); }
 }
+
+// ── Main Layout ──
 
 function render() {
     if (!container) return;
-
     container.innerHTML = `
         <div class="sched-view">
             <div class="view-header">
                 <div class="view-header-left">
                     <h2>Schedule</h2>
-                    <span class="view-subtitle">${status.enabled_tasks || 0}/${status.total_tasks || 0} tasks enabled
-                        <span class="sched-status-dot ${status.running ? 'running' : 'stopped'}"></span>
-                        ${status.running ? 'Running' : 'Stopped'}
-                    </span>
+                    <span class="view-subtitle" id="sched-subtitle"></span>
                 </div>
                 <div class="view-header-actions">
                     <button class="btn-primary" id="sched-new">+ New Task</button>
                 </div>
             </div>
-            <div class="sched-tabs">
-                <button class="sched-tab${activeTab === 'tasks' ? ' active' : ''}" data-tab="tasks">Tasks</button>
-                <button class="sched-tab${activeTab === 'timeline' ? ' active' : ''}" data-tab="timeline">Timeline</button>
-                <button class="sched-tab${activeTab === 'activity' ? ' active' : ''}" data-tab="activity">Activity</button>
+            <div class="view-body view-scroll">
+                <div class="sched-layout">
+                    <div id="sched-tasks"></div>
+                    <div class="sched-mission" id="sched-mission"></div>
+                </div>
             </div>
-            <div class="view-body view-scroll" id="sched-content"></div>
         </div>
     `;
-
-    renderContent();
+    updateContent();
     bindEvents();
 }
 
-function renderContent() {
-    const content = container?.querySelector('#sched-content');
-    if (!content) return;
-
-    // Update status dot
-    const dot = container.querySelector('.sched-status-dot');
-    if (dot) {
-        dot.className = `sched-status-dot ${status.running ? 'running' : 'stopped'}`;
-    }
-
-    switch (activeTab) {
-        case 'tasks': content.innerHTML = renderTasks(); break;
-        case 'timeline': content.innerHTML = renderTimeline(); break;
-        case 'activity': content.innerHTML = renderActivity(); break;
-    }
-
-    // Re-bind content events
-    bindContentEvents();
+function updateContent() {
+    const tasksEl = container?.querySelector('#sched-tasks');
+    const missionEl = container?.querySelector('#sched-mission');
+    const subEl = container?.querySelector('#sched-subtitle');
+    if (tasksEl) tasksEl.innerHTML = renderTaskList();
+    if (missionEl) missionEl.innerHTML = renderMission();
+    if (subEl) subEl.innerHTML = `${status.enabled_tasks || 0}/${status.total_tasks || 0} tasks
+        <span class="sched-status-dot ${status.running ? 'running' : 'stopped'} ${status.running ? 'pulse' : ''}"></span>
+        ${status.running ? 'Running' : 'Stopped'}`;
 }
 
-function renderTasks() {
+function renderTaskList() {
     if (tasks.length === 0) {
         return `<div class="view-placeholder" style="padding:40px;text-align:center">
             <p style="color:var(--text-muted)">No tasks yet. Create one to get started.</p>
         </div>`;
     }
+    return tasks.map(t => {
+        const sched = describeCron(t.schedule);
+        const lastRun = t.last_run ? formatTime(t.last_run) : 'Never';
+        let iterText = '';
+        if (t.progress) {
+            iterText = `<span class="sched-progress">${t.progress.iteration}/${t.progress.total} iters</span>`;
+        } else if (t.running) {
+            iterText = `<span class="sched-progress">Running...</span>`;
+        } else if (t.iterations > 1) {
+            iterText = `${t.iterations} iters`;
+        }
+        const meta = [
+            t.chance < 100 ? `${t.chance}%` : '',
+            iterText,
+            t.chat_target ? `\u{1F4AC} ${escapeHtml(t.chat_target)}` : '',
+            `Last: ${lastRun}`
+        ].filter(Boolean).join(' \u00B7 ');
 
-    return `<div class="sched-task-list">
-        ${tasks.map(t => {
-            const lastRun = t.last_run ? formatTime(t.last_run) : 'Never';
-            let iterText = '';
-            if (t.progress) {
-                iterText = `<span class="sched-progress">${t.progress.iteration}/${t.progress.total} iters</span>`;
-            } else if (t.running) {
-                iterText = `<span class="sched-progress">Running...</span>`;
-            } else if (t.iterations > 1) {
-                iterText = `${t.iterations} iters`;
-            }
-
-            const meta = [
-                t.chance < 100 ? `${t.chance}%` : '',
-                iterText,
-                t.chat_target ? `\u{1F4AC} ${escapeHtml(t.chat_target)}` : '',
-                t.memory_scope && t.memory_scope !== 'none' ? `\u{1F4BE} ${t.memory_scope}` : '',
-                `Last: ${lastRun}`
-            ].filter(Boolean).join(' \u2022 ');
-
-            return `
-                <div class="sched-task-card${t.running ? ' running' : ''}">
-                    <label class="sched-toggle" title="${t.enabled ? 'Disable' : 'Enable'}">
-                        <input type="checkbox" ${t.enabled ? 'checked' : ''} data-action="toggle" data-id="${t.id}">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <div class="sched-task-info">
-                        <div class="sched-task-name">${escapeHtml(t.name)}</div>
-                        <div class="sched-task-cron">${escapeHtml(t.schedule)}</div>
-                        <div class="sched-task-meta">${meta}</div>
-                    </div>
-                    <div class="sched-task-actions">
-                        <button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">\u25B6</button>
-                        <button class="btn-icon" data-action="edit" data-id="${t.id}" title="Edit">\u270F\uFE0F</button>
-                        <button class="btn-icon danger" data-action="delete" data-id="${t.id}" title="Delete">\u2715</button>
-                    </div>
+        return `
+            <div class="sched-task-card${t.running ? ' running' : ''}">
+                <label class="sched-toggle" title="${t.enabled ? 'Disable' : 'Enable'}">
+                    <input type="checkbox" ${t.enabled ? 'checked' : ''} data-action="toggle" data-id="${t.id}">
+                    <span class="toggle-slider"></span>
+                </label>
+                <div class="sched-task-info">
+                    <div class="sched-task-name">${escapeHtml(t.name)}</div>
+                    <div class="sched-task-schedule">${escapeHtml(sched)}</div>
+                    <div class="sched-task-meta">${meta}</div>
                 </div>
-            `;
-        }).join('')}
-    </div>`;
+                <div class="sched-task-actions">
+                    <button class="btn-icon" data-action="run" data-id="${t.id}" title="Run now">\u25B6</button>
+                    <button class="btn-icon" data-action="edit" data-id="${t.id}" title="Edit">\u270F\uFE0F</button>
+                    <button class="btn-icon danger" data-action="delete" data-id="${t.id}" title="Delete">\u2715</button>
+                </div>
+            </div>`;
+    }).join('');
 }
 
-function renderTimeline() {
-    if (timeline.length === 0) {
-        return `<div class="view-placeholder" style="padding:40px;text-align:center">
-            <p style="color:var(--text-muted)">No tasks scheduled in the next 24 hours</p>
-        </div>`;
-    }
+// ── Mission Control (right panel) ──
 
-    return `<div class="sched-timeline">
-        ${timeline.map(t => `
-            <div class="sched-tl-item">
-                <div class="sched-tl-dot"></div>
-                <div class="sched-tl-time">${formatTime(t.scheduled_for)}</div>
-                <div class="sched-tl-name">${escapeHtml(t.task_name)}</div>
-                ${t.chance < 100 ? `<div class="sched-tl-chance">${t.chance}%</div>` : ''}
+function renderMission() {
+    const lastAct = activity.length > 0 ? activity[activity.length - 1] : null;
+    const lastPulse = lastAct ? timeAgo(lastAct.timestamp) : 'No activity';
+    const nextFire = timeline.length > 0 ? timeline[0] : null;
+    const nextStr = nextFire ? formatTime(nextFire.scheduled_for) : 'None';
+    const nextName = nextFire ? escapeHtml(nextFire.task_name) : '';
+
+    const today = new Date().toDateString();
+    const todayActs = activity.filter(a => {
+        try { return new Date(a.timestamp).toDateString() === today; } catch { return false; }
+    });
+    const ran = todayActs.filter(a => a.status === 'complete').length;
+    const skipped = todayActs.filter(a => a.status === 'skipped').length;
+    let todayStr = `${ran} ran`;
+    if (skipped) todayStr += `, ${skipped} skipped`;
+
+    return `
+        <div class="sched-panel">
+            <div class="sched-section-title">\u2764 Heartbeat</div>
+            <div class="sched-hb-grid">
+                <div class="sched-hb-item">
+                    <span class="sched-hb-label">Status</span>
+                    <span class="sched-hb-value"><span class="sched-status-dot ${status.running ? 'running' : 'stopped'} ${status.running ? 'pulse' : ''}"></span> ${status.running ? 'Active' : 'Stopped'}</span>
+                </div>
+                <div class="sched-hb-item">
+                    <span class="sched-hb-label">Last pulse</span>
+                    <span class="sched-hb-value">${lastPulse}</span>
+                </div>
+                <div class="sched-hb-item">
+                    <span class="sched-hb-label">Next fire</span>
+                    <span class="sched-hb-value">${nextStr}${nextName ? `<br><span class="text-muted" style="font-size:var(--font-xs)">${nextName}</span>` : ''}</span>
+                </div>
+                <div class="sched-hb-item">
+                    <span class="sched-hb-label">Today</span>
+                    <span class="sched-hb-value">${todayStr}</span>
+                </div>
             </div>
-        `).join('')}
-    </div>`;
+        </div>
+        <div class="sched-panel">
+            <div class="sched-section-title">Coming Up</div>
+            ${timeline.length === 0 ? '<div class="text-muted" style="font-size:var(--font-sm)">Nothing in the next 24h</div>' :
+            timeline.slice(0, 8).map(t => `
+                <div class="sched-up-item">
+                    <span class="sched-up-time">${formatTime(t.scheduled_for)}</span>
+                    <span class="sched-up-name">${escapeHtml(t.task_name)}</span>
+                    ${t.chance < 100 ? `<span class="sched-up-chance">${t.chance}%</span>` : ''}
+                </div>
+            `).join('')}
+        </div>
+        <div class="sched-panel">
+            <div class="sched-section-title">Recent</div>
+            ${activity.length === 0 ? '<div class="text-muted" style="font-size:var(--font-sm)">No activity yet</div>' :
+            activity.slice(-8).reverse().map(a => `
+                <div class="sched-rec-item">
+                    <span class="sched-act-dot ${a.status}"></span>
+                    <span class="sched-rec-time">${formatTime(a.timestamp)}</span>
+                    <span class="sched-rec-name">${escapeHtml(a.task_name)}</span>
+                    ${a.details?.reason ? `<span class="sched-rec-detail">(${escapeHtml(a.details.reason)})</span>` : ''}
+                </div>
+            `).join('')}
+        </div>
+    `;
 }
 
-function renderActivity() {
-    if (activity.length === 0) {
-        return `<div class="view-placeholder" style="padding:40px;text-align:center">
-            <p style="color:var(--text-muted)">No activity yet</p>
-        </div>`;
-    }
-
-    return `<div class="sched-activity">
-        ${activity.slice().reverse().map(a => `
-            <div class="sched-act-item">
-                <div class="sched-act-dot ${a.status}"></div>
-                <div class="sched-act-time">${formatTime(a.timestamp)}</div>
-                <div class="sched-act-name">${escapeHtml(a.task_name)}</div>
-                <div class="sched-act-detail">${a.status}${a.details?.reason ? ` (${a.details.reason})` : ''}</div>
-            </div>
-        `).join('')}
-    </div>`;
-}
+// ── Events (bound once — fixes overlay stacking bug) ──
 
 function bindEvents() {
-    // Tab switching
-    container.querySelector('.sched-tabs')?.addEventListener('click', e => {
-        const tab = e.target.dataset.tab;
-        if (!tab) return;
-        activeTab = tab;
-        container.querySelectorAll('.sched-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-        renderContent();
-    });
-
-    // New task
     container.querySelector('#sched-new')?.addEventListener('click', () => openEditor(null));
-}
 
-function bindContentEvents() {
-    const content = container?.querySelector('#sched-content');
-    if (!content) return;
+    const layout = container.querySelector('.sched-layout');
+    if (!layout) return;
 
-    content.addEventListener('click', async e => {
+    layout.addEventListener('click', async e => {
         const btn = e.target.closest('[data-action]');
         if (!btn) return;
-
-        const action = btn.dataset.action;
-        const id = btn.dataset.id;
+        const { action, id } = btn.dataset;
 
         if (action === 'edit') {
             const task = tasks.find(t => t.id === id);
@@ -229,31 +210,28 @@ function bindContentEvents() {
             try {
                 await runTask(id);
                 ui.showToast(`Running: ${task.name}`, 'success');
-                await loadData();
-                renderContent();
-            } catch (e) { ui.showToast('Run failed', 'error'); }
+                await loadData(); updateContent();
+            } catch { ui.showToast('Run failed', 'error'); }
         } else if (action === 'delete') {
             const task = tasks.find(t => t.id === id);
             if (!task || !confirm(`Delete "${task.name}"?`)) return;
             try {
                 await deleteTask(id);
                 ui.showToast('Deleted', 'success');
-                await loadData();
-                renderContent();
-            } catch (e) { ui.showToast('Delete failed', 'error'); }
+                await loadData(); updateContent();
+            } catch { ui.showToast('Delete failed', 'error'); }
         }
     });
 
-    content.addEventListener('change', async e => {
+    layout.addEventListener('change', async e => {
         if (e.target.dataset.action === 'toggle') {
             const id = e.target.dataset.id;
             const task = tasks.find(t => t.id === id);
             if (!task) return;
             try {
                 await updateTask(id, { enabled: !task.enabled });
-                await loadData();
-                renderContent();
-            } catch (err) { ui.showToast('Toggle failed', 'error'); }
+                await loadData(); updateContent();
+            } catch { ui.showToast('Toggle failed', 'error'); }
         }
     });
 }
@@ -261,7 +239,9 @@ function bindContentEvents() {
 // ── Task Editor Modal ──
 
 async function openEditor(task) {
-    // Fetch dropdown data
+    // Kill any existing editor (prevents stacking)
+    document.querySelector('.sched-editor-overlay')?.remove();
+
     let prompts = [], toolsetsList = [], llmProviders = [], llmMetadata = {}, memoryScopes = [];
     try {
         const [p, ts, llm, scopes] = await Promise.all([
@@ -272,12 +252,11 @@ async function openEditor(task) {
         llmProviders = llm.providers || [];
         llmMetadata = llm.metadata || {};
         memoryScopes = scopes || [];
-    } catch (e) {
-        console.warn('Editor: failed to fetch options', e);
-    }
+    } catch (e) { console.warn('Editor: failed to fetch options', e); }
 
     const isEdit = !!task;
     const t = task || {};
+    const parsed = t.schedule ? parseCron(t.schedule) : { mode: 'daily', time: '09:00' };
 
     const providerOpts = llmProviders
         .filter(p => p.enabled)
@@ -287,6 +266,17 @@ async function openEditor(task) {
     const scopeOpts = memoryScopes
         .map(s => `<option value="${s.name}" ${t.memory_scope === s.name ? 'selected' : ''}>${s.name} (${s.count})</option>`)
         .join('');
+
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const selectedDays = parsed.mode === 'weekly' ? parsed.days : [1, 2, 3, 4, 5];
+    const dayChecks = dayNames.map((name, i) =>
+        `<label class="sched-day-label"><input type="checkbox" value="${i}" ${selectedDays.includes(i) ? 'checked' : ''}> ${name}</label>`
+    ).join('');
+
+    const currentTime = parsed.time || '09:00';
+    const intervalValue = parsed.mode === 'interval' ? parsed.value : 4;
+    const intervalUnit = parsed.mode === 'interval' ? parsed.unit : 'hours';
+    const cronRaw = t.schedule || '0 9 * * *';
 
     const modal = document.createElement('div');
     modal.className = 'sched-editor-overlay';
@@ -298,88 +288,141 @@ async function openEditor(task) {
             </div>
             <div class="sched-editor-body">
                 <div class="sched-field">
-                    <label>Task Name *</label>
+                    <label>Task Name <span class="help-tip" data-tip="A short name to identify this scheduled task">?</span></label>
                     <input type="text" id="ed-name" value="${escapeHtml(t.name || '')}" placeholder="Morning Greeting">
                 </div>
                 <div class="sched-field">
-                    <label>Schedule (Cron) *</label>
-                    <input type="text" id="ed-schedule" value="${t.schedule || '0 9 * * *'}" placeholder="0 9 * * *">
-                    <span class="sched-hint">minute hour day month weekday — e.g. "0 9 * * *" = 9 AM daily</span>
-                </div>
-                <div class="sched-field-row">
-                    <div class="sched-field">
-                        <label>Chance (%)</label>
-                        <input type="number" id="ed-chance" value="${t.chance ?? 100}" min="1" max="100">
-                    </div>
-                    <div class="sched-field">
-                        <label>Cooldown (min)</label>
-                        <input type="number" id="ed-cooldown" value="${t.cooldown_minutes ?? 1}" min="0">
-                    </div>
-                    <div class="sched-field">
-                        <label>Iterations</label>
-                        <input type="number" id="ed-iterations" value="${t.iterations ?? 1}" min="1" max="10">
-                    </div>
-                </div>
-                <div class="sched-field">
-                    <label>Initial Message</label>
+                    <label>Initial Message <span class="help-tip" data-tip="The message sent to the AI when this task fires">?</span></label>
                     <textarea id="ed-message" rows="2" placeholder="What should the AI receive?">${escapeHtml(t.initial_message || '')}</textarea>
                 </div>
-                <div class="sched-field">
-                    <label>Chat Name</label>
-                    <input type="text" id="ed-chat" value="${escapeHtml(t.chat_target || '')}" placeholder="Leave blank for ephemeral">
-                    <span class="sched-hint">Blank = ephemeral (background). Named = persists to that chat.</span>
-                </div>
-                <div class="sched-field-row">
-                    <div class="sched-field">
-                        <label>Prompt</label>
-                        <select id="ed-prompt">
-                            <option value="default">default</option>
-                            ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div class="sched-field">
-                        <label>Toolset</label>
-                        <select id="ed-toolset">
-                            <option value="none" ${t.toolset === 'none' ? 'selected' : ''}>none</option>
-                            <option value="default" ${t.toolset === 'default' ? 'selected' : ''}>default</option>
-                            ${toolsetsList.map(ts => `<option value="${ts.name}" ${t.toolset === ts.name ? 'selected' : ''}>${ts.name}</option>`).join('')}
-                        </select>
-                    </div>
-                </div>
-                <div class="sched-field-row">
-                    <div class="sched-field">
-                        <label>LLM Provider</label>
-                        <select id="ed-provider">
-                            <option value="auto" ${t.provider === 'auto' || !t.provider ? 'selected' : ''}>Auto (default)</option>
-                            ${providerOpts}
-                        </select>
-                    </div>
-                    <div class="sched-field" id="ed-model-field" style="display:none">
-                        <label>Model</label>
-                        <select id="ed-model"><option value="">Provider default</option></select>
-                    </div>
-                    <div class="sched-field" id="ed-model-custom-field" style="display:none">
-                        <label>Model</label>
-                        <input type="text" id="ed-model-custom" value="${escapeHtml(t.model || '')}" placeholder="Model name">
-                    </div>
-                </div>
-                <div class="sched-field">
-                    <label>Memory Scope</label>
-                    <div style="display:flex;gap:8px">
-                        <select id="ed-memory" style="flex:1">
-                            <option value="none" ${t.memory_scope === 'none' ? 'selected' : ''}>None (disabled)</option>
-                            <option value="default" ${!t.memory_scope || t.memory_scope === 'default' ? 'selected' : ''}>default</option>
-                            ${scopeOpts}
-                        </select>
-                        <button class="btn-sm" id="ed-add-scope" title="New scope">+</button>
-                    </div>
-                </div>
-                <div class="sched-checkbox">
-                    <label><input type="checkbox" id="ed-tts" ${t.tts_enabled !== false ? 'checked' : ''}> Enable TTS (speak responses)</label>
-                </div>
-                <div class="sched-checkbox">
-                    <label><input type="checkbox" id="ed-datetime" ${t.inject_datetime ? 'checked' : ''}> Inject date/time in system prompt</label>
-                </div>
+
+                <details class="sched-accordion" ${!isEdit ? 'open' : ''}>
+                    <summary class="sched-acc-header">When <span class="sched-preview">${describeCron(t.schedule || '0 9 * * *')}</span></summary>
+                    <div class="sched-acc-body"><div class="sched-acc-inner">
+                        <div class="sched-picker">
+                            <div class="sched-picker-tabs">
+                                <button type="button" class="sched-picker-tab${parsed.mode === 'daily' ? ' active' : ''}" data-mode="daily">Daily</button>
+                                <button type="button" class="sched-picker-tab${parsed.mode === 'weekly' ? ' active' : ''}" data-mode="weekly">Weekly</button>
+                                <button type="button" class="sched-picker-tab${parsed.mode === 'interval' ? ' active' : ''}" data-mode="interval">Interval</button>
+                                <button type="button" class="sched-picker-tab${parsed.mode === 'cron' ? ' active' : ''}" data-mode="cron">Cron</button>
+                            </div>
+                            <div class="sched-pick-panel" data-panel="weekly" ${parsed.mode !== 'weekly' ? 'style="display:none"' : ''}>
+                                <div class="sched-days">${dayChecks}</div>
+                            </div>
+                            <div class="sched-when-row">
+                                <div class="sched-pick-panel" data-panel="daily" ${parsed.mode !== 'daily' ? 'style="display:none"' : ''}>
+                                    <label>Time</label>
+                                    <input type="time" id="ed-time-daily" value="${currentTime}">
+                                </div>
+                                <div class="sched-pick-panel" data-panel="weekly" ${parsed.mode !== 'weekly' ? 'style="display:none"' : ''}>
+                                    <label>Time</label>
+                                    <input type="time" id="ed-time-weekly" value="${currentTime}">
+                                </div>
+                                <div class="sched-pick-panel" data-panel="interval" ${parsed.mode !== 'interval' ? 'style="display:none"' : ''}>
+                                    <label>Every</label>
+                                    <div style="display:flex;gap:6px;align-items:center">
+                                        <input type="number" id="ed-interval-val" value="${intervalValue}" min="1" style="width:60px">
+                                        <select id="ed-interval-unit">
+                                            <option value="minutes" ${intervalUnit === 'minutes' ? 'selected' : ''}>min</option>
+                                            <option value="hours" ${intervalUnit === 'hours' ? 'selected' : ''}>hrs</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="sched-pick-panel" data-panel="cron" ${parsed.mode !== 'cron' ? 'style="display:none"' : ''}>
+                                    <label>Cron</label>
+                                    <input type="text" id="ed-cron-raw" value="${escapeHtml(cronRaw)}" placeholder="0 9 * * *" style="width:120px">
+                                </div>
+                                <div class="sched-field">
+                                    <label>Chance <span class="help-tip" data-tip="Probability this task runs when triggered (100% = always)">?</span></label>
+                                    <div style="display:flex;align-items:center;gap:4px">
+                                        <input type="number" id="ed-chance" value="${t.chance ?? 100}" min="1" max="100" style="width:60px">
+                                        <span class="text-muted">%</span>
+                                    </div>
+                                </div>
+                                <div class="sched-field">
+                                    <label>Cooldown <span class="help-tip" data-tip="Minimum minutes between runs, even if schedule fires again">?</span></label>
+                                    <div style="display:flex;align-items:center;gap:4px">
+                                        <input type="number" id="ed-cooldown" value="${t.cooldown_minutes ?? 1}" min="0" style="width:60px">
+                                        <span class="text-muted">min</span>
+                                    </div>
+                                </div>
+                                <div class="sched-field">
+                                    <label>Iterations <span class="help-tip" data-tip="How many back-and-forth exchanges per run">?</span></label>
+                                    <input type="number" id="ed-iterations" value="${t.iterations ?? 1}" min="1" max="10" style="width:60px">
+                                </div>
+                            </div>
+                        </div>
+                    </div></div>
+                </details>
+
+                <details class="sched-accordion">
+                    <summary class="sched-acc-header">Who</summary>
+                    <div class="sched-acc-body"><div class="sched-acc-inner">
+                        <div class="sched-field-row">
+                            <div class="sched-field">
+                                <label>Prompt <span class="help-tip" data-tip="Which character/prompt the AI uses for this task">?</span></label>
+                                <select id="ed-prompt">
+                                    <option value="default">default</option>
+                                    ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
+                                </select>
+                            </div>
+                            <div class="sched-field">
+                                <label>Toolset <span class="help-tip" data-tip="Which tools the AI can use during this task">?</span></label>
+                                <select id="ed-toolset">
+                                    <option value="none" ${t.toolset === 'none' ? 'selected' : ''}>none</option>
+                                    <option value="default" ${t.toolset === 'default' ? 'selected' : ''}>default</option>
+                                    ${toolsetsList.map(ts => `<option value="${ts.name}" ${t.toolset === ts.name ? 'selected' : ''}>${ts.name}</option>`).join('')}
+                                </select>
+                            </div>
+                        </div>
+                        <div class="sched-field-row">
+                            <div class="sched-field">
+                                <label>Provider <span class="help-tip" data-tip="Which LLM provider handles this task">?</span></label>
+                                <select id="ed-provider">
+                                    <option value="auto" ${t.provider === 'auto' || !t.provider ? 'selected' : ''}>Auto (default)</option>
+                                    ${providerOpts}
+                                </select>
+                            </div>
+                            <div class="sched-field" id="ed-model-field" style="display:none">
+                                <label>Model</label>
+                                <select id="ed-model"><option value="">Provider default</option></select>
+                            </div>
+                            <div class="sched-field" id="ed-model-custom-field" style="display:none">
+                                <label>Model</label>
+                                <input type="text" id="ed-model-custom" value="${escapeHtml(t.model || '')}" placeholder="Model name">
+                            </div>
+                        </div>
+                        <div class="sched-field">
+                            <label>Memory Scope <span class="help-tip" data-tip="Which memory slot the AI reads/writes during this task">?</span></label>
+                            <div style="display:flex;gap:8px">
+                                <select id="ed-memory" style="flex:1">
+                                    <option value="none" ${t.memory_scope === 'none' ? 'selected' : ''}>None (disabled)</option>
+                                    <option value="default" ${!t.memory_scope || t.memory_scope === 'default' ? 'selected' : ''}>default</option>
+                                    ${scopeOpts}
+                                </select>
+                                <button class="btn-sm" id="ed-add-scope" title="New scope">+</button>
+                            </div>
+                        </div>
+                    </div></div>
+                </details>
+
+                <details class="sched-accordion">
+                    <summary class="sched-acc-header">Chat</summary>
+                    <div class="sched-acc-body"><div class="sched-acc-inner">
+                        <div class="sched-field">
+                            <label>Chat Name <span class="help-tip" data-tip="Leave blank for background (ephemeral). Name it to save conversation history">?</span></label>
+                            <input type="text" id="ed-chat" value="${escapeHtml(t.chat_target || '')}" placeholder="Leave blank for ephemeral">
+                        </div>
+                        <div class="sched-field-row">
+                            <div class="sched-checkbox">
+                                <label><input type="checkbox" id="ed-tts" ${t.tts_enabled !== false ? 'checked' : ''}> Enable TTS <span class="help-tip" data-tip="Speak AI responses aloud through text-to-speech">?</span></label>
+                            </div>
+                            <div class="sched-checkbox">
+                                <label><input type="checkbox" id="ed-datetime" ${t.inject_datetime ? 'checked' : ''}> Inject date/time <span class="help-tip" data-tip="Add current date and time to the system prompt">?</span></label>
+                            </div>
+                        </div>
+                    </div></div>
+                </details>
             </div>
             <div class="sched-editor-footer">
                 <button class="btn-sm" data-action="close">Cancel</button>
@@ -390,10 +433,68 @@ async function openEditor(task) {
 
     document.body.appendChild(modal);
 
-    // Close handlers
-    const close = () => modal.remove();
+    // Tooltips (JS-based to escape overflow containers)
+    const tipEl = document.createElement('div');
+    tipEl.className = 'help-tip-popup';
+    document.body.appendChild(tipEl);
+    modal.addEventListener('mouseover', e => {
+        const tip = e.target.closest('.help-tip');
+        if (!tip) return;
+        const text = tip.dataset.tip;
+        if (!text) return;
+        tipEl.textContent = text;
+        tipEl.style.display = 'block';
+        const r = tip.getBoundingClientRect();
+        tipEl.style.left = (r.left + r.width / 2) + 'px';
+        tipEl.style.top = (r.top - 6) + 'px';
+    });
+    modal.addEventListener('mouseout', e => {
+        if (e.target.closest('.help-tip') && !e.target.closest('.help-tip').contains(e.relatedTarget))
+            tipEl.style.display = 'none';
+    });
+
+    // Close
+    const close = () => { modal.remove(); tipEl.remove(); };
     modal.addEventListener('click', e => { if (e.target === modal) close(); });
     modal.querySelectorAll('[data-action="close"]').forEach(b => b.addEventListener('click', close));
+
+    // Schedule picker mode switching
+    let currentMode = parsed.mode;
+    modal.querySelector('.sched-picker-tabs')?.addEventListener('click', e => {
+        const tab = e.target.closest('.sched-picker-tab');
+        if (!tab) return;
+        currentMode = tab.dataset.mode;
+        modal.querySelectorAll('.sched-picker-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === currentMode));
+        modal.querySelectorAll('.sched-pick-panel').forEach(p => p.style.display = p.dataset.panel === currentMode ? '' : 'none');
+        updatePreview();
+    });
+
+    const getCurrentCron = () => {
+        switch (currentMode) {
+            case 'daily': return buildCron('daily', { time: modal.querySelector('#ed-time-daily')?.value || '09:00' });
+            case 'weekly': {
+                const days = [...modal.querySelectorAll('.sched-days input:checked')].map(c => parseInt(c.value));
+                if (days.length === 0) return buildCron('daily', { time: modal.querySelector('#ed-time-weekly')?.value || '09:00' });
+                return buildCron('weekly', { time: modal.querySelector('#ed-time-weekly')?.value || '09:00', days });
+            }
+            case 'interval': return buildCron('interval', {
+                value: parseInt(modal.querySelector('#ed-interval-val')?.value) || 4,
+                unit: modal.querySelector('#ed-interval-unit')?.value || 'hours'
+            });
+            case 'cron': return modal.querySelector('#ed-cron-raw')?.value || '0 9 * * *';
+        }
+    };
+
+    const updatePreview = () => {
+        const text = describeCron(getCurrentCron());
+        modal.querySelectorAll('.sched-preview').forEach(el => el.textContent = text);
+    };
+
+    // Live preview updates
+    modal.querySelectorAll('#ed-time-daily, #ed-time-weekly, #ed-interval-val, #ed-interval-unit, #ed-cron-raw')
+        .forEach(el => el.addEventListener('input', updatePreview));
+    modal.querySelectorAll('.sched-days input')
+        .forEach(el => el.addEventListener('change', updatePreview));
 
     // Provider → model logic
     const providerSel = modal.querySelector('#ed-provider');
@@ -429,7 +530,7 @@ async function openEditor(task) {
     providerSel.addEventListener('change', updateModels);
     updateModels();
 
-    // Add scope
+    // Add memory scope
     modal.querySelector('#ed-add-scope')?.addEventListener('click', async () => {
         const name = prompt('New memory slot name (lowercase, no spaces):');
         if (!name) return;
@@ -466,7 +567,7 @@ async function openEditor(task) {
 
         const data = {
             name: modal.querySelector('#ed-name').value.trim(),
-            schedule: modal.querySelector('#ed-schedule').value.trim(),
+            schedule: getCurrentCron(),
             chance: parseInt(modal.querySelector('#ed-chance').value) || 100,
             cooldown_minutes: parseInt(modal.querySelector('#ed-cooldown').value) || 1,
             iterations: parseInt(modal.querySelector('#ed-iterations').value) || 1,
@@ -485,40 +586,102 @@ async function openEditor(task) {
         if (!data.schedule) { alert('Schedule is required'); return; }
 
         try {
-            if (isEdit) {
-                await updateTask(task.id, data);
-            } else {
-                await createTask(data);
-            }
+            if (isEdit) await updateTask(task.id, data);
+            else await createTask(data);
             ui.showToast(isEdit ? 'Task updated' : 'Task created', 'success');
             close();
             await loadData();
-            renderContent();
+            updateContent();
         } catch (e) {
             ui.showToast(e.message || 'Save failed', 'error');
         }
     });
 }
 
-// ── Helpers ──
+// ── Cron Helpers ──
+
+function parseCron(cron) {
+    if (!cron) return { mode: 'daily', time: '09:00' };
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return { mode: 'cron', raw: cron };
+    const [min, hour, dom, mon, dow] = parts;
+
+    if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*')
+        return { mode: 'interval', value: parseInt(min.slice(2)), unit: 'minutes' };
+    if (min === '0' && hour.startsWith('*/') && dom === '*' && mon === '*' && dow === '*')
+        return { mode: 'interval', value: parseInt(hour.slice(2)), unit: 'hours' };
+    if (/^\d+$/.test(min) && /^\d+$/.test(hour) && dom === '*' && mon === '*') {
+        const time = `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
+        if (dow === '*') return { mode: 'daily', time };
+        const days = dow.split(',').map(Number).filter(d => !isNaN(d));
+        if (days.length > 0) return { mode: 'weekly', time, days };
+    }
+    return { mode: 'cron', raw: cron };
+}
+
+function buildCron(mode, config) {
+    switch (mode) {
+        case 'daily': {
+            const [h, m] = (config.time || '09:00').split(':');
+            return `${parseInt(m)} ${parseInt(h)} * * *`;
+        }
+        case 'weekly': {
+            const [h, m] = (config.time || '09:00').split(':');
+            return `${parseInt(m)} ${parseInt(h)} * * ${config.days.sort((a,b) => a-b).join(',')}`;
+        }
+        case 'interval':
+            if (config.unit === 'minutes') return `*/${config.value} * * * *`;
+            return `0 */${config.value} * * *`;
+        case 'cron': return config.raw || '0 9 * * *';
+    }
+}
+
+function describeCron(cron) {
+    if (!cron) return '';
+    const parsed = parseCron(cron);
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    switch (parsed.mode) {
+        case 'daily': return `Daily at ${formatTime12(parsed.time)}`;
+        case 'weekly': return `${parsed.days.map(d => dayNames[d]).join(', ')} at ${formatTime12(parsed.time)}`;
+        case 'interval': return `Every ${parsed.value} ${parsed.unit}`;
+        default: return cron;
+    }
+}
+
+function formatTime12(time24) {
+    if (!time24) return '';
+    const [h, m] = time24.split(':').map(Number);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+// ── General Helpers ──
+
+function timeAgo(isoString) {
+    if (!isoString) return 'Unknown';
+    try {
+        const diff = Date.now() - new Date(isoString).getTime();
+        if (diff < 60000) return 'Just now';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+        return `${Math.floor(diff / 86400000)}d ago`;
+    } catch { return 'Unknown'; }
+}
 
 function formatTime(isoString) {
     if (!isoString) return 'Unknown';
     try {
         const d = new Date(isoString);
         const now = new Date();
-        if (d.toDateString() === now.toDateString()) {
+        if (d.toDateString() === now.toDateString())
             return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
         const yesterday = new Date(now);
         yesterday.setDate(yesterday.getDate() - 1);
-        if (d.toDateString() === yesterday.toDateString()) {
+        if (d.toDateString() === yesterday.toDateString())
             return 'Yesterday ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
-        if (now - d < 7 * 24 * 60 * 60 * 1000) {
+        if (now - d < 7 * 24 * 60 * 60 * 1000)
             return d.toLocaleDateString([], { weekday: 'short' }) + ' ' +
                    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        }
         return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
                d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     } catch { return isoString; }
