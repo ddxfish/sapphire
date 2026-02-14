@@ -140,10 +140,12 @@ class StreamingChat:
                 logger.info(f"[THINK] Forced thinking prefill: {force_prefill}")
                 yield {"type": "content", "text": force_prefill}
             
-            # Set memory scope for this chat context
+            # Set memory and goal scopes for this chat context
             chat_settings = self.main_chat.session_manager.get_chat_settings()
             memory_scope = chat_settings.get('memory_scope', 'default')
             self.main_chat.function_manager.set_memory_scope(memory_scope if memory_scope != 'none' else None)
+            goal_scope = chat_settings.get('goal_scope', 'default')
+            self.main_chat.function_manager.set_goal_scope(goal_scope if goal_scope != 'none' else None)
             
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.main_chat.function_manager.enabled_tools

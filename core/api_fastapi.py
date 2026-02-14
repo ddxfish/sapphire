@@ -441,6 +441,13 @@ def _apply_chat_settings(system, settings: dict):
 
                 logger.info(f"Applied prompt: {prompt_name}")
 
+        if "memory_scope" in settings:
+            scope = settings["memory_scope"]
+            system.llm_chat.function_manager.set_memory_scope(scope if scope != "none" else None)
+        if "goal_scope" in settings:
+            scope = settings["goal_scope"]
+            system.llm_chat.function_manager.set_goal_scope(scope if scope != "none" else None)
+
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
             toolset_name = settings[toolset_key]

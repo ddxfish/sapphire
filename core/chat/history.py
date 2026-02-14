@@ -31,7 +31,9 @@ SYSTEM_DEFAULTS = {
     "state_engine_enabled": False,  # State engine for games/simulations
     "state_preset": None,           # Preset to load (e.g., "five_rooms")
     "state_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
-    "state_story_in_prompt": True   # Include story segments in prompt (cache-friendly)
+    "state_story_in_prompt": True,  # Include story segments in prompt (cache-friendly)
+    "memory_scope": "default",
+    "goal_scope": "default"
 }
 
 def get_user_defaults() -> Dict[str, Any]:
