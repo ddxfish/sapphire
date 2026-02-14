@@ -35,11 +35,24 @@ logger = logging.getLogger(__name__)
 # Cache-bust version — changes every server restart so browsers fetch fresh assets
 BOOT_VERSION = str(int(time.time()))
 
-# Project paths
+# Project paths — defined early so _build_import_map() can use STATIC_DIR
 PROJECT_ROOT = Path(__file__).parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "interfaces" / "web" / "templates"
 STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
 USER_PUBLIC_DIR = PROJECT_ROOT / "user" / "public"
+
+
+def _build_import_map():
+    """Build ES module import map — versions every JS file so browsers cache-bust on restart."""
+    imports = {}
+    for js_file in STATIC_DIR.rglob('*.js'):
+        rel = js_file.relative_to(STATIC_DIR).as_posix()
+        url = f"/static/{rel}"
+        imports[url] = f"{url}?v={BOOT_VERSION}"
+    return json.dumps({"imports": imports})
+
+
+IMPORT_MAP = _build_import_map()
 
 # =============================================================================
 # APP SETUP
@@ -135,10 +148,10 @@ async def security_headers(request: Request, call_next):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
 
-    # Static assets: revalidate every request (ETag handles 304s for unchanged files)
-    # HTML pages get no-cache headers directly on the response (see _no_cache_html)
+    # Static assets: cached 1hr, busted by ?v=BOOT_VERSION (changes every restart)
+    # Import map in index.html ensures ALL JS modules get versioned URLs
     if request.url.path.startswith('/static/'):
-        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
 
     response.headers['Connection'] = 'keep-alive'
     return response
@@ -181,7 +194,8 @@ async def index(request: Request, _=Depends(require_login)):
     return _no_cache_html("index.html", {
         "request": request,
         "csrf_token": lambda: csrf_token,
-        "v": BOOT_VERSION
+        "v": BOOT_VERSION,
+        "import_map": IMPORT_MAP
     })
 
 

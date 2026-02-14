@@ -380,6 +380,7 @@
         // Unregister any stale service workers (PWA manifest can trigger phantom caching)
         if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(r => r.forEach(sw => sw.unregister()));
     </script>
+    <script type="importmap">{{ import_map | safe }}</script>
     <script type="module" src="/static/main.js?v={{ v }}"></script>
 </body>
 </html>
