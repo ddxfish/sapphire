@@ -191,7 +191,7 @@ class ContinuityScheduler:
             "initial_message": data.get("initial_message", "Hello."),
             "tts_enabled": data.get("tts_enabled", True),
             "inject_datetime": data.get("inject_datetime", False),
-            "memory_scope": data.get("memory_scope", "default"),
+            "memory_scope": data.get("memory_scope", "none"),
             "cooldown_minutes": data.get("cooldown_minutes", 1),
             "heartbeat": data.get("heartbeat", False),
             "last_run": None,

@@ -84,7 +84,12 @@ function renderTaskList() {
             <p style="color:var(--text-muted)">No tasks yet. Create one to get started.</p>
         </div>`;
     }
-    return tasks.map(t => {
+    const sorted = [...tasks].sort((a, b) => {
+        if (a.heartbeat && !b.heartbeat) return -1;
+        if (!a.heartbeat && b.heartbeat) return 1;
+        return (a.name || '').localeCompare(b.name || '');
+    });
+    return sorted.map(t => {
         const sched = describeCron(t.schedule);
         const lastRun = t.last_run ? formatTime(t.last_run) : 'Never';
         let iterText = '';
@@ -273,19 +278,21 @@ async function openEditor(task) {
         <div class="sched-editor">
             <div class="sched-editor-header">
                 <h3>${isEdit ? 'Edit Task' : 'New Task'}</h3>
-                <label class="sched-hb-toggle">
+                <span class="sched-header-divider"></span>
+                <label class="sched-hb-toggle help-tip" data-tip="Track this task in the Heartbeats panel on your dashboard. Heartbeats are your AI's vital signs — see at a glance what's alive and running.">
                     <input type="checkbox" id="ed-heartbeat" ${t.heartbeat ? 'checked' : ''}>
-                    <span>\u2764\uFE0F Heartbeat</span>
+                    <span>\u2764\uFE0F</span>
                 </label>
+                <div style="flex:1"></div>
                 <button class="btn-icon" data-action="close">&times;</button>
             </div>
             <div class="sched-editor-body">
                 <div class="sched-field">
-                    <label>Task Name <span class="help-tip" data-tip="A short name to identify this scheduled task">?</span></label>
+                    <label>Task Name <span class="help-tip" data-tip="Give this task a name so you can find it later. Shows in the task list, activity log, and heartbeat panel.">?</span></label>
                     <input type="text" id="ed-name" value="${escapeHtml(t.name || '')}" placeholder="Morning Greeting">
                 </div>
                 <div class="sched-field">
-                    <label>Initial Message <span class="help-tip" data-tip="The message sent to the AI when this task fires">?</span></label>
+                    <label>Initial Message <span class="help-tip" data-tip="This is what the AI receives when the task runs. Be elaborate — give full context, instructions, and expectations. The AI only knows what you put here, so more detail means better results.">?</span></label>
                     <textarea id="ed-message" rows="2" placeholder="What should the AI receive?">${escapeHtml(t.initial_message || '')}</textarea>
                 </div>
 
@@ -326,21 +333,21 @@ async function openEditor(task) {
                                     <input type="text" id="ed-cron-raw" value="${escapeHtml(cronRaw)}" placeholder="0 9 * * *" style="width:120px">
                                 </div>
                                 <div class="sched-field">
-                                    <label>Chance <span class="help-tip" data-tip="Probability this task runs when triggered (100% = always)">?</span></label>
+                                    <label>Chance <span class="help-tip" data-tip="Roll the dice each time this fires. At 50%, the task only runs half the time — great for variety so the AI doesn't feel robotic. 100% = always runs.">?</span></label>
                                     <div style="display:flex;align-items:center;gap:4px">
                                         <input type="number" id="ed-chance" value="${t.chance ?? 100}" min="1" max="100" style="width:60px">
                                         <span class="text-muted">%</span>
                                     </div>
                                 </div>
                                 <div class="sched-field">
-                                    <label>Cooldown <span class="help-tip" data-tip="Minimum minutes between runs, even if schedule fires again">?</span></label>
+                                    <label>Cooldown <span class="help-tip" data-tip="Prevents the task from running again too soon. If the schedule fires every minute but cooldown is 30, it waits at least 30 minutes between runs.">?</span></label>
                                     <div style="display:flex;align-items:center;gap:4px">
                                         <input type="number" id="ed-cooldown" value="${t.cooldown_minutes ?? 1}" min="0" style="width:60px">
                                         <span class="text-muted">min</span>
                                     </div>
                                 </div>
                                 <div class="sched-field">
-                                    <label>Iterations <span class="help-tip" data-tip="How many back-and-forth exchanges per run">?</span></label>
+                                    <label>Iterations <span class="help-tip" data-tip="How many back-and-forth turns the AI gets per run. 1 = single response. Higher values let the AI use tools and follow up on its own work.">?</span></label>
                                     <input type="number" id="ed-iterations" value="${t.iterations ?? 1}" min="1" max="10" style="width:60px">
                                 </div>
                             </div>
@@ -353,14 +360,14 @@ async function openEditor(task) {
                     <div class="sched-acc-body"><div class="sched-acc-inner">
                         <div class="sched-field-row">
                             <div class="sched-field">
-                                <label>Prompt <span class="help-tip" data-tip="Which character/prompt the AI uses for this task">?</span></label>
+                                <label>Prompt <span class="help-tip" data-tip="Choose which personality or system prompt the AI uses. 'default' uses your main prompt. Pick a custom one to give the AI a different persona for this task.">?</span></label>
                                 <select id="ed-prompt">
                                     <option value="default">default</option>
                                     ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
                                 </select>
                             </div>
                             <div class="sched-field">
-                                <label>Toolset <span class="help-tip" data-tip="Which tools the AI can use during this task">?</span></label>
+                                <label>Toolset <span class="help-tip" data-tip="Which set of tools the AI can call — web search, file access, smart home, etc. 'none' means no tools, just conversation. 'default' uses your main toolset.">?</span></label>
                                 <select id="ed-toolset">
                                     <option value="none" ${t.toolset === 'none' ? 'selected' : ''}>none</option>
                                     <option value="default" ${t.toolset === 'default' ? 'selected' : ''}>default</option>
@@ -370,7 +377,7 @@ async function openEditor(task) {
                         </div>
                         <div class="sched-field-row">
                             <div class="sched-field">
-                                <label>Provider <span class="help-tip" data-tip="Which LLM provider handles this task">?</span></label>
+                                <label>Provider <span class="help-tip" data-tip="Pick which AI provider runs this task — OpenAI, Claude, local models, etc. 'Auto' uses your default. Choose a specific one to control cost or capability per task.">?</span></label>
                                 <select id="ed-provider">
                                     <option value="auto" ${t.provider === 'auto' || !t.provider ? 'selected' : ''}>Auto (default)</option>
                                     ${providerOpts}
@@ -386,11 +393,11 @@ async function openEditor(task) {
                             </div>
                         </div>
                         <div class="sched-field">
-                            <label>Memory Scope <span class="help-tip" data-tip="Which memory slot the AI reads/writes during this task">?</span></label>
+                            <label>Memory Scope <span class="help-tip" data-tip="Memory lets the AI remember things between runs. 'default' shares memory with your main chat. Pick a separate scope to give this task its own memory. 'None' = no memory at all.">?</span></label>
                             <div style="display:flex;gap:8px">
                                 <select id="ed-memory" style="flex:1">
                                     <option value="none" ${t.memory_scope === 'none' ? 'selected' : ''}>None (disabled)</option>
-                                    <option value="default" ${!t.memory_scope || t.memory_scope === 'default' ? 'selected' : ''}>default</option>
+                                    <option value="default" ${t.memory_scope === 'default' ? 'selected' : ''}>default</option>
                                     ${scopeOpts}
                                 </select>
                                 <button class="btn-sm" id="ed-add-scope" title="New scope">+</button>
@@ -403,15 +410,15 @@ async function openEditor(task) {
                     <summary class="sched-acc-header">Chat</summary>
                     <div class="sched-acc-body"><div class="sched-acc-inner">
                         <div class="sched-field">
-                            <label>Chat Name <span class="help-tip" data-tip="Leave blank for background (ephemeral). Name it to save conversation history">?</span></label>
+                            <label>Chat Name <span class="help-tip" data-tip="Enter a name to run this task in a specific chat — the conversation is saved and visible in the UI. Leave blank to run as a one-off background task with no history.">?</span></label>
                             <input type="text" id="ed-chat" value="${escapeHtml(t.chat_target || '')}" placeholder="Leave blank for ephemeral">
                         </div>
                         <div class="sched-field-row">
                             <div class="sched-checkbox">
-                                <label><input type="checkbox" id="ed-tts" ${t.tts_enabled !== false ? 'checked' : ''}> Enable TTS <span class="help-tip" data-tip="Speak AI responses aloud through text-to-speech">?</span></label>
+                                <label><input type="checkbox" id="ed-tts" ${t.tts_enabled !== false ? 'checked' : ''}> Enable TTS <span class="help-tip" data-tip="When enabled, the AI speaks its response out loud through your speakers. Turn off for silent background tasks.">?</span></label>
                             </div>
                             <div class="sched-checkbox">
-                                <label><input type="checkbox" id="ed-datetime" ${t.inject_datetime ? 'checked' : ''}> Inject date/time <span class="help-tip" data-tip="Add current date and time to the system prompt">?</span></label>
+                                <label><input type="checkbox" id="ed-datetime" ${t.inject_datetime ? 'checked' : ''}> Inject date/time <span class="help-tip" data-tip="Tells the AI what day and time it is right now. Useful for tasks like 'good morning' greetings or anything time-aware.">?</span></label>
                             </div>
                         </div>
                     </div></div>

@@ -1571,19 +1571,29 @@ body {
     border-bottom: 1px solid var(--border);
 }
 .sched-editor-header h3 { margin: 0; }
+.sched-header-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 12px;
+}
 .sched-hb-toggle {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: var(--font-sm);
+    gap: 8px;
+    font-size: 20px;
     cursor: pointer;
-    margin-left: auto;
-    margin-right: 12px;
     color: var(--text-muted);
     transition: color 0.15s;
+    opacity: 0.4;
 }
-.sched-hb-toggle:has(input:checked) { color: var(--text); }
-.sched-hb-toggle input { accent-color: var(--trim, #e44); }
+.sched-hb-toggle:has(input:checked) { color: var(--text); opacity: 1; }
+.sched-hb-toggle input {
+    accent-color: var(--trim, #e44);
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+}
 
 .sched-editor-body {
     padding: 16px 20px;
