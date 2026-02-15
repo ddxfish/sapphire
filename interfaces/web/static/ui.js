@@ -23,6 +23,10 @@ let avatarPaths = null;
 // Persona avatar URL cache - avoids repeated fetches per message
 const personaAvatarCache = new Map();
 
+// Current persona for the active chat (set by chat.js when settings load)
+let currentPersona = null;
+export const setCurrentPersona = (name) => { currentPersona = name; };
+
 // Initialize from /api/init data (called from main.js after init data loads)
 export const initFromInitData = (initData) => {
     if (initData.settings?.AVATARS_IN_CHAT !== undefined) {
@@ -326,7 +330,9 @@ export const updateStatus = (txt) => {
 // =============================================================================
 
 export const startStreaming = () => {
-    const { clone, contentDiv, msg } = createMessage({ role: 'assistant', content: '' }, null, null, false);
+    const streamMsg = { role: 'assistant', content: '' };
+    if (currentPersona) streamMsg.persona = currentPersona;
+    const { clone, contentDiv, msg } = createMessage(streamMsg, null, null, false);
     msg.id = 'streaming-message';
     msg.dataset.streaming = 'true';
     return Streaming.startStreaming(chat, clone, scrollToBottomIfSticky);

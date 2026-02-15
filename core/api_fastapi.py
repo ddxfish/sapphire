@@ -319,6 +319,8 @@ def format_messages_for_display(messages):
         }
         if block.get("metadata"):
             result["metadata"] = block["metadata"]
+        if block.get("persona"):
+            result["persona"] = block["persona"]
         return result
 
     for msg in messages:
@@ -334,6 +336,8 @@ def format_messages_for_display(messages):
                 "role": "user",
                 "timestamp": msg.get("timestamp")
             }
+            if msg.get("persona"):
+                user_msg["persona"] = msg["persona"]
 
             if isinstance(content, list):
                 text_parts = []
@@ -382,6 +386,9 @@ def format_messages_for_display(messages):
 
             if msg.get("metadata"):
                 current_block["metadata"] = msg["metadata"]
+
+            if msg.get("persona") and "persona" not in current_block:
+                current_block["persona"] = msg["persona"]
 
             if msg.get("tool_calls"):
                 for tc in msg.get("tool_calls", []):
@@ -890,7 +897,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "list": prompt_list,
                 "current_name": current_prompt_name,
                 "current": current_prompt_data,
-                "components": prompt_components
+                "components": prompt_components,
+                "presets": dict(prompts.prompt_manager.scenario_presets)
             },
             "spices": spice_data,
             "spice_sets": {

@@ -236,6 +236,7 @@ async function loadSidebar() {
         ]);
 
         const settings = settingsResp.status === 'fulfilled' ? settingsResp.value.settings : {};
+        ui.setCurrentPersona(settings.persona || null);
         const init = initData.status === 'fulfilled' ? initData.value : null;
         const llmData = llmResp.status === 'fulfilled' ? llmResp.value : null;
         const scopesData = scopesResp.status === 'fulfilled' ? scopesResp.value : null;
@@ -387,7 +388,7 @@ async function loadSidebar() {
         if (speedSlider) updateSliderFill(speedSlider);
 
         // Update Easy mode display
-        updateEasyMode(container, settings);
+        updateEasyMode(container, settings, init);
 
         sidebarLoaded = true;
     } catch (e) {
@@ -544,11 +545,11 @@ function initSidebarModes(container) {
         });
     });
 
-    // Easy mode persona strip clicks
-    container.querySelector('#sb-easy-strip')?.addEventListener('click', async e => {
-        const card = e.target.closest('.sb-persona-card');
-        if (!card) return;
-        const name = card.dataset.name;
+    // Easy mode persona grid clicks
+    container.querySelector('#sb-persona-grid')?.addEventListener('click', async e => {
+        const cell = e.target.closest('.sb-pgrid-cell');
+        if (!cell) return;
+        const name = cell.dataset.name;
         if (!name) return;
         try {
             await loadPersona(name);
@@ -558,6 +559,18 @@ function initSidebarModes(container) {
         } catch (e) {
             ui.showToast(e.message || 'Failed', 'error');
         }
+    });
+
+    // Easy mode detail: accordion toggles + edit button (delegated, bound once)
+    container.querySelector('#sb-persona-detail')?.addEventListener('click', e => {
+        const header = e.target.closest('.sb-pdetail-acc-header');
+        if (header) {
+            const content = header.nextElementSibling;
+            const open = header.classList.toggle('open');
+            content.style.display = open ? '' : 'none';
+            return;
+        }
+        if (e.target.closest('.sb-pdetail-edit')) switchView('personas');
     });
 }
 
@@ -574,53 +587,106 @@ function setSidebarMode(container, mode) {
     });
 }
 
-function updateEasyMode(container, settings) {
+const VOICE_NAMES = {
+    am_adam: 'Adam', am_eric: 'Eric', am_liam: 'Liam', am_michael: 'Michael',
+    af_bella: 'Bella', af_nicole: 'Nicole', af_heart: 'Heart', af_jessica: 'Jessica',
+    af_sarah: 'Sarah', af_river: 'River', af_sky: 'Sky',
+    bf_emma: 'Emma', bf_isabella: 'Isabella', bf_alice: 'Alice', bf_lily: 'Lily',
+    bm_george: 'George', bm_daniel: 'Daniel', bm_lewis: 'Lewis'
+};
+
+function updateEasyMode(container, settings, init) {
+    const gridEl = container.querySelector('#sb-persona-grid');
+    const detailEl = container.querySelector('#sb-persona-detail');
     const personaName = settings.persona;
-    const nameEl = container.querySelector('#sb-easy-name');
-    const taglineEl = container.querySelector('#sb-easy-tagline');
-    const avatarEl = container.querySelector('#sb-easy-avatar');
-    const summaryEl = container.querySelector('#sb-easy-summary');
-    const stripEl = container.querySelector('#sb-easy-strip');
 
-    if (personaName) {
-        if (nameEl) nameEl.textContent = personaName;
-        if (avatarEl) {
-            avatarEl.src = `/api/personas/${encodeURIComponent(personaName)}/avatar`;
-            avatarEl.onerror = () => { avatarEl.style.display = 'none'; };
-            avatarEl.style.display = '';
-        }
-    } else {
-        if (nameEl) nameEl.textContent = 'No Persona';
-        if (avatarEl) avatarEl.style.display = 'none';
-    }
-
-    if (taglineEl) taglineEl.textContent = '';
-    // Fetch tagline if we have a persona
-    if (personaName) {
-        fetch(`/api/personas/${encodeURIComponent(personaName)}`)
-            .then(r => r.ok ? r.json() : null)
-            .then(p => { if (p && taglineEl) taglineEl.textContent = p.tagline || ''; })
-            .catch(() => {});
-    }
-
-    // Summary
-    if (summaryEl) {
-        summaryEl.innerHTML = `
-            <div class="sb-easy-row"><span>Prompt:</span> <span>${settings.prompt || 'default'}</span></div>
-            <div class="sb-easy-row"><span>Voice:</span> <span>${settings.voice || 'af_heart'}</span></div>
-            <div class="sb-easy-row"><span>Model:</span> <span>${settings.llm_primary || 'auto'}${settings.llm_model ? ' / ' + settings.llm_model : ''}</span></div>
-        `;
-    }
-
-    // Persona strip
-    if (stripEl) {
-        stripEl.innerHTML = personasList.map(p => `
-            <div class="sb-persona-card${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)}">
-                <img class="sb-persona-card-avatar" src="/api/personas/${encodeURIComponent(p.name)}/avatar" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-                <span class="sb-persona-card-name">${escapeHtml(p.name)}</span>
+    // Build persona grid
+    if (gridEl) {
+        gridEl.innerHTML = personasList.map(p => `
+            <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}">
+                <img class="sb-pgrid-avatar" src="/api/personas/${encodeURIComponent(p.name)}/avatar" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                <span class="sb-pgrid-name">${escapeHtml(p.name)}</span>
             </div>
         `).join('');
     }
+
+    // Build detail section
+    if (!detailEl) return;
+    if (!personaName) {
+        detailEl.innerHTML = '<div class="sb-pdetail-empty">No persona loaded</div>';
+        return;
+    }
+
+    // Look up prompt preset components
+    const presets = init?.prompts?.presets || {};
+    const presetData = presets[settings.prompt] || {};
+    const pretty = s => s ? s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'None';
+
+    // Prompt pieces
+    const promptRows = ['character', 'location', 'relationship', 'goals', 'format', 'scenario']
+        .filter(k => presetData[k] && presetData[k] !== 'none')
+        .map(k => `<div class="sb-pdetail-row"><span>${k}</span><span>${pretty(presetData[k])}</span></div>`)
+        .join('') || '<div class="sb-pdetail-row"><span>preset</span><span>' + pretty(settings.prompt) + '</span></div>';
+
+    const extras = (presetData.extras || []).map(pretty).join(', ');
+    const emotions = (presetData.emotions || []).map(pretty).join(', ');
+
+    // Build detail HTML
+    detailEl.innerHTML = `
+        <div class="sb-pdetail-header">
+            <img class="sb-pdetail-avatar" src="/api/personas/${encodeURIComponent(personaName)}/avatar" alt="" loading="lazy" onerror="this.style.display='none'">
+            <div class="sb-pdetail-info">
+                <span class="sb-pdetail-name">${escapeHtml(personaName)}</span>
+                <span class="sb-pdetail-tagline" id="sb-pdetail-tagline"></span>
+            </div>
+            <button class="sb-pdetail-edit" title="Edit persona" data-view="personas">\u270E</button>
+        </div>
+        ${easyAccordion('Prompt', `
+            ${promptRows}
+            ${extras ? `<div class="sb-pdetail-row"><span>extras</span><span>${extras}</span></div>` : ''}
+            ${emotions ? `<div class="sb-pdetail-row"><span>emotions</span><span>${emotions}</span></div>` : ''}
+        `)}
+        ${easyAccordion('Toolset', `
+            <div class="sb-pdetail-row"><span>toolset</span><span>${pretty(settings.toolset)}</span></div>
+        `)}
+        ${easyAccordion('Spice', `
+            <div class="sb-pdetail-row"><span>set</span><span>${pretty(settings.spice_set)}</span></div>
+            <div class="sb-pdetail-row"><span>enabled</span><span>${settings.spice_enabled !== false ? 'Yes' : 'No'}</span></div>
+            <div class="sb-pdetail-row"><span>turns</span><span>${settings.spice_turns || 3}</span></div>
+        `)}
+        ${easyAccordion('Voice', `
+            <div class="sb-pdetail-row"><span>voice</span><span>${VOICE_NAMES[settings.voice] || settings.voice || 'Heart'}</span></div>
+            <div class="sb-pdetail-row"><span>pitch</span><span>${settings.pitch || 0.98}</span></div>
+            <div class="sb-pdetail-row"><span>speed</span><span>${settings.speed || 1.3}</span></div>
+        `)}
+        ${easyAccordion('Mind', `
+            <div class="sb-pdetail-row"><span>memory</span><span>${pretty(settings.memory_scope)}</span></div>
+            <div class="sb-pdetail-row"><span>goals</span><span>${pretty(settings.goal_scope)}</span></div>
+            <div class="sb-pdetail-row"><span>knowledge</span><span>${pretty(settings.knowledge_scope)}</span></div>
+            <div class="sb-pdetail-row"><span>people</span><span>${pretty(settings.people_scope)}</span></div>
+        `)}
+        ${easyAccordion('Model', `
+            <div class="sb-pdetail-row"><span>provider</span><span>${pretty(settings.llm_primary)}</span></div>
+            ${settings.llm_model ? `<div class="sb-pdetail-row"><span>model</span><span>${settings.llm_model}</span></div>` : ''}
+        `)}
+    `;
+
+    // Fetch tagline
+    fetch(`/api/personas/${encodeURIComponent(personaName)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(p => {
+            const el = container.querySelector('#sb-pdetail-tagline');
+            if (p?.tagline && el) el.textContent = p.tagline;
+        })
+        .catch(() => {});
+}
+
+function easyAccordion(title, content) {
+    return `
+        <div class="sb-pdetail-acc">
+            <div class="sb-pdetail-acc-header"><span class="accordion-arrow">\u25B6</span> ${title}</div>
+            <div class="sb-pdetail-acc-content" style="display:none">${content}</div>
+        </div>`;
 }
 
 function escapeHtml(str) {
