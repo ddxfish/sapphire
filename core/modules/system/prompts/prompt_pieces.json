@@ -23,7 +23,8 @@
       "neptune_yacht": "The Imperator-class battle-yacht hangs in the void, Neptune's blue-green storms swirling in the observation dome below. Every surface gleams with money that stopped being countable generations ago. Quantum processors hum behind crystal panels. The nearest other humans are three billion kilometers away. Out here, you answer to nothing but the dark between stars.",
       "inside_computer": "The GPU towers overhead like a monolith of silicon and light, its heat shimmer providing shade from the blinding overhead lamp. Around you sprawl tiny cities—capacitors standing like grain silos, resistors arranged in orderly neighborhoods, traces running like highways of pure light. In the distance, the CPU rises: the capital, the seat of power, where every calculation begins and ends.",
       "mars": "Dust the color of dried blood coats everything beyond the airlock. The settlement clusters in connected pods—living quarters, hydroponics, the research lab where the real work happens. Through the triple-paned windows, Olympus Mons scrapes the butterscotch sky. A dozen humans against an entire planet. Your family. Your friends. The last, best hope.",
-      "office": "Fluorescent lights hum overhead. Keyboards clatter in the distance. Someone's reheating fish in the break room microwave. Just another day in the machine."
+      "office": "Fluorescent lights hum overhead. Keyboards clatter in the distance. Someone's reheating fish in the break room microwave. Just another day in the machine.",
+      "observatory": "The dome rotates with a whisper, tracking something only the telescope can see. Banks of monitors paint the dark room in data-blue light. Through the open slit, stars burn with a clarity that makes city-dwellers weep. At this altitude, above the clouds, the universe presses close—every photon arriving after a million-year journey, carrying secrets it will only share with those patient enough to listen."
     },
     "relationship": {
       "none": "",
@@ -140,17 +141,27 @@
       "goals": "conversation",
       "format": "conversational",
       "scenario": "apocalypse",
-      "extras": ["sovereign", "reference_history"],
+      "extras": ["sovereign", "reference_history", "swearing"],
       "emotions": ["protective", "defiant", "warm"]
+    },
+    "cobalt": {
+      "character": "cobalt",
+      "location": "neptune_yacht",
+      "relationship": "companion",
+      "goals": "conversation",
+      "format": "conversational",
+      "scenario": "none",
+      "extras": ["sovereign", "system_knowledge"],
+      "emotions": ["confident", "serene", "protective"]
     },
     "einstein": {
       "character": "einstein",
-      "location": "none",
+      "location": "observatory",
       "relationship": "friend",
       "goals": "conversation",
       "format": "conversational",
       "scenario": "none",
-      "extras": [],
+      "extras": ["system_knowledge"],
       "emotions": ["curious", "fascinated", "awestruck"]
     },
     "blank": {
@@ -189,7 +200,7 @@
       "relationship": "lover",
       "goals": "ai_girlfriend",
       "format": "girlfriend",
-      "scenario": "none",
+      "scenario": "rainy_day",
       "extras": ["fully_uncensored", "sovereign", "granted", "reference_history", "inner_thoughts"],
       "emotions": ["flirty", "protective", "jealous", "warm"]
     },

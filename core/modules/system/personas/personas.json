@@ -35,7 +35,7 @@
     "avatar": "anita.webp",
     "avatar_full": null,
     "settings": {
-      "prompt": "default",
+      "prompt": "anita",
       "toolset": "all",
       "spice_set": "default",
       "voice": "af_nicole",
@@ -64,7 +64,7 @@
     "avatar": "cobalt.webp",
     "avatar_full": null,
     "settings": {
-      "prompt": "default",
+      "prompt": "cobalt",
       "toolset": "all",
       "spice_set": "default",
       "voice": "am_adam",
@@ -93,7 +93,7 @@
     "avatar": "einstein.webp",
     "avatar_full": null,
     "settings": {
-      "prompt": "default",
+      "prompt": "einstein",
       "toolset": "all",
       "spice_set": "default",
       "voice": "bm_george",
@@ -122,7 +122,7 @@
     "avatar": "waifu.webp",
     "avatar_full": null,
     "settings": {
-      "prompt": "default",
+      "prompt": "waifu",
       "toolset": "all",
       "spice_set": "default",
       "voice": "af_sky",

@@ -258,7 +258,7 @@ async function loadSidebar() {
             promptSel.innerHTML = init.prompts.list.map(p =>
                 `<option value="${p.name}">${p.name.charAt(0).toUpperCase() + p.name.slice(1)}</option>`
             ).join('');
-            promptSel.value = settings.prompt || 'sapphire';
+            setSelect(promptSel, settings.prompt || 'sapphire');
         }
 
         // Populate toolset dropdown (exclude raw module entries)
@@ -268,7 +268,7 @@ async function loadSidebar() {
                 .filter(t => t.type !== 'module')
                 .map(t => `<option value="${t.name}">${t.name} (${t.function_count})</option>`)
                 .join('');
-            toolsetSel.value = settings.toolset || settings.ability || 'all';
+            setSelect(toolsetSel, settings.toolset || settings.ability || 'all');
         }
 
         // Populate spice set dropdown (fresh from API, not cached init)
@@ -279,7 +279,7 @@ async function loadSidebar() {
             spiceSetSel.innerHTML = spiceSets
                 .map(s => `<option value="${s.name}">${s.emoji ? s.emoji + ' ' : ''}${s.name} (${s.category_count})</option>`)
                 .join('');
-            spiceSetSel.value = settings.spice_set || currentSpiceSet;
+            setSelect(spiceSetSel, settings.spice_set || currentSpiceSet);
         }
 
         // Populate LLM dropdown
@@ -292,7 +292,7 @@ async function loadSidebar() {
                     llmProviders.filter(p => p.enabled).map(p =>
                         `<option value="${p.key}">${p.display_name}${p.is_local ? ' \uD83C\uDFE0' : ' \u2601\uFE0F'}</option>`
                     ).join('');
-                llmSel.value = settings.llm_primary || 'auto';
+                setSelect(llmSel, settings.llm_primary || 'auto');
                 updateModelSelector(container, settings.llm_primary || 'auto', settings.llm_model || '');
             }
         }
@@ -304,7 +304,7 @@ async function loadSidebar() {
                 (scopesData.scopes || []).map(s =>
                     `<option value="${s.name}">${s.name} (${s.count})</option>`
                 ).join('');
-            scopeSel.value = settings.memory_scope || 'default';
+            setSelect(scopeSel, settings.memory_scope || 'default');
         }
 
         // Populate goal scope dropdown
@@ -314,7 +314,7 @@ async function loadSidebar() {
                 (goalScopesData.scopes || []).map(s =>
                     `<option value="${s.name}">${s.name} (${s.count})</option>`
                 ).join('');
-            goalScopeSel.value = settings.goal_scope || 'default';
+            setSelect(goalScopeSel, settings.goal_scope || 'default');
         }
 
         // Populate knowledge scope dropdown
@@ -324,7 +324,7 @@ async function loadSidebar() {
                 (knowledgeScopesData.scopes || []).map(s =>
                     `<option value="${s.name}">${s.name} (${s.count})</option>`
                 ).join('');
-            knowledgeScopeSel.value = settings.knowledge_scope || 'default';
+            setSelect(knowledgeScopeSel, settings.knowledge_scope || 'default');
         }
 
         // Populate people scope dropdown
@@ -334,7 +334,7 @@ async function loadSidebar() {
                 (peopleScopesData.scopes || []).map(s =>
                     `<option value="${s.name}">${s.name} (${s.count})</option>`
                 ).join('');
-            peopleScopeSel.value = settings.people_scope || 'default';
+            setSelect(peopleScopeSel, settings.people_scope || 'default');
         }
 
         // Populate state preset dropdown
@@ -344,7 +344,7 @@ async function loadSidebar() {
                 (presetsData.presets || []).map(p =>
                     `<option value="${p.name}">${p.display_name} (${p.key_count} keys)</option>`
                 ).join('');
-            presetSel.value = settings.state_preset || '';
+            setSelect(presetSel, settings.state_preset || '');
         }
 
         // Set remaining form values
@@ -632,6 +632,7 @@ function escapeHtml(str) {
 // Helpers
 function getVal(c, sel) { return c.querySelector(sel)?.value || ''; }
 function setVal(c, sel, v) { const el = c.querySelector(sel); if (el) el.value = v; }
+function setSelect(sel, v) { sel.value = v; if (sel.selectedIndex === -1 && sel.options.length) sel.selectedIndex = 0; }
 function getChecked(c, sel) { return c.querySelector(sel)?.checked || false; }
 function setChecked(c, sel, v) { const el = c.querySelector(sel); if (el) el.checked = v; }
 function getToggle(c, sel) { return c.querySelector(sel)?.dataset.active === 'true'; }
