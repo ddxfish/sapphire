@@ -523,10 +523,13 @@ export const exitEditMode = (msgEl, restore = true) => {
 export const showToast = (msg, type = 'error', duration = 4000) => {
     const container = document.getElementById('toast-container');
     if (!container) return;
-    
-    const toast = createElem('div', { class: `toast ${type}` }, msg);
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `<span class="toast-text">${msg.replace(/</g, '&lt;')}</span><button class="toast-close">\u00d7</button>`;
+    toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
     container.appendChild(toast);
-    
+
     // Shake chat area on error
     if (type === 'error') {
         const chatbg = document.getElementById('chatbg');
@@ -535,6 +538,6 @@ export const showToast = (msg, type = 'error', duration = 4000) => {
             setTimeout(() => chatbg.classList.remove('shake'), 500);
         }
     }
-    
+
     setTimeout(() => toast.remove(), duration);
 };
