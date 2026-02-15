@@ -72,11 +72,13 @@ function render() {
 
     container.innerHTML = `
         <div class="prompts-layout">
-            <div class="pr-editor">
-                ${selected ? renderEditor() : '<div class="view-placeholder"><p>Select a prompt</p></div>'}
-            </div>
-            <div class="pr-preview">
-                ${selected ? renderPreview() : ''}
+            <div class="pr-content">
+                <div class="pr-editor">
+                    ${selected ? renderEditor() : '<div class="view-placeholder"><p>Select a prompt</p></div>'}
+                </div>
+                <div class="pr-preview">
+                    ${selected ? renderPreview() : ''}
+                </div>
             </div>
             <div class="pr-roster">
                 ${renderRoster()}
@@ -260,7 +262,7 @@ function renderPreview() {
     if (!text) return '<div class="pr-preview-empty">No preview available</div>';
     return `
         <div class="pr-preview-header">
-            <h3>Compiled Prompt</h3>
+            <h3>Preview: ${esc(selected)}</h3>
             <span class="view-subtitle">${formatCount(text.length)} chars</span>
         </div>
         <div class="pr-preview-body">
