@@ -16,6 +16,14 @@ export default {
         container = el;
     },
     async show() {
+        if (window._mindTab) {
+            activeTab = window._mindTab;
+            delete window._mindTab;
+        }
+        if (window._mindScope) {
+            currentScope = window._mindScope;
+            delete window._mindScope;
+        }
         await render();
     },
     hide() {}

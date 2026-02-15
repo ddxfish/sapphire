@@ -6,6 +6,7 @@ import { updateScene, updateSendButtonLLM } from '../features/scene.js';
 import { applyTrimColor } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData } from '../shared/init-data.js';
+import { switchView } from '../core/router.js';
 
 let sidebarLoaded = false;
 let saveTimer = null;
@@ -147,137 +148,15 @@ export default {
             });
         }
 
-        // New memory scope button
-        const newScope = container.querySelector('#sb-new-scope');
-        if (newScope) {
-            newScope.addEventListener('click', async () => {
-                const name = prompt('New memory slot name (lowercase, no spaces):');
-                if (!name) return;
-                const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-                if (!clean || clean.length > 32) {
-                    ui.showToast('Invalid name', 'error');
-                    return;
-                }
-                try {
-                    const res = await fetch('/api/memory/scopes', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: clean })
-                    });
-                    if (res.ok) {
-                        const sel = container.querySelector('#sb-memory-scope');
-                        const opt = document.createElement('option');
-                        opt.value = clean;
-                        opt.textContent = `${clean} (0)`;
-                        sel.appendChild(opt);
-                        sel.value = clean;
-                        debouncedSave(container);
-                        ui.showToast(`Created: ${clean}`, 'success');
-                    }
-                } catch (e) {
-                    ui.showToast('Failed', 'error');
-                }
+        // "Go to Mind" buttons — navigate to Mind view with target tab + scope
+        container.querySelectorAll('.sb-goto-mind').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const scope = btn.closest('.sb-field-row')?.querySelector('select')?.value;
+                window._mindTab = btn.dataset.tab;
+                if (scope && scope !== 'none') window._mindScope = scope;
+                switchView('mind');
             });
-        }
-
-        // New goal scope button
-        const newGoalScope = container.querySelector('#sb-new-goal-scope');
-        if (newGoalScope) {
-            newGoalScope.addEventListener('click', async () => {
-                const name = prompt('New goal slot name (lowercase, no spaces):');
-                if (!name) return;
-                const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-                if (!clean || clean.length > 32) {
-                    ui.showToast('Invalid name', 'error');
-                    return;
-                }
-                try {
-                    const res = await fetch('/api/goals/scopes', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: clean })
-                    });
-                    if (res.ok) {
-                        const sel = container.querySelector('#sb-goal-scope');
-                        const opt = document.createElement('option');
-                        opt.value = clean;
-                        opt.textContent = `${clean} (0)`;
-                        sel.appendChild(opt);
-                        sel.value = clean;
-                        debouncedSave(container);
-                        ui.showToast(`Created: ${clean}`, 'success');
-                    }
-                } catch (e) {
-                    ui.showToast('Failed', 'error');
-                }
-            });
-        }
-
-        // New knowledge scope button
-        const newKnowledgeScope = container.querySelector('#sb-new-knowledge-scope');
-        if (newKnowledgeScope) {
-            newKnowledgeScope.addEventListener('click', async () => {
-                const name = prompt('New knowledge slot name (lowercase, no spaces):');
-                if (!name) return;
-                const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-                if (!clean || clean.length > 32) {
-                    ui.showToast('Invalid name', 'error');
-                    return;
-                }
-                try {
-                    const res = await fetch('/api/knowledge/scopes', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: clean })
-                    });
-                    if (res.ok) {
-                        const sel = container.querySelector('#sb-knowledge-scope');
-                        const opt = document.createElement('option');
-                        opt.value = clean;
-                        opt.textContent = `${clean} (0)`;
-                        sel.appendChild(opt);
-                        sel.value = clean;
-                        debouncedSave(container);
-                        ui.showToast(`Created: ${clean}`, 'success');
-                    }
-                } catch (e) {
-                    ui.showToast('Failed', 'error');
-                }
-            });
-        }
-
-        // New people scope button
-        const newPeopleScope = container.querySelector('#sb-new-people-scope');
-        if (newPeopleScope) {
-            newPeopleScope.addEventListener('click', async () => {
-                const name = prompt('New people slot name (lowercase, no spaces):');
-                if (!name) return;
-                const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
-                if (!clean || clean.length > 32) {
-                    ui.showToast('Invalid name', 'error');
-                    return;
-                }
-                try {
-                    const res = await fetch('/api/knowledge/people/scopes', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name: clean })
-                    });
-                    if (res.ok) {
-                        const sel = container.querySelector('#sb-people-scope');
-                        const opt = document.createElement('option');
-                        opt.value = clean;
-                        opt.textContent = `${clean} (0)`;
-                        sel.appendChild(opt);
-                        sel.value = clean;
-                        debouncedSave(container);
-                        ui.showToast(`Created: ${clean}`, 'success');
-                    }
-                } catch (e) {
-                    ui.showToast('Failed', 'error');
-                }
-            });
-        }
+        });
 
         // Save as defaults button
         const defaultsBtn = container.querySelector('#sb-save-defaults');
