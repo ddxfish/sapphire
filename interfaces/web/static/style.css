@@ -4806,3 +4806,94 @@ a.gallery-caption:hover {
     resize: vertical;
     min-height: 60px;
 }
+
+/* ─── Goals ─── */
+.goal-status-filter {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+.goal-filter-btn.active {
+    background: var(--trim-light, rgba(74, 158, 255, 0.15));
+    border-color: var(--trim-border, var(--border));
+    color: var(--text);
+}
+.goal-status-dot { font-size: 12px; flex-shrink: 0; }
+.goal-pri-badge {
+    font-size: var(--font-xs);
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    flex-shrink: 0;
+}
+.goal-pri-high { background: rgba(238, 85, 85, 0.15); color: #e55; }
+.goal-pri-medium { background: rgba(230, 180, 60, 0.15); color: #db0; }
+.goal-pri-low { background: rgba(100, 180, 100, 0.15); color: #6a6; }
+.goal-subtask-count {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    background: var(--bg-tertiary);
+    padding: 1px 6px;
+    border-radius: 8px;
+}
+.goal-desc {
+    color: var(--text-secondary);
+    font-size: var(--font-sm);
+    line-height: 1.5;
+    padding-bottom: 8px;
+    white-space: pre-wrap;
+}
+.goal-section-label {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 0 4px;
+    font-weight: 600;
+}
+.goal-subtasks { padding-bottom: 6px; }
+.goal-subtask {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+}
+.goal-subtask-check {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    padding: 0;
+    line-height: 1;
+    color: var(--text-muted);
+}
+.goal-subtask-check.done { color: var(--trim, var(--accent-blue)); }
+.goal-subtask-title { flex: 1; font-size: var(--font-sm); }
+.goal-subtask-title.done { text-decoration: line-through; color: var(--text-muted); }
+.goal-progress { padding-bottom: 6px; }
+.goal-progress-entry {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: var(--font-sm);
+}
+.goal-progress-time {
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    white-space: nowrap;
+    min-width: 56px;
+}
+.goal-progress-note {
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+.goal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    margin-top: 6px;
+}

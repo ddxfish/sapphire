@@ -263,6 +263,235 @@ def create_scope(name: str) -> bool:
         return False
 
 
+def delete_scope(name: str) -> dict:
+    """Delete a goal scope and ALL its goals, subtasks, and progress notes."""
+    if name == 'default':
+        return {"error": "Cannot delete the default scope"}
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM goals WHERE scope = ? AND parent_id IS NULL', (name,))
+        goal_count = cursor.fetchone()[0]
+        # Delete progress for all goals in scope
+        cursor.execute('DELETE FROM goal_progress WHERE goal_id IN (SELECT id FROM goals WHERE scope = ?)', (name,))
+        cursor.execute('DELETE FROM goals WHERE scope = ?', (name,))
+        cursor.execute('DELETE FROM goal_scopes WHERE name = ?', (name,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Deleted goal scope '{name}' with {goal_count} goals")
+        return {"deleted_goals": goal_count}
+    except Exception as e:
+        logger.error(f"Failed to delete goal scope '{name}': {e}")
+        return {"error": str(e)}
+
+
+# ─── Public API (used by api_fastapi.py) ─────────────────────────────────────
+
+def get_goals_list(scope='default', status='active'):
+    """Return structured goal data for the REST API."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if status == 'all':
+        cursor.execute(
+            'SELECT id, title, description, priority, status, parent_id, scope, created_at, updated_at, completed_at '
+            'FROM goals WHERE parent_id IS NULL AND scope = ? ORDER BY updated_at DESC',
+            (scope,)
+        )
+    else:
+        cursor.execute(
+            'SELECT id, title, description, priority, status, parent_id, scope, created_at, updated_at, completed_at '
+            'FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
+            (scope, status)
+        )
+    rows = cursor.fetchall()
+
+    goals = []
+    for r in rows:
+        gid = r[0]
+        # Subtasks
+        cursor.execute(
+            'SELECT id, title, description, priority, status, created_at, updated_at FROM goals WHERE parent_id = ? ORDER BY created_at',
+            (gid,)
+        )
+        subtasks = [{"id": s[0], "title": s[1], "description": s[2], "priority": s[3],
+                      "status": s[4], "created_at": s[5], "updated_at": s[6]} for s in cursor.fetchall()]
+        # Recent progress
+        cursor.execute(
+            'SELECT id, note, created_at FROM goal_progress WHERE goal_id = ? ORDER BY created_at DESC LIMIT 5',
+            (gid,)
+        )
+        progress = [{"id": p[0], "note": p[1], "created_at": p[2]} for p in cursor.fetchall()]
+
+        goals.append({
+            "id": r[0], "title": r[1], "description": r[2], "priority": r[3],
+            "status": r[4], "scope": r[6], "created_at": r[7], "updated_at": r[8],
+            "completed_at": r[9], "subtasks": subtasks, "progress": progress
+        })
+
+    conn.close()
+    return goals
+
+
+def get_goal_detail(goal_id):
+    """Get a single goal with all subtasks and full progress journal."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT id, title, description, priority, status, parent_id, scope, created_at, updated_at, completed_at '
+        'FROM goals WHERE id = ?', (goal_id,)
+    )
+    r = cursor.fetchone()
+    if not r:
+        conn.close()
+        return None
+
+    cursor.execute(
+        'SELECT id, title, description, priority, status, created_at, updated_at FROM goals WHERE parent_id = ? ORDER BY created_at',
+        (goal_id,)
+    )
+    subtasks = [{"id": s[0], "title": s[1], "description": s[2], "priority": s[3],
+                  "status": s[4], "created_at": s[5], "updated_at": s[6]} for s in cursor.fetchall()]
+
+    cursor.execute(
+        'SELECT id, note, created_at FROM goal_progress WHERE goal_id = ? ORDER BY created_at DESC',
+        (goal_id,)
+    )
+    progress = [{"id": p[0], "note": p[1], "created_at": p[2]} for p in cursor.fetchall()]
+
+    conn.close()
+    return {
+        "id": r[0], "title": r[1], "description": r[2], "priority": r[3],
+        "status": r[4], "parent_id": r[5], "scope": r[6], "created_at": r[7],
+        "updated_at": r[8], "completed_at": r[9], "subtasks": subtasks, "progress": progress
+    }
+
+
+def create_goal_api(title, description=None, priority='medium', parent_id=None, scope='default'):
+    """Create a goal and return the new ID. Raises ValueError on validation failure."""
+    if not title or not title.strip():
+        raise ValueError("Title is required")
+    title = title.strip()
+    if len(title) > 200:
+        raise ValueError("Title too long (max 200)")
+    if description:
+        description = description.strip()
+        if len(description) > 500:
+            raise ValueError("Description too long (max 500)")
+    priority = (priority or 'medium').lower().strip()
+    if priority not in VALID_PRIORITIES:
+        raise ValueError(f"Invalid priority '{priority}'")
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if parent_id is not None:
+        cursor.execute('SELECT parent_id FROM goals WHERE id = ? AND scope = ?', (parent_id, scope))
+        parent = cursor.fetchone()
+        if not parent:
+            conn.close()
+            raise ValueError(f"Parent goal [{parent_id}] not found")
+        if parent[0] is not None:
+            conn.close()
+            raise ValueError(f"Goal [{parent_id}] is already a subtask")
+
+    cursor.execute(
+        'INSERT INTO goals (title, description, priority, parent_id, scope) VALUES (?, ?, ?, ?, ?)',
+        (title, description, priority, parent_id, scope)
+    )
+    goal_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return goal_id
+
+
+def update_goal_api(goal_id, **kwargs):
+    """Update goal fields. Returns True on success. Raises ValueError on failure."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM goals WHERE id = ?', (goal_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise ValueError(f"Goal [{goal_id}] not found")
+
+    updates, params = [], []
+    for field in ('title', 'description', 'priority', 'status'):
+        val = kwargs.get(field)
+        if val is not None:
+            if field == 'priority' and val not in VALID_PRIORITIES:
+                conn.close()
+                raise ValueError(f"Invalid priority '{val}'")
+            if field == 'status' and val not in VALID_STATUSES:
+                conn.close()
+                raise ValueError(f"Invalid status '{val}'")
+            updates.append(f'{field} = ?')
+            params.append(val)
+            if field == 'status' and val == 'completed':
+                updates.append('completed_at = ?')
+                params.append(datetime.now().isoformat())
+            elif field == 'status' and val == 'active':
+                updates.append('completed_at = NULL')
+
+    if not updates and 'progress_note' not in kwargs:
+        conn.close()
+        raise ValueError("Nothing to update")
+
+    updates.append('updated_at = ?')
+    params.append(datetime.now().isoformat())
+    params.append(goal_id)
+    cursor.execute(f'UPDATE goals SET {", ".join(updates)} WHERE id = ?', params)
+
+    progress_note = kwargs.get('progress_note')
+    if progress_note:
+        cursor.execute('INSERT INTO goal_progress (goal_id, note) VALUES (?, ?)', (goal_id, progress_note.strip()))
+
+    conn.commit()
+    conn.close()
+    return True
+
+
+def add_progress_note(goal_id, note):
+    """Add a progress note to a goal. Returns the note ID."""
+    if not note or not note.strip():
+        raise ValueError("Note cannot be empty")
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM goals WHERE id = ?', (goal_id,))
+    if not cursor.fetchone():
+        conn.close()
+        raise ValueError(f"Goal [{goal_id}] not found")
+    cursor.execute('INSERT INTO goal_progress (goal_id, note) VALUES (?, ?)', (goal_id, note.strip()))
+    note_id = cursor.lastrowid
+    cursor.execute('UPDATE goals SET updated_at = ? WHERE id = ?', (datetime.now().isoformat(), goal_id))
+    conn.commit()
+    conn.close()
+    return note_id
+
+
+def delete_goal_api(goal_id, cascade=True):
+    """Delete a goal. Returns the deleted title. Raises ValueError if not found."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT title FROM goals WHERE id = ?', (goal_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError(f"Goal [{goal_id}] not found")
+    title = row[0]
+
+    if not cascade:
+        cursor.execute('UPDATE goals SET parent_id = NULL WHERE parent_id = ?', (goal_id,))
+
+    cursor.execute('DELETE FROM goal_progress WHERE goal_id = ?', (goal_id,))
+    if cascade:
+        cursor.execute('DELETE FROM goal_progress WHERE goal_id IN (SELECT id FROM goals WHERE parent_id = ?)', (goal_id,))
+        cursor.execute('DELETE FROM goals WHERE parent_id = ?', (goal_id,))
+    cursor.execute('DELETE FROM goals WHERE id = ?', (goal_id,))
+    conn.commit()
+    conn.close()
+    return title
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _time_ago(timestamp_str):
@@ -708,6 +937,22 @@ def _update_goal(goal_id, scope='default', **kwargs):
         )
 
     conn.commit()
+
+    # Check if completing the last subtask of a parent goal
+    parent_hint = ""
+    if status == 'completed' and goal[5] is not None:  # goal[5] = parent_id
+        parent_id = goal[5]
+        cursor.execute(
+            'SELECT COUNT(*) FROM goals WHERE parent_id = ? AND status != ?',
+            (parent_id, 'completed')
+        )
+        remaining = cursor.fetchone()[0]
+        if remaining == 0:
+            cursor.execute('SELECT title FROM goals WHERE id = ?', (parent_id,))
+            parent_row = cursor.fetchone()
+            if parent_row:
+                parent_hint = f"\n\nAll subtasks for [{parent_id}] \"{parent_row[0]}\" are now complete. If the goal is finished, mark it complete with update_goal(goal_id={parent_id}, status='completed')."
+
     conn.close()
 
     # Build response
@@ -724,7 +969,7 @@ def _update_goal(goal_id, scope='default', **kwargs):
         changes.append(f"logged: {progress_note[:80]}{'...' if len(progress_note) > 80 else ''}")
 
     logger.info(f"Updated goal [{goal_id}]: {', '.join(changes)}")
-    return f"Goal [{goal_id}] updated: {', '.join(changes)}", True
+    return f"Goal [{goal_id}] updated: {', '.join(changes)}{parent_hint}", True
 
 
 def _delete_goal(goal_id, cascade=True, scope='default'):

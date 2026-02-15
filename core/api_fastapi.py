@@ -2236,6 +2236,91 @@ async def create_goal_scope(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=500, detail="Failed to create scope")
 
 
+@app.delete("/api/goals/scopes/{scope_name}")
+async def remove_goal_scope(scope_name: str, request: Request, _=Depends(require_login)):
+    from functions import goals
+    data = await request.json()
+    if data.get('confirm') != 'DELETE':
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    result = goals.delete_scope(scope_name)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/goals")
+async def list_goals_api(request: Request, _=Depends(require_login)):
+    from functions import goals
+    scope = request.query_params.get('scope', 'default')
+    status = request.query_params.get('status', 'active')
+    return {"goals": goals.get_goals_list(scope, status)}
+
+
+@app.get("/api/goals/{goal_id}")
+async def get_goal_api(goal_id: int, request: Request, _=Depends(require_login)):
+    from functions import goals
+    detail = goals.get_goal_detail(goal_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return detail
+
+
+@app.post("/api/goals")
+async def create_goal_endpoint(request: Request, _=Depends(require_login)):
+    from functions import goals
+    data = await request.json()
+    try:
+        goal_id = goals.create_goal_api(
+            title=data.get('title', ''),
+            description=data.get('description'),
+            priority=data.get('priority', 'medium'),
+            parent_id=data.get('parent_id'),
+            scope=data.get('scope', 'default'),
+        )
+        return {"id": goal_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/api/goals/{goal_id}")
+async def update_goal_endpoint(goal_id: int, request: Request, _=Depends(require_login)):
+    from functions import goals
+    data = await request.json()
+    try:
+        goals.update_goal_api(
+            goal_id,
+            title=data.get('title'),
+            description=data.get('description'),
+            priority=data.get('priority'),
+            status=data.get('status'),
+            progress_note=data.get('progress_note'),
+        )
+        return {"updated": goal_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/goals/{goal_id}/progress")
+async def add_goal_progress(goal_id: int, request: Request, _=Depends(require_login)):
+    from functions import goals
+    data = await request.json()
+    try:
+        note_id = goals.add_progress_note(goal_id, data.get('note', ''))
+        return {"id": note_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/goals/{goal_id}")
+async def delete_goal_endpoint(goal_id: int, request: Request, _=Depends(require_login)):
+    from functions import goals
+    try:
+        title = goals.delete_goal_api(goal_id)
+        return {"deleted": goal_id, "title": title}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # =============================================================================
 # KNOWLEDGE BASE ROUTES
 # =============================================================================

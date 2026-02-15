@@ -1,4 +1,4 @@
-// views/mind.js - Mind view: Memories, People, Knowledge, AI Notes
+// views/mind.js - Mind view: Memories, People, Knowledge, AI Knowledge, Goals
 import * as ui from '../ui.js';
 
 let container = null;
@@ -7,6 +7,7 @@ let currentScope = 'default';
 let memoryScopeCache = [];
 let knowledgeScopeCache = [];
 let peopleScopeCache = [];
+let goalScopeCache = [];
 let memoryPage = 0;
 const MEMORIES_PER_PAGE = 100;
 
@@ -24,14 +25,16 @@ export default {
 
 async function render() {
     // Fetch all scope types in parallel
-    const [memResp, knowResp, peopleResp] = await Promise.allSettled([
+    const [memResp, knowResp, peopleResp, goalResp] = await Promise.allSettled([
         fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null),
         fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
-        fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null)
+        fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null),
+        fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null)
     ]);
     memoryScopeCache = memResp.status === 'fulfilled' && memResp.value ? memResp.value.scopes || [] : [];
     knowledgeScopeCache = knowResp.status === 'fulfilled' && knowResp.value ? knowResp.value.scopes || [] : [];
     peopleScopeCache = peopleResp.status === 'fulfilled' && peopleResp.value ? peopleResp.value.scopes || [] : [];
+    goalScopeCache = goalResp.status === 'fulfilled' && goalResp.value ? goalResp.value.scopes || [] : [];
 
     container.innerHTML = `
         <div class="mind-view">
@@ -42,6 +45,7 @@ async function render() {
                     <button class="mind-tab${activeTab === 'people' ? ' active' : ''}" data-tab="people">People</button>
                     <button class="mind-tab${activeTab === 'knowledge' ? ' active' : ''}" data-tab="knowledge">Human Knowledge</button>
                     <button class="mind-tab${activeTab === 'ai-notes' ? ' active' : ''}" data-tab="ai-notes">AI Knowledge</button>
+                    <button class="mind-tab${activeTab === 'goals' ? ' active' : ''}" data-tab="goals">Goals</button>
                 </div>
             </div>
             <div class="mind-body">
@@ -86,6 +90,7 @@ async function render() {
         }
         const apiPath = activeTab === 'memories' ? '/api/memory/scopes'
             : activeTab === 'people' ? '/api/knowledge/people/scopes'
+            : activeTab === 'goals' ? '/api/goals/scopes'
             : '/api/knowledge/scopes';
         try {
             const res = await fetch(apiPath, {
@@ -97,6 +102,7 @@ async function render() {
                 const newScope = { name: clean, count: 0 };
                 if (activeTab === 'memories') memoryScopeCache.push(newScope);
                 else if (activeTab === 'people') peopleScopeCache.push(newScope);
+                else if (activeTab === 'goals') goalScopeCache.push(newScope);
                 else knowledgeScopeCache.push(newScope);
                 currentScope = clean;
                 updateScopeDropdown();
@@ -118,9 +124,11 @@ async function render() {
         const scopeInfo = scopes.find(s => s.name === currentScope);
         const count = scopeInfo?.count || 0;
         const scopeType = activeTab === 'memories' ? 'memory'
-            : activeTab === 'people' ? 'people' : 'knowledge';
+            : activeTab === 'people' ? 'people'
+            : activeTab === 'goals' ? 'goals' : 'knowledge';
         const typeLabel = activeTab === 'memories' ? 'memories'
             : activeTab === 'people' ? 'contacts'
+            : activeTab === 'goals' ? 'goals (and all subtasks/progress)'
             : 'knowledge tabs (and all entries within them)';
 
         showDeleteScopeConfirmation(currentScope, typeLabel, count, scopeType);
@@ -133,6 +141,7 @@ async function render() {
 function getScopesForTab() {
     if (activeTab === 'memories') return memoryScopeCache;
     if (activeTab === 'people') return peopleScopeCache;
+    if (activeTab === 'goals') return goalScopeCache;
     return knowledgeScopeCache;
 }
 
@@ -162,6 +171,7 @@ async function renderContent() {
             case 'people': await renderPeople(el); break;
             case 'knowledge': await renderKnowledge(el, 'user'); break;
             case 'ai-notes': await renderKnowledge(el, 'ai'); break;
+            case 'goals': await renderGoals(el); break;
         }
     } catch (e) {
         el.innerHTML = `<div class="mind-empty">Failed to load: ${e.message}</div>`;
@@ -881,6 +891,8 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType) {
             ? `/api/memory/scopes/${encodeURIComponent(scopeName)}`
             : scopeType === 'people'
             ? `/api/knowledge/people/scopes/${encodeURIComponent(scopeName)}`
+            : scopeType === 'goals'
+            ? `/api/goals/scopes/${encodeURIComponent(scopeName)}`
             : `/api/knowledge/scopes/${encodeURIComponent(scopeName)}`;
         try {
             const resp = await fetch(apiPath, {
@@ -893,6 +905,7 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType) {
                 // Remove from cache
                 if (scopeType === 'memory') memoryScopeCache = memoryScopeCache.filter(s => s.name !== scopeName);
                 else if (scopeType === 'people') peopleScopeCache = peopleScopeCache.filter(s => s.name !== scopeName);
+                else if (scopeType === 'goals') goalScopeCache = goalScopeCache.filter(s => s.name !== scopeName);
                 else knowledgeScopeCache = knowledgeScopeCache.filter(s => s.name !== scopeName);
                 currentScope = 'default';
                 updateScopeDropdown();
@@ -906,6 +919,308 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType) {
             ui.showToast('Failed to delete scope', 'error');
         }
     });
+}
+
+// ─── Goals Tab ───────────────────────────────────────────────────────────────
+
+let goalStatusFilter = 'active';
+
+async function renderGoals(el) {
+    const resp = await fetch(`/api/goals?scope=${encodeURIComponent(currentScope)}&status=${goalStatusFilter}`);
+    if (!resp.ok) { el.innerHTML = '<div class="mind-empty">Failed to load goals</div>'; return; }
+    const data = await resp.json();
+    const goals = data.goals || [];
+
+    const desc = '<div class="mind-tab-desc">Tracked objectives and tasks. The AI creates and updates these via tools, but you can also manage them here.</div>';
+
+    const filterHtml = `
+        <div class="mind-toolbar">
+            <button class="mind-btn" id="mind-new-goal">+ New Goal</button>
+            <div class="goal-status-filter">
+                ${['active', 'completed', 'abandoned', 'all'].map(s =>
+                    `<button class="mind-btn-sm goal-filter-btn${goalStatusFilter === s ? ' active' : ''}" data-status="${s}">${s[0].toUpperCase() + s.slice(1)}</button>`
+                ).join('')}
+            </div>
+        </div>
+    `;
+
+    if (!goals.length) {
+        el.innerHTML = desc + filterHtml + `<div class="mind-empty">No ${goalStatusFilter === 'all' ? '' : goalStatusFilter + ' '}goals in this scope</div>`;
+        bindGoalToolbar(el);
+        return;
+    }
+
+    el.innerHTML = desc + filterHtml + '<div class="mind-list">' + goals.map(g => {
+        const priClass = `goal-pri-${g.priority}`;
+        const statusIcon = g.status === 'completed' ? '&#x2705;' : g.status === 'abandoned' ? '&#x274C;' : '&#x1F7E2;';
+        const ago = timeAgo(g.updated_at);
+        const subtasksDone = g.subtasks.filter(s => s.status === 'completed').length;
+        const subtasksTotal = g.subtasks.length;
+
+        return `
+            <details class="mind-accordion">
+                <summary class="mind-accordion-header">
+                    <span class="goal-status-dot" title="${escHtml(g.status)}">${statusIcon}</span>
+                    <span class="mind-accordion-title">${escHtml(g.title)}</span>
+                    <span class="goal-pri-badge ${priClass}">${g.priority}</span>
+                    ${subtasksTotal ? `<span class="goal-subtask-count">${subtasksDone}/${subtasksTotal}</span>` : ''}
+                    <span class="mind-accordion-count">${ago}</span>
+                </summary>
+                <div class="mind-accordion-body">
+                    <div class="mind-accordion-inner">
+                        ${g.description ? `<div class="goal-desc">${escHtml(g.description)}</div>` : ''}
+
+                        ${subtasksTotal ? `
+                            <div class="goal-subtasks">
+                                <div class="goal-section-label">Subtasks</div>
+                                ${g.subtasks.map(s => `
+                                    <div class="goal-subtask" data-id="${s.id}">
+                                        <button class="goal-subtask-check${s.status === 'completed' ? ' done' : ''}" data-id="${s.id}" data-status="${s.status}" title="Toggle complete">${s.status === 'completed' ? '&#x2611;' : '&#x2610;'}</button>
+                                        <span class="goal-subtask-title${s.status === 'completed' ? ' done' : ''}">${escHtml(s.title)}</span>
+                                        <button class="mind-btn-sm goal-del-subtask" data-id="${s.id}" title="Delete">&#x2715;</button>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+
+                        ${g.progress.length ? `
+                            <div class="goal-progress">
+                                <div class="goal-section-label">Progress Journal</div>
+                                ${g.progress.map(p => `
+                                    <div class="goal-progress-entry">
+                                        <span class="goal-progress-time">${timeAgo(p.created_at)}</span>
+                                        <span class="goal-progress-note">${escHtml(p.note)}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+
+                        <div class="goal-actions">
+                            ${g.status === 'active' ? `
+                                <button class="mind-btn-sm goal-complete-btn" data-id="${g.id}" title="Mark complete">&#x2705; Complete</button>
+                                <button class="mind-btn-sm goal-abandon-btn" data-id="${g.id}" title="Abandon">&#x274C; Abandon</button>
+                            ` : `
+                                <button class="mind-btn-sm goal-reactivate-btn" data-id="${g.id}" title="Reactivate">&#x1F504; Reactivate</button>
+                            `}
+                            <button class="mind-btn-sm goal-add-subtask" data-id="${g.id}" title="Add subtask">+ Subtask</button>
+                            <button class="mind-btn-sm goal-add-note" data-id="${g.id}" title="Add progress note">+ Note</button>
+                            <button class="mind-btn-sm goal-edit-btn" data-id="${g.id}" title="Edit">&#x270E;</button>
+                            <button class="mind-btn-sm goal-del-btn" data-id="${g.id}" title="Delete">&#x1F5D1;</button>
+                        </div>
+                    </div>
+                </div>
+            </details>
+        `;
+    }).join('') + '</div>';
+
+    bindGoalToolbar(el);
+    bindGoalActions(el);
+}
+
+function bindGoalToolbar(el) {
+    el.querySelector('#mind-new-goal')?.addEventListener('click', () => showGoalModal(el));
+    el.querySelectorAll('.goal-filter-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            goalStatusFilter = btn.dataset.status;
+            renderGoals(el);
+        });
+    });
+}
+
+function bindGoalActions(el) {
+    // Status changes
+    el.querySelectorAll('.goal-complete-btn').forEach(btn => {
+        btn.addEventListener('click', () => updateGoalStatus(el, btn.dataset.id, 'completed'));
+    });
+    el.querySelectorAll('.goal-abandon-btn').forEach(btn => {
+        btn.addEventListener('click', () => updateGoalStatus(el, btn.dataset.id, 'abandoned'));
+    });
+    el.querySelectorAll('.goal-reactivate-btn').forEach(btn => {
+        btn.addEventListener('click', () => updateGoalStatus(el, btn.dataset.id, 'active'));
+    });
+
+    // Subtask toggle
+    el.querySelectorAll('.goal-subtask-check').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const newStatus = btn.dataset.status === 'completed' ? 'active' : 'completed';
+            updateGoalStatus(el, btn.dataset.id, newStatus);
+        });
+    });
+
+    // Delete subtask
+    el.querySelectorAll('.goal-del-subtask').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Delete this subtask?')) return;
+            try {
+                const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE' });
+                if (resp.ok) { ui.showToast('Deleted', 'success'); renderGoals(el); }
+            } catch (e) { ui.showToast('Failed', 'error'); }
+        });
+    });
+
+    // Add subtask
+    el.querySelectorAll('.goal-add-subtask').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const title = prompt('Subtask title:');
+            if (!title?.trim()) return;
+            try {
+                const resp = await fetch('/api/goals', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: title.trim(), parent_id: parseInt(btn.dataset.id), scope: currentScope })
+                });
+                if (resp.ok) { ui.showToast('Subtask added', 'success'); renderGoals(el); }
+                else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
+            } catch (e) { ui.showToast('Failed', 'error'); }
+        });
+    });
+
+    // Add progress note
+    el.querySelectorAll('.goal-add-note').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const note = prompt('Progress note:');
+            if (!note?.trim()) return;
+            try {
+                const resp = await fetch(`/api/goals/${btn.dataset.id}/progress`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ note: note.trim() })
+                });
+                if (resp.ok) { ui.showToast('Note added', 'success'); renderGoals(el); }
+                else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
+            } catch (e) { ui.showToast('Failed', 'error'); }
+        });
+    });
+
+    // Edit goal
+    el.querySelectorAll('.goal-edit-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            try {
+                const resp = await fetch(`/api/goals/${btn.dataset.id}`);
+                if (resp.ok) {
+                    const goal = await resp.json();
+                    showGoalModal(el, goal);
+                }
+            } catch (e) { ui.showToast('Failed to load goal', 'error'); }
+        });
+    });
+
+    // Delete goal
+    el.querySelectorAll('.goal-del-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Delete this goal and all subtasks/progress?')) return;
+            try {
+                const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE' });
+                if (resp.ok) { ui.showToast('Deleted', 'success'); renderGoals(el); }
+            } catch (e) { ui.showToast('Failed', 'error'); }
+        });
+    });
+}
+
+async function updateGoalStatus(el, goalId, status) {
+    try {
+        const resp = await fetch(`/api/goals/${goalId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+        if (resp.ok) { renderGoals(el); }
+        else { const err = await resp.json(); ui.showToast(err.detail || 'Failed', 'error'); }
+    } catch (e) { ui.showToast('Failed', 'error'); }
+}
+
+function showGoalModal(el, goal = null) {
+    const existing = document.querySelector('.mind-modal-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal">
+            <div class="pr-modal-header">
+                <h3>${goal ? 'Edit' : 'New'} Goal</h3>
+                <button class="mind-btn-sm mind-modal-close">&#x2715;</button>
+            </div>
+            <div class="pr-modal-body">
+                <div class="mind-form">
+                    <input type="text" id="mg-title" placeholder="Title *" value="${escAttr(goal?.title || '')}">
+                    <textarea id="mg-desc" placeholder="Description (optional)" rows="3">${escHtml(goal?.description || '')}</textarea>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <label style="color:var(--text-muted);font-size:var(--font-sm)">Priority:</label>
+                        <select id="mg-priority" style="padding:4px 8px;background:var(--input-bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:var(--font-sm)">
+                            ${['high', 'medium', 'low'].map(p =>
+                                `<option value="${p}"${(goal?.priority || 'medium') === p ? ' selected' : ''}>${p[0].toUpperCase() + p.slice(1)}</option>`
+                            ).join('')}
+                        </select>
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;gap:8px">
+                        <button class="mind-btn mind-modal-cancel">Cancel</button>
+                        <button class="mind-btn" id="mg-save" style="border-color:var(--trim,var(--accent-blue))">${goal ? 'Update' : 'Create'}</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
+    overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('#mg-title').focus();
+
+    overlay.querySelector('#mg-save').addEventListener('click', async () => {
+        const title = overlay.querySelector('#mg-title').value.trim();
+        if (!title) { ui.showToast('Title is required', 'error'); return; }
+        const body = {
+            title,
+            description: overlay.querySelector('#mg-desc').value.trim() || null,
+            priority: overlay.querySelector('#mg-priority').value,
+        };
+
+        try {
+            let resp;
+            if (goal) {
+                resp = await fetch(`/api/goals/${goal.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+            } else {
+                body.scope = currentScope;
+                resp = await fetch('/api/goals', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+            }
+            if (resp.ok) {
+                close();
+                ui.showToast(goal ? 'Updated' : 'Created', 'success');
+                renderGoals(el);
+            } else {
+                const err = await resp.json();
+                ui.showToast(err.detail || 'Failed', 'error');
+            }
+        } catch (e) { ui.showToast('Failed', 'error'); }
+    });
+}
+
+function timeAgo(ts) {
+    if (!ts) return '';
+    try {
+        const diff = Date.now() - new Date(ts).getTime();
+        const mins = Math.floor(diff / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return `${mins}m ago`;
+        const hrs = Math.floor(mins / 60);
+        if (hrs < 24) return `${hrs}h ago`;
+        const days = Math.floor(hrs / 24);
+        if (days < 14) return `${days}d ago`;
+        return `${Math.floor(days / 7)}w ago`;
+    } catch { return ''; }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
