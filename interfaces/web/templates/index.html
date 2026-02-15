@@ -144,10 +144,36 @@
                 <!-- Chat Settings Sidebar (right) -->
                 <aside class="chat-sidebar">
                     <div class="chat-sidebar-inner">
+                        <!-- Row 1: accent circle + chat name + collapse (always visible) -->
+                        <div class="sb-chat-header">
+                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color (double-click to reset)">
+                            <div class="sb-chat-picker" id="sb-chat-picker">
+                                <button class="sb-chat-picker-btn" id="sb-chat-picker-btn">
+                                    <span id="sb-chat-name">Chat</span>
+                                    <span class="sb-chat-arrow">&#x25BE;</span>
+                                </button>
+                                <div class="sb-chat-picker-dropdown" id="sb-chat-picker-dropdown"></div>
+                            </div>
+                            <button type="button" id="chat-sidebar-toggle" class="sb-icon-btn sb-collapse-btn" title="Hide sidebar">&#x25B6;</button>
+                        </div>
+                        <!-- Row 2: chat actions (always visible) -->
+                        <div class="sb-chat-actions">
+                            <button type="button" id="sb-new-chat" class="sb-icon-btn" title="New Chat">+</button>
+                            <button type="button" id="sb-delete-chat" class="sb-icon-btn sb-icon-danger" title="Delete Chat">&#x1F5D1;</button>
+                            <button type="button" id="clear-chat-btn" class="sb-icon-btn" title="Clear Chat">&#x2715;</button>
+                            <div class="sb-kebab kebab-menu" id="chat-menu">
+                                <button type="button" class="sb-icon-btn kebab-btn" title="More">&#x22EE;</button>
+                                <div class="kebab-dropdown">
+                                    <button id="import-chat-btn">Import</button>
+                                    <button id="export-chat-btn">Export</button>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Sidebar mode tabs -->
                         <div class="sb-mode-tabs">
-                            <button class="sb-mode-tab active" data-mode="easy">Easy</button>
-                            <button class="sb-mode-tab" data-mode="full">Full</button>
+                            <button class="sb-mode-tab active" data-mode="easy">Persona</button>
+                            <button class="sb-mode-tab" data-mode="full">Settings</button>
                         </div>
 
                         <!-- Easy mode: persona-centric view -->
@@ -163,34 +189,8 @@
                             <div class="sb-easy-summary" id="sb-easy-summary"></div>
                         </div>
 
-                        <!-- Full mode: all settings (existing) -->
+                        <!-- Full mode: all settings -->
                         <div class="sb-full-content">
-                        <!-- Row 1: accent circle + chat name + collapse -->
-                        <div class="sb-chat-header">
-                            <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color (double-click to reset)">
-                            <div class="sb-chat-picker" id="sb-chat-picker">
-                                <button class="sb-chat-picker-btn" id="sb-chat-picker-btn">
-                                    <span id="sb-chat-name">Chat</span>
-                                    <span class="sb-chat-arrow">&#x25BE;</span>
-                                </button>
-                                <div class="sb-chat-picker-dropdown" id="sb-chat-picker-dropdown"></div>
-                            </div>
-                            <button type="button" id="chat-sidebar-toggle" class="sb-icon-btn sb-collapse-btn" title="Hide sidebar">&#x25B6;</button>
-                        </div>
-                        <!-- Row 2: chat actions -->
-                        <div class="sb-chat-actions">
-                            <button type="button" id="sb-new-chat" class="sb-icon-btn" title="New Chat">+</button>
-                            <button type="button" id="sb-delete-chat" class="sb-icon-btn sb-icon-danger" title="Delete Chat">&#x1F5D1;</button>
-                            <button type="button" id="clear-chat-btn" class="sb-icon-btn" title="Clear Chat">&#x2715;</button>
-                            <div class="sb-kebab kebab-menu" id="chat-menu">
-                                <button type="button" class="sb-icon-btn kebab-btn" title="More">&#x22EE;</button>
-                                <div class="kebab-dropdown">
-                                    <button id="import-chat-btn">Import</button>
-                                    <button id="export-chat-btn">Export</button>
-                                </div>
-                            </div>
-                        </div>
-
                         <div class="sidebar-section">
                             <div class="sb-field">
                                 <label for="sb-prompt">prompt</label>
