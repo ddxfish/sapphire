@@ -11,6 +11,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '💾'
 
 # Database location - lazy initialized
 _db_path = None

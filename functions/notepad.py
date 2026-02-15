@@ -11,6 +11,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '📝'
 NOTEPAD_PATH = Path("user/notepad/notepad.txt")
 
 AVAILABLE_FUNCTIONS = [

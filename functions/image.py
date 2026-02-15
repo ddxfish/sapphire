@@ -32,6 +32,7 @@ DEFAULTS = {
 
 # Module configuration
 ENABLED = True
+EMOJI = '🎨'
 AVAILABLE_FUNCTIONS = ['generate_scene_image']
 
 TOOLS = [

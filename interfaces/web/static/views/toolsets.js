@@ -3,12 +3,6 @@ import { getToolsets, getCurrentToolset, getFunctions, activateToolset, saveCust
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
-const MODULE_ICONS = {
-    meta: '\u{1F9E0}', web: '\u{1F310}', memory: '\u{1F4BE}', network: '\u{1F4E1}',
-    docs: '\u{1F4DA}', ai: '\u{1F916}', image: '\u{1F3A8}', notepad: '\u{1F4DD}',
-    homeassistant: '\u{1F3E0}', goals: '\u{1F3AF}', knowledge: '\u{1F4D6}'
-};
-
 const DEFAULT_ICONS = {
     work: '\u{1F4BC}', smarthome: '\u{1F3E0}', personality: '\u{1F3AD}',
     all: '\u{1F4E6}', none: '\u{26D4}'
@@ -219,7 +213,7 @@ function renderFunctions(selected, isEditable) {
                         <input type="checkbox" data-action="toggle-module" data-module="${modName}"
                             ${allChecked ? 'checked' : ''} ${someChecked ? 'data-indeterminate="true"' : ''}
                             ${!isEditable ? 'disabled' : ''}>
-                        <span class="ts-module-name">${MODULE_ICONS[modName] || '\u{1F527}'} ${modName}</span>
+                        <span class="ts-module-name">${mod.emoji || '\u{1F527}'} ${modName}</span>
                         <span class="ts-module-count">(${enabledCount}/${funcs.length})</span>
                     </label>
                 </div>

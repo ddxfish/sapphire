@@ -12,6 +12,7 @@ import config
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '🌐'
 
 WORK_SEARCH_MAX_RESULTS = 8
 WORK_WEBSITE_MAX_CONTENT = 12000

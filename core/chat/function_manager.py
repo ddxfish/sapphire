@@ -100,19 +100,21 @@ class FunctionManager:
                     tools = getattr(module, 'TOOLS', [])
                     executor = getattr(module, 'execute', None)
                     mode_filter = getattr(module, 'MODE_FILTER', None)
-                    
+                    emoji = getattr(module, 'EMOJI', '')
+
                     if not tools or not executor:
                         logger.warning(f"Module '{module_name}' missing TOOLS or execute()")
                         continue
-                    
+
                     if available_functions is not None:
                         tools = [t for t in tools if t['function']['name'] in available_functions]
-                    
+
                     self.function_modules[module_name] = {
                         'module': module,
                         'tools': tools,
                         'executor': executor,
-                        'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools]
+                        'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools],
+                        'emoji': emoji
                     }
                     
                     # Track network functions and is_local (per-tool flags)

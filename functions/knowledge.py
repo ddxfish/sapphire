@@ -15,6 +15,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '📖'
 
 _db_path = None
 _db_initialized = False

@@ -806,7 +806,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                     "enabled": func_name in enabled,
                     "is_network": func_name in network_functions
                 })
-            modules[module_name] = {"functions": functions, "count": len(functions)}
+            modules[module_name] = {"functions": functions, "count": len(functions), "emoji": module_info.get('emoji', '')}
 
         # Prompts data
         prompt_names = prompts.list_prompts()
@@ -1974,7 +1974,7 @@ async def list_functions(request: Request, _=Depends(require_login), system=Depe
                 "enabled": func_name in enabled,
                 "is_network": func_name in network
             })
-        modules[module_name] = {"functions": funcs, "count": len(funcs)}
+        modules[module_name] = {"functions": funcs, "count": len(funcs), "emoji": module_info.get('emoji', '')}
     return {"modules": modules}
 
 

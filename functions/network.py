@@ -10,6 +10,7 @@ import config
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '📡'
 
 AVAILABLE_FUNCTIONS = [
     'get_external_ip',

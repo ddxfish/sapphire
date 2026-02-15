@@ -6,6 +6,7 @@ from core.credentials_manager import credentials
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '🤖'
 
 AVAILABLE_FUNCTIONS = [
     'ask_claude',

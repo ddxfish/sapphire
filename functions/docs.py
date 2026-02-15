@@ -48,6 +48,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 ENABLED = True
+EMOJI = '📚'
 AI_SECTION_MARKER = "## Reference for AI"
 AI_FULL_INCLUDE_PATTERN = r'<!--\s*AI_INCLUDE_FULL:\s*(.+?)\s*-->'
 
