@@ -20,6 +20,9 @@ export const setAvatarsInChat = (val) => { avatarsInChat = val; };
 // Avatar path cache - populated from /api/init, eliminates 404 cascades
 let avatarPaths = null;
 
+// Persona avatar URL cache - avoids repeated fetches per message
+const personaAvatarCache = new Map();
+
 // Initialize from /api/init data (called from main.js after init data loads)
 export const initFromInitData = (initData) => {
     if (initData.settings?.AVATARS_IN_CHAT !== undefined) {
@@ -112,6 +115,28 @@ const setAvatarWithFallback = async (img, role) => {
     }
 };
 
+const setPersonaAvatar = (img, personaName) => {
+    if (!avatarsInChat) {
+        img.style.display = 'none';
+        return;
+    }
+    img.loading = 'lazy';
+
+    // Use cached URL or build it
+    const url = `/api/personas/${encodeURIComponent(personaName)}/avatar`;
+    img.src = url;
+    img.onerror = async () => {
+        // Fall back to default assistant avatar
+        const paths = await loadAvatarPaths();
+        if (paths.assistant) {
+            img.src = paths.assistant;
+            img.onerror = () => { img.style.display = 'none'; };
+        } else {
+            img.style.display = 'none';
+        }
+    };
+};
+
 const createToolbar = (idx, total, role = 'user') => {
     const tb = createElem('div', { class: 'toolbar' });
     const buttons = [
@@ -171,7 +196,11 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     
     const role = msg.role || 'user';
     msgEl.classList.add(role);
-    setAvatarWithFallback(avatar, role);
+    if (role === 'assistant' && msg.persona) {
+        setPersonaAvatar(avatar, msg.persona);
+    } else {
+        setAvatarWithFallback(avatar, role);
+    }
     
     if (idx !== null) {
         const toolbar = createToolbar(idx, total, role);

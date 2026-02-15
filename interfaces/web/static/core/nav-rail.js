@@ -1,14 +1,5 @@
-// core/nav-rail.js - Navigation rail
+// core/nav-rail.js - Navigation rail with flyout support
 import { switchView } from './router.js';
-
-const NAV_ITEMS = [
-    { id: 'chat', icon: '\uD83D\uDCAC', label: 'Chat' },
-    { id: 'prompts', icon: '\uD83D\uDC64', label: 'Prompts' },
-    { id: 'toolsets', icon: '\uD83D\uDD27', label: 'Toolsets' },
-    { id: 'spices', icon: '\uD83C\uDF36\uFE0F', label: 'Spices' },
-    { id: 'schedule', icon: '\u23F0', label: 'Schedule' },
-    { id: 'settings', icon: '\u2699\uFE0F', label: 'Settings' }
-];
 
 const MOBILE_MAX_VISIBLE = 5;
 
@@ -16,11 +7,56 @@ export function initNavRail() {
     const rail = document.getElementById('nav-rail');
     if (!rail) return;
 
+    // Main nav click handler
     rail.addEventListener('click', e => {
+        // Flyout item click
+        const flyoutItem = e.target.closest('.nav-flyout-item');
+        if (flyoutItem) {
+            e.stopPropagation();
+            const viewId = flyoutItem.dataset.view;
+            if (viewId) switchView(viewId);
+            // Close any open flyouts
+            rail.querySelectorAll('.nav-group-parent').forEach(p => p.classList.remove('flyout-open'));
+            return;
+        }
+
         const item = e.target.closest('.nav-item');
         if (!item) return;
+
+        // Group parent: on mobile, first tap opens flyout; second tap (or desktop click) navigates
+        if (item.classList.contains('nav-group-parent')) {
+            if (isMobile() && !item.classList.contains('flyout-open')) {
+                e.stopPropagation();
+                // Close other flyouts
+                rail.querySelectorAll('.nav-group-parent').forEach(p => p.classList.remove('flyout-open'));
+                item.classList.add('flyout-open');
+                return;
+            }
+        }
+
         const viewId = item.dataset.view;
         if (viewId) switchView(viewId);
+    });
+
+    // Desktop hover for flyout
+    rail.querySelectorAll('.nav-group-parent').forEach(parent => {
+        let hoverTimer = null;
+        parent.addEventListener('mouseenter', () => {
+            if (isMobile()) return;
+            clearTimeout(hoverTimer);
+            parent.classList.add('flyout-open');
+        });
+        parent.addEventListener('mouseleave', () => {
+            if (isMobile()) return;
+            hoverTimer = setTimeout(() => parent.classList.remove('flyout-open'), 200);
+        });
+    });
+
+    // Close flyouts on outside click
+    document.addEventListener('click', e => {
+        if (!e.target.closest('.nav-group-parent')) {
+            rail.querySelectorAll('.nav-group-parent').forEach(p => p.classList.remove('flyout-open'));
+        }
     });
 
     initMobileOverflow(rail);

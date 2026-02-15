@@ -7,11 +7,13 @@ import { applyTrimColor } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData } from '../shared/init-data.js';
 import { switchView } from '../core/router.js';
+import { loadPersona } from '../shared/persona-api.js';
 
 let sidebarLoaded = false;
 let saveTimer = null;
 let llmProviders = [];
 let llmMetadata = {};
+let personasList = [];
 
 const SAVE_DEBOUNCE = 500;
 
@@ -168,6 +170,12 @@ export default {
             });
         });
 
+        // Sidebar mode tabs (Easy/Full)
+        initSidebarModes(container);
+
+        // Listen for persona-loaded events
+        window.addEventListener('persona-loaded', () => loadSidebar());
+
         // Save as defaults button
         const defaultsBtn = container.querySelector('#sb-save-defaults');
         if (defaultsBtn) {
@@ -214,7 +222,7 @@ async function loadSidebar() {
     if (!chatName) return;
 
     try {
-        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, presetsResp, spiceSetsResp] = await Promise.allSettled([
+        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, presetsResp, spiceSetsResp, personasResp] = await Promise.allSettled([
             api.getChatSettings(chatName),
             getInitData(),
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
@@ -223,7 +231,8 @@ async function loadSidebar() {
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/state/presets').then(r => r.ok ? r.json() : null),
-            fetch('/api/spice-sets').then(r => r.ok ? r.json() : null)
+            fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
+            fetch('/api/personas').then(r => r.ok ? r.json() : null)
         ]);
 
         const settings = settingsResp.status === 'fulfilled' ? settingsResp.value.settings : {};
@@ -235,6 +244,8 @@ async function loadSidebar() {
         const peopleScopesData = peopleScopesResp.status === 'fulfilled' ? peopleScopesResp.value : null;
         const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
         const spiceSetsData = spiceSetsResp.status === 'fulfilled' ? spiceSetsResp.value : null;
+        const personasData = personasResp.status === 'fulfilled' ? personasResp.value : null;
+        personasList = personasData?.personas || [];
 
         // Sync sidebar chat name from hidden select
         const selectedOpt = chatSelect?.options?.[chatSelect.selectedIndex];
@@ -375,6 +386,9 @@ async function loadSidebar() {
         if (pitchSlider) updateSliderFill(pitchSlider);
         if (speedSlider) updateSliderFill(speedSlider);
 
+        // Update Easy mode display
+        updateEasyMode(container, settings);
+
         sidebarLoaded = true;
     } catch (e) {
         console.warn('Failed to load sidebar:', e);
@@ -508,6 +522,111 @@ function setupStateButtons(container) {
             ui.showToast('State reset', 'success');
         } catch (e) { ui.showToast('Failed', 'error'); }
     });
+}
+
+// === Easy/Full sidebar mode ===
+
+function initSidebarModes(container) {
+    const tabs = container.querySelectorAll('.sb-mode-tab');
+    const easyContent = container.querySelector('.sb-easy-content');
+    const fullContent = container.querySelector('.sb-full-content');
+    if (!tabs.length || !easyContent || !fullContent) return;
+
+    // Restore saved mode
+    const saved = localStorage.getItem('sapphire-sidebar-mode') || 'full';
+    setSidebarMode(container, saved);
+
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const mode = tab.dataset.mode;
+            setSidebarMode(container, mode);
+            localStorage.setItem('sapphire-sidebar-mode', mode);
+        });
+    });
+
+    // Easy mode persona strip clicks
+    container.querySelector('#sb-easy-strip')?.addEventListener('click', async e => {
+        const card = e.target.closest('.sb-persona-card');
+        if (!card) return;
+        const name = card.dataset.name;
+        if (!name) return;
+        try {
+            await loadPersona(name);
+            ui.showToast(`Loaded: ${name}`, 'success');
+            updateScene();
+            await loadSidebar();
+        } catch (e) {
+            ui.showToast(e.message || 'Failed', 'error');
+        }
+    });
+}
+
+function setSidebarMode(container, mode) {
+    const easyContent = container.querySelector('.sb-easy-content');
+    const fullContent = container.querySelector('.sb-full-content');
+    if (!easyContent || !fullContent) return;
+
+    easyContent.style.display = mode === 'easy' ? '' : 'none';
+    fullContent.style.display = mode === 'full' ? '' : 'none';
+
+    container.querySelectorAll('.sb-mode-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.mode === mode);
+    });
+}
+
+function updateEasyMode(container, settings) {
+    const personaName = settings.persona;
+    const nameEl = container.querySelector('#sb-easy-name');
+    const taglineEl = container.querySelector('#sb-easy-tagline');
+    const avatarEl = container.querySelector('#sb-easy-avatar');
+    const summaryEl = container.querySelector('#sb-easy-summary');
+    const stripEl = container.querySelector('#sb-easy-strip');
+
+    if (personaName) {
+        if (nameEl) nameEl.textContent = personaName;
+        if (avatarEl) {
+            avatarEl.src = `/api/personas/${encodeURIComponent(personaName)}/avatar`;
+            avatarEl.onerror = () => { avatarEl.style.display = 'none'; };
+            avatarEl.style.display = '';
+        }
+    } else {
+        if (nameEl) nameEl.textContent = 'No Persona';
+        if (avatarEl) avatarEl.style.display = 'none';
+    }
+
+    if (taglineEl) taglineEl.textContent = '';
+    // Fetch tagline if we have a persona
+    if (personaName) {
+        fetch(`/api/personas/${encodeURIComponent(personaName)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(p => { if (p && taglineEl) taglineEl.textContent = p.tagline || ''; })
+            .catch(() => {});
+    }
+
+    // Summary
+    if (summaryEl) {
+        summaryEl.innerHTML = `
+            <div class="sb-easy-row"><span>Prompt:</span> <span>${settings.prompt || 'default'}</span></div>
+            <div class="sb-easy-row"><span>Voice:</span> <span>${settings.voice || 'af_heart'}</span></div>
+            <div class="sb-easy-row"><span>Model:</span> <span>${settings.llm_primary || 'auto'}${settings.llm_model ? ' / ' + settings.llm_model : ''}</span></div>
+        `;
+    }
+
+    // Persona strip
+    if (stripEl) {
+        stripEl.innerHTML = personasList.map(p => `
+            <div class="sb-persona-card${p.name === personaName ? ' active' : ''}" data-name="${p.name}" title="${escapeHtml(p.name)}">
+                <img class="sb-persona-card-avatar" src="/api/personas/${encodeURIComponent(p.name)}/avatar" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                <span class="sb-persona-card-name">${escapeHtml(p.name)}</span>
+            </div>
+        `).join('');
+    }
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
 }
 
 // Helpers

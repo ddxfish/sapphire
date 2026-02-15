@@ -61,18 +61,16 @@
             <span class="nav-icon">&#x1F4AC;</span>
             <span class="nav-label">Chat</span>
         </button>
-        <button class="nav-item" data-view="prompts">
-            <span class="nav-icon">&#x1F464;</span>
-            <span class="nav-label">Prompts</span>
-        </button>
-        <button class="nav-item" data-view="toolsets">
-            <span class="nav-icon">&#x1F527;</span>
-            <span class="nav-label">Toolsets</span>
-        </button>
-        <button class="nav-item" data-view="spices">
-            <span class="nav-icon">&#x1F336;&#xFE0F;</span>
-            <span class="nav-label">Spices</span>
-        </button>
+        <div class="nav-item nav-group-parent" data-view="personas" role="button" tabindex="0">
+            <span class="nav-icon">&#x1F3AD;</span>
+            <span class="nav-label">Persona</span>
+            <div class="nav-flyout">
+                <div class="nav-flyout-item" data-view="personas" role="button" tabindex="0">&#x1F3AD; Personas</div>
+                <div class="nav-flyout-item" data-view="prompts" role="button" tabindex="0">&#x1F464; Prompts</div>
+                <div class="nav-flyout-item" data-view="toolsets" role="button" tabindex="0">&#x1F527; Toolsets</div>
+                <div class="nav-flyout-item" data-view="spices" role="button" tabindex="0">&#x1F336;&#xFE0F; Spices</div>
+            </div>
+        </div>
         <button class="nav-item" data-view="schedule">
             <span class="nav-icon">&#x23F0;</span>
             <span class="nav-label">Schedule</span>
@@ -146,6 +144,27 @@
                 <!-- Chat Settings Sidebar (right) -->
                 <aside class="chat-sidebar">
                     <div class="chat-sidebar-inner">
+                        <!-- Sidebar mode tabs -->
+                        <div class="sb-mode-tabs">
+                            <button class="sb-mode-tab active" data-mode="easy">Easy</button>
+                            <button class="sb-mode-tab" data-mode="full">Full</button>
+                        </div>
+
+                        <!-- Easy mode: persona-centric view -->
+                        <div class="sb-easy-content" style="display:none">
+                            <div class="sb-easy-persona">
+                                <img class="sb-easy-avatar" id="sb-easy-avatar" src="" alt="" loading="lazy">
+                                <div class="sb-easy-info">
+                                    <span class="sb-easy-name" id="sb-easy-name">No Persona</span>
+                                    <span class="sb-easy-tagline" id="sb-easy-tagline"></span>
+                                </div>
+                            </div>
+                            <div class="sb-easy-strip" id="sb-easy-strip"></div>
+                            <div class="sb-easy-summary" id="sb-easy-summary"></div>
+                        </div>
+
+                        <!-- Full mode: all settings (existing) -->
+                        <div class="sb-full-content">
                         <!-- Row 1: accent circle + chat name + collapse -->
                         <div class="sb-chat-header">
                             <input type="color" id="sb-trim-color" value="#4a9eff" class="sb-accent-circle" title="Accent color (double-click to reset)">
@@ -342,6 +361,7 @@
                         <div class="sidebar-section sb-footer">
                             <button type="button" id="sb-save-defaults" class="sb-btn-full">Save as Defaults</button>
                         </div>
+                        </div><!-- /.sb-full-content -->
                     </div>
                 </aside>
                 <!-- Sidebar expand tab (visible when collapsed) -->
@@ -354,6 +374,12 @@
         <!-- ============================================================
              PLACEHOLDER VIEWS (content in later steps)
              ============================================================ -->
+        <div id="view-personas" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Personas</h2>
+                <p>Loading...</p>
+            </div>
+        </div>
         <div id="view-prompts" class="view" style="display:none">
             <div class="view-placeholder">
                 <h2>Prompts</h2>

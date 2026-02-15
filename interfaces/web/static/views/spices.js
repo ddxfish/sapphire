@@ -1,6 +1,7 @@
 // views/spices.js - Spice manager view with spice sets
 import { getSpices, addSpice, updateSpice, deleteSpice, addCategory, renameCategory, deleteCategory, toggleCategory, reloadSpices,
          getSpiceSets, getCurrentSpiceSet, activateSpiceSet, saveCustomSpiceSet, deleteSpiceSet, setSpiceSetEmoji } from '../shared/spice-api.js';
+import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
@@ -61,6 +62,7 @@ function render() {
     const enabledSet = new Set(selected?.categories || []);
 
     container.innerHTML = `
+        ${renderPersonaTabs('spices')}
         <div class="two-panel">
             <div class="panel-left panel-list">
                 <div class="panel-list-header">
@@ -205,6 +207,8 @@ function showEmojiPicker() {
 }
 
 function bindEvents() {
+    bindPersonaTabs(container);
+
     // Set list selection
     container.querySelector('#ss-list')?.addEventListener('click', e => {
         const item = e.target.closest('.panel-list-item');

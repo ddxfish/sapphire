@@ -36,7 +36,8 @@ SYSTEM_DEFAULTS = {
     "memory_scope": "default",
     "goal_scope": "default",
     "knowledge_scope": "default",
-    "people_scope": "default"
+    "people_scope": "default",
+    "persona": None
 }
 
 def get_user_defaults() -> Dict[str, Any]:
@@ -181,31 +182,36 @@ class ConversationHistory:
         self.max_history = max_history
         self.messages = []
 
-    def add_user_message(self, content: Union[str, List[Dict[str, Any]]]):
+    def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
         """Add user message - accepts string or content list with images."""
-        self.messages.append({
-            "role": "user", 
+        msg = {
+            "role": "user",
             "content": content,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        if persona:
+            msg["persona"] = persona
+        self.messages.append(msg)
 
     def add_assistant_with_tool_calls(
-        self, 
-        content: Optional[str], 
+        self,
+        content: Optional[str],
         tool_calls: List[Dict],
         thinking: Optional[str] = None,
         thinking_raw: Optional[List[Dict]] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        persona: Optional[str] = None
     ):
         """
         Add assistant message that includes tool calls.
-        
+
         Args:
             content: The visible response content (no thinking tags)
             tool_calls: List of tool call dicts
             thinking: Extracted thinking text (for UI display)
             thinking_raw: Original structured thinking blocks (for Claude continuity)
             metadata: Provider info, timing, tokens
+            persona: Active persona name at time of generation
         """
         msg = {
             "role": "assistant",
@@ -213,14 +219,16 @@ class ConversationHistory:
             "tool_calls": tool_calls,
             "timestamp": datetime.now().isoformat()
         }
-        
+
         if thinking:
             msg["thinking"] = thinking
         if thinking_raw:
             msg["thinking_raw"] = thinking_raw
         if metadata:
             msg["metadata"] = metadata
-            
+        if persona:
+            msg["persona"] = persona
+
         self.messages.append(msg)
 
     def add_tool_result(self, tool_call_id: str, name: str, content: str, inputs: Optional[Dict] = None):
@@ -237,30 +245,34 @@ class ConversationHistory:
         self.messages.append(msg)
 
     def add_assistant_final(
-        self, 
+        self,
         content: str,
         thinking: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        persona: Optional[str] = None
     ):
         """
         Add final assistant message (no tool calls).
-        
+
         Args:
             content: The visible response content (no thinking tags)
             thinking: Extracted thinking text (for UI display)
             metadata: Provider info, timing, tokens
+            persona: Active persona name at time of generation
         """
         msg = {
             "role": "assistant",
             "content": content,
             "timestamp": datetime.now().isoformat()
         }
-        
+
         if thinking:
             msg["thinking"] = thinking
         if metadata:
             msg["metadata"] = metadata
-            
+        if persona:
+            msg["persona"] = persona
+
         self.messages.append(msg)
 
     def add_message_pair(self, user_content: str, assistant_content: str):
@@ -918,14 +930,16 @@ class ChatSessionManager:
         """Get active chat name."""
         return self.active_chat_name
 
-    def add_user_message(self, content: Union[str, List[Dict[str, Any]]]):
-        self.current_chat.add_user_message(content)
+    def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
+        if persona is None:
+            persona = self.current_settings.get("persona")
+        self.current_chat.add_user_message(content, persona=persona)
         self._save_current_chat()
         publish(Events.MESSAGE_ADDED, {"role": "user"})
 
     def add_assistant_with_tool_calls(
-        self, 
-        content: Optional[str], 
+        self,
+        content: Optional[str],
         tool_calls: List[Dict],
         thinking: Optional[str] = None,
         thinking_raw: Optional[List[Dict]] = None,
@@ -933,8 +947,9 @@ class ChatSessionManager:
     ):
         """Add assistant message with tool calls. Marks start of tool cycle."""
         self._in_tool_cycle = True
+        persona = self.current_settings.get("persona")
         self.current_chat.add_assistant_with_tool_calls(
-            content, tool_calls, thinking, thinking_raw, metadata
+            content, tool_calls, thinking, thinking_raw, metadata, persona=persona
         )
         self._save_current_chat()
 
@@ -943,13 +958,14 @@ class ChatSessionManager:
         self._save_current_chat()
 
     def add_assistant_final(
-        self, 
+        self,
         content: str,
         thinking: Optional[str] = None,
         metadata: Optional[Dict] = None
     ):
         """Add final assistant message. Ends tool cycle and clears thinking_raw."""
-        self.current_chat.add_assistant_final(content, thinking, metadata)
+        persona = self.current_settings.get("persona")
+        self.current_chat.add_assistant_final(content, thinking, metadata, persona=persona)
         
         # Tool cycle complete - clear thinking_raw from previous messages
         if self._in_tool_cycle:

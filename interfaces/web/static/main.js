@@ -23,6 +23,7 @@ import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 const _v = window.__v ? `?v=${window.__v}` : '';
 const VIEW_MODULES = {
     chat:     `./views/chat.js${_v}`,
+    personas: `./views/personas.js${_v}`,
     prompts:  `./views/prompts.js${_v}`,
     toolsets: `./views/toolsets.js${_v}`,
     spices:   `./views/spices.js${_v}`,

@@ -871,6 +871,10 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 else:
                     avatars[role] = None
 
+        # Personas data
+        from core.modules.system.personas import persona_manager
+        personas_list = persona_manager.get_list()
+
         # Plugins config (merged: static + user overrides)
         plugins_config = _get_merged_plugins()
 
@@ -892,6 +896,9 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             "spice_sets": {
                 "list": spice_sets_list,
                 "current": current_spice_set
+            },
+            "personas": {
+                "list": personas_list
             },
             "settings": {
                 "AVATARS_IN_CHAT": avatars_in_chat
@@ -2207,6 +2214,141 @@ async def delete_spice(category: str, index: int, request: Request, _=Depends(re
     prompts.prompt_manager.save_spices()
     publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "deleted"})
     return {"status": "success"}
+
+
+# =============================================================================
+# PERSONA ROUTES
+# =============================================================================
+
+@app.get("/api/personas")
+async def list_personas(request: Request, _=Depends(require_login)):
+    """List all personas with summary info."""
+    from core.modules.system.personas import persona_manager
+    return {"personas": persona_manager.get_list()}
+
+
+@app.get("/api/personas/{name}")
+async def get_persona(name: str, request: Request, _=Depends(require_login)):
+    """Get single persona with full details."""
+    from core.modules.system.personas import persona_manager
+    persona = persona_manager.get(name)
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return persona
+
+
+@app.post("/api/personas")
+async def create_persona(request: Request, _=Depends(require_login)):
+    """Create a new persona."""
+    from core.modules.system.personas import persona_manager
+    data = await request.json()
+    name = data.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    if not persona_manager.create(name, data):
+        raise HTTPException(status_code=409, detail="Persona already exists or invalid name")
+    return {"status": "success", "name": persona_manager._sanitize_name(name)}
+
+
+@app.put("/api/personas/{name}")
+async def update_persona(name: str, request: Request, _=Depends(require_login)):
+    """Update an existing persona."""
+    from core.modules.system.personas import persona_manager
+    if not persona_manager.exists(name):
+        raise HTTPException(status_code=404, detail="Persona not found")
+    data = await request.json()
+    if not persona_manager.update(name, data):
+        raise HTTPException(status_code=500, detail="Failed to update persona")
+    return {"status": "success"}
+
+
+@app.delete("/api/personas/{name}")
+async def delete_persona(name: str, request: Request, _=Depends(require_login)):
+    """Delete a persona."""
+    from core.modules.system.personas import persona_manager
+    if not persona_manager.delete(name):
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return {"status": "success"}
+
+
+@app.post("/api/personas/{name}/duplicate")
+async def duplicate_persona(name: str, request: Request, _=Depends(require_login)):
+    """Duplicate a persona with a new name."""
+    from core.modules.system.personas import persona_manager
+    data = await request.json()
+    new_name = data.get("name")
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New name required")
+    if not persona_manager.duplicate(name, new_name):
+        raise HTTPException(status_code=409, detail="Source not found or target name already exists")
+    return {"status": "success", "name": persona_manager._sanitize_name(new_name)}
+
+
+@app.post("/api/personas/{name}/avatar")
+async def upload_persona_avatar(name: str, request: Request, file: UploadFile = File(...), _=Depends(require_login)):
+    """Upload avatar image for a persona (max 4MB)."""
+    from core.modules.system.personas import persona_manager
+    if not persona_manager.exists(name):
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    data = await file.read()
+    if len(data) > 4 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Avatar too large (max 4MB)")
+
+    # Determine extension from content type
+    content_type = file.content_type or ''
+    ext_map = {'image/webp': '.webp', 'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif'}
+    ext = ext_map.get(content_type, '.webp')
+    filename = f"{name}{ext}"
+
+    if not persona_manager.set_avatar(name, filename, data):
+        raise HTTPException(status_code=500, detail="Failed to save avatar")
+    return {"status": "success", "avatar": filename}
+
+
+@app.get("/api/personas/{name}/avatar")
+async def serve_persona_avatar(name: str, request: Request, _=Depends(require_login)):
+    """Serve persona avatar image."""
+    from core.modules.system.personas import persona_manager
+    avatar_path = persona_manager.get_avatar_path(name)
+    if not avatar_path:
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    return FileResponse(str(avatar_path))
+
+
+@app.post("/api/personas/{name}/load")
+async def load_persona(name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Stamp persona settings into the active chat."""
+    from core.modules.system.personas import persona_manager
+    persona = persona_manager.get(name)
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    settings = persona.get("settings", {}).copy()
+    settings["persona"] = name
+    session_manager = system.llm_chat.session_manager
+    session_manager.update_chat_settings(settings)
+
+    # Apply all settings (prompt, toolset, voice, spice set, scopes, state engine)
+    _apply_chat_settings(system, settings)
+
+    publish(Events.CHAT_SETTINGS_CHANGED, {"persona": name})
+    return {"status": "success", "persona": name, "settings": settings}
+
+
+@app.post("/api/personas/from-chat")
+async def create_persona_from_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Create a persona from current active chat settings."""
+    from core.modules.system.personas import persona_manager
+    data = await request.json()
+    name = data.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+
+    chat_settings = system.llm_chat.session_manager.get_chat_settings()
+    if not persona_manager.create_from_settings(name, chat_settings):
+        raise HTTPException(status_code=409, detail="Persona already exists or invalid name")
+    return {"status": "success", "name": persona_manager._sanitize_name(name)}
 
 
 # =============================================================================

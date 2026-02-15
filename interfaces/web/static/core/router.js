@@ -4,6 +4,17 @@
 const views = {};
 let currentView = null;
 
+// View groups: views that share a nav parent
+const VIEW_GROUPS = {
+    personas: ['personas', 'prompts', 'toolsets', 'spices']
+};
+
+// Reverse lookup: view -> group parent
+const VIEW_TO_GROUP = {};
+for (const [parent, members] of Object.entries(VIEW_GROUPS)) {
+    for (const m of members) VIEW_TO_GROUP[m] = parent;
+}
+
 export function registerView(id, module) {
     views[id] = { module, initialized: false };
 }
@@ -33,9 +44,13 @@ export function switchView(viewId) {
     entry.module.show?.();
 
     currentView = viewId;
-    // Update nav rail active state
+
+    // Update nav rail active state (group-aware)
+    const groupParent = VIEW_TO_GROUP[viewId];
     document.querySelectorAll('.nav-item').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.view === viewId);
+        const btnView = btn.dataset.view;
+        const isActive = btnView === viewId || (groupParent ? btnView === groupParent : false);
+        btn.classList.toggle('active', isActive);
     });
 
     // Update hash without triggering hashchange
@@ -47,6 +62,8 @@ export function switchView(viewId) {
 export function getCurrentView() {
     return currentView;
 }
+
+export { VIEW_GROUPS, VIEW_TO_GROUP };
 
 export function initRouter(defaultView = 'chat') {
     // Hide ALL views before first switch — prevents dual-display when hash

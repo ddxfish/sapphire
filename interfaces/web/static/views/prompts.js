@@ -1,6 +1,7 @@
 // views/prompts.js - Prompt editor view (accordion-based inline editing)
 import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt,
          saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
+import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
@@ -71,6 +72,7 @@ function render() {
     if (!container) return;
 
     container.innerHTML = `
+        ${renderPersonaTabs('prompts')}
         <div class="prompts-layout">
             <div class="pr-content">
                 <div class="pr-editor">
@@ -274,6 +276,7 @@ function renderPreview() {
 // ── Events ──
 function bindEvents() {
     if (!container) return;
+    bindPersonaTabs(container);
     const layout = container.querySelector('.prompts-layout');
     if (!layout) return;
 
