@@ -1246,6 +1246,44 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         raise HTTPException(status_code=400, detail="Invalid output_mode")
 
 
+@app.post("/api/tts/preview")
+async def tts_preview(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Generate TTS audio with custom voice/pitch/speed without changing system state."""
+    data = await request.json()
+    text = data.get('text', 'Hello!')
+    voice = data.get('voice')
+    pitch = data.get('pitch')
+    speed = data.get('speed')
+
+    if not config.TTS_ENABLED:
+        raise HTTPException(status_code=503, detail="TTS disabled")
+
+    # Save current settings
+    orig_voice = system.tts.voice_name
+    orig_pitch = system.tts.pitch_shift
+    orig_speed = system.tts.speed
+
+    try:
+        if voice: system.tts.set_voice(voice)
+        if pitch is not None: system.tts.set_pitch(pitch)
+        if speed is not None: system.tts.set_speed(speed)
+        audio_data = await asyncio.to_thread(system.tts.generate_audio_data, text)
+    finally:
+        # Restore original settings
+        system.tts.set_voice(orig_voice)
+        system.tts.set_pitch(orig_pitch)
+        system.tts.set_speed(orig_speed)
+
+    if not audio_data:
+        raise HTTPException(status_code=503, detail="TTS generation failed")
+
+    return StreamingResponse(
+        io.BytesIO(audio_data),
+        media_type='audio/ogg',
+        headers={'Content-Disposition': 'inline; filename="preview.ogg"'}
+    )
+
+
 @app.get("/api/tts/status")
 async def tts_status(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Get TTS playback status."""

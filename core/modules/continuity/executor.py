@@ -135,9 +135,11 @@ class ContinuityExecutor:
         try:
             logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}'")
 
-            # Find existing chat (case-insensitive) or create new one
-            existing_chats = {c["name"].lower(): c["name"] for c in session_manager.list_chat_files()}
-            match = existing_chats.get(target_chat.lower())
+            # Find existing chat or create new one
+            # Normalize target the same way create_chat does (replace spaces, lowercase)
+            normalized = target_chat.replace(' ', '_').lower()
+            existing_chats = {c["name"]: c["name"] for c in session_manager.list_chat_files()}
+            match = existing_chats.get(normalized)
             if match:
                 target_chat = match  # Use actual DB name
             else:

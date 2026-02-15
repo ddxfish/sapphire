@@ -172,7 +172,12 @@ function renderDetail(p, isActive) {
                 </div>
 
                 <div class="pa-fence-group">
-                    <div class="pa-fence-heading"><span>TTS</span></div>
+                    <div class="pa-fence-heading">
+                        <span>TTS</span>
+                        <span class="pa-fence-heading-right">
+                            <button class="btn-sm" id="pa-tts-test" title="Preview voice">&#x25B6; Test</button>
+                        </span>
+                    </div>
                     <div class="pa-fence">
                         <div class="pa-fence-body">
                             ${renderSettingField('voice', 'Voice', s, renderVoiceOptions(s.voice), { tip: 'Text-to-speech voice' })}
@@ -456,6 +461,36 @@ function bindEvents() {
             } catch (e) { ui.showToast(e.message || 'Upload failed', 'error'); }
         });
     }
+
+    // TTS test button
+    container.querySelector('#pa-tts-test')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        btn.textContent = '...';
+        try {
+            const voice = container.querySelector('#pa-s-voice')?.value;
+            const pitch = parseFloat(container.querySelector('#pa-s-pitch')?.value) || 0.98;
+            const speed = parseFloat(container.querySelector('#pa-s-speed')?.value) || 1.3;
+            const name = selectedData?.name || 'Sapphire';
+            const settings = await fetch('/api/settings/DEFAULT_USERNAME').then(r => r.ok ? r.json() : null);
+            const userName = settings?.value || 'friend';
+            const resp = await fetch('/api/tts/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: `Hello ${userName}, I'm ${name}!`, voice, pitch, speed })
+            });
+            if (!resp.ok) throw new Error('TTS failed');
+            const blob = await resp.blob();
+            const audio = new Audio(URL.createObjectURL(blob));
+            audio.onended = () => URL.revokeObjectURL(audio.src);
+            audio.play();
+        } catch (err) {
+            ui.showToast(err.message || 'TTS preview failed', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '\u25B6 Test';
+        }
+    });
 
     // Name/tagline changes (debounced save)
     container.querySelector('#pa-name')?.addEventListener('input', () => debouncedSave());
