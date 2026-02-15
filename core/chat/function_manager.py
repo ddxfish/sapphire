@@ -19,6 +19,8 @@ class FunctionManager:
     _current_goal_scope = 'default'
     # Class-level knowledge scope - accessible from knowledge module
     _current_knowledge_scope = 'default'
+    # Class-level people scope - accessible from knowledge module
+    _current_people_scope = 'default'
     
     def __init__(self):
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
@@ -42,6 +44,8 @@ class FunctionManager:
         self._goal_scope = 'default'
         # Knowledge scope for current execution context (None = disabled)
         self._knowledge_scope = 'default'
+        # People scope for current execution context (None = disabled)
+        self._people_scope = 'default'
         
         # State engine for games/simulations (None = disabled)
         self._state_engine = None
@@ -349,6 +353,16 @@ class FunctionManager:
     def get_knowledge_scope(self) -> str:
         """Get current knowledge scope. Returns None if knowledge disabled."""
         return self._knowledge_scope
+
+    def set_people_scope(self, scope: str):
+        """Set people scope for current execution context. None = disabled."""
+        self._people_scope = scope
+        FunctionManager._current_people_scope = scope
+        logger.debug(f"People scope set to: {scope}")
+
+    def get_people_scope(self) -> str:
+        """Get current people scope. Returns None if people disabled."""
+        return self._people_scope
 
     def set_state_engine(self, engine, turn_getter=None):
         """

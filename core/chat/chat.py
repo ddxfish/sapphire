@@ -366,6 +366,8 @@ class LLMChat:
             self.function_manager.set_goal_scope(goal_scope if goal_scope != 'none' else None)
             knowledge_scope = chat_settings.get('knowledge_scope', 'default')
             self.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != 'none' else None)
+            people_scope = chat_settings.get('people_scope', 'default')
+            self.function_manager.set_people_scope(people_scope if people_scope != 'none' else None)
 
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.function_manager.enabled_tools

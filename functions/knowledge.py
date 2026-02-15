@@ -2,7 +2,7 @@
 """
 Knowledge base system for reference data: people contacts and knowledge tabs.
 SQLite-backed with FTS5 search, semantic embeddings, and scope isolation.
-People are universal (no scope). Knowledge tabs are scoped via knowledge_scope.
+People are scoped via people_scope. Knowledge tabs are scoped via knowledge_scope.
 """
 
 import sqlite3
@@ -167,7 +167,7 @@ def _ensure_db():
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA foreign_keys=ON")
 
-    # People (universal, no scope)
+    # People (scoped via people_scope)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS people (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,12 +177,23 @@ def _ensure_db():
             email TEXT,
             address TEXT,
             notes TEXT,
+            scope TEXT NOT NULL DEFAULT 'default',
             embedding BLOB,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_people_name_lower ON people(LOWER(name))')
+    # Migration: add scope column if missing (existing DBs)
+    try:
+        cursor.execute('SELECT scope FROM people LIMIT 1')
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE people ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
+        logger.info("Migrated people table: added scope column")
+
+    # Unique per name+scope (drop old name-only index)
+    cursor.execute('DROP INDEX IF EXISTS idx_people_name_lower')
+    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_people_name_scope ON people(LOWER(name), scope)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_people_scope ON people(scope)')
 
     # Knowledge tabs (scoped)
     cursor.execute('''
@@ -226,7 +237,7 @@ def _ensure_db():
         conn.commit()
         _setup_fts(cursor)
 
-    # Scope registry
+    # Scope registries
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS knowledge_scopes (
             name TEXT PRIMARY KEY,
@@ -234,6 +245,14 @@ def _ensure_db():
         )
     ''')
     cursor.execute("INSERT OR IGNORE INTO knowledge_scopes (name) VALUES ('default')")
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS people_scopes (
+            name TEXT PRIMARY KEY,
+            created DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute("INSERT OR IGNORE INTO people_scopes (name) VALUES ('default')")
 
     conn.commit()
     conn.close()
@@ -289,6 +308,14 @@ def _get_current_scope():
     try:
         from core.chat.function_manager import FunctionManager
         return FunctionManager._current_knowledge_scope
+    except Exception:
+        return 'default'
+
+
+def _get_current_people_scope():
+    try:
+        from core.chat.function_manager import FunctionManager
+        return FunctionManager._current_people_scope
     except Exception:
         return 'default'
 
@@ -360,12 +387,62 @@ def delete_scope(name: str) -> dict:
         return {"error": str(e)}
 
 
+# ─── People Scope CRUD ────────────────────────────────────────────────────────
+
+def get_people_scopes():
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT scope, COUNT(*) FROM people GROUP BY scope')
+        counts = {row[0]: row[1] for row in cursor.fetchall()}
+        cursor.execute('SELECT name FROM people_scopes ORDER BY name')
+        registered = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        all_scopes = set(registered) | set(counts.keys()) | {'default'}
+        return [{"name": name, "count": counts.get(name, 0)} for name in sorted(all_scopes)]
+    except Exception as e:
+        logger.error(f"Error getting people scopes: {e}")
+        return [{"name": "default", "count": 0}]
+
+
+def create_people_scope(name: str) -> bool:
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO people_scopes (name) VALUES (?)", (name,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create people scope '{name}': {e}")
+        return False
+
+
+def delete_people_scope(name: str) -> dict:
+    if name == 'default':
+        return {"error": "Cannot delete the default scope"}
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM people WHERE scope = ?', (name,))
+        count = cursor.fetchone()[0]
+        cursor.execute('DELETE FROM people WHERE scope = ?', (name,))
+        cursor.execute('DELETE FROM people_scopes WHERE name = ?', (name,))
+        conn.commit()
+        conn.close()
+        logger.info(f"Deleted people scope '{name}' with {count} people")
+        return {"deleted_people": count}
+    except Exception as e:
+        logger.error(f"Failed to delete people scope '{name}': {e}")
+        return {"error": str(e)}
+
+
 # ─── People CRUD ──────────────────────────────────────────────────────────────
 
-def get_people():
+def get_people(scope='default'):
     conn = _get_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at FROM people ORDER BY name')
+    cursor.execute('SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at FROM people WHERE scope = ? ORDER BY name', (scope,))
     rows = cursor.fetchall()
     conn.close()
     return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
@@ -373,12 +450,12 @@ def get_people():
              "created_at": r[7], "updated_at": r[8]} for r in rows]
 
 
-def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None):
+def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default'):
     conn = _get_connection()
     cursor = conn.cursor()
 
-    # Check if person exists (case-insensitive)
-    cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?)', (name.strip(),))
+    # Check if person exists (case-insensitive, within scope)
+    cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?', (name.strip(), scope))
     existing = cursor.fetchone()
 
     # Build embed text for semantic search
@@ -418,8 +495,8 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
         return pid, False  # (id, is_new)
     else:
         cursor.execute(
-            'INSERT INTO people (name, relationship, phone, email, address, notes, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            (name.strip(), relationship, phone, email, address, notes, embedding_blob, now)
+            'INSERT INTO people (name, relationship, phone, email, address, notes, scope, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (name.strip(), relationship, phone, email, address, notes, scope, embedding_blob, now)
         )
         pid = cursor.lastrowid
         conn.commit()
@@ -827,7 +904,7 @@ def _vector_search_entries(query, scope, category=None, limit=10):
     return scored[:limit]
 
 
-def _search_people(query, limit=10):
+def _search_people(query, scope='default', limit=10):
     """Search people via vector + LIKE. Only returns actual matches."""
     results = []
 
@@ -839,7 +916,7 @@ def _search_people(query, limit=10):
             query_vec = query_emb[0]
             conn = _get_connection()
             cursor = conn.cursor()
-            cursor.execute('SELECT id, name, relationship, phone, email, address, notes, embedding FROM people WHERE embedding IS NOT NULL')
+            cursor.execute('SELECT id, name, relationship, phone, email, address, notes, embedding FROM people WHERE scope = ? AND embedding IS NOT NULL', (scope,))
             rows = cursor.fetchall()
             conn.close()
             for pid, name, rel, phone, email, addr, notes, emb_blob in rows:
@@ -864,8 +941,8 @@ def _search_people(query, limit=10):
             params.extend([f'%{t}%', f'%{t}%', f'%{t}%'])
         cursor.execute(f'''
             SELECT id, name, relationship, phone, email, address, notes
-            FROM people WHERE {conditions} ORDER BY name LIMIT ?
-        ''', params + [limit])
+            FROM people WHERE scope = ? AND ({conditions}) ORDER BY name LIMIT ?
+        ''', [scope] + params + [limit])
         rows = cursor.fetchall()
         conn.close()
         # LIKE results get a low fixed score so they sort below vector matches
@@ -892,7 +969,7 @@ def _format_person(p):
     return " ".join(parts)
 
 
-def _format_entry(r, query=None, max_len=800):
+def _format_entry(r, query=None, max_len=480):
     content = r["content"]
     eid = f"[id:{r['id']}] " if r.get("id") else ""
     tab_info = f"[{r['tab']}] " if r.get("tab") else ""
@@ -901,11 +978,11 @@ def _format_entry(r, query=None, max_len=800):
     if len(content) <= max_len:
         preview = content
     elif query:
-        # Center snippet around the query match
+        # Show snippet weighted around match: ~1/3 before, ~2/3 after
         pos = content.lower().find(query.lower())
         if pos >= 0:
-            half = max_len // 2
-            start = max(0, pos - half)
+            before = max_len // 3
+            start = max(0, pos - before)
             end = min(len(content), start + max_len)
             if start > 0:
                 start = max(0, end - max_len)
@@ -920,15 +997,15 @@ def _format_entry(r, query=None, max_len=800):
 
 # ─── Tool Operations ─────────────────────────────────────────────────────────
 
-def _save_person(name, relationship=None, phone=None, email=None, address=None, notes=None):
+def _save_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default'):
     if not name or not name.strip():
         return "Person name is required.", False
     if len(name) > 100:
         return "Name too long (max 100 chars).", False
 
-    pid, is_new = create_or_update_person(name, relationship, phone, email, address, notes)
+    pid, is_new = create_or_update_person(name, relationship, phone, email, address, notes, scope=scope)
     action = "Saved new" if is_new else "Updated"
-    logger.info(f"{action} person [{pid}] '{name.strip()}'")
+    logger.info(f"{action} person [{pid}] '{name.strip()}' (scope: {scope})")
     return f"{action} contact: {name.strip()} (ID: {pid})", True
 
 
@@ -971,7 +1048,7 @@ def _save_knowledge(category, content, description=None, scope='default'):
     return f"Saved to '{category}'{chunk_note} [{ids_str}] — {len(content)} chars", True
 
 
-def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope='default'):
+def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope='default', people_scope='default'):
     # Mode 1: Read a single entry in full by ID
     if entry_id:
         conn = _get_connection()
@@ -1008,7 +1085,7 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
     # Mode 3: Overview (no query, no category, no id)
     if not query:
         lines = []
-        people = get_people()
+        people = get_people(people_scope) if people_scope else []
         lines.append(f"=== People ({len(people)}) ===")
         if people:
             for p in people[:10]:
@@ -1033,7 +1110,8 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
 
     # Mode 4: Search (query provided)
     results = []
-    results.extend(_search_people(query, limit))
+    if people_scope:
+        results.extend(_search_people(query, people_scope, limit))
     results.extend(_search_entries(query, scope, category, limit))
 
     if not results:
@@ -1107,10 +1185,12 @@ def _delete_knowledge(entry_id=None, category=None, scope='default'):
 def execute(function_name, arguments, config):
     try:
         scope = _get_current_scope()
-        if scope is None:
-            return "Knowledge base is disabled for this chat.", False
+        people_scope = _get_current_people_scope()
 
+        # People tools check people_scope, knowledge tools check knowledge scope
         if function_name == "save_person":
+            if people_scope is None:
+                return "People contacts are disabled for this chat.", False
             return _save_person(
                 name=arguments.get('name'),
                 relationship=arguments.get('relationship'),
@@ -1118,9 +1198,12 @@ def execute(function_name, arguments, config):
                 email=arguments.get('email'),
                 address=arguments.get('address'),
                 notes=arguments.get('notes'),
+                scope=people_scope,
             )
 
         elif function_name == "save_knowledge":
+            if scope is None:
+                return "Knowledge base is disabled for this chat.", False
             return _save_knowledge(
                 category=arguments.get('category'),
                 content=arguments.get('content'),
@@ -1129,15 +1212,21 @@ def execute(function_name, arguments, config):
             )
 
         elif function_name == "search_knowledge":
+            # Search spans both scopes — either can be active
+            if scope is None and people_scope is None:
+                return "Knowledge base is disabled for this chat.", False
             return _search_knowledge(
                 query=arguments.get('query'),
                 category=arguments.get('category'),
                 entry_id=arguments.get('id'),
                 limit=arguments.get('limit', 10),
-                scope=scope,
+                scope=scope or 'default',
+                people_scope=people_scope,
             )
 
         elif function_name == "delete_knowledge":
+            if scope is None:
+                return "Knowledge base is disabled for this chat.", False
             return _delete_knowledge(
                 entry_id=arguments.get('id'),
                 category=arguments.get('category'),

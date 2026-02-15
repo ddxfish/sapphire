@@ -6,6 +6,7 @@ let activeTab = 'memories';
 let currentScope = 'default';
 let memoryScopeCache = [];
 let knowledgeScopeCache = [];
+let peopleScopeCache = [];
 let memoryPage = 0;
 const MEMORIES_PER_PAGE = 100;
 
@@ -22,13 +23,15 @@ export default {
 // ─── Main Render ─────────────────────────────────────────────────────────────
 
 async function render() {
-    // Fetch both scope types in parallel
-    const [memResp, knowResp] = await Promise.allSettled([
+    // Fetch all scope types in parallel
+    const [memResp, knowResp, peopleResp] = await Promise.allSettled([
         fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null),
-        fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null)
+        fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
+        fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null)
     ]);
     memoryScopeCache = memResp.status === 'fulfilled' && memResp.value ? memResp.value.scopes || [] : [];
     knowledgeScopeCache = knowResp.status === 'fulfilled' && knowResp.value ? knowResp.value.scopes || [] : [];
+    peopleScopeCache = peopleResp.status === 'fulfilled' && peopleResp.value ? peopleResp.value.scopes || [] : [];
 
     container.innerHTML = `
         <div class="mind-view">
@@ -37,8 +40,8 @@ async function render() {
                 <div class="mind-tabs">
                     <button class="mind-tab${activeTab === 'memories' ? ' active' : ''}" data-tab="memories">Memories</button>
                     <button class="mind-tab${activeTab === 'people' ? ' active' : ''}" data-tab="people">People</button>
-                    <button class="mind-tab${activeTab === 'knowledge' ? ' active' : ''}" data-tab="knowledge">Knowledge</button>
-                    <button class="mind-tab${activeTab === 'ai-notes' ? ' active' : ''}" data-tab="ai-notes">AI Notes</button>
+                    <button class="mind-tab${activeTab === 'knowledge' ? ' active' : ''}" data-tab="knowledge">Human Knowledge</button>
+                    <button class="mind-tab${activeTab === 'ai-notes' ? ' active' : ''}" data-tab="ai-notes">AI Knowledge</button>
                 </div>
             </div>
             <div class="mind-body">
@@ -81,7 +84,9 @@ async function render() {
             ui.showToast('Invalid name', 'error');
             return;
         }
-        const apiPath = activeTab === 'memories' ? '/api/memory/scopes' : '/api/knowledge/scopes';
+        const apiPath = activeTab === 'memories' ? '/api/memory/scopes'
+            : activeTab === 'people' ? '/api/knowledge/people/scopes'
+            : '/api/knowledge/scopes';
         try {
             const res = await fetch(apiPath, {
                 method: 'POST',
@@ -91,6 +96,7 @@ async function render() {
             if (res.ok) {
                 const newScope = { name: clean, count: 0 };
                 if (activeTab === 'memories') memoryScopeCache.push(newScope);
+                else if (activeTab === 'people') peopleScopeCache.push(newScope);
                 else knowledgeScopeCache.push(newScope);
                 currentScope = clean;
                 updateScopeDropdown();
@@ -108,23 +114,32 @@ async function render() {
             ui.showToast('Cannot delete the default scope', 'error');
             return;
         }
-        const isMemory = activeTab === 'memories';
-        const scopes = isMemory ? memoryScopeCache : knowledgeScopeCache;
+        const scopes = getScopesForTab();
         const scopeInfo = scopes.find(s => s.name === currentScope);
         const count = scopeInfo?.count || 0;
-        const typeLabel = isMemory ? 'memories' : 'knowledge tabs (and all entries within them)';
+        const scopeType = activeTab === 'memories' ? 'memory'
+            : activeTab === 'people' ? 'people' : 'knowledge';
+        const typeLabel = activeTab === 'memories' ? 'memories'
+            : activeTab === 'people' ? 'contacts'
+            : 'knowledge tabs (and all entries within them)';
 
-        showDeleteScopeConfirmation(currentScope, typeLabel, count, isMemory);
+        showDeleteScopeConfirmation(currentScope, typeLabel, count, scopeType);
     });
 
     updateScopeDropdown();
     await renderContent();
 }
 
+function getScopesForTab() {
+    if (activeTab === 'memories') return memoryScopeCache;
+    if (activeTab === 'people') return peopleScopeCache;
+    return knowledgeScopeCache;
+}
+
 function updateScopeDropdown() {
     const sel = container.querySelector('#mind-scope');
     if (!sel) return;
-    const scopes = activeTab === 'memories' ? memoryScopeCache : knowledgeScopeCache;
+    const scopes = getScopesForTab();
     sel.innerHTML = scopes.map(s =>
         `<option value="${s.name}"${s.name === currentScope ? ' selected' : ''}>${s.name} (${s.count})</option>`
     ).join('');
@@ -139,9 +154,7 @@ async function renderContent() {
     const el = container.querySelector('#mind-content');
     if (!el) return;
 
-    // Show/hide scope bar for People tab (people are universal)
-    const scopeBar = container.querySelector('.mind-scope-bar');
-    if (scopeBar) scopeBar.style.display = activeTab === 'people' ? 'none' : '';
+    // All tabs now have scopes — always show scope bar
 
     try {
         switch (activeTab) {
@@ -164,8 +177,10 @@ async function renderMemories(el) {
     const groups = data.memories || {};
     const labels = Object.keys(groups).sort();
 
+    const desc = '<div class="mind-tab-desc">Short identity snippets the AI saves during conversation. Grouped by label — these shape how it remembers you and itself.</div>';
+
     if (!labels.length) {
-        el.innerHTML = '<div class="mind-empty">No memories in this scope</div>';
+        el.innerHTML = desc + '<div class="mind-empty">No memories in this scope</div>';
         return;
     }
 
@@ -192,7 +207,7 @@ async function renderMemories(el) {
 
     const totalPages = showPagination ? Math.ceil(labels.length / pageLabels.length) : 1;
 
-    el.innerHTML = (showPagination ? `
+    el.innerHTML = desc + (showPagination ? `
         <div class="mind-pagination">
             <button class="mind-btn-sm" id="mem-prev" ${memoryPage === 0 ? 'disabled' : ''}>&#x25C0; Prev</button>
             <span class="mind-page-info">${memoryPage + 1} / ${totalPages} (${totalMemories} memories)</span>
@@ -319,12 +334,13 @@ function showMemoryEditModal(el, memoryId, content) {
 // ─── People Tab ──────────────────────────────────────────────────────────────
 
 async function renderPeople(el) {
-    const resp = await fetch('/api/knowledge/people');
+    const resp = await fetch(`/api/knowledge/people?scope=${encodeURIComponent(currentScope)}`);
     if (!resp.ok) { el.innerHTML = '<div class="mind-empty">Failed to load</div>'; return; }
     const data = await resp.json();
     const people = data.people || [];
 
     el.innerHTML = `
+        <div class="mind-tab-desc">Contacts the AI learns about through conversation. Searchable by name, relationship, or notes.</div>
         <div class="mind-toolbar">
             <button class="mind-btn" id="mind-add-person">+ Add Person</button>
         </div>
@@ -413,6 +429,7 @@ function showPersonModal(el, person = null) {
             email: overlay.querySelector('#mp-email').value.trim(),
             address: overlay.querySelector('#mp-address').value.trim(),
             notes: overlay.querySelector('#mp-notes').value.trim(),
+            scope: currentScope,
         };
 
         try {
@@ -442,7 +459,12 @@ async function renderKnowledge(el, tabType) {
     const data = await resp.json();
     const tabs = data.tabs || [];
 
+    const knDesc = isAI
+        ? 'Reference data the AI writes on its own — research, notes, things it learned. You can read and delete, but only the AI creates entries here.'
+        : 'Your reference library — upload files, add notes, organize into categories. The AI can search this when the scope is active but cannot edit it.';
+
     el.innerHTML = `
+        <div class="mind-tab-desc">${knDesc}</div>
         <div class="mind-toolbar">
             ${!isAI ? '<button class="mind-btn" id="mind-new-tab">+ New Category</button>' : ''}
         </div>
@@ -751,7 +773,7 @@ function showEntryEditModal(inner, tabId, tabType, entryId, content) {
 
 // ─── Scope Deletion (double confirmation) ────────────────────────────────────
 
-function showDeleteScopeConfirmation(scopeName, typeLabel, count, isMemory) {
+function showDeleteScopeConfirmation(scopeName, typeLabel, count, scopeType) {
     const existing = document.querySelector('.mind-modal-overlay');
     if (existing) existing.remove();
 
@@ -801,11 +823,11 @@ function showDeleteScopeConfirmation(scopeName, typeLabel, count, isMemory) {
     nextBtn.addEventListener('click', () => {
         if (input1.value.trim() !== 'DELETE') return;
         close();
-        showDeleteScopeConfirmation2(scopeName, typeLabel, count, isMemory);
+        showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType);
     });
 }
 
-function showDeleteScopeConfirmation2(scopeName, typeLabel, count, isMemory) {
+function showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType) {
     // ── Confirmation 2 — more alarming ──
     const overlay = document.createElement('div');
     overlay.className = 'pr-modal-overlay mind-modal-overlay';
@@ -855,8 +877,10 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count, isMemory) {
 
     execBtn.addEventListener('click', async () => {
         if (input2.value.trim() !== 'DELETE') return;
-        const apiPath = isMemory
+        const apiPath = scopeType === 'memory'
             ? `/api/memory/scopes/${encodeURIComponent(scopeName)}`
+            : scopeType === 'people'
+            ? `/api/knowledge/people/scopes/${encodeURIComponent(scopeName)}`
             : `/api/knowledge/scopes/${encodeURIComponent(scopeName)}`;
         try {
             const resp = await fetch(apiPath, {
@@ -867,7 +891,8 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count, isMemory) {
             if (resp.ok) {
                 close();
                 // Remove from cache
-                if (isMemory) memoryScopeCache = memoryScopeCache.filter(s => s.name !== scopeName);
+                if (scopeType === 'memory') memoryScopeCache = memoryScopeCache.filter(s => s.name !== scopeName);
+                else if (scopeType === 'people') peopleScopeCache = peopleScopeCache.filter(s => s.name !== scopeName);
                 else knowledgeScopeCache = knowledgeScopeCache.filter(s => s.name !== scopeName);
                 currentScope = 'default';
                 updateScopeDropdown();

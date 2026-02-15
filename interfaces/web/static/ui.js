@@ -337,6 +337,7 @@ export const endTool = (toolId, toolName, result, isError) => {
         if (GOAL_TOOLS.includes(toolName)) refreshScopeCounts('#sb-goal-scope', '/api/goals/scopes');
         if (MEMORY_TOOLS.includes(toolName)) refreshScopeCounts('#sb-memory-scope', '/api/memory/scopes');
         if (KNOWLEDGE_TOOLS.includes(toolName)) refreshScopeCounts('#sb-knowledge-scope', '/api/knowledge/scopes');
+        if (toolName === 'save_person') refreshScopeCounts('#sb-people-scope', '/api/knowledge/people/scopes');
     }
 };
 

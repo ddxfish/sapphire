@@ -450,6 +450,9 @@ def _apply_chat_settings(system, settings: dict):
         if "knowledge_scope" in settings:
             scope = settings["knowledge_scope"]
             system.llm_chat.function_manager.set_knowledge_scope(scope if scope != "none" else None)
+        if "people_scope" in settings:
+            scope = settings["people_scope"]
+            system.llm_chat.function_manager.set_people_scope(scope if scope != "none" else None)
 
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
@@ -2271,10 +2274,40 @@ async def delete_knowledge_scope(scope_name: str, request: Request, _=Depends(re
     return result
 
 
+@app.get("/api/knowledge/people/scopes")
+async def list_people_scopes(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    return {"scopes": knowledge.get_people_scopes()}
+
+
+@app.post("/api/knowledge/people/scopes")
+async def create_people_scope(request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    name = data.get('name', '').strip().lower()
+    if not name or len(name) > 32:
+        raise HTTPException(status_code=400, detail="Invalid scope name")
+    knowledge.create_people_scope(name)
+    return {"created": name}
+
+
+@app.delete("/api/knowledge/people/scopes/{scope_name}")
+async def remove_people_scope(scope_name: str, request: Request, _=Depends(require_login)):
+    from functions import knowledge
+    data = await request.json()
+    if data.get('confirm') != 'DELETE':
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    result = knowledge.delete_people_scope(scope_name)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @app.get("/api/knowledge/people")
 async def list_people(request: Request, _=Depends(require_login)):
     from functions import knowledge
-    return {"people": knowledge.get_people()}
+    scope = request.query_params.get('scope', 'default')
+    return {"people": knowledge.get_people(scope)}
 
 
 @app.post("/api/knowledge/people")
@@ -2284,6 +2317,7 @@ async def save_person(request: Request, _=Depends(require_login)):
     name = data.get('name', '').strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name is required")
+    scope = data.get('scope', 'default')
     pid, is_new = knowledge.create_or_update_person(
         name=name,
         relationship=data.get('relationship'),
@@ -2291,6 +2325,7 @@ async def save_person(request: Request, _=Depends(require_login)):
         email=data.get('email'),
         address=data.get('address'),
         notes=data.get('notes'),
+        scope=scope,
     )
     return {"id": pid, "created": is_new}
 

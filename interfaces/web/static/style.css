@@ -4615,6 +4615,13 @@ a.gallery-caption:hover {
     color: var(--danger, #e55);
 }
 
+.mind-tab-desc {
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    line-height: 1.4;
+    padding: 0 0 12px;
+}
+
 .mind-empty {
     padding: 40px 20px;
     text-align: center;

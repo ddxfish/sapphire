@@ -246,6 +246,39 @@ export default {
             });
         }
 
+        // New people scope button
+        const newPeopleScope = container.querySelector('#sb-new-people-scope');
+        if (newPeopleScope) {
+            newPeopleScope.addEventListener('click', async () => {
+                const name = prompt('New people slot name (lowercase, no spaces):');
+                if (!name) return;
+                const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+                if (!clean || clean.length > 32) {
+                    ui.showToast('Invalid name', 'error');
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/knowledge/people/scopes', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: clean })
+                    });
+                    if (res.ok) {
+                        const sel = container.querySelector('#sb-people-scope');
+                        const opt = document.createElement('option');
+                        opt.value = clean;
+                        opt.textContent = `${clean} (0)`;
+                        sel.appendChild(opt);
+                        sel.value = clean;
+                        debouncedSave(container);
+                        ui.showToast(`Created: ${clean}`, 'success');
+                    }
+                } catch (e) {
+                    ui.showToast('Failed', 'error');
+                }
+            });
+        }
+
         // Save as defaults button
         const defaultsBtn = container.querySelector('#sb-save-defaults');
         if (defaultsBtn) {
@@ -292,13 +325,14 @@ async function loadSidebar() {
     if (!chatName) return;
 
     try {
-        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, presetsResp] = await Promise.allSettled([
+        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, presetsResp] = await Promise.allSettled([
             api.getChatSettings(chatName),
             getInitData(),
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
             fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
+            fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/state/presets').then(r => r.ok ? r.json() : null)
         ]);
 
@@ -308,6 +342,7 @@ async function loadSidebar() {
         const scopesData = scopesResp.status === 'fulfilled' ? scopesResp.value : null;
         const goalScopesData = goalScopesResp.status === 'fulfilled' ? goalScopesResp.value : null;
         const knowledgeScopesData = knowledgeScopesResp.status === 'fulfilled' ? knowledgeScopesResp.value : null;
+        const peopleScopesData = peopleScopesResp.status === 'fulfilled' ? peopleScopesResp.value : null;
         const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
 
         // Sync sidebar chat name from hidden select
@@ -376,6 +411,16 @@ async function loadSidebar() {
                     `<option value="${s.name}">${s.name} (${s.count})</option>`
                 ).join('');
             knowledgeScopeSel.value = settings.knowledge_scope || 'default';
+        }
+
+        // Populate people scope dropdown
+        const peopleScopeSel = container.querySelector('#sb-people-scope');
+        if (peopleScopeSel && peopleScopesData) {
+            peopleScopeSel.innerHTML = '<option value="none">None</option>' +
+                (peopleScopesData.scopes || []).map(s =>
+                    `<option value="${s.name}">${s.name} (${s.count})</option>`
+                ).join('');
+            peopleScopeSel.value = settings.people_scope || 'default';
         }
 
         // Populate state preset dropdown
@@ -473,6 +518,7 @@ function collectSettings(container) {
         memory_scope: getVal(container, '#sb-memory-scope') || 'default',
         goal_scope: getVal(container, '#sb-goal-scope') || 'default',
         knowledge_scope: getVal(container, '#sb-knowledge-scope') || 'default',
+        people_scope: getVal(container, '#sb-people-scope') || 'default',
         state_engine_enabled: getChecked(container, '#sb-state-enabled'),
         state_preset: getVal(container, '#sb-state-preset') || null,
         state_story_in_prompt: getChecked(container, '#sb-state-story'),

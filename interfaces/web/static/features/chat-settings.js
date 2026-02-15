@@ -46,11 +46,12 @@ export async function openSettingsModal() {
         }
         
         // Fetch supplemental data in parallel to avoid HTTP/1.1 connection queuing
-        const [llmResult, scopesResult, goalScopesResult, knowledgeScopesResult, presetsResult] = await Promise.allSettled([
+        const [llmResult, scopesResult, goalScopesResult, knowledgeScopesResult, peopleScopesResult, presetsResult] = await Promise.allSettled([
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/state/presets').then(r => r.ok ? r.json() : null).catch(() => null)
         ]);
 
@@ -101,6 +102,21 @@ export async function openSettingsModal() {
                     knowledgeScopeSelect.appendChild(opt);
                 });
                 knowledgeScopeSelect.value = settings.knowledge_scope || 'default';
+            }
+        }
+
+        // Process people scopes
+        if (peopleScopesResult.status === 'fulfilled' && peopleScopesResult.value) {
+            const peopleScopeSelect = document.getElementById('setting-people-scope');
+            if (peopleScopeSelect) {
+                peopleScopeSelect.innerHTML = '<option value="none">None (disabled)</option>';
+                (peopleScopesResult.value.scopes || []).forEach(s => {
+                    const opt = document.createElement('option');
+                    opt.value = s.name;
+                    opt.textContent = `${s.name} (${s.count})`;
+                    peopleScopeSelect.appendChild(opt);
+                });
+                peopleScopeSelect.value = settings.people_scope || 'default';
             }
         }
 
@@ -379,6 +395,7 @@ export async function saveSettings() {
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
             goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
             knowledge_scope: document.getElementById('setting-knowledge-scope')?.value || 'default',
+            people_scope: document.getElementById('setting-people-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
             state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
@@ -471,6 +488,7 @@ export async function saveAsDefaults() {
             memory_scope: document.getElementById('setting-memory-scope')?.value || 'default',
             goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
             knowledge_scope: document.getElementById('setting-knowledge-scope')?.value || 'default',
+            people_scope: document.getElementById('setting-people-scope')?.value || 'default',
             state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
             state_preset: document.getElementById('setting-state-preset')?.value || null,
             state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
