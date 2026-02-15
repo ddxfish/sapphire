@@ -171,8 +171,6 @@ async function renderContent() {
     const el = container.querySelector('#mind-content');
     if (!el) return;
 
-    // All tabs now have scopes — always show scope bar
-
     try {
         switch (activeTab) {
             case 'memories': await renderMemories(el); break;
@@ -181,6 +179,8 @@ async function renderContent() {
             case 'ai-notes': await renderKnowledge(el, 'ai'); break;
             case 'goals': await renderGoals(el); break;
         }
+        // Prepend scope label
+        el.insertAdjacentHTML('afterbegin', `<div class="mind-scope-label">Scope: <strong>${escHtml(currentScope)}</strong></div>`);
     } catch (e) {
         el.innerHTML = `<div class="mind-empty">Failed to load: ${e.message}</div>`;
     }

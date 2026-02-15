@@ -4615,6 +4615,14 @@ a.gallery-caption:hover {
     color: var(--danger, #e55);
 }
 
+.mind-scope-label {
+    font-size: var(--font-lg, 1.1rem);
+    color: var(--text-muted);
+    padding: 0 0 8px;
+}
+.mind-scope-label strong {
+    color: var(--trim, var(--accent-blue));
+}
 .mind-tab-desc {
     color: var(--text-muted);
     font-size: var(--font-xs);

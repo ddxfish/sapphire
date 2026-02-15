@@ -22,6 +22,7 @@ export default {
     },
 
     async show() {
+        if (window._viewSelect) { selectedName = window._viewSelect; delete window._viewSelect; }
         await loadData();
         render();
     },
@@ -39,7 +40,8 @@ async function loadData() {
         toolsets = tsList || [];
         currentToolset = cur;
         functions = funcs;
-        selectedName = currentToolset?.name || 'default';
+        if (!selectedName || !toolsets.some(t => t.name === selectedName))
+            selectedName = currentToolset?.name || 'default';
     } catch (e) {
         console.warn('Toolsets load failed:', e);
     }

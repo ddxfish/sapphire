@@ -27,7 +27,10 @@ const ICONS = {
 
 export default {
     init(el) { container = el; },
-    async show() { await loadAll(); render(); },
+    async show() {
+        if (window._viewSelect) { selected = window._viewSelect; delete window._viewSelect; }
+        await loadAll(); render();
+    },
     hide() {}
 };
 

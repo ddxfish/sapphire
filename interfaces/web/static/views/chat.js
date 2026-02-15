@@ -158,6 +158,16 @@ export default {
             });
         });
 
+        // "Go to view" buttons — navigate to Prompts/Toolsets with selection
+        container.querySelectorAll('.sb-goto-view').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const selectId = btn.dataset.select;
+                const val = selectId && container.querySelector(`#${selectId}`)?.value;
+                if (val) window._viewSelect = val;
+                switchView(btn.dataset.view);
+            });
+        });
+
         // Save as defaults button
         const defaultsBtn = container.querySelector('#sb-save-defaults');
         if (defaultsBtn) {

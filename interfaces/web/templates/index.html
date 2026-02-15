@@ -175,11 +175,17 @@
                         <div class="sidebar-section">
                             <div class="sb-field">
                                 <label for="sb-prompt">prompt</label>
-                                <select id="sb-prompt"><option value="sapphire">Sapphire</option></select>
+                                <div class="sb-field-row">
+                                    <select id="sb-prompt"><option value="sapphire">Sapphire</option></select>
+                                    <button type="button" class="sb-btn-sm sb-goto-view" data-view="prompts" data-select="sb-prompt" title="Open in Prompts">&#x2197;</button>
+                                </div>
                             </div>
                             <div class="sb-field">
                                 <label for="sb-toolset">toolset</label>
-                                <select id="sb-toolset"><option value="all">All</option></select>
+                                <div class="sb-field-row">
+                                    <select id="sb-toolset"><option value="all">All</option></select>
+                                    <button type="button" class="sb-btn-sm sb-goto-view" data-view="toolsets" data-select="sb-toolset" title="Open in Toolsets">&#x2197;</button>
+                                </div>
                             </div>
                             <div class="sb-field">
                                 <label for="sb-llm-primary">provider</label>
