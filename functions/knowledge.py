@@ -155,6 +155,13 @@ def _get_connection():
     return conn
 
 
+def _scope_condition(scope, col='scope'):
+    """Return (sql_fragment, params) that includes global overlay."""
+    if scope == 'global':
+        return f"{col} = ?", [scope]
+    return f"{col} IN (?, 'global')", [scope]
+
+
 def _ensure_db():
     global _db_initialized
     if _db_initialized:
@@ -443,7 +450,8 @@ def delete_people_scope(name: str) -> dict:
 def get_people(scope='default'):
     conn = _get_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at FROM people WHERE scope = ? ORDER BY name', (scope,))
+    scope_sql, scope_params = _scope_condition(scope)
+    cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at FROM people WHERE {scope_sql} ORDER BY name', scope_params)
     rows = cursor.fetchall()
     conn.close()
     return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
@@ -528,18 +536,19 @@ def delete_person(person_id):
 def get_tabs(scope='default', tab_type=None):
     conn = _get_connection()
     cursor = conn.cursor()
+    scope_sql, scope_params = _scope_condition(scope, 't.scope')
     if tab_type:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT t.id, t.name, t.description, t.type, t.scope, t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = t.id) as entry_count
-            FROM knowledge_tabs t WHERE t.scope = ? AND t.type = ? ORDER BY t.name
-        ''', (scope, tab_type))
+            FROM knowledge_tabs t WHERE {scope_sql} AND t.type = ? ORDER BY t.name
+        ''', scope_params + [tab_type])
     else:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT t.id, t.name, t.description, t.type, t.scope, t.created_at, t.updated_at,
                    (SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = t.id) as entry_count
-            FROM knowledge_tabs t WHERE t.scope = ? ORDER BY t.name
-        ''', (scope,))
+            FROM knowledge_tabs t WHERE {scope_sql} ORDER BY t.name
+        ''', scope_params)
     rows = cursor.fetchall()
     conn.close()
     return [{"id": r[0], "name": r[1], "description": r[2], "type": r[3],
@@ -754,11 +763,12 @@ def _search_entries(query, scope, category=None, limit=10):
     cursor = conn.cursor()
 
     # Resolve category filter
+    scope_sql, scope_params = _scope_condition(scope)
     tab_filter = ""
     tab_params = []
     if category:
-        cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                       (category, scope))
+        cursor.execute(f'SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND {scope_sql}',
+                       [category] + scope_params)
         tab = cursor.fetchone()
         if not tab:
             conn.close()
@@ -767,7 +777,7 @@ def _search_entries(query, scope, category=None, limit=10):
         tab_params = [tab[0]]
     else:
         # All tabs in scope
-        cursor.execute('SELECT id FROM knowledge_tabs WHERE scope = ?', (scope,))
+        cursor.execute(f'SELECT id FROM knowledge_tabs WHERE {scope_sql}', scope_params)
         tab_ids = [r[0] for r in cursor.fetchall()]
         if not tab_ids:
             conn.close()
@@ -880,18 +890,19 @@ def _vector_search_entries(query, scope, category=None, limit=10):
     conn = _get_connection()
     cursor = conn.cursor()
 
+    scope_sql, scope_params = _scope_condition(scope, 't.scope')
     if category:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT e.id, e.content, t.name, e.embedding, e.source_filename
             FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE t.scope = ? AND LOWER(t.name) = LOWER(?) AND e.embedding IS NOT NULL
-        ''', (scope, category))
+            WHERE {scope_sql} AND LOWER(t.name) = LOWER(?) AND e.embedding IS NOT NULL
+        ''', scope_params + [category])
     else:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT e.id, e.content, t.name, e.embedding, e.source_filename
             FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE t.scope = ? AND e.embedding IS NOT NULL
-        ''', (scope,))
+            WHERE {scope_sql} AND e.embedding IS NOT NULL
+        ''', scope_params)
 
     rows = cursor.fetchall()
     conn.close()
@@ -921,7 +932,8 @@ def _search_people(query, scope='default', limit=10):
             query_vec = query_emb[0]
             conn = _get_connection()
             cursor = conn.cursor()
-            cursor.execute('SELECT id, name, relationship, phone, email, address, notes, embedding FROM people WHERE scope = ? AND embedding IS NOT NULL', (scope,))
+            scope_sql, scope_params = _scope_condition(scope)
+            cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, embedding FROM people WHERE {scope_sql} AND embedding IS NOT NULL', scope_params)
             rows = cursor.fetchall()
             conn.close()
             for pid, name, rel, phone, email, addr, notes, emb_blob in rows:
@@ -944,10 +956,11 @@ def _search_people(query, scope='default', limit=10):
         params = []
         for t in terms:
             params.extend([f'%{t}%', f'%{t}%', f'%{t}%'])
+        scope_sql, scope_params = _scope_condition(scope)
         cursor.execute(f'''
             SELECT id, name, relationship, phone, email, address, notes
-            FROM people WHERE scope = ? AND ({conditions}) ORDER BY name LIMIT ?
-        ''', [scope] + params + [limit])
+            FROM people WHERE {scope_sql} AND ({conditions}) ORDER BY name LIMIT ?
+        ''', scope_params + params + [limit])
         rows = cursor.fetchall()
         conn.close()
         # LIKE results get a low fixed score so they sort below vector matches
@@ -1073,8 +1086,9 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
     if category and not query:
         conn = _get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                       (category, scope))
+        scope_sql, scope_params = _scope_condition(scope)
+        cursor.execute(f'SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND {scope_sql}',
+                       [category] + scope_params)
         tab = cursor.fetchone()
         conn.close()
         if not tab:

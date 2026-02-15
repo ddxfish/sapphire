@@ -4665,10 +4665,9 @@ a.gallery-caption:hover {
 /* Header bar — always full-width, pinned to top */
 .mind-header {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: 20px;
-    flex-wrap: wrap;
+    gap: 10px;
     position: sticky;
     top: 0;
     z-index: 10;
@@ -4714,12 +4713,12 @@ a.gallery-caption:hover {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 16px;
     font-size: var(--font-sm);
     color: var(--text-muted);
 }
 .mind-scope-bar select {
     padding: 4px 8px;
+    min-width: 200px;
     background: var(--input-bg);
     border: 1px solid var(--border);
     color: var(--text);
@@ -4798,6 +4797,7 @@ a.gallery-caption:hover {
     font-size: var(--font-xs);
     line-height: 1.4;
     padding: 0 0 12px;
+    text-align: center;
 }
 
 .mind-empty {
@@ -5730,6 +5730,37 @@ a.gallery-caption:hover {
 
 .sb-pdetail-row span:first-child { color: var(--text-muted); }
 .sb-pdetail-row span:last-child { color: var(--text); text-align: right; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Wrap row — like pdetail-row but wraps instead of truncating */
+.sb-pdetail-wrap-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: var(--font-sm);
+    padding: 2px 0;
+}
+.sb-pdetail-wrap-row span:first-child { color: var(--text-muted); flex-shrink: 0; }
+.sb-pdetail-wrap-row span:last-child { color: var(--text); text-align: right; }
+
+/* Tools list */
+.sb-pdetail-tools { margin-top: 6px; }
+.sb-pdetail-tool-group { margin-bottom: 6px; }
+.sb-pdetail-tool-mod {
+    display: block;
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+.sb-pdetail-tool {
+    display: inline-block;
+    font-size: 10px;
+    color: var(--text);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light, rgba(255,255,255,0.06));
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin: 1px 2px;
+}
 
 /* =============================================================================
    MOBILE: NAV FLYOUT

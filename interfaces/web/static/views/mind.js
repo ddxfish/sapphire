@@ -55,14 +55,14 @@ async function render() {
                     <button class="mind-tab${activeTab === 'ai-notes' ? ' active' : ''}" data-tab="ai-notes">AI Knowledge</button>
                     <button class="mind-tab${activeTab === 'goals' ? ' active' : ''}" data-tab="goals">Goals</button>
                 </div>
-            </div>
-            <div class="mind-body">
                 <div class="mind-scope-bar">
                     <label>Scope:</label>
                     <select id="mind-scope"></select>
                     <button class="mind-btn-sm" id="mind-new-scope" title="New scope">+</button>
                     <button class="mind-btn-sm mind-del-scope-btn" id="mind-del-scope" title="Delete scope">&#x1F5D1;</button>
                 </div>
+            </div>
+            <div class="mind-body">
                 <div id="mind-content" class="mind-content"></div>
             </div>
         </div>
@@ -87,7 +87,7 @@ async function render() {
         renderContent();
     });
 
-    // New scope button
+    // New scope button — creates across all backends
     container.querySelector('#mind-new-scope').addEventListener('click', async () => {
         const name = prompt('New scope name (lowercase, no spaces):');
         if (!name) return;
@@ -96,22 +96,27 @@ async function render() {
             ui.showToast('Invalid name', 'error');
             return;
         }
-        const apiPath = activeTab === 'memories' ? '/api/memory/scopes'
-            : activeTab === 'people' ? '/api/knowledge/people/scopes'
-            : activeTab === 'goals' ? '/api/goals/scopes'
-            : '/api/knowledge/scopes';
+        const apis = [
+            '/api/memory/scopes',
+            '/api/knowledge/scopes',
+            '/api/knowledge/people/scopes',
+            '/api/goals/scopes'
+        ];
         try {
-            const res = await fetch(apiPath, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: clean })
-            });
-            if (res.ok) {
+            const results = await Promise.allSettled(apis.map(url =>
+                fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: clean })
+                })
+            ));
+            const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
+            if (anyOk) {
                 const newScope = { name: clean, count: 0 };
-                if (activeTab === 'memories') memoryScopeCache.push(newScope);
-                else if (activeTab === 'people') peopleScopeCache.push(newScope);
-                else if (activeTab === 'goals') goalScopeCache.push(newScope);
-                else knowledgeScopeCache.push(newScope);
+                // Add to caches if not already present
+                for (const cache of [memoryScopeCache, knowledgeScopeCache, peopleScopeCache, goalScopeCache]) {
+                    if (!cache.find(s => s.name === clean)) cache.push(newScope);
+                }
                 currentScope = clean;
                 updateScopeDropdown();
                 renderContent();
@@ -122,41 +127,53 @@ async function render() {
         } catch (e) { ui.showToast('Failed', 'error'); }
     });
 
-    // Delete scope button
+    // Delete scope button — deletes from all backends
     container.querySelector('#mind-del-scope').addEventListener('click', () => {
         if (currentScope === 'default') {
             ui.showToast('Cannot delete the default scope', 'error');
             return;
         }
-        const scopes = getScopesForTab();
-        const scopeInfo = scopes.find(s => s.name === currentScope);
-        const count = scopeInfo?.count || 0;
-        const scopeType = activeTab === 'memories' ? 'memory'
-            : activeTab === 'people' ? 'people'
-            : activeTab === 'goals' ? 'goals' : 'knowledge';
-        const typeLabel = activeTab === 'memories' ? 'memories'
-            : activeTab === 'people' ? 'contacts'
-            : activeTab === 'goals' ? 'goals (and all subtasks/progress)'
-            : 'knowledge tabs (and all entries within them)';
+        // Count items across all backends for this scope
+        const memCount = memoryScopeCache.find(s => s.name === currentScope)?.count || 0;
+        const knowCount = knowledgeScopeCache.find(s => s.name === currentScope)?.count || 0;
+        const peopleCount = peopleScopeCache.find(s => s.name === currentScope)?.count || 0;
+        const goalCount = goalScopeCache.find(s => s.name === currentScope)?.count || 0;
+        const totalCount = memCount + knowCount + peopleCount + goalCount;
 
-        showDeleteScopeConfirmation(currentScope, typeLabel, count, scopeType);
+        showDeleteScopeConfirmation(currentScope, 'items (memories, knowledge, people, goals)', totalCount);
     });
 
     updateScopeDropdown();
     await renderContent();
 }
 
-function getScopesForTab() {
-    if (activeTab === 'memories') return memoryScopeCache;
-    if (activeTab === 'people') return peopleScopeCache;
-    if (activeTab === 'goals') return goalScopeCache;
-    return knowledgeScopeCache;
+function getAllScopes() {
+    // Union of all scope names across all backends
+    const map = {};
+    for (const cache of [memoryScopeCache, knowledgeScopeCache, peopleScopeCache, goalScopeCache]) {
+        for (const s of cache) {
+            if (!map[s.name]) map[s.name] = 0;
+            map[s.name] += s.count || 0;
+        }
+    }
+    // Ensure global always exists
+    if (!map['global']) map['global'] = 0;
+    // Sort: default first, global second, then alphabetical
+    return Object.entries(map)
+        .sort(([a], [b]) => {
+            if (a === 'default') return -1;
+            if (b === 'default') return 1;
+            if (a === 'global') return -1;
+            if (b === 'global') return 1;
+            return a.localeCompare(b);
+        })
+        .map(([name, count]) => ({ name, count }));
 }
 
 function updateScopeDropdown() {
     const sel = container.querySelector('#mind-scope');
     if (!sel) return;
-    const scopes = getScopesForTab();
+    const scopes = getAllScopes();
     sel.innerHTML = scopes.map(s =>
         `<option value="${s.name}"${s.name === currentScope ? ' selected' : ''}>${s.name} (${s.count})</option>`
     ).join('');
@@ -179,8 +196,6 @@ async function renderContent() {
             case 'ai-notes': await renderKnowledge(el, 'ai'); break;
             case 'goals': await renderGoals(el); break;
         }
-        // Prepend scope label
-        el.insertAdjacentHTML('afterbegin', `<div class="mind-scope-label">Scope: <strong>${escHtml(currentScope)}</strong></div>`);
     } catch (e) {
         el.innerHTML = `<div class="mind-empty">Failed to load: ${e.message}</div>`;
     }
@@ -818,7 +833,7 @@ function showEntryEditModal(inner, tabId, tabType, entryId, content) {
 
 // ─── Scope Deletion (double confirmation) ────────────────────────────────────
 
-function showDeleteScopeConfirmation(scopeName, typeLabel, count, scopeType) {
+function showDeleteScopeConfirmation(scopeName, typeLabel, count) {
     const existing = document.querySelector('.mind-modal-overlay');
     if (existing) existing.remove();
 
@@ -868,11 +883,11 @@ function showDeleteScopeConfirmation(scopeName, typeLabel, count, scopeType) {
     nextBtn.addEventListener('click', () => {
         if (input1.value.trim() !== 'DELETE') return;
         close();
-        showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType);
+        showDeleteScopeConfirmation2(scopeName, typeLabel, count);
     });
 }
 
-function showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType) {
+function showDeleteScopeConfirmation2(scopeName, typeLabel, count) {
     // ── Confirmation 2 — more alarming ──
     const overlay = document.createElement('div');
     overlay.className = 'pr-modal-overlay mind-modal-overlay';
@@ -922,33 +937,34 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count, scopeType) {
 
     execBtn.addEventListener('click', async () => {
         if (input2.value.trim() !== 'DELETE') return;
-        const apiPath = scopeType === 'memory'
-            ? `/api/memory/scopes/${encodeURIComponent(scopeName)}`
-            : scopeType === 'people'
-            ? `/api/knowledge/people/scopes/${encodeURIComponent(scopeName)}`
-            : scopeType === 'goals'
-            ? `/api/goals/scopes/${encodeURIComponent(scopeName)}`
-            : `/api/knowledge/scopes/${encodeURIComponent(scopeName)}`;
+        const enc = encodeURIComponent(scopeName);
+        const apis = [
+            `/api/memory/scopes/${enc}`,
+            `/api/knowledge/scopes/${enc}`,
+            `/api/knowledge/people/scopes/${enc}`,
+            `/api/goals/scopes/${enc}`
+        ];
         try {
-            const resp = await fetch(apiPath, {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ confirm: 'DELETE' })
-            });
-            if (resp.ok) {
+            const results = await Promise.allSettled(apis.map(url =>
+                fetch(url, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ confirm: 'DELETE' })
+                })
+            ));
+            const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
+            if (anyOk) {
                 close();
-                // Remove from cache
-                if (scopeType === 'memory') memoryScopeCache = memoryScopeCache.filter(s => s.name !== scopeName);
-                else if (scopeType === 'people') peopleScopeCache = peopleScopeCache.filter(s => s.name !== scopeName);
-                else if (scopeType === 'goals') goalScopeCache = goalScopeCache.filter(s => s.name !== scopeName);
-                else knowledgeScopeCache = knowledgeScopeCache.filter(s => s.name !== scopeName);
+                memoryScopeCache = memoryScopeCache.filter(s => s.name !== scopeName);
+                knowledgeScopeCache = knowledgeScopeCache.filter(s => s.name !== scopeName);
+                peopleScopeCache = peopleScopeCache.filter(s => s.name !== scopeName);
+                goalScopeCache = goalScopeCache.filter(s => s.name !== scopeName);
                 currentScope = 'default';
                 updateScopeDropdown();
                 renderContent();
                 ui.showToast(`Scope "${scopeName}" deleted`, 'success');
             } else {
-                const err = await resp.json();
-                ui.showToast(err.detail || 'Failed to delete', 'error');
+                ui.showToast('Failed to delete scope', 'error');
             }
         } catch (e) {
             ui.showToast('Failed to delete scope', 'error');

@@ -636,8 +636,32 @@ function updateEasyMode(container, settings, init) {
         .map(k => `<div class="sb-pdetail-row"><span>${k}</span><span>${pretty(presetData[k])}</span></div>`)
         .join('') || '<div class="sb-pdetail-row"><span>preset</span><span>' + pretty(settings.prompt) + '</span></div>';
 
-    const extras = (presetData.extras || []).map(pretty).join(', ');
-    const emotions = (presetData.emotions || []).map(pretty).join(', ');
+    const extras = (presetData.extras || []).map(pretty);
+    const emotions = (presetData.emotions || []).map(pretty);
+
+    // Build tools list grouped by module
+    const toolsetName = settings.toolset || 'all';
+    const tsData = (init?.toolsets?.list || []).find(t => t.name === toolsetName);
+    const enabledFuncs = new Set(tsData?.functions || []);
+    const modules = init?.functions?.modules || {};
+    let toolsHtml = `<div class="sb-pdetail-row"><span>active</span><span>${pretty(toolsetName)}</span></div>`;
+    const moduleEntries = Object.entries(modules)
+        .map(([mod, info]) => {
+            const active = (info.functions || []).filter(f => enabledFuncs.has(f.name));
+            return [mod, info, active];
+        })
+        .filter(([, , active]) => active.length > 0)
+        .sort(([a], [b]) => a.localeCompare(b));
+    if (moduleEntries.length) {
+        toolsHtml += '<div class="sb-pdetail-tools">';
+        for (const [mod, info, active] of moduleEntries) {
+            const emoji = info.emoji || '\u{1F527}';
+            toolsHtml += `<div class="sb-pdetail-tool-group"><span class="sb-pdetail-tool-mod">${emoji} ${pretty(mod)}</span>`;
+            toolsHtml += active.map(f => `<span class="sb-pdetail-tool">${f.name.replace(/_/g, ' ')}</span>`).join('');
+            toolsHtml += '</div>';
+        }
+        toolsHtml += '</div>';
+    }
 
     // Build detail HTML
     detailEl.innerHTML = `
@@ -651,12 +675,10 @@ function updateEasyMode(container, settings, init) {
         </div>
         ${easyAccordion('Prompt', `
             ${promptRows}
-            ${extras ? `<div class="sb-pdetail-row"><span>extras</span><span>${extras}</span></div>` : ''}
-            ${emotions ? `<div class="sb-pdetail-row"><span>emotions</span><span>${emotions}</span></div>` : ''}
+            ${extras.length ? `<div class="sb-pdetail-wrap-row"><span>extras</span><span>${extras.join(', ')}</span></div>` : ''}
+            ${emotions.length ? `<div class="sb-pdetail-wrap-row"><span>emotions</span><span>${emotions.join(', ')}</span></div>` : ''}
         `, { desc: 'Character & scenario', view: 'prompts' })}
-        ${easyAccordion('Toolset', `
-            <div class="sb-pdetail-row"><span>active</span><span>${pretty(settings.toolset)}</span></div>
-        `, { desc: 'AI capabilities', view: 'toolsets' })}
+        ${easyAccordion('Toolset', toolsHtml, { desc: 'AI capabilities', view: 'toolsets' })}
         ${easyAccordion('Spice', `
             <div class="sb-pdetail-row"><span>set</span><span>${pretty(settings.spice_set)}</span></div>
             <div class="sb-pdetail-row"><span>enabled</span><span>${settings.spice_enabled !== false ? 'Yes' : 'No'}</span></div>

@@ -2978,9 +2978,10 @@ async def list_memories(request: Request, _=Depends(require_login)):
     scope = request.query_params.get('scope', 'default')
     conn = memory._get_connection()
     cursor = conn.cursor()
+    scope_sql, scope_params = memory._scope_condition(scope)
     cursor.execute(
-        'SELECT id, content, timestamp, label FROM memories WHERE scope = ? ORDER BY label, timestamp DESC',
-        (scope,)
+        f'SELECT id, content, timestamp, label FROM memories WHERE {scope_sql} ORDER BY label, timestamp DESC',
+        scope_params
     )
     rows = cursor.fetchall()
     conn.close()

@@ -168,6 +168,13 @@ def _get_connection():
     return conn
 
 
+def _scope_condition(scope, col='scope'):
+    """Return (sql_fragment, params) that includes global overlay."""
+    if scope == 'global':
+        return f"{col} = ?", [scope]
+    return f"{col} IN (?, 'global')", [scope]
+
+
 def _ensure_db():
     global _db_initialized
     if _db_initialized:
@@ -292,18 +299,19 @@ def get_goals_list(scope='default', status='active'):
     """Return structured goal data for the REST API."""
     conn = _get_connection()
     cursor = conn.cursor()
+    scope_sql, scope_params = _scope_condition(scope)
 
     if status == 'all':
         cursor.execute(
             'SELECT id, title, description, priority, status, parent_id, scope, created_at, updated_at, completed_at '
-            'FROM goals WHERE parent_id IS NULL AND scope = ? ORDER BY updated_at DESC',
-            (scope,)
+            f'FROM goals WHERE parent_id IS NULL AND {scope_sql} ORDER BY updated_at DESC',
+            scope_params
         )
     else:
         cursor.execute(
             'SELECT id, title, description, priority, status, parent_id, scope, created_at, updated_at, completed_at '
-            'FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
-            (scope, status)
+            f'FROM goals WHERE parent_id IS NULL AND {scope_sql} AND status = ? ORDER BY updated_at DESC',
+            scope_params + [status]
         )
     rows = cursor.fetchall()
 
@@ -681,9 +689,10 @@ def _list_goals(goal_id=None, status='active', scope='default'):
     if status_filter == 'all':
         return _list_goals_all(cursor, conn, scope)
 
+    scope_sql, scope_params = _scope_condition(scope)
     cursor.execute(
-        'SELECT * FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
-        (scope, status_filter)
+        f'SELECT * FROM goals WHERE parent_id IS NULL AND {scope_sql} AND status = ? ORDER BY updated_at DESC',
+        scope_params + [status_filter]
     )
     top_level = cursor.fetchall()
 
@@ -738,9 +747,10 @@ def _list_goals(goal_id=None, status='active', scope='default'):
 
 def _append_recently_completed(cursor, lines, scope, limit=5):
     """Append a recently completed section to the output lines."""
+    scope_sql, scope_params = _scope_condition(scope)
     cursor.execute(
-        'SELECT id, title, completed_at FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY completed_at DESC LIMIT ?',
-        (scope, 'completed', limit)
+        f'SELECT id, title, completed_at FROM goals WHERE parent_id IS NULL AND {scope_sql} AND status = ? ORDER BY completed_at DESC LIMIT ?',
+        scope_params + ['completed', limit]
     )
     completed = cursor.fetchall()
     if not completed:
@@ -764,11 +774,12 @@ def _append_recently_completed(cursor, lines, scope, limit=5):
 def _list_goals_all(cursor, conn, scope):
     """Show all goals split into clear Active / Completed / Abandoned sections."""
     lines = [f"=== All Goals (scope: {scope}) ==="]
+    scope_sql, scope_params = _scope_condition(scope)
 
     # ── Active section ──
     cursor.execute(
-        'SELECT * FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC',
-        (scope, 'active')
+        f'SELECT * FROM goals WHERE parent_id IS NULL AND {scope_sql} AND status = ? ORDER BY updated_at DESC',
+        scope_params + ['active']
     )
     active = cursor.fetchall()
 
@@ -800,8 +811,8 @@ def _list_goals_all(cursor, conn, scope):
 
     # ── Completed section ──
     cursor.execute(
-        'SELECT id, title, completed_at FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY completed_at DESC LIMIT 10',
-        (scope, 'completed')
+        f'SELECT id, title, completed_at FROM goals WHERE parent_id IS NULL AND {scope_sql} AND status = ? ORDER BY completed_at DESC LIMIT 10',
+        scope_params + ['completed']
     )
     completed = cursor.fetchall()
 
@@ -820,8 +831,8 @@ def _list_goals_all(cursor, conn, scope):
 
     # ── Abandoned section ──
     cursor.execute(
-        'SELECT id, title, updated_at FROM goals WHERE parent_id IS NULL AND scope = ? AND status = ? ORDER BY updated_at DESC LIMIT 5',
-        (scope, 'abandoned')
+        f'SELECT id, title, updated_at FROM goals WHERE parent_id IS NULL AND {scope_sql} AND status = ? ORDER BY updated_at DESC LIMIT 5',
+        scope_params + ['abandoned']
     )
     abandoned = cursor.fetchall()
 

@@ -515,6 +515,13 @@ def _get_current_scope():
         return 'default'
 
 
+def _scope_condition(scope, col='scope'):
+    """Return (sql_fragment, params) that includes global overlay."""
+    if scope == 'global':
+        return f"{col} = ?", [scope]
+    return f"{col} IN (?, 'global')", [scope]
+
+
 # ─── Public API (used by api_fastapi.py) ─────────────────────────────────────
 
 def get_scopes():
@@ -662,21 +669,22 @@ def _save_memory(content: str, label: str = None, scope: str = 'default') -> tup
 
 
 def _fts_search(cursor, fts_query, scope, labels, limit):
+    scope_sql, scope_params = _scope_condition(scope, 'm.scope')
     if labels:
         placeholders = ','.join('?' * len(labels))
         cursor.execute(f'''
             SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
             FROM memories_fts f JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ? AND m.scope = ? AND m.label IN ({placeholders})
+            WHERE memories_fts MATCH ? AND {scope_sql} AND m.label IN ({placeholders})
             ORDER BY rank LIMIT ?
-        ''', [fts_query, scope] + labels + [limit])
+        ''', [fts_query] + scope_params + labels + [limit])
     else:
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
             FROM memories_fts f JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ? AND m.scope = ?
+            WHERE memories_fts MATCH ? AND {scope_sql}
             ORDER BY rank LIMIT ?
-        ''', (fts_query, scope, limit))
+        ''', [fts_query] + scope_params + [limit])
     return cursor.fetchall()
 
 
@@ -697,15 +705,16 @@ def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
     conn = _get_connection()
     cursor = conn.cursor()
 
+    scope_sql, scope_params = _scope_condition(scope)
     if labels:
         placeholders = ','.join('?' * len(labels))
         cursor.execute(
-            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE scope = ? AND label IN ({placeholders}) AND embedding IS NOT NULL',
-            [scope] + labels)
+            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND label IN ({placeholders}) AND embedding IS NOT NULL',
+            scope_params + labels)
     else:
         cursor.execute(
-            'SELECT id, content, timestamp, label, embedding FROM memories WHERE scope = ? AND embedding IS NOT NULL',
-            (scope,))
+            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND embedding IS NOT NULL',
+            scope_params)
 
     rows = cursor.fetchall()
     conn.close()
@@ -790,11 +799,12 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
                 params.extend(labels)
             else:
                 label_filter = ""
+            scope_sql, scope_params = _scope_condition(scope)
             cursor.execute(f'''
                 SELECT id, content, timestamp, label FROM memories
-                WHERE scope = ? AND ({conditions}){label_filter}
+                WHERE {scope_sql} AND ({conditions}){label_filter}
                 ORDER BY timestamp DESC LIMIT ?
-            ''', [scope] + params + [limit])
+            ''', scope_params + params + [limit])
             rows = cursor.fetchall()
             conn.close()
             if rows:
@@ -811,19 +821,20 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
 def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'default') -> tuple:
     try:
         labels = _parse_labels(label)
+        scope_sql, scope_params = _scope_condition(scope)
         conn = _get_connection()
         cursor = conn.cursor()
         if labels:
             placeholders = ','.join('?' * len(labels))
             cursor.execute(f'''
                 SELECT id, content, timestamp, label FROM memories
-                WHERE scope = ? AND label IN ({placeholders}) ORDER BY timestamp DESC LIMIT ?
-            ''', [scope] + labels + [count])
+                WHERE {scope_sql} AND label IN ({placeholders}) ORDER BY timestamp DESC LIMIT ?
+            ''', scope_params + labels + [count])
         else:
-            cursor.execute('''
+            cursor.execute(f'''
                 SELECT id, content, timestamp, label FROM memories
-                WHERE scope = ? ORDER BY timestamp DESC LIMIT ?
-            ''', (scope, count))
+                WHERE {scope_sql} ORDER BY timestamp DESC LIMIT ?
+            ''', scope_params + [count])
         rows = cursor.fetchall()
         conn.close()
         if not rows:
