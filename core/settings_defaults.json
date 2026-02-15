@@ -201,7 +201,7 @@
       "accounts/fireworks/models/gpt-oss-120b": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "accounts/fireworks/models/deepseek-v3p2": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 8192, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
       "accounts/fireworks/models/glm-4p7": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
-      "accounts/fireworks/models/minimax-m2p1": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
+      "accounts/fireworks/models/minimax-m2p5": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
     },
     "FORCE_THINKING": false,
     "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",

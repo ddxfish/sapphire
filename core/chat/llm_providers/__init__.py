@@ -78,7 +78,7 @@ PROVIDER_METADATA = {
             'accounts/fireworks/models/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B Thinking',
             'accounts/fireworks/models/glm-5': 'GLM 5',
             'accounts/fireworks/models/glm-4p7': 'GLM 4.7',
-            'accounts/fireworks/models/minimax-m2p1': 'MiniMax M2.1',
+            'accounts/fireworks/models/minimax-m2p5': 'MiniMax M2.5',
             'accounts/fireworks/models/kimi-k2p5': 'Kimi K2.5',
         },
         'is_local': False,
