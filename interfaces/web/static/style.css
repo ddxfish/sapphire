@@ -2055,6 +2055,83 @@ body {
 }
 .wl-entry:last-child { border-bottom: none; }
 
+/* ─── Backup Tab ─── */
+.backup-hero {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 20px 0;
+    padding: 16px 20px;
+    background: var(--trim-light, rgba(74, 158, 255, 0.08));
+    border: 1px solid var(--trim-border, var(--border));
+    border-radius: var(--radius-md);
+}
+.backup-now-btn {
+    padding: 10px 28px;
+    font-size: var(--font-md);
+    font-weight: 600;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--trim, var(--accent-blue));
+    color: #fff;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+}
+.backup-now-btn:hover { opacity: 0.85; }
+.backup-now-btn:disabled { opacity: 0.5; cursor: default; }
+.backup-section-divider {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--bg-tertiary, rgba(255,255,255,0.02));
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+.backup-stats {
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+}
+.backup-type-section {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+}
+.backup-type-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: var(--font-sm);
+}
+.backup-type-header:hover { background: var(--bg-hover); }
+.backup-type-title { flex: 1; font-weight: 500; }
+.backup-type-count {
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    background: var(--bg-tertiary);
+    padding: 1px 7px;
+    border-radius: 8px;
+}
+.backup-type-body { padding: 0 12px 8px; }
+.backup-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04));
+    font-size: var(--font-sm);
+}
+.backup-item:last-child { border-bottom: none; }
+.backup-item-date { flex: 1; }
+.backup-item-size { color: var(--text-muted); font-size: var(--font-xs); }
+.backup-item-actions { display: flex; gap: 4px; }
+.backup-empty {
+    padding: 8px 0;
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+}
+
 /* Audio sections */
 .audio-grid {
     display: grid;

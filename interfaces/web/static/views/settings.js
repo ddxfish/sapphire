@@ -14,11 +14,12 @@ import toolsTab from './settings-tabs/tools.js';
 import networkTab from './settings-tabs/network.js';
 import wakewordTab from './settings-tabs/wakeword.js';
 import pluginsTab from './settings-tabs/plugins.js';
+import backupTab from './settings-tabs/backup.js';
 import systemTab from './settings-tabs/system.js';
 
 import { getRegisteredTabs } from '../plugins/plugins-modal/plugin-registry.js';
 
-const STATIC_TABS = [identityTab, appearanceTab, audioTab, ttsTab, sttTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, systemTab];
+const STATIC_TABS = [identityTab, appearanceTab, audioTab, ttsTab, sttTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, backupTab, systemTab];
 
 let container = null;
 let activeTab = 'identity';
