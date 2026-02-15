@@ -23,7 +23,7 @@ AVAILABLE_FUNCTIONS = [
     'save_person',
     'save_knowledge',
     'search_knowledge',
-    'list_knowledge',
+    'delete_knowledge',
 ]
 
 TOOLS = [
@@ -32,30 +32,21 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_person",
-            "description": "Save or update a person's contact info in the knowledge base. Upserts by name (case-insensitive). Use for storing contacts, relationships, and notes about people.",
+            "description": "Save or update a person's contact info in your knowledge base. Upserts by name (case-insensitive). These are YOUR contacts — people you've learned about through conversation.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "Person's name (used as unique key, case-insensitive)"
+                        "description": "Person's name (unique key, case-insensitive)"
                     },
                     "relationship": {
                         "type": "string",
                         "description": "Relationship to user (e.g. 'father', 'friend', 'coworker')"
                     },
-                    "phone": {
-                        "type": "string",
-                        "description": "Phone number"
-                    },
-                    "email": {
-                        "type": "string",
-                        "description": "Email address"
-                    },
-                    "address": {
-                        "type": "string",
-                        "description": "Physical address"
-                    },
+                    "phone": {"type": "string", "description": "Phone number"},
+                    "email": {"type": "string", "description": "Email address"},
+                    "address": {"type": "string", "description": "Physical address"},
                     "notes": {
                         "type": "string",
                         "description": "Additional notes about this person"
@@ -70,13 +61,13 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_knowledge",
-            "description": "Save information to a knowledge tab. Auto-creates the tab if it doesn't exist (type='ai'). Long content is automatically chunked. Use for storing reference data, notes, research, etc.",
+            "description": "Save information to your personal knowledge base under a category. This is YOUR notebook — use it to store reference data, research, notes, and things you've learned. Auto-creates the category if new. Long content is automatically chunked.\nExamples:\n  save_knowledge(category='recipes', content='...') — save a recipe\n  save_knowledge(category='project_notes', content='...') — save project info",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "tab_name": {
+                    "category": {
                         "type": "string",
-                        "description": "Name of the knowledge tab to write to (e.g. 'recipes', 'project_notes')"
+                        "description": "Category to save under (e.g. 'recipes', 'books', 'research'). Auto-creates if new."
                     },
                     "content": {
                         "type": "string",
@@ -84,10 +75,10 @@ TOOLS = [
                     },
                     "description": {
                         "type": "string",
-                        "description": "Optional tab description (only used when creating a new tab)"
+                        "description": "Optional category description (only used when creating a new category)"
                     }
                 },
-                "required": ["tab_name", "content"]
+                "required": ["category", "content"]
             }
         }
     },
@@ -96,28 +87,28 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_knowledge",
-            "description": "Search the knowledge base using semantic similarity and full-text search. Can search across all sources or filter by type.",
+            "description": "Search, browse, or read from your personal knowledge base. This contains YOUR stored knowledge — people you know, things you've learned, and notes you've saved.\nExamples:\n  search_knowledge(query='mars') — find entries about mars\n  search_knowledge() — overview of all your categories and people\n  search_knowledge(category='books') — browse all entries in a category\n  search_knowledge(id=42) — read a specific entry in full\n  search_knowledge(query='orbital', category='physics') — search within a category",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search terms or topic"
+                        "description": "Search terms (optional — omit to browse)"
                     },
-                    "source": {
+                    "category": {
                         "type": "string",
-                        "description": "Filter: 'all' (default), 'people', or 'knowledge'"
+                        "description": "Filter to or browse a specific category"
                     },
-                    "tab_name": {
-                        "type": "string",
-                        "description": "Search within a specific knowledge tab only"
+                    "id": {
+                        "type": "integer",
+                        "description": "Read a specific entry in full by its ID"
                     },
                     "limit": {
                         "type": "integer",
                         "description": "Maximum results (default: 10)"
                     }
                 },
-                "required": ["query"]
+                "required": []
             }
         }
     },
@@ -125,18 +116,18 @@ TOOLS = [
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "list_knowledge",
-            "description": "Browse the knowledge base directory. No args = overview of tabs and people count. Use source='people' for contact list. Use tab_name to read entries in a specific tab.",
+            "name": "delete_knowledge",
+            "description": "Delete entries or categories from your knowledge base. You can only delete content YOU created — user-created content is protected. Deleting the last entry in a category auto-removes the category.\nExamples:\n  delete_knowledge(id=42) — delete a specific entry\n  delete_knowledge(category='old_research') — delete an entire category and all its entries",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "source": {
-                        "type": "string",
-                        "description": "What to list: 'all' (default overview), 'people' (contacts), 'tabs' (knowledge tabs)"
+                    "id": {
+                        "type": "integer",
+                        "description": "Delete a specific entry by its ID"
                     },
-                    "tab_name": {
+                    "category": {
                         "type": "string",
-                        "description": "Read entries from a specific tab"
+                        "description": "Delete an entire category and all its entries"
                     }
                 },
                 "required": []
@@ -648,17 +639,17 @@ def _sanitize_fts_query(query, use_or=False, use_prefix=False):
     return ' '.join(terms)
 
 
-def _search_entries(query, scope, tab_name=None, limit=10):
+def _search_entries(query, scope, category=None, limit=10):
     """Search knowledge entries with cascading FTS + vector + LIKE."""
     conn = _get_connection()
     cursor = conn.cursor()
 
-    # Resolve tab filter
+    # Resolve category filter
     tab_filter = ""
     tab_params = []
-    if tab_name:
+    if category:
         cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                       (tab_name, scope))
+                       (category, scope))
         tab = cursor.fetchone()
         if not tab:
             conn.close()
@@ -715,7 +706,7 @@ def _search_entries(query, scope, tab_name=None, limit=10):
         return [{"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.95} for r in results]
 
     # Strategy 3: Vector similarity (already returns score)
-    vec_results = _vector_search_entries(query, scope, tab_name, limit)
+    vec_results = _vector_search_entries(query, scope, category, limit)
     if vec_results:
         return vec_results
 
@@ -741,7 +732,7 @@ def _search_entries(query, scope, tab_name=None, limit=10):
     return []
 
 
-def _vector_search_entries(query, scope, tab_name=None, limit=10):
+def _vector_search_entries(query, scope, category=None, limit=10):
     embedder = _get_embedder()
     if not embedder or not embedder.available:
         return []
@@ -754,12 +745,12 @@ def _vector_search_entries(query, scope, tab_name=None, limit=10):
     conn = _get_connection()
     cursor = conn.cursor()
 
-    if tab_name:
+    if category:
         cursor.execute('''
             SELECT e.id, e.content, t.name, e.embedding
             FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
             WHERE t.scope = ? AND LOWER(t.name) = LOWER(?) AND e.embedding IS NOT NULL
-        ''', (scope, tab_name))
+        ''', (scope, category))
     else:
         cursor.execute('''
             SELECT e.id, e.content, t.name, e.embedding
@@ -833,7 +824,8 @@ def _search_people(query, limit=10):
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _format_person(p):
-    parts = [p["name"]]
+    pid = f"[id:{p['id']}] " if p.get("id") else ""
+    parts = [f"{pid}{p['name']}"]
     if p.get("relationship"): parts.append(f"({p['relationship']})")
     details = []
     if p.get("phone"): details.append(f"phone: {p['phone']}")
@@ -845,10 +837,29 @@ def _format_person(p):
     return " ".join(parts)
 
 
-def _format_entry(r):
-    preview = r["content"][:800] + ('...' if len(r["content"]) > 800 else '')
-    tab_info = f" [tab: {r['tab']}]" if r.get("tab") else ""
-    return f"{tab_info} {preview}"
+def _format_entry(r, query=None, max_len=800):
+    content = r["content"]
+    eid = f"[id:{r['id']}] " if r.get("id") else ""
+    tab_info = f"[tab: {r['tab']}] " if r.get("tab") else ""
+
+    if len(content) <= max_len:
+        preview = content
+    elif query:
+        # Center snippet around the query match
+        pos = content.lower().find(query.lower())
+        if pos >= 0:
+            half = max_len // 2
+            start = max(0, pos - half)
+            end = min(len(content), start + max_len)
+            if start > 0:
+                start = max(0, end - max_len)
+            preview = ('...' if start > 0 else '') + content[start:end] + ('...' if end < len(content) else '')
+        else:
+            preview = content[:max_len] + '...'
+    else:
+        preview = content[:max_len] + '...'
+
+    return f"{tab_info}{eid}{preview}"
 
 
 # ─── Tool Operations ─────────────────────────────────────────────────────────
@@ -865,31 +876,31 @@ def _save_person(name, relationship=None, phone=None, email=None, address=None, 
     return f"{action} contact: {name.strip()} (ID: {pid})", True
 
 
-def _save_knowledge(tab_name, content, description=None, scope='default'):
-    if not tab_name or not tab_name.strip():
-        return "Tab name is required.", False
+def _save_knowledge(category, content, description=None, scope='default'):
+    if not category or not category.strip():
+        return "Category name is required.", False
     if not content or not content.strip():
         return "Content is required.", False
-    if len(tab_name) > 100:
-        return "Tab name too long (max 100 chars).", False
+    if len(category) > 100:
+        return "Category name too long (max 100 chars).", False
 
-    tab_name = tab_name.strip()
+    category = category.strip()
     content = content.strip()
 
-    # Get or create tab
+    # Get or create category (stored as knowledge_tab)
     conn = _get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                   (tab_name, scope))
+                   (category, scope))
     row = cursor.fetchone()
     conn.close()
 
     if row:
         tab_id = row[0]
     else:
-        tab_id = create_tab(tab_name, scope, description, tab_type='ai')
+        tab_id = create_tab(category, scope, description, tab_type='ai')
         if not tab_id:
-            return f"Failed to create tab '{tab_name}'.", False
+            return f"Failed to create category '{category}'.", False
 
     # Chunk if needed
     chunks = _chunk_text(content)
@@ -898,64 +909,49 @@ def _save_knowledge(tab_name, content, description=None, scope='default'):
         eid = add_entry(tab_id, chunk, chunk_index=i)
         entry_ids.append(eid)
 
+    ids_str = ', '.join(f'id:{eid}' for eid in entry_ids)
     chunk_note = f" ({len(chunks)} chunks)" if len(chunks) > 1 else ""
-    logger.info(f"Saved knowledge to tab '{tab_name}' in scope '{scope}': {len(chunks)} entries")
-    return f"Saved to '{tab_name}'{chunk_note} — {len(content)} chars", True
+    logger.info(f"Saved knowledge to '{category}' in scope '{scope}': {len(chunks)} entries")
+    return f"Saved to '{category}'{chunk_note} [{ids_str}] — {len(content)} chars", True
 
 
-def _search_knowledge(query, source='all', tab_name=None, limit=10, scope='default'):
-    if not query or not query.strip():
-        return "Search query is required.", False
+def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope='default'):
+    # Mode 1: Read a single entry in full by ID
+    if entry_id:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT e.id, e.content, t.name, t.type
+            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+            WHERE e.id = ?
+        ''', (entry_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return f"Entry {entry_id} not found.", True
+        return f"=== Entry [id:{row[0]}] from '{row[2]}' ({row[3]}) ===\n{row[1]}", True
 
-    results = []
-
-    if source in ('all', 'people'):
-        results.extend(_search_people(query, limit))
-
-    if source in ('all', 'knowledge'):
-        results.extend(_search_entries(query, scope, tab_name, limit))
-
-    if not results:
-        return f"No results for '{query}'.", True
-
-    # Sort all results by score (highest first) — unified ranking across sources
-    results.sort(key=lambda r: r.get("score", 0), reverse=True)
-
-    # Format output
-    lines = [f"Found {len(results)} results:"]
-    for r in results[:limit]:
-        if r["source"] == "people":
-            lines.append(f"  [Person] {_format_person(r)}")
-        else:
-            lines.append(f"  [Knowledge]{_format_entry(r)}")
-
-    return '\n'.join(lines), True
-
-
-def _list_knowledge(source='all', tab_name=None, scope='default'):
-    lines = []
-
-    if tab_name:
-        # Read entries from specific tab
+    # Mode 2: Browse a category (no query needed)
+    if category and not query:
         conn = _get_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                       (tab_name, scope))
+                       (category, scope))
         tab = cursor.fetchone()
         conn.close()
         if not tab:
-            return f"Tab '{tab_name}' not found in scope '{scope}'.", True
+            return f"Category '{category}' not found in scope '{scope}'.", True
         entries = get_tab_entries(tab[0])
         if not entries:
-            return f"Tab '{tab_name}' is empty.", True
-        lines.append(f"=== Tab: {tab_name} ({len(entries)} entries) ===")
+            return f"Category '{category}' is empty.", True
+        lines = [f"=== {category} ({len(entries)} entries) ==="]
         for e in entries:
-            preview = e["content"][:500] + ('...' if len(e["content"]) > 500 else '')
-            lines.append(f"  [{e['id']}] {preview}")
+            lines.append(f"  [id:{e['id']}] {e['content']}")
         return '\n'.join(lines), True
 
-    # Overview
-    if source in ('all', 'people'):
+    # Mode 3: Overview (no query, no category, no id)
+    if not query:
+        lines = []
         people = get_people()
         lines.append(f"=== People ({len(people)}) ===")
         if people:
@@ -966,9 +962,8 @@ def _list_knowledge(source='all', tab_name=None, scope='default'):
         else:
             lines.append("  (none)")
 
-    if source in ('all', 'tabs'):
         tabs = get_tabs(scope)
-        lines.append(f"\n=== Knowledge Tabs (scope: {scope}, {len(tabs)} tabs) ===")
+        lines.append(f"\n=== Categories (scope: {scope}, {len(tabs)}) ===")
         if tabs:
             for t in tabs:
                 type_tag = f" [{t['type']}]" if t['type'] == 'ai' else ""
@@ -976,10 +971,79 @@ def _list_knowledge(source='all', tab_name=None, scope='default'):
         else:
             lines.append("  (none)")
 
-    if not lines:
-        return "Knowledge base is empty.", True
+        if not lines:
+            return "Your knowledge base is empty.", True
+        return '\n'.join(lines), True
+
+    # Mode 4: Search (query provided)
+    results = []
+    results.extend(_search_people(query, limit))
+    results.extend(_search_entries(query, scope, category, limit))
+
+    if not results:
+        return f"No results for '{query}'.", True
+
+    # Sort all results by score (highest first) — unified ranking across sources
+    results.sort(key=lambda r: r.get("score", 0), reverse=True)
+
+    lines = [f"Found {len(results)} results:"]
+    for r in results[:limit]:
+        if r["source"] == "people":
+            lines.append(f"  [Person] {_format_person(r)}")
+        else:
+            lines.append(f"  [Knowledge] {_format_entry(r, query=query)}")
 
     return '\n'.join(lines), True
+
+
+def _delete_knowledge(entry_id=None, category=None, scope='default'):
+    if not entry_id and not category:
+        return "Provide id or category to delete.", False
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    if entry_id:
+        # Delete single entry — must belong to an AI tab
+        cursor.execute('''
+            SELECT e.id, e.content, t.id, t.name, t.type
+            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+            WHERE e.id = ?
+        ''', (entry_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return f"Entry {entry_id} not found.", False
+        if row[4] != 'ai':
+            return f"Cannot delete user-created content (entry {entry_id} in tab '{row[3]}').", False
+        tab_id, tab_name_str = row[2], row[3]
+        delete_entry(entry_id)
+        preview = row[1][:100] + ('...' if len(row[1]) > 100 else '')
+        logger.info(f"AI deleted entry [{entry_id}] from tab '{tab_name_str}'")
+        # Auto-delete empty AI tab
+        remaining = get_tab_entries(tab_id)
+        if not remaining:
+            delete_tab(tab_id)
+            logger.info(f"Auto-deleted empty AI tab '{tab_name_str}'")
+            return f"Deleted entry [id:{entry_id}] from tab '{tab_name_str}': {preview}\nTab '{tab_name_str}' is now empty and was removed.", True
+        return f"Deleted entry [id:{entry_id}] from tab '{tab_name_str}': {preview}", True
+
+    if category:
+        # Delete entire category — must be AI type
+        cursor.execute('SELECT id, type FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
+                       (category, scope))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return f"Category '{category}' not found in scope '{scope}'.", False
+        if row[1] != 'ai':
+            return f"Cannot delete user-created category '{category}'.", False
+        delete_tab(row[0])
+        logger.info(f"AI deleted category '{category}' (scope: {scope})")
+        return f"Deleted category '{category}' and all its entries.", True
+
+    conn.close()
+    return "Nothing to delete.", False
 
 
 # ─── Executor ─────────────────────────────────────────────────────────────────
@@ -1002,7 +1066,7 @@ def execute(function_name, arguments, config):
 
         elif function_name == "save_knowledge":
             return _save_knowledge(
-                tab_name=arguments.get('tab_name'),
+                category=arguments.get('category'),
                 content=arguments.get('content'),
                 description=arguments.get('description'),
                 scope=scope,
@@ -1011,16 +1075,16 @@ def execute(function_name, arguments, config):
         elif function_name == "search_knowledge":
             return _search_knowledge(
                 query=arguments.get('query'),
-                source=arguments.get('source', 'all'),
-                tab_name=arguments.get('tab_name'),
+                category=arguments.get('category'),
+                entry_id=arguments.get('id'),
                 limit=arguments.get('limit', 10),
                 scope=scope,
             )
 
-        elif function_name == "list_knowledge":
-            return _list_knowledge(
-                source=arguments.get('source', 'all'),
-                tab_name=arguments.get('tab_name'),
+        elif function_name == "delete_knowledge":
+            return _delete_knowledge(
+                entry_id=arguments.get('id'),
+                category=arguments.get('category'),
                 scope=scope,
             )
 
