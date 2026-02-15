@@ -765,22 +765,15 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         for ts_name in sorted(toolsets_set):
             if ts_name in ['all', 'none']:
                 ts_type = 'builtin'
-            elif ts_name in function_manager.function_modules:
+                func_list = [t['function']['name'] for t in function_manager.all_possible_tools] if ts_name == 'all' else []
+            elif ts_name in function_manager.function_modules and not toolset_manager.toolset_exists(ts_name):
                 ts_type = 'module'
-            elif toolset_manager.toolset_exists(ts_name):
-                ts_type = 'user'
-            else:
-                ts_type = 'unknown'
-
-            if ts_name == "all":
-                func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
-            elif ts_name == "none":
-                func_list = []
-            elif ts_name in function_manager.function_modules:
                 func_list = function_manager.function_modules[ts_name]['available_functions']
             elif toolset_manager.toolset_exists(ts_name):
+                ts_type = toolset_manager.get_toolset_type(ts_name)
                 func_list = toolset_manager.get_toolset_functions(ts_name)
             else:
+                ts_type = 'unknown'
                 func_list = []
 
             toolsets_list.append({
@@ -788,6 +781,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "function_count": len(func_list),
                 "type": ts_type,
                 "functions": func_list,
+                "emoji": toolset_manager.get_toolset_emoji(ts_name) if toolset_manager.toolset_exists(ts_name) else "",
                 "has_network_tools": bool(set(func_list) & network_functions)
             })
 
@@ -1905,9 +1899,10 @@ async def reset_prompts_chat_defaults(request: Request, _=Depends(require_login)
 
 @app.get("/api/toolsets")
 async def list_toolsets(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """List all toolsets."""
+    """List all toolsets. Use ?filter=sidebar to exclude module-level entries."""
     from core.modules.system.toolsets import toolset_manager
     function_manager = system.llm_chat.function_manager
+    filter_mode = request.query_params.get("filter", "")
     ts_set = set()
     ts_set.update(function_manager.get_available_toolsets())
     ts_set.update(toolset_manager.get_toolset_names())
@@ -1921,12 +1916,15 @@ async def list_toolsets(request: Request, _=Depends(require_login), system=Depen
         elif name == "none":
             func_list = []
             ts_type = "builtin"
-        elif name in function_manager.function_modules:
+        elif name in function_manager.function_modules and not toolset_manager.toolset_exists(name):
+            # Pure module (no toolset override) — skip for sidebar
+            if filter_mode == "sidebar":
+                continue
             func_list = function_manager.function_modules[name]['available_functions']
             ts_type = "module"
         elif toolset_manager.toolset_exists(name):
             func_list = toolset_manager.get_toolset_functions(name)
-            ts_type = "user"
+            ts_type = toolset_manager.get_toolset_type(name)
         else:
             func_list = []
             ts_type = "unknown"
@@ -1936,6 +1934,7 @@ async def list_toolsets(request: Request, _=Depends(require_login), system=Depen
             "type": ts_type,
             "function_count": len(func_list),
             "functions": func_list,
+            "emoji": toolset_manager.get_toolset_emoji(name) if toolset_manager.toolset_exists(name) else "",
             "has_network_tools": bool(set(func_list) & network_functions)
         })
     return {"toolsets": toolsets}
@@ -2012,6 +2011,18 @@ async def delete_toolset(toolset_name: str, request: Request, _=Depends(require_
         return {"status": "success", "name": toolset_name}
     else:
         raise HTTPException(status_code=404, detail="Toolset not found or cannot delete")
+
+
+@app.post("/api/toolsets/{toolset_name}/emoji")
+async def set_toolset_emoji(toolset_name: str, request: Request, _=Depends(require_login)):
+    """Set custom emoji for a toolset (works on presets and user toolsets)."""
+    from core.modules.system.toolsets import toolset_manager
+    data = await request.json()
+    emoji = data.get('emoji', '')
+    if toolset_manager.set_emoji(toolset_name, emoji):
+        return {"status": "success", "name": toolset_name, "emoji": emoji}
+    else:
+        raise HTTPException(status_code=404, detail="Toolset not found")
 
 
 # =============================================================================

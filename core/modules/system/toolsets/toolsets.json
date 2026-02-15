@@ -1,9 +1,49 @@
 {
-  "_comment": "Default toolsets - copy to user/toolsets/toolsets.json to customize",
-  "setup": {
+  "_comment": "Core preset toolsets",
+  "work": {
+    "type": "preset",
     "functions": [
-      "list_tools",
+      "web_search",
+      "get_website",
+      "get_wikipedia",
+      "research_topic",
+      "get_site_links",
+      "get_images",
+      "create_goal",
+      "list_goals",
+      "update_goal",
+      "delete_goal",
+      "notepad_read",
+      "notepad_append_lines",
+      "notepad_delete_lines",
+      "notepad_insert_line",
       "search_help_docs",
+      "ask_claude"
+    ]
+  },
+  "smarthome": {
+    "type": "preset",
+    "functions": [
+      "ha_list_scenes_and_scripts",
+      "ha_activate",
+      "ha_list_areas",
+      "ha_area_light",
+      "ha_area_color",
+      "ha_get_thermostat",
+      "ha_set_thermostat",
+      "ha_list_lights_and_switches",
+      "ha_set_light",
+      "ha_set_switch",
+      "ha_notify",
+      "ha_house_status",
+      "save_knowledge",
+      "search_knowledge",
+      "delete_knowledge"
+    ]
+  },
+  "personality": {
+    "type": "preset",
+    "functions": [
       "view_prompt",
       "switch_prompt",
       "reset_chat",
@@ -14,25 +54,21 @@
       "list_pieces",
       "change_ai_name",
       "change_username",
-      "set_tts_voice"
-    ]
-  },
-  "essentials": {
-    "functions": [
+      "set_tts_voice",
+      "list_tools",
+      "get_time",
       "save_memory",
       "search_memory",
       "get_recent_memories",
-      "list_memory_labels",
-      "search_help_docs",
-      "view_prompt",
-      "edit_prompt",
-      "set_piece",
-      "create_piece",
-      "list_pieces"
-    ]
-  },
-  "user_new": {
-    "functions": [
+      "delete_memory",
+      "save_knowledge",
+      "search_knowledge",
+      "delete_knowledge",
+      "create_goal",
+      "list_goals",
+      "update_goal",
+      "delete_goal",
+      "ask_claude"
     ]
   }
 }

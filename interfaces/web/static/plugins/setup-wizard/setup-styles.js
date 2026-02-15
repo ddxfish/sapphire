@@ -285,8 +285,8 @@ export function injectSetupStyles() {
       opacity: 0.9;
     }
 
-    /* Help tip */
-    .help-tip {
+    /* Setup wizard info tip (not .help-tip — that's a 15px tooltip in main CSS) */
+    .setup-tip {
       display: flex;
       align-items: flex-start;
       gap: 10px;
@@ -298,7 +298,7 @@ export function injectSetupStyles() {
       font-size: 0.85rem;
       color: var(--text-secondary, #aaa);
     }
-    .help-tip .tip-icon {
+    .setup-tip .tip-icon {
       font-size: 1.1rem;
     }
 

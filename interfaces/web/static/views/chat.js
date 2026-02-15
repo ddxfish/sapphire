@@ -248,12 +248,13 @@ async function loadSidebar() {
             promptSel.value = settings.prompt || 'sapphire';
         }
 
-        // Populate toolset dropdown
+        // Populate toolset dropdown (exclude raw module entries)
         const toolsetSel = container.querySelector('#sb-toolset');
         if (toolsetSel && init?.toolsets?.list) {
-            toolsetSel.innerHTML = init.toolsets.list.map(t =>
-                `<option value="${t.name}">${t.name} (${t.function_count})</option>`
-            ).join('');
+            toolsetSel.innerHTML = init.toolsets.list
+                .filter(t => t.type !== 'module')
+                .map(t => `<option value="${t.name}">${t.name} (${t.function_count})</option>`)
+                .join('');
             toolsetSel.value = settings.toolset || settings.ability || 'all';
         }
 

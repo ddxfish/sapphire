@@ -33,11 +33,11 @@ export async function openSettingsModal() {
             });
         }
 
-        // Load toolsets list from init data cache
+        // Load toolsets list from init data cache (exclude raw module entries)
         if (initData?.toolsets?.list) {
             const toolsetSelect = document.getElementById('setting-toolset');
             toolsetSelect.innerHTML = '';
-            initData.toolsets.list.forEach(t => {
+            initData.toolsets.list.filter(t => t.type !== 'module').forEach(t => {
                 const opt = document.createElement('option');
                 opt.value = t.name;
                 opt.textContent = `${t.name} (${t.function_count} functions)`;

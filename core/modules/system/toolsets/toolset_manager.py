@@ -39,24 +39,39 @@ class ToolsetManager:
         self._load()
     
     def _load(self):
-        """Load toolsets - user file replaces core entirely."""
+        """Load toolsets - core presets + user overrides merged."""
         user_path = self.USER_DIR / "toolsets.json"
         core_path = self.BASE_DIR / "toolsets.json"
-        
-        path = user_path if user_path.exists() else core_path
-        
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
 
+        self._toolsets = {}
+
+        # Load core presets first
+        try:
+            with open(core_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
-            # Filter out metadata keys
             self._toolsets = {k: v for k, v in data.items() if not k.startswith('_')}
-            
-            source = "user" if path == user_path else "core"
-            logger.info(f"Loaded {len(self._toolsets)} toolsets from {source}")
+            logger.info(f"Loaded {len(self._toolsets)} core toolsets")
         except Exception as e:
-            logger.error(f"Failed to load toolsets: {e}")
+            logger.error(f"Failed to load core toolsets: {e}")
+
+        # Merge user toolsets
+        if user_path.exists():
+            try:
+                with open(user_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                user_ts = {k: v for k, v in data.items() if not k.startswith('_')}
+                for k, v in user_ts.items():
+                    if k in self._toolsets and self._toolsets[k].get('type') == 'preset':
+                        # Preset override — only take emoji, keep core functions
+                        if 'emoji' in v:
+                            self._toolsets[k]['emoji'] = v['emoji']
+                    else:
+                        self._toolsets[k] = v
+                logger.info(f"Merged {len(user_ts)} user toolsets")
+            except Exception as e:
+                logger.error(f"Failed to load user toolsets: {e}")
+
+        if not self._toolsets:
             self._toolsets = {"default": {"functions": []}}
     
     def reload(self):
@@ -134,6 +149,25 @@ class ToolsetManager:
     def get_toolset_functions(self, name: str) -> list:
         """Get function list for a toolset."""
         return self._toolsets.get(name, {}).get('functions', [])
+
+    def get_toolset_type(self, name: str) -> str:
+        """Get type for a toolset ('preset' or 'user')."""
+        return self._toolsets.get(name, {}).get('type', 'user')
+
+    def get_toolset_emoji(self, name: str) -> str:
+        """Get custom emoji for a toolset, or empty string."""
+        return self._toolsets.get(name, {}).get('emoji', '')
+
+    def set_emoji(self, name: str, emoji: str) -> bool:
+        """Set custom emoji on any toolset (including presets)."""
+        if name not in self._toolsets:
+            return False
+        with self._lock:
+            if emoji:
+                self._toolsets[name]['emoji'] = emoji
+            else:
+                self._toolsets[name].pop('emoji', None)
+            return self._save_to_user()
     
     def get_all_toolsets(self) -> dict:
         """Get all toolsets."""
@@ -156,25 +190,32 @@ class ToolsetManager:
             return self._save_to_user()
     
     def delete_toolset(self, name: str) -> bool:
-        """Delete a toolset (from user file only)."""
+        """Delete a toolset (user-created only, not presets)."""
         if name not in self._toolsets:
             return False
-        
+        if self._toolsets[name].get('type') == 'preset':
+            return False
+
         with self._lock:
             del self._toolsets[name]
             return self._save_to_user()
     
     def _save_to_user(self) -> bool:
-        """Save current toolsets to user file."""
+        """Save user toolsets + preset emoji overrides to user file."""
         user_path = self.USER_DIR / "toolsets.json"
-        
+
         try:
             # Ensure directory exists
             self.USER_DIR.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Saving toolsets to: {user_path}")
-            
+
             data = {"_comment": "Your custom toolsets"}
-            data.update(self._toolsets)
+            for k, v in self._toolsets.items():
+                if v.get('type') == 'preset':
+                    # Only save emoji override for presets (not functions)
+                    if 'emoji' in v:
+                        data[k] = {"type": "preset", "emoji": v['emoji']}
+                else:
+                    data[k] = v
             
             with open(user_path, 'w', encoding='utf-8') as f:
 

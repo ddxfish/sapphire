@@ -73,7 +73,7 @@ export default {
       .map(([key]) => key);
 
     return `
-      <div class="help-tip">
+      <div class="setup-tip">
         <span class="tip-icon">💡</span>
         <span>Easy mode: Install LM Studio, load a model, start the server.</span>
       </div>

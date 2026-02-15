@@ -16,6 +16,12 @@ export default {
             ${ctx.renderFields(this.essentialKeys)}
             ${ctx.renderAccordion('sys-adv', this.advancedKeys)}
 
+            <div class="system-tools" style="margin:20px 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius)">
+                <h4 style="margin:0 0 10px;font-size:var(--font-sm)">Tools</h4>
+                <button class="btn-primary" id="sys-setup-wizard">Run Setup Wizard</button>
+                <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Configure LLM, audio, voice, and identity settings step by step.</p>
+            </div>
+
             <div class="danger-zone">
                 <h4>Danger Zone</h4>
                 <div class="danger-section">
@@ -40,6 +46,14 @@ export default {
     },
 
     attachListeners(ctx, el) {
+        el.querySelector('#sys-setup-wizard')?.addEventListener('click', () => {
+            if (window.sapphireSetupWizard) {
+                window.sapphireSetupWizard.open(true);
+            } else {
+                ui.showToast('Setup wizard plugin not loaded', 'error');
+            }
+        });
+
         el.querySelector('#dz-reset-all')?.addEventListener('click', async () => {
             if (!confirm('Reset ALL settings to defaults?')) return;
             const t = prompt('Type RESET to confirm:');
