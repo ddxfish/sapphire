@@ -521,20 +521,127 @@ async function loadEntries(inner, tabId, tabType) {
         const data = await resp.json();
         const entries = data.entries || [];
 
-        inner.innerHTML = entries.map(e => `
-            <div class="mind-item" data-id="${e.id}">
-                <div class="mind-item-content">${escHtml(e.content)}</div>
-                <div class="mind-item-actions">
-                    ${!isAI ? `<button class="mind-btn-sm mind-edit-entry" data-id="${e.id}" title="Edit">&#x270E;</button>` : ''}
-                    <button class="mind-btn-sm mind-del-entry" data-id="${e.id}" title="Delete">&#x2715;</button>
-                </div>
-            </div>
-        `).join('') + (!isAI ? `<button class="mind-btn mind-add-entry" data-tab-id="${tabId}">+ Add Entry</button>` : '');
-
-        if (!entries.length) {
-            inner.innerHTML = `<div class="mind-empty">Empty tab</div>` +
-                (!isAI ? `<button class="mind-btn mind-add-entry" data-tab-id="${tabId}">+ Add Entry</button>` : '');
+        // Group entries: files first (grouped by filename), then loose entries
+        const fileGroups = {};
+        const loose = [];
+        for (const e of entries) {
+            if (e.source_filename) {
+                if (!fileGroups[e.source_filename]) fileGroups[e.source_filename] = [];
+                fileGroups[e.source_filename].push(e);
+            } else {
+                loose.push(e);
+            }
         }
+        const filenames = Object.keys(fileGroups).sort();
+
+        let html = '';
+
+        // File groups
+        for (const fname of filenames) {
+            const group = fileGroups[fname];
+            html += `
+                <div class="mind-file-group">
+                    <div class="mind-file-header">
+                        <span class="mind-file-badge">&#x1F4C4;</span>
+                        <span class="mind-file-name">${escHtml(fname)}</span>
+                        <span class="mind-file-info">${group.length} chunk${group.length > 1 ? 's' : ''}</span>
+                        <button class="mind-btn-sm mind-del-file" data-tab-id="${tabId}" data-filename="${escAttr(fname)}" title="Delete file">&#x2715;</button>
+                    </div>
+                    ${group.map(e => `
+                        <div class="mind-item mind-file-entry" data-id="${e.id}">
+                            <div class="mind-item-content">${escHtml(e.content)}</div>
+                            <div class="mind-item-actions">
+                                <button class="mind-btn-sm mind-edit-entry" data-id="${e.id}" title="Edit">&#x270E;</button>
+                                <button class="mind-btn-sm mind-del-entry" data-id="${e.id}" title="Delete chunk">&#x2715;</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        // Loose entries
+        for (const e of loose) {
+            html += `
+                <div class="mind-item" data-id="${e.id}">
+                    <div class="mind-item-content">${escHtml(e.content)}</div>
+                    <div class="mind-item-actions">
+                        ${!isAI ? `<button class="mind-btn-sm mind-edit-entry" data-id="${e.id}" title="Edit">&#x270E;</button>` : ''}
+                        <button class="mind-btn-sm mind-del-entry" data-id="${e.id}" title="Delete">&#x2715;</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Action buttons
+        if (!isAI) {
+            html += `<div class="mind-entry-actions">
+                <button class="mind-btn mind-add-entry" data-tab-id="${tabId}">+ Add Entry</button>
+                <button class="mind-btn mind-upload-file" data-tab-id="${tabId}">+ Add File</button>
+                <input type="file" class="mind-file-input" style="display:none"
+                    accept=".txt,.md,.py,.js,.ts,.html,.css,.json,.csv,.xml,.yml,.yaml,.log,.cfg,.ini,.conf,.sh,.bat,.toml,.rs,.go,.java,.c,.cpp,.h,.rb,.php,.sql,.r,.m">
+            </div>`;
+        }
+
+        if (!entries.length && !html.includes('mind-entry-actions')) {
+            html = `<div class="mind-empty">Empty</div>` + html;
+        }
+        if (!entries.length && isAI) {
+            html = `<div class="mind-empty">No AI notes yet</div>`;
+        }
+
+        inner.innerHTML = html;
+
+        // Upload file
+        inner.querySelectorAll('.mind-upload-file').forEach(btn => {
+            const fileInput = btn.parentElement.querySelector('.mind-file-input');
+            btn.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', async () => {
+                const file = fileInput.files[0];
+                if (!file) return;
+                const form = new FormData();
+                form.append('file', file);
+                try {
+                    btn.textContent = 'Uploading...';
+                    btn.disabled = true;
+                    const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/upload`, {
+                        method: 'POST', body: form
+                    });
+                    if (resp.ok) {
+                        const result = await resp.json();
+                        ui.showToast(`Uploaded ${result.filename} (${result.chunks} chunks)`, 'success');
+                        inner.dataset.loaded = '';
+                        await loadEntries(inner, tabId, tabType);
+                    } else {
+                        const err = await resp.json();
+                        ui.showToast(err.detail || 'Upload failed', 'error');
+                        btn.textContent = '+ Add File';
+                        btn.disabled = false;
+                    }
+                } catch (e) {
+                    ui.showToast('Upload failed', 'error');
+                    btn.textContent = '+ Add File';
+                    btn.disabled = false;
+                }
+                fileInput.value = '';
+            });
+        });
+
+        // Delete file (all chunks)
+        inner.querySelectorAll('.mind-del-file').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const fname = btn.dataset.filename;
+                if (!confirm(`Delete all chunks from "${fname}"?`)) return;
+                try {
+                    const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/file/${encodeURIComponent(fname)}`, { method: 'DELETE' });
+                    if (resp.ok) {
+                        ui.showToast(`Deleted ${fname}`, 'success');
+                        inner.dataset.loaded = '';
+                        await loadEntries(inner, tabId, tabType);
+                    }
+                } catch (e) { ui.showToast('Failed', 'error'); }
+            });
+        });
 
         // Add entry
         inner.querySelectorAll('.mind-add-entry').forEach(btn => {
@@ -561,20 +668,7 @@ async function loadEntries(inner, tabId, tabType) {
             btn.addEventListener('click', async () => {
                 const item = btn.closest('.mind-item');
                 const content = item.querySelector('.mind-item-content').textContent;
-                const newContent = prompt('Edit entry:', content);
-                if (newContent === null || newContent === content) return;
-                try {
-                    const resp = await fetch(`/api/knowledge/entries/${btn.dataset.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ content: newContent })
-                    });
-                    if (resp.ok) {
-                        ui.showToast('Updated', 'success');
-                        inner.dataset.loaded = '';
-                        await loadEntries(inner, tabId, tabType);
-                    }
-                } catch (e) { ui.showToast('Failed', 'error'); }
+                showEntryEditModal(inner, tabId, tabType, parseInt(btn.dataset.id), content);
             });
         });
 
@@ -595,6 +689,64 @@ async function loadEntries(inner, tabId, tabType) {
     } catch (e) {
         inner.innerHTML = `<div class="mind-empty">Error: ${e.message}</div>`;
     }
+}
+
+function showEntryEditModal(inner, tabId, tabType, entryId, content) {
+    const existing = document.querySelector('.mind-modal-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal">
+            <div class="pr-modal-header">
+                <h3>Edit Entry</h3>
+                <button class="mind-btn-sm mind-modal-close">&#x2715;</button>
+            </div>
+            <div class="pr-modal-body">
+                <div class="mind-form">
+                    <textarea id="me-content" rows="12" style="min-height:200px">${escHtml(content)}</textarea>
+                    <div style="display:flex;justify-content:flex-end;gap:8px">
+                        <button class="mind-btn mind-modal-cancel">Cancel</button>
+                        <button class="mind-btn" id="me-save" style="border-color:var(--trim,var(--accent-blue))">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
+    overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    const textarea = overlay.querySelector('#me-content');
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+
+    overlay.querySelector('#me-save').addEventListener('click', async () => {
+        const newContent = textarea.value.trim();
+        if (!newContent) { ui.showToast('Content cannot be empty', 'error'); return; }
+        if (newContent === content) { close(); return; }
+        try {
+            const resp = await fetch(`/api/knowledge/entries/${entryId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: newContent })
+            });
+            if (resp.ok) {
+                close();
+                ui.showToast('Entry updated', 'success');
+                inner.dataset.loaded = '';
+                await loadEntries(inner, tabId, tabType);
+            } else {
+                const err = await resp.json();
+                ui.showToast(err.detail || 'Failed', 'error');
+            }
+        } catch (e) { ui.showToast('Failed', 'error'); }
+    });
 }
 
 // ─── Scope Deletion (double confirmation) ────────────────────────────────────

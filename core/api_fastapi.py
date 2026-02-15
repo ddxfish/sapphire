@@ -2360,6 +2360,56 @@ async def add_knowledge_entry(tab_id: int, request: Request, _=Depends(require_l
     return {"id": entry_id}
 
 
+@app.post("/api/knowledge/tabs/{tab_id}/upload")
+async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Depends(require_login)):
+    """Upload a text file into a knowledge tab — chunks and embeds automatically."""
+    from functions import knowledge
+
+    # Verify tab exists
+    tab = knowledge.get_tabs_by_id(tab_id)
+    if not tab:
+        raise HTTPException(status_code=404, detail="Tab not found")
+
+    # Read and decode file
+    raw = await file.read()
+    if len(raw) > 2 * 1024 * 1024:  # 2MB cap
+        raise HTTPException(status_code=400, detail="File too large (max 2MB)")
+
+    # Try common encodings
+    text = None
+    for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
+        try:
+            text = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, ValueError):
+            continue
+    if text is None:
+        raise HTTPException(status_code=400, detail="Could not decode file — unsupported encoding")
+
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="File is empty")
+
+    filename = file.filename or 'upload.txt'
+    chunks = knowledge._chunk_text(text)
+    entry_ids = []
+    for i, chunk in enumerate(chunks):
+        eid = knowledge.add_entry(tab_id, chunk, chunk_index=i, source_filename=filename)
+        entry_ids.append(eid)
+
+    return {"filename": filename, "chunks": len(chunks), "entry_ids": entry_ids}
+
+
+@app.delete("/api/knowledge/tabs/{tab_id}/file/{filename}")
+async def delete_knowledge_file(tab_id: int, filename: str, _=Depends(require_login)):
+    """Delete all entries from a specific uploaded file."""
+    from functions import knowledge
+    count = knowledge.delete_entries_by_filename(tab_id, filename)
+    if count == 0:
+        raise HTTPException(status_code=404, detail="No entries found for that file")
+    return {"deleted": count, "filename": filename}
+
+
 @app.put("/api/knowledge/entries/{entry_id}")
 async def update_knowledge_entry(entry_id: int, request: Request, _=Depends(require_login)):
     from functions import knowledge

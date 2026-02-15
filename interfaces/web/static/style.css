@@ -4710,6 +4710,32 @@ a.gallery-caption:hover {
     flex-shrink: 0;
 }
 
+/* File groups inside entries */
+.mind-file-group {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    overflow: hidden;
+}
+.mind-file-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    font-size: var(--font-sm);
+}
+.mind-file-badge { font-size: 14px; }
+.mind-file-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mind-file-info { color: var(--text-muted); font-size: var(--font-xs); white-space: nowrap; }
+.mind-file-entry { padding-left: 12px; }
+
+.mind-entry-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
 /* People grid */
 .mind-people-grid {
     display: grid;

@@ -587,6 +587,33 @@ def delete_entry(entry_id):
     return True
 
 
+def delete_entries_by_filename(tab_id, filename):
+    """Delete all entries in a tab that came from a specific uploaded file."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = ? AND source_filename = ?',
+                   (tab_id, filename))
+    count = cursor.fetchone()[0]
+    if count:
+        cursor.execute('DELETE FROM knowledge_entries WHERE tab_id = ? AND source_filename = ?',
+                       (tab_id, filename))
+        conn.commit()
+    conn.close()
+    return count
+
+
+def get_tabs_by_id(tab_id):
+    """Get a single tab by ID."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, name, type, scope FROM knowledge_tabs WHERE id = ?', (tab_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "name": row[1], "type": row[2], "scope": row[3]}
+
+
 # ─── Chunking ─────────────────────────────────────────────────────────────────
 
 def _chunk_text(text, max_tokens=400, overlap_tokens=50):
@@ -668,47 +695,68 @@ def _search_entries(query, scope, category=None, limit=10):
         tab_params = tab_ids
 
     results = []
+    seen_ids = set()
+
+    # Strategy 0: Filename match
+    cursor.execute(f'''
+        SELECT e.id, e.content, t.name as tab_name, e.source_filename
+        FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+        WHERE e.source_filename LIKE ?{tab_filter}
+        ORDER BY e.chunk_index LIMIT ?
+    ''', [f'%{query}%'] + tab_params + [limit])
+    for r in cursor.fetchall():
+        results.append({"id": r[0], "content": r[1], "tab": r[2], "file": r[3], "source": "knowledge", "score": 0.96})
+        seen_ids.add(r[0])
 
     # Strategy 1: FTS AND
+    fts_results = []
     fts_exact = _sanitize_fts_query(query)
     if fts_exact:
         try:
             cursor.execute(f'''
-                SELECT e.id, e.content, t.name as tab_name, bm25(knowledge_fts) as rank
+                SELECT e.id, e.content, t.name as tab_name, e.source_filename
                 FROM knowledge_fts f
                 JOIN knowledge_entries e ON f.rowid = e.id
                 JOIN knowledge_tabs t ON e.tab_id = t.id
                 WHERE knowledge_fts MATCH ?{tab_filter}
-                ORDER BY rank LIMIT ?
+                ORDER BY bm25(knowledge_fts) LIMIT ?
             ''', [fts_exact] + tab_params + [limit])
-            results = cursor.fetchall()
+            fts_results = cursor.fetchall()
 
             # Strategy 2: FTS OR + prefix
-            if not results:
+            if not fts_results:
                 fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
                 if fts_broad != fts_exact:
                     cursor.execute(f'''
-                        SELECT e.id, e.content, t.name as tab_name, bm25(knowledge_fts) as rank
+                        SELECT e.id, e.content, t.name as tab_name, e.source_filename
                         FROM knowledge_fts f
                         JOIN knowledge_entries e ON f.rowid = e.id
                         JOIN knowledge_tabs t ON e.tab_id = t.id
                         WHERE knowledge_fts MATCH ?{tab_filter}
-                        ORDER BY rank LIMIT ?
+                        ORDER BY bm25(knowledge_fts) LIMIT ?
                     ''', [fts_broad] + tab_params + [limit])
-                    results = cursor.fetchall()
+                    fts_results = cursor.fetchall()
         except sqlite3.OperationalError as e:
             logger.warning(f"Knowledge FTS query failed: {e}")
 
     conn.close()
 
-    if results:
-        # FTS matches are direct text hits — score high so they outrank semantic guesses
-        return [{"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.95} for r in results]
+    if fts_results:
+        for r in fts_results:
+            if r[0] not in seen_ids:
+                entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.95}
+                if r[3]: entry["file"] = r[3]
+                results.append(entry)
+                seen_ids.add(r[0])
+        return results
 
     # Strategy 3: Vector similarity (already returns score)
     vec_results = _vector_search_entries(query, scope, category, limit)
     if vec_results:
-        return vec_results
+        for r in vec_results:
+            if r["id"] not in seen_ids:
+                results.append(r)
+        return results
 
     # Strategy 4: LIKE fallback
     conn = _get_connection()
@@ -718,7 +766,7 @@ def _search_entries(query, scope, category=None, limit=10):
         conditions = ' OR '.join(['e.content LIKE ?' for _ in terms])
         params = [f'%{t}%' for t in terms]
         cursor.execute(f'''
-            SELECT e.id, e.content, t.name as tab_name
+            SELECT e.id, e.content, t.name as tab_name, e.source_filename
             FROM knowledge_entries e
             JOIN knowledge_tabs t ON e.tab_id = t.id
             WHERE ({conditions}){tab_filter}
@@ -726,10 +774,15 @@ def _search_entries(query, scope, category=None, limit=10):
         ''', params + tab_params + [limit])
         rows = cursor.fetchall()
         conn.close()
-        return [{"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.35} for r in rows]
+        for r in rows:
+            if r[0] not in seen_ids:
+                entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.35}
+                if r[3]: entry["file"] = r[3]
+                results.append(entry)
+        return results
 
     conn.close()
-    return []
+    return results
 
 
 def _vector_search_entries(query, scope, category=None, limit=10):
@@ -747,13 +800,13 @@ def _vector_search_entries(query, scope, category=None, limit=10):
 
     if category:
         cursor.execute('''
-            SELECT e.id, e.content, t.name, e.embedding
+            SELECT e.id, e.content, t.name, e.embedding, e.source_filename
             FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
             WHERE t.scope = ? AND LOWER(t.name) = LOWER(?) AND e.embedding IS NOT NULL
         ''', (scope, category))
     else:
         cursor.execute('''
-            SELECT e.id, e.content, t.name, e.embedding
+            SELECT e.id, e.content, t.name, e.embedding, e.source_filename
             FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
             WHERE t.scope = ? AND e.embedding IS NOT NULL
         ''', (scope,))
@@ -762,11 +815,13 @@ def _vector_search_entries(query, scope, category=None, limit=10):
     conn.close()
 
     scored = []
-    for eid, content, tname, emb_blob in rows:
+    for eid, content, tname, emb_blob, src_file in rows:
         emb = np.frombuffer(emb_blob, dtype=np.float32)
         sim = float(np.dot(query_vec, emb))
         if sim >= SIMILARITY_THRESHOLD:
-            scored.append({"id": eid, "content": content, "tab": tname, "source": "knowledge", "score": sim})
+            entry = {"id": eid, "content": content, "tab": tname, "source": "knowledge", "score": sim}
+            if src_file: entry["file"] = src_file
+            scored.append(entry)
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:limit]
@@ -840,7 +895,8 @@ def _format_person(p):
 def _format_entry(r, query=None, max_len=800):
     content = r["content"]
     eid = f"[id:{r['id']}] " if r.get("id") else ""
-    tab_info = f"[tab: {r['tab']}] " if r.get("tab") else ""
+    tab_info = f"[{r['tab']}] " if r.get("tab") else ""
+    file_info = f"[file: {r['file']}] " if r.get("file") else ""
 
     if len(content) <= max_len:
         preview = content
@@ -859,7 +915,7 @@ def _format_entry(r, query=None, max_len=800):
     else:
         preview = content[:max_len] + '...'
 
-    return f"{tab_info}{eid}{preview}"
+    return f"{tab_info}{file_info}{eid}{preview}"
 
 
 # ─── Tool Operations ─────────────────────────────────────────────────────────
@@ -989,9 +1045,9 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
     lines = [f"Found {len(results)} results:"]
     for r in results[:limit]:
         if r["source"] == "people":
-            lines.append(f"  [Person] {_format_person(r)}")
+            lines.append(f"---\n[Person] {_format_person(r)}")
         else:
-            lines.append(f"  [Knowledge] {_format_entry(r, query=query)}")
+            lines.append(f"---\n[Knowledge] {_format_entry(r, query=query)}")
 
     return '\n'.join(lines), True
 
