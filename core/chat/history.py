@@ -24,6 +24,7 @@ SYSTEM_DEFAULTS = {
     "speed": 1.3,
     "spice_enabled": True,
     "spice_turns": 3,
+    "spice_set": "default",
     "inject_datetime": False,
     "custom_context": "",
     "llm_primary": "auto",      # "auto", "none", or provider key like "claude"

@@ -1447,7 +1447,7 @@ body {
 
 .spice-cat-header {
     display: grid;
-    grid-template-columns: 10px auto 1fr auto;
+    grid-template-columns: 10px auto auto 1fr;
     align-items: center;
     gap: 14px;
     padding: 14px 16px;
@@ -1510,6 +1510,10 @@ body {
 
 .spice-text { flex: 1; line-height: 1.4; }
 .spice-item-actions { display: flex; gap: 2px; flex-shrink: 0; }
+
+.ss-cat-check { display: flex; align-items: center; cursor: pointer; }
+.ss-cat-check input { cursor: pointer; width: 16px; height: 16px; }
+.ss-actions-bar { display: flex; gap: 8px; padding: 12px 16px 4px; }
 
 /* =============================================================================
    SCHEDULE VIEW

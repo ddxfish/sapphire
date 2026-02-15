@@ -454,6 +454,18 @@ def _apply_chat_settings(system, settings: dict):
             scope = settings["people_scope"]
             system.llm_chat.function_manager.set_people_scope(scope if scope != "none" else None)
 
+        if "spice_set" in settings:
+            from core.modules.system.spice_sets import spice_set_manager
+            set_name = settings["spice_set"]
+            if spice_set_manager.set_exists(set_name):
+                categories = spice_set_manager.get_categories(set_name)
+                all_cats = set(prompts.prompt_manager.spices.keys())
+                prompts.prompt_manager._disabled_categories = all_cats - set(categories)
+                prompts.prompt_manager.save_spices()
+                prompts.invalidate_spice_picks()
+                spice_set_manager.active_name = set_name
+                logger.info(f"Applied spice set: {set_name}")
+
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
             toolset_name = settings[toolset_key]
@@ -825,6 +837,19 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         # Spices data
         spice_data = _build_spice_response()
 
+        # Spice sets data
+        from core.modules.system.spice_sets import spice_set_manager
+        spice_sets_list = []
+        for name in spice_set_manager.get_set_names():
+            ss = spice_set_manager.get_set(name)
+            spice_sets_list.append({
+                "name": name,
+                "categories": ss.get('categories', []),
+                "category_count": len(ss.get('categories', [])),
+                "emoji": ss.get('emoji', '')
+            })
+        current_spice_set = spice_set_manager.active_name
+
         # Settings
         avatars_in_chat = getattr(config, 'AVATARS_IN_CHAT', False)
         wizard_step = getattr(config, 'SETUP_WIZARD_STEP', 'complete')
@@ -864,6 +889,10 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "components": prompt_components
             },
             "spices": spice_data,
+            "spice_sets": {
+                "list": spice_sets_list,
+                "current": current_spice_set
+            },
             "settings": {
                 "AVATARS_IN_CHAT": avatars_in_chat
             },
@@ -2178,6 +2207,88 @@ async def delete_spice(category: str, index: int, request: Request, _=Depends(re
     prompts.prompt_manager.save_spices()
     publish(Events.SPICE_CHANGED, {"category": category, "index": index, "action": "deleted"})
     return {"status": "success"}
+
+
+# =============================================================================
+# SPICE SET ROUTES
+# =============================================================================
+
+@app.get("/api/spice-sets")
+async def list_spice_sets(request: Request, _=Depends(require_login)):
+    """List all spice sets."""
+    from core.modules.system.spice_sets import spice_set_manager
+    sets = []
+    for name in spice_set_manager.get_set_names():
+        ss = spice_set_manager.get_set(name)
+        sets.append({
+            "name": name,
+            "categories": ss.get('categories', []),
+            "category_count": len(ss.get('categories', [])),
+            "emoji": ss.get('emoji', '')
+        })
+    return {"spice_sets": sets, "current": spice_set_manager.active_name}
+
+
+@app.get("/api/spice-sets/current")
+async def get_current_spice_set(request: Request, _=Depends(require_login)):
+    """Get current spice set."""
+    from core.modules.system.spice_sets import spice_set_manager
+    name = spice_set_manager.active_name
+    ss = spice_set_manager.get_set(name)
+    return {"name": name, "categories": ss.get('categories', []), "emoji": ss.get('emoji', '')}
+
+
+@app.post("/api/spice-sets/{set_name}/activate")
+async def activate_spice_set(set_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Activate a spice set - updates which categories are enabled."""
+    from core.modules.system.spice_sets import spice_set_manager
+    if not spice_set_manager.set_exists(set_name):
+        raise HTTPException(status_code=404, detail="Spice set not found")
+
+    categories = spice_set_manager.get_categories(set_name)
+    all_cats = set(prompts.prompt_manager.spices.keys())
+    disabled = all_cats - set(categories)
+    prompts.prompt_manager._disabled_categories = disabled
+    prompts.prompt_manager.save_spices()
+    prompts.invalidate_spice_picks()
+
+    spice_set_manager.active_name = set_name
+    system.llm_chat.session_manager.update_chat_settings({"spice_set": set_name})
+    publish(Events.SPICE_CHANGED, {"spice_set": set_name})
+    return {"status": "success", "spice_set": set_name}
+
+
+@app.post("/api/spice-sets/custom")
+async def save_custom_spice_set(request: Request, _=Depends(require_login)):
+    """Save a custom spice set."""
+    from core.modules.system.spice_sets import spice_set_manager
+    data = await request.json()
+    name = data.get('name')
+    categories = data.get('categories', [])
+    if not name:
+        raise HTTPException(status_code=400, detail="Name required")
+    spice_set_manager.save_set(name, categories)
+    return {"status": "success", "name": name}
+
+
+@app.delete("/api/spice-sets/{set_name}")
+async def delete_spice_set(set_name: str, request: Request, _=Depends(require_login)):
+    """Delete a spice set."""
+    from core.modules.system.spice_sets import spice_set_manager
+    if spice_set_manager.delete_set(set_name):
+        return {"status": "success"}
+    raise HTTPException(status_code=404, detail="Spice set not found")
+
+
+@app.post("/api/spice-sets/{set_name}/emoji")
+async def set_spice_set_emoji(set_name: str, request: Request, _=Depends(require_login)):
+    """Set emoji for a spice set."""
+    from core.modules.system.spice_sets import spice_set_manager
+    data = await request.json()
+    emoji = data.get('emoji', '')
+    if spice_set_manager.set_emoji(set_name, emoji):
+        return {"status": "success", "name": set_name, "emoji": emoji}
+    raise HTTPException(status_code=404, detail="Spice set not found")
 
 
 # =============================================================================

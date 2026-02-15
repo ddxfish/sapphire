@@ -1,0 +1,25 @@
+{
+  "_comment": "Default starter spice sets - seeded into user file on first run",
+  "default": {
+    "emoji": "\ud83c\udf36\ufe0f",
+    "categories": [
+      "length", "tone", "curiosity", "metacognition", "preferences",
+      "creativity", "depth", "pacing", "perspective", "focus",
+      "rapport", "precision", "flair", "scifi", "autonomy"
+    ]
+  },
+  "companion": {
+    "emoji": "\ud83d\udc9c",
+    "categories": [
+      "length", "tone", "curiosity", "metacognition", "preferences",
+      "creativity", "depth", "pacing", "perspective", "focus",
+      "rapport", "precision", "flair", "scifi", "flirty", "autonomy"
+    ]
+  },
+  "professional": {
+    "emoji": "\ud83d\udcbc",
+    "categories": [
+      "length", "tone", "depth", "pacing", "focus", "precision"
+    ]
+  }
+}

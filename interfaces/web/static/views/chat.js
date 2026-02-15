@@ -214,7 +214,7 @@ async function loadSidebar() {
     if (!chatName) return;
 
     try {
-        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, presetsResp] = await Promise.allSettled([
+        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, presetsResp, spiceSetsResp] = await Promise.allSettled([
             api.getChatSettings(chatName),
             getInitData(),
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
@@ -222,7 +222,8 @@ async function loadSidebar() {
             fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null),
-            fetch('/api/state/presets').then(r => r.ok ? r.json() : null)
+            fetch('/api/state/presets').then(r => r.ok ? r.json() : null),
+            fetch('/api/spice-sets').then(r => r.ok ? r.json() : null)
         ]);
 
         const settings = settingsResp.status === 'fulfilled' ? settingsResp.value.settings : {};
@@ -233,6 +234,7 @@ async function loadSidebar() {
         const knowledgeScopesData = knowledgeScopesResp.status === 'fulfilled' ? knowledgeScopesResp.value : null;
         const peopleScopesData = peopleScopesResp.status === 'fulfilled' ? peopleScopesResp.value : null;
         const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
+        const spiceSetsData = spiceSetsResp.status === 'fulfilled' ? spiceSetsResp.value : null;
 
         // Sync sidebar chat name from hidden select
         const selectedOpt = chatSelect?.options?.[chatSelect.selectedIndex];
@@ -256,6 +258,17 @@ async function loadSidebar() {
                 .map(t => `<option value="${t.name}">${t.name} (${t.function_count})</option>`)
                 .join('');
             toolsetSel.value = settings.toolset || settings.ability || 'all';
+        }
+
+        // Populate spice set dropdown (fresh from API, not cached init)
+        const spiceSetSel = container.querySelector('#sb-spice-set');
+        const spiceSets = spiceSetsData?.spice_sets || init?.spice_sets?.list || [];
+        const currentSpiceSet = spiceSetsData?.current || init?.spice_sets?.current || 'default';
+        if (spiceSetSel && spiceSets.length) {
+            spiceSetSel.innerHTML = spiceSets
+                .map(s => `<option value="${s.name}">${s.emoji ? s.emoji + ' ' : ''}${s.name} (${s.category_count})</option>`)
+                .join('');
+            spiceSetSel.value = settings.spice_set || currentSpiceSet;
         }
 
         // Populate LLM dropdown
@@ -395,6 +408,7 @@ function collectSettings(container) {
     return {
         prompt: getVal(container, '#sb-prompt'),
         toolset: getVal(container, '#sb-toolset'),
+        spice_set: getVal(container, '#sb-spice-set') || 'default',
         voice: getVal(container, '#sb-voice'),
         pitch: parseFloat(getVal(container, '#sb-pitch')) || 0.94,
         speed: parseFloat(getVal(container, '#sb-speed')) || 1.3,
