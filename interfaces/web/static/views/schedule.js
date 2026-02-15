@@ -332,6 +332,8 @@ async function openEditor(task) {
                                     <label>Cron</label>
                                     <input type="text" id="ed-cron-raw" value="${escapeHtml(cronRaw)}" placeholder="0 9 * * *" style="width:120px">
                                 </div>
+                            </div>
+                            <div class="sched-when-row" style="margin-top:10px">
                                 <div class="sched-field">
                                     <label>Chance <span class="help-tip" data-tip="Roll the dice each time this fires. At 50%, the task only runs half the time — great for variety so the AI doesn't feel robotic. 100% = always runs.">?</span></label>
                                     <div style="display:flex;align-items:center;gap:4px">

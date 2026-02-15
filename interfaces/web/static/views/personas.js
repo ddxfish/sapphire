@@ -105,127 +105,117 @@ function getCurrentPersona() {
 
 function renderDetail(p, isActive) {
     const s = p.settings || {};
+    const trim = s.trim_color || '#4a9eff';
     return `
-        <div class="view-header pa-header">
-            <div class="pa-header-left">
+        <div class="view-body view-scroll pa-scroll">
+
+            <div class="pa-header">
                 <div class="pa-avatar-wrap" id="pa-avatar-wrap">
                     <img class="pa-avatar-lg" id="pa-avatar" src="${avatarUrl(p.name)}" alt="${esc(p.name)}" loading="lazy"
                          onerror="this.src=''; this.alt='?'">
                     <div class="pa-avatar-overlay" id="pa-avatar-upload" title="Upload avatar">&#x1F4F7;</div>
                     <input type="file" id="pa-avatar-input" accept="image/*" style="display:none">
                 </div>
-                <div class="pa-header-text">
-                    <input class="pa-name-input" id="pa-name" value="${esc(p.name)}" placeholder="Name" spellcheck="false">
-                    <input class="pa-tagline-input" id="pa-tagline" value="${esc(p.tagline || '')}" placeholder="Tagline...">
+                <div class="pa-header-right">
+                    <div class="pa-header-top">
+                        <div class="pa-header-text">
+                            <input class="pa-name-input" id="pa-name" value="${esc(p.name)}" placeholder="Name" spellcheck="false">
+                            <input class="pa-tagline-input" id="pa-tagline" value="${esc(p.tagline || '')}" placeholder="Tagline...">
+                        </div>
+                        <input type="color" id="pa-s-trim_color" class="pa-trim-swatch" value="${trim}" data-key="trim_color" title="Trim color">
+                    </div>
+                    <div class="pa-header-actions">
+                        <button class="btn-primary" id="pa-load">Activate</button>
+                        <button class="btn-sm" id="pa-duplicate">Duplicate</button>
+                        <button class="btn-sm danger" id="pa-delete">Delete</button>
+                    </div>
                 </div>
             </div>
-            <div class="view-header-actions">
-                <button class="btn-primary" id="pa-load">Load</button>
-                <button class="btn-sm" id="pa-duplicate">Duplicate</button>
-                <button class="btn-sm danger" id="pa-delete">Delete</button>
-            </div>
-        </div>
-        <div class="view-body view-scroll pa-settings">
-            <div class="pa-sections">
 
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">Prompt</span>
-                        <span class="pa-section-desc">Character, scenario & behavior</span>
-                        <a class="pa-section-link" data-nav="prompts">\u2197 Prompts</a>
-                    </div>
-                    <div class="pa-section-body pa-section-row">
-                        ${renderSettingField('prompt', 'Prompt', s, renderPromptOptions(s.prompt))}
-                    </div>
-                </div>
+            <div class="pa-fences">
 
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">Toolset</span>
-                        <span class="pa-section-desc">Tools the AI can use</span>
-                        <a class="pa-section-link" data-nav="toolsets">\u2197 Toolsets</a>
+                <div class="pa-fence-group">
+                    <div class="pa-fence-heading">
+                        <span>Prompt & Tools</span>
+                        <span class="pa-fence-heading-right">
+                            <span class="pa-fence-toggle-label">Date/Time <span class="help-tip" data-tip="Inject current date & time into prompt">?</span></span>
+                            <label class="pa-fence-toggle"><input type="checkbox" id="pa-s-inject_datetime" data-key="inject_datetime" ${s.inject_datetime ? 'checked' : ''}><span class="toggle-slider"></span></label>
+                        </span>
                     </div>
-                    <div class="pa-section-body pa-section-row">
-                        ${renderSettingField('toolset', 'Toolset', s, renderToolsetOptions(s.toolset))}
-                    </div>
-                </div>
-
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">Spice</span>
-                        <span class="pa-section-desc">Style, flavor & personality injection</span>
-                        <a class="pa-section-link" data-nav="spices">\u2197 Spices</a>
-                    </div>
-                    <div class="pa-section-body pa-section-row">
-                        ${renderSettingField('spice_set', 'Set', s, renderSpiceSetOptions(s.spice_set))}
-                        <div class="pa-field">
-                            <label>Turns</label>
-                            <input type="number" id="pa-s-spice_turns" min="1" max="20" value="${s.spice_turns || 3}" data-key="spice_turns">
-                        </div>
-                        <div class="pa-field pa-field-toggle">
-                            <label><input type="checkbox" id="pa-s-spice_enabled" data-key="spice_enabled" ${s.spice_enabled !== false ? 'checked' : ''}> Enabled</label>
+                    <div class="pa-fence">
+                        <div class="pa-fence-body">
+                            ${renderSettingField('prompt', 'Prompt', s, renderPromptOptions(s.prompt), { tip: 'Character personality & scenario preset', view: 'prompts' })}
+                            ${renderSettingField('toolset', 'Toolset', s, renderToolsetOptions(s.toolset), { tip: 'Functions the AI can call', view: 'toolsets' })}
                         </div>
                     </div>
                 </div>
 
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">TTS</span>
-                        <span class="pa-section-desc">Voice synthesis settings</span>
+                <div class="pa-fence-group">
+                    <div class="pa-fence-heading">
+                        <span>Spice</span>
+                        <span class="pa-fence-heading-right">
+                            <label class="pa-fence-toggle">
+                                <input type="checkbox" id="pa-s-spice_enabled" data-key="spice_enabled" ${s.spice_enabled !== false ? 'checked' : ''}>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </span>
                     </div>
-                    <div class="pa-section-body">
-                        <div class="pa-section-row">
-                            ${renderSettingField('voice', 'Voice', s, renderVoiceOptions(s.voice))}
-                        </div>
-                        <div class="pa-section-row">
+                    <div class="pa-fence">
+                        <div class="pa-fence-body">
+                            ${renderSettingField('spice_set', 'Set', s, renderSpiceSetOptions(s.spice_set), { tip: 'Flavor pack for AI responses', view: 'spices' })}
                             <div class="pa-field">
-                                <label>Pitch: <span id="pa-pitch-val">${s.pitch || 0.98}</span></label>
+                                <label>Turns <span class="help-tip" data-tip="Spice activates every N turns">?</span></label>
+                                <input type="number" id="pa-s-spice_turns" min="1" max="20" value="${s.spice_turns || 3}" data-key="spice_turns">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pa-fence-group">
+                    <div class="pa-fence-heading"><span>TTS</span></div>
+                    <div class="pa-fence">
+                        <div class="pa-fence-body">
+                            ${renderSettingField('voice', 'Voice', s, renderVoiceOptions(s.voice), { tip: 'Text-to-speech voice' })}
+                            <div class="pa-field">
+                                <label>Pitch <span class="help-tip" data-tip="Voice pitch multiplier">?</span> <span id="pa-pitch-val">${s.pitch || 0.98}</span></label>
                                 <input type="range" id="pa-s-pitch" min="0.5" max="1.5" step="0.02" value="${s.pitch || 0.98}" data-key="pitch">
                             </div>
                             <div class="pa-field">
-                                <label>Speed: <span id="pa-speed-val">${s.speed || 1.3}</span></label>
+                                <label>Speed <span class="help-tip" data-tip="Speech speed multiplier">?</span> <span id="pa-speed-val">${s.speed || 1.3}</span></label>
                                 <input type="range" id="pa-s-speed" min="0.5" max="2.5" step="0.1" value="${s.speed || 1.3}" data-key="speed">
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">Model</span>
-                        <span class="pa-section-desc">LLM provider & model</span>
-                    </div>
-                    <div class="pa-section-body pa-section-row">
-                        ${renderSettingField('llm_primary', 'Provider', s, renderProviderOptions(s.llm_primary))}
-                    </div>
-                </div>
-
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">Appearance</span>
-                        <span class="pa-section-desc">Trim color & visual identity</span>
-                    </div>
-                    <div class="pa-section-body pa-section-row">
-                        <div class="pa-field">
-                            <label>Trim Color</label>
-                            <input type="color" id="pa-s-trim_color" value="${s.trim_color || '#4a9eff'}" data-key="trim_color">
+                <div class="pa-fence-group">
+                    <div class="pa-fence-heading"><span>Model</span></div>
+                    <div class="pa-fence">
+                        <div class="pa-fence-body">
+                            ${renderSettingField('llm_primary', 'Provider', s, renderProviderOptions(s.llm_primary), { tip: 'LLM API provider' })}
+                            <div class="pa-field" id="pa-model-group" style="display:none">
+                                <label>Model <span class="help-tip" data-tip="Specific model for this provider">?</span></label>
+                                <select id="pa-s-llm_model" data-key="llm_model"></select>
+                            </div>
+                            <div class="pa-field" id="pa-model-custom-group" style="display:none">
+                                <label>Model ID <span class="help-tip" data-tip="Custom model identifier">?</span></label>
+                                <input type="text" id="pa-s-llm_model_custom" placeholder="model-name" data-key="llm_model">
+                            </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="pa-section">
-                    <div class="pa-section-header">
-                        <span class="pa-section-title">Advanced</span>
-                        <span class="pa-section-desc">State engine, datetime & context</span>
+                <div class="pa-fence-group pa-fence-group-wide">
+                    <div class="pa-fence-heading pa-fence-collapse-trigger">
+                        <span class="accordion-arrow">&#x25B6;</span>
+                        <span>Advanced</span>
                     </div>
-                    <div class="pa-section-body">
-                        <div class="pa-toggles">
-                            <label><input type="checkbox" id="pa-s-inject_datetime" data-key="inject_datetime" ${s.inject_datetime ? 'checked' : ''}> Date/Time</label>
-                            <label><input type="checkbox" id="pa-s-state_engine_enabled" data-key="state_engine_enabled" ${s.state_engine_enabled ? 'checked' : ''}> State Engine</label>
-                        </div>
-                        <div class="pa-field pa-field-wide">
-                            <label>Custom Context</label>
-                            <textarea id="pa-s-custom_context" rows="3" placeholder="Injected into system prompt..." data-key="custom_context">${esc(s.custom_context || '')}</textarea>
+                    <div class="pa-fence pa-fence-collapse-content" style="display:none">
+                        <div class="pa-fence-body">
+                            <div class="pa-field">
+                                <label>Custom Context <span class="help-tip" data-tip="Extra text injected into system prompt">?</span></label>
+                                <textarea id="pa-s-custom_context" rows="3" placeholder="Injected into system prompt..." data-key="custom_context">${esc(s.custom_context || '')}</textarea>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -235,13 +225,18 @@ function renderDetail(p, isActive) {
     `;
 }
 
-function renderSettingField(key, label, settings, optionsHtml) {
+function renderSettingField(key, label, settings, optionsHtml, opts = {}) {
+    const tip = opts.tip ? ` <span class="help-tip" data-tip="${esc(opts.tip)}">?</span>` : '';
+    const link = opts.view ? `<a class="pa-field-edit pa-section-link" data-nav="${opts.view}">edit</a>` : '';
     return `
         <div class="pa-field">
-            <label>${label}</label>
-            <select id="pa-s-${key}" data-key="${key}">
-                ${optionsHtml}
-            </select>
+            <label>${label}${tip}</label>
+            <div class="pa-field-with-link">
+                <select id="pa-s-${key}" data-key="${key}">
+                    ${optionsHtml}
+                </select>
+                ${link}
+            </div>
         </div>
     `;
 }
@@ -268,6 +263,8 @@ function renderSpiceSetOptions(current) {
 }
 
 function renderVoiceOptions(current) {
+    const flag = v => v.startsWith('a') ? '\u{1F1FA}\u{1F1F8}' : '\u{1F1EC}\u{1F1E7}';
+    const gender = v => v[1] === 'm' ? '\u{1F468}' : '\u{1F469}';
     const voices = [
         ['am_adam', 'Adam'], ['am_eric', 'Eric'], ['am_liam', 'Liam'], ['am_michael', 'Michael'],
         ['af_bella', 'Bella'], ['af_nicole', 'Nicole'], ['af_heart', 'Heart'], ['af_jessica', 'Jessica'],
@@ -276,7 +273,7 @@ function renderVoiceOptions(current) {
         ['bm_george', 'George'], ['bm_daniel', 'Daniel'], ['bm_lewis', 'Lewis']
     ];
     return voices.map(([val, label]) =>
-        `<option value="${val}"${val === current ? ' selected' : ''}>${label}</option>`
+        `<option value="${val}"${val === current ? ' selected' : ''}>${flag(val)}${gender(val)} ${label}</option>`
     ).join('');
 }
 
@@ -288,12 +285,97 @@ function renderProviderOptions(current) {
     return html;
 }
 
+function updateModelSelector(providerKey, currentModel) {
+    const group = container.querySelector('#pa-model-group');
+    const customGroup = container.querySelector('#pa-model-custom-group');
+    const select = container.querySelector('#pa-s-llm_model');
+    const custom = container.querySelector('#pa-s-llm_model_custom');
+
+    if (group) group.style.display = 'none';
+    if (customGroup) customGroup.style.display = 'none';
+
+    if (providerKey === 'auto' || providerKey === 'none' || !providerKey) return;
+
+    const meta = llmMetadata[providerKey];
+    const conf = llmProviders.find(p => p.key === providerKey);
+
+    if (meta?.model_options && Object.keys(meta.model_options).length > 0) {
+        const defaultModel = conf?.model || '';
+        const defaultLabel = defaultModel ?
+            `Default (${meta.model_options[defaultModel] || defaultModel})` : 'Default';
+
+        select.innerHTML = `<option value="">${defaultLabel}</option>` +
+            Object.entries(meta.model_options).map(([k, v]) =>
+                `<option value="${k}" ${k === currentModel ? 'selected' : ''}>${v}</option>`
+            ).join('');
+
+        if (currentModel && !meta.model_options[currentModel]) {
+            select.innerHTML += `<option value="${currentModel}" selected>${currentModel}</option>`;
+        }
+        if (group) group.style.display = '';
+    } else if (providerKey === 'other') {
+        if (custom) custom.value = currentModel || '';
+        if (customGroup) customGroup.style.display = '';
+    }
+}
+
+function getSelectedModel() {
+    const provider = container.querySelector('#pa-s-llm_primary')?.value;
+    if (provider === 'auto' || provider === 'none') return '';
+
+    const group = container.querySelector('#pa-model-group');
+    if (group && group.style.display !== 'none') {
+        return container.querySelector('#pa-s-llm_model')?.value || '';
+    }
+
+    const customGroup = container.querySelector('#pa-model-custom-group');
+    if (customGroup && customGroup.style.display !== 'none') {
+        return (container.querySelector('#pa-s-llm_model_custom')?.value || '').trim();
+    }
+    return '';
+}
+
 function bindEvents() {
-    // Section nav links (e.g. "↗ Prompts")
+    // Section nav links (e.g. "edit prompts")
     container.querySelectorAll('.pa-section-link[data-nav]').forEach(link => {
         link.addEventListener('click', e => {
             e.preventDefault();
             switchView(link.dataset.nav);
+        });
+    });
+
+    // Help tip tooltips
+    let tipEl = document.getElementById('pa-tip-popup');
+    if (!tipEl) {
+        tipEl = document.createElement('div');
+        tipEl.id = 'pa-tip-popup';
+        tipEl.className = 'help-tip-popup';
+        document.body.appendChild(tipEl);
+    }
+    container.addEventListener('mouseover', e => {
+        const tip = e.target.closest('.help-tip');
+        if (!tip) return;
+        const text = tip.dataset.tip;
+        if (!text) return;
+        tipEl.textContent = text;
+        tipEl.style.display = 'block';
+        const r = tip.getBoundingClientRect();
+        tipEl.style.left = (r.left + r.width / 2) + 'px';
+        tipEl.style.top = (r.top - 6) + 'px';
+    });
+    container.addEventListener('mouseout', e => {
+        if (e.target.closest('.help-tip') && !e.target.closest('.help-tip').contains(e.relatedTarget))
+            tipEl.style.display = 'none';
+    });
+
+    // Collapsible fence toggle
+    container.querySelectorAll('.pa-fence-collapse-trigger').forEach(trigger => {
+        trigger.addEventListener('click', () => {
+            const content = trigger.nextElementSibling;
+            if (!content) return;
+            const open = content.style.display === 'none';
+            content.style.display = open ? '' : 'none';
+            trigger.querySelector('.accordion-arrow')?.classList.toggle('open', open);
         });
     });
 
@@ -379,8 +461,18 @@ function bindEvents() {
     container.querySelector('#pa-name')?.addEventListener('input', () => debouncedSave());
     container.querySelector('#pa-tagline')?.addEventListener('input', () => debouncedSave());
 
+    // Provider change → update model dropdown
+    const providerSelect = container.querySelector('#pa-s-llm_primary');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', () => {
+            updateModelSelector(providerSelect.value, '');
+            debouncedSave();
+        });
+    }
+
     // Settings fields (debounced save)
-    container.querySelectorAll('.pa-settings select, .pa-settings input, .pa-settings textarea').forEach(el => {
+    container.querySelectorAll('.pa-scroll select, .pa-scroll input, .pa-scroll textarea').forEach(el => {
+        if (el.id === 'pa-s-llm_primary') return; // handled above
         const event = el.type === 'range' ? 'input' : (el.tagName === 'TEXTAREA' ? 'input' : 'change');
         el.addEventListener(event, () => {
             if (el.id === 'pa-s-pitch') {
@@ -396,8 +488,11 @@ function bindEvents() {
         });
     });
 
-    // Init slider fills
+    // Init slider fills + model selector
     container.querySelectorAll('.pa-field input[type="range"]').forEach(updateSliderFill);
+    if (selectedData?.settings) {
+        updateModelSelector(selectedData.settings.llm_primary || 'auto', selectedData.settings.llm_model || '');
+    }
 }
 
 function collectSettings() {
@@ -416,13 +511,13 @@ function collectSettings() {
         inject_datetime: getChecked('inject_datetime'),
         custom_context: get('custom_context'),
         llm_primary: get('llm_primary') || 'auto',
-        llm_model: '',
+        llm_model: getSelectedModel(),
         trim_color: get('trim_color') || '#4a9eff',
         memory_scope: selectedData?.settings?.memory_scope || 'default',
         goal_scope: selectedData?.settings?.goal_scope || 'default',
         knowledge_scope: selectedData?.settings?.knowledge_scope || 'default',
         people_scope: selectedData?.settings?.people_scope || 'default',
-        state_engine_enabled: getChecked('state_engine_enabled'),
+        state_engine_enabled: selectedData?.settings?.state_engine_enabled || false,
         state_preset: selectedData?.settings?.state_preset || null,
         state_vars_in_prompt: selectedData?.settings?.state_vars_in_prompt || false,
         state_story_in_prompt: selectedData?.settings?.state_story_in_prompt !== false,
