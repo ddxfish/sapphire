@@ -5,12 +5,20 @@ import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
 import { getInitData } from '../shared/init-data.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
+import { switchView } from '../core/router.js';
 
 let container = null;
 let personas = [];
 let selectedName = null;
 let selectedData = null;
 let saveTimer = null;
+
+function updateSliderFill(slider) {
+    const min = parseFloat(slider.min) || 0;
+    const max = parseFloat(slider.max) || 100;
+    const pct = ((parseFloat(slider.value) - min) / (max - min)) * 100;
+    slider.style.setProperty('--pct', `${pct}%`);
+}
 
 // Dropdown data (cached from loadSidebar-style fetches)
 let initData = null;
@@ -118,42 +126,110 @@ function renderDetail(p, isActive) {
             </div>
         </div>
         <div class="view-body view-scroll pa-settings">
-            <div class="pa-settings-grid">
-                ${renderSettingField('prompt', 'Prompt', s, renderPromptOptions(s.prompt))}
-                ${renderSettingField('toolset', 'Toolset', s, renderToolsetOptions(s.toolset))}
-                ${renderSettingField('spice_set', 'Spice Set', s, renderSpiceSetOptions(s.spice_set))}
-                ${renderSettingField('voice', 'Voice', s, renderVoiceOptions(s.voice))}
-                ${renderSettingField('llm_primary', 'Provider', s, renderProviderOptions(s.llm_primary))}
+            <div class="pa-sections">
 
-                <div class="pa-field">
-                    <label>Pitch: <span id="pa-pitch-val">${s.pitch || 0.98}</span></label>
-                    <input type="range" id="pa-s-pitch" min="0.5" max="1.5" step="0.02" value="${s.pitch || 0.98}" data-key="pitch">
-                </div>
-                <div class="pa-field">
-                    <label>Speed: <span id="pa-speed-val">${s.speed || 1.3}</span></label>
-                    <input type="range" id="pa-s-speed" min="0.5" max="2.5" step="0.1" value="${s.speed || 1.3}" data-key="speed">
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">Prompt</span>
+                        <span class="pa-section-desc">Character, scenario & behavior</span>
+                        <a class="pa-section-link" data-nav="prompts">\u2197 Prompts</a>
+                    </div>
+                    <div class="pa-section-body pa-section-row">
+                        ${renderSettingField('prompt', 'Prompt', s, renderPromptOptions(s.prompt))}
+                    </div>
                 </div>
 
-                <div class="pa-field">
-                    <label>Spice Turns</label>
-                    <input type="number" id="pa-s-spice_turns" min="1" max="20" value="${s.spice_turns || 3}" data-key="spice_turns">
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">Toolset</span>
+                        <span class="pa-section-desc">Tools the AI can use</span>
+                        <a class="pa-section-link" data-nav="toolsets">\u2197 Toolsets</a>
+                    </div>
+                    <div class="pa-section-body pa-section-row">
+                        ${renderSettingField('toolset', 'Toolset', s, renderToolsetOptions(s.toolset))}
+                    </div>
                 </div>
 
-                <div class="pa-field">
-                    <label>Trim Color</label>
-                    <input type="color" id="pa-s-trim_color" value="${s.trim_color || '#4a9eff'}" data-key="trim_color">
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">Spice</span>
+                        <span class="pa-section-desc">Style, flavor & personality injection</span>
+                        <a class="pa-section-link" data-nav="spices">\u2197 Spices</a>
+                    </div>
+                    <div class="pa-section-body pa-section-row">
+                        ${renderSettingField('spice_set', 'Set', s, renderSpiceSetOptions(s.spice_set))}
+                        <div class="pa-field">
+                            <label>Turns</label>
+                            <input type="number" id="pa-s-spice_turns" min="1" max="20" value="${s.spice_turns || 3}" data-key="spice_turns">
+                        </div>
+                        <div class="pa-field pa-field-toggle">
+                            <label><input type="checkbox" id="pa-s-spice_enabled" data-key="spice_enabled" ${s.spice_enabled !== false ? 'checked' : ''}> Enabled</label>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="pa-toggles">
-                    <label><input type="checkbox" id="pa-s-spice_enabled" data-key="spice_enabled" ${s.spice_enabled !== false ? 'checked' : ''}> Spice</label>
-                    <label><input type="checkbox" id="pa-s-inject_datetime" data-key="inject_datetime" ${s.inject_datetime ? 'checked' : ''}> Date/Time</label>
-                    <label><input type="checkbox" id="pa-s-state_engine_enabled" data-key="state_engine_enabled" ${s.state_engine_enabled ? 'checked' : ''}> State Engine</label>
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">TTS</span>
+                        <span class="pa-section-desc">Voice synthesis settings</span>
+                    </div>
+                    <div class="pa-section-body">
+                        <div class="pa-section-row">
+                            ${renderSettingField('voice', 'Voice', s, renderVoiceOptions(s.voice))}
+                        </div>
+                        <div class="pa-section-row">
+                            <div class="pa-field">
+                                <label>Pitch: <span id="pa-pitch-val">${s.pitch || 0.98}</span></label>
+                                <input type="range" id="pa-s-pitch" min="0.5" max="1.5" step="0.02" value="${s.pitch || 0.98}" data-key="pitch">
+                            </div>
+                            <div class="pa-field">
+                                <label>Speed: <span id="pa-speed-val">${s.speed || 1.3}</span></label>
+                                <input type="range" id="pa-s-speed" min="0.5" max="2.5" step="0.1" value="${s.speed || 1.3}" data-key="speed">
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="pa-field pa-field-wide">
-                    <label>Custom Context</label>
-                    <textarea id="pa-s-custom_context" rows="3" placeholder="Injected into system prompt..." data-key="custom_context">${esc(s.custom_context || '')}</textarea>
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">Model</span>
+                        <span class="pa-section-desc">LLM provider & model</span>
+                    </div>
+                    <div class="pa-section-body pa-section-row">
+                        ${renderSettingField('llm_primary', 'Provider', s, renderProviderOptions(s.llm_primary))}
+                    </div>
                 </div>
+
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">Appearance</span>
+                        <span class="pa-section-desc">Trim color & visual identity</span>
+                    </div>
+                    <div class="pa-section-body pa-section-row">
+                        <div class="pa-field">
+                            <label>Trim Color</label>
+                            <input type="color" id="pa-s-trim_color" value="${s.trim_color || '#4a9eff'}" data-key="trim_color">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pa-section">
+                    <div class="pa-section-header">
+                        <span class="pa-section-title">Advanced</span>
+                        <span class="pa-section-desc">State engine, datetime & context</span>
+                    </div>
+                    <div class="pa-section-body">
+                        <div class="pa-toggles">
+                            <label><input type="checkbox" id="pa-s-inject_datetime" data-key="inject_datetime" ${s.inject_datetime ? 'checked' : ''}> Date/Time</label>
+                            <label><input type="checkbox" id="pa-s-state_engine_enabled" data-key="state_engine_enabled" ${s.state_engine_enabled ? 'checked' : ''}> State Engine</label>
+                        </div>
+                        <div class="pa-field pa-field-wide">
+                            <label>Custom Context</label>
+                            <textarea id="pa-s-custom_context" rows="3" placeholder="Injected into system prompt..." data-key="custom_context">${esc(s.custom_context || '')}</textarea>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </div>
     `;
@@ -213,6 +289,14 @@ function renderProviderOptions(current) {
 }
 
 function bindEvents() {
+    // Section nav links (e.g. "↗ Prompts")
+    container.querySelectorAll('.pa-section-link[data-nav]').forEach(link => {
+        link.addEventListener('click', e => {
+            e.preventDefault();
+            switchView(link.dataset.nav);
+        });
+    });
+
     // List selection
     container.querySelector('#pa-list')?.addEventListener('click', async e => {
         const item = e.target.closest('.panel-list-item');
@@ -307,9 +391,13 @@ function bindEvents() {
                 const label = container.querySelector('#pa-speed-val');
                 if (label) label.textContent = el.value;
             }
+            if (el.type === 'range') updateSliderFill(el);
             debouncedSave();
         });
     });
+
+    // Init slider fills
+    container.querySelectorAll('.pa-field input[type="range"]').forEach(updateSliderFill);
 }
 
 function collectSettings() {

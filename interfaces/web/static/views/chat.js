@@ -561,8 +561,16 @@ function initSidebarModes(container) {
         }
     });
 
-    // Easy mode detail: accordion toggles + edit button (delegated, bound once)
+    // Easy mode detail: accordion toggles, nav links, edit button (delegated, bound once)
     container.querySelector('#sb-persona-detail')?.addEventListener('click', e => {
+        // Nav links inside accordion headers
+        const navLink = e.target.closest('.sb-pdetail-acc-link');
+        if (navLink) {
+            e.stopPropagation();
+            const view = navLink.dataset.nav;
+            if (view) switchView(view);
+            return;
+        }
         const header = e.target.closest('.sb-pdetail-acc-header');
         if (header) {
             const content = header.nextElementSibling;
@@ -645,30 +653,30 @@ function updateEasyMode(container, settings, init) {
             ${promptRows}
             ${extras ? `<div class="sb-pdetail-row"><span>extras</span><span>${extras}</span></div>` : ''}
             ${emotions ? `<div class="sb-pdetail-row"><span>emotions</span><span>${emotions}</span></div>` : ''}
-        `)}
+        `, { desc: 'Character & scenario', view: 'prompts' })}
         ${easyAccordion('Toolset', `
-            <div class="sb-pdetail-row"><span>toolset</span><span>${pretty(settings.toolset)}</span></div>
-        `)}
+            <div class="sb-pdetail-row"><span>active</span><span>${pretty(settings.toolset)}</span></div>
+        `, { desc: 'AI capabilities', view: 'toolsets' })}
         ${easyAccordion('Spice', `
             <div class="sb-pdetail-row"><span>set</span><span>${pretty(settings.spice_set)}</span></div>
             <div class="sb-pdetail-row"><span>enabled</span><span>${settings.spice_enabled !== false ? 'Yes' : 'No'}</span></div>
             <div class="sb-pdetail-row"><span>turns</span><span>${settings.spice_turns || 3}</span></div>
-        `)}
-        ${easyAccordion('Voice', `
+        `, { desc: 'Style & flavor', view: 'spices' })}
+        ${easyAccordion('TTS', `
             <div class="sb-pdetail-row"><span>voice</span><span>${VOICE_NAMES[settings.voice] || settings.voice || 'Heart'}</span></div>
             <div class="sb-pdetail-row"><span>pitch</span><span>${settings.pitch || 0.98}</span></div>
             <div class="sb-pdetail-row"><span>speed</span><span>${settings.speed || 1.3}</span></div>
-        `)}
+        `, { desc: 'Voice synthesis' })}
         ${easyAccordion('Mind', `
             <div class="sb-pdetail-row"><span>memory</span><span>${pretty(settings.memory_scope)}</span></div>
             <div class="sb-pdetail-row"><span>goals</span><span>${pretty(settings.goal_scope)}</span></div>
             <div class="sb-pdetail-row"><span>knowledge</span><span>${pretty(settings.knowledge_scope)}</span></div>
             <div class="sb-pdetail-row"><span>people</span><span>${pretty(settings.people_scope)}</span></div>
-        `)}
+        `, { desc: 'Memory & knowledge' })}
         ${easyAccordion('Model', `
             <div class="sb-pdetail-row"><span>provider</span><span>${pretty(settings.llm_primary)}</span></div>
             ${settings.llm_model ? `<div class="sb-pdetail-row"><span>model</span><span>${settings.llm_model}</span></div>` : ''}
-        `)}
+        `, { desc: 'LLM backend' })}
     `;
 
     // Fetch tagline
@@ -681,10 +689,12 @@ function updateEasyMode(container, settings, init) {
         .catch(() => {});
 }
 
-function easyAccordion(title, content) {
+function easyAccordion(title, content, opts = {}) {
+    const desc = opts.desc ? `<span class="sb-pdetail-acc-desc">${opts.desc}</span>` : '';
+    const link = opts.view ? `<span class="sb-pdetail-acc-link" data-nav="${opts.view}">\u2197</span>` : '';
     return `
         <div class="sb-pdetail-acc">
-            <div class="sb-pdetail-acc-header"><span class="accordion-arrow">\u25B6</span> ${title}</div>
+            <div class="sb-pdetail-acc-header"><span class="accordion-arrow">\u25B6</span> ${title}${desc}${link}</div>
             <div class="sb-pdetail-acc-content" style="display:none">${content}</div>
         </div>`;
 }
