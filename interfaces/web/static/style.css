@@ -4487,17 +4487,24 @@ a.gallery-caption:hover {
 }
 
 .mind-view {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
 }
 
+/* Header bar — always full-width, pinned to top */
 .mind-header {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 20px;
-    margin-bottom: 16px;
     flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--bg);
+    padding: 14px 24px 10px;
+    border-bottom: 1px solid var(--border);
 }
 .mind-header h2 { margin: 0; }
 
@@ -4510,19 +4517,27 @@ a.gallery-caption:hover {
 }
 .mind-tab {
     padding: 6px 14px;
-    border: none;
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-muted);
     font-size: var(--font-sm);
     cursor: pointer;
-    transition: all 0.15s;
 }
 .mind-tab:hover { color: var(--text); }
 .mind-tab.active {
     background: var(--trim-light, rgba(74, 158, 255, 0.15));
     color: var(--text);
     border: 1px solid var(--trim-border, var(--border));
+}
+
+/* Scope bar + content — constrained width, centered */
+.mind-body {
+    max-width: 900px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 16px 24px 24px;
+    flex: 1;
 }
 
 .mind-scope-bar {
@@ -4543,6 +4558,17 @@ a.gallery-caption:hover {
 }
 
 .mind-content { min-height: 200px; }
+
+.mind-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    font-size: var(--font-sm);
+}
+.mind-page-info { color: var(--text-muted); }
+.mind-pagination button:disabled { opacity: 0.3; cursor: default; }
 
 .mind-toolbar {
     display: flex;
@@ -4600,6 +4626,7 @@ a.gallery-caption:hover {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    width: 100%;
 }
 
 /* Accordion (reuses spice-cat pattern) */
@@ -4686,9 +4713,12 @@ a.gallery-caption:hover {
 /* People grid */
 .mind-people-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(4, 1fr);
     gap: 12px;
 }
+@media (max-width: 1000px) { .mind-people-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 750px) { .mind-people-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 500px) { .mind-people-grid { grid-template-columns: 1fr; } }
 .mind-person-card {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);

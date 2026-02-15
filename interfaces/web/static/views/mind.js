@@ -6,6 +6,8 @@ let activeTab = 'memories';
 let currentScope = 'default';
 let memoryScopeCache = [];
 let knowledgeScopeCache = [];
+let memoryPage = 0;
+const MEMORIES_PER_PAGE = 100;
 
 export default {
     init(el) {
@@ -33,19 +35,21 @@ async function render() {
             <div class="mind-header">
                 <h2>Mind</h2>
                 <div class="mind-tabs">
-                    <button class="mind-tab active" data-tab="memories">Memories</button>
-                    <button class="mind-tab" data-tab="people">People</button>
-                    <button class="mind-tab" data-tab="knowledge">Knowledge</button>
-                    <button class="mind-tab" data-tab="ai-notes">AI Notes</button>
+                    <button class="mind-tab${activeTab === 'memories' ? ' active' : ''}" data-tab="memories">Memories</button>
+                    <button class="mind-tab${activeTab === 'people' ? ' active' : ''}" data-tab="people">People</button>
+                    <button class="mind-tab${activeTab === 'knowledge' ? ' active' : ''}" data-tab="knowledge">Knowledge</button>
+                    <button class="mind-tab${activeTab === 'ai-notes' ? ' active' : ''}" data-tab="ai-notes">AI Notes</button>
                 </div>
             </div>
-            <div class="mind-scope-bar">
-                <label>Scope:</label>
-                <select id="mind-scope"></select>
-                <button class="mind-btn-sm" id="mind-new-scope" title="New scope">+</button>
-                <button class="mind-btn-sm mind-del-scope-btn" id="mind-del-scope" title="Delete scope">&#x1F5D1;</button>
+            <div class="mind-body">
+                <div class="mind-scope-bar">
+                    <label>Scope:</label>
+                    <select id="mind-scope"></select>
+                    <button class="mind-btn-sm" id="mind-new-scope" title="New scope">+</button>
+                    <button class="mind-btn-sm mind-del-scope-btn" id="mind-del-scope" title="Delete scope">&#x1F5D1;</button>
+                </div>
+                <div id="mind-content" class="mind-content"></div>
             </div>
-            <div id="mind-content" class="mind-content"></div>
         </div>
     `;
 
@@ -55,6 +59,7 @@ async function render() {
             container.querySelectorAll('.mind-tab').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             activeTab = btn.dataset.tab;
+            memoryPage = 0;
             updateScopeDropdown();
             renderContent();
         });
@@ -63,6 +68,7 @@ async function render() {
     // Scope change
     container.querySelector('#mind-scope').addEventListener('change', (e) => {
         currentScope = e.target.value;
+        memoryPage = 0;
         renderContent();
     });
 
@@ -163,7 +169,37 @@ async function renderMemories(el) {
         return;
     }
 
-    el.innerHTML = '<div class="mind-list">' + labels.map(label => {
+    // Count total and paginate by accordion (never split a group)
+    const totalMemories = labels.reduce((n, l) => n + groups[l].length, 0);
+    let pageLabels = labels, showPagination = false;
+    if (totalMemories > MEMORIES_PER_PAGE) {
+        showPagination = true;
+        let count = 0, startIdx = 0, collected = 0;
+        // Find starting label for current page
+        for (let i = 0; i < labels.length; i++) {
+            if (count >= memoryPage * MEMORIES_PER_PAGE) { startIdx = i; break; }
+            count += groups[labels[i]].length;
+            startIdx = i;
+        }
+        // Collect labels for this page (don't break groups)
+        pageLabels = [];
+        count = 0;
+        for (let i = startIdx; i < labels.length && count < MEMORIES_PER_PAGE; i++) {
+            pageLabels.push(labels[i]);
+            count += groups[labels[i]].length;
+        }
+    }
+
+    const totalPages = showPagination ? Math.ceil(labels.length / pageLabels.length) : 1;
+
+    el.innerHTML = (showPagination ? `
+        <div class="mind-pagination">
+            <button class="mind-btn-sm" id="mem-prev" ${memoryPage === 0 ? 'disabled' : ''}>&#x25C0; Prev</button>
+            <span class="mind-page-info">${memoryPage + 1} / ${totalPages} (${totalMemories} memories)</span>
+            <button class="mind-btn-sm" id="mem-next" ${memoryPage >= totalPages - 1 ? 'disabled' : ''}>Next &#x25B6;</button>
+        </div>
+    ` : '') +
+    '<div class="mind-list">' + pageLabels.map(label => {
         const memories = groups[label];
         return `
             <details class="mind-accordion" open>
@@ -187,6 +223,14 @@ async function renderMemories(el) {
             </details>
         `;
     }).join('') + '</div>';
+
+    // Pagination handlers
+    el.querySelector('#mem-prev')?.addEventListener('click', () => {
+        if (memoryPage > 0) { memoryPage--; renderMemories(el); }
+    });
+    el.querySelector('#mem-next')?.addEventListener('click', () => {
+        if (memoryPage < totalPages - 1) { memoryPage++; renderMemories(el); }
+    });
 
     // Edit handlers
     el.querySelectorAll('.mind-edit-memory').forEach(btn => {
@@ -400,7 +444,7 @@ async function renderKnowledge(el, tabType) {
 
     el.innerHTML = `
         <div class="mind-toolbar">
-            ${!isAI ? '<button class="mind-btn" id="mind-new-tab">+ New Tab</button>' : ''}
+            ${!isAI ? '<button class="mind-btn" id="mind-new-tab">+ New Category</button>' : ''}
         </div>
         ${tabs.length ? `<div class="mind-list">
             ${tabs.map(t => `
@@ -408,7 +452,7 @@ async function renderKnowledge(el, tabType) {
                     <summary class="mind-accordion-header">
                         <span class="mind-accordion-title">${escHtml(t.name)}</span>
                         <span class="mind-accordion-count">${t.entry_count} entries</span>
-                        ${!isAI ? `<button class="mind-btn-sm mind-del-tab" data-id="${t.id}" title="Delete tab">&#x2715;</button>` : ''}
+                        <button class="mind-btn-sm mind-del-tab" data-id="${t.id}" title="Delete category">&#x2715;</button>
                     </summary>
                     <div class="mind-accordion-body">
                         <div class="mind-accordion-inner mind-tab-entries" data-tab-id="${t.id}" data-type="${tabType}">
@@ -417,12 +461,12 @@ async function renderKnowledge(el, tabType) {
                     </div>
                 </details>
             `).join('')}
-        </div>` : `<div class="mind-empty">No ${isAI ? 'AI notes' : 'knowledge tabs'} in this scope</div>`}
+        </div>` : `<div class="mind-empty">No ${isAI ? 'AI notes' : 'knowledge'} in this scope</div>`}
     `;
 
-    // New tab button
+    // New category button
     el.querySelector('#mind-new-tab')?.addEventListener('click', async () => {
-        const name = prompt('Tab name:');
+        const name = prompt('Category name:');
         if (!name) return;
         try {
             const resp = await fetch('/api/knowledge/tabs', {
@@ -431,7 +475,7 @@ async function renderKnowledge(el, tabType) {
                 body: JSON.stringify({ name: name.trim(), scope: currentScope, type: 'user' })
             });
             if (resp.ok) {
-                ui.showToast('Tab created', 'success');
+                ui.showToast('Category created', 'success');
                 await renderKnowledge(el, tabType);
             } else {
                 const err = await resp.json();
@@ -440,12 +484,13 @@ async function renderKnowledge(el, tabType) {
         } catch (e) { ui.showToast('Failed', 'error'); }
     });
 
-    // Delete tab buttons
+    // Delete category buttons
     el.querySelectorAll('.mind-del-tab').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (!confirm('Delete this tab and all its entries?')) return;
+            const name = btn.closest('.mind-accordion')?.querySelector('.mind-accordion-title')?.textContent || 'this category';
+            if (!confirm(`Delete "${name}" and all its entries?`)) return;
             try {
                 const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.id}`, { method: 'DELETE' });
                 if (resp.ok) {
