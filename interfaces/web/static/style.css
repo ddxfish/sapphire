@@ -1408,7 +1408,7 @@ body {
 /* ≥1440px: show preview panel */
 @media (min-width: 1440px) {
     .prompts-layout {
-        grid-template-columns: 240px 1fr 1fr;
+        grid-template-columns: 240px 3fr 2fr;
         grid-template-areas: "roster editor preview";
     }
     .pr-preview { display: flex; }

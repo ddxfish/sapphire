@@ -451,12 +451,16 @@ def get_people(scope='default'):
              "created_at": r[7], "updated_at": r[8]} for r in rows]
 
 
-def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default'):
+def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default', person_id=None):
     conn = _get_connection()
     cursor = conn.cursor()
 
-    # Check if person exists (case-insensitive, within scope)
-    cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?', (name.strip(), scope))
+    # If ID provided, update by ID directly (allows name changes)
+    if person_id:
+        cursor.execute('SELECT id FROM people WHERE id = ?', (person_id,))
+    else:
+        # Fallback: match by name (for AI tool calls)
+        cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?', (name.strip(), scope))
     existing = cursor.fetchone()
 
     # Build embed text for semantic search

@@ -2533,6 +2533,7 @@ async def save_person(request: Request, _=Depends(require_login)):
         address=data.get('address'),
         notes=data.get('notes'),
         scope=scope,
+        person_id=data.get('id'),
     )
     return {"id": pid, "created": is_new}
 
@@ -2543,6 +2544,112 @@ async def remove_person(person_id: int, request: Request, _=Depends(require_logi
     if knowledge.delete_person(person_id):
         return {"deleted": person_id}
     raise HTTPException(status_code=404, detail="Person not found")
+
+
+@app.post("/api/knowledge/people/import-vcf")
+async def import_vcf(request: Request, _=Depends(require_login)):
+    """Import contacts from a VCF (vCard) file."""
+    from functions import knowledge
+    import re
+
+    form = await request.form()
+    file = form.get('file')
+    scope = form.get('scope', 'default')
+    if not file:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    content = (await file.read()).decode('utf-8', errors='replace')
+
+    # Parse vCards
+    cards = []
+    current = {}
+    for line in content.splitlines():
+        line = line.strip()
+        if line.upper() == 'BEGIN:VCARD':
+            current = {'phones': [], 'emails': [], 'addresses': [], 'notes': [], 'org': '', 'title': ''}
+        elif line.upper() == 'END:VCARD':
+            if current.get('name'):
+                cards.append(current)
+            current = {}
+        elif not current and not isinstance(current, dict):
+            continue
+        else:
+            # Strip type params: "TEL;TYPE=CELL:+1234" -> key=TEL, val=+1234
+            if ':' not in line:
+                continue
+            key_part, val = line.split(':', 1)
+            key = key_part.split(';')[0].upper()
+            val = val.strip()
+            if not val:
+                continue
+
+            if key == 'FN':
+                current['name'] = val
+            elif key == 'TEL':
+                current['phones'].append(val)
+            elif key == 'EMAIL':
+                current['emails'].append(val)
+            elif key == 'ADR':
+                # ADR format: ;;street;city;state;zip;country (semicolons separate parts)
+                parts = [p.strip() for p in val.split(';') if p.strip()]
+                current['addresses'].append(', '.join(parts))
+            elif key == 'NOTE':
+                current['notes'].append(val)
+            elif key == 'ORG':
+                current['org'] = val.replace(';', ', ')
+            elif key == 'TITLE':
+                current['title'] = val
+
+    # Get existing people for duplicate detection
+    existing = knowledge.get_people(scope)
+    existing_keys = set()
+    for p in existing:
+        key = (p['name'].lower().strip(), (p.get('email') or '').lower().strip())
+        existing_keys.add(key)
+
+    imported = 0
+    skipped = []
+    for card in cards:
+        name = card.get('name', '').strip()
+        if not name:
+            continue
+
+        email = card['emails'][0] if card['emails'] else ''
+        phone = card['phones'][0] if card['phones'] else ''
+        address = card['addresses'][0] if card['addresses'] else ''
+
+        # Build notes from extra data
+        note_parts = list(card['notes'])
+        if card['org']:
+            note_parts.insert(0, card['org'])
+        if card['title']:
+            note_parts.insert(0, card['title'])
+        # Extra emails/phones beyond the first
+        if len(card['emails']) > 1:
+            note_parts.append('Other emails: ' + ', '.join(card['emails'][1:]))
+        if len(card['phones']) > 1:
+            note_parts.append('Other phones: ' + ', '.join(card['phones'][1:]))
+        notes = '. '.join(note_parts) if note_parts else ''
+
+        # Duplicate check: name + email
+        dup_key = (name.lower(), email.lower())
+        if dup_key in existing_keys:
+            skipped.append(f"{name}" + (f" ({email})" if email else ""))
+            continue
+
+        knowledge.create_or_update_person(
+            name=name, phone=phone, email=email,
+            address=address, notes=notes, scope=scope
+        )
+        existing_keys.add(dup_key)
+        imported += 1
+
+    return {
+        "imported": imported,
+        "skipped_count": len(skipped),
+        "skipped": skipped[:25],
+        "total_in_file": len(cards)
+    }
 
 
 @app.get("/api/knowledge/tabs")

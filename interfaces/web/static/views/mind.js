@@ -361,6 +361,8 @@ async function renderPeople(el) {
         <div class="mind-tab-desc">Contacts the AI learns about through conversation. Searchable by name, relationship, or notes.</div>
         <div class="mind-toolbar">
             <button class="mind-btn" id="mind-add-person">+ Add Person</button>
+            <button class="mind-btn" id="mind-import-vcf">Import VCF</button>
+            <input type="file" id="mind-vcf-input" accept=".vcf" style="display:none">
         </div>
         ${people.length ? `<div class="mind-people-grid">
             ${people.map(p => `
@@ -383,6 +385,30 @@ async function renderPeople(el) {
     `;
 
     el.querySelector('#mind-add-person')?.addEventListener('click', () => showPersonModal(el));
+
+    const vcfInput = el.querySelector('#mind-vcf-input');
+    el.querySelector('#mind-import-vcf')?.addEventListener('click', () => vcfInput?.click());
+    vcfInput?.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const form = new FormData();
+        form.append('file', file);
+        form.append('scope', currentScope);
+        try {
+            const resp = await fetch('/api/knowledge/people/import-vcf', { method: 'POST', body: form });
+            if (!resp.ok) throw new Error('Upload failed');
+            const result = await resp.json();
+            let msg = `Imported ${result.imported} of ${result.total_in_file} contacts`;
+            if (result.skipped_count > 0) {
+                msg += `\nSkipped ${result.skipped_count} duplicates:`;
+                result.skipped.forEach(s => { msg += `\n  - ${s}`; });
+                if (result.skipped_count > result.skipped.length) msg += `\n  ... and ${result.skipped_count - result.skipped.length} more`;
+            }
+            ui.showToast(msg, result.imported > 0 ? 'success' : 'info');
+            await renderPeople(el);
+        } catch (err) { ui.showToast('Import failed: ' + err.message, 'error'); }
+        vcfInput.value = '';
+    });
 
     el.querySelectorAll('.mind-edit-person').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -449,6 +475,7 @@ function showPersonModal(el, person = null) {
             notes: overlay.querySelector('#mp-notes').value.trim(),
             scope: currentScope,
         };
+        if (person?.id) body.id = person.id;
 
         try {
             const resp = await fetch('/api/knowledge/people', {
