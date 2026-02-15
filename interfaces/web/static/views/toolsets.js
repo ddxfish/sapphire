@@ -114,7 +114,7 @@ function render() {
                         ` : (hasEmoji ? `<span class="ts-emoji-display">${emoji}</span>` : '')}
                         <div class="ts-header-text">
                             <h2>${selected?.name || 'None'}</h2>
-                            <span class="view-subtitle">${selected?.function_count || 0} functions${!isEditable ? (selected?.type === 'preset' ? ' (preset)' : '') : ''}${canEditEmoji ? ' \u00B7 <a href="#" id="ts-emoji-edit" class="ts-emoji-link">' + (hasEmoji ? 'change emoji' : 'add emoji') + '</a>' : ''}</span>
+                            <span class="view-subtitle">${selected?.function_count || 0} functions${canEditEmoji ? ' \u00B7 <a href="#" id="ts-emoji-edit" class="ts-emoji-link">' + (hasEmoji ? 'change emoji' : 'add emoji') + '</a>' : ''}</span>
                         </div>
                     </div>
                     <div class="view-header-actions">

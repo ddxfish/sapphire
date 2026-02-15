@@ -1,7 +1,7 @@
 {
-  "_comment": "Core preset toolsets",
+  "_comment": "Default starter toolsets - seeded into user file on first run",
   "work": {
-    "type": "preset",
+    "emoji": "\uD83D\uDCBC",
     "functions": [
       "web_search",
       "get_website",
@@ -22,7 +22,7 @@
     ]
   },
   "smarthome": {
-    "type": "preset",
+    "emoji": "\uD83C\uDFE0",
     "functions": [
       "ha_list_scenes_and_scripts",
       "ha_activate",
@@ -42,7 +42,7 @@
     ]
   },
   "personality": {
-    "type": "preset",
+    "emoji": "\uD83C\uDFAD",
     "functions": [
       "view_prompt",
       "switch_prompt",
