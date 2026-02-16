@@ -19,11 +19,18 @@ logger = logging.getLogger(__name__)
 
 def friendly_llm_error(e):
     """Convert LLM provider exceptions to user-friendly messages. Returns None if unrecognized."""
+    error_str = str(e).lower()
+    type_name = type(e).__name__
+
+    # Connection errors — detect local providers like LM Studio
+    if isinstance(e, ConnectionError) or 'ConnectError' in type_name or 'connection' in error_str:
+        if any(h in error_str for h in ('127.0.0.1', 'localhost', '0.0.0.0')):
+            return "Can't reach LM Studio — open LM Studio, load a model, and enable its local server."
+        return "Lost connection to the LLM server. Check that the service is running."
+
     status = getattr(e, 'status_code', None)
     if not status:
         return None
-
-    error_str = str(e).lower()
 
     if status == 400:
         if 'model' in error_str and any(k in error_str for k in ('not found', 'not loaded', 'does not exist')):

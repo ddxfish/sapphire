@@ -5602,6 +5602,16 @@ a.gallery-caption:hover {
 
 .sb-pgrid-cell.active .sb-pgrid-name { color: var(--text); font-weight: 600; }
 
+.sb-pgrid-new-icon {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    border: 2px dashed var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; color: var(--text-muted);
+    transition: border-color 0.15s, color 0.15s;
+}
+.sb-pgrid-new:hover .sb-pgrid-new-icon { border-color: var(--trim, #4a9eff); color: var(--text); }
+
 /* Persona detail section */
 .sb-persona-detail {
     border-top: 1px solid var(--border);

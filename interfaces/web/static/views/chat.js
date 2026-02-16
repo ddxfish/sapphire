@@ -375,6 +375,7 @@ async function loadSidebar() {
                 trimInput.value = localStorage.getItem('sapphire-trim') || '#4a9eff';
                 trimInput.dataset.cleared = 'true';
             }
+            applyTrimColor(settings.trim_color || '');
         }
 
         // Update labels
@@ -551,11 +552,29 @@ function initSidebarModes(container) {
     container.querySelector('#sb-persona-grid')?.addEventListener('click', async e => {
         const cell = e.target.closest('.sb-pgrid-cell');
         if (!cell) return;
-        const name = cell.dataset.name;
-        if (!name) return;
+
+        // "+ New" cell
+        if (cell.dataset.action === 'new') {
+            const name = prompt('Name for the new persona:');
+            if (!name?.trim()) return;
+            try {
+                const res = await createFromChat(name.trim());
+                if (res?.name) {
+                    ui.showToast(`Persona "${res.name}" created`, 'success');
+                    window.dispatchEvent(new CustomEvent('persona-select', { detail: { name: res.name } }));
+                    switchView('personas');
+                }
+            } catch (err) {
+                ui.showToast(err.message || 'Failed', 'error');
+            }
+            return;
+        }
+
+        const pName = cell.dataset.name;
+        if (!pName) return;
         try {
-            await loadPersona(name);
-            ui.showToast(`Loaded: ${name}`, 'success');
+            await loadPersona(pName);
+            ui.showToast(`Loaded: ${pName}`, 'success');
             updateScene();
             await loadSidebar();
         } catch (e) {
@@ -617,7 +636,11 @@ function updateEasyMode(container, settings, init) {
                 <img class="sb-pgrid-avatar" src="/api/personas/${encodeURIComponent(p.name)}/avatar" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
                 <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
             </div>
-        `).join('');
+        `).join('') + `
+            <div class="sb-pgrid-cell sb-pgrid-new" data-action="new">
+                <span class="sb-pgrid-new-icon">+</span>
+                <span class="sb-pgrid-name">New...</span>
+            </div>`;
     }
 
     // Build detail section

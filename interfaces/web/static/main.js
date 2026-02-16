@@ -198,6 +198,17 @@ async function init() {
         // Auto-refresh interval (fallback - events handle most updates)
         setInterval(handleAutoRefresh, 30000);
 
+        // Setup wizard auto-show on first launch
+        const wizardStep = initData?.wizard_step;
+        if (typeof wizardStep === 'number' && wizardStep < 3) {
+            setTimeout(async () => {
+                try {
+                    const mod = await import(`./plugins/setup-wizard/index.js${_v}`);
+                    if (mod.default?.init) await mod.default.init();
+                } catch (e) { console.warn('[Init] Setup wizard failed:', e); }
+            }, 500);
+        }
+
         console.log(`[Init] Complete in ${(performance.now() - t0).toFixed(0)}ms`);
 
     } catch (e) {

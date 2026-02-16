@@ -5,6 +5,7 @@ import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
 import { getInitData } from '../shared/init-data.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
+import { applyTrimColor } from '../features/chat-settings.js';
 import { switchView } from '../core/router.js';
 
 let container = null;
@@ -28,7 +29,12 @@ let llmMetadata = {};
 let scopeData = { memory: [], goals: [], knowledge: [], people: [] };
 
 export default {
-    init(el) { container = el; },
+    init(el) {
+        container = el;
+        window.addEventListener('persona-select', e => {
+            if (e.detail?.name) selectedName = e.detail.name;
+        });
+    },
     async show() {
         await loadData();
         render();
@@ -89,7 +95,7 @@ function render() {
                 <div class="panel-list-items" id="pa-list">
                     ${personas.map(p => `
                         <button class="panel-list-item${p.name === selectedName ? ' active' : ''}" data-name="${p.name}">
-                            <img class="pa-list-avatar" src="${avatarUrl(p.name)}" alt="" loading="lazy" onerror="this.style.display='none'">
+                            <img class="pa-list-avatar" src="${avatarUrl(p.name)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
                             <div class="pa-list-info">
                                 <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}</span>
                                 ${p.tagline ? `<span class="pa-list-tagline">${esc(p.tagline)}</span>` : ''}
@@ -125,7 +131,7 @@ function renderDetail(p, isActive) {
             <div class="pa-header">
                 <div class="pa-avatar-wrap" id="pa-avatar-wrap">
                     <img class="pa-avatar-lg" id="pa-avatar" src="${avatarUrl(p.name)}" alt="${esc(p.name)}" loading="lazy"
-                         onerror="this.src=''; this.alt='?'">
+                         onerror="this.style.visibility='hidden'">
                     <div class="pa-avatar-overlay" id="pa-avatar-upload" title="Upload avatar">&#x1F4F7;</div>
                     <input type="file" id="pa-avatar-input" accept="image/*" style="display:none">
                 </div>
@@ -520,9 +526,13 @@ function bindEvents() {
             if (!file || !selectedName) return;
             try {
                 await uploadAvatar(selectedName, file);
-                // Refresh avatar display
+                const bust = '?t=' + Date.now();
+                // Refresh main avatar
                 const img = container.querySelector('#pa-avatar');
-                if (img) img.src = avatarUrl(selectedName) + '?t=' + Date.now();
+                if (img) { img.src = avatarUrl(selectedName) + bust; img.style.visibility = ''; }
+                // Refresh list thumbnail
+                const listItem = container.querySelector(`.panel-list-item[data-name="${selectedName}"] .pa-list-avatar`);
+                if (listItem) { listItem.src = avatarUrl(selectedName) + bust; listItem.style.visibility = ''; }
                 ui.showToast('Avatar updated', 'success');
             } catch (e) { ui.showToast(e.message || 'Upload failed', 'error'); }
         });
@@ -585,6 +595,7 @@ function bindEvents() {
                 if (label) label.textContent = el.value;
             }
             if (el.type === 'range') updateSliderFill(el);
+            if (el.id === 'pa-s-trim_color') applyTrimColor(el.value);
             debouncedSave();
         });
     });
