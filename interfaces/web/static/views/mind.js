@@ -382,7 +382,7 @@ async function renderPeople(el) {
         ${people.length ? `<div class="mind-people-grid">
             ${people.map(p => `
                 <div class="mind-person-card" data-id="${p.id}">
-                    <div class="mind-person-name">${escHtml(p.name)}</div>
+                    <div class="mind-person-name">${escHtml(p.name)}${p.email_whitelisted ? ' <span title="Email allowed" style="font-size:12px">&#x1F4E7;</span>' : ''}</div>
                     ${p.relationship ? `<div class="mind-person-rel">${escHtml(p.relationship)}</div>` : ''}
                     <div class="mind-person-details">
                         ${p.phone ? `<div>&#x1F4DE; ${escHtml(p.phone)}</div>` : ''}
@@ -466,6 +466,9 @@ function showPersonModal(el, person = null) {
                     <input type="text" id="mp-email" placeholder="Email" value="${escAttr(person?.email || '')}">
                     <input type="text" id="mp-address" placeholder="Address" value="${escAttr(person?.address || '')}">
                     <textarea id="mp-notes" placeholder="Notes" rows="3">${escHtml(person?.notes || '')}</textarea>
+                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);cursor:pointer">
+                        <input type="checkbox" id="mp-email-whitelist" ${person?.email_whitelisted ? 'checked' : ''}> Allow AI to send email
+                    </label>
                     <button class="mind-btn" id="mp-save">${person ? 'Update' : 'Save'}</button>
                 </div>
             </div>
@@ -488,6 +491,7 @@ function showPersonModal(el, person = null) {
             email: overlay.querySelector('#mp-email').value.trim(),
             address: overlay.querySelector('#mp-address').value.trim(),
             notes: overlay.querySelector('#mp-notes').value.trim(),
+            email_whitelisted: overlay.querySelector('#mp-email-whitelist').checked,
             scope: currentScope,
         };
         if (person?.id) body.id = person.id;

@@ -9,7 +9,8 @@
     "backup",
     "image-gen",
     "continuity",
-    "homeassistant"
+    "homeassistant",
+    "email"
   ],
   "plugins": {
     "setup-wizard": {
@@ -60,6 +61,10 @@
     },
     "homeassistant": {
       "title": "Home Assistant",
+      "showInSidebar": false
+    },
+    "email": {
+      "title": "Email",
       "showInSidebar": false
     }
   }

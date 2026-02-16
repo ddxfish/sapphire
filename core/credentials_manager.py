@@ -13,14 +13,25 @@ This keeps credentials OUT of the project directory and backups.
 import json
 import os
 import sys
+import hashlib
+import base64
+import getpass
 import logging
+import socket
 from pathlib import Path
 from typing import Optional
 from core.setup import CONFIG_DIR, SOCKS_CONFIG_FILE, CLAUDE_API_KEY_FILE
 
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+except ImportError:
+    Fernet = None
+    InvalidToken = Exception
+
 logger = logging.getLogger(__name__)
 
 CREDENTIALS_FILE = CONFIG_DIR / 'credentials.json'
+SCRAMBLE_SALT_FILE = CONFIG_DIR / '.scramble_salt'
 
 # Schema for credentials.json
 DEFAULT_CREDENTIALS = {
@@ -36,6 +47,12 @@ DEFAULT_CREDENTIALS = {
     },
     "homeassistant": {
         "token": ""
+    },
+    "email": {
+        "address": "",
+        "app_password": "",
+        "imap_server": "imap.gmail.com",
+        "smtp_server": "smtp.gmail.com"
     }
 }
 
@@ -51,9 +68,10 @@ PROVIDER_ENV_VARS = {
 
 class CredentialsManager:
     """Manages credentials stored outside project directory."""
-    
+
     def __init__(self):
         self._credentials = None
+        self._scramble_key = None
         self._load()
     
     def _load(self):
@@ -200,6 +218,56 @@ class CredentialsManager:
             logger.error(f"Failed to save credentials to {CREDENTIALS_FILE}: {e}")
             return False
     
+    # =========================================================================
+    # Scramble (reversible encryption for sensitive fields)
+    # =========================================================================
+
+    def _get_scramble_key(self) -> bytes:
+        """Derive Fernet key from salt + machine identity. Cached after first call."""
+        if self._scramble_key:
+            return self._scramble_key
+
+        if Fernet is None:
+            raise RuntimeError("cryptography package not installed — cannot scramble")
+
+        # Create salt file on first use
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        if SCRAMBLE_SALT_FILE.exists():
+            salt = SCRAMBLE_SALT_FILE.read_bytes()
+        else:
+            salt = os.urandom(32)
+            SCRAMBLE_SALT_FILE.write_bytes(salt)
+            if sys.platform != 'win32':
+                os.chmod(SCRAMBLE_SALT_FILE, 0o600)
+            logger.info("Created scramble salt file")
+
+        # Machine identity: hostname + OS username
+        identity = f"{socket.gethostname()}:{getpass.getuser()}".encode()
+        derived = hashlib.pbkdf2_hmac('sha256', identity, salt, 100_000)
+        self._scramble_key = base64.urlsafe_b64encode(derived)
+        return self._scramble_key
+
+    def _scramble(self, value: str) -> str:
+        """Encrypt a value. Returns 'enc:...' string."""
+        if not value:
+            return value
+        key = self._get_scramble_key()
+        f = Fernet(key)
+        encrypted = f.encrypt(value.encode()).decode()
+        return f"enc:{encrypted}"
+
+    def _unscramble(self, value: str) -> str:
+        """Decrypt an 'enc:...' value. Plaintext passes through unchanged."""
+        if not value or not value.startswith('enc:'):
+            return value
+        try:
+            key = self._get_scramble_key()
+            f = Fernet(key)
+            return f.decrypt(value[4:].encode()).decode()
+        except (InvalidToken, Exception) as e:
+            logger.error(f"Failed to unscramble value: {e}")
+            return ''
+
     # =========================================================================
     # LLM API Keys
     # =========================================================================
@@ -385,6 +453,52 @@ class CredentialsManager:
         return bool(self.get_ha_token())
     
     # =========================================================================
+    # Email
+    # =========================================================================
+
+    def get_email_credentials(self) -> dict:
+        """Get email credentials. App password is unscrambled on read."""
+        email = self._credentials.get('email', {})
+        return {
+            'address': email.get('address', ''),
+            'app_password': self._unscramble(email.get('app_password', '')),
+            'imap_server': email.get('imap_server', 'imap.gmail.com'),
+            'smtp_server': email.get('smtp_server', 'smtp.gmail.com'),
+        }
+
+    def set_email_credentials(self, address: str, app_password: str,
+                              imap_server: str = 'imap.gmail.com',
+                              smtp_server: str = 'smtp.gmail.com') -> bool:
+        """Set email credentials. App password is scrambled before save."""
+        try:
+            if 'email' not in self._credentials:
+                self._credentials['email'] = {}
+
+            self._credentials['email']['address'] = address
+            self._credentials['email']['app_password'] = self._scramble(app_password) if app_password else ''
+            self._credentials['email']['imap_server'] = imap_server
+            self._credentials['email']['smtp_server'] = smtp_server
+
+            if not self._save():
+                logger.error("Failed to persist email credentials to disk")
+                return False
+
+            logger.info("Set email credentials")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set email credentials: {e}")
+            return False
+
+    def clear_email_credentials(self) -> bool:
+        """Clear email credentials."""
+        return self.set_email_credentials('', '', 'imap.gmail.com', 'smtp.gmail.com')
+
+    def has_email_credentials(self) -> bool:
+        """Check if email credentials are configured."""
+        creds = self.get_email_credentials()
+        return bool(creds['address'] and creds['app_password'])
+
+    # =========================================================================
     # Utility
     # =========================================================================
     
@@ -394,6 +508,8 @@ class CredentialsManager:
         
         Shows which credentials are set without exposing actual values.
         """
+        email_creds = self._credentials.get('email', {})
+        email_addr = email_creds.get('address', '')
         summary = {
             "llm": {},
             "socks": {
@@ -401,6 +517,10 @@ class CredentialsManager:
             },
             "homeassistant": {
                 "has_token": self.has_ha_token()
+            },
+            "email": {
+                "has_credentials": self.has_email_credentials(),
+                "address": email_addr[:3] + '***' if email_addr else ''
             }
         }
         

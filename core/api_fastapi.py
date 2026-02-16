@@ -2756,6 +2756,7 @@ async def save_person(request: Request, _=Depends(require_login)):
         notes=data.get('notes'),
         scope=scope,
         person_id=data.get('id'),
+        email_whitelisted=data.get('email_whitelisted'),
     )
     return {"id": pid, "created": is_new}
 
@@ -4023,6 +4024,91 @@ async def get_ha_token_status(request: Request, _=Depends(require_login)):
     from core.credentials_manager import credentials
     has_token = credentials.has_ha_token()
     return {"has_token": has_token}
+
+
+# =============================================================================
+# EMAIL PLUGIN ROUTES
+# =============================================================================
+
+@app.get("/api/webui/plugins/email/credentials")
+async def get_email_credentials_status(request: Request, _=Depends(require_login)):
+    """Check if email credentials exist (never returns password)."""
+    from core.credentials_manager import credentials
+    creds = credentials.get_email_credentials()
+    return {
+        "has_credentials": credentials.has_email_credentials(),
+        "address": creds['address'],
+        "imap_server": creds['imap_server'],
+        "smtp_server": creds['smtp_server'],
+    }
+
+
+@app.put("/api/webui/plugins/email/credentials")
+async def set_email_credentials(request: Request, _=Depends(require_login)):
+    """Store email credentials (app password is scrambled)."""
+    from core.credentials_manager import credentials
+    data = await request.json() or {}
+    address = data.get('address', '').strip()
+    app_password = data.get('app_password', '').strip()
+    imap_server = data.get('imap_server', 'imap.gmail.com').strip()
+    smtp_server = data.get('smtp_server', 'smtp.gmail.com').strip()
+
+    if not address:
+        raise HTTPException(status_code=400, detail="Email address is required")
+
+    # If no new password provided, keep existing
+    if not app_password:
+        existing = credentials.get_email_credentials()
+        app_password = existing.get('app_password', '')
+
+    if credentials.set_email_credentials(address, app_password, imap_server, smtp_server):
+        return {"success": True}
+    raise HTTPException(status_code=500, detail="Failed to save email credentials")
+
+
+@app.delete("/api/webui/plugins/email/credentials")
+async def clear_email_credentials(request: Request, _=Depends(require_login)):
+    """Clear email credentials."""
+    from core.credentials_manager import credentials
+    if credentials.clear_email_credentials():
+        return {"success": True}
+    raise HTTPException(status_code=500, detail="Failed to clear email credentials")
+
+
+@app.post("/api/webui/plugins/email/test")
+async def test_email_connection(request: Request, _=Depends(require_login)):
+    """Test IMAP connection with provided or stored credentials."""
+    import imaplib
+    from core.credentials_manager import credentials
+
+    data = await request.json() or {}
+    address = data.get('address', '').strip()
+    app_password = data.get('app_password', '').strip()
+    imap_server = data.get('imap_server', '').strip()
+
+    # Fall back to stored credentials for missing fields
+    if not address or not app_password:
+        stored = credentials.get_email_credentials()
+        address = address or stored['address']
+        app_password = app_password or stored['app_password']
+        imap_server = imap_server or stored['imap_server']
+
+    if not address or not app_password:
+        return {"success": False, "error": "No credentials provided"}
+
+    imap_server = imap_server or 'imap.gmail.com'
+
+    try:
+        imap = imaplib.IMAP4_SSL(imap_server)
+        imap.login(address, app_password)
+        _, data_resp = imap.select('INBOX', readonly=True)
+        msg_count = int(data_resp[0])
+        imap.logout()
+        return {"success": True, "message_count": msg_count}
+    except imaplib.IMAP4.error as e:
+        return {"success": False, "error": f"Authentication failed: {e}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
