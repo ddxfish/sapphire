@@ -79,6 +79,8 @@ class VoiceChatSystem:
         start_time = time.time()
         self.is_listening = False
         self.current_session = None
+        self._processing_lock = threading.Lock()
+        self._web_active = False  # Suppresses wakeword during web UI activity
         
         self.history = ConversationHistory(max_history=config.LLM_MAX_HISTORY)
 
@@ -391,33 +393,38 @@ class VoiceChatSystem:
         return text.strip()
 
     def process_llm_query(self, query, skip_tts=False):
+        if not self._processing_lock.acquire(timeout=0.5):
+            logger.warning("process_llm_query: already processing, skipping duplicate")
+            return None
         try:
             clean_query = self._clean_text(query)
-            
+
             if clean_query == "stop":
                 logger.info("Stop command detected, stopping TTS")
                 self.tts.stop()
                 return
-            
+
             if clean_query == "reset":
                 logger.info("Reset command detected, resetting chat")
                 self.reset_chat()
                 return
-            
+
             response_text = self.llm_chat.chat(query)
-            
+
             if response_text:
                 if not skip_tts:
                     self.tts.speak(response_text)
                 return response_text
             else:
                 logger.warning("Empty response from processing")
-                
+
         except Exception as e:
             logger.error(f"Error in process_llm_query: {e}")
             if not skip_tts:
                 self.speak_error('processing')
-                
+        finally:
+            self._processing_lock.release()
+
         return None
 
     def start_background_services(self):

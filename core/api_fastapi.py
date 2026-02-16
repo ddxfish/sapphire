@@ -541,7 +541,11 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
     if not data or 'text' not in data:
         raise HTTPException(status_code=400, detail="No text provided")
 
-    response = await asyncio.to_thread(system.process_llm_query, data['text'], True)
+    system._web_active = True
+    try:
+        response = await asyncio.to_thread(system.process_llm_query, data['text'], True)
+    finally:
+        system._web_active = False
     return {"response": response}
 
 
@@ -560,6 +564,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
     files = data.get('files', [])
 
     system.llm_chat.streaming_chat.cancel_flag = False
+    system._web_active = True
 
     def generate():
         try:
@@ -611,6 +616,8 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             from core.chat.chat import friendly_llm_error
             msg = friendly_llm_error(e) or str(e)
             yield f"data: {json.dumps({'error': msg})}\n\n"
+        finally:
+            system._web_active = False
 
     return StreamingResponse(
         generate(),
@@ -1324,6 +1331,7 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
     if not ok:
         raise HTTPException(status_code=400, detail=reason)
 
+    system._web_active = True
     fd, temp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(fd)
@@ -1344,6 +1352,7 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
         logger.error(f"Transcription error: {e}")
         raise HTTPException(status_code=500, detail="Failed to process audio")
     finally:
+        system._web_active = False
         try:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)

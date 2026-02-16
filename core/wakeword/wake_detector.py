@@ -209,6 +209,12 @@ class WakeWordDetector:
             logger.debug("Wakeword detected but WAKE_WORD_ENABLED=False, ignoring")
             return
 
+        # Suppress during web UI activity (recording/chatting)
+        if self.system and getattr(self.system, '_web_active', False):
+            logger.info("Wakeword detected but web UI active, suppressing")
+            self._reset_detection_state()
+            return
+
         self.callback_pool.submit(self._play_tone)
         publish(Events.WAKEWORD_DETECTED)
 
