@@ -3,6 +3,11 @@
 
 import { registerPluginSettings } from '../plugins-modal/plugin-registry.js';
 
+function csrfHeaders(extra = {}) {
+  const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  return { 'X-CSRF-Token': token, ...extra };
+}
+
 function injectStyles() {
   if (document.getElementById('email-plugin-styles')) return;
 
@@ -171,7 +176,7 @@ async function testConnection(container) {
 
     const res = await fetch('/api/webui/plugins/email/test', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
     const data = await res.json();
@@ -201,7 +206,7 @@ async function testConnection(container) {
 
 async function clearCredentials(container) {
   try {
-    const res = await fetch('/api/webui/plugins/email/credentials', { method: 'DELETE' });
+    const res = await fetch('/api/webui/plugins/email/credentials', { method: 'DELETE', headers: csrfHeaders() });
     if (res.ok) {
       const getEl = (id) => container.querySelector(`#${id}`) || document.getElementById(id);
       const addrInput = getEl('email-address');
@@ -311,7 +316,7 @@ async function saveSettings(settings) {
 
       const res = await fetch('/api/webui/plugins/email/credentials', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload)
       });
       const data = await res.json();

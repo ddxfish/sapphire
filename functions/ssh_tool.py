@@ -46,7 +46,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "ssh_run_command",
-            "description": "Run a command on a remote server via SSH. Use the server's friendly name from ssh_get_servers(). Output is truncated if too long.",
+            "description": "Run a command on a server by friendly name (from ssh_get_servers). Use 'localhost' for the local machine. Output is truncated if too long.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -91,7 +91,7 @@ DEFAULT_MAX_TIMEOUT = 120
 
 def _get_ssh_settings():
     """Load SSH plugin settings (output_limit, max_timeout, blacklist)."""
-    settings_file = Path(__file__).parent.parent / "user" / "settings" / "plugins" / "ssh.json"
+    settings_file = Path(__file__).parent.parent / "user" / "webui" / "plugins" / "ssh.json"
     if settings_file.exists():
         try:
             with open(settings_file, 'r', encoding='utf-8') as f:
@@ -123,6 +123,11 @@ def _get_max_timeout():
     return settings.get('max_timeout', DEFAULT_MAX_TIMEOUT)
 
 
+def _localhost_enabled():
+    settings = _get_ssh_settings()
+    return bool(settings.get('localhost_enabled', False))
+
+
 def _check_blacklist(command):
     """Check command against blacklist. Returns matching pattern or None."""
     blacklist = _get_blacklist()
@@ -143,16 +148,25 @@ def _check_blacklist(command):
 
 def _get_servers(name=None):
     from core.credentials_manager import credentials
-    servers = credentials.get_ssh_servers()
+    all_servers = credentials.get_ssh_servers()
+    active = [s for s in all_servers if s.get('enabled', True)]
+    localhost = _localhost_enabled()
 
-    if not servers:
-        return "No SSH servers configured. Add servers in Settings → Plugins → SSH.", True
+    active_names = [s['name'] for s in active]
+    if localhost:
+        active_names.insert(0, 'localhost')
+
+    if not active and not localhost:
+        return "No SSH servers available. Add or enable servers in Settings → Plugins → SSH.", True
 
     if name:
-        server = credentials.get_ssh_server(name)
+        if name.lower() == 'localhost':
+            if not localhost:
+                return "Localhost is not enabled. Enable it in Settings → Plugins → SSH.", False
+            return "Server: localhost\n  Runs commands directly on this machine (no SSH).", True
+        server = next((s for s in active if s['name'].lower() == name.lower()), None)
         if not server:
-            names = ', '.join(s['name'] for s in servers)
-            return f"Server '{name}' not found. Available: {names}", False
+            return f"Server '{name}' not found. Available: {', '.join(active_names)}", False
         return (
             f"Server: {server['name']}\n"
             f"  Host: {server['host']}\n"
@@ -161,44 +175,81 @@ def _get_servers(name=None):
             f"  Key: {server.get('key_path', '~/.ssh/id_ed25519')}"
         ), True
 
-    lines = [f"SSH Servers ({len(servers)}):"]
-    for s in servers:
+    total = len(active) + (1 if localhost else 0)
+    lines = [f"Servers ({total}):"]
+    if localhost:
+        lines.append("  [localhost] (local machine)")
+    for s in active:
         lines.append(f"  [{s['name']}] {s['user']}@{s['host']}:{s.get('port', 22)}")
     return '\n'.join(lines), True
 
 
 def _run_command(server_name, command, timeout=30):
-    from core.credentials_manager import credentials
-
-    # Resolve server
-    server = credentials.get_ssh_server(server_name)
-    if not server:
-        servers = credentials.get_ssh_servers()
-        if servers:
-            names = ', '.join(s['name'] for s in servers)
-            return f"Server '{server_name}' not found. Available: {names}", False
-        return "No SSH servers configured.", False
-
-    # Blacklist check
+    # Blacklist check (applies to all targets including localhost)
     blocked = _check_blacklist(command)
     if blocked:
-        logger.warning(f"SSH command blocked by blacklist: {command!r} matched {blocked!r}")
+        logger.warning(f"Command blocked by blacklist: {command!r} matched {blocked!r}")
         return f"Command blocked by safety filter (matched: {blocked}). Edit blacklist in Settings → Plugins → SSH.", False
 
     # Clamp timeout
     max_timeout = _get_max_timeout()
     timeout = min(max(5, timeout), max_timeout)
 
+    # Localhost — direct subprocess, no SSH
+    if server_name.lower() == 'localhost':
+        if not _localhost_enabled():
+            return "Localhost is not enabled. Enable it in Settings → Plugins → SSH.", False
+        return _run_local(command, timeout)
+
+    # Remote server — resolve from enabled servers only
+    from core.credentials_manager import credentials
+    all_servers = credentials.get_ssh_servers()
+    active = [s for s in all_servers if s.get('enabled', True)]
+    server = next((s for s in active if s['name'].lower() == server_name.lower()), None)
+    if not server:
+        active_names = [s['name'] for s in active]
+        if _localhost_enabled():
+            active_names.insert(0, 'localhost')
+        if active_names:
+            return f"Server '{server_name}' not found. Available: {', '.join(active_names)}", False
+        return "No servers available.", False
+
+    return _run_remote(server, command, timeout)
+
+
+def _run_local(command, timeout):
+    """Run command locally via subprocess."""
+    logger.info(f"LOCAL $ {command[:100]}")
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return _format_output('localhost', 'local', command, result)
+
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Local command timed out after {timeout}s: {command[:100]}")
+        return f"[localhost] Command timed out after {timeout}s.", False
+    except Exception as e:
+        logger.error(f"Local command error: {e}", exc_info=True)
+        return f"Local command error: {e}", False
+
+
+def _run_remote(server, command, timeout):
+    """Run command on remote server via SSH."""
     host = server['host']
     user = server['user']
     port = str(server.get('port', 22))
     key_path = server.get('key_path', '')
 
-    # Build ssh command
     ssh_cmd = [
         'ssh',
         '-o', 'StrictHostKeyChecking=accept-new',
-        '-o', f'ConnectTimeout=5',
+        '-o', 'ConnectTimeout=5',
         '-o', 'BatchMode=yes',
         '-p', port,
     ]
@@ -217,31 +268,7 @@ def _run_command(server_name, command, timeout=30):
             text=True,
             timeout=timeout,
         )
-
-        output = result.stdout
-        stderr = result.stderr.strip()
-        exit_code = result.returncode
-
-        # Combine stdout + stderr
-        parts = []
-        if output:
-            parts.append(output)
-        if stderr and exit_code != 0:
-            parts.append(f"STDERR: {stderr}")
-        full_output = '\n'.join(parts) if parts else '(no output)'
-
-        # Truncate
-        limit = _get_output_limit()
-        truncated = False
-        if len(full_output) > limit:
-            full_output = full_output[:limit]
-            truncated = True
-
-        header = f"[{server['name']}] ({host}) $ {command}\nExit code: {exit_code}"
-        if truncated:
-            header += f" (output truncated to {limit} chars)"
-
-        return f"{header}\n\n{full_output}", exit_code == 0
+        return _format_output(server['name'], host, command, result)
 
     except subprocess.TimeoutExpired:
         logger.warning(f"SSH command timed out after {timeout}s: {command[:100]}")
@@ -251,6 +278,32 @@ def _run_command(server_name, command, timeout=30):
     except Exception as e:
         logger.error(f"SSH error: {e}", exc_info=True)
         return f"SSH error: {e}", False
+
+
+def _format_output(name, host, command, result):
+    """Format subprocess result with truncation."""
+    output = result.stdout
+    stderr = result.stderr.strip()
+    exit_code = result.returncode
+
+    parts = []
+    if output:
+        parts.append(output)
+    if stderr and exit_code != 0:
+        parts.append(f"STDERR: {stderr}")
+    full_output = '\n'.join(parts) if parts else '(no output)'
+
+    limit = _get_output_limit()
+    truncated = False
+    if len(full_output) > limit:
+        full_output = full_output[:limit]
+        truncated = True
+
+    header = f"[{name}] ({host}) $ {command}\nExit code: {exit_code}"
+    if truncated:
+        header += f" (output truncated to {limit} chars)"
+
+    return f"{header}\n\n{full_output}", exit_code == 0
 
 
 # ─── Executor ────────────────────────────────────────────────────────────────

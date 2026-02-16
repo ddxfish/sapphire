@@ -1,5 +1,10 @@
 // plugins-api.js - API calls for plugin management
 
+function csrfHeaders(extra = {}) {
+  const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  return { 'X-CSRF-Token': token, ...extra };
+}
+
 const pluginsAPI = {
   /**
    * Get list of all plugins with enabled/locked status
@@ -24,7 +29,8 @@ const pluginsAPI = {
    */
   async togglePlugin(pluginName) {
     const res = await fetch(`/api/webui/plugins/toggle/${pluginName}`, {
-      method: 'PUT'
+      method: 'PUT',
+      headers: csrfHeaders()
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -49,7 +55,7 @@ const pluginsAPI = {
   async saveSettings(pluginName, settings) {
     const res = await fetch(`/api/webui/plugins/${pluginName}/settings`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(settings)
     });
     if (!res.ok) {
@@ -64,7 +70,8 @@ const pluginsAPI = {
    */
   async resetSettings(pluginName) {
     const res = await fetch(`/api/webui/plugins/${pluginName}/settings`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: csrfHeaders()
     });
     if (!res.ok) throw new Error(`Failed to reset: ${res.status}`);
     return res.json();

@@ -4,6 +4,11 @@
 import { registerPluginSettings } from '../plugins-modal/plugin-registry.js';
 import pluginsAPI from '../plugins-modal/plugins-api.js';
 
+function csrfHeaders(extra = {}) {
+  const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  return { 'X-CSRF-Token': token, ...extra };
+}
+
 let DEFAULTS = null;
 
 async function loadDefaults() {
@@ -255,7 +260,7 @@ async function testConnection(container) {
     
     const res = await fetch('/api/webui/plugins/homeassistant/test-connection', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
     const data = await res.json();
@@ -321,7 +326,7 @@ async function testNotify(container) {
     
     const res = await fetch('/api/webui/plugins/homeassistant/test-notify', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
     });
     const data = await res.json();
@@ -377,7 +382,7 @@ async function fetchEntities(container) {
   try {
     const res = await fetch('/api/webui/plugins/homeassistant/entities', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ url, token: token || undefined, blacklist })
     });
     const data = await res.json();
@@ -526,7 +531,7 @@ async function saveSettings(settings) {
       console.log('HA: Saving token to credentials manager');
       const res = await fetch('/api/webui/plugins/homeassistant/token', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ token })
       });
       const data = await res.json();

@@ -4,6 +4,11 @@
 import { registerPluginSettings } from '../plugins-modal/plugin-registry.js';
 import pluginsAPI from '../plugins-modal/plugins-api.js';
 
+function csrfHeaders(extra = {}) {
+  const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+  return { 'X-CSRF-Token': token, ...extra };
+}
+
 const DEFAULT_BLACKLIST = [
   'rm -rf /',
   'rm -rf /*',
@@ -201,6 +206,12 @@ function injectStyles() {
 }
 
 
+function autoSave(container) {
+  const settings = getFormSettings(container);
+  saveSettings(settings).catch(e => console.error('SSH auto-save failed:', e));
+}
+
+
 function renderServerList(container) {
   const listEl = container.querySelector('#ssh-server-list');
   if (!listEl) return;
@@ -210,16 +221,28 @@ function renderServerList(container) {
     return;
   }
 
-  listEl.innerHTML = servers.map((s, i) => `
-    <div class="ssh-server-row" data-idx="${i}">
+  listEl.innerHTML = servers.map((s, i) => {
+    const enabled = s.enabled !== false;
+    return `
+    <div class="ssh-server-row${enabled ? '' : ' disabled'}" data-idx="${i}" style="${enabled ? '' : 'opacity:0.5'}">
+      <input type="checkbox" class="ssh-toggle-server" data-idx="${i}" ${enabled ? 'checked' : ''} title="${enabled ? 'Enabled' : 'Disabled'}">
       <div class="ssh-server-info">
         <div class="ssh-server-name">${esc(s.name)}</div>
         <div class="ssh-server-detail">${esc(s.user)}@${esc(s.host)}:${s.port || 22} &middot; ${esc(s.key_path || '~/.ssh/id_ed25519')}</div>
       </div>
       <button class="ssh-btn ssh-test-server" data-idx="${i}">Test</button>
       <button class="ssh-btn danger ssh-del-server" data-idx="${i}">&times;</button>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
+
+  // Enable/disable toggles
+  listEl.querySelectorAll('.ssh-toggle-server').forEach(cb => {
+    cb.addEventListener('change', () => {
+      servers[parseInt(cb.dataset.idx)].enabled = cb.checked;
+      renderServerList(container);
+      autoSave(container);
+    });
+  });
 
   // Test buttons
   listEl.querySelectorAll('.ssh-test-server').forEach(btn => {
@@ -230,7 +253,7 @@ function renderServerList(container) {
       try {
         const res = await fetch('/api/webui/plugins/ssh/test', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: csrfHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(s)
         });
         const data = await res.json();
@@ -260,6 +283,7 @@ function renderServerList(container) {
     btn.addEventListener('click', () => {
       servers.splice(parseInt(btn.dataset.idx), 1);
       renderServerList(container);
+      autoSave(container);
     });
   });
 }
@@ -280,6 +304,13 @@ function renderForm(container, settings) {
   container.innerHTML = `
     <div class="ssh-form">
       <div class="ssh-section-title">Servers</div>
+
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:8px">
+        <input type="checkbox" id="ssh-localhost" ${s.localhost_enabled ? 'checked' : ''}>
+        Enable localhost
+        <span style="color:var(--text-muted);font-size:11px">(run commands directly on this machine)</span>
+      </label>
+
       <div class="ssh-server-list" id="ssh-server-list"></div>
 
       <div class="ssh-add-form" id="ssh-add-form">
@@ -323,6 +354,9 @@ function renderForm(container, settings) {
 
   renderServerList(container);
 
+  // Localhost toggle — auto-save
+  container.querySelector('#ssh-localhost').addEventListener('change', () => autoSave(container));
+
   // Add server button
   container.querySelector('#ssh-add-btn').addEventListener('click', () => {
     const getVal = (id) => (container.querySelector(`#${id}`) || document.getElementById(id))?.value?.trim() || '';
@@ -345,6 +379,7 @@ function renderForm(container, settings) {
 
     servers.push({ name, host, user, port, key_path });
     renderServerList(container);
+    autoSave(container);
 
     // Clear form
     const form = container.querySelector('#ssh-add-form');
@@ -354,6 +389,14 @@ function renderForm(container, settings) {
     form.querySelector('#ssh-new-port').value = '22';
     form.querySelector('#ssh-new-key').value = '';
   });
+
+  // Auto-save settings fields on blur
+  ['ssh-output-limit', 'ssh-max-timeout'].forEach(id => {
+    const el = container.querySelector(`#${id}`);
+    if (el) el.addEventListener('change', () => autoSave(container));
+  });
+  const bl = container.querySelector('#ssh-blacklist');
+  if (bl) bl.addEventListener('blur', () => autoSave(container));
 }
 
 
@@ -362,18 +405,19 @@ async function saveSettings(settings) {
   try {
     await fetch('/api/webui/plugins/ssh/servers', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ servers })
     });
   } catch (e) {
     console.error('Failed to save SSH servers:', e);
   }
 
-  // Save settings (output_limit, max_timeout, blacklist) to plugin settings
+  // Save settings to plugin settings
   const pluginSettings = {
     output_limit: settings._output_limit,
     max_timeout: settings._max_timeout,
     blacklist: settings._blacklist,
+    localhost_enabled: settings._localhost_enabled,
   };
   return pluginsAPI.saveSettings('ssh', pluginSettings);
 }
@@ -388,10 +432,13 @@ function getFormSettings(container) {
   const blacklistText = getVal('ssh-blacklist');
   const blacklist = blacklistText.split('\n').map(s => s.trim()).filter(Boolean);
 
+  const localhostEl = container.querySelector('#ssh-localhost') || document.getElementById('ssh-localhost');
+
   return {
     _output_limit: parseInt(getVal('ssh-output-limit')) || 6000,
     _max_timeout: parseInt(getVal('ssh-max-timeout')) || 120,
     _blacklist: blacklist,
+    _localhost_enabled: localhostEl?.checked || false,
   };
 }
 
