@@ -93,6 +93,11 @@
         </button>
         <div class="nav-overflow-menu hidden"></div>
 
+        <!-- User profile -->
+        <button class="nav-profile-btn" id="nav-profile-btn" title="Profile">
+            <span class="nav-profile-initial" id="nav-profile-initial">?</span>
+        </button>
+
         <span class="nav-version">v2</span>
     </nav>
 
@@ -445,6 +450,35 @@
             <button id="image-modal-prev" class="image-modal-nav image-modal-prev-btn">&#8249;</button>
             <button id="image-modal-next" class="image-modal-nav image-modal-next-btn">&#8250;</button>
             <div id="image-modal-counter" class="image-modal-counter"></div>
+        </div>
+    </div>
+
+    <!-- User Profile Modal -->
+    <div id="user-profile-modal" class="up-overlay" style="display:none">
+        <div class="up-modal">
+            <div class="up-header">
+                <h3>Profile</h3>
+                <button class="btn-icon" id="up-close">&times;</button>
+            </div>
+            <div class="up-body">
+                <div class="up-avatar-section">
+                    <img class="up-avatar" id="up-avatar" src="/static/users/user.webp" onerror="this.style.visibility='hidden'">
+                    <input type="file" id="up-avatar-file" accept=".png,.jpg,.jpeg,.gif,.webp" hidden>
+                    <button class="btn-sm" id="up-avatar-btn">Change Avatar</button>
+                </div>
+                <div class="up-field">
+                    <label for="up-username">Your Name</label>
+                    <input type="text" id="up-username" placeholder="What should Sapphire call you?">
+                </div>
+                <div class="up-divider"></div>
+                <div class="up-field">
+                    <label>Default AI</label>
+                    <div class="up-persona-row" id="up-persona-row">
+                        <img class="up-persona-avatar" id="up-persona-avatar" src="/static/users/assistant.webp" onerror="this.style.visibility='hidden'">
+                        <select id="up-persona-select"></select>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

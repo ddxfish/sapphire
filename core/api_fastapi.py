@@ -665,6 +665,17 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         from core.chat.history import count_tokens, count_message_tokens
 
         chat_settings = system.llm_chat.session_manager.get_chat_settings()
+
+        # Backfill trim_color from persona if missing (pre-persona chats)
+        if not chat_settings.get('trim_color') and chat_settings.get('persona'):
+            try:
+                from core.modules.system.personas import persona_manager
+                p = persona_manager.get(chat_settings['persona'])
+                if p:
+                    chat_settings['trim_color'] = p.get('settings', {}).get('trim_color', '')
+            except Exception:
+                pass
+
         if chat_settings.get('state_engine_enabled') and not system.llm_chat.function_manager.get_state_engine():
             system.llm_chat._update_state_engine()
 
@@ -912,7 +923,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "default": getattr(config, 'DEFAULT_PERSONA', '') or ''
             },
             "settings": {
-                "AVATARS_IN_CHAT": avatars_in_chat
+                "AVATARS_IN_CHAT": avatars_in_chat,
+                "DEFAULT_USERNAME": getattr(config, 'DEFAULT_USERNAME', 'Human Protagonist')
             },
             "wizard_step": wizard_step,
             "avatars": avatars,

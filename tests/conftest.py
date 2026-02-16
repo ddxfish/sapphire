@@ -15,8 +15,7 @@ def settings_defaults():
     """Minimal settings defaults for testing."""
     return {
         "identity": {
-            "DEFAULT_USERNAME": "TestUser",
-            "DEFAULT_AI_NAME": "TestAI"
+            "DEFAULT_USERNAME": "TestUser"
         },
         "features": {
             "MODULES_ENABLED": True,

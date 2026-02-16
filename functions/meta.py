@@ -26,7 +26,6 @@ AVAILABLE_FUNCTIONS = [
     'remove_piece',
     'create_piece',
     'list_pieces',
-    'change_ai_name',
     'change_username',
     'set_tts_voice',
     'list_tools',
@@ -35,8 +34,8 @@ AVAILABLE_FUNCTIONS = [
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
-    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_ai_name', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
+    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
+    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
 }
 
 # Available TTS voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female)
@@ -100,24 +99,6 @@ TOOLS = [
                     }
                 },
                 "required": ["reason"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "change_ai_name",
-            "description": "Change your AI name. Updates the setting used in prompts.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Your new name"
-                    }
-                },
-                "required": ["name"]
             }
         }
     },
@@ -556,24 +537,6 @@ def execute(function_name, arguments, config):
             response.raise_for_status()
             
             return f"Chat reset. Reason: {reason}", True
-
-        elif function_name == "change_ai_name":
-            name = arguments.get('name', '').strip()
-            if not name:
-                return "Name is required.", False
-            
-            response = requests.put(
-                f"{main_api_url}/api/settings/DEFAULT_AI_NAME",
-                json={"value": name, "persist": True},
-                headers=headers,
-                timeout=5, verify=False
-            )
-            
-            if response.status_code != 200:
-                return f"Failed to change AI name: {response.text}", False
-            
-            logger.info(f"AI name changed to: {name}")
-            return f"AI name changed to {name}. This will appear in prompts using {{ai_name}}.", True
 
         elif function_name == "change_username":
             name = arguments.get('name', '').strip()

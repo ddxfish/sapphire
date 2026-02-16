@@ -4,7 +4,6 @@ import * as api from '../shared/settings-api.js';
 import * as ui from '../ui.js';
 
 // Tab registry
-import identityTab from './settings-tabs/identity.js';
 import appearanceTab from './settings-tabs/appearance.js';
 import audioTab from './settings-tabs/audio.js';
 import ttsTab from './settings-tabs/tts.js';
@@ -19,17 +18,17 @@ import systemTab from './settings-tabs/system.js';
 
 import { getRegisteredTabs } from '../plugins/plugins-modal/plugin-registry.js';
 
-const STATIC_TABS = [identityTab, appearanceTab, audioTab, ttsTab, sttTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, backupTab, systemTab];
+const STATIC_TABS = [appearanceTab, audioTab, ttsTab, sttTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, backupTab, systemTab];
 
 let container = null;
-let activeTab = 'identity';
+let activeTab = 'appearance';
 let settings = {};
 let help = {};
 let overrides = [];
 let pendingChanges = {};
 let wakewordModels = [];
 let availableThemes = ['dark'];
-let avatarPaths = { user: null, assistant: null };
+let avatarPaths = { user: null, assistant: null }; // kept for plugin compat
 let providerMeta = {};
 let dynamicTabs = [];
 let pluginList = [];
@@ -57,7 +56,7 @@ async function loadData() {
         overrides = settingsData.user_overrides || [];
         help = helpData.help || {};
 
-        await Promise.all([loadThemes(), loadWakewordModels(), loadAvatarPaths(), loadProviderMeta(), loadPluginList()]);
+        await Promise.all([loadThemes(), loadWakewordModels(), loadProviderMeta(), loadPluginList()]);
     } catch (e) {
         console.warn('Settings load failed:', e);
     }
@@ -146,16 +145,6 @@ async function loadProviderMeta() {
     } catch {}
 }
 
-async function loadAvatarPaths() {
-    try {
-        const [u, a] = await Promise.all([
-            api.checkAvatar('user').catch(() => ({ exists: false })),
-            api.checkAvatar('assistant').catch(() => ({ exists: false }))
-        ]);
-        avatarPaths.user = u.exists ? u.path : '/static/users/user.webp';
-        avatarPaths.assistant = a.exists ? a.path : '/static/users/assistant.webp';
-    } catch {}
-}
 
 // ── Rendering ──
 

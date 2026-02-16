@@ -128,7 +128,7 @@ class PromptManager:
         
         try:
             from core.settings_manager import settings
-            ai_name = settings.get('DEFAULT_AI_NAME', 'Sapphire')
+            ai_name = 'Sapphire'
             user_name = settings.get('DEFAULT_USERNAME', 'Human Protagonist')
             # Sanitize curly brackets to prevent template injection
             ai_name = ai_name.replace('{', '').replace('}', '')

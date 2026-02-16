@@ -17,6 +17,7 @@ let openAccordion = null;
 let editTarget = {};        // { type: key } per-type editing target
 let saveTimer = null;
 let compSaveTimers = {};
+let previewOpen = false;
 
 const SINGLE_TYPES = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
 const MULTI_TYPES  = ['extras', 'emotions'];
@@ -81,6 +82,7 @@ function render() {
                 <div class="pr-preview">
                     ${selected ? renderPreview() : ''}
                 </div>
+
             </div>
             <div class="pr-roster">
                 ${renderRoster()}
@@ -263,12 +265,15 @@ function renderPreview() {
     const text = selectedData?.compiled || selectedData?.content || '';
     if (!text) return '<div class="pr-preview-empty">No preview available</div>';
     return `
-        <div class="pr-preview-header">
-            <h3>Preview: ${esc(selected)}</h3>
-            <span class="view-subtitle">${formatCount(text.length)} chars</span>
-        </div>
-        <div class="pr-preview-body">
-            <pre class="pr-preview-text">${esc(text)}</pre>
+        <div class="pr-preview-accordion">
+            <div class="pr-preview-header" id="pr-preview-toggle">
+                <span class="accordion-arrow">${previewOpen ? '\u25BC' : '\u25B6'}</span>
+                <h3>Preview <span class="text-muted" style="font-weight:normal;font-size:var(--font-sm)">${previewOpen ? '' : '(expand)'}</span></h3>
+                <span class="view-subtitle">${formatCount(text.length)} chars</span>
+            </div>
+            <div class="pr-preview-body" style="${previewOpen ? '' : 'display:none'}">
+                <pre class="pr-preview-text">${esc(text)}</pre>
+            </div>
         </div>
     `;
 }
@@ -322,6 +327,15 @@ function bindEvents() {
             openAccordion = openAccordion === type ? null : type;
             render();
         });
+    });
+
+    // --- Preview accordion toggle ---
+    layout.querySelector('#pr-preview-toggle')?.addEventListener('click', () => {
+        previewOpen = !previewOpen;
+        const body = layout.querySelector('.pr-preview-body');
+        const arrow = layout.querySelector('#pr-preview-toggle .accordion-arrow');
+        if (body) body.style.display = previewOpen ? '' : 'none';
+        if (arrow) arrow.textContent = previewOpen ? '\u25BC' : '\u25B6';
     });
 
     // --- Inside accordion bodies ---
@@ -653,7 +667,16 @@ async function refreshPreview() {
     } catch { /* ignore */ }
 
     const previewEl = container?.querySelector('.pr-preview');
-    if (previewEl) previewEl.innerHTML = renderPreview();
+    if (previewEl) {
+        previewEl.innerHTML = renderPreview();
+        previewEl.querySelector('#pr-preview-toggle')?.addEventListener('click', () => {
+            previewOpen = !previewOpen;
+            const body = previewEl.querySelector('.pr-preview-body');
+            const arrow = previewEl.querySelector('#pr-preview-toggle .accordion-arrow');
+            if (body) body.style.display = previewOpen ? '' : 'none';
+            if (arrow) arrow.textContent = previewOpen ? '\u25BC' : '\u25B6';
+        });
+    }
 
     // Update char count in header subtitle
     const subtitle = container?.querySelector('.pr-header .view-subtitle');

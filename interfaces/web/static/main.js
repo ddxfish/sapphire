@@ -9,6 +9,7 @@ import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
 import { initPrivacy } from './features/privacy.js';
+import { initUserProfile } from './features/user-profile.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
 import { setupImageModal } from './ui-images.js';
@@ -56,7 +57,8 @@ async function loadViews() {
     );
 }
 
-// Initialize appearance settings from localStorage (theme, density, font, trim)
+// Initialize appearance settings from localStorage (theme, density, font)
+// Trim color is per-persona now — default cyan set in CSS body
 function initAppearance() {
     const root = document.documentElement;
 
@@ -72,20 +74,8 @@ function initAppearance() {
         root.setAttribute('data-font', font);
     }
 
-    // Trim color - apply if explicitly set
-    const trim = localStorage.getItem('sapphire-trim');
-    if (trim) {
-        root.style.setProperty('--trim', trim);
-        const r = parseInt(trim.slice(1, 3), 16);
-        const g = parseInt(trim.slice(3, 5), 16);
-        const b = parseInt(trim.slice(5, 7), 16);
-        root.style.setProperty('--trim-glow', `rgba(${r}, ${g}, ${b}, 0.35)`);
-        root.style.setProperty('--trim-light', `rgba(${r}, ${g}, ${b}, 0.15)`);
-        root.style.setProperty('--trim-border', `rgba(${r}, ${g}, ${b}, 0.4)`);
-        root.style.setProperty('--trim-50', `rgba(${r}, ${g}, ${b}, 0.5)`);
-        root.style.setProperty('--accordion-header-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-        root.style.setProperty('--accordion-header-hover', `rgba(${r}, ${g}, ${b}, 0.12)`);
-    }
+    // Clean up stale trim localStorage (now per-persona)
+    localStorage.removeItem('sapphire-trim');
 
     // Send button trim preference
     const sendBtnTrim = localStorage.getItem('sapphire-send-btn-trim');
@@ -174,6 +164,7 @@ async function init() {
         setupImageHandlers();
         setupImageModal();
         initPrivacy();
+        initUserProfile();
 
         initEventBus();
 
@@ -236,6 +227,7 @@ async function init() {
             setupImageHandlers();
             setupImageModal();
             initPrivacy();
+            initUserProfile();
             initEventBus();
         } catch (e2) {
             console.error('UI wiring failed:', e2);

@@ -39,7 +39,12 @@ export default {
         await loadData();
         render();
     },
-    hide() {}
+    hide() {
+        // Restore active chat's trim color when leaving persona view
+        fetch('/api/scene').then(r => r.ok ? r.json() : null).then(d => {
+            applyTrimColor(d?.chat_settings?.trim_color || '');
+        }).catch(() => applyTrimColor(''));
+    }
 };
 
 async function loadData() {
@@ -80,6 +85,8 @@ async function loadData() {
 
 function render() {
     if (!container) return;
+    // Apply selected persona's trim color while browsing
+    applyTrimColor(selectedData?.settings?.trim_color || '');
 
     const s = selectedData?.settings || {};
     const isActive = selectedData?.name === getCurrentPersona();

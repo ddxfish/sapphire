@@ -3,7 +3,7 @@
 
 // Tab metadata - modules loaded on demand
 const TAB_METADATA = [
-  { id: 'identity', name: 'Identity', icon: '👤', description: 'User and AI identity settings', keys: ['DEFAULT_USERNAME', 'DEFAULT_AI_NAME', 'AVATARS_IN_CHAT'] },
+  { id: 'identity', name: 'Identity', icon: '👤', description: 'User identity settings', keys: ['DEFAULT_USERNAME', 'AVATARS_IN_CHAT'] },
   { id: 'appearance', name: 'Appearance', icon: '🎨', description: 'Theme and visual settings', keys: [] },
   { id: 'audio', name: 'Audio', icon: '🔊', description: 'Audio device settings', keys: ['AUDIO_OUTPUT_DEVICE', 'AUDIO_INPUT_DEVICE', 'STEREO_DOWNMIX', 'SOUND_EFFECTS', 'SEND_SOUND_PATH', 'RECEIVE_SOUND_PATH', 'SEND_SOUND_VOLUME', 'RECEIVE_SOUND_VOLUME'] },
   { id: 'tts', name: 'TTS', icon: '🗣️', description: 'Text-to-speech settings', keys: ['TTS_VOICE', 'TTS_SPEED', 'TTS_PITCH', 'KOKORO_HOST', 'KOKORO_PORT', 'KOKORO_GPU', 'KOKORO_TOP_P', 'KOKORO_TEMPERATURE'] },

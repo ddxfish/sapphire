@@ -3,6 +3,16 @@
 
 * { box-sizing: border-box; }
 
+html {
+    --trim: #00cccc;
+    --trim-glow: rgba(0, 204, 204, 0.35);
+    --trim-light: rgba(0, 204, 204, 0.15);
+    --trim-border: rgba(0, 204, 204, 0.4);
+    --trim-50: rgba(0, 204, 204, 0.5);
+    --accordion-header-bg: rgba(0, 204, 204, 0.08);
+    --accordion-header-hover: rgba(0, 204, 204, 0.12);
+}
+
 body {
     font-family: var(--font-body);
     margin: 0;
@@ -71,7 +81,7 @@ body {
     width: 40px;
     height: 40px;
     border-radius: var(--radius-md);
-    background: linear-gradient(135deg, var(--trim, #4a9eff), rgba(74, 158, 255, 0.6));
+    background: linear-gradient(135deg, var(--trim), var(--trim-50));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -135,6 +145,36 @@ body {
 }
 
 .nav-spacer { flex: 1; }
+
+/* User profile button */
+.nav-profile-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--bg-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    flex-shrink: 0;
+    transition: border-color 0.15s ease;
+    overflow: hidden;
+    margin-bottom: 2px;
+}
+.nav-profile-btn:hover { border-color: var(--trim, #4a9eff); }
+.nav-profile-initial {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    line-height: 1;
+}
+.nav-profile-btn img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
 
 .nav-version {
     font-size: 9px;
@@ -1340,14 +1380,24 @@ body {
 
 /* Preview panel */
 .pr-preview-header {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
+    gap: 10px;
+    cursor: pointer;
+    user-select: none;
+    background: var(--accordion-header-bg);
+    border-radius: 8px;
+    transition: background 0.15s;
+}
+.pr-preview-header:hover { background: var(--accordion-header-hover); }
+.pr-preview-header .accordion-arrow {
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.15s;
 }
 .pr-preview-header h3 { margin: 0; font-size: var(--font-md); }
+.pr-preview-header .view-subtitle { margin-left: auto; }
 .pr-preview-body { padding: 16px 20px; }
 .pr-preview-text {
     white-space: pre-wrap;
@@ -1987,8 +2037,8 @@ body {
 .setting-input select {
     width: 100%;
     padding: 6px 10px;
-    background: var(--input-bg);
-    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
     color: var(--text);
     font-size: var(--font-sm);
@@ -2002,14 +2052,16 @@ body {
 .setting-json {
     width: 100%;
     padding: 8px 10px;
-    background: var(--input-bg);
-    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    border: 1px solid var(--border-light);
     border-radius: var(--radius-sm);
     color: var(--text);
     font-size: var(--font-xs);
     font-family: var(--font-mono, monospace);
     resize: vertical;
 }
+/* JSON textareas span full width in 2-col grid */
+.setting-row:has(.setting-json) { grid-column: 1 / -1; }
 
 .setting-toggle { display: flex; align-items: center; gap: 8px; font-size: var(--font-sm); cursor: pointer; }
 .setting-toggle input[type="checkbox"] {
@@ -3782,6 +3834,7 @@ a.gallery-caption:hover {
     .nav-logo { display: none; }
     .nav-spacer { display: none; }
     .nav-version { display: none; }
+    .nav-profile-btn { display: none; }
 
     .nav-item {
         width: 48px;
@@ -3922,7 +3975,7 @@ a.gallery-caption:hover {
     padding: 16px;
     border-top: 1px solid rgba(255,255,255,0.06);
     transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease;
-    max-height: 500px;
+    max-height: 2000px;
     opacity: 1;
 }
 
@@ -4445,6 +4498,101 @@ a.gallery-caption:hover {
         max-width: 100px;
         max-height: 100px;
     }
+}
+
+/* =============================================================================
+   USER PROFILE MODAL
+   ============================================================================= */
+
+.up-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.up-modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    width: 360px;
+    max-width: 90vw;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.up-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.up-header h3 { margin: 0; font-size: 16px; }
+.up-body { padding: 20px; }
+.up-avatar-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.up-avatar {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--border);
+    background: var(--bg-tertiary);
+}
+.up-field { margin-bottom: 14px; }
+.up-field label {
+    display: block;
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.up-field input[type="text"],
+.up-field select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-primary);
+    color: var(--text);
+    font-size: var(--font-base);
+}
+.up-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 16px 0;
+}
+.up-persona-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.up-persona-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    background: var(--bg-tertiary);
+    flex-shrink: 0;
+}
+.up-persona-row select {
+    flex: 1;
+    background: var(--bg-primary);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    font-size: var(--font-base);
+}
+.up-persona-row select option {
+    background: var(--bg-secondary);
+    color: var(--text);
 }
 
 /* =============================================================================

@@ -429,9 +429,9 @@ export function closeSettingsModal() {
 export function applyTrimColor(color) {
     const root = document.documentElement;
     
-    // If no per-chat color, check for global trim in localStorage
+    // If no color provided, fall back to CSS default (cyan)
     if (!color || !color.match(/^#[0-9a-f]{6}$/i)) {
-        color = localStorage.getItem('sapphire-trim') || '';
+        color = '';
     }
     
     if (color && color.match(/^#[0-9a-f]{6}$/i)) {

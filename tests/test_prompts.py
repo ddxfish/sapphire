@@ -120,10 +120,10 @@ class TestPromptManagerTemplates:
             
             # Patch where settings is imported FROM (inside the method)
             with patch('core.settings_manager.settings') as mock_settings:
-                mock_settings.get.side_effect = lambda k, d: "Sapphire" if k == "DEFAULT_AI_NAME" else d
-                
+                mock_settings.get.side_effect = lambda k, d: d
+
                 result = mgr._replace_templates("Hello {ai_name}!")
-                
+
                 assert result == "Hello Sapphire!"
     
     def test_replace_user_name(self):
@@ -150,14 +150,10 @@ class TestPromptManagerTemplates:
             mgr.USER_DIR = Path("/tmp")
             
             with patch('core.settings_manager.settings') as mock_settings:
-                def get_setting(k, d):
-                    if k == "DEFAULT_AI_NAME": return "Sapphire"
-                    if k == "DEFAULT_USERNAME": return "testuser"
-                    return d
-                mock_settings.get.side_effect = get_setting
-                
+                mock_settings.get.side_effect = lambda k, d: "testuser" if k == "DEFAULT_USERNAME" else d
+
                 result = mgr._replace_templates("I am {ai_name}, you are {user_name}")
-                
+
                 assert result == "I am Sapphire, you are testuser"
     
     def test_handles_empty_string(self):

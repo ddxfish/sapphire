@@ -190,10 +190,9 @@ class LLMChat:
 
     def _get_system_prompt(self):
         username = getattr(config, 'DEFAULT_USERNAME', 'Human Scum')
-        ai_name = getattr(config, 'DEFAULT_AI_NAME', 'Sapphire')
+        ai_name = 'Sapphire'
         # Sanitize curly brackets to prevent template injection
         username = username.replace('{', '').replace('}', '')
-        ai_name = ai_name.replace('{', '').replace('}', '')
         prompt_template = self.current_system_prompt or "System prompt not loaded."
         prompt = prompt_template.replace("{user_name}", username).replace("{ai_name}", ai_name)
         
@@ -804,7 +803,7 @@ class LLMChat:
             
             # Apply name substitutions
             username = getattr(config, 'DEFAULT_USERNAME', 'Human')
-            ai_name = getattr(config, 'DEFAULT_AI_NAME', 'Sapphire')
+            ai_name = 'Sapphire'
             system_prompt = system_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
             
             # Inject datetime if enabled
