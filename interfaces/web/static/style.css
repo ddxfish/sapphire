@@ -1680,79 +1680,64 @@ body {
 .sched-create-opt:hover { background: var(--bg-primary); }
 .sched-create-opt:not(:last-child) { border-bottom: 1px solid var(--border); }
 
-/* Mission Control - compact heartbeat status grid */
-.sched-mc {
-    padding: 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+/* Horizontal timeline strip */
+.sched-hstrip {
+    max-width: 1100px;
+    margin: 0 auto 16px;
+    padding: 14px 4px 0;
+}
+.hstrip-ruler {
+    position: relative;
     background: var(--bg-secondary);
-}
-.sched-mc-grid { display: grid; grid-template-columns: 1fr; gap: 4px; }
-.sched-mc-grid.mc-2col { grid-template-columns: 1fr 1fr; }
-.sched-mc-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: background 0.12s;
-    font-size: var(--font-sm);
+    min-height: 28px;
 }
-.sched-mc-row:hover { background: var(--bg-primary); }
-.sched-mc-emoji { font-size: 15px; flex-shrink: 0; line-height: 1; }
-.sched-mc-name {
-    font-weight: 500;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.hstrip-pip {
+    position: absolute;
+    transform: translateX(-50%);
+    font-size: 13px;
+    line-height: 1;
+    cursor: default;
+    transition: transform 0.15s;
+    z-index: 1;
+}
+.hstrip-pip:hover { transform: translateX(-50%) scale(1.4); z-index: 2; }
+.hstrip-pip.past { opacity: 0.6; }
+.hstrip-now {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--trim, #4a9eff);
+    transform: translateX(-50%);
+    z-index: 3;
+}
+.hstrip-now-label {
+    position: absolute;
+    bottom: calc(100% + 2px);
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--trim, #4a9eff);
     white-space: nowrap;
+    font-weight: 600;
 }
-.sched-mc-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
+.hstrip-markers {
+    position: relative;
+    height: 14px;
+    margin-bottom: 2px;
 }
-.sched-mc-dot.beating { background: var(--success, #22c55e); }
-.sched-mc-dot.babump { background: var(--success, #22c55e); box-shadow: 0 0 6px var(--success, #22c55e); }
-.sched-mc-dot.irregular { background: var(--warning, #f59e0b); }
-.sched-mc-dot.flatlined { background: var(--text-muted); opacity: 0.5; }
-.sched-mc-dot.warmup { background: var(--trim, #4a9eff); }
-.sched-mc-status {
-    font-size: var(--font-xs);
+.hstrip-marker {
+    position: absolute;
+    transform: translateX(-50%);
+    font-size: 10px;
     color: var(--text-muted);
     white-space: nowrap;
 }
-.sched-mc-meta {
-    font-size: var(--font-xs);
-    color: var(--text-muted);
-    white-space: nowrap;
-    margin-left: auto;
-}
-
-/* Right column tabs */
-.sched-right-tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border);
-    gap: 0;
-}
-.sched-right-tab {
-    flex: 1;
-    padding: 8px 12px;
-    border: none;
-    background: transparent;
-    color: var(--text-muted);
-    font-size: var(--font-sm);
-    font-weight: 500;
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
-    border-bottom: 2px solid transparent;
-}
-.sched-right-tab:hover { color: var(--text); }
-.sched-right-tab.active { color: var(--trim, #4a9eff); border-bottom-color: var(--trim, #4a9eff); }
-.sched-right-body { padding-top: 4px; }
+.hstrip-marker:first-child { transform: translateX(0); }
+.hstrip-marker:last-child { transform: translateX(-100%); }
 
 /* Vitals grid - heartbeat cards */
 .sched-vitals-grid {
@@ -1782,27 +1767,36 @@ body {
     margin-bottom: 8px;
 }
 .hb-emoji { font-size: 20px; line-height: 1; }
-.hb-name { font-weight: 600; font-size: var(--font-md); flex: 1; }
+.hb-name {
+    font-weight: 600;
+    font-size: var(--font-md);
+    flex: 1;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+.hb-name:hover { color: var(--trim, #4a9eff); }
+.hb-toggle { margin-left: auto; }
 
-/* Beat dots - execution history */
-.hb-dots {
+/* Heatmap blocks - execution history */
+.hb-heatmap {
     display: flex;
-    gap: 3px;
+    gap: 2px;
     margin-bottom: 8px;
-    flex-wrap: wrap;
 }
-.hb-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--border);
+.hb-block {
+    flex: 1;
+    height: 10px;
+    border-radius: 2px;
+    background: var(--text-muted);
+    opacity: 0.2;
 }
-.hb-dot.complete { background: var(--success, #22c55e); }
-.hb-dot.error { background: var(--error, #ef4444); }
-.hb-dot.skipped { background: var(--warning, #f59e0b); }
-.hb-dot.started { background: var(--trim, #4a9eff); }
+.hb-block.complete { background: var(--trim, #4a9eff); opacity: 0.55; }
+.hb-block.error { background: var(--trim, #4a9eff); opacity: 0.18; }
+.hb-block.skipped { background: var(--trim, #4a9eff); opacity: 0.28; }
+.hb-block.started { background: var(--trim, #4a9eff); opacity: 0.4; }
+.hb-block.empty { background: var(--text-muted); opacity: 0.2; }
 
-.hb-meta {
+.hb-time {
     font-size: var(--font-xs);
     color: var(--text-muted);
     margin-bottom: 8px;
@@ -1824,7 +1818,7 @@ body {
 
 .hb-actions {
     display: flex;
-    gap: 8px;
+    gap: 4px;
 }
 
 /* Heartbeat pulse animations */
@@ -1840,48 +1834,6 @@ body {
 .hb-card.flatlined .hb-emoji { filter: grayscale(1); opacity: 0.35; }
 .hb-card.warmup .hb-emoji { opacity: 0.7; }
 
-/* Timeline */
-.sched-timeline {
-    padding: 8px 0;
-    font-size: var(--font-sm);
-}
-.tl-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 8px;
-    border-radius: var(--radius-sm);
-    transition: background 0.12s;
-}
-.tl-item:hover { background: var(--bg-primary); }
-.tl-item.future { opacity: 0.7; }
-.tl-time {
-    font-family: var(--font-mono);
-    font-size: var(--font-xs);
-    color: var(--text-muted);
-    min-width: 70px;
-    flex-shrink: 0;
-}
-.tl-icon { font-size: 14px; flex-shrink: 0; line-height: 1; }
-.tl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tl-status { font-size: var(--font-xs); color: var(--text-muted); }
-.tl-chance { font-size: var(--font-xs); color: var(--text-muted); }
-.tl-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-.tl-dot.upcoming { background: var(--trim, #4a9eff); opacity: 0.6; }
-.tl-now {
-    text-align: center;
-    color: var(--trim, #4a9eff);
-    font-size: var(--font-xs);
-    font-weight: 600;
-    padding: 10px 0;
-    letter-spacing: 0.5px;
-    opacity: 0.8;
-}
 
 /* Heartbeat emoji picker (header button + dropdown) */
 .sched-hb-emoji-wrap { position: relative; flex-shrink: 0; }
@@ -2186,7 +2138,6 @@ body {
 /* Mobile: stack layout */
 @media (max-width: 768px) {
     .sched-layout { grid-template-columns: 1fr; gap: 20px; }
-    .sched-mc-grid.mc-2col { grid-template-columns: 1fr; }
     .sched-vitals-grid { grid-template-columns: 1fr; }
     .sched-picker-tabs { flex-wrap: wrap; }
     .sched-picker-tab { flex: 1 1 40%; padding: 6px 6px; font-size: var(--font-xs); }

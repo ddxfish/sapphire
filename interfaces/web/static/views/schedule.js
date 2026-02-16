@@ -12,7 +12,6 @@ let heartbeats = [];    // heartbeats only
 let status = {};
 let mergedTimeline = { now: null, past: [], future: [] };
 let pollTimer = null;
-let rightTab = 'vitals'; // 'vitals' | 'timeline'
 
 export default {
     init(el) { container = el; },
@@ -63,6 +62,7 @@ function render() {
                 </div>
             </div>
             <div class="view-body view-scroll">
+                <div id="sched-hstrip-wrap"></div>
                 <div class="sched-layout">
                     <div id="sched-tasks"></div>
                     <div class="sched-mission" id="sched-mission"></div>
@@ -78,8 +78,10 @@ function updateContent() {
     const tasksEl = container?.querySelector('#sched-tasks');
     const missionEl = container?.querySelector('#sched-mission');
     const subEl = container?.querySelector('#sched-subtitle');
+    const hstripEl = container?.querySelector('#sched-hstrip-wrap');
     if (tasksEl) tasksEl.innerHTML = renderTaskList();
     if (missionEl) missionEl.innerHTML = renderMission();
+    if (hstripEl) hstripEl.innerHTML = renderHorizontalTimeline();
     const total = tasks.length + heartbeats.length;
     const enabled = [...tasks, ...heartbeats].filter(t => t.enabled).length;
     if (subEl) subEl.innerHTML = `${enabled}/${total} active
@@ -135,127 +137,134 @@ function renderTaskList() {
     }).join('');
 }
 
-// ── Right Column: Mission Control + Tabs ──
+// ── Right Column: Heartbeat Cards ──
 
 function renderMission() {
-    return `
-        ${renderMissionControl()}
-        <div class="sched-right-tabs">
-            <button class="sched-right-tab${rightTab === 'vitals' ? ' active' : ''}" data-tab="vitals">Vitals</button>
-            <button class="sched-right-tab${rightTab === 'timeline' ? ' active' : ''}" data-tab="timeline">Timeline</button>
-        </div>
-        <div class="sched-right-body">
-            ${rightTab === 'vitals' ? renderVitals() : renderTimeline()}
-        </div>
-    `;
+    if (heartbeats.length === 0) {
+        return '<div class="text-muted" style="padding:20px;text-align:center;font-size:var(--font-sm)">Create a heartbeat to monitor vitals here</div>';
+    }
+    return `<div class="sched-vitals-grid">
+        ${heartbeats.map(hb => renderHeartbeatCard(hb)).join('')}
+    </div>`;
 }
 
-function renderMissionControl() {
-    if (heartbeats.length === 0) {
-        return `<div class="sched-mc">
-            <div class="sched-section-title">\uD83D\uDCDF Mission Control</div>
-            <div class="text-muted" style="font-size:var(--font-sm);padding:4px 0">No heartbeats yet</div>
-        </div>`;
-    }
-    const cols = heartbeats.length > 3 ? 'mc-2col' : '';
+function renderHeartbeatCard(hb) {
+    const state = getHeartbeatState(hb);
+    const emoji = hb.emoji || '\u2764\uFE0F';
+    const lastResp = hb.last_response || '';
+    const truncResp = lastResp.length > 200 ? lastResp.slice(0, 200) + '...' : lastResp;
+    const beats = getBeatsForTask(hb.id, 20);
+
+    // Time context: "Beating · ran 3m ago · next in 12m"
+    const lastAgo = hb.last_run ? timeAgo(hb.last_run) : null;
+    const nextIn = getNextIn(hb.id);
+    const timeParts = [
+        state.label,
+        lastAgo ? `ran ${lastAgo}` : null,
+        nextIn ? `next in ${nextIn}` : null
+    ].filter(Boolean).join(' \u00B7 ');
+
     return `
-        <div class="sched-mc">
-            <div class="sched-section-title">\uD83D\uDCDF Mission Control</div>
-            <div class="sched-mc-grid ${cols}">
-                ${heartbeats.map(hb => {
-                    const state = getHeartbeatState(hb);
-                    const emoji = hb.emoji || '\u2764\uFE0F';
-                    const lastAgo = hb.last_run ? timeAgo(hb.last_run) : '';
-                    const rate = describeCron(hb.schedule).replace('Every ', '');
-                    return `
-                        <div class="sched-mc-row ${state.cls}" data-action="scroll-vital" data-id="${hb.id}">
-                            <span class="sched-mc-emoji">${emoji}</span>
-                            <span class="sched-mc-name">${esc(hb.name)}</span>
-                            <span class="sched-mc-dot ${state.cls}"></span>
-                            <span class="sched-mc-status">${state.label}</span>
-                            ${lastAgo ? `<span class="sched-mc-meta">${lastAgo}</span>` : ''}
-                        </div>`;
-                }).join('')}
+        <div class="hb-card ${state.cls}" id="vital-${hb.id}">
+            <div class="hb-card-header">
+                <span class="hb-emoji">${emoji}</span>
+                <span class="hb-name" data-action="edit" data-id="${hb.id}">${esc(hb.name)}</span>
+                <label class="sched-toggle hb-toggle" title="${hb.enabled ? 'Pause' : 'Resume'}">
+                    <input type="checkbox" ${hb.enabled ? 'checked' : ''} data-action="hb-toggle" data-id="${hb.id}">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            ${renderHeatmap(beats)}
+            <div class="hb-time">${timeParts}</div>
+            ${truncResp ? `<div class="hb-response">${esc(truncResp)}</div>` : ''}
+            <div class="hb-actions">
+                <button class="btn-icon" data-action="run" data-id="${hb.id}" title="Run now">\u25B6</button>
+                <button class="btn-icon" data-action="edit" data-id="${hb.id}" title="Edit">\u270F\uFE0F</button>
+                <button class="btn-icon danger" data-action="delete" data-id="${hb.id}" title="Delete">\u2715</button>
             </div>
         </div>`;
 }
 
-function renderVitals() {
-    if (heartbeats.length === 0) {
-        return '<div class="text-muted" style="padding:20px;text-align:center;font-size:var(--font-sm)">Create a heartbeat to see vitals here</div>';
-    }
-    return `<div class="sched-vitals-grid">
-        ${heartbeats.map(hb => {
-            const state = getHeartbeatState(hb);
-            const emoji = hb.emoji || '\u2764\uFE0F';
-            const schedDesc = describeCron(hb.schedule);
-            const lastResp = hb.last_response || '';
-            const truncResp = lastResp.length > 200 ? lastResp.slice(0, 200) + '...' : lastResp;
+// ── Heatmap Blocks ──
 
-            // Beat dots from activity
-            const dots = getBeatsForTask(hb.id, 20);
-
-            return `
-                <div class="hb-card ${state.cls}" id="vital-${hb.id}">
-                    <div class="hb-card-header">
-                        <span class="hb-emoji">${emoji}</span>
-                        <span class="hb-name">${esc(hb.name)}</span>
-                        <button class="btn-sm" data-action="edit" data-id="${hb.id}">Edit</button>
-                    </div>
-                    <div class="hb-dots">${dots.map(d =>
-                        `<span class="hb-dot ${d}"></span>`
-                    ).join('')}</div>
-                    <div class="hb-meta">${schedDesc} \u00B7 ${state.label}</div>
-                    ${truncResp ? `<div class="hb-response">${esc(truncResp)}</div>` : ''}
-                    <div class="hb-actions">
-                        <button class="btn-sm" data-action="${hb.enabled ? 'disable' : 'enable'}" data-id="${hb.id}">${hb.enabled ? 'Pause' : 'Revive'}</button>
-                        <button class="btn-sm" data-action="run" data-id="${hb.id}">Run Now</button>
-                        <button class="btn-sm danger" data-action="delete" data-id="${hb.id}">Delete</button>
-                    </div>
-                </div>`;
-        }).join('')}
-    </div>`;
+function renderHeatmap(beats) {
+    // Fixed 20-slot scale, right-aligned. Empty slots = border-colored.
+    const MAX = 20;
+    const empty = MAX - beats.length;
+    const blocks = [];
+    for (let i = 0; i < empty; i++) blocks.push('<span class="hb-block empty"></span>');
+    for (const s of beats) blocks.push(`<span class="hb-block ${s}"></span>`);
+    return `<div class="hb-heatmap">${blocks.join('')}</div>`;
 }
 
-function renderTimeline() {
+// ── Horizontal Timeline Strip ──
+
+function renderHorizontalTimeline() {
     const { now, past, future } = mergedTimeline;
-    if (!past.length && !future.length) {
-        return '<div class="text-muted" style="padding:20px;text-align:center;font-size:var(--font-sm)">No timeline data</div>';
-    }
+    // Filter to only tasks that still exist
+    const liveIds = new Set([...tasks, ...heartbeats].map(t => t.id));
+    const allItems = [...past, ...future].filter(item => liveIds.has(item.task_id));
+    if (!allItems.length) return '';
 
-    let html = '';
+    const nowMs = now ? new Date(now).getTime() : Date.now();
+    const windowMs = 2 * 60 * 60 * 1000; // 2h each side = 4h window
+    const minMs = nowMs - windowMs;
+    const maxMs = nowMs + windowMs;
 
-    // Past events (most recent first, reversed so oldest at top)
-    const pastItems = [...past].reverse();
-    for (const item of pastItems) {
+    // Group by task_id — each task gets its own row, matching card order
+    const rowMap = new Map();
+    for (const hb of heartbeats) rowMap.set(hb.id, rowMap.size);
+    for (const t of tasks) rowMap.set(t.id, rowMap.size);
+    const pipData = [];
+    for (const item of allItems) {
+        const ts = item.timestamp || item.scheduled_for;
+        if (!ts) continue;
+        const ms = new Date(ts).getTime();
+        if (ms < minMs || ms > maxMs) continue;
+        const tid = item.task_id || item.task_name;
+        if (!rowMap.has(tid)) rowMap.set(tid, rowMap.size);
+        const pct = ((ms - minMs) / (maxMs - minMs)) * 100;
         const icon = item.heartbeat ? (item.emoji || '\u2764\uFE0F') : '\u26A1';
-        const statusCls = item.status || 'complete';
-        html += `<div class="tl-item past">
-            <span class="tl-time">${formatTime(item.timestamp)}</span>
-            <span class="sched-act-dot ${statusCls}"></span>
-            <span class="tl-icon">${icon}</span>
-            <span class="tl-name">${esc(item.task_name)}</span>
-            <span class="tl-status">${item.status}</span>
-        </div>`;
+        const isPast = ms <= nowMs;
+        const timeStr = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        pipData.push({ pct, icon, isPast, name: item.task_name, timeStr, row: rowMap.get(tid) });
     }
 
-    // NOW marker
-    const nowTime = now ? formatTime(now) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    html += `<div class="tl-now">\u2500\u2500\u2500 NOW (${nowTime}) \u2500\u2500\u2500</div>`;
+    const usedRows = new Set(pipData.map(p => p.row));
+    const numRows = Math.max(1, usedRows.size);
+    const rowH = 20;
+    // Compact rows: remap to remove gaps from unused pre-seeded rows
+    const rowRemap = new Map();
+    [...usedRows].sort((a, b) => a - b).forEach((r, i) => rowRemap.set(r, i));
+    for (const p of pipData) p.row = rowRemap.get(p.row);
+    const rulerH = numRows * rowH + 8;
 
-    // Future events
-    for (const item of future) {
-        const icon = item.heartbeat ? (item.emoji || '\u2764\uFE0F') : '\u26A1';
-        html += `<div class="tl-item future">
-            <span class="tl-time">${formatTime(item.scheduled_for)}</span>
-            <span class="tl-dot upcoming"></span>
-            <span class="tl-icon">${icon}</span>
-            <span class="tl-name">${esc(item.task_name)}</span>
-            ${item.chance < 100 ? `<span class="tl-chance">${item.chance}%</span>` : ''}
+    const pips = pipData.map(p => {
+        const topPx = 4 + p.row * rowH; // 4px top pad + row offset
+        return `<span class="hstrip-pip${p.isPast ? ' past' : ''}" style="left:${p.pct}%;top:${topPx}px" title="${esc(p.name)} \u2014 ${p.timeStr}">${p.icon}</span>`;
+    }).join('');
+
+    const nowTimeStr = new Date(nowMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Time markers at -2h, -1h, NOW, +1h, +2h
+    const fmt = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const markers = [
+        { pct: 0, label: fmt(minMs) },
+        { pct: 25, label: fmt(nowMs - windowMs / 2) },
+        { pct: 75, label: fmt(nowMs + windowMs / 2) },
+        { pct: 100, label: fmt(maxMs) }
+    ].map(m =>
+        `<span class="hstrip-marker" style="left:${m.pct}%">${m.label}</span>`
+    ).join('');
+
+    return `
+        <div class="sched-hstrip">
+            <div class="hstrip-markers">${markers}</div>
+            <div class="hstrip-ruler" style="height:${rulerH}px">
+                ${pips}
+                <span class="hstrip-now"><span class="hstrip-now-label">${nowTimeStr}</span></span>
+            </div>
         </div>`;
-    }
-
-    return `<div class="sched-timeline">${html}</div>`;
 }
 
 // ── Heartbeat Helpers ──
@@ -274,6 +283,24 @@ function getHeartbeatState(hb) {
 function getBeatsForTask(taskId, count) {
     const all = (mergedTimeline.past || []).filter(a => a.task_id === taskId);
     return all.slice(0, count).reverse().map(a => a.status || 'complete');
+}
+
+function getNextIn(taskId) {
+    const next = (mergedTimeline.future || []).find(f => f.task_id === taskId);
+    if (!next?.scheduled_for) return null;
+    return timeUntil(next.scheduled_for);
+}
+
+function timeUntil(isoString) {
+    if (!isoString) return '';
+    try {
+        const diff = new Date(isoString).getTime() - Date.now();
+        if (diff < 0) return null;
+        if (diff < 60000) return '<1m';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+        return `${Math.floor(diff / 86400000)}d`;
+    } catch { return ''; }
 }
 
 // ── Events ──
@@ -326,37 +353,24 @@ function bindEvents() {
                 ui.showToast('Deleted', 'success');
                 await loadData(); updateContent();
             } catch { ui.showToast('Delete failed', 'error'); }
-        } else if (action === 'disable') {
-            try { await updateTask(id, { enabled: false }); await loadData(); updateContent(); }
-            catch { ui.showToast('Failed', 'error'); }
-        } else if (action === 'enable') {
-            try { await updateTask(id, { enabled: true }); await loadData(); updateContent(); }
-            catch { ui.showToast('Failed', 'error'); }
-        } else if (action === 'scroll-vital') {
-            rightTab = 'vitals';
-            updateContent();
-            setTimeout(() => {
-                container.querySelector(`#vital-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }, 50);
         }
     });
 
-    // Right column tab switching
-    layout.addEventListener('click', e => {
-        const tab = e.target.closest('.sched-right-tab');
-        if (!tab) return;
-        rightTab = tab.dataset.tab;
-        updateContent();
-    });
-
-    // Toggle (checkbox change)
+    // Toggle (checkbox change) — tasks + heartbeats
     layout.addEventListener('change', async e => {
-        if (e.target.dataset.action === 'toggle') {
-            const id = e.target.dataset.id;
+        const { action, id } = e.target.dataset;
+        if (action === 'toggle') {
             const task = tasks.find(t => t.id === id);
             if (!task) return;
             try {
                 await updateTask(id, { enabled: !task.enabled });
+                await loadData(); updateContent();
+            } catch { ui.showToast('Toggle failed', 'error'); }
+        } else if (action === 'hb-toggle') {
+            const hb = heartbeats.find(h => h.id === id);
+            if (!hb) return;
+            try {
+                await updateTask(id, { enabled: !hb.enabled });
                 await loadData(); updateContent();
             } catch { ui.showToast('Toggle failed', 'error'); }
         }
@@ -565,7 +579,7 @@ async function openEditor(task, isHeartbeat = false) {
                 </details>
 
                 <details class="sched-accordion">
-                    <summary class="sched-acc-header">Chat <span class="sched-preview" id="ed-chat-preview">${esc(t.chat_target || '')}</span></summary>
+                    <summary class="sched-acc-header">Chat <span class="sched-preview" id="ed-chat-preview">${t.chat_target ? esc(t.chat_target) : 'No history'}</span></summary>
                     <div class="sched-acc-body"><div class="sched-acc-inner">
                         <div class="sched-field">
                             <label>Chat Name <span class="help-tip" data-tip="Run in a named chat (conversation saved). Leave blank for ephemeral background execution.">?</span></label>
@@ -729,7 +743,14 @@ async function openEditor(task, isHeartbeat = false) {
     const personaSel = modal.querySelector('#ed-persona');
     personaSel?.addEventListener('change', async () => {
         const name = personaSel.value;
-        if (!name) return;
+        if (!name) {
+            const set = (id, val) => { const el = modal.querySelector(id); if (el) el.value = val; };
+            set('#ed-memory', 'none');
+            set('#ed-knowledge', 'none');
+            set('#ed-people', 'none');
+            set('#ed-goals', 'none');
+            return;
+        }
         try {
             const persona = await fetchPersona(name);
             if (!persona?.settings) return;
@@ -813,7 +834,7 @@ async function openEditor(task, isHeartbeat = false) {
     // Chat name label
     modal.querySelector('#ed-chat')?.addEventListener('input', () => {
         const el = modal.querySelector('#ed-chat-preview');
-        if (el) el.textContent = modal.querySelector('#ed-chat').value.trim();
+        if (el) el.textContent = modal.querySelector('#ed-chat').value.trim() || 'No history';
     });
 
     // Live preview updates
