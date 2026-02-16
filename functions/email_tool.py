@@ -225,26 +225,27 @@ def _get_inbox(count=20):
         imap.login(creds['address'], creds['app_password'])
         imap.select('INBOX', readonly=True)
 
-        _, data = imap.search(None, 'ALL')
-        msg_ids = data[0].split()
-        if not msg_ids:
+        # Use UIDs — stable across sessions (unlike sequence numbers)
+        _, data = imap.uid('search', None, 'ALL')
+        uids = data[0].split()
+        if not uids:
             imap.logout()
             _inbox_cache = {"messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()}
             return "Inbox is empty.", True
 
-        # Get unseen message IDs for reliable unread detection
-        _, unseen_data = imap.search(None, 'UNSEEN')
-        unseen_ids = set(unseen_data[0].split())
+        # Get unseen UIDs for reliable unread detection
+        _, unseen_data = imap.uid('search', None, 'UNSEEN')
+        unseen_uids = set(unseen_data[0].split())
 
         # Fetch latest N
-        latest = msg_ids[-count:]
+        latest = uids[-count:]
         latest.reverse()  # Newest first
 
         messages = []
         raw_messages = []
 
-        for i, msg_id in enumerate(latest, 1):
-            _, msg_data = imap.fetch(msg_id, '(RFC822)')
+        for i, uid in enumerate(latest, 1):
+            _, msg_data = imap.uid('fetch', uid, '(RFC822)')
             raw_email = msg_data[0][1]
             msg = email.message_from_bytes(raw_email)
             raw_messages.append(msg)
@@ -261,7 +262,7 @@ def _get_inbox(count=20):
                 "sender_name": _extract_sender_name(msg.get('From', '')),
                 "subject": _decode_header_value(msg.get('Subject', '(no subject)')),
                 "date": date_display,
-                "unread": msg_id in unseen_ids,
+                "unread": uid in unseen_uids,
             })
 
         imap.logout()
@@ -269,7 +270,7 @@ def _get_inbox(count=20):
         _inbox_cache = {
             "messages": messages,
             "raw": raw_messages,
-            "msg_ids": latest,
+            "msg_ids": latest,  # UIDs now, stable across connections
             "timestamp": time.time(),
         }
 
@@ -320,7 +321,7 @@ def _read_email(index):
 
 
 def _mark_as_read(index):
-    """Mark a message as read (\\Seen) in IMAP."""
+    """Mark a message as read (\\Seen) in IMAP using UID."""
     if not _inbox_cache["msg_ids"] or index < 1 or index > len(_inbox_cache["msg_ids"]):
         return
     creds = _get_email_creds()
@@ -330,7 +331,7 @@ def _mark_as_read(index):
         imap = imaplib.IMAP4_SSL(creds['imap_server'])
         imap.login(creds['address'], creds['app_password'])
         imap.select('INBOX')  # read-write
-        imap.store(_inbox_cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
+        imap.uid('store', _inbox_cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
         imap.logout()
         # Update cache
         if index <= len(_inbox_cache["messages"]):
@@ -367,10 +368,10 @@ def _archive_emails(indices):
 
         archived = []
         for idx in sorted(set(indices)):
-            msg_id = _inbox_cache["msg_ids"][idx - 1]
+            uid = _inbox_cache["msg_ids"][idx - 1]
             subject = _inbox_cache["messages"][idx - 1]["subject"] if idx <= len(_inbox_cache["messages"]) else "?"
-            imap.copy(msg_id, 'Archive')
-            imap.store(msg_id, '+FLAGS', '\\Deleted')
+            imap.uid('copy', uid, 'Archive')
+            imap.uid('store', uid, '+FLAGS', '\\Deleted')
             archived.append(f"[{idx}] {subject}")
 
         imap.expunge()
