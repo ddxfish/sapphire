@@ -215,7 +215,6 @@ class WakeWordDetector:
             self._reset_detection_state()
             return
 
-        self.callback_pool.submit(self._play_tone)
         publish(Events.WAKEWORD_DETECTED)
 
         if self.system:
@@ -223,7 +222,7 @@ class WakeWordDetector:
         else:
             for callback in self.callbacks:
                 callback()
-        
+
         # Critical: reset state after activation to prevent false re-triggers
         # Audio buffer accumulated during processing, OWW has stale feature state
         self._reset_detection_state()
@@ -248,16 +247,19 @@ class WakeWordDetector:
         if self.audio_recorder:
             logger.debug("Stopping wakeword audio stream for STT handoff")
             self.audio_recorder.stop_recording()
-        
+
+        # Play tone AFTER InputStream is closed to avoid device contention
+        self._play_tone()
+
         try:
             logger.info("Recording your message...")
             audio_file = self.system.whisper_recorder.record_audio()
-            
+
             if not audio_file or not os.path.exists(audio_file):
                 logger.warning("No audio file produced")
                 self.system.speak_error('file')
                 return
-                
+
             process_time = time.time()
             try:
                 text = self.system.whisper_client.transcribe_file(audio_file)
@@ -267,24 +269,33 @@ class WakeWordDetector:
                 except OSError:
                     pass
             logger.info(f"Processing took: {(time.time() - process_time)*1000:.1f}ms")
-            
+
             if not text or not text.strip():
                 logger.warning("No speech detected")
                 self.system.speak_error('speech')
                 return
-                
+
             logger.info(f"Transcribed: user text hidden")
             self.system.process_llm_query(text)
-                    
+
         except Exception as e:
             logger.error(f"Error during recording: {e}")
             self.system.speak_error('recording')
         finally:
             logger.info(f"Total wake word handling took: {(time.time() - start_time.value)*1000:.1f}ms")
-            
-            # Restart wakeword audio stream after STT is done
+
+            # Wait for TTS to finish before restarting wakeword audio —
+            # avoids PortAudio device contention between TTS OutputStream
+            # and the wakeword InputStream on backends that don't support
+            # simultaneous streams on the same device
+            try:
+                self.system.tts.wait(timeout=60)
+            except Exception:
+                pass
+
+            # Restart wakeword audio stream after TTS is done
             if self.audio_recorder:
-                logger.debug("Restarting wakeword audio stream after STT")
+                logger.debug("Restarting wakeword audio stream after STT/TTS")
                 self.audio_recorder.start_recording()
 
     def _listen_loop(self):
