@@ -23,6 +23,7 @@ EMOJI = '📧'
 AVAILABLE_FUNCTIONS = [
     'get_inbox',
     'read_email',
+    'archive_emails',
     'get_recipients',
     'send_email',
 ]
@@ -68,6 +69,25 @@ TOOLS = [
         "type": "function",
         "is_local": True,
         "function": {
+            "name": "archive_emails",
+            "description": "Archive emails by their index numbers from the last get_inbox() call. Moves them to an Archive folder (not deleted — recoverable). Clears inbox cache so next get_inbox() reflects changes.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "indices": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "List of email indices to archive (1-based, from get_inbox)"
+                    }
+                },
+                "required": ["indices"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
             "name": "get_recipients",
             "description": "List contacts who are whitelisted for email. Returns IDs and names only (no addresses). Use the ID with send_email().",
             "parameters": {
@@ -82,24 +102,28 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "send_email",
-            "description": "Send an email to a whitelisted contact by their ID. The recipient's email address is resolved server-side — you only need their contact ID from get_recipients().",
+            "description": "Send an email to a whitelisted contact, or reply to an inbox message. For new emails use recipient_id. For replies use reply_to_index (from get_inbox) — the recipient is resolved from the original message automatically.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "recipient_id": {
                         "type": "integer",
-                        "description": "Contact ID from get_recipients()"
+                        "description": "Contact ID from get_recipients() — required for new emails, omit when replying"
+                    },
+                    "reply_to_index": {
+                        "type": "integer",
+                        "description": "Email index from get_inbox() to reply to — sets recipient, subject, and threading headers automatically"
                     },
                     "subject": {
                         "type": "string",
-                        "description": "Email subject line"
+                        "description": "Email subject (auto-set to 'Re: ...' when replying)"
                     },
                     "body": {
                         "type": "string",
                         "description": "Email body text"
                     }
                 },
-                "required": ["recipient_id", "subject", "body"]
+                "required": ["body"]
             }
         }
     }
@@ -110,6 +134,7 @@ TOOLS = [
 _inbox_cache = {
     "messages": [],   # Parsed summaries for AI
     "raw": [],        # Full message objects for read_email
+    "msg_ids": [],    # IMAP message IDs for mark-as-read / archive
     "timestamp": 0,
 }
 
@@ -204,8 +229,12 @@ def _get_inbox(count=20):
         msg_ids = data[0].split()
         if not msg_ids:
             imap.logout()
-            _inbox_cache = {"messages": [], "raw": [], "timestamp": time.time()}
+            _inbox_cache = {"messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()}
             return "Inbox is empty.", True
+
+        # Get unseen message IDs for reliable unread detection
+        _, unseen_data = imap.search(None, 'UNSEEN')
+        unseen_ids = set(unseen_data[0].split())
 
         # Fetch latest N
         latest = msg_ids[-count:]
@@ -232,6 +261,7 @@ def _get_inbox(count=20):
                 "sender_name": _extract_sender_name(msg.get('From', '')),
                 "subject": _decode_header_value(msg.get('Subject', '(no subject)')),
                 "date": date_display,
+                "unread": msg_id in unseen_ids,
             })
 
         imap.logout()
@@ -239,6 +269,7 @@ def _get_inbox(count=20):
         _inbox_cache = {
             "messages": messages,
             "raw": raw_messages,
+            "msg_ids": latest,
             "timestamp": time.time(),
         }
 
@@ -256,9 +287,11 @@ def _get_inbox(count=20):
 def _format_inbox(messages):
     if not messages:
         return "Inbox is empty."
-    lines = [f"Inbox ({len(messages)} messages):"]
+    unread_count = sum(1 for m in messages if m.get('unread'))
+    lines = [f"Inbox ({len(messages)} messages, {unread_count} unread):"]
     for m in messages:
-        lines.append(f"  [{m['index']}] {m['date']} — {m['sender_name']}: {m['subject']}")
+        tag = " (unread)" if m.get('unread') else ""
+        lines.append(f"  [{m['index']}] {m['date']} — {m['sender_name']}: {m['subject']}{tag}")
     lines.append("\nUse read_email(index) to read full content.")
     return '\n'.join(lines)
 
@@ -280,7 +313,80 @@ def _read_email(index):
     if len(body) > 4000:
         body = body[:4000] + '\n\n... (truncated)'
 
+    # Mark as read in IMAP
+    _mark_as_read(index)
+
     return f"From: {sender}\nSubject: {subject}\nDate: {date_str}\n\n{body}", True
+
+
+def _mark_as_read(index):
+    """Mark a message as read (\\Seen) in IMAP."""
+    if not _inbox_cache["msg_ids"] or index < 1 or index > len(_inbox_cache["msg_ids"]):
+        return
+    creds = _get_email_creds()
+    if not creds:
+        return
+    try:
+        imap = imaplib.IMAP4_SSL(creds['imap_server'])
+        imap.login(creds['address'], creds['app_password'])
+        imap.select('INBOX')  # read-write
+        imap.store(_inbox_cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
+        imap.logout()
+        # Update cache
+        if index <= len(_inbox_cache["messages"]):
+            _inbox_cache["messages"][index - 1]["unread"] = False
+        logger.info(f"Email [{index}] marked as read")
+    except Exception as e:
+        logger.warning(f"Failed to mark email as read: {e}")
+
+
+def _archive_emails(indices):
+    """Archive emails by moving to Archive folder."""
+    global _inbox_cache
+
+    if not _inbox_cache["msg_ids"]:
+        return "No inbox loaded. Call get_inbox() first.", False
+
+    max_idx = len(_inbox_cache["msg_ids"])
+    bad = [i for i in indices if i < 1 or i > max_idx]
+    if bad:
+        return f"Invalid indices: {bad}. Range: 1-{max_idx}.", False
+
+    creds = _get_email_creds()
+    if not creds:
+        return "Email not configured.", False
+
+    try:
+        imap = imaplib.IMAP4_SSL(creds['imap_server'])
+        imap.login(creds['address'], creds['app_password'])
+
+        # Create Archive folder (no-op if exists)
+        imap.create('Archive')
+
+        imap.select('INBOX')  # read-write
+
+        archived = []
+        for idx in sorted(set(indices)):
+            msg_id = _inbox_cache["msg_ids"][idx - 1]
+            subject = _inbox_cache["messages"][idx - 1]["subject"] if idx <= len(_inbox_cache["messages"]) else "?"
+            imap.copy(msg_id, 'Archive')
+            imap.store(msg_id, '+FLAGS', '\\Deleted')
+            archived.append(f"[{idx}] {subject}")
+
+        imap.expunge()
+        imap.logout()
+
+        # Invalidate cache so next get_inbox() is fresh
+        _inbox_cache = {"messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
+
+        logger.info(f"Archived {len(archived)} emails")
+        lines = [f"Archived {len(archived)} emails:"]
+        lines.extend(f"  {a}" for a in archived)
+        return '\n'.join(lines), True
+
+    except Exception as e:
+        logger.error(f"Archive error: {e}", exc_info=True)
+        return f"Failed to archive: {e}", False
 
 
 def _get_recipients():
@@ -302,42 +408,88 @@ def _get_recipients():
     return '\n'.join(lines), True
 
 
-def _send_email(recipient_id, subject, body):
-    from functions.knowledge import get_people
-
+def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
     creds = _get_email_creds()
     if not creds:
         return "Email not configured. Set up email credentials in Settings → Plugins → Email.", False
 
-    # Resolve recipient
-    people_scope = _get_current_people_scope()
-    if people_scope is None:
-        return "People contacts are disabled for this chat.", False
+    reply_headers = {}
+    to_addr = None
+    to_name = None
 
-    people = get_people(people_scope)
-    person = next((p for p in people if p['id'] == recipient_id), None)
+    # Reply mode — resolve recipient + headers from cached message
+    if reply_to_index is not None:
+        if not _inbox_cache["raw"]:
+            return "No inbox loaded. Call get_inbox() first.", False
+        if reply_to_index < 1 or reply_to_index > len(_inbox_cache["raw"]):
+            return f"Invalid index {reply_to_index}. Range: 1-{len(_inbox_cache['raw'])}.", False
 
-    if not person:
-        return f"Contact ID {recipient_id} not found.", False
-    if not person.get('email_whitelisted'):
-        return f"{person['name']} is not whitelisted for email.", False
-    if not person.get('email'):
-        return f"{person['name']} has no email address.", False
+        original = _inbox_cache["raw"][reply_to_index - 1]
+        # Reply-to address: use Reply-To header if set, otherwise From
+        reply_addr = original.get('Reply-To') or original.get('From', '')
+        _, to_addr = email.utils.parseaddr(reply_addr)
+        to_name = _extract_sender_name(original.get('From', ''))
 
-    to_addr = person['email']
-    to_name = person['name']
+        if not to_addr:
+            return "Could not determine reply address from original message.", False
+
+        # Threading headers
+        orig_msg_id = original.get('Message-ID', '')
+        orig_refs = original.get('References', '')
+        if orig_msg_id:
+            reply_headers['In-Reply-To'] = orig_msg_id
+            reply_headers['References'] = f"{orig_refs} {orig_msg_id}".strip()
+
+        # Auto-subject
+        if not subject:
+            orig_subject = _decode_header_value(original.get('Subject', ''))
+            subject = orig_subject if orig_subject.lower().startswith('re:') else f"Re: {orig_subject}"
+
+        # Quote original body
+        orig_body = _extract_body(original)
+        if len(orig_body) > 2000:
+            orig_body = orig_body[:2000] + '\n...'
+        orig_date = original.get('Date', '')
+        body = f"{body}\n\nOn {orig_date}, {to_name} wrote:\n> " + '\n> '.join(orig_body.splitlines())
+
+    # New email mode — resolve from whitelisted contacts
+    elif recipient_id is not None:
+        from functions.knowledge import get_people
+
+        people_scope = _get_current_people_scope()
+        if people_scope is None:
+            return "People contacts are disabled for this chat.", False
+
+        people = get_people(people_scope)
+        person = next((p for p in people if p['id'] == recipient_id), None)
+
+        if not person:
+            return f"Contact ID {recipient_id} not found.", False
+        if not person.get('email_whitelisted'):
+            return f"{person['name']} is not whitelisted for email.", False
+        if not person.get('email'):
+            return f"{person['name']} has no email address.", False
+
+        to_addr = person['email']
+        to_name = person['name']
+        if not subject:
+            return "subject is required for new emails.", False
+    else:
+        return "Either recipient_id (new email) or reply_to_index (reply) is required.", False
 
     try:
         msg = MIMEText(body)
         msg['Subject'] = subject
         msg['From'] = creds['address']
         msg['To'] = to_addr
+        for k, v in reply_headers.items():
+            msg[k] = v
 
         with smtplib.SMTP_SSL(creds['smtp_server'], 465) as smtp:
             smtp.login(creds['address'], creds['app_password'])
             smtp.send_message(msg)
 
-        logger.info(f"Email sent to {to_name} (id:{recipient_id}): {subject}")
+        logger.info(f"Email sent to {to_name}: {subject}")
         return f"Email sent to {to_name}: \"{subject}\"", True
 
     except smtplib.SMTPAuthenticationError as e:
@@ -369,19 +521,23 @@ def execute(function_name, arguments, config):
             if index is None:
                 return "index is required.", False
             return _read_email(index)
+        elif function_name == "archive_emails":
+            indices = arguments.get('indices')
+            if not indices:
+                return "indices list is required.", False
+            return _archive_emails(indices)
         elif function_name == "get_recipients":
             return _get_recipients()
         elif function_name == "send_email":
-            recipient_id = arguments.get('recipient_id')
-            subject = arguments.get('subject', '')
             body = arguments.get('body', '')
-            if not recipient_id:
-                return "recipient_id is required.", False
-            if not subject:
-                return "subject is required.", False
             if not body:
                 return "body is required.", False
-            return _send_email(recipient_id, subject, body)
+            return _send_email(
+                recipient_id=arguments.get('recipient_id'),
+                subject=arguments.get('subject'),
+                body=body,
+                reply_to_index=arguments.get('reply_to_index'),
+            )
         else:
             return f"Unknown email function '{function_name}'.", False
     except Exception as e:
