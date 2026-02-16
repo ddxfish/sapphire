@@ -4,7 +4,8 @@
   "identity": {
     "DEFAULT_USERNAME": "Human Protagonist",
     "DEFAULT_AI_NAME": "Sapphire",
-    "AVATARS_IN_CHAT": true
+    "AVATARS_IN_CHAT": true,
+    "DEFAULT_PERSONA": ""
   },
   
   "network": {

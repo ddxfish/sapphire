@@ -5187,6 +5187,7 @@ a.gallery-caption:hover {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+.pa-default-star { font-size: 0.7em; vertical-align: middle; }
 
 .pa-list-tagline {
     font-size: var(--font-xs);
@@ -5389,6 +5390,11 @@ a.gallery-caption:hover {
 .pa-fence-body {
     display: flex;
     flex-direction: column;
+    gap: 10px;
+}
+.pa-fence-body-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 10px;
 }
 

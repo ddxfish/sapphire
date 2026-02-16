@@ -43,23 +43,35 @@ SYSTEM_DEFAULTS = {
 def get_user_defaults() -> Dict[str, Any]:
     """
     Get user's custom chat defaults, falling back to system defaults.
-    Used when creating new chats.
+    If DEFAULT_PERSONA is set, loads persona settings as the base.
     """
+    merged = SYSTEM_DEFAULTS.copy()
+
+    # Check for default persona
+    default_persona = getattr(config, 'DEFAULT_PERSONA', '') or ''
+    if default_persona:
+        try:
+            from core.modules.system.personas import persona_manager
+            persona = persona_manager.get(default_persona)
+            if persona and persona.get('settings'):
+                merged.update(persona['settings'])
+                merged['persona'] = default_persona
+                logger.debug(f"Using default persona '{default_persona}' for new chat")
+        except Exception as e:
+            logger.warning(f"Failed to load default persona '{default_persona}': {e}")
+
+    # User chat_defaults.json overrides on top (if it exists)
     user_defaults_path = Path("user/settings/chat_defaults.json")
-    
     if user_defaults_path.exists():
         try:
             with open(user_defaults_path, 'r', encoding='utf-8') as f:
                 user_defaults = json.load(f)
-            # Merge: start with system defaults, override with user settings
-            merged = SYSTEM_DEFAULTS.copy()
             merged.update(user_defaults)
-            logger.debug(f"Using user chat defaults from {user_defaults_path}")
-            return merged
+            logger.debug(f"Applied user chat defaults from {user_defaults_path}")
         except Exception as e:
             logger.error(f"Failed to load user chat defaults: {e}")
-    
-    return SYSTEM_DEFAULTS.copy()
+
+    return merged
 
 _tokenizer = None
 

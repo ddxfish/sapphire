@@ -906,7 +906,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "current": current_spice_set
             },
             "personas": {
-                "list": personas_list
+                "list": personas_list,
+                "default": getattr(config, 'DEFAULT_PERSONA', '') or ''
             },
             "settings": {
                 "AVATARS_IN_CHAT": avatars_in_chat
@@ -2270,7 +2271,7 @@ async def delete_spice(category: str, index: int, request: Request, _=Depends(re
 async def list_personas(request: Request, _=Depends(require_login)):
     """List all personas with summary info."""
     from core.modules.system.personas import persona_manager
-    return {"personas": persona_manager.get_list()}
+    return {"personas": persona_manager.get_list(), "default": getattr(config, 'DEFAULT_PERSONA', '') or ''}
 
 
 @app.get("/api/personas/{name}")
@@ -2395,6 +2396,25 @@ async def create_persona_from_chat(request: Request, _=Depends(require_login), s
     if not persona_manager.create_from_settings(name, chat_settings):
         raise HTTPException(status_code=409, detail="Persona already exists or invalid name")
     return {"status": "success", "name": persona_manager._sanitize_name(name)}
+
+
+@app.put("/api/personas/default")
+async def set_default_persona(request: Request, _=Depends(require_login)):
+    """Set the default persona for new chats."""
+    from core.modules.system.personas import persona_manager
+    data = await request.json()
+    name = data.get("name", "")
+    if name and not persona_manager.exists(name):
+        raise HTTPException(status_code=404, detail="Persona not found")
+    config.settings_manager.set("DEFAULT_PERSONA", name, persist=True)
+    return {"status": "success", "default": name}
+
+
+@app.delete("/api/personas/default")
+async def clear_default_persona(request: Request, _=Depends(require_login)):
+    """Clear the default persona."""
+    config.settings_manager.set("DEFAULT_PERSONA", "", persist=True)
+    return {"status": "success"}
 
 
 # =============================================================================

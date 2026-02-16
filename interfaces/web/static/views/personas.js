@@ -12,6 +12,7 @@ let personas = [];
 let selectedName = null;
 let selectedData = null;
 let saveTimer = null;
+let defaultPersona = '';
 
 function updateSliderFill(slider) {
     const min = parseFloat(slider.min) || 0;
@@ -24,6 +25,7 @@ function updateSliderFill(slider) {
 let initData = null;
 let llmProviders = [];
 let llmMetadata = {};
+let scopeData = { memory: [], goals: [], knowledge: [], people: [] };
 
 export default {
     init(el) { container = el; },
@@ -36,19 +38,30 @@ export default {
 
 async function loadData() {
     try {
-        const [pRes, init, llmResp] = await Promise.allSettled([
+        const [pRes, init, llmResp, memS, goalS, knowS, pplS] = await Promise.allSettled([
             listPersonas(),
             getInitData(),
-            fetch('/api/llm/providers').then(r => r.ok ? r.json() : null)
+            fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
+            fetch('/api/memory/scopes').then(r => r.ok ? r.json() : null),
+            fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null),
+            fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
+            fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null)
         ]);
 
         personas = pRes.status === 'fulfilled' ? (pRes.value?.personas || []) : [];
         initData = init.status === 'fulfilled' ? init.value : null;
+        defaultPersona = initData?.personas?.default || '';
         const llmData = llmResp.status === 'fulfilled' ? llmResp.value : null;
         if (llmData) {
             llmProviders = llmData.providers || [];
             llmMetadata = llmData.metadata || {};
         }
+        scopeData = {
+            memory: memS.status === 'fulfilled' ? (memS.value?.scopes || []) : [],
+            goals: goalS.status === 'fulfilled' ? (goalS.value?.scopes || []) : [],
+            knowledge: knowS.status === 'fulfilled' ? (knowS.value?.scopes || []) : [],
+            people: pplS.status === 'fulfilled' ? (pplS.value?.scopes || []) : []
+        };
 
         if (!selectedName && personas.length) selectedName = personas[0].name;
         if (selectedName) {
@@ -78,7 +91,7 @@ function render() {
                         <button class="panel-list-item${p.name === selectedName ? ' active' : ''}" data-name="${p.name}">
                             <img class="pa-list-avatar" src="${avatarUrl(p.name)}" alt="" loading="lazy" onerror="this.style.display='none'">
                             <div class="pa-list-info">
-                                <span class="pa-list-name">${esc(p.name)}</span>
+                                <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}</span>
                                 ${p.tagline ? `<span class="pa-list-tagline">${esc(p.tagline)}</span>` : ''}
                             </div>
                         </button>
@@ -126,6 +139,9 @@ function renderDetail(p, isActive) {
                     </div>
                     <div class="pa-header-actions">
                         <button class="btn-primary" id="pa-load">Activate</button>
+                        ${p.name === defaultPersona
+                            ? '<button class="btn-sm" id="pa-clear-default" title="Remove as default">&#x2B50; Default</button>'
+                            : '<button class="btn-sm" id="pa-set-default" title="Set as default for new chats">Set Default</button>'}
                         <button class="btn-sm" id="pa-duplicate">Duplicate</button>
                         <button class="btn-sm danger" id="pa-delete">Delete</button>
                     </div>
@@ -211,6 +227,18 @@ function renderDetail(p, isActive) {
                 </div>
 
                 <div class="pa-fence-group pa-fence-group-wide">
+                    <div class="pa-fence-heading"><span>Mind Scopes</span></div>
+                    <div class="pa-fence">
+                        <div class="pa-fence-body pa-fence-body-grid">
+                            ${renderScopeField('memory_scope', 'Memory', s, scopeData.memory)}
+                            ${renderScopeField('goal_scope', 'Goals', s, scopeData.goals)}
+                            ${renderScopeField('knowledge_scope', 'Knowledge', s, scopeData.knowledge)}
+                            ${renderScopeField('people_scope', 'People', s, scopeData.people)}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pa-fence-group pa-fence-group-wide">
                     <div class="pa-fence-heading pa-fence-collapse-trigger">
                         <span class="accordion-arrow">&#x25B6;</span>
                         <span>Advanced</span>
@@ -288,6 +316,19 @@ function renderProviderOptions(current) {
         `<option value="${p.key}"${p.key === current ? ' selected' : ''}>${p.display_name}</option>`
     ).join('');
     return html;
+}
+
+function renderScopeField(key, label, settings, scopes) {
+    const current = settings[key] || 'default';
+    const opts = scopes.map(s =>
+        `<option value="${s.name}"${s.name === current ? ' selected' : ''}>${s.name} (${s.count})</option>`
+    ).join('') || `<option value="${current}">${current}</option>`;
+    return `
+        <div class="pa-field">
+            <label>${label}</label>
+            <select id="pa-s-${key}" data-key="${key}">${opts}</select>
+        </div>
+    `;
 }
 
 function updateModelSelector(providerKey, currentModel) {
@@ -415,6 +456,31 @@ function bindEvents() {
             updateScene();
             // Refresh sidebar easy mode
             window.dispatchEvent(new CustomEvent('persona-loaded', { detail: { name: selectedName } }));
+        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+    });
+
+    // Set as default
+    container.querySelector('#pa-set-default')?.addEventListener('click', async () => {
+        if (!selectedName) return;
+        try {
+            await fetch('/api/personas/default', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: selectedName })
+            });
+            defaultPersona = selectedName;
+            render();
+            ui.showToast(`${selectedName} set as default`, 'success');
+        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+    });
+
+    // Clear default
+    container.querySelector('#pa-clear-default')?.addEventListener('click', async () => {
+        try {
+            await fetch('/api/personas/default', { method: 'DELETE' });
+            defaultPersona = '';
+            render();
+            ui.showToast('Default cleared', 'success');
         } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
     });
 
@@ -548,10 +614,10 @@ function collectSettings() {
         llm_primary: get('llm_primary') || 'auto',
         llm_model: getSelectedModel(),
         trim_color: get('trim_color') || '#4a9eff',
-        memory_scope: selectedData?.settings?.memory_scope || 'default',
-        goal_scope: selectedData?.settings?.goal_scope || 'default',
-        knowledge_scope: selectedData?.settings?.knowledge_scope || 'default',
-        people_scope: selectedData?.settings?.people_scope || 'default',
+        memory_scope: get('memory_scope') || 'default',
+        goal_scope: get('goal_scope') || 'default',
+        knowledge_scope: get('knowledge_scope') || 'default',
+        people_scope: get('people_scope') || 'default',
         state_engine_enabled: selectedData?.settings?.state_engine_enabled || false,
         state_preset: selectedData?.settings?.state_preset || null,
         state_vars_in_prompt: selectedData?.settings?.state_vars_in_prompt || false,

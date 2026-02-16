@@ -7,13 +7,14 @@ import { applyTrimColor } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData } from '../shared/init-data.js';
 import { switchView } from '../core/router.js';
-import { loadPersona } from '../shared/persona-api.js';
+import { loadPersona, createFromChat } from '../shared/persona-api.js';
 
 let sidebarLoaded = false;
 let saveTimer = null;
 let llmProviders = [];
 let llmMetadata = {};
 let personasList = [];
+let defaultPersonaName = '';
 
 const SAVE_DEBOUNCE = 500;
 
@@ -176,21 +177,21 @@ export default {
         // Listen for persona-loaded events
         window.addEventListener('persona-loaded', () => loadSidebar());
 
-        // Save as defaults button
-        const defaultsBtn = container.querySelector('#sb-save-defaults');
-        if (defaultsBtn) {
-            defaultsBtn.addEventListener('click', async () => {
-                if (!confirm('Save current settings as defaults for new chats?')) return;
+        // Save As New Persona button
+        const saveAsPersonaBtn = container.querySelector('#sb-save-as-persona');
+        if (saveAsPersonaBtn) {
+            saveAsPersonaBtn.addEventListener('click', async () => {
+                const name = prompt('Name for the new persona:');
+                if (!name?.trim()) return;
                 try {
-                    const settings = collectSettings(container);
-                    const res = await fetch('/api/settings/chat-defaults', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(settings)
-                    });
-                    if (res.ok) ui.showToast('Saved as defaults', 'success');
+                    const res = await createFromChat(name.trim());
+                    if (res?.name) {
+                        ui.showToast(`Persona "${res.name}" created`, 'success');
+                    } else {
+                        ui.showToast(res?.detail || 'Failed to create persona', 'error');
+                    }
                 } catch (e) {
-                    ui.showToast('Failed', 'error');
+                    ui.showToast(e.message || 'Failed', 'error');
                 }
             });
         }
@@ -247,6 +248,7 @@ async function loadSidebar() {
         const spiceSetsData = spiceSetsResp.status === 'fulfilled' ? spiceSetsResp.value : null;
         const personasData = personasResp.status === 'fulfilled' ? personasResp.value : null;
         personasList = personasData?.personas || [];
+        defaultPersonaName = personasData?.default || init?.personas?.default || '';
 
         // Sync sidebar chat name from hidden select
         const selectedOpt = chatSelect?.options?.[chatSelect.selectedIndex];
@@ -613,7 +615,7 @@ function updateEasyMode(container, settings, init) {
         gridEl.innerHTML = personasList.map(p => `
             <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}">
                 <img class="sb-pgrid-avatar" src="/api/personas/${encodeURIComponent(p.name)}/avatar" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-                <span class="sb-pgrid-name">${escapeHtml(p.name)}</span>
+                <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
             </div>
         `).join('');
     }
