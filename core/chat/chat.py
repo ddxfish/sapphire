@@ -857,8 +857,11 @@ class LLMChat:
             response = provider.chat_completion(messages, tools=tools, generation_params=gen_params)
             
             if response and response.content:
-                logger.info(f"[ISOLATED] Got response: {len(response.content)} chars")
-                return response.content
+                # Strip thinking blocks — return only the actual spoken content
+                import re
+                content = re.sub(r'<think>.*?</think>\s*', '', response.content, flags=re.DOTALL).strip()
+                logger.info(f"[ISOLATED] Got response: {len(response.content)} chars total, {len(content)} chars content")
+                return content if content else response.content
             else:
                 logger.warning("[ISOLATED] Empty response from provider")
                 return "No response received."

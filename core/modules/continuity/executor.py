@@ -36,6 +36,10 @@ class ContinuityExecutor:
             Result dict with success, responses, errors
         """
         self._progress_cb = progress_callback
+
+        # Resolve persona defaults into task (task-level fields override persona)
+        task = self._resolve_persona(task)
+
         result = {
             "success": False,
             "task_id": task.get("id"),
@@ -68,20 +72,21 @@ class ContinuityExecutor:
                 "model": task.get("model", ""),
                 "inject_datetime": task.get("inject_datetime", False),
                 "memory_scope": task.get("memory_scope", "default"),
+                "knowledge_scope": task.get("knowledge_scope", "none"),
+                "people_scope": task.get("people_scope", "none"),
+                "goal_scope": task.get("goal_scope", "none"),
             }
             
+            # Apply voice settings before any TTS calls
+            self._apply_voice(task)
+
             iterations = max(1, task.get("iterations", 1))
-            cooldown_sec = task.get("cooldown_minutes", 0) * 60
             chance = task.get("chance", 100)
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
+            follow_up = task.get("follow_up_message", "[continue]")
 
             for i in range(iterations):
-                # Cooldown between follow-up iterations (not before first)
-                if i > 0 and cooldown_sec > 0:
-                    logger.info(f"[Continuity] Iteration cooldown: {cooldown_sec}s before iteration {i+1}")
-                    time.sleep(cooldown_sec)
-
                 # Per-iteration chance roll
                 if chance < 100:
                     roll = random.randint(1, 100)
@@ -89,16 +94,16 @@ class ContinuityExecutor:
                         logger.info(f"[Continuity] Iteration {i+1} skipped (roll {roll} > {chance}%)")
                         continue
 
-                msg = initial_message if i == 0 else "[continue]"
+                msg = initial_message if i == 0 else follow_up
 
                 try:
                     # Use isolated_chat - no session state changes
                     response = self.system.llm_chat.isolated_chat(msg, task_settings)
 
-                    # TTS if enabled
+                    # TTS if enabled — blocking so we finish before next iteration/re-fire
                     if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
                         try:
-                            self.system.tts.speak(response)
+                            self.system.tts.speak_sync(response)
                         except Exception as tts_err:
                             logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
@@ -158,17 +163,12 @@ class ContinuityExecutor:
 
             # Run iterations
             iterations = max(1, task.get("iterations", 1))
-            cooldown_sec = task.get("cooldown_minutes", 0) * 60
             chance = task.get("chance", 100)
             tts_enabled = task.get("tts_enabled", True)
             initial_message = task.get("initial_message", "Hello.")
+            follow_up = task.get("follow_up_message", "[continue]")
 
             for i in range(iterations):
-                # Cooldown between follow-up iterations (not before first)
-                if i > 0 and cooldown_sec > 0:
-                    logger.info(f"[Continuity] Iteration cooldown: {cooldown_sec}s before iteration {i+1}")
-                    time.sleep(cooldown_sec)
-
                 # Per-iteration chance roll
                 if chance < 100:
                     roll = random.randint(1, 100)
@@ -176,10 +176,17 @@ class ContinuityExecutor:
                         logger.info(f"[Continuity] Iteration {i+1} skipped (roll {roll} > {chance}%)")
                         continue
 
-                msg = initial_message if i == 0 else "[continue]"
+                msg = initial_message if i == 0 else follow_up
 
                 try:
-                    response = self.system.process_llm_query(msg, skip_tts=not tts_enabled)
+                    # Skip TTS in process_llm_query — we handle it with speak_sync below
+                    response = self.system.process_llm_query(msg, skip_tts=True)
+                    # TTS blocking so we finish before next iteration/re-fire
+                    if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
+                        try:
+                            self.system.tts.speak_sync(response)
+                        except Exception as tts_err:
+                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
                     result["responses"].append({
                         "iteration": i + 1,
                         "input": msg,
@@ -215,6 +222,67 @@ class ContinuityExecutor:
         result["completed_at"] = datetime.now().isoformat()
         return result
     
+    def _resolve_persona(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """If task has a persona, merge persona settings as defaults under task-level overrides."""
+        persona_name = task.get("persona", "")
+        if not persona_name:
+            return task
+
+        try:
+            from core.modules.system.personas import persona_manager
+            persona = persona_manager.get(persona_name)
+            if not persona:
+                logger.warning(f"[Continuity] Persona '{persona_name}' not found, skipping")
+                return task
+
+            ps = persona.get("settings", {})
+            resolved = dict(task)
+
+            # Persona provides defaults — task-level fields override
+            field_map = {
+                "prompt": "prompt",
+                "toolset": "toolset",
+                "voice": "voice",
+                "pitch": "pitch",
+                "speed": "speed",
+                "llm_primary": "provider",
+                "llm_model": "model",
+                "inject_datetime": "inject_datetime",
+                "memory_scope": "memory_scope",
+                "knowledge_scope": "knowledge_scope",
+                "people_scope": "people_scope",
+                "goal_scope": "goal_scope",
+            }
+            for persona_key, task_key in field_map.items():
+                persona_val = ps.get(persona_key)
+                task_val = resolved.get(task_key)
+                # Use persona value if task field is empty/default
+                if persona_val and not task_val:
+                    resolved[task_key] = persona_val
+                elif persona_val and task_val in ("", "auto", "none", "default", None):
+                    resolved[task_key] = persona_val
+
+            logger.info(f"[Continuity] Resolved persona '{persona_name}' into task settings")
+            return resolved
+        except Exception as e:
+            logger.error(f"[Continuity] Persona resolution failed: {e}")
+            return task
+
+    def _apply_voice(self, task: Dict[str, Any]) -> None:
+        """Apply voice/pitch/speed settings to TTS if available."""
+        tts = getattr(self.system, 'tts', None)
+        if not tts:
+            return
+        try:
+            if task.get("voice"):
+                tts.set_voice(task["voice"])
+            if task.get("pitch") is not None:
+                tts.set_pitch(task["pitch"])
+            if task.get("speed") is not None:
+                tts.set_speed(task["speed"])
+        except Exception as e:
+            logger.warning(f"[Continuity] Failed to apply voice settings: {e}")
+
     def _apply_task_settings(self, task: Dict[str, Any], session_manager) -> None:
         """Apply task's prompt/ability/LLM/memory/datetime settings to current chat."""
         settings = {}
@@ -243,14 +311,34 @@ class ContinuityExecutor:
         
         if task.get("memory_scope"):
             settings["memory_scope"] = task["memory_scope"]
-        
+
+        if task.get("knowledge_scope") and task["knowledge_scope"] != "none":
+            settings["knowledge_scope"] = task["knowledge_scope"]
+
+        if task.get("people_scope") and task["people_scope"] != "none":
+            settings["people_scope"] = task["people_scope"]
+
+        if task.get("goal_scope") and task["goal_scope"] != "none":
+            settings["goal_scope"] = task["goal_scope"]
+
         # Inject datetime into system prompt if enabled
         if task.get("inject_datetime"):
             settings["inject_datetime"] = True
-        
+
+        # Voice settings
+        if task.get("voice"):
+            settings["voice"] = task["voice"]
+        if task.get("pitch") is not None:
+            settings["pitch"] = task["pitch"]
+        if task.get("speed") is not None:
+            settings["speed"] = task["speed"]
+
         if settings:
             session_manager.update_chat_settings(settings)
             logger.debug(f"[Continuity] Applied settings: {settings}")
-        
+
+        # Apply voice to live TTS
+        self._apply_voice(task)
+
         # Publish chat switch event so UI updates
         publish(Events.CHAT_SWITCHED, {"chat": session_manager.get_active_chat_name()})

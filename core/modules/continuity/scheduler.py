@@ -4,6 +4,7 @@ Continuity Scheduler - Background thread that checks cron schedules and fires ta
 """
 
 import os
+import re
 import json
 import uuid
 import random
@@ -14,6 +15,18 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_think_tags(text: str) -> str:
+    """Strip <think>...</think> blocks from LLM response, return clean content."""
+    if not text:
+        return text
+    # Remove complete think blocks
+    clean = re.sub(r'<(?:seed:)?think[^>]*>.*?</(?:seed:think|seed:cot_budget_reflect|think)>', '', text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove orphan open tag + trailing content
+    clean = re.sub(r'<(?:seed:)?think[^>]*>.*$', '', clean, flags=re.DOTALL | re.IGNORECASE)
+    return clean.strip()
+
 
 # Lazy import croniter to avoid startup crash if not installed
 croniter = None
@@ -189,12 +202,24 @@ class ContinuityScheduler:
             "toolset": data.get("toolset", "none"),
             "chat_target": data.get("chat_target", ""),  # blank = ephemeral (no chat, no UI)
             "initial_message": data.get("initial_message", "Hello."),
+            "follow_up_message": data.get("follow_up_message", "[continue]"),
             "tts_enabled": data.get("tts_enabled", True),
             "inject_datetime": data.get("inject_datetime", False),
+            "persona": data.get("persona", ""),
+            "voice": data.get("voice", ""),
+            "pitch": data.get("pitch", None),
+            "speed": data.get("speed", None),
             "memory_scope": data.get("memory_scope", "none"),
-            "cooldown_minutes": data.get("cooldown_minutes", 1),
+            "knowledge_scope": data.get("knowledge_scope", "none"),
+            "people_scope": data.get("people_scope", "none"),
+            "goal_scope": data.get("goal_scope", "none"),
             "heartbeat": data.get("heartbeat", False),
+            "emoji": data.get("emoji", ""),
+            "context_limit": data.get("context_limit", 0),
+            "max_parallel_tools": data.get("max_parallel_tools", 0),
+            "max_tool_rounds": data.get("max_tool_rounds", 0),
             "last_run": None,
+            "last_response": None,
             "created": datetime.now().isoformat()
         }
         
@@ -230,8 +255,11 @@ class ContinuityScheduler:
             allowed = {
                 "name", "enabled", "schedule", "chance", "iterations",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "tts_enabled", "inject_datetime", "memory_scope", "cooldown_minutes",
-                "heartbeat"
+                "initial_message", "follow_up_message", "tts_enabled", "inject_datetime",
+                "persona", "voice", "pitch", "speed",
+                "memory_scope", "knowledge_scope", "people_scope", "goal_scope",
+                "heartbeat", "emoji",
+                "context_limit", "max_parallel_tools", "max_tool_rounds"
             }
             for key in allowed:
                 if key in data:
@@ -329,8 +357,18 @@ class ContinuityScheduler:
                     self._task_progress.pop(task_id, None)
 
                 status = "complete" if result.get("success") else "error"
+
+                # Store last response for vitals display (strip think tags)
+                responses = result.get("responses", [])
+                if responses:
+                    last = _strip_think_tags(responses[-1].get("output", ""))
+                    with self._lock:
+                        if task_id in self._tasks:
+                            self._tasks[task_id]["last_response"] = last[:500] if last else None
+                            self._save_tasks()
+
                 self._log_activity(task_id, task_name, status, {
-                    "responses": len(result.get("responses", [])),
+                    "responses": len(responses),
                     "errors": result.get("errors", [])
                 })
             except Exception as e:
@@ -432,9 +470,19 @@ class ContinuityScheduler:
                     self._save_tasks()
 
             status = "complete" if result.get("success") else "error"
+
+            # Store last response for vitals display (strip think tags)
+            responses = result.get("responses", [])
+            if responses:
+                last = _strip_think_tags(responses[-1].get("output", ""))
+                with self._lock:
+                    if task_id in self._tasks:
+                        self._tasks[task_id]["last_response"] = last[:500] if last else None
+                        self._save_tasks()
+
             self._log_activity(task_id, task_name, status, {
                 "manual": True,
-                "responses": len(result.get("responses", [])),
+                "responses": len(responses),
                 "errors": result.get("errors", [])
             })
 
@@ -577,7 +625,10 @@ class ContinuityScheduler:
                             "task_id": task["id"],
                             "task_name": task.get("name"),
                             "scheduled_for": next_time.isoformat(),
-                            "chance": task.get("chance", 100)
+                            "chance": task.get("chance", 100),
+                            "heartbeat": task.get("heartbeat", False),
+                            "emoji": task.get("emoji", ""),
+                            "type": "upcoming"
                         })
                 except Exception:
                     continue
@@ -585,3 +636,40 @@ class ContinuityScheduler:
         # Sort by time
         timeline.sort(key=lambda x: x["scheduled_for"])
         return timeline
+
+    def get_merged_timeline(self, hours_back: int = 12, hours_ahead: int = 12) -> Dict[str, Any]:
+        """Get merged timeline: past activity + future schedule with NOW marker."""
+        now = datetime.now()
+
+        # Future: reuse existing timeline logic
+        future = self.get_timeline(hours_ahead)
+
+        # Past: pull from activity log, enrich with task info
+        cutoff = now - timedelta(hours=hours_back)
+        past = []
+        with self._lock:
+            task_map = {t["id"]: t for t in self._tasks.values()}
+        for entry in self._activity:
+            try:
+                ts = datetime.fromisoformat(entry["timestamp"])
+                if ts < cutoff:
+                    continue
+            except (ValueError, KeyError):
+                continue
+            task = task_map.get(entry.get("task_id", ""), {})
+            past.append({
+                "task_id": entry.get("task_id"),
+                "task_name": entry.get("task_name"),
+                "timestamp": entry.get("timestamp"),
+                "status": entry.get("status"),
+                "heartbeat": task.get("heartbeat", False),
+                "emoji": task.get("emoji", ""),
+                "type": "past",
+                "details": entry.get("details", {})
+            })
+
+        return {
+            "now": now.isoformat(),
+            "past": sorted(past, key=lambda x: x["timestamp"], reverse=True),
+            "future": future
+        }

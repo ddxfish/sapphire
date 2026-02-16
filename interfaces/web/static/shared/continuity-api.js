@@ -111,3 +111,64 @@ export async function fetchMemoryScopes() {
   const data = await res.json();
   return data.scopes || [];
 }
+
+// Fetch knowledge scopes
+export async function fetchKnowledgeScopes() {
+  const res = await fetch('/api/knowledge/scopes');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.scopes || [];
+}
+
+// Fetch people scopes
+export async function fetchPeopleScopes() {
+  const res = await fetch('/api/knowledge/people/scopes');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.scopes || [];
+}
+
+// Fetch goal scopes
+export async function fetchGoalScopes() {
+  const res = await fetch('/api/goals/scopes');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.scopes || [];
+}
+
+// Fetch tasks filtered by heartbeat
+export async function fetchHeartbeats() {
+  const res = await fetch(`${API_BASE}/tasks?heartbeat=true`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.tasks || [];
+}
+
+export async function fetchNonHeartbeatTasks() {
+  const res = await fetch(`${API_BASE}/tasks?heartbeat=false`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.tasks || [];
+}
+
+// Fetch personas (list with summary)
+export async function fetchPersonas() {
+  const res = await fetch('/api/personas');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.personas || [];
+}
+
+// Fetch single persona with full settings
+export async function fetchPersona(name) {
+  const res = await fetch(`/api/personas/${encodeURIComponent(name)}`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// Fetch merged timeline
+export async function fetchMergedTimeline(hoursBack = 12, hoursAhead = 12) {
+  const res = await fetch(`${API_BASE}/merged-timeline?hours_back=${hoursBack}&hours_ahead=${hoursAhead}`);
+  if (!res.ok) return { now: null, past: [], future: [] };
+  return res.json();
+}

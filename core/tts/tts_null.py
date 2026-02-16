@@ -12,6 +12,10 @@ class NullTTS:
     def speak(self, text):
         """No-op speak"""
         pass
+
+    def speak_sync(self, text):
+        """No-op speak_sync"""
+        pass
         
     def stop(self):
         """No-op stop"""
@@ -27,6 +31,10 @@ class NullTTS:
         
     def set_pitch(self, pitch):
         """No-op set_pitch"""
+        return True
+
+    def wait(self, timeout=300):
+        """No-op wait"""
         return True
         
     def generate_audio_data(self, text):

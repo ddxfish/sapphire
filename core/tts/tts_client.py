@@ -189,15 +189,10 @@ class TTSClient:
         logger.info(f"Primary unavailable, using fallback: {self.fallback_server}")
         return self.fallback_server
 
-    def speak(self, text):
-        """Send text to TTS server and play audio"""
-        if not self.audio_available:
-            logger.warning("Audio playback unavailable - skipping TTS")
-            return False
-        
-        # Strip content that shouldn't be spoken (order matters)
+    def _process_text_for_tts(self, text):
+        """Strip markdown/tags and normalize text for speech."""
         processed_text = text
-        
+
         # Remove block-level content entirely
         block_patterns = [
             r'<think>.*?</think>',           # Think tags
@@ -211,56 +206,67 @@ class TTSClient:
         ]
         for pattern in block_patterns:
             processed_text = re.sub(pattern, ' ', processed_text, flags=re.DOTALL)
-        
+
         # Transform markdown to speech-friendly punctuation
-        # Bold **text** or __text__ → period before and after for emphasis pause
         processed_text = re.sub(r'\*\*([^*]+)\*\*', r'. \1. ', processed_text)
         processed_text = re.sub(r'__([^_]+)__', r'. \1. ', processed_text)
-        
-        # Italic *text* or _text_ → comma for slight pause (but not mid-word apostrophes)
         processed_text = re.sub(r'(?<!\w)\*([^*]+)\*(?!\w)', r', \1, ', processed_text)
         processed_text = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r', \1, ', processed_text)
-        
-        # Links [anchor](url) → keep anchor text only
         processed_text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', processed_text)
-        
-        # Headers # Title → Title with period at end of line
         processed_text = re.sub(r'^#+\s*(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
-        
-        # LIST HANDLING - convert list items to sentences with pauses
-        # Bullet lists: - item or * item (at line start) → item.
         processed_text = re.sub(r'^[\-\*]\s+(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
-        
-        # Numbered lists: 1. item or 1) item → item. (strip the number, keep content with pause)
         processed_text = re.sub(r'^\d+[\.\)]\s+(.+)$', r'\1.', processed_text, flags=re.MULTILINE)
-        
-        # Clean up remaining markdown artifacts
-        processed_text = re.sub(r'[*_#]', '', processed_text)  # Stray markers
-        
-        # Convert newlines to periods for TTS pauses (before collapsing to spaces)
-        # Multiple newlines (paragraph breaks) → period
+        processed_text = re.sub(r'[*_#]', '', processed_text)
         processed_text = re.sub(r'\n{2,}', '. ', processed_text)
-        # Single newlines → period (line breaks need pauses too)
         processed_text = re.sub(r'\n', '. ', processed_text)
-        
-        # Remove common UI text that shouldn't be spoken
+
         ui_words = ['Copy', 'Copied!', 'Failed', 'Loading...', '...']
         for word in ui_words:
             processed_text = processed_text.replace(word, '')
-        
-        # Normalize punctuation - collapse multiple/mixed punctuation to single period
+
         processed_text = re.sub(r'[.!?,]+\s*[.!?,]+', '. ', processed_text)
         processed_text = re.sub(r'\s+', ' ', processed_text).strip()
-        
+        return processed_text
+
+    def speak(self, text):
+        """Send text to TTS server and play audio (non-blocking)."""
+        if not self.audio_available:
+            logger.warning("Audio playback unavailable - skipping TTS")
+            return False
+
+        processed_text = self._process_text_for_tts(text)
+        if not processed_text or len(processed_text) < 3:
+            logger.warning(f"[TTS] speak: too short after processing ({len(processed_text) if processed_text else 0} chars), skipping")
+            return False
+
         self.stop()
         self.should_stop.clear()
-        
+
         threading.Thread(
             target=self._generate_and_play_audio,
             args=(processed_text,),
             daemon=True
         ).start()
-        
+
+        return True
+
+    def speak_sync(self, text):
+        """Send text to TTS server, play audio, and block until playback finishes."""
+        if not self.audio_available:
+            logger.warning("Audio playback unavailable - skipping TTS")
+            return False
+
+        processed_text = self._process_text_for_tts(text)
+        if not processed_text or len(processed_text) < 3:
+            logger.warning(f"[TTS] speak_sync: too short after processing ({len(processed_text) if processed_text else 0} chars), skipping")
+            return False
+
+        logger.debug(f"[TTS] speak_sync: {len(text)} chars raw → {len(processed_text)} chars processed")
+        self.stop()
+        self.should_stop.clear()
+
+        # Run synchronously on calling thread — no daemon, no race
+        self._generate_and_play_audio(processed_text)
         return True
         
     def _apply_pitch_shift(self, audio_data, samplerate):
@@ -335,44 +341,61 @@ class TTSClient:
                     pass
         
     def _generate_and_play_audio(self, text):
-        """Generate audio from server and play it using sounddevice"""
+        """Generate audio from server and play it using sounddevice OutputStream"""
         if not self.audio_available:
             return
-        
+
         try:
             audio_data, samplerate = self._fetch_audio(text)
             if audio_data is None or self.should_stop.is_set():
+                logger.debug(f"[TTS] Fetch returned None={audio_data is None}, stopped={self.should_stop.is_set()}")
                 return
-            
+
             with self.lock:
                 if self.should_stop.is_set():
                     return
                 self._is_playing = True
                 publish(Events.TTS_PLAYING)
-            
+
             # Convert stereo to mono if needed
             if len(audio_data.shape) > 1:
                 audio_data = audio_data.mean(axis=1)
-            
+
             # Resample to output device rate if different
             if samplerate != self.output_rate:
                 logger.debug(f"Resampling audio from {samplerate}Hz to {self.output_rate}Hz")
                 audio_data = self._resample(audio_data, samplerate, self.output_rate)
                 samplerate = self.output_rate
-            
-            # Play audio
-            sd.play(audio_data, samplerate, device=self.output_device)
-            
-            # Wait for playback to complete or stop signal
-            while sd.get_stream() and sd.get_stream().active and not self.should_stop.is_set():
-                time.sleep(0.05)
-            
-            # If stopped early, halt playback
-            if self.should_stop.is_set():
-                sd.stop()
-                
+
+            # Ensure float32 for sounddevice
+            audio_data = audio_data.astype(np.float32)
+            duration = len(audio_data) / samplerate
+            logger.debug(f"[TTS] Playing {duration:.1f}s audio ({len(audio_data)} samples @ {samplerate}Hz) on device {self.output_device}")
+
+            # Use OutputStream directly — avoids sd.play() global state
+            # that can be stomped by other sd.play()/sd.stop() calls
+            chunk_dur = 0.1  # 100ms chunks for interruptibility
+            chunk_size = int(samplerate * chunk_dur)
+            chunks_written = 0
+            stopped_early = False
+
+            with sd.OutputStream(samplerate=samplerate, device=self.output_device,
+                                 channels=1, dtype='float32') as stream:
+                for i in range(0, len(audio_data), chunk_size):
+                    if self.should_stop.is_set():
+                        stopped_early = True
+                        break
+                    chunk = audio_data[i:i + chunk_size].reshape(-1, 1)
+                    stream.write(chunk)
+                    chunks_written += 1
+
+            if stopped_early:
+                logger.info(f"[TTS] Stopped early at {chunks_written * chunk_dur:.1f}s / {duration:.1f}s")
+            else:
+                logger.debug(f"[TTS] Playback complete: {duration:.1f}s")
+
         except Exception as e:
-            logger.error(f"Error in TTS playback: {e}")
+            logger.error(f"Error in TTS playback: {e}", exc_info=True)
         finally:
             with self.lock:
                 self._is_playing = False
@@ -389,6 +412,14 @@ class TTSClient:
                 except Exception:
                     pass
                 self._is_playing = False
+
+    def wait(self, timeout=300):
+        """Block until TTS playback finishes or timeout (seconds)."""
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        while self._is_playing and _time.monotonic() < deadline:
+            _time.sleep(0.1)
+        return not self._is_playing
 
     def generate_audio_data(self, text):
         """Generate audio and return raw bytes for file download"""

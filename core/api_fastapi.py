@@ -3522,10 +3522,15 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
 
 @app.get("/api/continuity/tasks")
 async def list_continuity_tasks(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """List continuity tasks."""
+    """List continuity tasks. Optional ?heartbeat=true/false filter."""
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         return {"tasks": []}
-    return {"tasks": system.continuity_scheduler.list_tasks()}
+    tasks = system.continuity_scheduler.list_tasks()
+    hb_filter = request.query_params.get("heartbeat")
+    if hb_filter is not None:
+        want_hb = hb_filter.lower() in ("true", "1", "yes")
+        tasks = [t for t in tasks if t.get("heartbeat", False) == want_hb]
+    return {"tasks": tasks}
 
 
 @app.post("/api/continuity/tasks")
@@ -3601,11 +3606,21 @@ async def get_continuity_activity(request: Request, _=Depends(require_login), sy
 
 @app.get("/api/continuity/timeline")
 async def get_continuity_timeline(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Get continuity task timeline."""
+    """Get continuity task timeline (future only, legacy)."""
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         return {"timeline": []}
     hours = int(request.query_params.get("hours", 24))
     return {"timeline": system.continuity_scheduler.get_timeline(hours)}
+
+
+@app.get("/api/continuity/merged-timeline")
+async def get_continuity_merged_timeline(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Get merged timeline: past activity + future schedule with NOW marker."""
+    if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
+        return {"now": None, "past": [], "future": []}
+    hours_back = int(request.query_params.get("hours_back", 12))
+    hours_ahead = int(request.query_params.get("hours_ahead", 12))
+    return system.continuity_scheduler.get_merged_timeline(hours_back, hours_ahead)
 
 
 # =============================================================================
