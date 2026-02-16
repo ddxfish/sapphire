@@ -4121,6 +4121,72 @@ async def test_email_connection(request: Request, _=Depends(require_login)):
 
 
 # =============================================================================
+# SSH PLUGIN ROUTES
+# =============================================================================
+
+@app.get("/api/webui/plugins/ssh/servers")
+async def get_ssh_servers(request: Request, _=Depends(require_login)):
+    """Get configured SSH servers."""
+    from core.credentials_manager import credentials
+    return {"servers": credentials.get_ssh_servers()}
+
+
+@app.put("/api/webui/plugins/ssh/servers")
+async def set_ssh_servers(request: Request, _=Depends(require_login)):
+    """Replace the SSH servers list."""
+    from core.credentials_manager import credentials
+    data = await request.json() or {}
+    servers = data.get('servers', [])
+    # Validate each server has required fields
+    for s in servers:
+        if not s.get('name') or not s.get('host') or not s.get('user'):
+            raise HTTPException(status_code=400, detail="Each server needs name, host, and user")
+    if credentials.set_ssh_servers(servers):
+        return {"success": True, "count": len(servers)}
+    raise HTTPException(status_code=500, detail="Failed to save SSH servers")
+
+
+@app.post("/api/webui/plugins/ssh/test")
+async def test_ssh_connection(request: Request, _=Depends(require_login)):
+    """Test SSH connection to a server."""
+    import subprocess
+    from pathlib import Path
+
+    data = await request.json() or {}
+    host = data.get('host', '').strip()
+    user = data.get('user', '').strip()
+    port = str(data.get('port', 22))
+    key_path = data.get('key_path', '').strip()
+
+    if not host or not user:
+        return {"success": False, "error": "Host and user required"}
+
+    ssh_cmd = [
+        'ssh',
+        '-o', 'StrictHostKeyChecking=accept-new',
+        '-o', 'ConnectTimeout=5',
+        '-o', 'BatchMode=yes',
+        '-p', port,
+    ]
+    if key_path:
+        ssh_cmd.extend(['-i', str(Path(key_path).expanduser())])
+    ssh_cmd.append(f'{user}@{host}')
+    ssh_cmd.append('echo ok')
+
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            return {"success": True}
+        return {"success": False, "error": result.stderr.strip() or f"Exit code {result.returncode}"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": "Connection timed out"}
+    except FileNotFoundError:
+        return {"success": False, "error": "SSH client not found"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
 # SYSTEM MANAGEMENT ROUTES
 # =============================================================================
 

@@ -10,7 +10,8 @@
     "image-gen",
     "continuity",
     "homeassistant",
-    "email"
+    "email",
+    "ssh"
   ],
   "plugins": {
     "setup-wizard": {
@@ -65,6 +66,10 @@
     },
     "email": {
       "title": "Email",
+      "showInSidebar": false
+    },
+    "ssh": {
+      "title": "SSH",
       "showInSidebar": false
     }
   }

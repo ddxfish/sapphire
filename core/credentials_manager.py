@@ -53,6 +53,9 @@ DEFAULT_CREDENTIALS = {
         "app_password": "",
         "imap_server": "imap.gmail.com",
         "smtp_server": "smtp.gmail.com"
+    },
+    "ssh": {
+        "servers": []
     }
 }
 
@@ -497,6 +500,37 @@ class CredentialsManager:
         """Check if email credentials are configured."""
         creds = self.get_email_credentials()
         return bool(creds['address'] and creds['app_password'])
+
+    # =========================================================================
+    # SSH
+    # =========================================================================
+
+    def get_ssh_servers(self) -> list:
+        """Get list of configured SSH servers."""
+        ssh = self._credentials.get('ssh', {})
+        return ssh.get('servers', [])
+
+    def get_ssh_server(self, name: str) -> dict | None:
+        """Get a single SSH server by friendly name (case-insensitive)."""
+        for s in self.get_ssh_servers():
+            if s.get('name', '').lower() == name.lower():
+                return s
+        return None
+
+    def set_ssh_servers(self, servers: list) -> bool:
+        """Replace the full SSH servers list."""
+        try:
+            if 'ssh' not in self._credentials:
+                self._credentials['ssh'] = {}
+            self._credentials['ssh']['servers'] = servers
+            if not self._save():
+                logger.error("Failed to persist SSH servers to disk")
+                return False
+            logger.info(f"Saved {len(servers)} SSH servers")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set SSH servers: {e}")
+            return False
 
     # =========================================================================
     # Utility
