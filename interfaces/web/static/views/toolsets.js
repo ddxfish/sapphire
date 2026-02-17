@@ -295,7 +295,7 @@ function bindEvents() {
 
     // Function toggles
     container.querySelectorAll('[data-action="toggle-func"]').forEach(cb => {
-        cb.addEventListener('change', () => debouncedSave());
+        cb.addEventListener('change', () => { updateCounts(); debouncedSave(); });
     });
 
     // Module toggles
@@ -307,6 +307,7 @@ function bindEvents() {
                 const funcMod = findFuncModule(fc.dataset.func);
                 if (funcMod === mod) fc.checked = checked;
             });
+            updateCounts();
             debouncedSave();
         });
     });
@@ -331,6 +332,34 @@ function findFuncModule(funcName) {
         if (mod.functions?.some(f => f.name === funcName)) return modName;
     }
     return null;
+}
+
+function updateCounts() {
+    const total = container.querySelectorAll('[data-action="toggle-func"]:checked').length;
+    // Header subtitle
+    const subtitle = container.querySelector('.view-subtitle');
+    if (subtitle) subtitle.textContent = `${total} functions`;
+    // Sidebar item count
+    const activeItem = container.querySelector(`.panel-list-item.active .ts-item-count`);
+    if (activeItem) activeItem.textContent = total;
+    // Per-module counts
+    container.querySelectorAll('[data-action="toggle-module"]').forEach(modCb => {
+        const mod = modCb.dataset.module;
+        const label = modCb.closest('.ts-module-toggle');
+        const countSpan = label?.querySelector('.ts-module-count');
+        if (!countSpan) return;
+        const funcCbs = container.querySelectorAll(`[data-action="toggle-func"]`);
+        let enabled = 0, moduleTotal = 0;
+        funcCbs.forEach(fc => {
+            if (findFuncModule(fc.dataset.func) === mod) {
+                moduleTotal++;
+                if (fc.checked) enabled++;
+            }
+        });
+        countSpan.textContent = `(${enabled}/${moduleTotal})`;
+        modCb.checked = enabled === moduleTotal;
+        modCb.indeterminate = enabled > 0 && enabled < moduleTotal;
+    });
 }
 
 function debouncedSave() {
