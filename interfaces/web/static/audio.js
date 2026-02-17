@@ -310,7 +310,10 @@ const startRec = async () => {
         return true;
     } catch (e) {
         console.error('Mic access error:', e);
-        alert('Mic access denied');
+        const msg = e.name === 'NotFoundError' || e.message?.includes('not be found')
+            ? 'No microphone found. Check your audio device.'
+            : 'Mic access denied';
+        alert(msg);
         return false;
     }
 };
