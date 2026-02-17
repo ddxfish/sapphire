@@ -52,10 +52,13 @@ def friendly_llm_error(e):
         return "Account billing limit reached — out of credits or over budget. Check your provider's billing page."
 
     if status == 429:
-        return "Rate limited by provider. Too many requests — wait a moment and try again."
+        return "Rate limited — too many requests. Wait 30-60 seconds before trying again."
 
     if status == 529:
-        return "Provider is overloaded. Try again in a moment."
+        return "Claude's servers are at capacity (529). This is temporary — wait a minute and resend."
+
+    if status >= 500:
+        return f"Server error ({status}) from LLM provider. The service may be experiencing issues."
 
     return None
 

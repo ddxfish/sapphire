@@ -600,7 +600,7 @@ def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
         if not subject:
             return "subject is required for new emails.", False
     else:
-        return "Either recipient_id (new email) or reply_to_index (reply) is required.", False
+        return "FAILED: No recipient specified. Use recipient_id (integer from get_recipients) for new emails, or reply_to_index (integer from get_inbox) for replies. Do NOT pass email addresses directly.", False
 
     try:
         msg = MIMEText(body)
