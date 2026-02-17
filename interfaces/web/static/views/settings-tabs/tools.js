@@ -4,7 +4,7 @@ export default {
     name: 'Tools',
     icon: '\uD83D\uDD27',
     description: 'Function calling and tool settings',
-    essentialKeys: ['FUNCTIONS_ENABLED', 'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS'],
+    essentialKeys: ['FUNCTIONS_ENABLED', 'MAX_TOOL_ITERATIONS', 'MAX_PARALLEL_TOOLS', 'TOOL_MAKER_VALIDATION'],
     advancedKeys: ['DEBUG_TOOL_CALLING'],
 
     render(ctx) {

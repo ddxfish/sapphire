@@ -69,7 +69,14 @@ class EventBus:
         logger.info(f"New subscriber: {sub_id} (replay={replay}) — total subscribers: {len(self._subscribers)}")
 
         # Immediate connection event - wakes up client instantly
-        yield {"type": "connected", "data": {"sub_id": sub_id}, "timestamp": time.time()}
+        # Include boot_version so frontend can detect server restarts
+        boot_version = None
+        try:
+            from core.api_fastapi import BOOT_VERSION
+            boot_version = BOOT_VERSION
+        except Exception:
+            pass
+        yield {"type": "connected", "data": {"sub_id": sub_id, "boot_version": boot_version}, "timestamp": time.time()}
 
         try:
             keepalive_count = 0

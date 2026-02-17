@@ -270,6 +270,10 @@
     "short": "Enable verbose tool calling debug logs",
     "long": "When enabled, logs detailed information about every tool call: parameters, responses, timing, errors. Very helpful for debugging tool issues but creates large log files. Disable in production for better performance."
   },
+  "TOOL_MAKER_VALIDATION": {
+    "short": "How strictly AI-created tools are validated",
+    "long": "Controls what the AI is allowed to import/use when creating custom tools via tool_save.\n\n• strict — Only allowlisted imports (json, re, datetime, math, requests, pathlib, etc.). Safest.\n• moderate — Blocks dangerous operations (subprocess, shutil, eval, os.system) but allows most imports.\n• trust — Syntax check only. Full Python access. Use if you trust the AI completely."
+  },
   "SESSION_TIMEOUT_DAYS": {
     "short": "How long login sessions remain valid (days)",
     "long": "Number of days a login session cookie remains valid before requiring re-login. 30 days means users stay logged in for a month. Shorter values are more secure but less convenient. Set to 1 for daily re-authentication."

@@ -25,6 +25,7 @@ export function initPillsCache() {
     eventBus.on(eventBus.Events.PROMPT_CHANGED, () => { promptsCache = null; refreshInitData(); });
     eventBus.on(eventBus.Events.PROMPT_DELETED, () => { promptsCache = null; refreshInitData(); });
     eventBus.on(eventBus.Events.TOOLSET_CHANGED, () => { toolsetsCache = null; refreshInitData(); });
+    eventBus.on(eventBus.Events.SERVER_RESTARTED, () => { promptsCache = null; toolsetsCache = null; });
 }
 
 export function closePillDropdowns() {

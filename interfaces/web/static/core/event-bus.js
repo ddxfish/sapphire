@@ -4,6 +4,7 @@ import { sessionId } from '../shared/fetch.js';
 let eventSource = null;
 let reconnectAttempts = 0;
 let reconnectTimeout = null;
+let knownBootVersion = null;
 const MAX_RECONNECT_DELAY = 30000;
 const BASE_RECONNECT_DELAY = 1000;
 
@@ -37,6 +38,16 @@ export function connect(replay = false) {
 
             // Skip keepalives
             if (event.type === 'keepalive') return;
+
+            // Detect server restart via boot_version change
+            if (event.type === 'connected' && event.data?.boot_version) {
+                const v = event.data.boot_version;
+                if (knownBootVersion && knownBootVersion !== v) {
+                    console.log(`[EventBus] Server restarted (boot ${knownBootVersion} → ${v})`);
+                    dispatch('server_restarted', { old: knownBootVersion, new: v });
+                }
+                knownBootVersion = v;
+            }
 
             // Skip events we originated (we already handled them locally)
             if (event.data?.origin && event.data.origin === sessionId) {
@@ -229,5 +240,6 @@ export const Events = {
     // Connection events
     CONNECTED: 'connected',           // Server confirms SSE subscription
     BUS_CONNECTED: 'bus_connected',   // Client-side: EventSource opened
-    BUS_DISCONNECTED: 'bus_disconnected'
+    BUS_DISCONNECTED: 'bus_disconnected',
+    SERVER_RESTARTED: 'server_restarted'  // Boot version changed — caches stale
 };

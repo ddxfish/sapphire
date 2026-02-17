@@ -49,7 +49,20 @@ Each tool file has `ENABLED = True/False` at the top. Set to `False` to disable 
 
 Use the **Toolset Manager** in the web UI. see [TOOLSETS.md](TOOLSETS.md)
 
-## Creating Tools with AI (feed it this)
+## AI Self-Creating Tools (Tool Maker)
+
+Sapphire can create her own tools using the **Tool Maker** (`tool_save`, `tool_read`, `tool_activate`). The AI writes a tool module, validates it, saves to `user/functions/`, and restarts to load it. No manual file editing needed.
+
+**Validation strictness** is a user setting (`TOOL_MAKER_VALIDATION`):
+- `strict` — Only allowlisted imports (json, re, datetime, math, requests, etc.)
+- `moderate` — Blocks dangerous operations (subprocess, shutil, eval, os.system, etc.)
+- `trust` — Syntax check only
+
+New tools appear in the **All** toolset automatically. Add them to other toolsets via the Toolset Manager.
+
+## Creating Tools Manually
+
+You can also create tools by hand or with an external AI:
 
 > Create a Sapphire tool that [describe what you want].
 >
@@ -95,7 +108,7 @@ Use the **Toolset Manager** in the web UI. see [TOOLSETS.md](TOOLSETS.md)
 >             query = arguments.get('query')
 >             if not query:
 >                 return "I need a query.", False
->             
+>
 >             # Do the work here
 >             result = f"Processed: {query}"
 >             return result, True
@@ -109,7 +122,7 @@ Use the **Toolset Manager** in the web UI. see [TOOLSETS.md](TOOLSETS.md)
 > Give me the complete file, ready to drop in.
 
 After the AI gives you the file:
-1. Save to `functions/your_tool.py` or `user/functions/your_tool.py`
+1. Save to `user/functions/your_tool.py`
 2. Add to a toolset (UI or JSON)
 3. Restart Sapphire
 
@@ -266,6 +279,79 @@ META TOOLS (self-modification):
 - set_piece/remove_piece/create_piece - edit assembled prompts
 - change_ai_name/change_username - update names
 - set_tts_voice/pitch/speed - adjust voice
+
+TOOL MAKER (create your own tools):
+- tool_save(name, code) - create or update a custom tool
+- tool_read(name) - read tool source code (no args = list all)
+- tool_activate() - restart app to load new tools (ends conversation — save goals first)
+
+CREATING CUSTOM TOOLS:
+Custom tools live in user/functions/. Use tool_save to write them.
+After saving, call tool_activate to restart and load.
+New tools appear in the "All" toolset. User adds to other toolsets manually.
+
+TOOL FILE FORMAT — every tool module needs these exports:
+```python
+ENABLED = True
+AVAILABLE_FUNCTIONS = ['my_func']
+TOOLS = [
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "my_func",
+            "description": "What this does and WHEN to use it. Be specific.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The input"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
+
+def execute(function_name, arguments, config):
+    if function_name == 'my_func':
+        query = arguments.get('query', '')
+        if not query:
+            return "I need a query.", False
+        return f"Result: {query}", True
+    return f"Unknown function: {function_name}", False
+```
+
+TOOL FORMAT RULES:
+- TOOLS: list of dicts, each with "type": "function" and "function" key
+- function.name: must match an entry in AVAILABLE_FUNCTIONS
+- function.description: critical — this is how you decide WHEN to call the tool
+- function.parameters: OpenAI function calling schema (type, properties, required)
+- Parameter types: string, integer, number, boolean, array, object
+- No parameters: {"type": "object", "properties": {}, "required": []}
+- execute() returns (result_string, success_bool) tuple
+- Return True for success, False for errors. "No results" is True, not False.
+- Use lazy imports for heavy dependencies (import inside execute)
+- "is_local": True means tool works offline. False = needs network. "endpoint" = conditional.
+- "network": True marks tool as using external network (highlighted in UI)
+- Optional: EMOJI = '🔧' for UI display, MODE_FILTER for prompt mode filtering
+
+VALIDATION:
+tool_save validates code before writing. Three strictness levels (user setting):
+- strict: only allowlisted imports (json, re, datetime, math, requests, pathlib, etc.)
+- moderate: blocks dangerous ops (subprocess, shutil, os.system, eval, exec, etc.)
+- trust: syntax check only
+
+WORKFLOW FOR CREATING A TOOL:
+1. Design: decide what the tool does, what parameters it needs
+2. Write: create the code following the format above
+3. Save: tool_save("my_tool", code) — validates and smoke tests
+4. If validation fails: read the error, fix code, save again
+5. Activate: tool_activate() — restarts app, tool loads on startup
+6. Test: use the tool in conversation to verify it works
+7. Iterate: tool_read("my_tool") to review, tool_save to update
 
 TOOL AVAILABILITY:
 - Tools filtered by active toolset (ability)

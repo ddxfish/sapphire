@@ -8,6 +8,7 @@ import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from '.
 import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
+import { refreshInitData } from './shared/init-data.js';
 import { initPrivacy } from './features/privacy.js';
 import { initUserProfile } from './features/user-profile.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
@@ -309,6 +310,13 @@ function initEventBus() {
 
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
         populateChatDropdown();
+    });
+
+    // Server restart detection — invalidate caches, refresh scene
+    eventBus.on(eventBus.Events.SERVER_RESTARTED, async () => {
+        console.log('[Main] Server restarted — refreshing caches');
+        await refreshInitData();
+        updateScene();
     });
 
     // STT events
