@@ -1,6 +1,7 @@
 // views/personas.js - Persona manager view
 import { listPersonas, getPersona, createPersona, updatePersona, deletePersona,
-         duplicatePersona, loadPersona, createFromChat, uploadAvatar, avatarUrl } from '../shared/persona-api.js';
+         duplicatePersona, loadPersona, createFromChat, uploadAvatar, avatarUrl,
+         avatarImg, avatarFallback } from '../shared/persona-api.js';
 import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
 import { getInitData } from '../shared/init-data.js';
 import * as ui from '../ui.js';
@@ -103,7 +104,7 @@ function render() {
                 <div class="panel-list-items" id="pa-list">
                     ${personas.map(p => `
                         <button class="panel-list-item${p.name === selectedName ? ' active' : ''}" data-name="${p.name}">
-                            <img class="pa-list-avatar" src="${avatarUrl(p.name)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                            ${avatarImg(p.name, p.trim_color, 'pa-list-avatar', p.avatar)}
                             <div class="pa-list-info">
                                 <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}</span>
                                 ${p.tagline ? `<span class="pa-list-tagline">${esc(p.tagline)}</span>` : ''}
@@ -138,8 +139,8 @@ function renderDetail(p, isActive) {
 
             <div class="pa-header">
                 <div class="pa-avatar-wrap" id="pa-avatar-wrap">
-                    <img class="pa-avatar-lg" id="pa-avatar" src="${avatarUrl(p.name)}" alt="${esc(p.name)}" loading="lazy"
-                         onerror="this.style.visibility='hidden'">
+                    <img class="pa-avatar-lg" id="pa-avatar" src="${p.avatar ? avatarUrl(p.name) : avatarFallback(p.name, trim)}" alt="${esc(p.name)}" loading="lazy"
+                         ${p.avatar ? `onerror="this.onerror=null;this.src='${avatarFallback(p.name, trim)}'"` : ''}>
                     <div class="pa-avatar-overlay" id="pa-avatar-upload" title="Upload avatar">&#x1F4F7;</div>
                     <input type="file" id="pa-avatar-input" accept="image/*" style="display:none">
                 </div>

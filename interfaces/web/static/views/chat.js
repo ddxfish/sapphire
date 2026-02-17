@@ -7,7 +7,7 @@ import { applyTrimColor } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
 import { getInitData, refreshInitData } from '../shared/init-data.js';
 import { switchView } from '../core/router.js';
-import { loadPersona, createFromChat } from '../shared/persona-api.js';
+import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
 
 let sidebarLoaded = false;
 let saveTimer = null;
@@ -634,7 +634,7 @@ function updateEasyMode(container, settings, init) {
     if (gridEl) {
         gridEl.innerHTML = personasList.map(p => `
             <div class="sb-pgrid-cell${p.name === personaName ? ' active' : ''}" data-name="${p.name}">
-                <img class="sb-pgrid-avatar" src="/api/personas/${encodeURIComponent(p.name)}/avatar" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                ${avatarImg(p.name, p.trim_color, 'sb-pgrid-avatar', p.avatar)}
                 <span class="sb-pgrid-name">${escapeHtml(p.name)}${p.name === defaultPersonaName ? ' &#x2B50;' : ''}</span>
             </div>
         `).join('') + `
@@ -690,9 +690,10 @@ function updateEasyMode(container, settings, init) {
     }
 
     // Build detail HTML
+    const activePd = personasList.find(p => p.name === personaName);
     detailEl.innerHTML = `
         <div class="sb-pdetail-header">
-            <img class="sb-pdetail-avatar" src="/api/personas/${encodeURIComponent(personaName)}/avatar" alt="" loading="lazy" onerror="this.style.display='none'">
+            ${activePd ? avatarImg(activePd.name, activePd.trim_color, 'sb-pdetail-avatar', activePd.avatar) : ''}
             <div class="sb-pdetail-info">
                 <span class="sb-pdetail-name">${escapeHtml(personaName)}</span>
                 <span class="sb-pdetail-tagline" id="sb-pdetail-tagline"></span>

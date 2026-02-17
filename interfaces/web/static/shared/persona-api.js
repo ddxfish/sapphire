@@ -54,3 +54,17 @@ export const uploadAvatar = async (name, file) => {
 export function avatarUrl(name) {
     return `/api/personas/${encodeURIComponent(name)}/avatar`;
 }
+
+export function avatarFallback(name, color) {
+    const initial = (name || '?')[0].toUpperCase();
+    const c = color || '#888';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="${c}18" stroke="${c}" stroke-width="3"/><text x="50" y="54" text-anchor="middle" dominant-baseline="middle" font-family="system-ui,sans-serif" font-size="44" font-weight="600" fill="${c}">${initial}</text></svg>`;
+    return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+export function avatarImg(name, color, cls, avatar) {
+    const fb = avatarFallback(name, color);
+    const src = avatar ? avatarUrl(name) : fb;
+    const onerror = avatar ? `this.onerror=null;this.src='${fb}'` : '';
+    return `<img class="${cls}" src="${src}" alt="" loading="lazy"${onerror ? ` onerror="${onerror}"` : ''}>`;
+}

@@ -135,6 +135,7 @@ function renderEditor() {
             </div>
             <div class="pr-header-actions">
                 ${!isActive ? '<button class="btn-primary" id="pr-activate">Activate</button>' : '<span class="badge badge-active">Active</span>'}
+                <button class="btn-sm" id="pr-dup" title="Duplicate prompt">\u2398</button>
                 <button class="btn-sm" id="pr-io" title="Import / Export">\u21C4</button>
                 <button class="btn-sm danger" id="pr-delete" title="Delete prompt">\u2715</button>
             </div>
@@ -301,6 +302,7 @@ function bindEvents() {
 
     // --- Header actions ---
     layout.querySelector('#pr-activate')?.addEventListener('click', activateCurrentPrompt);
+    layout.querySelector('#pr-dup')?.addEventListener('click', duplicatePrompt);
     layout.querySelector('#pr-delete')?.addEventListener('click', deleteCurrentPrompt);
     layout.querySelector('#pr-io')?.addEventListener('click', () => openImportExport());
 
@@ -478,6 +480,23 @@ async function createPrompt() {
         await loadAll();
         render();
         ui.showToast(`Created: ${name.trim()}`, 'success');
+    } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+}
+
+async function duplicatePrompt() {
+    if (!selected || !selectedData) return;
+    const name = prompt(`Duplicate "${selected}" as:`, selected + '-copy');
+    if (!name?.trim() || name.trim() === selected) return;
+    try {
+        const data = { ...selectedData };
+        delete data.name;
+        await savePrompt(name.trim(), data);
+        selected = name.trim();
+        openAccordion = null;
+        editTarget = {};
+        await loadAll();
+        render();
+        ui.showToast(`Duplicated as: ${name.trim()}`, 'success');
     } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
 }
 
@@ -687,6 +706,27 @@ async function refreshPreview() {
 }
 
 // ── Import / Export (modal) ──
+function getUsedPieces() {
+    if (!selectedData?.components) return {};
+    const used = {};
+    for (const type of SINGLE_TYPES) {
+        const key = selectedData.components[type];
+        if (key && components[type]?.[key]) {
+            used[type] = { [key]: components[type][key] };
+        }
+    }
+    for (const type of MULTI_TYPES) {
+        const keys = selectedData.components[type] || [];
+        for (const key of keys) {
+            if (components[type]?.[key]) {
+                if (!used[type]) used[type] = {};
+                used[type][key] = components[type][key];
+            }
+        }
+    }
+    return used;
+}
+
 function openImportExport() {
     const modal = document.createElement('div');
     modal.className = 'pr-modal-overlay';
@@ -700,7 +740,7 @@ function openImportExport() {
                 <div class="pr-io-section">
                     <h4>Export</h4>
                     <label class="pr-io-option">
-                        <input type="checkbox" id="io-export-pieces" checked> Include prompt pieces (component definitions)
+                        <input type="checkbox" id="io-export-pieces" checked> Include pieces used by this prompt
                     </label>
                     <div class="pr-io-buttons">
                         <button class="btn-sm" id="io-export-clip">Copy to Clipboard</button>
@@ -711,7 +751,7 @@ function openImportExport() {
                 <div class="pr-io-section">
                     <h4>Import</h4>
                     <label class="pr-io-option">
-                        <input type="checkbox" id="io-import-pieces"> Overwrite prompt pieces with imported definitions
+                        <input type="checkbox" id="io-import-overwrite"> Overwrite mode (replace existing pieces and prompt)
                     </label>
                     <div class="pr-io-buttons">
                         <button class="btn-sm" id="io-import-clip">Paste from Clipboard</button>
@@ -729,23 +769,22 @@ function openImportExport() {
     modal.addEventListener('click', e => { if (e.target === modal) close(); });
     modal.querySelector('#pr-io-close').addEventListener('click', close);
 
-    // Export
-    async function buildExport() {
+    // Export — only pieces used by this prompt
+    function buildExport() {
         const bundle = { name: selected, prompt: selectedData };
-        if (modal.querySelector('#io-export-pieces').checked) bundle.components = components;
+        if (modal.querySelector('#io-export-pieces').checked) bundle.components = getUsedPieces();
         return bundle;
     }
 
     modal.querySelector('#io-export-clip').addEventListener('click', async () => {
         try {
-            const data = await buildExport();
-            await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+            await navigator.clipboard.writeText(JSON.stringify(buildExport(), null, 2));
             ui.showToast('Copied to clipboard', 'success');
         } catch { ui.showToast('Copy failed', 'error'); }
     });
 
-    modal.querySelector('#io-export-file').addEventListener('click', async () => {
-        const data = await buildExport();
+    modal.querySelector('#io-export-file').addEventListener('click', () => {
+        const data = buildExport();
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -754,30 +793,51 @@ function openImportExport() {
         ui.showToast('Downloaded', 'success');
     });
 
-    // Import
+    // Import — smart merge by default, overwrite if checked
     async function doImport(json) {
         const status = modal.querySelector('#io-status');
         try {
             const data = JSON.parse(json);
             if (!data.prompt) { status.textContent = 'Invalid format: missing prompt data'; return; }
-            const name = data.name || selected;
+            const overwrite = modal.querySelector('#io-import-overwrite').checked;
+
+            // Resolve prompt name
+            let name = data.name || selected;
+            const exists = prompts.some(p => p.name === name);
+            if (exists && !overwrite) {
+                const newName = prompt(`Prompt "${name}" already exists. Enter a new name:`, name + '-imported');
+                if (!newName?.trim()) { status.textContent = 'Import cancelled'; return; }
+                name = newName.trim();
+            }
+
             status.textContent = `Importing "${name}"...`;
-            await savePrompt(name, data.prompt);
+
+            // Import pieces
             const importPieces = data.components || data.pieces;
-            if (modal.querySelector('#io-import-pieces').checked && importPieces) {
+            let skipped = 0, imported = 0;
+            if (importPieces) {
                 for (const [type, defs] of Object.entries(importPieces)) {
                     for (const [key, value] of Object.entries(defs)) {
+                        if (!overwrite && components[type]?.[key]) { skipped++; continue; }
                         await saveComponent(type, key, value);
+                        imported++;
                     }
                 }
             }
+
+            // Save prompt
+            await savePrompt(name, data.prompt);
             if (name === activePromptName) await loadPrompt(name);
             selected = name;
             await loadAll();
             render();
             updateScene();
             close();
-            ui.showToast(`Imported: ${name}`, 'success');
+
+            const parts = [`Imported: ${name}`];
+            if (imported) parts.push(`${imported} pieces`);
+            if (skipped) parts.push(`${skipped} skipped (already exist)`);
+            ui.showToast(parts.join(' \u2014 '), 'success');
         } catch (e) { status.textContent = `Error: ${e.message}`; }
     }
 
