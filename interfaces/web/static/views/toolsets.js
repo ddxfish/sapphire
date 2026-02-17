@@ -370,6 +370,9 @@ function debouncedSave() {
             const selected = toolsets.find(t => t.name === selectedName);
             if (selected?.type === 'user') {
                 await saveCustomToolset(selectedName, enabled);
+                // Update local state so switching away and back shows correct data
+                selected.functions = enabled;
+                selected.function_count = enabled.length;
             }
             await enableFunctions(enabled);
             updateScene();
