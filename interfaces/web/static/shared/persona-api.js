@@ -51,6 +51,10 @@ export const uploadAvatar = async (name, file) => {
     return res.json();
 };
 
+export const deleteAvatar = (name) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}/avatar`, {
+    method: 'DELETE'
+});
+
 export function avatarUrl(name) {
     return `/api/personas/${encodeURIComponent(name)}/avatar`;
 }

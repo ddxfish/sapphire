@@ -2395,6 +2395,15 @@ async def upload_persona_avatar(name: str, request: Request, file: UploadFile = 
     return {"status": "success", "avatar": filename}
 
 
+@app.delete("/api/personas/{name}/avatar")
+async def delete_persona_avatar(name: str, request: Request, _=Depends(require_login)):
+    """Delete avatar for a persona, reverting to fallback."""
+    from core.modules.system.personas import persona_manager
+    if not persona_manager.delete_avatar(name):
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return {"status": "success"}
+
+
 @app.get("/api/personas/{name}/avatar")
 async def serve_persona_avatar(name: str, request: Request, _=Depends(require_login)):
     """Serve persona avatar image."""

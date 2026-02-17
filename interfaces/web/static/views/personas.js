@@ -1,7 +1,7 @@
 // views/personas.js - Persona manager view
 import { listPersonas, getPersona, createPersona, updatePersona, deletePersona,
-         duplicatePersona, loadPersona, createFromChat, uploadAvatar, avatarUrl,
-         avatarImg, avatarFallback } from '../shared/persona-api.js';
+         duplicatePersona, loadPersona, createFromChat, uploadAvatar, deleteAvatar,
+         avatarUrl, avatarImg, avatarFallback } from '../shared/persona-api.js';
 import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
 import { getInitData } from '../shared/init-data.js';
 import * as ui from '../ui.js';
@@ -142,6 +142,7 @@ function renderDetail(p, isActive) {
                     <img class="pa-avatar-lg" id="pa-avatar" src="${p.avatar ? avatarUrl(p.name) : avatarFallback(p.name, trim)}" alt="${esc(p.name)}" loading="lazy"
                          ${p.avatar ? `onerror="this.onerror=null;this.src='${avatarFallback(p.name, trim)}'"` : ''}>
                     <div class="pa-avatar-overlay" id="pa-avatar-upload" title="Upload avatar">&#x1F4F7;</div>
+                    ${p.avatar ? '<button class="pa-avatar-delete" id="pa-avatar-delete" title="Remove avatar">&times;</button>' : ''}
                     <input type="file" id="pa-avatar-input" accept="image/*" style="display:none">
                 </div>
                 <div class="pa-header-right">
@@ -546,6 +547,17 @@ function bindEvents() {
             } catch (e) { ui.showToast(e.message || 'Upload failed', 'error'); }
         });
     }
+
+    // Avatar delete
+    container.querySelector('#pa-avatar-delete')?.addEventListener('click', async () => {
+        if (!selectedName) return;
+        try {
+            await deleteAvatar(selectedName);
+            selectedData.avatar = null;
+            render();
+            ui.showToast('Avatar removed', 'success');
+        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+    });
 
     // TTS test button
     container.querySelector('#pa-tts-test')?.addEventListener('click', async (e) => {

@@ -5607,6 +5607,29 @@ a.gallery-caption:hover {
     font-size: 20px;
 }
 
+.pa-avatar-delete {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(220, 50, 50, 0.85);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 2;
+    padding: 0;
+}
+
+.pa-avatar-wrap:hover .pa-avatar-delete {
+    opacity: 1;
+}
+
 .pa-avatar-wrap:hover .pa-avatar-overlay {
     opacity: 1;
 }

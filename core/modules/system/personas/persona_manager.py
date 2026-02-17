@@ -239,6 +239,24 @@ class PersonaManager:
 
     # === Avatar ===
 
+    def delete_avatar(self, name: str) -> bool:
+        """Remove avatar for a persona, reverting to fallback."""
+        if name not in self._personas:
+            return False
+
+        with self._lock:
+            avatar = self._personas[name].get("avatar")
+            if avatar:
+                avatar_path = self.USER_AVATARS / avatar
+                if avatar_path.exists():
+                    try:
+                        avatar_path.unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to delete avatar file {avatar}: {e}")
+            self._personas[name]["avatar"] = None
+            self._personas[name]["avatar_full"] = None
+            return self._save_to_user()
+
     def set_avatar(self, name: str, filename: str, data: bytes) -> bool:
         """Save avatar file for a persona."""
         if name not in self._personas:
