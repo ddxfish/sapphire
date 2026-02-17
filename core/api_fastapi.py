@@ -1984,10 +1984,29 @@ async def reset_prompts(request: Request, _=Depends(require_login)):
 @app.post("/api/prompts/merge")
 async def merge_prompts(request: Request, _=Depends(require_login)):
     """Merge factory defaults into user prompts."""
-    if prompts.prompt_manager.merge_defaults():
-        return {"status": "success"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to merge prompts")
+    result = prompts.prompt_manager.merge_defaults()
+    if result:
+        return {"status": "success", **result}
+    raise HTTPException(status_code=500, detail="Failed to merge prompts")
+
+
+@app.post("/api/system/merge-updates")
+async def merge_updates(request: Request, _=Depends(require_login)):
+    """Unified merge: add missing prompts + personas from app updates."""
+    from datetime import datetime
+    backup_dir = str(PROJECT_ROOT / "user" / "backups" / datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+    prompt_result = prompts.prompt_manager.merge_defaults(backup_dir)
+    if not prompt_result:
+        raise HTTPException(status_code=500, detail="Failed to merge prompt defaults")
+
+    from core.modules.system.personas import persona_manager
+    personas_added = persona_manager.merge_defaults(backup_dir)
+
+    added = prompt_result["added"]
+    added["personas"] = personas_added
+
+    return {"status": "success", "backup": prompt_result["backup"], "added": added}
 
 
 @app.post("/api/prompts/reset-chat-defaults")

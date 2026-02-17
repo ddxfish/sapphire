@@ -46,11 +46,12 @@ export default {
           
           <div class="danger-zone-section">
             <h5>Prompts & Personas</h5>
+            <button class="btn btn-primary" id="merge-updates" style="margin-bottom: 8px;">Import App Updates</button>
+            <p class="warning-text" style="color: var(--text-secondary, #999); margin-bottom: 12px;">Adds new prompts and personas from updates without touching your stuff. Backs up first.</p>
             <div class="danger-zone-buttons">
               <button class="btn btn-danger" id="prompts-reset">Reset Prompts to Defaults</button>
-              <button class="btn btn-danger" id="prompts-merge">Merge Factory Defaults</button>
             </div>
-            <p class="warning-text">Reset: Overwrites all prompt files with factory versions. Merge: Factory values overwrite conflicts, your unique additions are preserved.</p>
+            <p class="warning-text">Overwrites all prompt files with factory versions. Creates backup first.</p>
           </div>
           
           <div class="danger-zone-section">
@@ -75,10 +76,10 @@ export default {
     if (promptsResetBtn) {
       promptsResetBtn.addEventListener('click', () => modal.resetPrompts());
     }
-    
-    const promptsMergeBtn = contentEl.querySelector('#prompts-merge');
-    if (promptsMergeBtn) {
-      promptsMergeBtn.addEventListener('click', () => modal.mergePrompts());
+
+    const mergeUpdatesBtn = contentEl.querySelector('#merge-updates');
+    if (mergeUpdatesBtn) {
+      mergeUpdatesBtn.addEventListener('click', () => modal.mergeUpdates());
     }
     
     const chatDefaultsResetBtn = contentEl.querySelector('#chat-defaults-reset');

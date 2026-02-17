@@ -585,30 +585,29 @@ class SettingsModal {
     }
   }
 
-  async mergePrompts() {
-    if (!confirm('⚠️ Merge factory defaults into your prompts?\n\nFactory values will OVERWRITE your customizations where they conflict!')) return;
-    
-    const confirmText = prompt(
-      'Factory defaults will overwrite conflicts. Your unique additions are preserved.\n\n' +
-      'Type MERGE to confirm:'
-    );
-    
-    if (!confirmText || confirmText.toUpperCase() !== 'MERGE') {
-      showToast('Merge cancelled', 'info');
-      return;
-    }
-    
+  async mergeUpdates() {
+    if (!confirm('Import new prompts and personas from app updates?\n\nYour existing content is untouched. A backup is created first.')) return;
+
     try {
-      await settingsAPI.mergePrompts();
-      showToast('✓ Factory defaults merged into prompts', 'success');
-      
-      // Refresh pill in case active prompt changed
-      await updateScene();
-      
-      // Notify prompt editor to refresh
+      const result = await settingsAPI.mergeUpdates();
+      const a = result.added || {};
+      const total = (a.components || 0) + (a.presets || 0) + (a.monoliths || 0) + (a.spice_categories || 0) + (a.personas || 0);
+
+      if (total === 0) {
+        showToast('Already up to date', 'info');
+      } else {
+        const parts = [];
+        if (a.components) parts.push(`${a.components} components`);
+        if (a.presets) parts.push(`${a.presets} presets`);
+        if (a.monoliths) parts.push(`${a.monoliths} monoliths`);
+        if (a.spice_categories) parts.push(`${a.spice_categories} spice categories`);
+        if (a.personas) parts.push(`${a.personas} personas`);
+        showToast(`Added ${parts.join(', ')}`, 'success');
+      }
+
       window.dispatchEvent(new CustomEvent('prompts-changed'));
     } catch (e) {
-      showToast('Merge failed: ' + e.message, 'error');
+      showToast('Import failed: ' + e.message, 'error');
     }
   }
 

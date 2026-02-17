@@ -1,7 +1,9 @@
 import logging
 import json
+import shutil
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -11,6 +13,7 @@ class PromptManager:
     
     def __init__(self):
         # Single source of truth - user/prompts/ only
+        self.CORE_DIR = Path(__file__).parent / "prompts"
         self.USER_DIR = Path(__file__).parent.parent.parent.parent / "user" / "prompts"
         
         self._components = {}
@@ -381,6 +384,122 @@ class PromptManager:
     @property
     def spice_meta(self):
         return self._spice_meta
+
+    # === Merge / Reset ===
+
+    def _backup_user_files(self, backup_dir=None):
+        """Backup user prompt files to timestamped directory. Returns backup path."""
+        if backup_dir:
+            dest = Path(backup_dir) / "prompts"
+        else:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest = self.USER_DIR.parent.parent / "backups" / ts / "prompts"
+
+        dest.mkdir(parents=True, exist_ok=True)
+
+        for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
+            src = self.USER_DIR / fname
+            if src.exists():
+                shutil.copy2(src, dest / fname)
+
+        logger.info(f"Backed up prompt files to {dest}")
+        return str(dest.parent)  # return the timestamped dir, not /prompts
+
+    def reset_to_defaults(self):
+        """Backup user prompts then overwrite with core defaults. Returns True on success."""
+        try:
+            self._backup_user_files()
+            for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
+                src = self.CORE_DIR / fname
+                if src.exists():
+                    shutil.copy2(src, self.USER_DIR / fname)
+            self.reload()
+            logger.info("Prompts reset to factory defaults")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reset prompts: {e}")
+            return False
+
+    def merge_defaults(self, backup_dir=None):
+        """Additive merge: add missing items from core defaults without touching existing ones."""
+        try:
+            backup_path = self._backup_user_files(backup_dir)
+            added = {"components": 0, "presets": 0, "monoliths": 0, "spice_categories": 0}
+
+            # --- Prompt pieces (components + scenario presets) ---
+            core_pieces_path = self.CORE_DIR / "prompt_pieces.json"
+            if core_pieces_path.exists():
+                with open(core_pieces_path, 'r', encoding='utf-8') as f:
+                    core_pieces = json.load(f)
+
+                # Merge components: add missing keys per type
+                core_components = core_pieces.get("components", {})
+                for comp_type, entries in core_components.items():
+                    if comp_type not in self._components:
+                        self._components[comp_type] = entries
+                        added["components"] += len(entries)
+                    else:
+                        for key, val in entries.items():
+                            if key not in self._components[comp_type]:
+                                self._components[comp_type][key] = val
+                                added["components"] += 1
+
+                # Merge scenario presets
+                core_presets = core_pieces.get("scenario_presets", {})
+                for name, preset in core_presets.items():
+                    if name not in self._scenario_presets:
+                        self._scenario_presets[name] = preset
+                        added["presets"] += 1
+
+                self.save_components()
+                self.save_scenario_presets()
+
+            # --- Monoliths ---
+            core_mono_path = self.CORE_DIR / "prompt_monoliths.json"
+            if core_mono_path.exists():
+                with open(core_mono_path, 'r', encoding='utf-8') as f:
+                    core_monoliths = json.load(f)
+
+                for key, val in core_monoliths.items():
+                    if key.startswith('_'):
+                        continue
+                    if key not in self._monoliths:
+                        if isinstance(val, str):
+                            self._monoliths[key] = {'content': val, 'privacy_required': False}
+                        elif isinstance(val, dict):
+                            self._monoliths[key] = val
+                        added["monoliths"] += 1
+
+                self.save_monoliths()
+
+            # --- Spices ---
+            core_spice_path = self.CORE_DIR / "prompt_spices.json"
+            if core_spice_path.exists():
+                with open(core_spice_path, 'r', encoding='utf-8') as f:
+                    core_spices = json.load(f)
+
+                for key, val in core_spices.items():
+                    if key.startswith('_'):
+                        # Merge _meta entries additively
+                        if key == '_meta' and isinstance(val, dict):
+                            if not self._spice_meta:
+                                self._spice_meta = {}
+                            for mk, mv in val.items():
+                                if mk not in self._spice_meta:
+                                    self._spice_meta[mk] = mv
+                        continue
+                    if isinstance(val, list) and key not in self._spices:
+                        self._spices[key] = val
+                        added["spice_categories"] += 1
+
+                self.save_spices()
+
+            self.reload()
+            logger.info(f"Merge complete: {added}")
+            return {"backup": backup_path, "added": added}
+        except Exception as e:
+            logger.error(f"Failed to merge defaults: {e}")
+            return None
 
 
 # Create singleton instance

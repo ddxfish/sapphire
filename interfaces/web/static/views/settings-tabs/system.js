@@ -1,5 +1,5 @@
 // settings-tabs/system.js - System settings and danger zone
-import { resetAllSettings, resetPrompts, mergePrompts, resetChatDefaults } from '../../shared/settings-api.js';
+import { resetAllSettings, resetPrompts, mergeUpdates, resetChatDefaults } from '../../shared/settings-api.js';
 import * as ui from '../../ui.js';
 import { updateScene } from '../../features/scene.js';
 
@@ -30,12 +30,11 @@ export default {
                     <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Reverts everything to defaults. Requires restart.</p>
                 </div>
                 <div class="danger-section">
-                    <h5>Prompts</h5>
-                    <div style="display:flex;gap:8px">
-                        <button class="btn-sm danger" id="dz-reset-prompts">Reset Prompts</button>
-                        <button class="btn-sm danger" id="dz-merge-prompts">Merge Factory</button>
-                    </div>
-                    <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Reset: overwrites all. Merge: factory overwrites conflicts, your additions kept.</p>
+                    <h5>Prompts & Personas</h5>
+                    <button class="btn-primary" id="dz-merge-updates" style="margin-bottom:6px">Import App Updates</button>
+                    <p class="text-muted" style="font-size:var(--font-xs);margin:0 0 10px">Adds new prompts and personas from updates without touching your stuff. Backs up first.</p>
+                    <button class="btn-sm danger" id="dz-reset-prompts">Reset Prompts to Defaults</button>
+                    <p class="text-muted" style="font-size:var(--font-xs);margin:4px 0 0">Overwrites all prompt files with factory versions. Creates backup first.</p>
                 </div>
                 <div class="danger-section">
                     <h5>Chat Defaults</h5>
@@ -76,15 +75,26 @@ export default {
             } catch { ui.showToast('Failed', 'error'); }
         });
 
-        el.querySelector('#dz-merge-prompts')?.addEventListener('click', async () => {
-            if (!confirm('Merge factory defaults? Conflicts will use factory values.')) return;
-            const t = prompt('Type MERGE to confirm:');
-            if (t?.toUpperCase() !== 'MERGE') return;
+        el.querySelector('#dz-merge-updates')?.addEventListener('click', async () => {
+            if (!confirm('Import new prompts and personas from app updates?\n\nYour existing content is untouched. A backup is created first.')) return;
             try {
-                await mergePrompts();
-                ui.showToast('Factory defaults merged', 'success');
+                const result = await mergeUpdates();
+                const a = result.added || {};
+                const total = (a.components||0) + (a.presets||0) + (a.monoliths||0) + (a.spice_categories||0) + (a.personas||0);
+                if (total === 0) {
+                    ui.showToast('Already up to date', 'info');
+                } else {
+                    const parts = [];
+                    if (a.components) parts.push(`${a.components} components`);
+                    if (a.presets) parts.push(`${a.presets} presets`);
+                    if (a.monoliths) parts.push(`${a.monoliths} monoliths`);
+                    if (a.spice_categories) parts.push(`${a.spice_categories} spice categories`);
+                    if (a.personas) parts.push(`${a.personas} personas`);
+                    ui.showToast(`Added ${parts.join(', ')}`, 'success');
+                }
                 updateScene();
-            } catch { ui.showToast('Failed', 'error'); }
+                window.dispatchEvent(new CustomEvent('prompts-changed'));
+            } catch { ui.showToast('Import failed', 'error'); }
         });
 
         el.querySelector('#dz-reset-chat')?.addEventListener('click', async () => {

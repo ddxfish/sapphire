@@ -276,6 +276,42 @@ class PersonaManager:
 
         return None
 
+    # === Merge ===
+
+    def merge_defaults(self, backup_dir=None):
+        """Additive merge: add missing personas from core defaults. Returns count added."""
+        if backup_dir:
+            dest = Path(backup_dir) / "personas"
+            dest.mkdir(parents=True, exist_ok=True)
+            src = self.USER_DIR / "personas.json"
+            if src.exists():
+                shutil.copy2(src, dest / "personas.json")
+
+        core_path = self.BASE_DIR / "personas.json"
+        if not core_path.exists():
+            return 0
+
+        try:
+            with open(core_path, 'r', encoding='utf-8') as f:
+                core_personas = {k: v for k, v in json.load(f).items() if not k.startswith('_')}
+        except Exception as e:
+            logger.error(f"Failed to load core personas for merge: {e}")
+            return 0
+
+        added = 0
+        with self._lock:
+            for name, persona in core_personas.items():
+                if name not in self._personas:
+                    self._personas[name] = persona
+                    self._seed_avatar(persona.get('avatar'))
+                    added += 1
+
+            if added > 0:
+                self._save_to_user()
+                logger.info(f"Merged {added} new personas from defaults")
+
+        return added
+
     # === Helpers ===
 
     def _sanitize_name(self, name: str) -> str:

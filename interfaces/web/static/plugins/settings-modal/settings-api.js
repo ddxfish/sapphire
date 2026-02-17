@@ -99,8 +99,8 @@ class SettingsAPI {
     return await fetchWithTimeout('/api/prompts/reset', { method: 'POST' });
   }
 
-  async mergePrompts() {
-    return await fetchWithTimeout('/api/prompts/merge', { method: 'POST' });
+  async mergeUpdates() {
+    return await fetchWithTimeout('/api/system/merge-updates', { method: 'POST' });
   }
 
   async resetChatDefaults() {

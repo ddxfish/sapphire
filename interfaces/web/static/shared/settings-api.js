@@ -53,6 +53,10 @@ export async function mergePrompts() {
     return await fetchWithTimeout('/api/prompts/merge', { method: 'POST' });
 }
 
+export async function mergeUpdates() {
+    return await fetchWithTimeout('/api/system/merge-updates', { method: 'POST' });
+}
+
 export async function resetChatDefaults() {
     return await fetchWithTimeout('/api/prompts/reset-chat-defaults', { method: 'POST' });
 }
