@@ -9,6 +9,7 @@ import imaplib
 import smtplib
 import email
 import email.utils
+import re
 import time
 import logging
 from email.mime.text import MIMEText
@@ -34,13 +35,18 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_inbox",
-            "description": "Fetch the latest emails from the inbox. Returns sender names (not addresses), subjects, and dates. Use read_email(index) to read full content.",
+            "description": "Fetch the latest emails from a mail folder. Returns names, subjects, and dates. Use read_email(index) to read full content.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
                         "description": "Number of recent emails to fetch (default 20, max 50)"
+                    },
+                    "folder": {
+                        "type": "string",
+                        "enum": ["inbox", "sent", "archive"],
+                        "description": "Which mail folder to view (default: inbox)"
                     }
                 },
                 "required": []
@@ -132,13 +138,105 @@ TOOLS = [
 # ─── Inbox Cache ─────────────────────────────────────────────────────────────
 
 _inbox_cache = {
-    "messages": [],   # Parsed summaries for AI
-    "raw": [],        # Full message objects for read_email
-    "msg_ids": [],    # IMAP message IDs for mark-as-read / archive
+    "folder": "inbox", # which folder is cached
+    "messages": [],    # Parsed summaries for AI
+    "raw": [],         # Full message objects for read_email
+    "msg_ids": [],     # IMAP message IDs for mark-as-read / archive
     "timestamp": 0,
 }
 
 CACHE_TTL = 60  # seconds
+
+# IMAP folder name candidates (tried in order, first success wins)
+_FOLDER_CANDIDATES = {
+    "inbox": ["INBOX"],
+    "sent": ["[Gmail]/Sent Mail", "Sent", "Sent Items"],
+    "archive": ["Archive", "[Gmail]/All Mail"],
+}
+_resolved_folders = {}  # "sent" -> resolved IMAP folder name
+
+
+def _imap_quote(name):
+    """Workaround for Python imaplib bug #90378 — select() breaks on spaces."""
+    if ' ' in name and not name.startswith('"'):
+        return f'"{name}"'
+    return name
+
+
+def _resolve_folder(imap, folder_key):
+    """Resolve logical folder name to IMAP folder. LIST discovery first, then candidates."""
+    if folder_key in _resolved_folders:
+        name = _resolved_folders[folder_key]
+        try:
+            imap.select(_imap_quote(name), readonly=True)
+            return name
+        except imaplib.IMAP4.error:
+            del _resolved_folders[folder_key]
+
+    if folder_key == "inbox":
+        imap.select("INBOX", readonly=True)
+        _resolved_folders["inbox"] = "INBOX"
+        return "INBOX"
+
+    # Discover via LIST first (no select = no BAD errors to corrupt state)
+    name = _discover_folder(imap, folder_key)
+    if name:
+        try:
+            status, _ = imap.select(_imap_quote(name), readonly=True)
+            if status == 'OK':
+                _resolved_folders[folder_key] = name
+                return name
+        except imaplib.IMAP4.error:
+            pass
+
+    # Fallback: try hardcoded candidates
+    for name in _FOLDER_CANDIDATES.get(folder_key, []):
+        try:
+            status, _ = imap.select(_imap_quote(name), readonly=True)
+            if status == 'OK':
+                _resolved_folders[folder_key] = name
+                return name
+        except imaplib.IMAP4.error:
+            continue
+
+    return None
+
+
+def _discover_folder(imap, folder_key):
+    """Find IMAP folder by special-use flag (RFC 6154), then by name pattern."""
+    _FLAGS = {"sent": b"\\Sent", "archive": b"\\All"}
+    _HINTS = {"sent": [b"sent"], "archive": [b"archive", b"all mail"]}
+
+    flag = _FLAGS.get(folder_key)
+    hints = _HINTS.get(folder_key, [])
+
+    try:
+        _, folders = imap.list()
+        if not folders:
+            return None
+
+        # Pass 1: match by special-use flag
+        for entry in folders:
+            if not isinstance(entry, bytes):
+                continue
+            if flag and flag in entry:
+                match = re.search(rb'"([^"]+)"\s*$', entry)
+                if match:
+                    return match.group(1).decode()
+
+        # Pass 2: match by folder name pattern
+        for entry in folders:
+            if not isinstance(entry, bytes):
+                continue
+            lower = entry.lower()
+            for hint in hints:
+                if hint in lower:
+                    match = re.search(rb'"([^"]+)"\s*$', entry)
+                    if match:
+                        return match.group(1).decode()
+    except Exception:
+        pass
+    return None
 
 
 def _decode_header_value(value):
@@ -205,16 +303,18 @@ def _get_email_creds():
 
 # ─── Tool Implementations ────────────────────────────────────────────────────
 
-def _get_inbox(count=20):
+def _get_inbox(count=20, folder="inbox"):
     global _inbox_cache
 
     count = min(max(1, count), 50)
+    folder = folder if folder in _FOLDER_CANDIDATES else "inbox"
 
-    # Check cache
-    if _inbox_cache["messages"] and (time.time() - _inbox_cache["timestamp"]) < CACHE_TTL:
+    # Cache hit — same folder and fresh
+    if (_inbox_cache["folder"] == folder and _inbox_cache["messages"]
+            and (time.time() - _inbox_cache["timestamp"]) < CACHE_TTL):
         cached = _inbox_cache["messages"][:count]
-        logger.info(f"Email inbox: returning {len(cached)} cached messages")
-        return _format_inbox(cached), True
+        logger.info(f"Email {folder}: returning {len(cached)} cached messages")
+        return _format_inbox(cached, folder), True
 
     creds = _get_email_creds()
     if not creds:
@@ -223,19 +323,26 @@ def _get_inbox(count=20):
     try:
         imap = imaplib.IMAP4_SSL(creds['imap_server'])
         imap.login(creds['address'], creds['app_password'])
-        imap.select('INBOX', readonly=True)
+
+        # Resolve IMAP folder name (also selects it)
+        imap_folder = _resolve_folder(imap, folder)
+        if not imap_folder:
+            imap.logout()
+            return f"Could not find {folder} folder on mail server.", False
 
         # Use UIDs — stable across sessions (unlike sequence numbers)
         _, data = imap.uid('search', None, 'ALL')
         uids = data[0].split()
         if not uids:
             imap.logout()
-            _inbox_cache = {"messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()}
-            return "Inbox is empty.", True
+            _inbox_cache = {"folder": folder, "messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()}
+            return f"{folder.title()} is empty.", True
 
-        # Get unseen UIDs for reliable unread detection
-        _, unseen_data = imap.uid('search', None, 'UNSEEN')
-        unseen_uids = set(unseen_data[0].split())
+        # Get unseen UIDs (only meaningful for inbox)
+        unseen_uids = set()
+        if folder == "inbox":
+            _, unseen_data = imap.uid('search', None, 'UNSEEN')
+            unseen_uids = set(unseen_data[0].split())
 
         # Fetch latest N
         latest = uids[-count:]
@@ -257,9 +364,15 @@ def _get_inbox(count=20):
             except Exception:
                 date_display = date_str[:20] if date_str else '?'
 
+            # Show recipient for sent, sender for inbox/archive
+            if folder == "sent":
+                display_name = _extract_sender_name(msg.get('To', ''))
+            else:
+                display_name = _extract_sender_name(msg.get('From', ''))
+
             messages.append({
                 "index": i,
-                "sender_name": _extract_sender_name(msg.get('From', '')),
+                "name": display_name,
                 "subject": _decode_header_value(msg.get('Subject', '(no subject)')),
                 "date": date_display,
                 "unread": uid in unseen_uids,
@@ -268,31 +381,37 @@ def _get_inbox(count=20):
         imap.logout()
 
         _inbox_cache = {
+            "folder": folder,
             "messages": messages,
             "raw": raw_messages,
-            "msg_ids": latest,  # UIDs now, stable across connections
+            "msg_ids": latest,
             "timestamp": time.time(),
         }
 
-        logger.info(f"Email inbox: fetched {len(messages)} messages")
-        return _format_inbox(messages), True
+        logger.info(f"Email {folder}: fetched {len(messages)} messages")
+        return _format_inbox(messages, folder), True
 
     except imaplib.IMAP4.error as e:
         logger.error(f"IMAP error: {e}")
         return f"Email login failed — check credentials. Error: {e}", False
     except Exception as e:
-        logger.error(f"Email inbox error: {e}", exc_info=True)
-        return f"Failed to fetch inbox: {e}", False
+        logger.error(f"Email {folder} error: {e}", exc_info=True)
+        return f"Failed to fetch {folder}: {e}", False
 
 
-def _format_inbox(messages):
+def _format_inbox(messages, folder="inbox"):
     if not messages:
-        return "Inbox is empty."
-    unread_count = sum(1 for m in messages if m.get('unread'))
-    lines = [f"Inbox ({len(messages)} messages, {unread_count} unread):"]
+        return f"{folder.title()} is empty."
+    label = "To" if folder == "sent" else "From"
+    header = f"{folder.title()} ({len(messages)} messages"
+    if folder == "inbox":
+        unread_count = sum(1 for m in messages if m.get('unread'))
+        header += f", {unread_count} unread"
+    header += "):"
+    lines = [header]
     for m in messages:
-        tag = " (unread)" if m.get('unread') else ""
-        lines.append(f"  [{m['index']}] {m['date']} — {m['sender_name']}: {m['subject']}{tag}")
+        tag = " (unread)" if folder == "inbox" and m.get('unread') else ""
+        lines.append(f"  [{m['index']}] {m['date']} — {m['name']}: {m['subject']}{tag}")
     lines.append("\nUse read_email(index) to read full content.")
     return '\n'.join(lines)
 
@@ -322,6 +441,8 @@ def _read_email(index):
 
 def _mark_as_read(index):
     """Mark a message as read (\\Seen) in IMAP using UID."""
+    if _inbox_cache["folder"] != "inbox":
+        return  # Only mark read in inbox
     if not _inbox_cache["msg_ids"] or index < 1 or index > len(_inbox_cache["msg_ids"]):
         return
     creds = _get_email_creds()
@@ -344,6 +465,9 @@ def _mark_as_read(index):
 def _archive_emails(indices):
     """Archive emails by moving to Archive folder."""
     global _inbox_cache
+
+    if _inbox_cache["folder"] != "inbox":
+        return "Can only archive from inbox view. Use get_inbox() first.", False
 
     if not _inbox_cache["msg_ids"]:
         return "No inbox loaded. Call get_inbox() first.", False
@@ -378,7 +502,7 @@ def _archive_emails(indices):
         imap.logout()
 
         # Invalidate cache so next get_inbox() is fresh
-        _inbox_cache = {"messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
+        _inbox_cache = {"folder": "inbox", "messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
 
         logger.info(f"Archived {len(archived)} emails")
         lines = [f"Archived {len(archived)} emails:"]
@@ -516,7 +640,7 @@ def _get_current_people_scope():
 def execute(function_name, arguments, config):
     try:
         if function_name == "get_inbox":
-            return _get_inbox(count=arguments.get('count', 20))
+            return _get_inbox(count=arguments.get('count', 20), folder=arguments.get('folder', 'inbox'))
         elif function_name == "read_email":
             index = arguments.get('index')
             if index is None:
