@@ -5,7 +5,7 @@ import { getElements } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from '../features/scene.js';
 import { applyTrimColor } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
-import { getInitData } from '../shared/init-data.js';
+import { getInitData, refreshInitData } from '../shared/init-data.js';
 import { switchView } from '../core/router.js';
 import { loadPersona, createFromChat } from '../shared/persona-api.js';
 
@@ -201,6 +201,7 @@ export default {
     },
 
     async show() {
+        await refreshInitData();
         await loadSidebar();
     },
 
