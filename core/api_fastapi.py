@@ -2961,12 +2961,22 @@ async def delete_knowledge_tab(tab_id: int, request: Request, _=Depends(require_
 @app.post("/api/knowledge/tabs/{tab_id}/entries")
 async def add_knowledge_entry(tab_id: int, request: Request, _=Depends(require_login)):
     from functions import knowledge
+    from datetime import datetime
     data = await request.json()
     content = data.get('content', '').strip()
     if not content:
         raise HTTPException(status_code=400, detail="Content is required")
-    entry_id = knowledge.add_entry(tab_id, content, source_filename=data.get('source_filename'))
-    return {"id": entry_id}
+    chunks = knowledge._chunk_text(content)
+    if len(chunks) == 1:
+        entry_id = knowledge.add_entry(tab_id, chunks[0], source_filename=data.get('source_filename'))
+        return {"id": entry_id}
+    # Multiple chunks — group under a timestamped paste name
+    source = data.get('source_filename') or f"paste-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    entry_ids = []
+    for i, chunk in enumerate(chunks):
+        eid = knowledge.add_entry(tab_id, chunk, chunk_index=i, source_filename=source)
+        entry_ids.append(eid)
+    return {"ids": entry_ids, "chunks": len(chunks)}
 
 
 @app.post("/api/knowledge/tabs/{tab_id}/upload")

@@ -741,7 +741,9 @@ async function loadEntries(inner, tabId, tabType) {
                         body: JSON.stringify({ content })
                     });
                     if (resp.ok) {
-                        ui.showToast('Added', 'success');
+                        const result = await resp.json();
+                        const msg = result.chunks ? `Added (${result.chunks} chunks)` : 'Added';
+                        ui.showToast(msg, 'success');
                         inner.dataset.loaded = '';
                         await loadEntries(inner, tabId, tabType);
                     }

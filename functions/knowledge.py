@@ -718,20 +718,62 @@ def get_tabs_by_id(tab_id):
 # ─── Chunking ─────────────────────────────────────────────────────────────────
 
 def _chunk_text(text, max_tokens=400, overlap_tokens=50):
-    """Split text into chunks by paragraph, respecting token limits."""
-    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-    if not paragraphs:
-        return [text.strip()] if text.strip() else []
+    """Split text into chunks respecting token limits.
 
+    Cascade: split on \\n\\n → \\n → sentence boundaries → hard word split.
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    # --- Break into atomic segments using cascading splitters ---
+
+    # 1. Paragraph breaks (best semantic boundary)
+    segments = [p.strip() for p in text.split('\n\n') if p.strip()]
+    if not segments:
+        return [text]
+
+    # 2. Single line breaks for oversized paragraphs
+    refined = []
+    for seg in segments:
+        if len(seg.split()) <= max_tokens:
+            refined.append(seg)
+        else:
+            refined.extend(l.strip() for l in seg.split('\n') if l.strip())
+    segments = refined
+
+    # 3. Sentence boundaries for oversized lines
+    refined = []
+    for seg in segments:
+        if len(seg.split()) <= max_tokens:
+            refined.append(seg)
+        else:
+            parts = re.split(r'(?<=[.!?])\s+(?=[A-Z])', seg)
+            refined.extend(s.strip() for s in parts if s.strip())
+    segments = refined
+
+    # 4. Hard word-boundary split (last resort)
+    refined = []
+    for seg in segments:
+        if len(seg.split()) <= max_tokens:
+            refined.append(seg)
+        else:
+            words = seg.split()
+            for i in range(0, len(words), max_tokens):
+                piece = ' '.join(words[i:i + max_tokens])
+                if piece:
+                    refined.append(piece)
+    segments = refined
+
+    # --- Accumulate segments into chunks with overlap ---
     chunks = []
     current = []
     current_len = 0
 
-    for para in paragraphs:
-        para_len = len(para.split())
-        if current and current_len + para_len > max_tokens:
+    for seg in segments:
+        seg_len = len(seg.split())
+        if current and current_len + seg_len > max_tokens:
             chunks.append('\n\n'.join(current))
-            # Overlap: keep last paragraph if it fits
             if overlap_tokens > 0 and current:
                 last = current[-1]
                 if len(last.split()) <= overlap_tokens:
@@ -743,13 +785,13 @@ def _chunk_text(text, max_tokens=400, overlap_tokens=50):
             else:
                 current = []
                 current_len = 0
-        current.append(para)
-        current_len += para_len
+        current.append(seg)
+        current_len += seg_len
 
     if current:
         chunks.append('\n\n'.join(current))
 
-    return chunks if chunks else [text.strip()]
+    return chunks if chunks else [text]
 
 
 # ─── Search ───────────────────────────────────────────────────────────────────
