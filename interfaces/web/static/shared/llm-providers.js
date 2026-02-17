@@ -1,5 +1,5 @@
 // shared/llm-providers.js - Reusable LLM provider UI components
-// Used by: settings-modal/tabs/llm.js, setup-wizard
+// Used by: views/settings-tabs/llm.js, setup-wizard
 
 import { fetchWithTimeout } from './fetch.js';
 

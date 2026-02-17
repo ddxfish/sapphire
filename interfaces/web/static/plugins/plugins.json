@@ -1,11 +1,7 @@
 {
   "enabled": [
     "setup-wizard",
-    "prompt-manager",
-    "ability-manager",
-    "settings-modal",
     "plugins-modal",
-    "spice-manager",
     "backup",
     "image-gen",
     "continuity",
@@ -19,21 +15,6 @@
       "showInSidebar": false,
       "autoShow": true
     },
-    "prompt-manager": {
-      "title": "Prompt Editor",
-      "collapsible": true,
-      "defaultOpen": true
-    },
-    "ability-manager": {
-      "title": "Tool Set Editor",
-      "collapsible": true
-    },
-    "settings-modal": {
-      "title": "App Settings",
-      "menuText": "App Settings",
-      "showInSidebar": false,
-      "lazy": true
-    },
     "plugins-modal": {
       "title": "Plugins",
       "menuText": "Plugins",
@@ -45,10 +26,6 @@
       "menuText": "Backup & Restore",
       "showInSidebar": false,
       "lazy": true
-    },
-    "spice-manager": {
-      "title": "Spice Editor",
-      "collapsible": true
     },
     "image-gen": {
       "title": "Image Generation",

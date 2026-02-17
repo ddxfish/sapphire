@@ -3,8 +3,7 @@ import * as ui from '../../ui.js';
 
 // Infrastructure plugins hidden from toggle list
 const HIDDEN = new Set([
-    'setup-wizard', 'prompt-manager', 'ability-manager',
-    'settings-modal', 'plugins-modal', 'spice-manager'
+    'setup-wizard', 'plugins-modal'
 ]);
 
 // Plugins that own a nav-rail view

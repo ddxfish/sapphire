@@ -52,18 +52,18 @@ echo "--- cat user/webui/plugins/image-gen.json ---"
 cat user/webui/plugins/image-gen.json 2>/dev/null || echo "(file not found - test from sapphire root)"
 echo ""
 
-# Toggle a plugin (example: disable spice-manager)
-echo "--- PUT /api/webui/plugins/toggle/spice-manager ---"
+# Toggle a plugin (example: disable image-gen)
+echo "--- PUT /api/webui/plugins/toggle/image-gen ---"
 curl -sk -X PUT \
     -H "Cookie: $SAPPHIRE_COOKIE" \
-    "$BASE_URL/api/webui/plugins/toggle/spice-manager" | python3 -m json.tool
+    "$BASE_URL/api/webui/plugins/toggle/image-gen" | python3 -m json.tool
 echo ""
 
 # Try to toggle locked plugin (should fail)
-echo "--- PUT /api/webui/plugins/toggle/settings-modal (should fail) ---"
+echo "--- PUT /api/webui/plugins/toggle/plugins-modal (should fail) ---"
 curl -sk -X PUT \
     -H "Cookie: $SAPPHIRE_COOKIE" \
-    "$BASE_URL/api/webui/plugins/toggle/settings-modal" | python3 -m json.tool
+    "$BASE_URL/api/webui/plugins/toggle/plugins-modal" | python3 -m json.tool
 echo ""
 
 echo "=== Done ==="

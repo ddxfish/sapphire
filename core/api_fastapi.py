@@ -3775,7 +3775,7 @@ async def check_avatar(role: str, request: Request, _=Depends(require_login)):
 USER_WEBUI_DIR = PROJECT_ROOT / 'user' / 'webui'
 USER_PLUGINS_JSON = USER_WEBUI_DIR / 'plugins.json'
 USER_PLUGIN_SETTINGS_DIR = USER_WEBUI_DIR / 'plugins'
-LOCKED_PLUGINS = ['settings-modal', 'plugins-modal']
+LOCKED_PLUGINS = ['plugins-modal']
 
 
 def _get_merged_plugins():

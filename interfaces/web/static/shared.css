@@ -661,10 +661,6 @@
 /* =============================================================================
    SETTINGS MODAL SPECIFIC
    ============================================================================= */
-.settings-modal .modal-base {
-    max-width: 900px;
-}
-
 .settings-layout {
     display: flex;
     gap: var(--space-lg);
@@ -1284,10 +1280,6 @@ input[type="range"]:focus::-webkit-slider-thumb {
    ============================================================================= */
 .accordion-section {
     margin-top: var(--space-md);
-}
-
-#settings-modal .accordion-section {
-    margin-top: 0;
 }
 
 .accordion-section .accordion-header {

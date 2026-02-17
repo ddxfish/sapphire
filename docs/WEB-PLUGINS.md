@@ -22,17 +22,14 @@ Think weather widgets, API integrations, custom controls, or anything that exten
 
 | Plugin | Location | Purpose |
 |--------|----------|---------|
-| prompt-manager | Sidebar | Edit assembled/monolith prompts |
-| spice-manager | Sidebar | Manage random injection snippets |
-| ability-manager | Sidebar | Configure toolsets |
-| settings-modal | Gear menu | App settings |
 | backup | Gear menu | Backup management |
 | plugins-modal | Gear menu | Enable/disable plugins |
 | image-gen | Plugins popup | SDXL image generation settings |
 | continuity | Gear menu | Scheduled task management |
 | homeassistant | Plugins popup | Home Assistant integration |
+| email | Plugins popup | Gmail/email configuration |
+| ssh | Plugins popup | SSH server management |
 | setup-wizard | Auto-show | First-run configuration |
-| hello-world | Sidebar | Example/template plugin |
 
 ## Creating Plugins with AI
 
@@ -257,11 +254,13 @@ WEB PLUGIN VS BACKEND PLUGIN:
 - Backend plugin: Runs on server, keyword-triggered (Python)
 
 BUILT-IN WEB PLUGINS:
-- settings-modal: App settings UI
-- prompt-manager: Prompt editor
-- spice-manager: Spice editor
-- ability-manager: Toolset editor
 - backup: Backup management UI
+- plugins-modal: Plugin management
+- image-gen: Image generation settings
+- continuity: Scheduled task management
+- homeassistant: Home Assistant integration
+- email: Email configuration
+- ssh: SSH server management
 - setup-wizard: First-run configuration
 
 PLUGIN LOCATIONS:

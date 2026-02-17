@@ -1,5 +1,5 @@
 // shared/audio-devices.js - Reusable audio device UI components
-// Used by: settings-modal/tabs/audio.js, setup-wizard
+// Used by: views/settings-tabs/audio.js, setup-wizard
 
 import { fetchWithTimeout } from './fetch.js';
 

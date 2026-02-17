@@ -36,6 +36,7 @@ export default {
         });
     },
     async show() {
+        if (container) container.innerHTML = '';
         await loadData();
         render();
     },
