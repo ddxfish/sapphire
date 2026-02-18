@@ -180,7 +180,8 @@ class ContinuityExecutor:
                 if session_manager.get_active_chat_name() != original_chat:
                     session_manager.set_active_chat(original_chat)
                     logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
-                    publish(Events.CHAT_SWITCHED, {"chat": original_chat})
+                    # Don't publish CHAT_SWITCHED — this is backend state restore,
+                    # not a UI navigation. Frontend session is authoritative for the user's view.
             except Exception as e:
                 logger.error(f"[Continuity] Failed to restore chat context: {e}")
                 result["errors"].append(f"Context restore failed: {e}")
@@ -306,5 +307,5 @@ class ContinuityExecutor:
         # Apply voice to live TTS
         self._apply_voice(task)
 
-        # Publish chat switch event so UI updates
-        publish(Events.CHAT_SWITCHED, {"chat": session_manager.get_active_chat_name()})
+        # Backend state is set — don't broadcast CHAT_SWITCHED to frontend.
+        # Task chat targeting is internal; the user's UI view is authoritative.

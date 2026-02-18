@@ -833,6 +833,10 @@ class LLMChat:
                 self.function_manager.set_memory_scope(memory_scope if memory_scope != "none" else None)
                 goal_scope = task_settings.get("goal_scope", "default")
                 self.function_manager.set_goal_scope(goal_scope if goal_scope != "none" else None)
+                knowledge_scope = task_settings.get("knowledge_scope", "none")
+                self.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != "none" else None)
+                people_scope = task_settings.get("people_scope", "none")
+                self.function_manager.set_people_scope(people_scope if people_scope != "none" else None)
                 self.function_manager.update_enabled_functions([toolset])
                 tools = self.function_manager.enabled_tools
                 logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")
@@ -860,15 +864,71 @@ class LLMChat:
             
             logger.info(f"[ISOLATED] Using provider '{provider_key}', model '{effective_model}'")
             
-            # Simple single-shot call (no tool loop for now - keep it simple)
-            response = provider.chat_completion(messages, tools=tools, generation_params=gen_params)
-            
-            if response and response.content:
-                # Strip thinking blocks — return only the actual spoken content
-                import re
-                content = re.sub(r'<think>.*?</think>\s*', '', response.content, flags=re.DOTALL).strip()
-                logger.info(f"[ISOLATED] Got response: {len(response.content)} chars total, {len(content)} chars content")
-                return content if content else response.content
+            # Agentic tool loop — call LLM, execute tools, feed results back
+            max_iterations = task_settings.get("max_tool_rounds") or config.MAX_TOOL_ITERATIONS
+            max_parallel = task_settings.get("max_parallel_tools") or config.MAX_PARALLEL_TOOLS
+
+            final_content = None
+            response_msg = None
+            tool_call_count = 0
+
+            for i in range(max_iterations):
+                response_msg = self.tool_engine.call_llm_with_metrics(
+                    provider, messages, gen_params, tools=tools
+                )
+
+                if response_msg.has_tool_calls:
+                    filtered = filter_to_thinking_only(response_msg.content or "")
+                    tool_calls = response_msg.get_tool_calls_as_dicts()[:max_parallel]
+                    messages.append({
+                        "role": "assistant", "content": filtered,
+                        "tool_calls": tool_calls
+                    })
+                    tools_executed = self.tool_engine.execute_tool_calls(
+                        tool_calls, messages, None, provider
+                    )
+                    tool_call_count += tools_executed
+                    logger.info(f"[ISOLATED] Loop {i+1}: executed {tools_executed} tools (total: {tool_call_count})")
+                    if tool_calls and tool_calls[0]["function"]["name"] == "end_and_reset_chat":
+                        return "Chat reset (no effect in background mode)."
+                    continue
+
+                elif response_msg.content:
+                    fn_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
+                    if fn_data:
+                        filtered = filter_to_thinking_only(response_msg.content)
+                        self.tool_engine.execute_text_based_tool_call(
+                            fn_data, filtered, messages, None, provider
+                        )
+                        tool_call_count += 1
+                        logger.info(f"[ISOLATED] Loop {i+1}: text-based tool call (total: {tool_call_count})")
+                        continue
+
+                final_content = response_msg.content
+                break
+
+            # Hit max iterations without a prose response — force one
+            if final_content is None and tool_call_count > 0:
+                logger.warning(f"[ISOLATED] Max iterations ({max_iterations}) hit. Forcing final answer.")
+                messages.append({
+                    "role": "user",
+                    "content": "You've used tools multiple times. Stop using tools now and provide your final answer based on the information you gathered."
+                })
+                try:
+                    forced = self.tool_engine.call_llm_with_metrics(
+                        provider, messages, gen_params, tools=None
+                    )
+                    final_content = forced.content or f"I used {tool_call_count} tools and gathered information, but couldn't formulate a final answer."
+                except Exception as e:
+                    logger.error(f"[ISOLATED] Forced final response failed: {e}")
+                    final_content = f"I used {tool_call_count} tools but encountered technical difficulties."
+            elif final_content is None:
+                final_content = response_msg.content if response_msg else None
+
+            if final_content:
+                content = re.sub(r'<think>.*?</think>\s*', '', final_content, flags=re.DOTALL).strip()
+                logger.info(f"[ISOLATED] Done: {tool_call_count} tool calls, {len(content)} chars content")
+                return content if content else final_content
             else:
                 logger.warning("[ISOLATED] Empty response from provider")
                 return "No response received."

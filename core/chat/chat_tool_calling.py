@@ -213,7 +213,7 @@ class ToolCallingEngine:
                     wrapped_msg = wrap_tool_result(tool_call["id"], function_name, error_result)
                 messages.append(wrapped_msg)
                 
-                if function_name != "end_and_reset_chat":
+                if history and function_name != "end_and_reset_chat":
                     history.add_tool_result(tool_call["id"], function_name, error_result)
                 continue
 
@@ -237,15 +237,17 @@ class ToolCallingEngine:
             logger.debug(f"   Content preview: {str(wrapped_msg.get('content', ''))[:100]}")
             
             # Don't save reset tool result - history is about to be wiped anyway
-            if function_name != "end_and_reset_chat":
+            if history and function_name != "end_and_reset_chat":
                 logger.info(f"[SAVE] Saving tool result for: {function_name}")
                 history.add_tool_result(tool_call["id"], function_name, result_str, inputs=function_args)
+            elif not history:
+                logger.debug(f"[ISOLATED] No history manager, skipping save for: {function_name}")
             else:
                 logger.info(f"[RESET] Skipping history save for reset tool")
-            
+
             tools_executed += 1
             logger.info(f"[OK] Executed tool: {function_name}")
-        
+
         return tools_executed
 
     def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None):
@@ -280,7 +282,8 @@ class ToolCallingEngine:
             "tool_calls": tool_calls_formatted
         })
         
-        history.add_assistant_with_tool_calls(filtered_content, tool_calls_formatted)
+        if history:
+            history.add_assistant_with_tool_calls(filtered_content, tool_calls_formatted)
 
         try:
             function_result = self.function_manager.execute_function(function_name, function_args)
@@ -298,8 +301,10 @@ class ToolCallingEngine:
         messages.append(wrapped_msg)
         
         # Don't save reset tool result
-        if function_name != "end_and_reset_chat":
+        if history and function_name != "end_and_reset_chat":
             history.add_tool_result(tool_call_id, function_name, result_str, inputs=function_args)
+        elif not history:
+            logger.debug(f"[ISOLATED] No history manager, skipping save for: {function_name}")
         else:
             logger.info(f"[RESET] Skipping history save for reset tool")
         
