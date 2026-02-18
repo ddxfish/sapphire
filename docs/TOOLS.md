@@ -338,6 +338,24 @@ TOOL FORMAT RULES:
 - "network": True marks tool as using external network (highlighted in UI)
 - Optional: EMOJI = '🔧' for UI display, MODE_FILTER for prompt mode filtering
 
+TOOL SETTINGS (optional):
+Tools can declare settings that appear in the Settings page under the Custom Tools tab.
+```python
+SETTINGS = {
+    'MYTOOL_API_KEY': '',          # string → text input
+    'MYTOOL_TIMEOUT': 30,          # number → number input
+    'MYTOOL_ENABLED': True,        # bool → toggle
+}
+SETTINGS_HELP = {
+    'MYTOOL_API_KEY': 'API key for the external service',
+    'MYTOOL_TIMEOUT': 'Request timeout in seconds',
+}
+```
+- Key naming: prefix with tool name uppercase (e.g. MYTOOL_) to avoid collisions
+- Access in execute() via config.MYTOOL_API_KEY (same as any setting)
+- Types inferred from default values: str=text, int/float=number, bool=toggle
+- SETTINGS_HELP is optional but recommended — shows description under the field
+
 VALIDATION:
 tool_save validates code before writing. Three strictness levels (user setting):
 - strict: only allowlisted imports (json, re, datetime, math, requests, pathlib, etc.)

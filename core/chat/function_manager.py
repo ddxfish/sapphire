@@ -116,6 +116,13 @@ class FunctionManager:
                         'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools],
                         'emoji': emoji
                     }
+
+                    # Register tool-declared settings
+                    tool_settings = getattr(module, 'SETTINGS', None)
+                    if tool_settings and isinstance(tool_settings, dict):
+                        from core.settings_manager import settings as sm
+                        tool_help = getattr(module, 'SETTINGS_HELP', None)
+                        sm.register_tool_settings(module_name, tool_settings, tool_help)
                     
                     # Track network functions and is_local (per-tool flags)
                     for tool in tools:

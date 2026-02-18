@@ -36,6 +36,10 @@ class SettingsManager:
         # Restart tracking
         self._restart_pending = False
         self._pending_restart_keys = set()
+
+        # Tool-registered settings: {key: tool_name}
+        self._tool_settings = {}
+        self._tool_settings_help = {}
         
         self._load_defaults()
         self._apply_construction()
@@ -330,6 +334,42 @@ class SettingsManager:
                 logger.error(f"Failed to reset settings file: {e}")
                 return False
     
+    def register_tool_settings(self, tool_name, defaults, help_dict=None):
+        """Register settings declared by a tool module.
+
+        Args:
+            tool_name: Module name (e.g. 'weather_alerts')
+            defaults: Dict of {KEY: default_value}
+            help_dict: Optional dict of {KEY: 'description string'}
+        """
+        with self._lock:
+            for key, value in defaults.items():
+                if key in self._defaults:
+                    logger.warning(f"Tool '{tool_name}' setting '{key}' collides with core setting, skipping")
+                    continue
+                self._defaults[key] = value
+                self._tool_settings[key] = tool_name
+                if key not in self._config:
+                    self._config[key] = value
+            if help_dict:
+                for key, text in help_dict.items():
+                    self._tool_settings_help[key] = text
+            logger.info(f"Registered {len(defaults)} settings from tool '{tool_name}'")
+
+    def get_tool_settings_meta(self):
+        """Get tool settings grouped by tool name, for the API/frontend."""
+        grouped = {}
+        for key, tool_name in self._tool_settings.items():
+            if tool_name not in grouped:
+                grouped[tool_name] = []
+            grouped[tool_name].append({
+                'key': key,
+                'value': self._config.get(key),
+                'default': self._defaults.get(key),
+                'help': self._tool_settings_help.get(key, ''),
+            })
+        return grouped
+
     def register_reload_callback(self, key, callback):
         """
         Register a callback to be called when a setting changes.

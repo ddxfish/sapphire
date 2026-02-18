@@ -13,6 +13,7 @@ import toolsTab from './settings-tabs/tools.js';
 import networkTab from './settings-tabs/network.js';
 import wakewordTab from './settings-tabs/wakeword.js';
 import pluginsTab from './settings-tabs/plugins.js';
+import customToolsTab from './settings-tabs/custom-tools.js';
 import backupTab from './settings-tabs/backup.js';
 import systemTab from './settings-tabs/system.js';
 
@@ -57,6 +58,7 @@ async function loadData() {
         help = helpData.help || {};
 
         await Promise.all([loadThemes(), loadWakewordModels(), loadProviderMeta(), loadPluginList()]);
+        if (customToolsTab.init) await customToolsTab.init().catch(() => {});
     } catch (e) {
         console.warn('Settings load failed:', e);
     }
@@ -121,7 +123,9 @@ function getAllTabs() {
     const idx = STATIC_TABS.findIndex(t => t.id === 'system');
     const before = STATIC_TABS.slice(0, idx);
     const after = STATIC_TABS.slice(idx);
-    return [...before, ...dynamicTabs, ...after];
+    // Only show custom-tools tab if tools have registered settings
+    const conditional = customToolsTab.hasContent?.() ? [customToolsTab] : [];
+    return [...before, ...conditional, ...dynamicTabs, ...after];
 }
 
 async function loadThemes() {

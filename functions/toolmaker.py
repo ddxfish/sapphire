@@ -65,6 +65,19 @@ TOOLS = [
     }
 ]
 
+# Optional: settings that appear in the Settings page under Custom Tools tab.
+# Use unique prefixed keys (e.g. MYTOOL_API_KEY) to avoid collisions.
+# Types are inferred from defaults: str=text, int/float=number, bool=toggle.
+# Access in execute() via config.MYTOOL_API_KEY
+SETTINGS = {
+    'MYFUNC_ENABLED': True,
+    'MYFUNC_TIMEOUT': 30,
+}
+SETTINGS_HELP = {
+    'MYFUNC_ENABLED': 'Enable or disable this tool',
+    'MYFUNC_TIMEOUT': 'Request timeout in seconds',
+}
+
 def execute(function_name, arguments, config):
     if function_name == 'my_func':
         query = arguments.get('query', '')

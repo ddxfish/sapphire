@@ -1569,6 +1569,13 @@ async def get_setting_help(key: str, request: Request, _=Depends(require_login))
     return {"key": key, "help": help_text}
 
 
+@app.get("/api/settings/tool-settings")
+async def get_tool_settings(request: Request, _=Depends(require_login)):
+    """Get settings declared by tool modules, grouped by tool name."""
+    from core.settings_manager import settings as sm
+    return sm.get_tool_settings_meta()
+
+
 @app.get("/api/settings/chat-defaults")
 async def get_chat_defaults(request: Request, _=Depends(require_login)):
     """Get chat defaults."""
