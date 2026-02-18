@@ -6315,6 +6315,152 @@ a.gallery-caption:hover {
 .story-preset-tag.has-tools { color: var(--trim, #4a9eff); border-color: var(--trim, #4a9eff); }
 .story-preset-tag.has-prompt { color: #a78bfa; border-color: #a78bfa; }
 
+/* Story tab content (in sidebar easy mode for story chats) */
+
+.sb-story-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 8px 16px;
+}
+
+.sb-story-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    text-align: center;
+}
+
+.sb-story-meta {
+    font-size: var(--font-xs);
+    color: var(--text-muted);
+}
+
+.sb-story-vars {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sb-story-var {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: var(--font-xs);
+}
+
+.sb-story-var-label {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sb-story-var-value {
+    color: var(--text);
+    text-align: right;
+    cursor: pointer;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 1px 4px;
+    border-radius: 3px;
+    transition: background 0.15s;
+}
+
+.sb-story-var-value:hover {
+    background: var(--bg-hover);
+}
+
+.sb-story-var-input {
+    width: 100%;
+    padding: 1px 4px;
+    font: inherit;
+    font-size: var(--font-xs);
+    background: var(--bg-primary);
+    border: 1px solid var(--trim, #4a9eff);
+    border-radius: 3px;
+    color: var(--text);
+    outline: none;
+}
+
+.sb-story-empty {
+    padding: 8px 0;
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    text-align: center;
+}
+
+.sb-story-slots {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.sb-story-slot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    color: inherit;
+    font: inherit;
+    font-size: var(--font-xs);
+    text-align: left;
+    width: 100%;
+}
+
+.sb-story-slot:hover {
+    border-color: var(--trim, #4a9eff);
+    background: var(--bg-hover);
+}
+
+.sb-story-slot-num {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    font-size: 10px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.sb-story-slot-info {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sb-story-actions {
+    display: flex;
+    justify-content: center;
+    padding: 12px 0 4px;
+}
+
+.sb-story-reset-btn {
+    color: var(--error, #e74c3c);
+    border-color: var(--error, #e74c3c);
+}
+
+.sb-story-reset-btn:hover {
+    background: rgba(231, 76, 60, 0.1);
+}
+
 /* "New Story" button in chat picker dropdown */
 .chat-picker-story-btn {
     display: flex;

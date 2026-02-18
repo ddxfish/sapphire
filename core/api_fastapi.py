@@ -3415,7 +3415,7 @@ async def list_game_saves(preset_name: str, request: Request, _=Depends(require_
 
 @app.post("/api/story/{chat_name}/save")
 async def save_game_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Save game state to a slot."""
+    """Save game state + chat history to a slot (quicksave)."""
     from datetime import datetime, timezone
     from core.story_engine import StoryEngine
 
@@ -3434,12 +3434,16 @@ async def save_game_state(chat_name: str, request: Request, _=Depends(require_lo
     state = engine.get_state()
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
 
+    # Snapshot both state AND chat messages for full quicksave
+    messages = system.llm_chat.session_manager.current_chat.get_messages()
+
     save_data = {
         "slot": slot,
         "preset": preset_name,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "turn": turn,
-        "state": state
+        "state": state,
+        "messages": messages,
     }
 
     saves_dir = Path("user/state_saves") / preset_name
@@ -3448,12 +3452,13 @@ async def save_game_state(chat_name: str, request: Request, _=Depends(require_lo
     with open(slot_file, 'w', encoding='utf-8') as f:
         json.dump(save_data, f, indent=2)
 
-    return {"status": "saved", "slot": slot, "timestamp": save_data["timestamp"]}
+    msg_count = len(messages)
+    return {"status": "saved", "slot": slot, "timestamp": save_data["timestamp"], "message_count": msg_count}
 
 
 @app.post("/api/story/{chat_name}/load")
 async def load_game_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Load game state from a slot."""
+    """Load game state + chat history from a slot (quickload)."""
     from core.story_engine import StoryEngine
 
     data = await request.json() or {}
@@ -3474,6 +3479,7 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
     with open(slot_file, 'r', encoding='utf-8') as f:
         save_data = json.load(f)
 
+    # Restore story state
     db_path = Path("user/history/sapphire_history.db")
     engine = StoryEngine(chat_name, db_path)
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
@@ -3486,6 +3492,14 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
     live_engine = system.llm_chat.function_manager.get_story_engine()
     if live_engine and live_engine.chat_name == chat_name:
         live_engine.reload_from_db()
+
+    # Restore chat history if saved (quickload)
+    saved_messages = save_data.get("messages")
+    if saved_messages is not None:
+        session_manager = system.llm_chat.session_manager
+        session_manager.current_chat.messages = saved_messages
+        session_manager._save_current_chat()
+        logger.info(f"[STORY] Quickloaded slot {slot}: {len(saved_messages)} messages + state restored")
 
     return {"status": "loaded", "slot": slot, "turn": save_data.get("turn", 0), "timestamp": save_data.get("timestamp")}
 

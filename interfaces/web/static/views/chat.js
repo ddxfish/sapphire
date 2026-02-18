@@ -437,8 +437,16 @@ async function loadSidebar() {
         if (pitchSlider) updateSliderFill(pitchSlider);
         if (speedSlider) updateSliderFill(speedSlider);
 
-        // Update Easy mode display
-        updateEasyMode(container, settings, init);
+        // Swap tab label and content based on story chat
+        const isStoryChat = settings.story_chat === true;
+        const firstTab = container.querySelector('.sb-mode-tab[data-mode="easy"]');
+        if (firstTab) firstTab.textContent = isStoryChat ? 'Story' : 'Persona';
+
+        if (isStoryChat) {
+            await updateStoryMode(container, settings);
+        } else {
+            updateEasyMode(container, settings, init);
+        }
 
         sidebarLoaded = true;
     } catch (e) {
@@ -799,6 +807,203 @@ function updateEasyMode(container, settings, init) {
             if (p?.tagline && el) el.textContent = p.tagline;
         })
         .catch(() => {});
+}
+
+// ==================== Story Mode Tab ====================
+
+async function updateStoryMode(container, settings) {
+    const gridEl = container.querySelector('#sb-persona-grid');
+    const detailEl = container.querySelector('#sb-persona-detail');
+    if (!gridEl && !detailEl) return;
+
+    const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
+    const chatName = chatSelect?.value;
+    const presetName = settings.story_preset ?? settings.state_preset ?? '';
+
+    // Fetch state and save slots in parallel
+    const [stateResp, slotsResp] = await Promise.allSettled([
+        chatName ? fetch(`/api/story/${encodeURIComponent(chatName)}`).then(r => r.ok ? r.json() : null) : null,
+        presetName ? fetch(`/api/story/saves/${encodeURIComponent(presetName)}`).then(r => r.ok ? r.json() : null) : null,
+    ]);
+    const stateData = stateResp.status === 'fulfilled' ? stateResp.value : null;
+    const slotsData = slotsResp.status === 'fulfilled' ? slotsResp.value : null;
+
+    // Story display name
+    const storyDisplay = (settings.story_display_name || presetName || 'Story').replace(/^\[STORY\]\s*/, '');
+
+    // Hide persona grid, use detail area for story content
+    if (gridEl) gridEl.innerHTML = '';
+
+    if (!detailEl) return;
+
+    // Build state variable rows
+    const state = stateData?.state || {};
+    const stateKeys = Object.keys(state).filter(k => !k.startsWith('_'));
+    let stateRows = '';
+    if (stateKeys.length === 0) {
+        stateRows = '<div class="sb-story-empty">No state variables</div>';
+    } else {
+        stateRows = stateKeys.map(k => {
+            const v = state[k];
+            const label = v.label || k;
+            const val = v.value ?? '';
+            const displayVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
+            return `
+                <div class="sb-story-var" data-key="${escapeHtml(k)}">
+                    <span class="sb-story-var-label">${escapeHtml(label)}</span>
+                    <span class="sb-story-var-value" title="Click to edit">${escapeHtml(displayVal)}</span>
+                </div>`;
+        }).join('');
+    }
+
+    // Build save slot buttons
+    const slots = slotsData?.slots || [];
+    const slotButtons = (action) => {
+        let html = '';
+        for (let i = 1; i <= 5; i++) {
+            const slot = slots.find(s => s.slot === i);
+            const isEmpty = !slot || slot.empty;
+            const timestamp = isEmpty ? 'Empty' : formatSlotTime(slot.timestamp);
+            const turn = isEmpty ? '' : ` \u2022 Turn ${slot.turn}`;
+            html += `<button class="sb-story-slot" data-action="${action}" data-slot="${i}">
+                <span class="sb-story-slot-num">${i}</span>
+                <span class="sb-story-slot-info">${timestamp}${turn}</span>
+            </button>`;
+        }
+        return html;
+    };
+
+    // Progress info
+    const turnCount = stateData?.key_count || 0;
+    const presetLabel = stateData?.preset || presetName;
+
+    detailEl.innerHTML = `
+        <div class="sb-story-header">
+            <span class="sb-story-title">${escapeHtml(storyDisplay)}</span>
+            <span class="sb-story-meta">${turnCount} variables \u2022 ${escapeHtml(presetLabel)}</span>
+        </div>
+        ${easyAccordion('State', `<div class="sb-story-vars">${stateRows}</div>`, { desc: `${stateKeys.length} vars` })}
+        ${easyAccordion('Save', `<div class="sb-story-slots">${slotButtons('save')}</div>`, { desc: 'Save progress' })}
+        ${easyAccordion('Load', `<div class="sb-story-slots">${slotButtons('load')}</div>`, { desc: 'Restore progress' })}
+        <div class="sb-story-actions">
+            <button class="sb-btn-sm sb-story-reset-btn">Reset Story</button>
+        </div>
+    `;
+
+    // Wire state variable editing
+    detailEl.querySelectorAll('.sb-story-var-value').forEach(el => {
+        el.addEventListener('click', () => {
+            if (el.querySelector('input')) return; // already editing
+            const row = el.closest('.sb-story-var');
+            const key = row?.dataset.key;
+            if (!key) return;
+
+            const current = el.textContent;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'sb-story-var-input';
+            input.value = current;
+            el.textContent = '';
+            el.appendChild(input);
+            input.focus();
+            input.select();
+
+            const commit = async () => {
+                const newVal = input.value;
+                el.textContent = newVal;
+                if (newVal !== current && chatName) {
+                    try {
+                        await fetch(`/api/story/${encodeURIComponent(chatName)}/set`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ key, value: newVal })
+                        });
+                    } catch (e) {
+                        el.textContent = current; // revert on error
+                        ui.showToast('Failed to update variable', 'error');
+                    }
+                }
+            };
+            input.addEventListener('blur', commit, { once: true });
+            input.addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+                if (e.key === 'Escape') { el.textContent = current; }
+            });
+        });
+    });
+
+    // Wire save/load slots
+    detailEl.querySelectorAll('.sb-story-slot').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            const slot = parseInt(btn.dataset.slot);
+            if (!chatName) return;
+
+            if (action === 'save') {
+                try {
+                    await fetch(`/api/story/${encodeURIComponent(chatName)}/save`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ slot })
+                    });
+                    ui.showToast(`Saved to slot ${slot}`, 'success');
+                    await updateStoryMode(container, settings); // refresh slots
+                } catch (e) {
+                    ui.showToast('Save failed', 'error');
+                }
+            } else if (action === 'load') {
+                const slotData = slots.find(s => s.slot === slot);
+                if (!slotData || slotData.empty) {
+                    ui.showToast(`Slot ${slot} is empty`, 'info');
+                    return;
+                }
+                if (!confirm(`Load save from slot ${slot}? Chat history and state will be restored.`)) return;
+                try {
+                    await fetch(`/api/story/${encodeURIComponent(chatName)}/load`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ slot })
+                    });
+                    ui.showToast(`Loaded slot ${slot}`, 'success');
+                    // Refresh chat messages + story state
+                    const { setHistLen, refresh } = await import('../core/state.js');
+                    const len = await refresh(false);
+                    setHistLen(len);
+                    await updateStoryMode(container, settings);
+                } catch (e) {
+                    ui.showToast('Load failed', 'error');
+                }
+            }
+        });
+    });
+
+    // Wire reset button
+    detailEl.querySelector('.sb-story-reset-btn')?.addEventListener('click', async () => {
+        if (!confirm('Reset story progress? This will restart from the beginning.')) return;
+        if (!chatName) return;
+        try {
+            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preset: presetName || null })
+            });
+            ui.showToast('Story reset', 'success');
+            await updateStoryMode(container, settings);
+        } catch (e) {
+            ui.showToast('Reset failed', 'error');
+        }
+    });
+
+    // Accordion headers are handled by delegated click on #sb-persona-detail (bound once in init)
+}
+
+function formatSlotTime(isoString) {
+    if (!isoString) return 'Empty';
+    try {
+        const d = new Date(isoString);
+        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+               d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return 'Saved'; }
 }
 
 function easyAccordion(title, content, opts = {}) {
