@@ -4,8 +4,6 @@ Continuity Executor - Runs scheduled tasks with proper context isolation.
 Switches chat context, applies settings, runs LLM, restores original state.
 """
 
-import time
-import random
 import logging
 from datetime import datetime
 from typing import Dict, Any
@@ -80,46 +78,30 @@ class ContinuityExecutor:
             # Apply voice settings before any TTS calls
             self._apply_voice(task)
 
-            iterations = max(1, task.get("iterations", 1))
-            chance = task.get("chance", 100)
             tts_enabled = task.get("tts_enabled", True)
-            initial_message = task.get("initial_message", "Hello.")
-            follow_up = task.get("follow_up_message", "[continue]")
+            msg = task.get("initial_message", "Hello.")
 
-            for i in range(iterations):
-                # Per-iteration chance roll
-                if chance < 100:
-                    roll = random.randint(1, 100)
-                    if roll > chance:
-                        logger.info(f"[Continuity] Iteration {i+1} skipped (roll {roll} > {chance}%)")
-                        continue
+            try:
+                response = self.system.llm_chat.isolated_chat(msg, task_settings)
 
-                msg = initial_message if i == 0 else follow_up
+                if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
+                    try:
+                        self.system.tts.speak_sync(response)
+                    except Exception as tts_err:
+                        logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
-                try:
-                    # Use isolated_chat - no session state changes
-                    response = self.system.llm_chat.isolated_chat(msg, task_settings)
+                result["responses"].append({
+                    "iteration": 1,
+                    "input": msg,
+                    "output": response[:500] if response else None
+                })
+            except Exception as e:
+                error_msg = f"Task failed: {e}"
+                logger.error(f"[Continuity] {error_msg}")
+                result["errors"].append(error_msg)
 
-                    # TTS if enabled — blocking so we finish before next iteration/re-fire
-                    if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
-                        try:
-                            self.system.tts.speak_sync(response)
-                        except Exception as tts_err:
-                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
-
-                    result["responses"].append({
-                        "iteration": i + 1,
-                        "input": msg,
-                        "output": response[:500] if response else None
-                    })
-                except Exception as e:
-                    error_msg = f"Iteration {i+1} failed: {e}"
-                    logger.error(f"[Continuity] {error_msg}")
-                    result["errors"].append(error_msg)
-
-                # Report progress
-                if self._progress_cb:
-                    self._progress_cb(i + 1, iterations)
+            if self._progress_cb:
+                self._progress_cb(1, 1)
 
             result["success"] = len(result["errors"]) == 0
 
@@ -161,45 +143,29 @@ class ContinuityExecutor:
             # Apply task settings to chat
             self._apply_task_settings(task, session_manager)
 
-            # Run iterations
-            iterations = max(1, task.get("iterations", 1))
-            chance = task.get("chance", 100)
+            # Run single execution
             tts_enabled = task.get("tts_enabled", True)
-            initial_message = task.get("initial_message", "Hello.")
-            follow_up = task.get("follow_up_message", "[continue]")
+            msg = task.get("initial_message", "Hello.")
 
-            for i in range(iterations):
-                # Per-iteration chance roll
-                if chance < 100:
-                    roll = random.randint(1, 100)
-                    if roll > chance:
-                        logger.info(f"[Continuity] Iteration {i+1} skipped (roll {roll} > {chance}%)")
-                        continue
+            try:
+                response = self.system.process_llm_query(msg, skip_tts=True)
+                if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
+                    try:
+                        self.system.tts.speak_sync(response)
+                    except Exception as tts_err:
+                        logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                result["responses"].append({
+                    "iteration": 1,
+                    "input": msg,
+                    "output": response[:500] if response else None
+                })
+            except Exception as e:
+                error_msg = f"Task failed: {e}"
+                logger.error(f"[Continuity] {error_msg}")
+                result["errors"].append(error_msg)
 
-                msg = initial_message if i == 0 else follow_up
-
-                try:
-                    # Skip TTS in process_llm_query — we handle it with speak_sync below
-                    response = self.system.process_llm_query(msg, skip_tts=True)
-                    # TTS blocking so we finish before next iteration/re-fire
-                    if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
-                        try:
-                            self.system.tts.speak_sync(response)
-                        except Exception as tts_err:
-                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
-                    result["responses"].append({
-                        "iteration": i + 1,
-                        "input": msg,
-                        "output": response[:500] if response else None
-                    })
-                except Exception as e:
-                    error_msg = f"Iteration {i+1} failed: {e}"
-                    logger.error(f"[Continuity] {error_msg}")
-                    result["errors"].append(error_msg)
-
-                # Report progress
-                if self._progress_cb:
-                    self._progress_cb(i + 1, iterations)
+            if self._progress_cb:
+                self._progress_cb(1, 1)
 
             result["success"] = len(result["errors"]) == 0
 

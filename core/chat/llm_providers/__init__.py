@@ -80,6 +80,7 @@ PROVIDER_METADATA = {
             'accounts/fireworks/models/glm-4p7': 'GLM 4.7',
             'accounts/fireworks/models/minimax-m2p5': 'MiniMax M2.5',
             'accounts/fireworks/models/kimi-k2p5': 'Kimi K2.5',
+            'accounts/fireworks/models/qwen3p5-397b-a17b': 'Qwen3.5 397B',
         },
         'is_local': False,
         'default_timeout': 10.0,

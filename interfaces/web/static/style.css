@@ -1922,11 +1922,44 @@ body {
     font-size: var(--font-sm);
 }
 .sched-active-hours-row select { width: 80px; }
-.sched-followup-preview {
+
+/* Sentence-style schedule display */
+.sched-sentence {
+    font-size: var(--font-sm);
+    line-height: 2.2;
+    color: var(--text-secondary);
+    padding: 4px 0;
+}
+.sched-sentence select,
+.sched-sentence input {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+/* Modifier checkboxes (active hours, chance) */
+.sched-modifiers { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.sched-modifier {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+.sched-modifier-inputs {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--font-sm);
+}
+.sched-modifier-inputs select { width: 80px; }
+
+/* Editor blurb */
+.sched-editor-blurb {
     font-size: var(--font-xs);
     color: var(--text-muted);
-    margin-top: 4px;
+    margin: 0 0 12px;
     font-style: italic;
+    line-height: 1.4;
 }
 
 .sched-act-dot {
@@ -2080,10 +2113,6 @@ body {
 
 .sched-pick-panel { padding: 4px 0; }
 .sched-pick-panel label { font-size: var(--font-sm); color: var(--text-secondary); margin-bottom: 4px; display: block; }
-.sched-when-row { display: flex; gap: 12px; align-items: flex-end; }
-.sched-when-row > * { flex: 1; min-width: 0; }
-.sched-when-row > .sched-pick-panel { padding: 0; }
-.sched-when-row > .sched-field { margin-bottom: 0; }
 .sched-pick-panel input[type="time"],
 .sched-pick-panel input[type="number"] {
     background: var(--bg-primary, var(--bg));
@@ -2158,16 +2187,10 @@ body {
 @media (max-width: 768px) {
     .sched-layout { grid-template-columns: 1fr; gap: 20px; }
     .sched-vitals-grid { grid-template-columns: 1fr; }
-    .sched-picker-tabs { flex-wrap: wrap; }
-    .sched-picker-tab { flex: 1 1 40%; padding: 6px 6px; font-size: var(--font-xs); }
-    .sched-picker-tab:nth-child(2) { border-right: none; }
-    .sched-picker-tab:nth-child(3),
-    .sched-picker-tab:nth-child(4) { border-top: 1px solid var(--border); }
-    .sched-when-row { flex-wrap: wrap; }
-    .sched-when-row > * { flex: 1 1 calc(50% - 6px); }
+    .sched-picker-tab { padding: 6px 6px; font-size: var(--font-xs); }
 }
 @media (max-width: 480px) {
-    .sched-when-row > * { flex: 1 1 100%; }
+    .sched-sentence { line-height: 2.5; }
 }
 
 /* =============================================================================

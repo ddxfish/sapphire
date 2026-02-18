@@ -195,14 +195,12 @@ class ContinuityScheduler:
             "enabled": data.get("enabled", True),
             "schedule": data.get("schedule", "0 9 * * *"),
             "chance": data.get("chance", 100),
-            "iterations": data.get("iterations", 1),
             "provider": data.get("provider", "auto"),
             "model": data.get("model", ""),
             "prompt": data.get("prompt", "default"),
             "toolset": data.get("toolset", "none"),
             "chat_target": data.get("chat_target", ""),  # blank = ephemeral (no chat, no UI)
             "initial_message": data.get("initial_message", "Hello."),
-            "follow_up_message": data.get("follow_up_message", "[continue]"),
             "tts_enabled": data.get("tts_enabled", True),
             "inject_datetime": data.get("inject_datetime", False),
             "persona": data.get("persona", ""),
@@ -255,9 +253,9 @@ class ContinuityScheduler:
             
             # Update allowed fields
             allowed = {
-                "name", "enabled", "schedule", "chance", "iterations",
+                "name", "enabled", "schedule", "chance",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "follow_up_message", "tts_enabled", "inject_datetime",
+                "initial_message", "tts_enabled", "inject_datetime",
                 "persona", "voice", "pitch", "speed",
                 "memory_scope", "knowledge_scope", "people_scope", "goal_scope",
                 "heartbeat", "emoji",
@@ -439,6 +437,14 @@ class ContinuityScheduler:
                 end = task.get("active_hours_end")
                 logger.info(f"[Continuity] '{task_name}' outside active hours ({start}:00-{end}:00), skipping")
                 continue
+
+            # Chance roll — gates the entire firing
+            chance = task.get("chance", 100)
+            if chance < 100:
+                roll = random.randint(1, 100)
+                if roll > chance:
+                    logger.info(f"[Continuity] '{task_name}' failed chance roll ({roll} > {chance}%), skipping")
+                    continue
 
             logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
 

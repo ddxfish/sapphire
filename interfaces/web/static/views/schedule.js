@@ -101,19 +101,14 @@ function renderTaskList() {
     return sorted.map(t => {
         const sched = describeCron(t.schedule);
         const lastRun = t.last_run ? formatTime(t.last_run) : 'Never';
-        let iterText = '';
-        if (t.progress) {
-            iterText = `<span class="sched-progress">${t.progress.iteration}/${t.progress.total} turns</span>`;
-        } else if (t.running) {
-            iterText = `<span class="sched-progress">Running...</span>`;
-        } else if (t.iterations > 1) {
-            const fu = t.iterations - 1;
-            iterText = `${fu} follow-up${fu > 1 ? 's' : ''}`;
+        let statusText = '';
+        if (t.running) {
+            statusText = `<span class="sched-progress">Running...</span>`;
         }
         const meta = [
             t.chance < 100 ? `${t.chance}%` : '',
             t.active_hours_start != null ? `\uD83D\uDD53 ${formatHourRange(t.active_hours_start, t.active_hours_end)}` : '',
-            iterText,
+            statusText,
             t.chat_target ? `\uD83D\uDCAC ${esc(t.chat_target)}` : '',
             `Last: ${lastRun}`
         ].filter(Boolean).join(' \u00B7 ');
@@ -429,9 +424,12 @@ async function openEditor(task, isHeartbeat = false) {
         t.tts_enabled = false;
         t.emoji = t.emoji || '\u2764\uFE0F';
     }
-    const defaultMode = isHeartbeat && !isEdit ? 'interval' : null;
-    const parsed = t.schedule ? parseCron(t.schedule) : { mode: defaultMode || 'daily', time: '09:00' };
-    if (defaultMode === 'interval' && parsed.mode !== 'interval') {
+    const parsed = t.schedule ? parseCron(t.schedule) : (isHeartbeat ? { mode: 'interval', value: 15, unit: 'minutes' } : { mode: 'daily', time: '09:00' });
+    // Determine initial tab: simple if mode matches type, advanced otherwise
+    const simpleOk = isHeartbeat ? parsed.mode === 'interval' : (parsed.mode === 'daily' || parsed.mode === 'weekly');
+    const initTab = simpleOk || !isEdit ? 'simple' : 'advanced';
+    // For new heartbeats, force interval defaults
+    if (!isEdit && isHeartbeat && parsed.mode !== 'interval') {
         parsed.mode = 'interval';
         parsed.value = 15;
         parsed.unit = 'minutes';
@@ -475,71 +473,76 @@ async function openEditor(task, isHeartbeat = false) {
                 <button class="btn-icon" data-action="close">&times;</button>
             </div>
             <div class="sched-editor-body">
+                <p class="sched-editor-blurb">${isHeartbeat
+                    ? 'Heartbeats wake Sapphire up on a rhythm to check on things. She remembers what she found last time.'
+                    : 'Tasks run at a scheduled time — an alarm that triggers Sapphire to do something specific.'}</p>
 
                 <div class="sched-field">
                     <label>${isHeartbeat ? 'Heartbeat Name' : 'Task Name'}</label>
                     <input type="text" id="ed-name" value="${esc(t.name || '')}" placeholder="${isHeartbeat ? 'System Health Check' : 'Morning Greeting'}">
                 </div>
                 <div class="sched-field">
-                    <label>Message <span class="help-tip" data-tip="What the AI receives when this fires. Be specific — the AI only knows what you tell it here.">?</span></label>
-                    <textarea id="ed-message" rows="2" placeholder="What should the AI do?">${esc(t.initial_message || '')}</textarea>
+                    <label>${isHeartbeat ? 'What should Sapphire check?' : 'What should Sapphire do?'} <span class="help-tip" data-tip="What the AI receives when this fires. Be specific — the AI only knows what you tell it here.">?</span></label>
+                    <textarea id="ed-message" rows="2" placeholder="${isHeartbeat
+                        ? 'Check my emails and calendar. If anything needs attention, tell me. Otherwise just say all clear.'
+                        : 'Write a brief daily summary of what happened today.'}">${esc(t.initial_message || '')}</textarea>
                 </div>
 
                 <div class="sched-section-title" style="margin-top:16px">\uD83D\uDCC5 When</div>
                 <div class="sched-picker">
                     <div class="sched-picker-tabs">
-                        <button type="button" class="sched-picker-tab${parsed.mode === 'daily' ? ' active' : ''}" data-mode="daily">Daily</button>
-                        <button type="button" class="sched-picker-tab${parsed.mode === 'weekly' ? ' active' : ''}" data-mode="weekly">Weekly</button>
-                        <button type="button" class="sched-picker-tab${parsed.mode === 'interval' ? ' active' : ''}" data-mode="interval">Interval</button>
-                        <button type="button" class="sched-picker-tab${parsed.mode === 'cron' ? ' active' : ''}" data-mode="cron">Cron</button>
+                        <button type="button" class="sched-picker-tab${initTab === 'simple' ? ' active' : ''}" data-tab="simple">Simple</button>
+                        <button type="button" class="sched-picker-tab${initTab === 'advanced' ? ' active' : ''}" data-tab="advanced">Advanced</button>
                     </div>
-                    <div class="sched-pick-panel" data-panel="weekly" ${parsed.mode !== 'weekly' ? 'style="display:none"' : ''}>
-                        <div class="sched-days">${dayChecks}</div>
+                    <div class="sched-pick-panel" data-tab-panel="simple" ${initTab !== 'simple' ? 'style="display:none"' : ''}>
+                        ${isHeartbeat ? `
+                        <div class="sched-sentence">
+                            Beats every
+                            <input type="number" id="ed-interval-val" value="${intervalValue}" min="1" style="width:60px">
+                            <select id="ed-interval-unit">
+                                <option value="minutes" ${intervalUnit === 'minutes' ? 'selected' : ''}>minutes</option>
+                                <option value="hours" ${intervalUnit === 'hours' ? 'selected' : ''}>hours</option>
+                            </select>
+                        </div>
+                        ` : `
+                        <div class="sched-sentence">
+                            Runs at <input type="time" id="ed-time" value="${currentTime}"> every
+                            <select id="ed-frequency">
+                                <option value="day" ${parsed.mode === 'daily' ? 'selected' : ''}>Day</option>
+                                <option value="days" ${parsed.mode === 'weekly' ? 'selected' : ''}>On these days</option>
+                            </select>
+                        </div>
+                        <div class="sched-days" id="ed-days-row" ${parsed.mode !== 'weekly' ? 'style="display:none"' : ''}>${dayChecks}</div>
+                        `}
                     </div>
-                    <div class="sched-when-row">
-                        <div class="sched-field" style="flex:0 0 auto">
-                            <label>Chance <span class="help-tip" data-tip="Roll the dice each time this fires. 50% = runs half the time. 100% = always runs.">?</span></label>
-                            <div style="display:flex;align-items:center;gap:4px">
-                                <input type="number" id="ed-chance" value="${t.chance ?? 100}" min="1" max="100" style="width:60px">
-                                <span class="text-muted">%</span>
-                            </div>
-                        </div>
-                        <div class="sched-pick-panel" data-panel="daily" ${parsed.mode !== 'daily' ? 'style="display:none"' : ''}>
-                            <label>Time</label>
-                            <input type="time" id="ed-time-daily" value="${currentTime}">
-                        </div>
-                        <div class="sched-pick-panel" data-panel="weekly" ${parsed.mode !== 'weekly' ? 'style="display:none"' : ''}>
-                            <label>Time</label>
-                            <input type="time" id="ed-time-weekly" value="${currentTime}">
-                        </div>
-                        <div class="sched-pick-panel" data-panel="interval" ${parsed.mode !== 'interval' ? 'style="display:none"' : ''}>
-                            <label>Every</label>
-                            <div style="display:flex;gap:6px;align-items:center">
-                                <input type="number" id="ed-interval-val" value="${intervalValue}" min="1" style="width:60px">
-                                <select id="ed-interval-unit">
-                                    <option value="minutes" ${intervalUnit === 'minutes' ? 'selected' : ''}>min</option>
-                                    <option value="hours" ${intervalUnit === 'hours' ? 'selected' : ''}>hrs</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="sched-pick-panel" data-panel="cron" ${parsed.mode !== 'cron' ? 'style="display:none"' : ''}>
-                            <label>Cron</label>
-                            <input type="text" id="ed-cron-raw" value="${esc(cronRaw)}" placeholder="0 9 * * *" style="width:120px">
+                    <div class="sched-pick-panel" data-tab-panel="advanced" ${initTab !== 'advanced' ? 'style="display:none"' : ''}>
+                        <div class="sched-field" style="margin-bottom:4px">
+                            <label>Cron expression</label>
+                            <input type="text" id="ed-cron-raw" value="${esc(cronRaw)}" placeholder="0 9 * * *">
                         </div>
                     </div>
                     <div class="sched-preview-line" id="sched-preview-line"></div>
                 </div>
 
-                <div class="sched-active-hours" style="margin-top:12px">
-                    <label class="sched-checkbox">
-                        <input type="checkbox" id="ed-active-hours-on" ${t.active_hours_start != null ? 'checked' : ''}> Active hours only
-                        <span class="help-tip" data-tip="Restrict this task to a time window. Outside these hours, cron matches are skipped. Supports overnight wrap-around (e.g. 8PM–4AM).">?</span>
+                <div class="sched-modifiers">
+                    <label class="sched-modifier">
+                        <input type="checkbox" id="ed-active-hours-on" ${t.active_hours_start != null ? 'checked' : ''}>
+                        Active hours
+                        <span class="help-tip" data-tip="Restrict to a time window. Outside these hours, cron matches are skipped. Supports overnight (e.g. 8PM-4AM).">?</span>
+                        <span class="sched-modifier-inputs" id="ed-active-hours-row" ${t.active_hours_start == null ? 'style="display:none"' : ''}>
+                            <select id="ed-active-start">${hourOptions(t.active_hours_start ?? 20)}</select>
+                            to
+                            <select id="ed-active-end">${hourOptions(t.active_hours_end ?? 4)}</select>
+                        </span>
                     </label>
-                    <div class="sched-active-hours-row" id="ed-active-hours-row" ${t.active_hours_start == null ? 'style="display:none"' : ''}>
-                        <select id="ed-active-start">${hourOptions(t.active_hours_start ?? 20)}</select>
-                        <span>to</span>
-                        <select id="ed-active-end">${hourOptions(t.active_hours_end ?? 4)}</select>
-                    </div>
+                    <label class="sched-modifier">
+                        <input type="checkbox" id="ed-chance-on" ${(t.chance ?? 100) < 100 ? 'checked' : ''}>
+                        Chance
+                        <span class="help-tip" data-tip="Roll the dice each time this fires. 50% = runs half the time. 100% = always.">?</span>
+                        <span class="sched-modifier-inputs" id="ed-chance-row" ${(t.chance ?? 100) >= 100 ? 'style="display:none"' : ''}>
+                            <input type="number" id="ed-chance" value="${t.chance ?? 100}" min="1" max="100" style="width:60px">%
+                        </span>
+                    </label>
                 </div>
 
                 <div class="sched-field" style="margin-top:16px">
@@ -628,21 +631,6 @@ async function openEditor(task, isHeartbeat = false) {
                                 <input type="number" id="ed-speed" value="${t.speed ?? ''}" min="0.5" max="2.0" step="0.05" placeholder="default" style="width:80px">
                             </div>
                         </div>
-                    </div></div>
-                </details>
-
-                <details class="sched-accordion">
-                    <summary class="sched-acc-header">Follow-ups <span class="sched-preview" id="ed-followup-label">${(t.iterations || 1) > 1 ? (t.iterations - 1) + ' follow-up' + ((t.iterations - 1) > 1 ? 's' : '') : ''}</span></summary>
-                    <div class="sched-acc-body"><div class="sched-acc-inner">
-                        <div class="sched-field">
-                            <label>Follow-ups <span class="help-tip" data-tip="After the initial message, send the follow-up message this many more times. 0 = just the initial message. Runs back-to-back with no delay.">?</span></label>
-                            <input type="number" id="ed-followups" value="${Math.max(0, (t.iterations ?? 1) - 1)}" min="0" max="99" style="width:80px">
-                        </div>
-                        <div class="sched-field">
-                            <label>Follow-up message <span class="help-tip" data-tip="Sent after each follow-up instead of the initial message. Default is [continue] but you can customize it.">?</span></label>
-                            <input type="text" id="ed-followup" value="${esc(t.follow_up_message || '[continue]')}" placeholder="[continue]">
-                        </div>
-                        <div class="sched-followup-preview" id="ed-followup-preview"></div>
                     </div></div>
                 </details>
 
@@ -794,40 +782,54 @@ async function openEditor(task, isHeartbeat = false) {
         } catch (e) { console.warn('Failed to load persona:', e); }
     });
 
-    // Schedule picker mode switching
-    let currentMode = parsed.mode;
+    // Schedule picker tab switching (Simple/Advanced)
+    let currentTab = initTab;
     modal.querySelector('.sched-picker-tabs')?.addEventListener('click', e => {
         const tab = e.target.closest('.sched-picker-tab');
         if (!tab) return;
-        currentMode = tab.dataset.mode;
-        modal.querySelectorAll('.sched-picker-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === currentMode));
-        modal.querySelectorAll('.sched-pick-panel').forEach(p => p.style.display = p.dataset.panel === currentMode ? '' : 'none');
+        currentTab = tab.dataset.tab;
+        modal.querySelectorAll('.sched-picker-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === currentTab));
+        modal.querySelectorAll('[data-tab-panel]').forEach(p => p.style.display = p.dataset.tabPanel === currentTab ? '' : 'none');
+        updatePreview();
+    });
+
+    // Frequency dropdown (tasks only, simple mode): show/hide day chips
+    modal.querySelector('#ed-frequency')?.addEventListener('change', () => {
+        const daysRow = modal.querySelector('#ed-days-row');
+        if (daysRow) daysRow.style.display = modal.querySelector('#ed-frequency').value === 'days' ? '' : 'none';
         updatePreview();
     });
 
     const getCurrentCron = () => {
-        switch (currentMode) {
-            case 'daily': return buildCron('daily', { time: modal.querySelector('#ed-time-daily')?.value || '09:00' });
-            case 'weekly': {
-                const days = [...modal.querySelectorAll('.sched-days input:checked')].map(c => parseInt(c.value));
-                if (days.length === 0) return buildCron('daily', { time: modal.querySelector('#ed-time-weekly')?.value || '09:00' });
-                return buildCron('weekly', { time: modal.querySelector('#ed-time-weekly')?.value || '09:00', days });
-            }
-            case 'interval': return buildCron('interval', {
+        if (currentTab === 'advanced') {
+            return modal.querySelector('#ed-cron-raw')?.value || '0 9 * * *';
+        }
+        // Simple mode
+        if (isHeartbeat) {
+            return buildCron('interval', {
                 value: parseInt(modal.querySelector('#ed-interval-val')?.value) || 15,
                 unit: modal.querySelector('#ed-interval-unit')?.value || 'minutes'
             });
-            case 'cron': return modal.querySelector('#ed-cron-raw')?.value || '0 9 * * *';
         }
+        // Task: day or specific days
+        const time = modal.querySelector('#ed-time')?.value || '09:00';
+        const freq = modal.querySelector('#ed-frequency')?.value || 'day';
+        if (freq === 'days') {
+            const days = [...modal.querySelectorAll('.sched-days input:checked')].map(c => parseInt(c.value));
+            if (days.length === 0) return buildCron('daily', { time });
+            return buildCron('weekly', { time, days });
+        }
+        return buildCron('daily', { time });
     };
 
     const updatePreview = () => {
         const cronText = describeCron(getCurrentCron());
-        const chance = parseInt(modal.querySelector('#ed-chance')?.value) || 100;
+        const chanceOn = modal.querySelector('#ed-chance-on')?.checked;
+        const chance = chanceOn ? (parseInt(modal.querySelector('#ed-chance')?.value) || 100) : 100;
         const text = chance < 100 ? `${chance}% chance to run ${cronText.toLowerCase()}` : cronText;
         const el = modal.querySelector('#sched-preview-line');
         if (el) el.textContent = text;
-        modal.querySelectorAll('.sched-preview:not(#ed-ai-preview):not(#ed-voice-preview):not(#ed-chat-preview):not(#ed-followup-label)').forEach(el => el.textContent = text);
+        modal.querySelectorAll('.sched-preview:not(#ed-ai-preview):not(#ed-voice-preview):not(#ed-chat-preview)').forEach(el => el.textContent = text);
     };
     modal.querySelector('#ed-chance')?.addEventListener('input', updatePreview);
     updatePreview();
@@ -838,18 +840,12 @@ async function openEditor(task, isHeartbeat = false) {
         if (row) row.style.display = modal.querySelector('#ed-active-hours-on').checked ? '' : 'none';
     });
 
-    // Follow-up preview + label
-    const updateFollowupPreview = () => {
-        const followups = parseInt(modal.querySelector('#ed-followups')?.value) || 0;
-        const el = modal.querySelector('#ed-followup-preview');
-        const label = modal.querySelector('#ed-followup-label');
-        if (label) label.textContent = followups > 0 ? `${followups} follow-up${followups > 1 ? 's' : ''}` : '';
-        if (!el) return;
-        if (followups <= 0) { el.textContent = ''; return; }
-        el.textContent = `Sends initial message, then follow-up ${followups} more time${followups > 1 ? 's' : ''}. Total: ${followups + 1} AI responses per run.`;
-    };
-    modal.querySelector('#ed-followups')?.addEventListener('input', updateFollowupPreview);
-    updateFollowupPreview();
+    // Chance toggle
+    modal.querySelector('#ed-chance-on')?.addEventListener('change', () => {
+        const row = modal.querySelector('#ed-chance-row');
+        if (row) row.style.display = modal.querySelector('#ed-chance-on').checked ? '' : 'none';
+        updatePreview();
+    });
 
     // Chat name label
     modal.querySelector('#ed-chat')?.addEventListener('input', () => {
@@ -858,7 +854,7 @@ async function openEditor(task, isHeartbeat = false) {
     });
 
     // Live preview updates
-    modal.querySelectorAll('#ed-time-daily, #ed-time-weekly, #ed-interval-val, #ed-interval-unit, #ed-cron-raw')
+    modal.querySelectorAll('#ed-time, #ed-interval-val, #ed-interval-unit, #ed-cron-raw')
         .forEach(el => el.addEventListener('input', updatePreview));
     modal.querySelectorAll('.sched-days input')
         .forEach(el => el.addEventListener('change', updatePreview));
@@ -950,13 +946,12 @@ async function openEditor(task, isHeartbeat = false) {
         const pitchVal = modal.querySelector('#ed-pitch')?.value;
         const speedVal = modal.querySelector('#ed-speed')?.value;
 
+        const chanceOn = modal.querySelector('#ed-chance-on')?.checked;
         const data = {
             name: modal.querySelector('#ed-name').value.trim(),
             schedule: getCurrentCron(),
-            chance: parseInt(modal.querySelector('#ed-chance').value) || 100,
-            iterations: (parseInt(modal.querySelector('#ed-followups').value) || 0) + 1,
+            chance: chanceOn ? (parseInt(modal.querySelector('#ed-chance').value) || 100) : 100,
             initial_message: modal.querySelector('#ed-message').value.trim() || 'Hello.',
-            follow_up_message: modal.querySelector('#ed-followup')?.value?.trim() || '[continue]',
             chat_target: modal.querySelector('#ed-chat').value.trim(),
             persona: modal.querySelector('#ed-persona').value,
             prompt: modal.querySelector('#ed-prompt').value,
