@@ -12,6 +12,7 @@ Handles:
 This is the default provider and your 99% use case.
 """
 
+import hashlib
 import logging
 from typing import Dict, Any, List, Optional, Generator
 
@@ -39,6 +40,14 @@ class OpenAICompatProvider(BaseProvider):
             api_key=self.api_key,
             timeout=self.request_timeout
         )
+
+        # Fireworks prompt caching: stable session ID for replica affinity
+        if 'fireworks.ai' in (self.base_url or '').lower():
+            key_hash = hashlib.sha256((self.api_key or '').encode()).hexdigest()[:12]
+            self._fireworks_session_id = f"sapphire-{key_hash}"
+        else:
+            self._fireworks_session_id = None
+
         logger.info(f"OpenAI-compat provider initialized: {self.base_url}")
     
     @property
@@ -360,15 +369,19 @@ class OpenAICompatProvider(BaseProvider):
             "messages": clean_messages,
             **params
         }
-        
+
+        # Fireworks: session affinity for prompt caching
+        if self._fireworks_session_id:
+            request_kwargs["user"] = self._fireworks_session_id
+
         # Add reasoning_effort for Fireworks reasoning models
         if self._is_fireworks_reasoning_model():
             request_kwargs["reasoning_effort"] = params.get("reasoning_effort", "medium")
-        
+
         if tools:
             request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
-        
+
         # Wrap in retry for rate limiting
         response = retry_on_rate_limit(
             self._client.chat.completions.create,
@@ -414,7 +427,11 @@ class OpenAICompatProvider(BaseProvider):
             "stream": True,
             **params
         }
-        
+
+        # Fireworks: session affinity for prompt caching
+        if self._fireworks_session_id:
+            request_kwargs["user"] = self._fireworks_session_id
+
         # Add reasoning_effort for Fireworks reasoning models to enable thinking output
         if self._is_fireworks_reasoning_model():
             request_kwargs["reasoning_effort"] = params.get("reasoning_effort", "medium")
