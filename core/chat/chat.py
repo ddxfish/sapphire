@@ -198,15 +198,22 @@ class LLMChat:
         username = username.replace('{', '').replace('}', '')
         prompt_template = self.current_system_prompt or "System prompt not loaded."
         prompt = prompt_template.replace("{user_name}", username).replace("{ai_name}", ai_name)
-        
+
         # Build context parts from chat settings
         context_parts = []
         chat_settings = self.session_manager.get_chat_settings()
-        
+
         # Debug logging for story engine
         story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
         story_engine = self.function_manager.get_story_engine()
         logger.info(f"[STORY] _get_system_prompt: enabled={story_enabled}, engine_exists={story_engine is not None}")
+
+        # Story prompt override: if story has prompt.md, replace character prompt entirely
+        if story_enabled and story_engine:
+            story_prompt = story_engine.story_prompt
+            if story_prompt:
+                prompt = story_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
+                logger.info(f"[STORY] Using story prompt override ({len(story_prompt)} chars)")
 
         # Inject datetime if enabled
         if chat_settings.get('inject_datetime', False):

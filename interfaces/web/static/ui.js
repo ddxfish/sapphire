@@ -462,6 +462,9 @@ export const renderChatDropdown = (chats, activeChat) => {
 
     const sbName = document.getElementById('sb-chat-name');
     if (sbName) sbName.textContent = displayName;
+
+    // Notify sidebar to reload with correct chat settings
+    if (select) select.dispatchEvent(new Event('chat-list-ready'));
 };
 
 const escapeHtml = (str) => {

@@ -732,6 +732,8 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
                     "preset_display": story_preset.replace('_', ' ').title() if story_preset else ''
                 }
                 live_engine = system.llm_chat.function_manager.get_story_engine()
+                if live_engine and live_engine.story_prompt:
+                    story_status["has_prompt"] = True
                 if live_engine and hasattr(live_engine, 'preset_config'):
                     story_status["turn"] = getattr(live_engine, 'current_turn', 0)
                     visible_state = live_engine.get_visible_state() if hasattr(live_engine, 'get_visible_state') else {}
@@ -750,6 +752,12 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
 
         state_tools = [f for f in function_names if f in STORY_TOOL_NAMES]
         user_tools = [f for f in function_names if f not in STORY_TOOL_NAMES]
+
+        # Story prompt override: prefix prompt name so user knows story prompt is active
+        live_engine = system.llm_chat.function_manager.get_story_engine()
+        if live_engine and live_engine.story_prompt:
+            prompt_name = f"[STORY] {prompt_name}"
+            prompt_char_count = len(live_engine.story_prompt)
 
         return {
             "prompt_name": prompt_name,

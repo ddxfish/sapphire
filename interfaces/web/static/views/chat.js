@@ -18,6 +18,18 @@ let defaultPersonaName = '';
 
 const SAVE_DEBOUNCE = 500;
 
+function updateStoryPromptLabel(container) {
+    const promptSel = container.querySelector('#sb-prompt');
+    if (!promptSel) return;
+    const selected = promptSel.options[promptSel.selectedIndex];
+    if (!selected) return;
+    // Strip existing prefix first
+    const clean = selected.textContent.replace(/^\[STORY\] /, '');
+    const enabled = container.querySelector('#sb-story-enabled')?.checked;
+    const preset = container.querySelector('#sb-story-preset')?.value;
+    selected.textContent = (enabled && preset) ? `[STORY] ${clean}` : clean;
+}
+
 export default {
     init(container) {
         // Sidebar collapse/expand
@@ -33,7 +45,10 @@ export default {
 
         // Reload sidebar settings whenever active chat changes
         const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
-        if (chatSelect) chatSelect.addEventListener('change', () => loadSidebar());
+        if (chatSelect) {
+            chatSelect.addEventListener('change', () => loadSidebar());
+            chatSelect.addEventListener('chat-list-ready', () => loadSidebar());
+        }
 
         // Accordion headers in sidebar
         container.querySelectorAll('.sidebar-accordion-header').forEach(header => {
@@ -134,6 +149,9 @@ export default {
                 if (el.id === 'sb-spice-turns') {
                     const toggle = container.querySelector('#sb-spice-toggle');
                     if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
+                }
+                if (el.id === 'sb-story-enabled' || el.id === 'sb-story-preset' || el.id === 'sb-prompt') {
+                    updateStoryPromptLabel(container);
                 }
                 debouncedSave(container);
             });
@@ -362,9 +380,14 @@ async function loadSidebar() {
         setToggle(container, '#sb-spice-toggle', settings.spice_enabled !== false,
             `Spice \u00b7 ${settings.spice_turns || 3}`);
         setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
-        setChecked(container, '#sb-story-enabled', (settings.story_engine_enabled ?? settings.state_engine_enabled) === true);
+        const storyEnabled = (settings.story_engine_enabled ?? settings.state_engine_enabled) === true;
+        const storyPreset = settings.story_preset ?? settings.state_preset;
+        setChecked(container, '#sb-story-enabled', storyEnabled);
         setChecked(container, '#sb-story-in-prompt', (settings.story_in_prompt ?? settings.state_story_in_prompt) !== false);
         setChecked(container, '#sb-story-vars', (settings.story_vars_in_prompt ?? settings.state_vars_in_prompt) === true);
+
+        // Show [STORY] prefix on prompt when story engine is active
+        updateStoryPromptLabel(container);
 
         // Trim color
         const trimInput = container.querySelector('#sb-trim-color');
