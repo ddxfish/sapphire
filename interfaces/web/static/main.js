@@ -312,11 +312,13 @@ function initEventBus() {
         populateChatDropdown();
     });
 
-    // Server restart detection — invalidate caches, refresh scene
+    // Server restart detection — full state resync
     eventBus.on(eventBus.Events.SERVER_RESTARTED, async () => {
-        console.log('[Main] Server restarted — refreshing caches');
+        console.log('[Main] Server restarted — full resync');
         await refreshInitData();
-        updateScene();
+        await populateChatDropdown();
+        await refresh(false);
+        await updateScene();
     });
 
     // STT events

@@ -590,10 +590,18 @@ class ChatSessionManager:
         # Migrate any existing JSON files
         self._migrate_json_files()
         
-        # Ensure default chat exists and load it
+        # Ensure default chat exists and load last active (or default)
         self._ensure_default_exists()
-        self._load_chat("default")
-        
+        last_active = self._read_last_active()
+        if last_active and last_active != "default":
+            if self._load_chat(last_active):
+                self.active_chat_name = last_active
+                logger.info(f"Restored last active chat: {last_active}")
+            else:
+                self._load_chat("default")
+        else:
+            self._load_chat("default")
+
         logger.info(f"ChatSessionManager initialized with SQLite storage")
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -923,15 +931,35 @@ class ChatSessionManager:
         except Exception as e:
             logger.error(f"Failed to ensure default chat: {e}")
 
+    def _read_last_active(self):
+        """Read last active chat name from marker file."""
+        marker = self.history_dir / ".active_chat"
+        try:
+            if marker.exists():
+                name = marker.read_text(encoding='utf-8').strip()
+                return name if name else None
+        except Exception:
+            pass
+        return None
+
+    def _save_last_active(self, chat_name):
+        """Persist active chat name for restart recovery."""
+        marker = self.history_dir / ".active_chat"
+        try:
+            marker.write_text(chat_name, encoding='utf-8')
+        except Exception:
+            pass
+
     def set_active_chat(self, chat_name: str) -> bool:
         """Switch to a different chat - loads messages AND settings."""
         if chat_name == self.active_chat_name:
             return True
-        
+
         self._save_current_chat()
-        
+
         if self._load_chat(chat_name):
             self.active_chat_name = chat_name
+            self._save_last_active(chat_name)
             self._in_tool_cycle = False  # Reset tool cycle state on chat switch
             logger.info(f"Switched to chat: {chat_name}")
             return True
