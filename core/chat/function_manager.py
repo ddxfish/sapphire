@@ -217,6 +217,11 @@ class FunctionManager:
                 # Exclude move tool for non-navigation presets
                 tools = tools + [t for t in STORY_TOOLS if t['function']['name'] != 'move']
 
+            # Add custom story tools from story folder
+            custom = self._story_engine.get_story_tools()
+            if custom:
+                tools = tools + custom
+
         return tools
 
     def update_enabled_functions(self, enabled_names: list):
@@ -322,7 +327,16 @@ class FunctionManager:
             expected_count = len(toolset_manager.get_toolset_functions(self.current_toolset_name))
         
         mode = self._get_current_prompt_mode()
-        
+
+        # Include story tool info
+        story_tool_count = 0
+        story_custom_names = []
+        if self._story_engine and self._story_engine_enabled:
+            from core.story_engine import STORY_TOOL_NAMES
+            story_tool_count = len(STORY_TOOL_NAMES)
+            story_custom_names = [t['function']['name'] for t in self._story_engine.get_story_tools()]
+            story_tool_count += len(story_custom_names)
+
         return {
             "name": self.current_toolset_name,
             "function_count": actual_count,
@@ -330,7 +344,9 @@ class FunctionManager:
             "expected_count": expected_count,
             "enabled_functions": self.get_enabled_function_names(),
             "prompt_mode": mode,
-            "status": "ok" if base_count == expected_count else "partial"
+            "status": "ok" if base_count == expected_count else "partial",
+            "story_tools": story_tool_count,
+            "story_custom_tools": story_custom_names,
         }
 
     def set_memory_scope(self, scope: str):
@@ -516,6 +532,20 @@ class FunctionManager:
                 self._log_tool_call(function_name, arguments, f"Error: {e}", execution_time, False)
                 return f"Error executing {function_name}: {str(e)}"
         
+        # Check if this is a custom story tool
+        if (self._story_engine and self._story_engine_enabled and
+                function_name in self._story_engine.story_tool_names):
+            try:
+                result, success = self._story_engine.execute_story_tool(function_name, arguments)
+                execution_time = time.time() - start_time
+                self._log_tool_call(function_name, arguments, result, execution_time, success)
+                return result
+            except Exception as e:
+                logger.error(f"Error executing custom story tool {function_name}: {e}")
+                execution_time = time.time() - start_time
+                self._log_tool_call(function_name, arguments, f"Error: {e}", execution_time, False)
+                return f"Error executing {function_name}: {str(e)}"
+
         # Standard function execution
         executor = self.execution_map.get(function_name)
         if not executor:

@@ -10,6 +10,7 @@ This module orchestrates:
 - Progressive prompt building
 """
 
+import importlib.util
 import json
 import logging
 import sqlite3
@@ -54,7 +55,12 @@ class StoryEngine:
         self._navigation: Optional[NavigationManager] = None
         self._prompt_builder: Optional[PromptBuilder] = None
         self._game_type = None
-        
+
+        # Story-specific custom tools
+        self._custom_tools = []        # TOOLS schemas from loaded modules
+        self._custom_executors = {}    # function_name -> execute callable
+        self._custom_modules = {}      # module_name -> module object
+
         self._load_state()
     
     # ==================== DATABASE OPERATIONS ====================
@@ -606,6 +612,7 @@ class StoryEngine:
             self._riddles = None
             self._navigation = None
             self._prompt_builder = None
+            self.unload_story_tools()
             logger.info(f"Cleared all state for '{self.chat_name}'")
             return True
         except Exception as e:
@@ -775,6 +782,9 @@ class StoryEngine:
                 if starting_room:
                     self.set_state("_visited_rooms", [starting_room], "system", turn_number, "starting room")
 
+            # Load custom tools from story folder
+            self.load_story_tools()
+
             logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys, game_type={self._game_type.name}")
             return True, f"Loaded preset: {preset_name}"
             
@@ -815,6 +825,9 @@ class StoryEngine:
             # Persist preset name
             self._persist_system_key("_preset", preset_name, 0)
             
+            # Reload custom tools from story folder
+            self.load_story_tools()
+
             logger.info(f"Reloaded config for preset '{preset_name}', game_type={self._game_type.name}")
             return True
         except Exception as e:
@@ -978,6 +991,74 @@ class StoryEngine:
         except Exception as e:
             logger.warning(f"Failed to read story prompt: {e}")
             return None
+
+    # ==================== CUSTOM TOOL LOADING ====================
+
+    def load_story_tools(self):
+        """Load custom tool modules from {story_dir}/tools/*.py."""
+        self.unload_story_tools()
+        if not self._story_dir:
+            return
+
+        tools_dir = self._story_dir / "tools"
+        if not tools_dir.is_dir():
+            return
+
+        for py_file in sorted(tools_dir.glob("*.py")):
+            if py_file.name.startswith("_"):
+                continue
+            try:
+                mod_name = f"story_tool_{self._preset_name}_{py_file.stem}"
+                spec = importlib.util.spec_from_file_location(mod_name, py_file)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+
+                if not hasattr(module, 'TOOLS') or not hasattr(module, 'execute'):
+                    logger.warning(f"Story tool {py_file.name}: missing TOOLS or execute(), skipped")
+                    continue
+
+                if getattr(module, 'ENABLED', True) is False:
+                    logger.debug(f"Story tool {py_file.name}: ENABLED=False, skipped")
+                    continue
+
+                self._custom_modules[py_file.stem] = module
+                self._custom_tools.extend(module.TOOLS)
+                for tool in module.TOOLS:
+                    fname = tool['function']['name']
+                    self._custom_executors[fname] = module.execute
+
+                logger.info(f"Loaded story tool: {py_file.name} ({len(module.TOOLS)} tools)")
+
+            except Exception as e:
+                logger.error(f"Failed to load story tool {py_file.name}: {e}")
+
+        if self._custom_tools:
+            names = [t['function']['name'] for t in self._custom_tools]
+            logger.info(f"Story custom tools ready: {names}")
+
+    def unload_story_tools(self):
+        """Clear all loaded custom story tools."""
+        if self._custom_tools:
+            logger.debug(f"Unloading {len(self._custom_tools)} custom story tools")
+        self._custom_tools = []
+        self._custom_executors = {}
+        self._custom_modules = {}
+
+    def get_story_tools(self) -> list:
+        """Return TOOLS schemas for all loaded custom story tools."""
+        return self._custom_tools
+
+    @property
+    def story_tool_names(self) -> set:
+        """Set of custom story tool function names."""
+        return set(self._custom_executors.keys())
+
+    def execute_story_tool(self, function_name: str, arguments: dict) -> tuple:
+        """Execute a custom story tool. Returns (result_str, success_bool)."""
+        executor = self._custom_executors.get(function_name)
+        if not executor:
+            return f"Unknown story tool: {function_name}", False
+        return executor(function_name, arguments, self)
 
     @property
     def key_count(self) -> int:

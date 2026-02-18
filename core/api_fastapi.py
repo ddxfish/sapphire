@@ -750,11 +750,16 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         except Exception as e:
             logger.warning(f"Error getting story status: {e}")
 
-        state_tools = [f for f in function_names if f in STORY_TOOL_NAMES]
-        user_tools = [f for f in function_names if f not in STORY_TOOL_NAMES]
+        # Collect all story tool names (built-in + custom)
+        all_story_names = set(STORY_TOOL_NAMES)
+        live_engine = system.llm_chat.function_manager.get_story_engine()
+        if live_engine:
+            all_story_names |= live_engine.story_tool_names
+
+        state_tools = [f for f in function_names if f in all_story_names]
+        user_tools = [f for f in function_names if f not in all_story_names]
 
         # Story prompt override: prefix prompt name so user knows story prompt is active
-        live_engine = system.llm_chat.function_manager.get_story_engine()
         if live_engine and live_engine.story_prompt:
             prompt_name = f"[STORY] {prompt_name}"
             prompt_char_count = len(live_engine.story_prompt)
@@ -1241,7 +1246,25 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
         origin = request.headers.get('X-Session-ID')
         publish(Events.CHAT_SETTINGS_CHANGED, {"chat": chat_name, "settings": new_settings, "origin": origin})
 
-        return {"status": "success", "message": f"Settings updated for '{chat_name}'"}
+        # Return updated tool state so frontend can sync pills immediately
+        fm = system.llm_chat.function_manager
+        toolset_info = fm.get_current_toolset_info()
+        function_names = fm.get_enabled_function_names()
+        from core.story_engine import STORY_TOOL_NAMES
+        all_story_names = set(STORY_TOOL_NAMES)
+        engine = fm.get_story_engine()
+        if engine:
+            all_story_names |= engine.story_tool_names
+        state_tools = [f for f in function_names if f in all_story_names]
+        user_tools = [f for f in function_names if f not in all_story_names]
+
+        return {
+            "status": "success",
+            "message": f"Settings updated for '{chat_name}'",
+            "toolset": toolset_info,
+            "functions": user_tools,
+            "state_tools": state_tools,
+        }
     except HTTPException:
         raise
     except Exception as e:

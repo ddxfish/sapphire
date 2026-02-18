@@ -450,8 +450,22 @@ async function saveSettings(container) {
     const settings = collectSettings(container);
 
     try {
-        await api.updateChatSettings(chatName, settings);
+        const result = await api.updateChatSettings(chatName, settings);
         updateSendButtonLLM(settings.llm_primary, settings.llm_model);
+
+        // Sync toolset dropdown from save response (no second API call)
+        if (result?.toolset) {
+            const toolsetSel = container.querySelector('#sb-toolset');
+            if (toolsetSel) {
+                const selected = toolsetSel.options[toolsetSel.selectedIndex];
+                if (selected) {
+                    const name = result.toolset.name || selected.value;
+                    const total = (result.functions?.length || 0) + (result.state_tools?.length || 0);
+                    const st = result.toolset.story_tools || 0;
+                    selected.textContent = st ? `${name} + Story (${total})` : `${name} (${total})`;
+                }
+            }
+        }
     } catch (e) {
         console.warn('Auto-save failed:', e);
     }

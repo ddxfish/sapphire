@@ -201,12 +201,15 @@ function updateFuncs(funcs, toolset, cloudTools, stateTools) {
     }
 
     const name = toolset?.name || 'Custom';
-    textEl.textContent = `${name} (${totalCount})`;
+    const storyCount = toolset?.story_tools || 0;
+    textEl.textContent = storyCount ? `${name} + Story (${totalCount})` : `${name} (${totalCount})`;
 
     // Build tooltip with sections
     const parts = [];
     if (cloudTools) parts.push('⚠️ Network tools enabled');
     if (stateTools?.length) parts.push(`📖 Story: ${stateTools.join(', ')}`);
+    const customStory = toolset?.story_custom_tools || [];
+    if (customStory.length) parts.push(`📖 Custom: ${customStory.join(', ')}`);
     if (funcs?.length) parts.push(`🔧 Tools: ${funcs.join(', ')}`);
 
     tooltipEl.textContent = parts.join('\n');
