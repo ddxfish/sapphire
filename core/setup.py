@@ -451,7 +451,9 @@ def ensure_story_presets() -> bool:
     base = Path(__file__).parent.parent / "user"
     old_dir = base / "state_presets"
     target_dir = base / "story_presets"
-    template_file = target_dir / "_template.json"
+    template_dir = target_dir / "_template"
+    template_file = template_dir / "story.json"
+    old_template = target_dir / "_template.json"
 
     try:
         # Auto-rename old directory
@@ -462,10 +464,17 @@ def ensure_story_presets() -> bool:
         created = not target_dir.exists()
         target_dir.mkdir(parents=True, exist_ok=True)
 
+        # Migrate old flat template to folder format
+        if old_template.exists() and not template_file.exists():
+            template_dir.mkdir(exist_ok=True)
+            old_template.rename(template_file)
+            logger.info("Migrated _template.json → _template/story.json")
+
         # Create template only on first run
         if created or not template_file.exists():
+            template_dir.mkdir(exist_ok=True)
             template = {
-                "_comment": "Template for custom story presets. Copy and modify.",
+                "_comment": "Template for custom story presets. Copy this folder and modify.",
                 "name": "My Custom Story",
                 "description": "Brief description shown in preset list",
                 "initial_state": {
@@ -503,10 +512,14 @@ def ensure_story_presets() -> bool:
             }
             with open(template_file, 'w', encoding='utf-8') as f:
                 json.dump(template, f, indent=2)
-            logger.info("Created story preset template at user/story_presets/_template.json")
+            # Also create a placeholder prompt.md
+            prompt_path = template_dir / "prompt.md"
+            if not prompt_path.exists():
+                prompt_path.write_text("# My Story\n\nOptional: Write your full story prompt here.\nThis replaces the character prompt when in story mode.\n")
+            logger.info("Created story preset template at user/story_presets/_template/")
 
         if created:
-            logger.info("Created user/story_presets/ for custom simulations")
+            logger.info("Created user/story_presets/ for custom stories")
         return True
     except Exception as e:
         logger.error(f"Failed to ensure story_presets directory: {e}")

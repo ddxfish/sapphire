@@ -44,6 +44,7 @@ class StoryEngine:
         self._current_state = {}  # Cache: key -> {value, type, label, constraints, turn}
         self._preset_name = None
         self._progressive_config = None
+        self._story_dir = None  # Path to folder containing story.json (None for flat presets)
         self._scene_entered_at_turn = 0
         self._last_advance_turn = -1  # Track to prevent double-advance in same turn
 
@@ -113,6 +114,7 @@ class StoryEngine:
         self._current_state = {}
         self._preset_name = None
         self._progressive_config = None
+        self._story_dir = None
         self._scene_entered_at_turn = 0
         self._choices = None
         self._riddles = None
@@ -598,6 +600,7 @@ class StoryEngine:
             self._current_state = {}
             self._preset_name = None
             self._progressive_config = None
+            self._story_dir = None
             self._scene_entered_at_turn = 0
             self._choices = None
             self._riddles = None
@@ -685,22 +688,27 @@ class StoryEngine:
     
     # ==================== PRESETS ====================
     
-    def load_preset(self, preset_name: str, turn_number: int) -> tuple[bool, str]:
-        """Load a state preset, initializing all state keys."""
+    def _find_preset_path(self, preset_name: str) -> Optional[Path]:
+        """Find preset file, checking folder format then flat format."""
         project_root = Path(__file__).parent.parent.parent
         search_paths = [
+            # Folder format: {name}/story.json
+            project_root / "user" / "story_presets" / preset_name / "story.json",
+            project_root / "core" / "story_engine" / "presets" / preset_name / "story.json",
+            # Flat format: {name}.json
             project_root / "user" / "story_presets" / f"{preset_name}.json",
             project_root / "core" / "story_engine" / "presets" / f"{preset_name}.json",
-            # Backward compat: old paths
+            # Backward compat: old directory
             project_root / "user" / "state_presets" / f"{preset_name}.json",
         ]
-
-        preset_path = None
         for path in search_paths:
             if path.exists():
-                preset_path = path
-                break
+                return path
+        return None
 
+    def load_preset(self, preset_name: str, turn_number: int) -> tuple[bool, str]:
+        """Load a story preset, initializing all state keys."""
+        preset_path = self._find_preset_path(preset_name)
         if not preset_path:
             return False, f"Preset not found: {preset_name}"
 
@@ -753,6 +761,7 @@ class StoryEngine:
             # Initialize features
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            self._story_dir = preset_path.parent if preset_path.name == "story.json" else None
             self._game_type = get_game_type(preset)
             self._init_features(preset, turn_number)
 
@@ -775,30 +784,18 @@ class StoryEngine:
     
     def reload_preset_config(self, preset_name: str) -> bool:
         """Reload progressive_config from preset WITHOUT resetting state."""
-        project_root = Path(__file__).parent.parent.parent
-        search_paths = [
-            project_root / "user" / "story_presets" / f"{preset_name}.json",
-            project_root / "core" / "story_engine" / "presets" / f"{preset_name}.json",
-            # Backward compat: old paths
-            project_root / "user" / "state_presets" / f"{preset_name}.json",
-        ]
-
-        preset_path = None
-        for path in search_paths:
-            if path.exists():
-                preset_path = path
-                break
-
+        preset_path = self._find_preset_path(preset_name)
         if not preset_path:
             logger.warning(f"Preset not found for config reload: {preset_name}")
             return False
-        
+
         try:
             with open(preset_path, 'r', encoding='utf-8') as f:
                 preset = json.load(f)
-            
+
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
+            self._story_dir = preset_path.parent if preset_path.name == "story.json" else None
             self._game_type = get_game_type(preset)
             
             # Reinitialize features (they need the preset config)
@@ -964,8 +961,27 @@ class StoryEngine:
         return self._progressive_config
     
     @property
+    def story_dir(self) -> Optional[Path]:
+        """Path to the story folder (contains story.json, prompt.md, tools/), or None for flat presets."""
+        return self._story_dir
+
+    @property
+    def story_prompt(self) -> Optional[str]:
+        """Load prompt.md from story folder if present."""
+        if not self._story_dir:
+            return None
+        prompt_path = self._story_dir / "prompt.md"
+        if not prompt_path.exists():
+            return None
+        try:
+            return prompt_path.read_text(encoding='utf-8')
+        except Exception as e:
+            logger.warning(f"Failed to read story prompt: {e}")
+            return None
+
+    @property
     def key_count(self) -> int:
         return len(self._current_state)
-    
+
     def is_empty(self) -> bool:
         return len(self._current_state) == 0

@@ -3144,35 +3144,49 @@ async def delete_memory_api(memory_id: int, request: Request, _=Depends(require_
 
 @app.get("/api/story/presets")
 async def list_story_presets(request: Request, _=Depends(require_login)):
-    """List available story presets."""
+    """List available story presets (folder-based and flat)."""
     presets = []
-    search_paths = [
+    search_dirs = [
         PROJECT_ROOT / "user" / "story_presets",
         PROJECT_ROOT / "core" / "story_engine" / "presets",
         # Backward compat: old directory
         PROJECT_ROOT / "user" / "state_presets",
     ]
     seen = set()
-    for search_dir in search_paths:
+
+    def add_preset(name, preset_file, source):
+        if name in seen or name.startswith("_"):
+            return
+        seen.add(name)
+        try:
+            with open(preset_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            has_prompt = (preset_file.parent / "prompt.md").exists() if preset_file.name == "story.json" else False
+            has_tools = (preset_file.parent / "tools").is_dir() if preset_file.name == "story.json" else False
+            presets.append({
+                "name": name,
+                "display_name": data.get("name", name),
+                "description": data.get("description", ""),
+                "key_count": len(data.get("initial_state", {})),
+                "source": source,
+                "folder": preset_file.name == "story.json",
+                "has_prompt": has_prompt,
+                "has_tools": has_tools,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to load preset {preset_file}: {e}")
+
+    for search_dir in search_dirs:
         if not search_dir.exists():
             continue
+        source = "user" if "user" in str(search_dir) else "core"
+        # Folder-based: {name}/story.json
+        for story_file in search_dir.glob("*/story.json"):
+            add_preset(story_file.parent.name, story_file, source)
+        # Flat: {name}.json
         for preset_file in search_dir.glob("*.json"):
-            name = preset_file.stem
-            if name in seen:
-                continue
-            seen.add(name)
-            try:
-                with open(preset_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                presets.append({
-                    "name": name,
-                    "display_name": data.get("name", name),
-                    "description": data.get("description", ""),
-                    "key_count": len(data.get("initial_state", {})),
-                    "source": "user" if "user" in str(search_dir) else "core"
-                })
-            except Exception as e:
-                logger.warning(f"Failed to load preset {preset_file}: {e}")
+            add_preset(preset_file.stem, preset_file, source)
+
     return {"presets": presets}
 
 
