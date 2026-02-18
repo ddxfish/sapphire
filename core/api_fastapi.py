@@ -587,6 +587,8 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
                             yield f"data: {json.dumps({'type': 'iteration_start', 'iteration': event.get('iteration', 1)})}\n\n"
                         elif event_type == "content":
                             yield f"data: {json.dumps({'type': 'content', 'text': event.get('text', '')})}\n\n"
+                        elif event_type == "tool_pending":
+                            yield f"data: {json.dumps({'type': 'tool_pending', 'name': event.get('name'), 'index': event.get('index', 0)})}\n\n"
                         elif event_type == "tool_start":
                             yield f"data: {json.dumps({'type': 'tool_start', 'id': event.get('id'), 'name': event.get('name'), 'args': event.get('args', {})})}\n\n"
                         elif event_type == "tool_end":

@@ -108,6 +108,13 @@ const processSSEData = (data, handlers) => {
         return { gotContent: true };
     }
     
+    if (data.type === 'tool_pending') {
+        if (onToolStart) {
+            onToolStart(`pending-${data.index || 0}`, data.name, null);
+        }
+        return { gotContent: true };
+    }
+
     if (data.type === 'tool_start') {
         if (onToolStart) {
             onToolStart(data.id, data.name, data.args);

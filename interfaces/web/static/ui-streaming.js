@@ -48,8 +48,8 @@ const createToolAccordionElement = (toolName, toolId, args) => {
     const summary = createElem('summary');
     summary.innerHTML = `<span class="tool-spinner"></span> Running: ${toolName}`;
     
-    // Add delete button
-    if (toolId) {
+    // Add delete button (skip for pending placeholders)
+    if (toolId && !String(toolId).startsWith('pending-')) {
         const deleteBtn = createElem('button', { 
             class: 'tool-delete-btn',
             title: 'Remove from history'
@@ -395,23 +395,73 @@ export const appendStream = (chunk, scrollCallback) => {
 
 // Internal function to actually create tool accordion
 const doStartTool = (toolId, toolName, args, scrollCallback) => {
+    const isPending = toolId.startsWith('pending-');
+
+    // Upgrade: real tool_start arrived for an existing pending accordion
+    if (!isPending) {
+        const pendingKey = Object.keys(state.toolAccordions).find(
+            k => k.startsWith('pending-') && state.toolAccordions[k].toolName === toolName
+        );
+        if (pendingKey) {
+            const existing = state.toolAccordions[pendingKey];
+            delete state.toolAccordions[pendingKey];
+            existing.acc.dataset.toolId = toolId;
+            existing.summary.innerHTML = `<span class="tool-spinner"></span> Running: ${toolName}`;
+            // Add delete button now that we have the real tool call id
+            const deleteBtn = createElem('button', {
+                class: 'tool-delete-btn',
+                title: 'Remove from history'
+            }, '\u00d7');
+            deleteBtn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!confirm('Remove this tool call from history?')) return;
+                try {
+                    const { removeToolCall } = await import('./api.js');
+                    await removeToolCall(toolId);
+                    existing.acc.remove();
+                } catch (err) {
+                    console.error('Failed to remove tool call:', err);
+                    const { showToast } = await import('./ui.js');
+                    showToast('Failed to remove tool call', 'error');
+                }
+            });
+            existing.summary.appendChild(deleteBtn);
+            if (args && Object.keys(args).length > 0) {
+                try {
+                    existing.content.textContent = 'Inputs:\n' + JSON.stringify(args, null, 2);
+                } catch { /* keep existing text */ }
+            }
+            state.toolAccordions[toolId] = existing;
+            if (scrollCallback) scrollCallback();
+            return;
+        }
+    }
+
     // Clean up empty current paragraph
     if (state.curPara && !state.paraBuf.trim()) {
         state.curPara.remove();
     }
-    
+
     const { acc, content, summary, toolName: name } = createToolAccordionElement(toolName, toolId, args);
+
+    // Pending tools show "Preparing..." instead of "Running..."
+    if (isPending) {
+        summary.innerHTML = `<span class="tool-spinner"></span> Preparing: ${toolName}`;
+        content.textContent = 'Assembling arguments...';
+    }
+
     state.toolAccordions[toolId] = { acc, content, summary, toolName };
-    
+
     streamMsg.el.appendChild(acc);
     streamMsg.last = acc;
-    
+
     // Create new paragraph for content after tool
     const newP = createElem('p');
     streamMsg.el.appendChild(newP);
     state.curPara = newP;
     state.paraBuf = '';
-    
+
     if (scrollCallback) scrollCallback();
 };
 
