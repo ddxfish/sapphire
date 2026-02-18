@@ -201,8 +201,14 @@ function renderFunctions(selected, isEditable) {
         functions.enabled.forEach(f => enabledSet.add(f));
     }
 
+    const bulkBar = isEditable ? `
+        <div class="ts-bulk-bar">
+            <button class="btn-sm" id="ts-check-all">Check All</button>
+            <button class="btn-sm" id="ts-uncheck-all">Uncheck All</button>
+        </div>` : '';
+
     const modules = functions.modules;
-    return Object.entries(modules).map(([modName, mod]) => {
+    return bulkBar + Object.entries(modules).map(([modName, mod]) => {
         const funcs = mod.functions || [];
         const enabledCount = funcs.filter(f => enabledSet.has(f.name)).length;
         const allChecked = enabledCount === funcs.length;
@@ -291,6 +297,16 @@ function bindEvents() {
             await loadData();
             render();
         } catch (e) { ui.showToast('Failed to delete', 'error'); }
+    });
+
+    // Bulk check/uncheck all
+    container.querySelector('#ts-check-all')?.addEventListener('click', () => {
+        container.querySelectorAll('[data-action="toggle-func"]').forEach(cb => cb.checked = true);
+        updateCounts(); debouncedSave();
+    });
+    container.querySelector('#ts-uncheck-all')?.addEventListener('click', () => {
+        container.querySelectorAll('[data-action="toggle-func"]').forEach(cb => cb.checked = false);
+        updateCounts(); debouncedSave();
     });
 
     // Function toggles

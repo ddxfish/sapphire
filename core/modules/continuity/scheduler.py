@@ -218,6 +218,8 @@ class ContinuityScheduler:
             "context_limit": data.get("context_limit", 0),
             "max_parallel_tools": data.get("max_parallel_tools", 0),
             "max_tool_rounds": data.get("max_tool_rounds", 0),
+            "active_hours_start": data.get("active_hours_start", None),
+            "active_hours_end": data.get("active_hours_end", None),
             "last_run": None,
             "last_response": None,
             "created": datetime.now().isoformat()
@@ -259,7 +261,8 @@ class ContinuityScheduler:
                 "persona", "voice", "pitch", "speed",
                 "memory_scope", "knowledge_scope", "people_scope", "goal_scope",
                 "heartbeat", "emoji",
-                "context_limit", "max_parallel_tools", "max_tool_rounds"
+                "context_limit", "max_parallel_tools", "max_tool_rounds",
+                "active_hours_start", "active_hours_end"
             }
             for key in allowed:
                 if key in data:
@@ -387,6 +390,17 @@ class ContinuityScheduler:
                     self._task_running[task_id] = False
                     break
 
+    def _in_active_hours(self, task):
+        """Check if current hour is within the task's active hours window."""
+        start = task.get("active_hours_start")
+        end = task.get("active_hours_end")
+        if start is None or end is None:
+            return True  # no restriction
+        hour = datetime.now().hour
+        if start <= end:
+            return start <= hour < end
+        return hour >= start or hour < end  # wrap-around (e.g. 20→04)
+
     def _check_and_run(self):
         """Single check cycle - evaluate all tasks, run eligible ones."""
         now = datetime.now()
@@ -418,6 +432,13 @@ class ContinuityScheduler:
             if self._task_last_matched.get(task_id) == current_minute:
                 continue
             self._task_last_matched[task_id] = current_minute
+
+            # Check active hours window
+            if not self._in_active_hours(task):
+                start = task.get("active_hours_start")
+                end = task.get("active_hours_end")
+                logger.info(f"[Continuity] '{task_name}' outside active hours ({start}:00-{end}:00), skipping")
+                continue
 
             logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
 

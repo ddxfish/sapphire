@@ -1089,6 +1089,8 @@ body {
     overflow: hidden;
 }
 
+.ts-bulk-bar { display: flex; gap: 8px; padding: 8px 0 4px; }
+
 .ts-module-header {
     padding: 10px 12px;
     background: var(--bg-secondary);
@@ -1914,6 +1916,12 @@ body {
     font-weight: 500;
     padding: 6px 0 2px;
 }
+.sched-active-hours-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 6px; padding-left: 26px;
+    font-size: var(--font-sm);
+}
+.sched-active-hours-row select { width: 80px; }
 .sched-followup-preview {
     font-size: var(--font-xs);
     color: var(--text-muted);

@@ -112,6 +112,7 @@ function renderTaskList() {
         }
         const meta = [
             t.chance < 100 ? `${t.chance}%` : '',
+            t.active_hours_start != null ? `\uD83D\uDD53 ${formatHourRange(t.active_hours_start, t.active_hours_end)}` : '',
             iterText,
             t.chat_target ? `\uD83D\uDCAC ${esc(t.chat_target)}` : '',
             `Last: ${lastRun}`
@@ -160,6 +161,7 @@ function renderHeartbeatCard(hb) {
     const nextIn = getNextIn(hb.id);
     const timeParts = [
         state.label,
+        hb.active_hours_start != null ? formatHourRange(hb.active_hours_start, hb.active_hours_end) : null,
         lastAgo ? `ran ${lastAgo}` : null,
         nextIn ? `next in ${nextIn}` : null
     ].filter(Boolean).join(' \u00B7 ');
@@ -528,6 +530,18 @@ async function openEditor(task, isHeartbeat = false) {
                     <div class="sched-preview-line" id="sched-preview-line"></div>
                 </div>
 
+                <div class="sched-active-hours" style="margin-top:12px">
+                    <label class="sched-checkbox">
+                        <input type="checkbox" id="ed-active-hours-on" ${t.active_hours_start != null ? 'checked' : ''}> Active hours only
+                        <span class="help-tip" data-tip="Restrict this task to a time window. Outside these hours, cron matches are skipped. Supports overnight wrap-around (e.g. 8PM–4AM).">?</span>
+                    </label>
+                    <div class="sched-active-hours-row" id="ed-active-hours-row" ${t.active_hours_start == null ? 'style="display:none"' : ''}>
+                        <select id="ed-active-start">${hourOptions(t.active_hours_start ?? 20)}</select>
+                        <span>to</span>
+                        <select id="ed-active-end">${hourOptions(t.active_hours_end ?? 4)}</select>
+                    </div>
+                </div>
+
                 <div class="sched-field" style="margin-top:16px">
                     <label>\uD83D\uDC64 Persona <span class="help-tip" data-tip="Auto-fills prompt, voice, toolset, model, scopes, and more from a persona profile. You can still override individual settings in the accordions below.">?</span></label>
                     <select id="ed-persona">
@@ -818,6 +832,12 @@ async function openEditor(task, isHeartbeat = false) {
     modal.querySelector('#ed-chance')?.addEventListener('input', updatePreview);
     updatePreview();
 
+    // Active hours toggle
+    modal.querySelector('#ed-active-hours-on')?.addEventListener('change', () => {
+        const row = modal.querySelector('#ed-active-hours-row');
+        if (row) row.style.display = modal.querySelector('#ed-active-hours-on').checked ? '' : 'none';
+    });
+
     // Follow-up preview + label
     const updateFollowupPreview = () => {
         const followups = parseInt(modal.querySelector('#ed-followups')?.value) || 0;
@@ -956,7 +976,9 @@ async function openEditor(task, isHeartbeat = false) {
             emoji: selectedEmoji || t.emoji || '',
             context_limit: parseInt(modal.querySelector('#ed-context-limit')?.value) || 0,
             max_parallel_tools: parseInt(modal.querySelector('#ed-max-parallel')?.value) || 0,
-            max_tool_rounds: parseInt(modal.querySelector('#ed-max-rounds')?.value) || 0
+            max_tool_rounds: parseInt(modal.querySelector('#ed-max-rounds')?.value) || 0,
+            active_hours_start: modal.querySelector('#ed-active-hours-on')?.checked ? parseInt(modal.querySelector('#ed-active-start')?.value) : null,
+            active_hours_end: modal.querySelector('#ed-active-hours-on')?.checked ? parseInt(modal.querySelector('#ed-active-end')?.value) : null
         };
 
         if (!data.name) { alert('Name is required'); return; }
@@ -1050,6 +1072,23 @@ function formatTime12(time24) {
     const [h, m] = time24.split(':').map(Number);
     const ampm = h >= 12 ? 'PM' : 'AM';
     return `${h % 12 || 12}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+function hourOptions(selected) {
+    return Array.from({ length: 24 }, (_, i) => {
+        const label = i === 0 ? '12 AM' : i < 12 ? `${i} AM` : i === 12 ? '12 PM' : `${i - 12} PM`;
+        return `<option value="${i}" ${i === selected ? 'selected' : ''}>${label}</option>`;
+    }).join('');
+}
+
+function formatHourRange(start, end) {
+    const fmt = h => {
+        if (h === 0) return '12AM';
+        if (h < 12) return `${h}AM`;
+        if (h === 12) return '12PM';
+        return `${h - 12}PM`;
+    };
+    return `${fmt(start)}\u2013${fmt(end)}`;
 }
 
 // ── General Helpers ──
