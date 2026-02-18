@@ -21,13 +21,27 @@ const SAVE_DEBOUNCE = 500;
 function updateStoryPromptLabel(container) {
     const promptSel = container.querySelector('#sb-prompt');
     if (!promptSel) return;
-    const selected = promptSel.options[promptSel.selectedIndex];
-    if (!selected) return;
-    // Strip existing prefix first
-    const clean = selected.textContent.replace(/^\[STORY\] /, '');
+
+    // Remove previous story option, restore original selection
+    const existing = promptSel.querySelector('option[data-story]');
+    if (existing) {
+        const orig = promptSel.dataset.originalPrompt;
+        existing.remove();
+        if (orig) promptSel.value = orig;
+    }
+
     const enabled = container.querySelector('#sb-story-enabled')?.checked;
     const preset = container.querySelector('#sb-story-preset')?.value;
-    selected.textContent = (enabled && preset) ? `[STORY] ${clean}` : clean;
+    if (enabled && preset) {
+        promptSel.dataset.originalPrompt = promptSel.value;
+        const opt = document.createElement('option');
+        opt.value = '__story__';
+        opt.dataset.story = 'true';
+        const name = preset.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        opt.textContent = `[STORY] ${name}`;
+        promptSel.insertBefore(opt, promptSel.firstChild);
+        promptSel.value = '__story__';
+    }
 }
 
 export default {
