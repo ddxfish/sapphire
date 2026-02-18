@@ -885,47 +885,43 @@ def _search_entries(query, scope, category=None, limit=10):
 
     conn.close()
 
-    if fts_results:
-        for r in fts_results:
-            if r[0] not in seen_ids:
-                entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.95}
-                if r[3]: entry["file"] = r[3]
-                results.append(entry)
-                seen_ids.add(r[0])
-        return results
+    # Add FTS results
+    for r in fts_results:
+        if r[0] not in seen_ids:
+            entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.95}
+            if r[3]: entry["file"] = r[3]
+            results.append(entry)
+            seen_ids.add(r[0])
 
-    # Strategy 3: Vector similarity (already returns score)
+    # Always run vector search — finds semantically related chunks FTS misses
     vec_results = _vector_search_entries(query, scope, category, limit)
-    if vec_results:
-        for r in vec_results:
-            if r["id"] not in seen_ids:
-                results.append(r)
-        return results
+    for r in vec_results:
+        if r["id"] not in seen_ids:
+            results.append(r)
+            seen_ids.add(r["id"])
 
-    # Strategy 4: LIKE fallback
-    conn = _get_connection()
-    cursor = conn.cursor()
-    terms = query.lower().split()[:5]
-    if terms:
-        conditions = ' OR '.join(['e.content LIKE ?' for _ in terms])
-        params = [f'%{t}%' for t in terms]
-        cursor.execute(f'''
-            SELECT e.id, e.content, t.name as tab_name, e.source_filename
-            FROM knowledge_entries e
-            JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE ({conditions}){tab_filter}
-            ORDER BY e.updated_at DESC LIMIT ?
-        ''', params + tab_params + [limit])
-        rows = cursor.fetchall()
+    # LIKE fallback only when nothing else worked
+    if not results:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        terms = query.lower().split()[:5]
+        if terms:
+            conditions = ' OR '.join(['e.content LIKE ?' for _ in terms])
+            params = [f'%{t}%' for t in terms]
+            cursor.execute(f'''
+                SELECT e.id, e.content, t.name as tab_name, e.source_filename
+                FROM knowledge_entries e
+                JOIN knowledge_tabs t ON e.tab_id = t.id
+                WHERE ({conditions}){tab_filter}
+                ORDER BY e.updated_at DESC LIMIT ?
+            ''', params + tab_params + [limit])
+            for r in cursor.fetchall():
+                if r[0] not in seen_ids:
+                    entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.35}
+                    if r[3]: entry["file"] = r[3]
+                    results.append(entry)
         conn.close()
-        for r in rows:
-            if r[0] not in seen_ids:
-                entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.35}
-                if r[3]: entry["file"] = r[3]
-                results.append(entry)
-        return results
 
-    conn.close()
     return results
 
 
@@ -1039,7 +1035,57 @@ def _format_person(p):
     return " ".join(parts)
 
 
-def _format_entry(r, query=None, max_len=480):
+def _expand_with_neighbors(results):
+    """For chunked entries, expand with adjacent chunks for surrounding context."""
+    if not results:
+        return results
+
+    knowledge_results = [r for r in results if r.get("source") == "knowledge" and r.get("file")]
+    if not knowledge_results:
+        return results
+
+    result_ids = {r["id"] for r in results}
+    conn = _get_connection()
+    cursor = conn.cursor()
+
+    expanded = []
+    for r in results:
+        if r.get("source") != "knowledge" or not r.get("file"):
+            expanded.append(r)
+            continue
+
+        cursor.execute(
+            'SELECT chunk_index, tab_id FROM knowledge_entries WHERE id = ?',
+            (r["id"],))
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            expanded.append(r)
+            continue
+
+        chunk_idx, tab_id = row
+        cursor.execute('''
+            SELECT id, chunk_index, content FROM knowledge_entries
+            WHERE tab_id = ? AND source_filename = ? AND chunk_index IN (?, ?)
+            ORDER BY chunk_index
+        ''', (tab_id, r["file"], chunk_idx - 1, chunk_idx + 1))
+        neighbors = {n[1]: n[2] for n in cursor.fetchall() if n[0] not in result_ids}
+
+        parts = []
+        if chunk_idx - 1 in neighbors:
+            parts.append(neighbors[chunk_idx - 1])
+        parts.append(r["content"])
+        if chunk_idx + 1 in neighbors:
+            parts.append(neighbors[chunk_idx + 1])
+
+        r = dict(r)
+        r["content"] = '\n\n'.join(parts)
+        expanded.append(r)
+
+    conn.close()
+    return expanded
+
+
+def _format_entry(r, query=None, max_len=4000):
     content = r["content"]
     eid = f"[id:{r['id']}] " if r.get("id") else ""
     tab_info = f"[{r['tab']}] " if r.get("tab") else ""
@@ -1047,18 +1093,6 @@ def _format_entry(r, query=None, max_len=480):
 
     if len(content) <= max_len:
         preview = content
-    elif query:
-        # Show snippet weighted around match: ~1/3 before, ~2/3 after
-        pos = content.lower().find(query.lower())
-        if pos >= 0:
-            before = max_len // 3
-            start = max(0, pos - before)
-            end = min(len(content), start + max_len)
-            if start > 0:
-                start = max(0, end - max_len)
-            preview = ('...' if start > 0 else '') + content[start:end] + ('...' if end < len(content) else '')
-        else:
-            preview = content[:max_len] + '...'
     else:
         preview = content[:max_len] + '...'
 
@@ -1190,9 +1224,13 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
 
     # Sort all results by score (highest first) — unified ranking across sources
     results.sort(key=lambda r: r.get("score", 0), reverse=True)
+    results = results[:limit]
+
+    # Expand chunked entries with neighboring chunks for context
+    results = _expand_with_neighbors(results)
 
     lines = [f"Found {len(results)} results:"]
-    for r in results[:limit]:
+    for r in results:
         if r["source"] == "people":
             lines.append(f"---\n[Person] {_format_person(r)}")
         else:

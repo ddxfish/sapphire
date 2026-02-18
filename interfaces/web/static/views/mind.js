@@ -731,23 +731,8 @@ async function loadEntries(inner, tabId, tabType) {
 
         // Add entry
         inner.querySelectorAll('.mind-add-entry').forEach(btn => {
-            btn.addEventListener('click', async () => {
-                const content = prompt('Entry content:');
-                if (!content) return;
-                try {
-                    const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/entries`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ content })
-                    });
-                    if (resp.ok) {
-                        const result = await resp.json();
-                        const msg = result.chunks ? `Added (${result.chunks} chunks)` : 'Added';
-                        ui.showToast(msg, 'success');
-                        inner.dataset.loaded = '';
-                        await loadEntries(inner, tabId, tabType);
-                    }
-                } catch (e) { ui.showToast('Failed', 'error'); }
+            btn.addEventListener('click', () => {
+                showAddEntryModal(inner, parseInt(btn.dataset.tabId), tabType);
             });
         });
 
@@ -827,6 +812,65 @@ function showEntryEditModal(inner, tabId, tabType, entryId, content) {
             if (resp.ok) {
                 close();
                 ui.showToast('Entry updated', 'success');
+                inner.dataset.loaded = '';
+                await loadEntries(inner, tabId, tabType);
+            } else {
+                const err = await resp.json();
+                ui.showToast(err.detail || 'Failed', 'error');
+            }
+        } catch (e) { ui.showToast('Failed', 'error'); }
+    });
+}
+
+// ─── Add Entry Modal ─────────────────────────────────────────────────────────
+
+function showAddEntryModal(inner, tabId, tabType) {
+    const existing = document.querySelector('.mind-modal-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal">
+            <div class="pr-modal-header">
+                <h3>Add Entry</h3>
+                <button class="mind-btn-sm mind-modal-close">&#x2715;</button>
+            </div>
+            <div class="pr-modal-body">
+                <div class="mind-form">
+                    <textarea id="mae-content" rows="16" style="min-height:300px" placeholder="Paste or type content here — large texts are automatically chunked for search"></textarea>
+                    <div style="display:flex;justify-content:flex-end;gap:8px">
+                        <button class="mind-btn mind-modal-cancel">Cancel</button>
+                        <button class="mind-btn" id="mae-save" style="border-color:var(--trim,var(--accent-blue))">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
+    overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('#mae-content').focus();
+
+    overlay.querySelector('#mae-save').addEventListener('click', async () => {
+        const content = overlay.querySelector('#mae-content').value.trim();
+        if (!content) { ui.showToast('Content cannot be empty', 'error'); return; }
+        try {
+            const resp = await fetch(`/api/knowledge/tabs/${tabId}/entries`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+            if (resp.ok) {
+                const result = await resp.json();
+                const msg = result.chunks ? `Added (${result.chunks} chunks)` : 'Added';
+                close();
+                ui.showToast(msg, 'success');
                 inner.dataset.loaded = '';
                 await loadEntries(inner, tabId, tabType);
             } else {
