@@ -47,9 +47,9 @@ class FunctionManager:
         # People scope for current execution context (None = disabled)
         self._people_scope = 'default'
         
-        # State engine for games/simulations (None = disabled)
-        self._state_engine = None
-        self._state_engine_enabled = False  # Explicit enabled flag
+        # Story engine for games/simulations (None = disabled)
+        self._story_engine = None
+        self._story_engine_enabled = False  # Explicit enabled flag
         self._turn_getter = None  # Callable that returns current turn number
         
         # Track what was REQUESTED, not reverse-engineered
@@ -202,21 +202,21 @@ class FunctionManager:
 
     @property
     def enabled_tools(self) -> list:
-        """Get enabled tools filtered by current prompt mode, plus state tools if active."""
+        """Get enabled tools filtered by current prompt mode, plus story tools if active."""
         tools = self._apply_mode_filter(self._enabled_tools)
-        
-        # Add state tools if state engine is active (both engine AND flag must be set)
-        if self._state_engine and self._state_engine_enabled:
-            from core.state_engine import TOOLS as STATE_TOOLS
+
+        # Add story tools if story engine is active (both engine AND flag must be set)
+        if self._story_engine and self._story_engine_enabled:
+            from core.story_engine import TOOLS as STORY_TOOLS
             # Only include move tool if navigation is configured
-            has_navigation = (self._state_engine.navigation is not None and 
-                              self._state_engine.navigation.is_enabled)
+            has_navigation = (self._story_engine.navigation is not None and
+                              self._story_engine.navigation.is_enabled)
             if has_navigation:
-                tools = tools + STATE_TOOLS
+                tools = tools + STORY_TOOLS
             else:
                 # Exclude move tool for non-navigation presets
-                tools = tools + [t for t in STATE_TOOLS if t['function']['name'] != 'move']
-        
+                tools = tools + [t for t in STORY_TOOLS if t['function']['name'] != 'move']
+
         return tools
 
     def update_enabled_functions(self, enabled_names: list):
@@ -373,25 +373,32 @@ class FunctionManager:
         """Get current people scope. Returns None if people disabled."""
         return self._people_scope
 
-    def set_state_engine(self, engine, turn_getter=None):
+    def set_story_engine(self, engine, turn_getter=None):
         """
-        Set state engine for current chat context.
-        
+        Set story engine for current chat context.
+
         Args:
-            engine: StateEngine instance, or None to disable
+            engine: StoryEngine instance, or None to disable
             turn_getter: Callable that returns current turn number
         """
-        self._state_engine = engine
-        self._state_engine_enabled = engine is not None  # Track enabled state
+        self._story_engine = engine
+        self._story_engine_enabled = engine is not None  # Track enabled state
         self._turn_getter = turn_getter
         if engine:
-            logger.info(f"State engine enabled for chat '{engine.chat_name}'")
+            logger.info(f"Story engine enabled for chat '{engine.chat_name}'")
         else:
-            logger.debug("State engine disabled")
+            logger.debug("Story engine disabled")
+
+    def get_story_engine(self):
+        """Get current story engine. Returns None if disabled."""
+        return self._story_engine
+
+    # Backward compat aliases
+    def set_state_engine(self, engine, turn_getter=None):
+        return self.set_story_engine(engine, turn_getter)
 
     def get_state_engine(self):
-        """Get current state engine. Returns None if disabled."""
-        return self._state_engine
+        return self.get_story_engine()
 
     def _check_privacy_allowed(self, function_name: str) -> tuple:
         """
@@ -487,24 +494,24 @@ class FunctionManager:
 
         logger.info(f"Executing function: {function_name}")
         
-        # Check if this is a state tool
-        from core.state_engine import STATE_TOOL_NAMES, execute as state_execute
-        if function_name in STATE_TOOL_NAMES:
-            if not self._state_engine or not self._state_engine_enabled:
-                result = f"Error: State engine not active for tool '{function_name}'"
+        # Check if this is a story tool
+        from core.story_engine import STORY_TOOL_NAMES, execute as story_execute
+        if function_name in STORY_TOOL_NAMES:
+            if not self._story_engine or not self._story_engine_enabled:
+                result = f"Error: Story engine not active for tool '{function_name}'"
                 self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
                 return result
-            
+
             # Get current turn number
             turn = self._turn_getter() if self._turn_getter else 0
-            
+
             try:
-                result, success = state_execute(function_name, arguments, self._state_engine, turn)
+                result, success = story_execute(function_name, arguments, self._story_engine, turn)
                 execution_time = time.time() - start_time
                 self._log_tool_call(function_name, arguments, result, execution_time, success)
                 return result
             except Exception as e:
-                logger.error(f"Error executing state tool {function_name}: {e}")
+                logger.error(f"Error executing story tool {function_name}: {e}")
                 execution_time = time.time() - start_time
                 self._log_tool_call(function_name, arguments, f"Error: {e}", execution_time, False)
                 return f"Error executing {function_name}: {str(e)}"

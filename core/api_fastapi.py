@@ -25,7 +25,7 @@ from core.auth import (
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
 from core.event_bus import publish, Events
 from core.modules.system import prompts
-from core.state_engine import STATE_TOOL_NAMES
+from core.story_engine import STORY_TOOL_NAMES
 from core.stt.stt_null import NullWhisperClient as _NullWhisperClient
 from core.stt.utils import can_transcribe
 from core.wakeword.wakeword_null import NullWakeWordDetector as _NullWakeWordDetector
@@ -480,13 +480,13 @@ def _apply_chat_settings(system, settings: dict):
             logger.info(f"Applied toolset: {toolset_name}")
             publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
 
-        system.llm_chat._update_state_engine()
+        system.llm_chat._update_story_engine()
 
-        if settings.get('state_engine_enabled') is not None:
+        if settings.get('story_engine_enabled') is not None or settings.get('state_engine_enabled') is not None:
             toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
             publish(Events.TOOLSET_CHANGED, {
                 "name": toolset_info.get("name", "custom"),
-                "action": "state_engine_update",
+                "action": "story_engine_update",
                 "function_count": toolset_info.get("function_count", 0)
             })
 
@@ -685,8 +685,9 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             except Exception:
                 pass
 
-        if chat_settings.get('state_engine_enabled') and not system.llm_chat.function_manager.get_state_engine():
-            system.llm_chat._update_state_engine()
+        story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled'))
+        if story_enabled and not system.llm_chat.function_manager.get_story_engine():
+            system.llm_chat._update_story_engine()
 
         prompt_state = prompts.get_current_state()
         prompt_name = prompts.get_active_preset_name()
@@ -722,13 +723,15 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
 
         story_status = None
         try:
-            if chat_settings.get('state_engine_enabled', False):
+            story_enabled_status = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+            story_preset = chat_settings.get('story_preset', chat_settings.get('state_preset', ''))
+            if story_enabled_status:
                 story_status = {
                     "enabled": True,
-                    "preset": chat_settings.get('state_preset', ''),
-                    "preset_display": chat_settings.get('state_preset', '').replace('_', ' ').title() if chat_settings.get('state_preset') else ''
+                    "preset": story_preset,
+                    "preset_display": story_preset.replace('_', ' ').title() if story_preset else ''
                 }
-                live_engine = system.llm_chat.function_manager.get_state_engine()
+                live_engine = system.llm_chat.function_manager.get_story_engine()
                 if live_engine and hasattr(live_engine, 'preset_config'):
                     story_status["turn"] = getattr(live_engine, 'current_turn', 0)
                     visible_state = live_engine.get_visible_state() if hasattr(live_engine, 'get_visible_state') else {}
@@ -745,8 +748,8 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         except Exception as e:
             logger.warning(f"Error getting story status: {e}")
 
-        state_tools = [f for f in function_names if f in STATE_TOOL_NAMES]
-        user_tools = [f for f in function_names if f not in STATE_TOOL_NAMES]
+        state_tools = [f for f in function_names if f in STORY_TOOL_NAMES]
+        user_tools = [f for f in function_names if f not in STORY_TOOL_NAMES]
 
         return {
             "prompt_name": prompt_name,
@@ -980,19 +983,20 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
             session_manager.clear()
 
             chat_settings = session_manager.get_chat_settings()
-            if chat_settings.get('state_engine_enabled', False):
+            story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+            if story_enabled:
                 from pathlib import Path
-                from core.state_engine import StateEngine
+                from core.story_engine import StoryEngine
                 db_path = Path("user/history/sapphire_history.db")
                 if db_path.exists() and chat_name:
-                    engine = StateEngine(chat_name, db_path)
-                    preset = chat_settings.get('state_preset')
+                    engine = StoryEngine(chat_name, db_path)
+                    preset = chat_settings.get('story_preset', chat_settings.get('state_preset'))
                     if preset:
                         engine.load_preset(preset, 1)
                     else:
                         engine.clear_all()
 
-                    live_engine = system.llm_chat.function_manager.get_state_engine()
+                    live_engine = system.llm_chat.function_manager.get_story_engine()
                     if live_engine and live_engine.chat_name == chat_name:
                         live_engine.reload_from_db()
 
@@ -3135,16 +3139,18 @@ async def delete_memory_api(memory_id: int, request: Request, _=Depends(require_
 
 
 # =============================================================================
-# STATE ENGINE ROUTES
+# STORY ENGINE ROUTES
 # =============================================================================
 
-@app.get("/api/state/presets")
-async def list_state_presets(request: Request, _=Depends(require_login)):
-    """List available state presets."""
+@app.get("/api/story/presets")
+async def list_story_presets(request: Request, _=Depends(require_login)):
+    """List available story presets."""
     presets = []
     search_paths = [
+        PROJECT_ROOT / "user" / "story_presets",
+        PROJECT_ROOT / "core" / "story_engine" / "presets",
+        # Backward compat: old directory
         PROJECT_ROOT / "user" / "state_presets",
-        PROJECT_ROOT / "core" / "state_engine" / "presets",
     ]
     seen = set()
     for search_dir in search_paths:
@@ -3170,21 +3176,22 @@ async def list_state_presets(request: Request, _=Depends(require_login)):
     return {"presets": presets}
 
 
-@app.get("/api/state/{chat_name}")
+@app.get("/api/story/{chat_name}")
 async def get_chat_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Get current state for a chat."""
-    from core.state_engine import StateEngine
+    from core.story_engine import StoryEngine
     db_path = Path("user/history/sapphire_history.db")
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
 
-    engine = StateEngine(chat_name, db_path)
+    engine = StoryEngine(chat_name, db_path)
     session_manager = system.llm_chat.session_manager
 
     if chat_name == session_manager.get_active_chat_name():
         chat_settings = session_manager.get_chat_settings()
-        if chat_settings.get('state_engine_enabled', False):
-            settings_preset = chat_settings.get('state_preset')
+        story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+        if story_enabled:
+            settings_preset = chat_settings.get('story_preset', chat_settings.get('state_preset'))
             db_preset = engine.preset_name
             if settings_preset and settings_preset != db_preset:
                 if engine.is_empty():
@@ -3206,29 +3213,29 @@ async def get_chat_state(chat_name: str, request: Request, _=Depends(require_log
     return {"chat_name": chat_name, "state": formatted, "key_count": len(formatted), "preset": engine.preset_name}
 
 
-@app.get("/api/state/{chat_name}/history")
+@app.get("/api/story/{chat_name}/history")
 async def get_chat_state_history(chat_name: str, limit: int = 100, key: str = None, request: Request = None, _=Depends(require_login)):
     """Get state change history."""
-    from core.state_engine import StateEngine
+    from core.story_engine import StoryEngine
     db_path = Path("user/history/sapphire_history.db")
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
-    engine = StateEngine(chat_name, db_path)
+    engine = StoryEngine(chat_name, db_path)
     history = engine.get_history(key=key, limit=limit)
     return {"chat_name": chat_name, "history": history, "count": len(history)}
 
 
-@app.post("/api/state/{chat_name}/reset")
+@app.post("/api/story/{chat_name}/reset")
 async def reset_chat_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Reset state."""
-    from core.state_engine import StateEngine
+    from core.story_engine import StoryEngine
     db_path = Path("user/history/sapphire_history.db")
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
 
     data = await request.json() or {}
     preset = data.get('preset')
-    engine = StateEngine(chat_name, db_path)
+    engine = StoryEngine(chat_name, db_path)
 
     if preset:
         turn = system.llm_chat.session_manager.get_turn_count() if system else 0
@@ -3240,17 +3247,17 @@ async def reset_chat_state(chat_name: str, request: Request, _=Depends(require_l
         engine.clear_all()
         result = {"status": "cleared", "message": "State cleared"}
 
-    live_engine = system.llm_chat.function_manager.get_state_engine()
+    live_engine = system.llm_chat.function_manager.get_story_engine()
     if live_engine and live_engine.chat_name == chat_name:
         live_engine.reload_from_db()
 
     return result
 
 
-@app.post("/api/state/{chat_name}/set")
+@app.post("/api/story/{chat_name}/set")
 async def set_chat_state_value(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Set a state value."""
-    from core.state_engine import StateEngine
+    from core.story_engine import StoryEngine
     db_path = Path("user/history/sapphire_history.db")
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
@@ -3261,12 +3268,12 @@ async def set_chat_state_value(chat_name: str, request: Request, _=Depends(requi
     if not key:
         raise HTTPException(status_code=400, detail="Key required")
 
-    engine = StateEngine(chat_name, db_path)
+    engine = StoryEngine(chat_name, db_path)
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
     success, msg = engine.set_state(key, value, "user", turn, "Manual edit via UI")
 
     if success:
-        live_engine = system.llm_chat.function_manager.get_state_engine()
+        live_engine = system.llm_chat.function_manager.get_story_engine()
         if live_engine and live_engine.chat_name == chat_name:
             live_engine.reload_from_db()
         return {"status": "set", "key": key, "value": value}
@@ -3274,7 +3281,7 @@ async def set_chat_state_value(chat_name: str, request: Request, _=Depends(requi
         raise HTTPException(status_code=400, detail=msg)
 
 
-@app.get("/api/state/saves/{preset_name}")
+@app.get("/api/story/saves/{preset_name}")
 async def list_game_saves(preset_name: str, request: Request, _=Depends(require_login)):
     """List save slots for a game preset."""
     saves_dir = Path("user/state_saves") / preset_name
@@ -3290,11 +3297,11 @@ async def list_game_saves(preset_name: str, request: Request, _=Depends(require_
     return {"preset": preset_name, "slots": slots}
 
 
-@app.post("/api/state/{chat_name}/save")
+@app.post("/api/story/{chat_name}/save")
 async def save_game_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Save game state to a slot."""
     from datetime import datetime, timezone
-    from core.state_engine import StateEngine
+    from core.story_engine import StoryEngine
 
     data = await request.json() or {}
     slot = data.get('slot')
@@ -3302,12 +3309,12 @@ async def save_game_state(chat_name: str, request: Request, _=Depends(require_lo
         raise HTTPException(status_code=400, detail="Slot must be 1-5")
 
     chat_settings = system.llm_chat.session_manager.get_chat_settings()
-    preset_name = chat_settings.get('state_preset')
+    preset_name = chat_settings.get('story_preset', chat_settings.get('state_preset'))
     if not preset_name:
         raise HTTPException(status_code=400, detail="No game preset active")
 
     db_path = Path("user/history/sapphire_history.db")
-    engine = StateEngine(chat_name, db_path)
+    engine = StoryEngine(chat_name, db_path)
     state = engine.get_state()
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
 
@@ -3328,10 +3335,10 @@ async def save_game_state(chat_name: str, request: Request, _=Depends(require_lo
     return {"status": "saved", "slot": slot, "timestamp": save_data["timestamp"]}
 
 
-@app.post("/api/state/{chat_name}/load")
+@app.post("/api/story/{chat_name}/load")
 async def load_game_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Load game state from a slot."""
-    from core.state_engine import StateEngine
+    from core.story_engine import StoryEngine
 
     data = await request.json() or {}
     slot = data.get('slot')
@@ -3339,7 +3346,7 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
         raise HTTPException(status_code=400, detail="Slot must be 1-5")
 
     chat_settings = system.llm_chat.session_manager.get_chat_settings()
-    preset_name = chat_settings.get('state_preset')
+    preset_name = chat_settings.get('story_preset', chat_settings.get('state_preset'))
     if not preset_name:
         raise HTTPException(status_code=400, detail="No game preset active")
 
@@ -3352,7 +3359,7 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
         save_data = json.load(f)
 
     db_path = Path("user/history/sapphire_history.db")
-    engine = StateEngine(chat_name, db_path)
+    engine = StoryEngine(chat_name, db_path)
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
 
     engine.clear_all()
@@ -3360,7 +3367,7 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
         val = value.get("value") if isinstance(value, dict) else value
         engine.set_state(key, val, "load", turn, f"Loaded from slot {slot}")
 
-    live_engine = system.llm_chat.function_manager.get_state_engine()
+    live_engine = system.llm_chat.function_manager.get_story_engine()
     if live_engine and live_engine.chat_name == chat_name:
         live_engine.reload_from_db()
 

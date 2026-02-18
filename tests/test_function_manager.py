@@ -215,8 +215,8 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'test_func'}}]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.execution_map = {'test_func': mock_executor}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -235,8 +235,8 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'allowed_func'}}]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.execution_map = {'disabled_func': MagicMock()}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -254,8 +254,8 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'orphan_func'}}]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.execution_map = {}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -276,8 +276,8 @@ class TestExecution:
 
             mgr._enabled_tools = [{'function': {'name': 'crashy_func'}}]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.execution_map = {'crashy_func': failing_executor}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
@@ -306,8 +306,8 @@ class TestNetworkToolDetection:
                 {'function': {'name': 'web_search'}},
             ]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr._network_functions = {'web_search', 'web_fetch'}
 
             assert mgr.has_network_tools_enabled() is True
@@ -322,8 +322,8 @@ class TestNetworkToolDetection:
                 {'function': {'name': 'another_local'}},
             ]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr._network_functions = {'web_search', 'web_fetch'}
 
             assert mgr.has_network_tools_enabled() is False
@@ -363,8 +363,8 @@ class TestModeFiltering:
                     'assembled': ['assembled_only', 'both_modes'],
                 }
             }
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.function_modules = {
                 'test_module': {'available_functions': ['mono_only', 'assembled_only', 'both_modes']},
                 'other_module': {'available_functions': ['no_filter']},
@@ -395,8 +395,8 @@ class TestModeFiltering:
                     'assembled': ['assembled_only', 'both_modes'],
                 }
             }
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.function_modules = {
                 'test_module': {'available_functions': ['mono_only', 'assembled_only', 'both_modes']},
             }
@@ -419,8 +419,8 @@ class TestModeFiltering:
                 {'function': {'name': 'func_b'}},
             ]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.function_modules = {}
 
             filtered = mgr.enabled_tools
@@ -446,8 +446,8 @@ class TestEnabledFunctionNames:
                 {'function': {'name': 'func_c'}},
             ]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
 
             names = mgr.get_enabled_function_names()
 
@@ -460,8 +460,8 @@ class TestEnabledFunctionNames:
 
             mgr._enabled_tools = []
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
 
             names = mgr.get_enabled_function_names()
 
@@ -486,8 +486,8 @@ class TestAbilityInfo:
                 {'function': {'name': 'fetch'}},
             ]
             mgr._mode_filters = {}
-            mgr._state_engine = None
-            mgr._state_engine_enabled = False
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
             mgr.function_modules = {
                 'web': {'available_functions': ['search', 'fetch']}
             }

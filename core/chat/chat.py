@@ -203,42 +203,39 @@ class LLMChat:
         context_parts = []
         chat_settings = self.session_manager.get_chat_settings()
         
-        # Debug logging for state engine
-        state_enabled = chat_settings.get('state_engine_enabled', False)
-        state_engine = self.function_manager.get_state_engine()
-        logger.info(f"[STATE] _get_system_prompt: enabled={state_enabled}, engine_exists={state_engine is not None}")
-        
+        # Debug logging for story engine
+        story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+        story_engine = self.function_manager.get_story_engine()
+        logger.info(f"[STORY] _get_system_prompt: enabled={story_enabled}, engine_exists={story_engine is not None}")
+
         # Inject datetime if enabled
         if chat_settings.get('inject_datetime', False):
             from datetime import datetime
             now = datetime.now()
             context_parts.append(f"Current date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}")
-        
+
         # Inject custom context if present
         custom_ctx = chat_settings.get('custom_context', '').strip()
         if custom_ctx:
             context_parts.append(custom_ctx)
-        
-        # Inject state engine block if enabled
-        if chat_settings.get('state_engine_enabled', False):
-            state_engine = self.function_manager.get_state_engine()
-            if state_engine:
-                # New settings take priority, ignore legacy state_in_prompt
-                vars_in_prompt = chat_settings.get('state_vars_in_prompt', False)
-                story_in_prompt = chat_settings.get('state_story_in_prompt', True)
-                
-                logger.info(f"[STATE] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={state_engine.preset_name}")
-                
+
+        # Inject story engine block if enabled
+        if story_enabled:
+            if story_engine:
+                vars_in_prompt = chat_settings.get('story_vars_in_prompt', chat_settings.get('state_vars_in_prompt', False))
+                story_in_prompt = chat_settings.get('story_in_prompt', chat_settings.get('state_story_in_prompt', True))
+
+                logger.info(f"[STORY] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={story_engine.preset_name}")
+
                 if vars_in_prompt or story_in_prompt:
                     # +1 because we're building prompt for the INCOMING message
-                    # get_turn_count() returns existing messages, but hints should reflect current turn
                     turn = self.session_manager.get_turn_count() + 1
-                    state_block = state_engine.format_for_prompt(
+                    state_block = story_engine.format_for_prompt(
                         include_vars=vars_in_prompt,
                         include_story=story_in_prompt,
                         current_turn=turn
                     )
-                    logger.info(f"[STATE] State block length: {len(state_block)} chars")
+                    logger.info(f"[STORY] State block length: {len(state_block)} chars")
                     context_parts.append(f"<state turn=\"{turn}\">\n{state_block}\n</state>")
         
         # Combine all context
@@ -247,21 +244,22 @@ class LLMChat:
         
         return prompt, username
 
-    def _update_state_engine(self):
-        """Initialize or update state engine based on chat settings."""
+    def _update_story_engine(self):
+        """Initialize or update story engine based on chat settings."""
         chat_settings = self.session_manager.get_chat_settings()
 
-        # Fast path: state engine disabled (99% of users)
-        if not chat_settings.get('state_engine_enabled', False):
-            if self.function_manager.get_state_engine():
-                self.function_manager.set_state_engine(None)
-                logger.debug("[STATE] State engine disabled")
+        # Fast path: story engine disabled (99% of users)
+        story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+        if not story_enabled:
+            if self.function_manager.get_story_engine():
+                self.function_manager.set_story_engine(None)
+                logger.debug("[STORY] Story engine disabled")
             return
 
-        # State engine is enabled - check if current engine is still valid
+        # Story engine is enabled - check if current engine is still valid
         chat_name = self.session_manager.get_active_chat_name()
-        new_preset = chat_settings.get('state_preset')
-        current_engine = self.function_manager.get_state_engine()
+        new_preset = chat_settings.get('story_preset', chat_settings.get('state_preset'))
+        current_engine = self.function_manager.get_story_engine()
 
         # Fast path: existing engine is valid for this chat+preset
         if (current_engine and
@@ -270,17 +268,16 @@ class LLMChat:
             return
 
         # Need to create or update engine
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
         db_path = self.session_manager._db_path
 
         if current_engine and current_engine.preset_name != new_preset:
-            logger.info(f"[STATE] Preset changed: '{current_engine.preset_name}' → '{new_preset}'")
+            logger.info(f"[STORY] Preset changed: '{current_engine.preset_name}' → '{new_preset}'")
 
-        # Create new state engine for this chat
-        engine = StateEngine(chat_name, db_path)
+        # Create new story engine for this chat
+        engine = StoryEngine(chat_name, db_path)
 
         if new_preset:
-            # Compare DB preset (what engine loaded) vs requested preset
             db_preset = engine.preset_name
             needs_fresh_load = (db_preset != new_preset) or engine.is_empty()
 
@@ -288,18 +285,18 @@ class LLMChat:
                 turn = self.session_manager.get_turn_count()
                 success, msg = engine.load_preset(new_preset, turn)
                 if success:
-                    logger.info(f"[STATE] Loaded preset '{new_preset}' for chat '{chat_name}'")
+                    logger.info(f"[STORY] Loaded preset '{new_preset}' for chat '{chat_name}'")
                 else:
-                    logger.warning(f"[STATE] Failed to load preset '{new_preset}': {msg}")
+                    logger.warning(f"[STORY] Failed to load preset '{new_preset}': {msg}")
             else:
                 engine.reload_preset_config(new_preset)
-                logger.info(f"[STATE] Reloaded config for existing state in '{chat_name}'")
+                logger.info(f"[STORY] Reloaded config for existing state in '{chat_name}'")
 
-        self.function_manager.set_state_engine(
+        self.function_manager.set_story_engine(
             engine,
             lambda: self.session_manager.get_turn_count()
         )
-        logger.info(f"[STATE] State engine enabled for chat '{chat_name}'")
+        logger.info(f"[STORY] Story engine enabled for chat '{chat_name}'")
 
     def _build_base_messages(self, user_input: str, images: list = None, files: list = None):
         system_prompt, user_name = self._get_system_prompt()
@@ -361,8 +358,8 @@ class LLMChat:
                 
                 return response_text
 
-            # Update state engine FIRST (before building messages) based on current settings
-            self._update_state_engine()
+            # Update story engine FIRST (before building messages) based on current settings
+            self._update_story_engine()
             
             messages = self._build_base_messages(user_input)
             self.session_manager.add_user_message(user_input)

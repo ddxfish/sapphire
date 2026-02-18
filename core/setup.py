@@ -441,23 +441,31 @@ def reset_chat_defaults() -> bool:
         return False
 
 
-def ensure_state_presets() -> bool:
+def ensure_story_presets() -> bool:
     """
-    Create user/state_presets/ directory for custom simulations/games.
+    Create user/story_presets/ directory for custom simulations/games.
     Copies _template.json as a starting point if directory is new.
+    Auto-renames old user/state_presets/ if it exists.
     Returns True on success, False on error.
     """
-    target_dir = Path(__file__).parent.parent / "user" / "state_presets"
+    base = Path(__file__).parent.parent / "user"
+    old_dir = base / "state_presets"
+    target_dir = base / "story_presets"
     template_file = target_dir / "_template.json"
-    
+
     try:
+        # Auto-rename old directory
+        if old_dir.exists() and not target_dir.exists():
+            old_dir.rename(target_dir)
+            logger.info("Renamed user/state_presets/ → user/story_presets/")
+
         created = not target_dir.exists()
         target_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create template only on first run
         if created or not template_file.exists():
             template = {
-                "_comment": "Template for custom state presets. Copy and modify.",
+                "_comment": "Template for custom story presets. Copy and modify.",
                 "name": "My Custom Story",
                 "description": "Brief description shown in preset list",
                 "initial_state": {
@@ -495,13 +503,13 @@ def ensure_state_presets() -> bool:
             }
             with open(template_file, 'w', encoding='utf-8') as f:
                 json.dump(template, f, indent=2)
-            logger.info("Created state preset template at user/state_presets/_template.json")
-        
+            logger.info("Created story preset template at user/story_presets/_template.json")
+
         if created:
-            logger.info("Created user/state_presets/ for custom simulations")
+            logger.info("Created user/story_presets/ for custom simulations")
         return True
     except Exception as e:
-        logger.error(f"Failed to ensure state_presets directory: {e}")
+        logger.error(f"Failed to ensure story_presets directory: {e}")
         return False
 
 

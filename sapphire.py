@@ -35,10 +35,10 @@ def request_shutdown():
     logger.info("Shutdown requested")
 
 # Bootstrap user files before any modules try to load them
-from core.setup import ensure_prompt_files, ensure_chat_defaults, ensure_state_presets
+from core.setup import ensure_prompt_files, ensure_chat_defaults, ensure_story_presets
 ensure_prompt_files()
 ensure_chat_defaults()
-ensure_state_presets()
+ensure_story_presets()
 
 # Run data migrations (e.g. persona -> character rename)
 from core.migration import run_all as run_migrations

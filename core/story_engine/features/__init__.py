@@ -1,6 +1,6 @@
-# core/state_engine/features/__init__.py
+# core/story_engine/features/__init__.py
 """
-Feature modules for state engine.
+Feature modules for story engine.
 
 Features are optional capabilities that can be enabled per game type:
 - choices: Binary forced decisions

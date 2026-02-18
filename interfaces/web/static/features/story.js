@@ -72,7 +72,7 @@ export function closeStoryDropdown() {
 
 async function loadPresets() {
     try {
-        const res = await fetch('/api/state/presets');
+        const res = await fetch('/api/story/presets');
         if (!res.ok) return;
         const data = await res.json();
         // Filter out base presets (start with _)
@@ -119,8 +119,8 @@ async function switchPreset(presetName) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 settings: {
-                    state_engine_enabled: true,
-                    state_preset: presetName
+                    story_engine_enabled: true,
+                    story_preset: presetName
                 }
             })
         });
@@ -130,7 +130,7 @@ async function switchPreset(presetName) {
         const shouldReset = confirm(`Switched to "${presetName}". Would you like to reset progress and start fresh?`);
 
         if (shouldReset) {
-            await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preset: presetName })
@@ -174,7 +174,7 @@ async function handleAction(action) {
 
 async function showStateView(chatName) {
     try {
-        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}`);
+        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}`);
         if (!res.ok) throw new Error('Failed to fetch state');
         const data = await res.json();
 
@@ -202,7 +202,7 @@ async function showStateView(chatName) {
 
 async function showHistory(chatName) {
     try {
-        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}/history?limit=20`);
+        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/history?limit=20`);
         if (!res.ok) throw new Error('Failed to fetch history');
         const data = await res.json();
 
@@ -232,7 +232,7 @@ async function resetState(chatName) {
     }
 
     try {
-        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ preset: null })  // Reset with current preset
@@ -255,7 +255,7 @@ async function disableStory(chatName) {
         const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ settings: { state_engine_enabled: false } })
+            body: JSON.stringify({ settings: { story_engine_enabled: false } })
         });
         if (!res.ok) throw new Error('Failed to disable');
 
@@ -275,7 +275,7 @@ async function enableStory(chatName) {
         const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ settings: { state_engine_enabled: true } })
+            body: JSON.stringify({ settings: { story_engine_enabled: true } })
         });
         if (!res.ok) throw new Error('Failed to enable');
 
@@ -283,7 +283,7 @@ async function enableStory(chatName) {
         const shouldReset = confirm('Story enabled! Would you like to reset progress and start from the beginning?');
 
         if (shouldReset) {
-            await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preset: null })
@@ -391,7 +391,7 @@ async function loadSaveSlots() {
     }
 
     try {
-        const res = await fetch(`/api/state/saves/${encodeURIComponent(currentPreset)}`);
+        const res = await fetch(`/api/story/saves/${encodeURIComponent(currentPreset)}`);
         if (!res.ok) return;
         const data = await res.json();
         saveSlotsCache = data.slots || [];
@@ -470,7 +470,7 @@ async function saveGame(slot) {
     if (!chatName) return;
 
     try {
-        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}/save`, {
+        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot })
@@ -501,7 +501,7 @@ async function loadGame(slot) {
     if (!chatName) return;
 
     try {
-        const res = await fetch(`/api/state/${encodeURIComponent(chatName)}/load`, {
+        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot })

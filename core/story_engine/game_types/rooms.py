@@ -1,4 +1,4 @@
-# core/state_engine/game_types/rooms.py
+# core/story_engine/game_types/rooms.py
 """
 Rooms Game Type - Graph-based room navigation with compass directions.
 

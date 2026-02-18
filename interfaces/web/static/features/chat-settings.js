@@ -52,7 +52,7 @@ export async function openSettingsModal() {
             fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
             fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null).catch(() => null),
-            fetch('/api/state/presets').then(r => r.ok ? r.json() : null).catch(() => null)
+            fetch('/api/story/presets').then(r => r.ok ? r.json() : null).catch(() => null)
         ]);
 
         // Process LLM providers
@@ -122,7 +122,7 @@ export async function openSettingsModal() {
 
         // Process state presets
         if (presetsResult.status === 'fulfilled' && presetsResult.value) {
-            const presetSelect = document.getElementById('setting-state-preset');
+            const presetSelect = document.getElementById('setting-story-preset');
             presetSelect.innerHTML = '<option value="">None</option>';
             (presetsResult.value.presets || []).forEach(p => {
                 const opt = document.createElement('option');
@@ -133,7 +133,7 @@ export async function openSettingsModal() {
         }
 
         // Load current state info if enabled
-        await loadStateInfo(chatName, settings);
+        await loadStoryInfo(chatName, settings);
         
         // Populate form
         document.getElementById('setting-prompt').value = settings.prompt || 'sapphire';
@@ -213,11 +213,11 @@ export async function openSettingsModal() {
             };
         }
         
-        // State engine settings
-        document.getElementById('setting-state-enabled').checked = settings.state_engine_enabled === true;
-        document.getElementById('setting-state-preset').value = settings.state_preset || '';
-        document.getElementById('setting-state-story-in-prompt').checked = settings.state_story_in_prompt !== false;
-        document.getElementById('setting-state-vars-in-prompt').checked = settings.state_vars_in_prompt === true;
+        // Story engine settings
+        document.getElementById('setting-story-enabled').checked = (settings.story_engine_enabled ?? settings.state_engine_enabled) === true;
+        document.getElementById('setting-story-preset').value = settings.story_preset || settings.state_preset || '';
+        document.getElementById('setting-story-in-prompt').checked = (settings.story_in_prompt ?? settings.state_story_in_prompt) !== false;
+        document.getElementById('setting-story-vars-in-prompt').checked = (settings.story_vars_in_prompt ?? settings.state_vars_in_prompt) === true;
         
         // TTS accordion toggle
         const ttsHeader = document.getElementById('tts-header');
@@ -239,9 +239,9 @@ export async function openSettingsModal() {
             };
         }
         
-        // State engine accordion toggle
-        const stateHeader = document.getElementById('state-engine-header');
-        const stateContent = document.getElementById('state-engine-content');
+        // Story engine accordion toggle
+        const stateHeader = document.getElementById('story-engine-header');
+        const stateContent = document.getElementById('story-engine-content');
         if (stateHeader) {
             stateHeader.onclick = () => {
                 const isOpen = stateHeader.classList.toggle('open');
@@ -250,10 +250,10 @@ export async function openSettingsModal() {
         }
         
         // Update state badge
-        updateStateBadge(settings.state_engine_enabled);
+        updateStoryBadge(settings.story_engine_enabled ?? settings.state_engine_enabled);
         
         // State action buttons
-        setupStateActionButtons(chatName);
+        setupStoryActionButtons(chatName);
         
         document.getElementById('pitch-value').textContent = settings.pitch || 0.94;
         document.getElementById('speed-value').textContent = settings.speed || 1.3;
@@ -396,10 +396,10 @@ export async function saveSettings() {
             goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
             knowledge_scope: document.getElementById('setting-knowledge-scope')?.value || 'default',
             people_scope: document.getElementById('setting-people-scope')?.value || 'default',
-            state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
-            state_preset: document.getElementById('setting-state-preset')?.value || null,
-            state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
-            state_vars_in_prompt: document.getElementById('setting-state-vars-in-prompt')?.checked || false
+            story_engine_enabled: document.getElementById('setting-story-enabled')?.checked || false,
+            story_preset: document.getElementById('setting-story-preset')?.value || null,
+            story_in_prompt: document.getElementById('setting-story-in-prompt')?.checked !== false,
+            story_vars_in_prompt: document.getElementById('setting-story-vars-in-prompt')?.checked || false
         };
 
         await api.updateChatSettings(chatName, settings);
@@ -489,10 +489,10 @@ export async function saveAsDefaults() {
             goal_scope: document.getElementById('setting-goal-scope')?.value || 'default',
             knowledge_scope: document.getElementById('setting-knowledge-scope')?.value || 'default',
             people_scope: document.getElementById('setting-people-scope')?.value || 'default',
-            state_engine_enabled: document.getElementById('setting-state-enabled')?.checked || false,
-            state_preset: document.getElementById('setting-state-preset')?.value || null,
-            state_story_in_prompt: document.getElementById('setting-state-story-in-prompt')?.checked !== false,
-            state_vars_in_prompt: document.getElementById('setting-state-vars-in-prompt')?.checked || false
+            story_engine_enabled: document.getElementById('setting-story-enabled')?.checked || false,
+            story_preset: document.getElementById('setting-story-preset')?.value || null,
+            story_in_prompt: document.getElementById('setting-story-in-prompt')?.checked !== false,
+            story_vars_in_prompt: document.getElementById('setting-story-vars-in-prompt')?.checked || false
         };
 
         const res = await fetch('/api/settings/chat-defaults', {
@@ -553,16 +553,16 @@ export function handleModalBackdropClick(e) {
 }
 
 // =============================================================================
-// STATE ENGINE HELPERS
+// STORY ENGINE HELPERS
 // =============================================================================
 
-async function loadStateInfo(chatName, settings) {
-    const stateInfo = document.getElementById('state-info');
-    const stateActions = document.getElementById('state-actions');
-    const turnInfo = document.getElementById('state-turn-info');
-    const keyInfo = document.getElementById('state-key-info');
+async function loadStoryInfo(chatName, settings) {
+    const stateInfo = document.getElementById('story-info');
+    const stateActions = document.getElementById('story-actions');
+    const turnInfo = document.getElementById('story-turn-info');
+    const keyInfo = document.getElementById('story-key-info');
     
-    if (!settings.state_engine_enabled) {
+    if (!(settings.story_engine_enabled ?? settings.state_engine_enabled)) {
         if (stateInfo) stateInfo.style.display = 'none';
         if (stateActions) stateActions.style.display = 'none';
         return;
@@ -571,7 +571,7 @@ async function loadStateInfo(chatName, settings) {
     try {
         const ctrl = new AbortController();
         setTimeout(() => ctrl.abort(), 5000);
-        const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`, { signal: ctrl.signal });
+        const resp = await fetch(`/api/story/${encodeURIComponent(chatName)}`, { signal: ctrl.signal });
         if (resp.ok) {
             const data = await resp.json();
             if (turnInfo) turnInfo.textContent = `Turn: ${Object.values(data.state || {})[0]?.turn || 0}`;
@@ -584,19 +584,19 @@ async function loadStateInfo(chatName, settings) {
     }
 }
 
-function updateStateBadge(enabled) {
-    const badge = document.getElementById('state-badge');
+function updateStoryBadge(enabled) {
+    const badge = document.getElementById('story-badge');
     if (badge) {
         badge.style.display = enabled ? 'inline-block' : 'none';
     }
     
     // Also update checkbox change handler
-    const checkbox = document.getElementById('setting-state-enabled');
+    const checkbox = document.getElementById('setting-story-enabled');
     if (checkbox) {
         checkbox.onchange = () => {
-            updateStateBadge(checkbox.checked);
-            const stateInfo = document.getElementById('state-info');
-            const stateActions = document.getElementById('state-actions');
+            updateStoryBadge(checkbox.checked);
+            const stateInfo = document.getElementById('story-info');
+            const stateActions = document.getElementById('story-actions');
             if (!checkbox.checked) {
                 if (stateInfo) stateInfo.style.display = 'none';
                 if (stateActions) stateActions.style.display = 'none';
@@ -605,15 +605,15 @@ function updateStateBadge(enabled) {
     }
 }
 
-function setupStateActionButtons(chatName) {
-    const viewBtn = document.getElementById('state-view-btn');
-    const resetBtn = document.getElementById('state-reset-btn');
-    const historyBtn = document.getElementById('state-history-btn');
+function setupStoryActionButtons(chatName) {
+    const viewBtn = document.getElementById('story-view-btn');
+    const resetBtn = document.getElementById('story-reset-btn');
+    const historyBtn = document.getElementById('story-history-btn');
     
     if (viewBtn) {
         viewBtn.onclick = async () => {
             try {
-                const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`);
+                const resp = await fetch(`/api/story/${encodeURIComponent(chatName)}`);
                 if (resp.ok) {
                     const data = await resp.json();
                     const stateStr = Object.entries(data.state || {})
@@ -629,11 +629,11 @@ function setupStateActionButtons(chatName) {
     
     if (resetBtn) {
         resetBtn.onclick = async () => {
-            const preset = document.getElementById('setting-state-preset')?.value;
+            const preset = document.getElementById('setting-story-preset')?.value;
             if (!confirm(`Reset state${preset ? ` to preset "${preset}"` : ''}?`)) return;
             
             try {
-                const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+                const resp = await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ preset: preset || null })
@@ -641,8 +641,8 @@ function setupStateActionButtons(chatName) {
                 if (resp.ok) {
                     ui.showToast('State reset', 'success');
                     // Refresh state info
-                    const settings = { state_engine_enabled: true };
-                    await loadStateInfo(chatName, settings);
+                    const settings = { story_engine_enabled: true };
+                    await loadStoryInfo(chatName, settings);
                 } else {
                     const err = await resp.json();
                     ui.showToast(err.error || 'Reset failed', 'error');
@@ -656,7 +656,7 @@ function setupStateActionButtons(chatName) {
     if (historyBtn) {
         historyBtn.onclick = async () => {
             try {
-                const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}/history?limit=20`);
+                const resp = await fetch(`/api/story/${encodeURIComponent(chatName)}/history?limit=20`);
                 if (resp.ok) {
                     const data = await resp.json();
                     const histStr = (data.history || [])

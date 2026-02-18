@@ -1,4 +1,4 @@
-# core/state_engine/game_types/linear.py
+# core/story_engine/game_types/linear.py
 """
 Linear Game Type - Scene-based progression with cumulative content reveal.
 

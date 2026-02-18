@@ -1,14 +1,14 @@
 """
-State Engine Tests - Per-chat state management for games and interactive stories.
+Story Engine Tests - Per-chat state management for games and interactive stories.
 
-Tests the StateEngine class for:
+Tests the StoryEngine class for:
 - Basic state get/set operations
 - Type validation
 - Dice rolling
 - Preset loading
 - Database persistence
 
-Run with: pytest tests/test_state_engine.py -v
+Run with: pytest tests/test_story_engine.py -v
 """
 import pytest
 import tempfile
@@ -67,24 +67,24 @@ def temp_db():
 
 
 # =============================================================================
-# StateEngine Basic Operations
+# StoryEngine Basic Operations
 # =============================================================================
 
-class TestStateEngineInit:
-    """Test StateEngine initialization."""
+class TestStoryEngineInit:
+    """Test StoryEngine initialization."""
 
     def test_creates_empty_state(self, temp_db):
         """New engine should have empty state."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         assert engine.chat_name == "test_chat"
         assert engine.get_state() == {}
 
     def test_loads_existing_state(self, temp_db):
         """Engine should load state from database."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
         # Pre-populate database
         conn = sqlite3.connect(str(temp_db))
@@ -98,28 +98,28 @@ class TestStateEngineInit:
         conn.commit()
         conn.close()
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         assert engine.get_state("health") == 100
 
 
-class TestStateEngineGetSet:
+class TestStoryEngineGetSet:
     """Test state get/set operations."""
 
     def test_set_state_basic(self, temp_db):
         """set_state should store value."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("player_name", "Alice", changed_by="ai", turn_number=1)
 
         assert engine.get_state("player_name") == "Alice"
 
     def test_set_state_overwrites(self, temp_db):
         """set_state should overwrite existing value."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("score", 10, changed_by="ai", turn_number=1)
         engine.set_state("score", 20, changed_by="ai", turn_number=2)
 
@@ -127,17 +127,17 @@ class TestStateEngineGetSet:
 
     def test_get_state_returns_none_for_missing(self, temp_db):
         """get_state should return None for missing key."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         assert engine.get_state("nonexistent") is None
 
     def test_get_state_no_key_returns_all(self, temp_db):
         """get_state() with no key should return all state."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("a", 1, changed_by="ai", turn_number=1)
         engine.set_state("b", 2, changed_by="ai", turn_number=1)
 
@@ -147,9 +147,9 @@ class TestStateEngineGetSet:
 
     def test_set_state_different_types(self, temp_db):
         """set_state should handle different value types."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         engine.set_state("string_val", "hello", changed_by="ai", turn_number=1)
         engine.set_state("number_val", 42, changed_by="ai", turn_number=1)
@@ -162,27 +162,27 @@ class TestStateEngineGetSet:
         assert engine.get_state("list_val") == ["a", "b"]
 
 
-class TestStateEnginePersistence:
+class TestStoryEnginePersistence:
     """Test database persistence."""
 
     def test_state_persists_to_database(self, temp_db):
         """State changes should be written to database."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("persistent_key", "persistent_value", changed_by="ai", turn_number=1)
 
         # Create new engine instance to verify persistence
-        engine2 = StateEngine("test_chat", temp_db)
+        engine2 = StoryEngine("test_chat", temp_db)
 
         assert engine2.get_state("persistent_key") == "persistent_value"
 
     def test_state_isolated_by_chat(self, temp_db):
         """State should be isolated per chat_name."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine1 = StateEngine("chat_a", temp_db)
-        engine2 = StateEngine("chat_b", temp_db)
+        engine1 = StoryEngine("chat_a", temp_db)
+        engine2 = StoryEngine("chat_b", temp_db)
 
         engine1.set_state("key", "value_a", changed_by="ai", turn_number=1)
         engine2.set_state("key", "value_b", changed_by="ai", turn_number=1)
@@ -191,14 +191,14 @@ class TestStateEnginePersistence:
         assert engine2.get_state("key") == "value_b"
 
 
-class TestStateEngineClear:
+class TestStoryEngineClear:
     """Test state clearing."""
 
     def test_clear_all_removes_all(self, temp_db):
         """clear_all should remove all state for chat."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("a", 1, changed_by="ai", turn_number=1)
         engine.set_state("b", 2, changed_by="ai", turn_number=1)
 
@@ -207,14 +207,14 @@ class TestStateEngineClear:
         assert engine.get_state() == {}
 
 
-class TestStateEngineReload:
+class TestStoryEngineReload:
     """Test state reload from database."""
 
     def test_reload_from_db(self, temp_db):
         """reload_from_db should refresh state from database."""
-        from core.state_engine import StateEngine
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("original", "value", changed_by="ai", turn_number=1)
 
         # Directly modify database (simulating external change)
@@ -243,7 +243,7 @@ class TestStateValidation:
 
     def test_is_system_key_detects_underscore_prefix(self):
         """System keys start with underscore."""
-        from core.state_engine.validation import is_system_key
+        from core.story_engine.validation import is_system_key
 
         assert is_system_key("_preset") is True
         assert is_system_key("_scene_entered_at") is True
@@ -252,14 +252,14 @@ class TestStateValidation:
 
     def test_infer_type_string(self):
         """Should infer string type."""
-        from core.state_engine.validation import infer_type
+        from core.story_engine.validation import infer_type
 
         assert infer_type("hello") == "string"
         assert infer_type("") == "string"
 
     def test_infer_type_number(self):
         """Should infer integer/number type."""
-        from core.state_engine.validation import infer_type
+        from core.story_engine.validation import infer_type
 
         assert infer_type(42) == "integer"
         assert infer_type(3.14) == "number"  # floats are "number"
@@ -267,14 +267,14 @@ class TestStateValidation:
 
     def test_infer_type_boolean(self):
         """Should infer boolean type."""
-        from core.state_engine.validation import infer_type
+        from core.story_engine.validation import infer_type
 
         assert infer_type(True) == "boolean"
         assert infer_type(False) == "boolean"
 
     def test_infer_type_list(self):
         """Should infer array type (JSON schema term)."""
-        from core.state_engine.validation import infer_type
+        from core.story_engine.validation import infer_type
 
         assert infer_type([1, 2, 3]) == "array"
         assert infer_type([]) == "array"
@@ -284,12 +284,12 @@ class TestStateValidation:
 # Tools Tests
 # =============================================================================
 
-class TestStateTools:
-    """Test state engine tools definitions."""
+class TestStoryTools:
+    """Test story engine tools definitions."""
 
     def test_tools_list_has_required_tools(self):
-        """TOOLS should include all state tools."""
-        from core.state_engine import TOOLS, STATE_TOOL_NAMES
+        """TOOLS should include all story tools."""
+        from core.story_engine import TOOLS, STORY_TOOL_NAMES
 
         tool_names = {t['function']['name'] for t in TOOLS}
 
@@ -299,12 +299,12 @@ class TestStateTools:
         assert 'advance_scene' in tool_names
         assert 'move' in tool_names
 
-        # STATE_TOOL_NAMES should match
-        assert tool_names == STATE_TOOL_NAMES
+        # STORY_TOOL_NAMES should match
+        assert tool_names == STORY_TOOL_NAMES
 
     def test_tool_definitions_have_required_fields(self):
         """Each tool should have proper structure."""
-        from core.state_engine import TOOLS
+        from core.story_engine import TOOLS
 
         for tool in TOOLS:
             assert tool['type'] == 'function'
@@ -319,10 +319,10 @@ class TestDiceRolling:
 
     def test_roll_dice_returns_valid_range(self, temp_db):
         """roll_dice should return values in valid range."""
-        from core.state_engine.tools import execute
-        from core.state_engine import StateEngine
+        from core.story_engine.tools import execute
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         # Roll 1d6 many times and check range
         for _ in range(20):
@@ -332,10 +332,10 @@ class TestDiceRolling:
 
     def test_roll_dice_respects_count(self, temp_db):
         """roll_dice with count should roll multiple dice."""
-        from core.state_engine.tools import execute
-        from core.state_engine import StateEngine
+        from core.story_engine.tools import execute
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         result, _ = execute("roll_dice", {"count": 3, "sides": 6}, engine, turn_number=1)
         # Should mention multiple dice or individual rolls
@@ -346,24 +346,31 @@ class TestDiceRolling:
 # Integration Tests
 # =============================================================================
 
-class TestStateEngineIntegration:
-    """Integration tests for state engine."""
+class TestStoryEngineIntegration:
+    """Integration tests for story engine."""
 
     def test_module_imports(self):
-        """State engine should import cleanly."""
-        from core.state_engine import StateEngine, TOOLS, STATE_TOOL_NAMES, execute
+        """Story engine should import cleanly."""
+        from core.story_engine import StoryEngine, TOOLS, STORY_TOOL_NAMES, execute
+
+        assert StoryEngine is not None
+        assert TOOLS is not None
+        assert STORY_TOOL_NAMES is not None
+        assert execute is not None
+
+    def test_backward_compat_imports(self):
+        """Backward compat aliases should work."""
+        from core.story_engine import StateEngine, STATE_TOOL_NAMES
 
         assert StateEngine is not None
-        assert TOOLS is not None
         assert STATE_TOOL_NAMES is not None
-        assert execute is not None
 
     def test_execute_get_state(self, temp_db):
         """execute('get_state') should return state."""
-        from core.state_engine.tools import execute
-        from core.state_engine import StateEngine
+        from core.story_engine.tools import execute
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
         engine.set_state("test_key", "test_value", changed_by="ai", turn_number=1)
 
         result, _ = execute("get_state", {"key": "test_key"}, engine, turn_number=2)
@@ -372,10 +379,10 @@ class TestStateEngineIntegration:
 
     def test_execute_set_state(self, temp_db):
         """execute('set_state') should modify state."""
-        from core.state_engine.tools import execute
-        from core.state_engine import StateEngine
+        from core.story_engine.tools import execute
+        from core.story_engine import StoryEngine
 
-        engine = StateEngine("test_chat", temp_db)
+        engine = StoryEngine("test_chat", temp_db)
 
         result, _ = execute("set_state", {
             "key": "new_key",

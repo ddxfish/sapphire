@@ -1,4 +1,4 @@
-# core/state_engine/game_types/base.py
+# core/story_engine/game_types/base.py
 """
 Base Game Type - Abstract base class for game paradigms.
 """

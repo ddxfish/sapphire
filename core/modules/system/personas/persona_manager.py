@@ -13,8 +13,8 @@ PERSONA_SETTINGS_KEYS = [
     "spice_enabled", "spice_turns", "inject_datetime", "custom_context",
     "llm_primary", "llm_model", "memory_scope", "goal_scope",
     "knowledge_scope", "people_scope", "trim_color",
-    "state_engine_enabled", "state_preset", "state_vars_in_prompt",
-    "state_story_in_prompt"
+    "story_engine_enabled", "story_preset", "story_vars_in_prompt",
+    "story_in_prompt"
 ]
 
 

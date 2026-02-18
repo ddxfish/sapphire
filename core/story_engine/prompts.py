@@ -1,4 +1,4 @@
-# core/state_engine/prompts.py
+# core/story_engine/prompts.py
 """
 Progressive Prompt Assembly - Reveals content based on iterator state.
 

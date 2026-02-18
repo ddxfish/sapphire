@@ -1,4 +1,4 @@
-# core/state_engine/game_types/__init__.py
+# core/story_engine/game_types/__init__.py
 """
 Game Types - Define how different game paradigms work.
 

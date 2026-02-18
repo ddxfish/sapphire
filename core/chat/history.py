@@ -29,10 +29,10 @@ SYSTEM_DEFAULTS = {
     "custom_context": "",
     "llm_primary": "auto",      # "auto", "none", or provider key like "claude"
     "llm_model": "",            # Empty = use provider default, or specific model override
-    "state_engine_enabled": False,  # State engine for games/simulations
-    "state_preset": None,           # Preset to load (e.g., "five_rooms")
-    "state_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
-    "state_story_in_prompt": True,  # Include story segments in prompt (cache-friendly)
+    "story_engine_enabled": False,  # Story engine for games/simulations
+    "story_preset": None,           # Preset to load (e.g., "crystal_prophecy")
+    "story_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
+    "story_in_prompt": True,        # Include story segments in prompt (cache-friendly)
     "memory_scope": "default",
     "goal_scope": "default",
     "knowledge_scope": "default",
@@ -1041,20 +1041,22 @@ class ChatSessionManager:
         return self.current_chat.get_turn_count()
 
     def _rollback_state_if_needed(self):
-        """Rollback state engine to current turn count if enabled."""
-        if not self.current_settings.get('state_engine_enabled', False):
+        """Rollback story engine to current turn count if enabled."""
+        story_enabled = self.current_settings.get('story_engine_enabled',
+                         self.current_settings.get('state_engine_enabled', False))
+        if not story_enabled:
             return
-        
+
         try:
-            from core.state_engine import StateEngine
+            from core.story_engine import StoryEngine
             new_turn = self.get_turn_count()
-            engine = StateEngine(self.active_chat_name, self._db_path)
-            
+            engine = StoryEngine(self.active_chat_name, self._db_path)
+
             if not engine.is_empty():
                 engine.rollback_to_turn(new_turn)
-                logger.info(f"[STATE] Rolled back state to turn {new_turn} after message removal")
+                logger.info(f"[STORY] Rolled back state to turn {new_turn} after message removal")
         except Exception as e:
-            logger.error(f"[STATE] Failed to rollback state: {e}")
+            logger.error(f"[STORY] Failed to rollback state: {e}")
 
     def remove_last_messages(self, count: int) -> bool:
         result = self.current_chat.remove_last_messages(count)
@@ -1096,13 +1098,13 @@ class ChatSessionManager:
         
         # Always clear state for this chat (even if engine currently disabled)
         try:
-            from core.state_engine import StateEngine
-            engine = StateEngine(self.active_chat_name, self._db_path)
+            from core.story_engine import StoryEngine
+            engine = StoryEngine(self.active_chat_name, self._db_path)
             if not engine.is_empty():
                 engine.clear_all()
-                logger.info(f"[STATE] Cleared state for chat '{self.active_chat_name}'")
+                logger.info(f"[STORY] Cleared state for chat '{self.active_chat_name}'")
         except Exception as e:
-            logger.error(f"[STATE] Failed to clear state: {e}")
+            logger.error(f"[STORY] Failed to clear state: {e}")
         
         publish(Events.CHAT_CLEARED)
 

@@ -197,7 +197,7 @@ export default {
         }
 
         // State engine buttons
-        setupStateButtons(container);
+        setupStoryButtons(container);
     },
 
     async show() {
@@ -232,7 +232,7 @@ async function loadSidebar() {
             fetch('/api/goals/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null),
-            fetch('/api/state/presets').then(r => r.ok ? r.json() : null),
+            fetch('/api/story/presets').then(r => r.ok ? r.json() : null),
             fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
             fetch('/api/personas').then(r => r.ok ? r.json() : null)
         ]);
@@ -342,13 +342,13 @@ async function loadSidebar() {
         }
 
         // Populate state preset dropdown
-        const presetSel = container.querySelector('#sb-state-preset');
+        const presetSel = container.querySelector('#sb-story-preset');
         if (presetSel && presetsData) {
             presetSel.innerHTML = '<option value="">None</option>' +
                 (presetsData.presets || []).map(p =>
                     `<option value="${p.name}">${p.display_name} (${p.key_count} keys)</option>`
                 ).join('');
-            setSelect(presetSel, settings.state_preset || '');
+            setSelect(presetSel, settings.story_preset ?? settings.state_preset ?? '');
         }
 
         // Set remaining form values
@@ -362,9 +362,9 @@ async function loadSidebar() {
         setToggle(container, '#sb-spice-toggle', settings.spice_enabled !== false,
             `Spice \u00b7 ${settings.spice_turns || 3}`);
         setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
-        setChecked(container, '#sb-state-enabled', settings.state_engine_enabled === true);
-        setChecked(container, '#sb-state-story', settings.state_story_in_prompt !== false);
-        setChecked(container, '#sb-state-vars', settings.state_vars_in_prompt === true);
+        setChecked(container, '#sb-story-enabled', (settings.story_engine_enabled ?? settings.state_engine_enabled) === true);
+        setChecked(container, '#sb-story-in-prompt', (settings.story_in_prompt ?? settings.state_story_in_prompt) !== false);
+        setChecked(container, '#sb-story-vars', (settings.story_vars_in_prompt ?? settings.state_vars_in_prompt) === true);
 
         // Trim color
         const trimInput = container.querySelector('#sb-trim-color');
@@ -442,10 +442,10 @@ function collectSettings(container) {
         goal_scope: getVal(container, '#sb-goal-scope') || 'default',
         knowledge_scope: getVal(container, '#sb-knowledge-scope') || 'default',
         people_scope: getVal(container, '#sb-people-scope') || 'default',
-        state_engine_enabled: getChecked(container, '#sb-state-enabled'),
-        state_preset: getVal(container, '#sb-state-preset') || null,
-        state_story_in_prompt: getChecked(container, '#sb-state-story'),
-        state_vars_in_prompt: getChecked(container, '#sb-state-vars')
+        story_engine_enabled: getChecked(container, '#sb-story-enabled'),
+        story_preset: getVal(container, '#sb-story-preset') || null,
+        story_in_prompt: getChecked(container, '#sb-story-in-prompt'),
+        story_vars_in_prompt: getChecked(container, '#sb-story-vars')
     };
 }
 
@@ -499,12 +499,12 @@ function getSelectedModel(container) {
     return '';
 }
 
-function setupStateButtons(container) {
-    container.querySelector('#sb-state-view')?.addEventListener('click', async () => {
+function setupStoryButtons(container) {
+    container.querySelector('#sb-story-view')?.addEventListener('click', async () => {
         const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
         if (!chatName) return;
         try {
-            const resp = await fetch(`/api/state/${encodeURIComponent(chatName)}`);
+            const resp = await fetch(`/api/story/${encodeURIComponent(chatName)}`);
             if (resp.ok) {
                 const data = await resp.json();
                 const str = Object.entries(data.state || {})
@@ -514,17 +514,17 @@ function setupStateButtons(container) {
         } catch (e) { ui.showToast('Failed', 'error'); }
     });
 
-    container.querySelector('#sb-state-reset')?.addEventListener('click', async () => {
+    container.querySelector('#sb-story-reset')?.addEventListener('click', async () => {
         const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
-        if (!chatName || !confirm('Reset state?')) return;
-        const preset = getVal(container, '#sb-state-preset');
+        if (!chatName || !confirm('Reset story?')) return;
+        const preset = getVal(container, '#sb-story-preset');
         try {
-            await fetch(`/api/state/${encodeURIComponent(chatName)}/reset`, {
+            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preset: preset || null })
             });
-            ui.showToast('State reset', 'success');
+            ui.showToast('Story reset', 'success');
         } catch (e) { ui.showToast('Failed', 'error'); }
     });
 }

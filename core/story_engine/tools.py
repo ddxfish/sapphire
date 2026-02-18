@@ -1,6 +1,6 @@
-# core/state_engine/tools.py
+# core/story_engine/tools.py
 """
-State Engine Tools - Exposed to AI when state_engine_enabled.
+Story Engine Tools - Exposed to AI when story engine is enabled.
 
 Simplified tool set:
 - get_state: Check values
@@ -19,7 +19,7 @@ from typing import Any, Tuple
 logger = logging.getLogger(__name__)
 
 # Tool names for detection
-STATE_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'advance_scene', 'move'}
+STORY_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'advance_scene', 'move'}
 
 TOOLS = [
     {
@@ -137,7 +137,7 @@ TOOLS = [
 ]
 
 
-def execute(function_name: str, arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
+def execute(function_name: str, arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
     """
     Execute a state tool.
     
@@ -146,7 +146,7 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
     Args:
         function_name: Name of the state tool
         arguments: Tool arguments from LLM
-        state_engine: StateEngine instance for this chat
+        story_engine: StateEngine instance for this chat
         turn_number: Current turn number (user message count)
     
     Returns:
@@ -154,19 +154,19 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
     """
     try:
         if function_name == "get_state":
-            return _execute_get_state(arguments, state_engine, turn_number)
+            return _execute_get_state(arguments, story_engine, turn_number)
         
         elif function_name == "set_state":
-            return _execute_set_state(arguments, state_engine, turn_number)
+            return _execute_set_state(arguments, story_engine, turn_number)
         
         elif function_name == "advance_scene":
-            return _execute_advance_scene(arguments, state_engine, turn_number)
+            return _execute_advance_scene(arguments, story_engine, turn_number)
         
         elif function_name == "roll_dice":
-            return _execute_roll_dice(arguments, state_engine, turn_number)
+            return _execute_roll_dice(arguments, story_engine, turn_number)
         
         elif function_name == "move":
-            return _execute_move(arguments, state_engine, turn_number)
+            return _execute_move(arguments, story_engine, turn_number)
         
         else:
             return f"Unknown state tool: {function_name}", False
@@ -176,28 +176,28 @@ def execute(function_name: str, arguments: dict, state_engine, turn_number: int)
         return f"Error: {str(e)}", False
 
 
-def _execute_get_state(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
+def _execute_get_state(arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
     """Get state - returns context block."""
     key = arguments.get("key")
     
     if key:
         # Special handling for scene_turns pseudo-variable
         if key == "scene_turns":
-            scene_turns = state_engine.get_scene_turns(turn_number)
+            scene_turns = story_engine.get_scene_turns(turn_number)
             summary = f"scene_turns = {scene_turns}"
         else:
-            value = state_engine.get_state(key)
+            value = story_engine.get_state(key)
             if value is None:
                 return f"Key '{key}' not found in state", False
             summary = f"{key} = {_format_value(value)}"
     else:
         summary = "Current state:"
     
-    context = state_engine.get_context_block(turn_number, summary)
+    context = story_engine.get_context_block(turn_number, summary)
     return context, True
 
 
-def _execute_set_state(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
+def _execute_set_state(arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
     """Set state - handles regular state, choices, and riddles."""
     key = arguments.get("key")
     value = arguments.get("value")
@@ -207,13 +207,13 @@ def _execute_set_state(arguments: dict, state_engine, turn_number: int) -> Tuple
         return "Error: key is required", False
 
     # Check if this is a riddle attempt (before we call set_state)
-    is_riddle_attempt = state_engine._riddles and state_engine._riddles.is_riddle_key(key)
+    is_riddle_attempt = story_engine._riddles and story_engine._riddles.is_riddle_key(key)
 
     # Let engine handle routing to choices/riddles based on key type
-    success, msg = state_engine.set_state(key, value, "ai", turn_number, reason)
+    success, msg = story_engine.set_state(key, value, "ai", turn_number, reason)
 
     if success:
-        context = state_engine.get_context_block(turn_number, msg)
+        context = story_engine.get_context_block(turn_number, msg)
         # Terminal instruction for riddle attempts - let player react to result
         if is_riddle_attempt:
             context += "\n\n⛔ STOP — Narrate this attempt to the player. Do NOT guess again or make additional tool calls this turn."
@@ -222,25 +222,25 @@ def _execute_set_state(arguments: dict, state_engine, turn_number: int) -> Tuple
         return msg, False
 
 
-def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
+def _execute_advance_scene(arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
     """Advance to next scene - validates prerequisites."""
     reason = arguments.get("reason", "story progression")
 
     # Check if already advanced this turn
-    can_advance, msg = state_engine.can_advance_this_turn(turn_number)
+    can_advance, msg = story_engine.can_advance_this_turn(turn_number)
     if not can_advance:
         return f"Error: {msg}", False
 
     # Get iterator config
-    if not state_engine.progressive_config:
+    if not story_engine.progressive_config:
         return "Error: No progressive story configured", False
 
-    iterator_key = state_engine.progressive_config.get("iterator")
+    iterator_key = story_engine.progressive_config.get("iterator")
     if not iterator_key:
         return "Error: No scene iterator configured", False
     
     # Get current value
-    current = state_engine.get_state(iterator_key)
+    current = story_engine.get_state(iterator_key)
     if current is None:
         return f"Error: Iterator '{iterator_key}' not found in state", False
     
@@ -251,7 +251,7 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
     new_value = int(current) + 1
     
     # Check max constraint
-    entry = state_engine.get_state_full(iterator_key)
+    entry = story_engine.get_state_full(iterator_key)
     if entry and entry.get("constraints"):
         constraints = entry["constraints"]
         max_val = constraints.get("max")
@@ -259,12 +259,12 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
             return f"Cannot advance: already at final scene ({current}/{max_val})", False
     
     # Try to set - this will check choice blockers
-    success, msg = state_engine.set_state(iterator_key, new_value, "ai", turn_number, reason)
+    success, msg = story_engine.set_state(iterator_key, new_value, "ai", turn_number, reason)
     
     if success:
-        state_engine.mark_advanced(turn_number)
+        story_engine.mark_advanced(turn_number)
         summary = f"✓ Advanced to scene {new_value}"
-        context = state_engine.get_context_block(turn_number, summary)
+        context = story_engine.get_context_block(turn_number, summary)
         # Terminal instruction - AI must narrate new scene before more tool calls
         context += "\n\n⛔ STOP — Narrate this new scene to the player. Do NOT make additional tool calls this turn."
         return context, True
@@ -272,7 +272,7 @@ def _execute_advance_scene(arguments: dict, state_engine, turn_number: int) -> T
         return msg, False
 
 
-def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
+def _execute_roll_dice(arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
     """Roll dice - returns result with context. Auto-detects active riddle with dice_dc."""
     count = arguments.get("count", 1)
     sides = arguments.get("sides", 6)
@@ -292,9 +292,9 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
         summary = f"🎲 Rolled {count}d{sides}: {rolls} = {total}"
 
     # Auto-detect active riddle with dice_dc if not specified
-    if riddle_id is None and dc is None and state_engine._riddles:
+    if riddle_id is None and dc is None and story_engine._riddles:
         # Find active riddles (not solved, not locked) with dice_dc configured
-        for riddle in state_engine._riddles.riddles:
+        for riddle in story_engine._riddles.riddles:
             rid = riddle.get("id")
             if not rid:
                 continue
@@ -303,13 +303,13 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
             if riddle_dc is None:
                 continue
             # Check if already solved or locked
-            status = state_engine._riddles.get_status(rid)
+            status = story_engine._riddles.get_status(rid)
             if status.get("solved") or status.get("locked"):
                 continue
             # Check visibility - supports both scene (numeric) and room (string)
             visible_from_scene = riddle.get("visible_from_scene")
             visible_from_room = riddle.get("visible_from_room")
-            current_pos = state_engine.get_state(state_engine._progressive_config.get("iterator")) if state_engine._progressive_config else None
+            current_pos = story_engine.get_state(story_engine._progressive_config.get("iterator")) if story_engine._progressive_config else None
 
             if visible_from_scene is not None:
                 if isinstance(current_pos, (int, float)) and current_pos < visible_from_scene:
@@ -329,22 +329,22 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
         if total >= dc:
             # Success! Apply riddle's dice_success_sets if available
             summary += f" vs DC {dc} — SUCCESS! (bypassed {riddle_id})"
-            if state_engine._riddles:
-                riddle = state_engine._riddles.get_by_id(riddle_id)
+            if story_engine._riddles:
+                riddle = story_engine._riddles.get_by_id(riddle_id)
                 if riddle:
                     # Mark riddle as solved via bypass
-                    state_engine.set_state(f"_riddle_{riddle_id}_solved", True, "system",
+                    story_engine.set_state(f"_riddle_{riddle_id}_solved", True, "system",
                                           turn_number, "Dice bypass")
                     # Apply dice_success_sets (or fall back to success_sets)
                     success_sets = riddle.get("dice_success_sets") or riddle.get("success_sets", {})
                     for key, value in success_sets.items():
-                        state_engine.set_state(key, value, "ai", turn_number, f"Dice bypass: {riddle_id}")
+                        story_engine.set_state(key, value, "ai", turn_number, f"Dice bypass: {riddle_id}")
                         summary += f"\n  → {key} = {value}"
         else:
             summary += f" vs DC {dc} — FAILED (need {dc}+)"
 
     # Log the roll to state (for audit trail)
-    state_engine.set_state(
+    story_engine.set_state(
         "_last_roll",
         {"dice": f"{count}d{sides}", "rolls": rolls, "total": total, "dc": dc, "riddle_id": riddle_id},
         "system",
@@ -352,11 +352,11 @@ def _execute_roll_dice(arguments: dict, state_engine, turn_number: int) -> Tuple
         "dice roll"
     )
 
-    context = state_engine.get_context_block(turn_number, summary)
+    context = story_engine.get_context_block(turn_number, summary)
     return context, True
 
 
-def _execute_move(arguments: dict, state_engine, turn_number: int) -> Tuple[str, bool]:
+def _execute_move(arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
     """Move in direction - navigation mode."""
     direction = arguments.get("direction", "").strip()
     reason = arguments.get("reason", f"moved {direction}")
@@ -364,13 +364,13 @@ def _execute_move(arguments: dict, state_engine, turn_number: int) -> Tuple[str,
     if not direction:
         return "Error: direction is required", False
     
-    if not state_engine.navigation or not state_engine.navigation.is_enabled:
+    if not story_engine.navigation or not story_engine.navigation.is_enabled:
         return "Error: This preset doesn't use room navigation. Use set_state() instead.", False
     
-    success, msg = state_engine.navigation.move(direction, turn_number, reason)
+    success, msg = story_engine.navigation.move(direction, turn_number, reason)
     
     if success:
-        context = state_engine.get_context_block(turn_number, msg)
+        context = story_engine.get_context_block(turn_number, msg)
         # Terminal instruction - AI must respond before more tool calls
         context += "\n\n⛔ STOP — Narrate this location to the player. Do NOT make additional tool calls this turn."
         return context, True

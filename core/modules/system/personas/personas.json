@@ -23,10 +23,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#4a9eff",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "cobalt": {
@@ -52,10 +52,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#3d7aff",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "anita": {
@@ -81,10 +81,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#ff6b9d",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "claude": {
@@ -110,10 +110,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#b07aff",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "alfred": {
@@ -139,10 +139,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#c4a265",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "lovelace": {
@@ -168,10 +168,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#00d4aa",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "einstein": {
@@ -197,10 +197,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#ffa500",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "nexus": {
@@ -226,10 +226,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#00ff88",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "cantos": {
@@ -255,10 +255,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#ff4500",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "yuki": {
@@ -284,10 +284,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#ff69b4",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   },
   "eddie": {
@@ -313,10 +313,10 @@
       "knowledge_scope": "default",
       "people_scope": "default",
       "trim_color": "#ffdd44",
-      "state_engine_enabled": false,
-      "state_preset": null,
-      "state_vars_in_prompt": false,
-      "state_story_in_prompt": true
+      "story_engine_enabled": false,
+      "story_preset": null,
+      "story_vars_in_prompt": false,
+      "story_in_prompt": true
     }
   }
 }

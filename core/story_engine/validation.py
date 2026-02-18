@@ -1,4 +1,4 @@
-# core/state_engine/validation.py
+# core/story_engine/validation.py
 """
 State validation: constraints, type inference, blocker checking.
 """

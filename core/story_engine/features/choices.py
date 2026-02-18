@@ -1,4 +1,4 @@
-# core/state_engine/features/choices.py
+# core/story_engine/features/choices.py
 """
 Binary Choices - Forced decisions that block progression until resolved.
 

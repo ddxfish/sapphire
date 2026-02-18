@@ -1,4 +1,4 @@
-# core/state_engine/features/navigation.py
+# core/story_engine/features/navigation.py
 """
 Navigation - Room-based movement with compass directions.
 

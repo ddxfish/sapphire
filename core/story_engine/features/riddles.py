@@ -1,4 +1,4 @@
-# core/state_engine/features/riddles.py
+# core/story_engine/features/riddles.py
 """
 Riddles - Collaborative puzzles with hidden answers.
 

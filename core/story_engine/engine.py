@@ -1,6 +1,6 @@
-# core/state_engine/engine.py
+# core/story_engine/engine.py
 """
-State Engine - Per-chat state management with full history for rollback.
+Story Engine - Per-chat state management with full history for rollback.
 Enables games, simulations, and interactive stories where AI reads/writes state via tools.
 
 This module orchestrates:
@@ -22,11 +22,11 @@ from .prompts import PromptBuilder
 from .game_types import get_game_type
 from .features import ChoiceManager, RiddleManager, NavigationManager
 
-# Set up dedicated state engine logger
+# Set up dedicated story engine logger
 logger = logging.getLogger(__name__)
 
-# Create dedicated file handler for state engine debugging
-_state_log_path = Path(__file__).parent.parent.parent / "user" / "logs" / "state_engine.log"
+# Create dedicated file handler for story engine debugging
+_state_log_path = Path(__file__).parent.parent.parent / "user" / "logs" / "story_engine.log"
 _state_log_path.parent.mkdir(parents=True, exist_ok=True)
 _state_file_handler = logging.FileHandler(_state_log_path, mode='a')
 _state_file_handler.setLevel(logging.DEBUG)
@@ -35,7 +35,7 @@ logger.addHandler(_state_file_handler)
 logger.setLevel(logging.DEBUG)
 
 
-class StateEngine:
+class StoryEngine:
     """Manages per-chat state with SQLite persistence and rollback support."""
     
     def __init__(self, chat_name: str, db_path: Path):
@@ -689,25 +689,27 @@ class StateEngine:
         """Load a state preset, initializing all state keys."""
         project_root = Path(__file__).parent.parent.parent
         search_paths = [
+            project_root / "user" / "story_presets" / f"{preset_name}.json",
+            project_root / "core" / "story_engine" / "presets" / f"{preset_name}.json",
+            # Backward compat: old paths
             project_root / "user" / "state_presets" / f"{preset_name}.json",
-            project_root / "core" / "state_engine" / "presets" / f"{preset_name}.json",
         ]
-        
+
         preset_path = None
         for path in search_paths:
             if path.exists():
                 preset_path = path
                 break
-        
+
         if not preset_path:
             return False, f"Preset not found: {preset_name}"
-        
+
         try:
             with open(preset_path, 'r', encoding='utf-8') as f:
                 preset = json.load(f)
-            
+
             self.clear_all()
-            
+
             # Initialize state from preset
             initial_state = preset.get("initial_state", {})
             for key, spec in initial_state.items():
@@ -719,12 +721,12 @@ class StateEngine:
                     "constraints": {k: v for k, v in spec.items() if k not in ("value", "type", "label")},
                     "turn": turn_number
                 }
-            
+
             # Write to database
             with self._get_connection() as conn:
                 for key, entry in self._current_state.items():
                     conn.execute(
-                        """INSERT INTO state_current 
+                        """INSERT INTO state_current
                            (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (self.chat_name, key, json.dumps(entry["value"]), entry["type"],
@@ -732,13 +734,13 @@ class StateEngine:
                          datetime.now().isoformat(), "system", turn_number)
                     )
                     conn.execute(
-                        """INSERT INTO state_log 
+                        """INSERT INTO state_log
                            (chat_name, key, old_value, new_value, changed_by, turn_number, timestamp, reason)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                         (self.chat_name, key, None, json.dumps(entry["value"]),
                          "system", turn_number, datetime.now().isoformat(), f"Preset: {preset_name}")
                     )
-                
+
                 conn.execute(
                     """INSERT OR REPLACE INTO state_current 
                        (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
@@ -775,16 +777,18 @@ class StateEngine:
         """Reload progressive_config from preset WITHOUT resetting state."""
         project_root = Path(__file__).parent.parent.parent
         search_paths = [
+            project_root / "user" / "story_presets" / f"{preset_name}.json",
+            project_root / "core" / "story_engine" / "presets" / f"{preset_name}.json",
+            # Backward compat: old paths
             project_root / "user" / "state_presets" / f"{preset_name}.json",
-            project_root / "core" / "state_engine" / "presets" / f"{preset_name}.json",
         ]
-        
+
         preset_path = None
         for path in search_paths:
             if path.exists():
                 preset_path = path
                 break
-        
+
         if not preset_path:
             logger.warning(f"Preset not found for config reload: {preset_name}")
             return False

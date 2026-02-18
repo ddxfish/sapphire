@@ -95,8 +95,8 @@ class StreamingChat:
                 yield {"type": "content", "text": response_text}
                 return
 
-            # Update state engine FIRST (before building messages) based on current settings
-            self.main_chat._update_state_engine()
+            # Update story engine FIRST (before building messages) based on current settings
+            self.main_chat._update_story_engine()
             
             messages = self.main_chat._build_base_messages(user_input, images=images, files=files)
 
