@@ -108,7 +108,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "tool_save",
-            "description": f"Create or update a custom tool module. Validates code (AST + smoke test) before saving to user/functions/. Overwrites if exists. After saving, call tool_activate to load.\n\nRequired format:\n{_TOOL_FORMAT}",
+            "description": f"Create or update a custom tool module. Validates code (AST + smoke test) before saving to user/functions/. Overwrites if exists. After saving, call tool_activate to load.\n\nBefore creating a tool, call search_help_docs(\"TOOLS\") for the full tool format reference and rules.\n\nRequired format:\n{_TOOL_FORMAT}",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -268,7 +268,7 @@ def execute(function_name, arguments, config):
                 return f"Smoke test failed: {err}\nFile removed — fix and retry.", False
 
             tool_list = _list_custom_tools()
-            return f"Tool '{name}' saved and validated.\n{tool_list}\nCall tool_activate to load.", True
+            return f"Tool '{name}' saved and validated.\n{tool_list}\nNow call tool_activate to reload tools.", True
 
         elif function_name == 'tool_read':
             name = arguments.get('name')
