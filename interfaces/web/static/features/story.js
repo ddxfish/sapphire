@@ -1,4 +1,5 @@
 // features/story.js - Story Engine pill indicator and controls
+import * as api from '../api.js';
 import * as ui from '../ui.js';
 
 let storyMenu = null;
@@ -7,6 +8,52 @@ let isDropdownOpen = false;
 let currentPreset = null;
 let presetsCache = null;
 let saveSlotsCache = null;
+
+// ==================== Story Picker Modal ====================
+
+export async function openStoryPicker() {
+    const modal = document.getElementById('story-picker-modal');
+    if (!modal) return;
+
+    // Load presets if needed
+    if (!presetsCache) await loadPresets();
+
+    const grid = modal.querySelector('#story-preset-grid');
+    if (grid && presetsCache) {
+        grid.innerHTML = presetsCache.map(p => {
+            const tags = [];
+            if (p.has_tools) tags.push('<span class="story-preset-tag has-tools">Custom Tools</span>');
+            if (p.has_prompt) tags.push('<span class="story-preset-tag has-prompt">Story Prompt</span>');
+            if (p.key_count) tags.push(`<span class="story-preset-tag">${p.key_count} vars</span>`);
+            return `
+                <button class="story-preset-card" data-preset="${p.name}">
+                    <span class="story-preset-card-title">${p.display_name || p.name}</span>
+                    ${p.description ? `<span class="story-preset-card-desc">${p.description}</span>` : ''}
+                    ${tags.length ? `<div class="story-preset-card-tags">${tags.join('')}</div>` : ''}
+                </button>
+            `;
+        }).join('');
+
+        // Card click → start story
+        grid.querySelectorAll('.story-preset-card').forEach(card => {
+            card.addEventListener('click', async () => {
+                const preset = card.dataset.preset;
+                modal.style.display = 'none';
+                await startStory(preset);
+            });
+        });
+    }
+
+    modal.style.display = 'flex';
+
+    // Close handlers
+    const closeBtn = modal.querySelector('#story-modal-close');
+    const closeModal = () => { modal.style.display = 'none'; };
+    closeBtn?.addEventListener('click', closeModal, { once: true });
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    }, { once: true });
+}
 
 export function initStoryIndicator() {
     storyMenu = document.getElementById('story-indicator');
@@ -96,15 +143,38 @@ function populatePresetSubmenu() {
         </button>
     `).join('');
 
-    // Add click handlers
+    // Add click handlers — start new story chat when inactive, switch preset when active
     submenu.querySelectorAll('.story-preset-item').forEach(item => {
         item.addEventListener('click', async (e) => {
             e.stopPropagation();
             const presetName = item.dataset.preset;
             closeDropdown();
-            await switchPreset(presetName);
+            if (currentPreset) {
+                await switchPreset(presetName);
+            } else {
+                await startStory(presetName);
+            }
         });
     });
+}
+
+async function startStory(presetName) {
+    try {
+        const result = await api.startStory(presetName);
+        ui.showToast(`Started: ${result.display_name}`, 'success');
+
+        // Backend already switched to the new chat — just sync the frontend
+        const { populateChatDropdown, handleChatChange } = await import('./chat-manager.js');
+        await populateChatDropdown();
+
+        // Select the new chat in the dropdown, then refresh UI
+        const { getElements } = await import('../core/state.js');
+        const { chatSelect } = getElements();
+        if (chatSelect) chatSelect.value = result.chat_name;
+        await handleChatChange();
+    } catch (e) {
+        ui.showToast(`Failed to start story: ${e.message}`, 'error');
+    }
 }
 
 async function switchPreset(presetName) {

@@ -323,6 +323,17 @@ body {
     white-space: nowrap;
 }
 
+.chat-picker-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 8px;
+}
+
+.chat-picker-story .chat-picker-item-name {
+    font-style: italic;
+    opacity: 0.85;
+}
+
 .header-icon-btn.danger-icon { font-size: 14px; }
 .header-icon-btn.danger-icon:hover { color: var(--error); }
 
@@ -6193,4 +6204,133 @@ a.gallery-caption:hover {
         width: 80px;
         height: 80px;
     }
+}
+
+
+/* =============================================================================
+   STORY PICKER MODAL
+   ============================================================================= */
+
+.story-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.15s ease;
+}
+
+.story-modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    width: 520px;
+    max-width: 90vw;
+    max-height: 80vh;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.story-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.story-modal-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.story-modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+}
+
+.story-preset-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.story-preset-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 14px 16px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    text-align: left;
+    width: 100%;
+    color: inherit;
+    font: inherit;
+}
+
+.story-preset-card:hover {
+    border-color: var(--trim, #4a9eff);
+    background: var(--bg-hover);
+}
+
+.story-preset-card-title {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.story-preset-card-desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.story-preset-card-tags {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.story-preset-tag {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+
+.story-preset-tag.has-tools { color: var(--trim, #4a9eff); border-color: var(--trim, #4a9eff); }
+.story-preset-tag.has-prompt { color: #a78bfa; border-color: #a78bfa; }
+
+/* "New Story" button in chat picker dropdown */
+.chat-picker-story-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    color: var(--trim, #4a9eff);
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.chat-picker-story-btn:hover {
+    background: var(--bg-hover);
 }

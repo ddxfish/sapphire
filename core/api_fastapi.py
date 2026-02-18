@@ -1126,10 +1126,14 @@ async def import_history(request: Request, _=Depends(require_login), system=Depe
 # =============================================================================
 
 @app.get("/api/chats")
-async def list_chats(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """List all chats."""
+async def list_chats(request: Request, type: str = None, _=Depends(require_login), system=Depends(get_system)):
+    """List chats. Optional ?type=regular|story to filter."""
     try:
         chats = system.llm_chat.list_chats()
+        if type == "regular":
+            chats = [c for c in chats if not c.get("story_chat")]
+        elif type == "story":
+            chats = [c for c in chats if c.get("story_chat")]
         active_chat = system.llm_chat.get_active_chat()
         return {"chats": chats, "active_chat": active_chat}
     except Exception as e:
@@ -3172,6 +3176,73 @@ async def delete_memory_api(memory_id: int, request: Request, _=Depends(require_
 # =============================================================================
 # STORY ENGINE ROUTES
 # =============================================================================
+
+
+@app.post("/api/story/start")
+async def start_story(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Create a dedicated story chat with auto-configured settings."""
+    try:
+        data = await request.json() or {}
+        preset_name = data.get("preset")
+        if not preset_name:
+            raise HTTPException(status_code=400, detail="Preset name required")
+
+        # Load preset to get display name
+        from core.story_engine.engine import StoryEngine
+        preset_path = StoryEngine._find_preset_path_static(preset_name)
+        if not preset_path:
+            raise HTTPException(status_code=404, detail=f"Preset not found: {preset_name}")
+
+        with open(preset_path, 'r', encoding='utf-8') as f:
+            preset_data = json.load(f)
+        story_display = preset_data.get("name", preset_name.replace('_', ' ').title())
+
+        # Create unique chat name (sanitize same as create_chat does)
+        raw_name = f"story_{preset_name}"
+        chat_name = "".join(c for c in raw_name if c.isalnum() or c in (' ', '-', '_')).strip()
+        chat_name = chat_name.replace(' ', '_').lower()
+        base_name = chat_name
+        counter = 1
+        existing = {c["name"] for c in system.llm_chat.list_chats()}
+        while chat_name in existing:
+            counter += 1
+            chat_name = f"{base_name}_{counter}"
+
+        if not system.llm_chat.create_chat(chat_name):
+            raise HTTPException(status_code=500, detail="Failed to create story chat")
+
+        # Switch to the new chat
+        if not system.llm_chat.switch_chat(chat_name):
+            raise HTTPException(status_code=500, detail="Failed to switch to story chat")
+
+        # Configure story settings
+        story_settings = {
+            "story_chat": True,
+            "story_display_name": f"[STORY] {story_display}",
+            "story_engine_enabled": True,
+            "story_preset": preset_name,
+            "story_in_prompt": True,
+            "story_vars_in_prompt": False,
+        }
+        system.llm_chat.session_manager.update_chat_settings(story_settings)
+
+        # Apply settings (loads story engine, prompt, etc.)
+        settings = system.llm_chat.session_manager.get_chat_settings()
+        _apply_chat_settings(system, settings)
+
+        origin = request.headers.get('X-Session-ID')
+        publish(Events.CHAT_SWITCHED, {"name": chat_name, "origin": origin})
+
+        return {
+            "status": "success",
+            "chat_name": chat_name,
+            "display_name": f"[STORY] {story_display}",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start story: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/story/presets")
 async def list_story_presets(request: Request, _=Depends(require_login)):

@@ -695,7 +695,8 @@ class StoryEngine:
     
     # ==================== PRESETS ====================
     
-    def _find_preset_path(self, preset_name: str) -> Optional[Path]:
+    @staticmethod
+    def _find_preset_path_static(preset_name: str) -> Optional[Path]:
         """Find preset file, checking folder format then flat format."""
         project_root = Path(__file__).parent.parent.parent
         search_paths = [
@@ -712,6 +713,9 @@ class StoryEngine:
             if path.exists():
                 return path
         return None
+
+    def _find_preset_path(self, preset_name: str) -> Optional[Path]:
+        return self._find_preset_path_static(preset_name)
 
     def load_preset(self, preset_name: str, turn_number: int) -> tuple[bool, str]:
         """Load a story preset, initializing all state keys."""

@@ -146,6 +146,9 @@ function updateSpice(spice) {
     }
 }
 
+// NOTE: promptPill is NOT in state.js initElements() — always undefined.
+// Prompt display is the #sb-prompt dropdown in chat.js.
+// This function is dead code but kept for future pill UI (Phase 6).
 function updatePrompt(state, promptName, charCount, privacyRequired) {
     const { promptPill } = getElements();
     if (!promptPill) return;
@@ -183,6 +186,9 @@ function updatePrompt(state, promptName, charCount, privacyRequired) {
     }
 }
 
+// NOTE: abilityPill is NOT in state.js initElements() — always undefined.
+// Toolset display is the #sb-toolset dropdown in chat.js, synced via saveSettings().
+// This function is dead code but kept for future pill UI (Phase 6).
 function updateFuncs(funcs, toolset, cloudTools, stateTools) {
     const { abilityPill } = getElements();
     if (!abilityPill) return;

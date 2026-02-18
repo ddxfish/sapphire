@@ -84,6 +84,15 @@ export default {
             const sbDropdown = container.querySelector('#sb-chat-picker-dropdown');
             if (sbDropdown) {
                 sbDropdown.addEventListener('click', async e => {
+                    // "New Story..." button opens the story picker modal
+                    const storyBtn = e.target.closest('[data-action="new-story"]');
+                    if (storyBtn) {
+                        sbPicker.classList.remove('open');
+                        const { openStoryPicker } = await import('../features/story.js');
+                        openStoryPicker();
+                        return;
+                    }
+
                     const item = e.target.closest('.chat-picker-item');
                     if (!item) return;
                     const chatName = item.dataset.chat;
@@ -453,7 +462,10 @@ async function saveSettings(container) {
         const result = await api.updateChatSettings(chatName, settings);
         updateSendButtonLLM(settings.llm_primary, settings.llm_model);
 
-        // Sync toolset dropdown from save response (no second API call)
+        // Sync toolset dropdown directly from save response.
+        // The PUT response returns live toolset/function state so we update
+        // the sidebar #sb-toolset dropdown here — no second API call, no race.
+        // scene.js updateFuncs() targets abilityPill which doesn't exist in DOM.
         if (result?.toolset) {
             const toolsetSel = container.querySelector('#sb-toolset');
             if (toolsetSel) {

@@ -423,12 +423,15 @@ export const hasVisibleContent = () => {
 // CHAT MANAGEMENT
 // =============================================================================
 
-export const renderChatDropdown = (chats, activeChat) => {
+export const renderChatDropdown = (chats, activeChat, storyChats = []) => {
+    // Combine all chats for the hidden select (needs all chats for switching)
+    const allChats = [...chats, ...storyChats];
+
     // Update hidden select (state holder used throughout the app)
     const select = document.getElementById('chat-select');
     if (select) {
         select.innerHTML = '';
-        chats.forEach(chat => {
+        allChats.forEach(chat => {
             const opt = document.createElement('option');
             opt.value = chat.name;
             opt.textContent = chat.display_name;
@@ -437,7 +440,8 @@ export const renderChatDropdown = (chats, activeChat) => {
         });
     }
 
-    const itemsHtml = chats.map(c => `
+    // Build picker items — regular chats first, then story chats with separator
+    let itemsHtml = chats.map(c => `
         <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
                 data-chat="${c.name}">
             <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
@@ -445,16 +449,27 @@ export const renderChatDropdown = (chats, activeChat) => {
         </button>
     `).join('');
 
-    // Update top bar chat picker dropdown
-    const dropdown = document.getElementById('chat-picker-dropdown');
-    if (dropdown) dropdown.innerHTML = itemsHtml;
+    if (storyChats.length > 0) {
+        itemsHtml += '<div class="chat-picker-divider"></div>';
+        itemsHtml += storyChats.map(c => `
+            <button class="chat-picker-item chat-picker-story ${c.name === activeChat ? 'active' : ''}"
+                    data-chat="${c.name}">
+                <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+                <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
+            </button>
+        `).join('');
+    }
+
+    // "New Story..." button at the bottom
+    itemsHtml += '<div class="chat-picker-divider"></div>';
+    itemsHtml += '<button class="chat-picker-story-btn" data-action="new-story">&#x1F4D6; New Story...</button>';
 
     // Update sidebar chat picker dropdown
     const sbDropdown = document.getElementById('sb-chat-picker-dropdown');
     if (sbDropdown) sbDropdown.innerHTML = itemsHtml;
 
-    // Update header names
-    const active = chats.find(c => c.name === activeChat);
+    // Update header names (check all chats)
+    const active = allChats.find(c => c.name === activeChat);
     const displayName = active?.display_name || activeChat || 'Chat';
 
     const headerName = document.getElementById('chat-header-name');
