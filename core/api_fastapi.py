@@ -3114,14 +3114,12 @@ async def upload_chat_document(chat_name: str, file: UploadFile = File(...), _=D
 
     filename = file.filename or 'upload.txt'
     ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
-    if ext not in ('txt', 'md', 'pdf'):
-        raise HTTPException(status_code=400, detail="Unsupported file type. Use .txt, .md, or .pdf")
 
     raw = await file.read()
     if len(raw) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (max 5MB)")
 
-    # Extract text
+    # Extract text — PDF is special, everything else try to decode as text
     if ext == 'pdf':
         try:
             from pypdf import PdfReader
@@ -3139,7 +3137,7 @@ async def upload_chat_document(chat_name: str, file: UploadFile = File(...), _=D
             except (UnicodeDecodeError, ValueError):
                 continue
         if text is None:
-            raise HTTPException(status_code=400, detail="Could not decode file")
+            raise HTTPException(status_code=400, detail="Could not decode file — binary or unsupported encoding")
 
     text = text.strip()
     if not text:

@@ -80,7 +80,7 @@ function updateContent() {
     const subEl = container?.querySelector('#sched-subtitle');
     const hstripEl = container?.querySelector('#sched-hstrip-wrap');
 
-    // Preserve open accordion state before re-render
+    // Preserve open accordion state + scroll position before re-render
     const openCards = new Set();
     if (missionEl) {
         for (const d of missionEl.querySelectorAll('details.hb-response-wrap[open]')) {
@@ -88,16 +88,19 @@ function updateContent() {
             if (card) openCards.add(card.id);
         }
     }
+    const scrollEl = container?.querySelector('.view-scroll');
+    const scrollTop = scrollEl?.scrollTop || 0;
 
     if (tasksEl) tasksEl.innerHTML = renderTaskList();
     if (missionEl) missionEl.innerHTML = renderMission();
     if (hstripEl) hstripEl.innerHTML = renderHorizontalTimeline();
 
-    // Restore open accordions
+    // Restore open accordions + scroll position
     for (const id of openCards) {
         const details = missionEl?.querySelector(`#${id} details.hb-response-wrap`);
         if (details) details.open = true;
     }
+    if (scrollEl) scrollEl.scrollTop = scrollTop;
     const total = tasks.length + heartbeats.length;
     const enabled = [...tasks, ...heartbeats].filter(t => t.enabled).length;
     if (subEl) subEl.innerHTML = `${enabled}/${total} active
