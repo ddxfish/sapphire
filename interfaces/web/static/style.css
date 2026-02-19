@@ -1596,9 +1596,9 @@ body {
 /* 2-column layout: tasks left, mission control right */
 .sched-layout {
     display: grid;
-    grid-template-columns: 1fr 42%;
+    grid-template-columns: 1fr 55%;
     gap: 28px;
-    max-width: 1100px;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 0 4px;
 }
@@ -1695,7 +1695,7 @@ body {
 
 /* Horizontal timeline strip */
 .sched-hstrip {
-    max-width: 1100px;
+    max-width: 1200px;
     margin: 0 auto 16px;
     padding: 14px 4px 0;
 }
@@ -1815,18 +1815,64 @@ body {
     margin-bottom: 8px;
 }
 
-.hb-response {
+.hb-response-wrap {
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+.hb-response-wrap summary { cursor: pointer; list-style: none; }
+.hb-response-wrap summary::marker, .hb-response-wrap summary::-webkit-details-marker { display: none; }
+
+/* Shared text style */
+.hb-response-summary, .hb-response-full {
     font-size: var(--font-xs);
     color: var(--text-secondary);
     background: var(--bg-primary);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
-    margin-bottom: 8px;
     line-height: 1.4;
-    max-height: 60px;
-    overflow: hidden;
-    white-space: pre-wrap;
     word-break: break-word;
+}
+
+/* Collapsed: 1-line preview with ▸ */
+.hb-response-summary {
+    padding: 6px 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+}
+/* Standalone (short response, no accordion) */
+div.hb-response-summary {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+}
+.hb-response-wrap .hb-response-summary::before {
+    content: '\25B8';
+    opacity: 0.4;
+    font-size: 10px;
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+
+/* Expanded: hide summary text, show collapse bar + full content */
+.hb-response-wrap[open] .hb-response-summary {
+    font-size: 0;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    display: block;
+}
+.hb-response-wrap[open] .hb-response-summary::before {
+    content: '\25BE';
+    font-size: 10px;
+    margin-right: 0;
+}
+.hb-response-full {
+    white-space: pre-wrap;
+    padding: 8px 10px;
+    max-height: 400px;
+    overflow-y: auto;
 }
 
 .hb-actions {

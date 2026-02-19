@@ -22,18 +22,20 @@ class ContinuityExecutor:
         """
         self.system = system
     
-    def run(self, task: Dict[str, Any], progress_callback=None) -> Dict[str, Any]:
+    def run(self, task: Dict[str, Any], progress_callback=None, response_callback=None) -> Dict[str, Any]:
         """
         Execute a continuity task.
 
         Args:
             task: Task definition dict
             progress_callback: Optional callable(iteration, total) for progress updates
+            response_callback: Optional callable(response_text) called before TTS
 
         Returns:
             Result dict with success, responses, errors
         """
         self._progress_cb = progress_callback
+        self._response_cb = response_callback
 
         # Resolve persona defaults into task (task-level fields override persona)
         task = self._resolve_persona(task)
@@ -84,6 +86,11 @@ class ContinuityExecutor:
             try:
                 response = self.system.llm_chat.isolated_chat(msg, task_settings)
 
+                # Update UI before TTS (which blocks)
+                if self._response_cb and response:
+                    try: self._response_cb(response)
+                    except Exception: pass
+
                 if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
                     try:
                         self.system.tts.speak_sync(response)
@@ -93,7 +100,7 @@ class ContinuityExecutor:
                 result["responses"].append({
                     "iteration": 1,
                     "input": msg,
-                    "output": response[:500] if response else None
+                    "output": response or None
                 })
             except Exception as e:
                 error_msg = f"Task failed: {e}"
@@ -164,6 +171,12 @@ class ContinuityExecutor:
 
             try:
                 response = self.system.process_llm_query(msg, skip_tts=True)
+
+                # Update UI before TTS (which blocks)
+                if self._response_cb and response:
+                    try: self._response_cb(response)
+                    except Exception: pass
+
                 if tts_enabled and response and hasattr(self.system, 'tts') and self.system.tts:
                     try:
                         self.system.tts.speak_sync(response)
@@ -172,7 +185,7 @@ class ContinuityExecutor:
                 result["responses"].append({
                     "iteration": 1,
                     "input": msg,
-                    "output": response[:500] if response else None
+                    "output": response or None
                 })
             except Exception as e:
                 error_msg = f"Task failed: {e}"

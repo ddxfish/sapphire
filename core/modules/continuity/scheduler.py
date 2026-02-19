@@ -332,6 +332,16 @@ class ContinuityScheduler:
                     self._tasks[task_id]["last_run"] = now
         return callback
 
+    def _make_response_callback(self, task_id: str):
+        """Create a response callback — stores last_response before TTS blocks."""
+        def callback(response: str):
+            clean = _strip_think_tags(response)
+            with self._lock:
+                if task_id in self._tasks:
+                    self._tasks[task_id]["last_response"] = clean or None
+                    self._save_tasks()
+        return callback
+
     def _execute_task(self, task: Dict):
         """Execute a task and drain any pending queue. Runs on a worker thread."""
         task_id = task["id"]
@@ -350,7 +360,11 @@ class ContinuityScheduler:
 
             self._log_activity(task_id, task_name, "started")
             try:
-                result = self.executor.run(task, progress_callback=self._make_progress_callback(task_id))
+                result = self.executor.run(
+                    task,
+                    progress_callback=self._make_progress_callback(task_id),
+                    response_callback=self._make_response_callback(task_id),
+                )
 
                 with self._lock:
                     if task_id in self._tasks:
@@ -360,17 +374,8 @@ class ContinuityScheduler:
 
                 status = "complete" if result.get("success") else "error"
 
-                # Store last response for vitals display (strip think tags)
-                responses = result.get("responses", [])
-                if responses:
-                    last = _strip_think_tags(responses[-1].get("output", ""))
-                    with self._lock:
-                        if task_id in self._tasks:
-                            self._tasks[task_id]["last_response"] = last[:500] if last else None
-                            self._save_tasks()
-
                 self._log_activity(task_id, task_name, status, {
-                    "responses": len(responses),
+                    "responses": len(result.get("responses", [])),
                     "errors": result.get("errors", [])
                 })
             except Exception as e:
@@ -490,7 +495,11 @@ class ContinuityScheduler:
         self._log_activity(task_id, task_name, "started", {"manual": True})
 
         try:
-            result = self.executor.run(task, progress_callback=self._make_progress_callback(task_id))
+            result = self.executor.run(
+                task,
+                progress_callback=self._make_progress_callback(task_id),
+                response_callback=self._make_response_callback(task_id),
+            )
 
             with self._lock:
                 if task_id in self._tasks:
@@ -499,18 +508,9 @@ class ContinuityScheduler:
 
             status = "complete" if result.get("success") else "error"
 
-            # Store last response for vitals display (strip think tags)
-            responses = result.get("responses", [])
-            if responses:
-                last = _strip_think_tags(responses[-1].get("output", ""))
-                with self._lock:
-                    if task_id in self._tasks:
-                        self._tasks[task_id]["last_response"] = last[:500] if last else None
-                        self._save_tasks()
-
             self._log_activity(task_id, task_name, status, {
                 "manual": True,
-                "responses": len(responses),
+                "responses": len(result.get("responses", [])),
                 "errors": result.get("errors", [])
             })
 

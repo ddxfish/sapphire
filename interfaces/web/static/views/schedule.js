@@ -79,9 +79,25 @@ function updateContent() {
     const missionEl = container?.querySelector('#sched-mission');
     const subEl = container?.querySelector('#sched-subtitle');
     const hstripEl = container?.querySelector('#sched-hstrip-wrap');
+
+    // Preserve open accordion state before re-render
+    const openCards = new Set();
+    if (missionEl) {
+        for (const d of missionEl.querySelectorAll('details.hb-response-wrap[open]')) {
+            const card = d.closest('.hb-card');
+            if (card) openCards.add(card.id);
+        }
+    }
+
     if (tasksEl) tasksEl.innerHTML = renderTaskList();
     if (missionEl) missionEl.innerHTML = renderMission();
     if (hstripEl) hstripEl.innerHTML = renderHorizontalTimeline();
+
+    // Restore open accordions
+    for (const id of openCards) {
+        const details = missionEl?.querySelector(`#${id} details.hb-response-wrap`);
+        if (details) details.open = true;
+    }
     const total = tasks.length + heartbeats.length;
     const enabled = [...tasks, ...heartbeats].filter(t => t.enabled).length;
     if (subEl) subEl.innerHTML = `${enabled}/${total} active
@@ -148,7 +164,9 @@ function renderHeartbeatCard(hb) {
     const state = getHeartbeatState(hb);
     const emoji = hb.emoji || '\u2764\uFE0F';
     const lastResp = hb.last_response || '';
-    const truncResp = lastResp.length > 200 ? lastResp.slice(0, 200) + '...' : lastResp;
+    const TRUNC = 120;
+    const needsExpand = lastResp.length > TRUNC;
+    const truncResp = needsExpand ? lastResp.slice(0, TRUNC) + '\u2026' : lastResp;
     const beats = getBeatsForTask(hb.id, 20);
 
     // Time context: "Beating · ran 3m ago · next in 12m"
@@ -160,6 +178,19 @@ function renderHeartbeatCard(hb) {
         lastAgo ? `ran ${lastAgo}` : null,
         nextIn ? `next in ${nextIn}` : null
     ].filter(Boolean).join(' \u00B7 ');
+
+    // Response with expand accordion
+    let responseHtml = '';
+    if (lastResp) {
+        if (needsExpand) {
+            responseHtml = `<details class="hb-response-wrap">
+                <summary class="hb-response-summary">${esc(truncResp)}</summary>
+                <div class="hb-response-full">${esc(lastResp)}</div>
+            </details>`;
+        } else {
+            responseHtml = `<div class="hb-response-summary">${esc(lastResp)}</div>`;
+        }
+    }
 
     return `
         <div class="hb-card ${state.cls}" id="vital-${hb.id}">
@@ -173,7 +204,7 @@ function renderHeartbeatCard(hb) {
             </div>
             ${renderHeatmap(beats)}
             <div class="hb-time">${timeParts}</div>
-            ${truncResp ? `<div class="hb-response">${esc(truncResp)}</div>` : ''}
+            ${responseHtml}
             <div class="hb-actions">
                 <button class="btn-icon" data-action="run" data-id="${hb.id}" title="Run now">\u25B6</button>
                 <button class="btn-icon" data-action="edit" data-id="${hb.id}" title="Edit">\u270F\uFE0F</button>
