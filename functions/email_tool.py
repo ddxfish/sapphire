@@ -636,10 +636,18 @@ def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
         msg['Subject'] = subject
         msg['From'] = creds['address']
         msg['To'] = to_addr
+        msg['Date'] = email.utils.formatdate(localtime=True)
+        msg['Message-ID'] = email.utils.make_msgid(domain=creds['smtp_server'])
         for k, v in reply_headers.items():
             msg[k] = v
 
-        with smtplib.SMTP_SSL(creds['smtp_server'], creds.get('smtp_port', 465)) as smtp:
+        smtp_port = creds.get('smtp_port', 465)
+        if smtp_port == 465:
+            smtp = smtplib.SMTP_SSL(creds['smtp_server'], smtp_port)
+        else:
+            smtp = smtplib.SMTP(creds['smtp_server'], smtp_port)
+            smtp.starttls()
+        with smtp:
             smtp.login(creds['address'], creds['app_password'])
             smtp.send_message(msg)
 
