@@ -115,9 +115,24 @@ class ContinuityExecutor:
     
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
         """Run task in foreground mode - switches to named chat, runs, restores original."""
+        import config
         session_manager = self.system.llm_chat.session_manager
         original_chat = session_manager.get_active_chat_name()
         target_chat = task.get("chat_target", "").strip()
+
+        # Temporarily override global config with per-task limits
+        _config_overrides = {}
+        for task_key, config_key in [
+            ("max_tool_rounds", "MAX_TOOL_ITERATIONS"),
+            ("max_parallel_tools", "MAX_PARALLEL_TOOLS"),
+            ("context_limit", "CONTEXT_LIMIT"),
+        ]:
+            val = task.get(task_key)
+            if val:  # 0 means "use global default"
+                _config_overrides[config_key] = getattr(config, config_key, None)
+                from core.settings_manager import settings as _settings
+                _settings.set(config_key, val, persist=False)
+                logger.debug(f"[Continuity] Override {config_key}: {_config_overrides[config_key]} -> {val}")
 
         try:
             logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}'")
@@ -175,6 +190,13 @@ class ContinuityExecutor:
             result["errors"].append(error_msg)
 
         finally:
+            # Restore per-task config overrides
+            if _config_overrides:
+                from core.settings_manager import settings as _settings
+                for config_key, original_val in _config_overrides.items():
+                    _settings.set(config_key, original_val, persist=False)
+                logger.debug(f"[Continuity] Restored config overrides: {list(_config_overrides.keys())}")
+
             # Always restore original chat context
             try:
                 if session_manager.get_active_chat_name() != original_chat:

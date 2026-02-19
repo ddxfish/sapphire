@@ -867,12 +867,22 @@ class LLMChat:
             # Agentic tool loop — call LLM, execute tools, feed results back
             max_iterations = task_settings.get("max_tool_rounds") or config.MAX_TOOL_ITERATIONS
             max_parallel = task_settings.get("max_parallel_tools") or config.MAX_PARALLEL_TOOLS
+            context_limit = task_settings.get("context_limit") or getattr(config, 'CONTEXT_LIMIT', 0)
+
+            logger.info(f"[ISOLATED] Limits: max_iterations={max_iterations}, max_parallel={max_parallel}, context_limit={context_limit}")
 
             final_content = None
             response_msg = None
             tool_call_count = 0
 
             for i in range(max_iterations):
+                # Context limit check — bail if messages are getting too large
+                if context_limit > 0:
+                    total_tokens = sum(count_tokens(str(m.get("content", ""))) for m in messages)
+                    if total_tokens > context_limit * 0.9:  # 90% threshold
+                        logger.warning(f"[ISOLATED] Context limit approaching ({total_tokens}/{context_limit} tokens). Forcing final answer.")
+                        break
+
                 response_msg = self.tool_engine.call_llm_with_metrics(
                     provider, messages, gen_params, tools=tools
                 )
