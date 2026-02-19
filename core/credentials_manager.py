@@ -477,11 +477,15 @@ class CredentialsManager:
             'app_password': self._unscramble(acct.get('app_password', '')),
             'imap_server': acct.get('imap_server', 'imap.gmail.com'),
             'smtp_server': acct.get('smtp_server', 'smtp.gmail.com'),
+            'imap_port': acct.get('imap_port', 993),
+            'smtp_port': acct.get('smtp_port', 465),
         }
 
     def set_email_account(self, scope: str, address: str, app_password: str,
                           imap_server: str = 'imap.gmail.com',
-                          smtp_server: str = 'smtp.gmail.com') -> bool:
+                          smtp_server: str = 'smtp.gmail.com',
+                          imap_port: int = 993,
+                          smtp_port: int = 465) -> bool:
         """Set email account for a scope. App password is scrambled before save."""
         try:
             if 'email_accounts' not in self._credentials:
@@ -492,6 +496,8 @@ class CredentialsManager:
                 'app_password': self._scramble(app_password) if app_password else '',
                 'imap_server': imap_server,
                 'smtp_server': smtp_server,
+                'imap_port': imap_port,
+                'smtp_port': smtp_port,
             }
 
             if not self._save():
@@ -526,6 +532,8 @@ class CredentialsManager:
                 'address': acct.get('address', ''),
                 'imap_server': acct.get('imap_server', 'imap.gmail.com'),
                 'smtp_server': acct.get('smtp_server', 'smtp.gmail.com'),
+                'imap_port': acct.get('imap_port', 993),
+                'smtp_port': acct.get('smtp_port', 465),
             })
         return result
 
@@ -540,8 +548,10 @@ class CredentialsManager:
 
     def set_email_credentials(self, address: str, app_password: str,
                               imap_server: str = 'imap.gmail.com',
-                              smtp_server: str = 'smtp.gmail.com') -> bool:
-        return self.set_email_account('default', address, app_password, imap_server, smtp_server)
+                              smtp_server: str = 'smtp.gmail.com',
+                              imap_port: int = 993,
+                              smtp_port: int = 465) -> bool:
+        return self.set_email_account('default', address, app_password, imap_server, smtp_server, imap_port, smtp_port)
 
     def clear_email_credentials(self) -> bool:
         return self.delete_email_account('default')

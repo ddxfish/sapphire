@@ -4373,6 +4373,7 @@ async def test_email_connection(request: Request, _=Depends(require_login)):
     address = data.get('address', '').strip()
     app_password = data.get('app_password', '').strip()
     imap_server = data.get('imap_server', '').strip()
+    imap_port = data.get('imap_port', 0)
 
     # Fall back to stored credentials for missing fields
     if not address or not app_password:
@@ -4380,14 +4381,16 @@ async def test_email_connection(request: Request, _=Depends(require_login)):
         address = address or stored['address']
         app_password = app_password or stored['app_password']
         imap_server = imap_server or stored['imap_server']
+        imap_port = imap_port or stored.get('imap_port', 993)
 
     if not address or not app_password:
         return {"success": False, "error": "No credentials provided"}
 
     imap_server = imap_server or 'imap.gmail.com'
+    imap_port = int(imap_port) or 993
 
     try:
-        imap = imaplib.IMAP4_SSL(imap_server)
+        imap = imaplib.IMAP4_SSL(imap_server, imap_port)
         imap.login(address, app_password)
         _, data_resp = imap.select('INBOX', readonly=True)
         msg_count = int(data_resp[0])
@@ -4419,6 +4422,8 @@ async def set_email_account(scope: str, request: Request, _=Depends(require_logi
     app_password = data.get('app_password', '').strip()
     imap_server = data.get('imap_server', 'imap.gmail.com').strip()
     smtp_server = data.get('smtp_server', 'smtp.gmail.com').strip()
+    imap_port = int(data.get('imap_port', 993))
+    smtp_port = int(data.get('smtp_port', 465))
 
     if not address:
         raise HTTPException(status_code=400, detail="Email address is required")
@@ -4428,7 +4433,7 @@ async def set_email_account(scope: str, request: Request, _=Depends(require_logi
         existing = credentials.get_email_account(scope)
         app_password = existing.get('app_password', '')
 
-    if credentials.set_email_account(scope, address, app_password, imap_server, smtp_server):
+    if credentials.set_email_account(scope, address, app_password, imap_server, smtp_server, imap_port, smtp_port):
         return {"success": True}
     raise HTTPException(status_code=500, detail="Failed to save email account")
 
@@ -4452,6 +4457,7 @@ async def test_email_account(scope: str, request: Request, _=Depends(require_log
     address = data.get('address', '').strip()
     app_password = data.get('app_password', '').strip()
     imap_server = data.get('imap_server', '').strip()
+    imap_port = data.get('imap_port', 0)
 
     # Fall back to stored credentials for missing fields
     if not address or not app_password:
@@ -4459,14 +4465,16 @@ async def test_email_account(scope: str, request: Request, _=Depends(require_log
         address = address or stored['address']
         app_password = app_password or stored['app_password']
         imap_server = imap_server or stored['imap_server']
+        imap_port = imap_port or stored.get('imap_port', 993)
 
     if not address or not app_password:
         return {"success": False, "error": "No credentials provided"}
 
     imap_server = imap_server or 'imap.gmail.com'
+    imap_port = int(imap_port) or 993
 
     try:
-        imap = imaplib.IMAP4_SSL(imap_server)
+        imap = imaplib.IMAP4_SSL(imap_server, imap_port)
         imap.login(address, app_password)
         _, data_resp = imap.select('INBOX', readonly=True)
         msg_count = int(data_resp[0])

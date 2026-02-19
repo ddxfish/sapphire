@@ -325,11 +325,17 @@ function renderAccountEditor(container, scope, acct) {
         <div class="email-servers-title">Server Settings</div>
         <div class="email-group">
           <label for="email-imap">IMAP Server</label>
-          <input type="text" id="email-imap" value="${s.imap_server || 'imap.gmail.com'}" placeholder="imap.gmail.com">
+          <div class="email-row">
+            <input type="text" id="email-imap" value="${s.imap_server || 'imap.gmail.com'}" placeholder="imap.gmail.com">
+            <input type="number" id="email-imap-port" value="${s.imap_port || 993}" placeholder="993" style="max-width:80px" min="1" max="65535">
+          </div>
         </div>
         <div class="email-group" style="margin-top:12px">
           <label for="email-smtp">SMTP Server</label>
-          <input type="text" id="email-smtp" value="${s.smtp_server || 'smtp.gmail.com'}" placeholder="smtp.gmail.com">
+          <div class="email-row">
+            <input type="text" id="email-smtp" value="${s.smtp_server || 'smtp.gmail.com'}" placeholder="smtp.gmail.com">
+            <input type="number" id="email-smtp-port" value="${s.smtp_port || 465}" placeholder="465" style="max-width:80px" min="1" max="65535">
+          </div>
         </div>
         <div class="email-hint" style="margin-top:8px">
           Gmail defaults shown. Change for other providers (e.g. mail.yourdomain.com).
@@ -356,13 +362,15 @@ async function saveAccount(container, scope) {
   const app_password = container.querySelector('#email-password')?.value?.trim() || '';
   const imap_server = container.querySelector('#email-imap')?.value?.trim() || 'imap.gmail.com';
   const smtp_server = container.querySelector('#email-smtp')?.value?.trim() || 'smtp.gmail.com';
+  const imap_port = parseInt(container.querySelector('#email-imap-port')?.value) || 993;
+  const smtp_port = parseInt(container.querySelector('#email-smtp-port')?.value) || 465;
 
   if (!address) {
     alert('Email address is required');
     return;
   }
 
-  const payload = { address, imap_server, smtp_server };
+  const payload = { address, imap_server, smtp_server, imap_port, smtp_port };
   if (app_password) payload.app_password = app_password;
 
   const btn = container.querySelector('#email-save-btn');
@@ -402,6 +410,7 @@ async function testAccount(container, scope) {
   const address = container.querySelector('#email-address')?.value?.trim() || '';
   const app_password = container.querySelector('#email-password')?.value?.trim() || '';
   const imap_server = container.querySelector('#email-imap')?.value?.trim() || '';
+  const imap_port = parseInt(container.querySelector('#email-imap-port')?.value) || 993;
 
   if (!address && !app_password) {
     btn.textContent = 'No credentials';
@@ -419,6 +428,7 @@ async function testAccount(container, scope) {
     if (address) payload.address = address;
     if (app_password) payload.app_password = app_password;
     if (imap_server) payload.imap_server = imap_server;
+    payload.imap_port = imap_port;
 
     const res = await fetch(`/api/email/accounts/${encodeURIComponent(scope)}/test`, {
       method: 'POST',
