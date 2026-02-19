@@ -715,6 +715,90 @@ def get_tabs_by_id(tab_id):
     return {"id": row[0], "name": row[1], "type": row[2], "scope": row[3]}
 
 
+# ─── RAG Helpers ─────────────────────────────────────────────────────────────
+
+def get_entries_by_scope(scope):
+    """Get all entries in a scope, grouped by source_filename."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT e.source_filename, COUNT(*), SUM(LENGTH(e.content))
+        FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+        WHERE t.scope = ?
+        GROUP BY e.source_filename
+    ''', (scope,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"filename": r[0] or "(untitled)", "chunks": r[1], "chars": r[2]} for r in rows]
+
+
+def search_rag(query, scope, limit=5, threshold=0.40, max_tokens=4000):
+    """Search RAG scope via vector search, token-capped. Strict scope (no global overlay)."""
+    embedder = _get_embedder()
+    if not embedder or not embedder.available:
+        return []
+
+    query_emb = embedder.embed([query], prefix='search_query')
+    if query_emb is None:
+        return []
+    query_vec = query_emb[0]
+
+    conn = _get_connection()
+    cursor = conn.cursor()
+    # Strict scope match — no global overlay for RAG
+    cursor.execute('''
+        SELECT e.id, e.content, t.name, e.embedding, e.source_filename
+        FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+        WHERE t.scope = ? AND e.embedding IS NOT NULL
+    ''', (scope,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    scored = []
+    for eid, content, tname, emb_blob, src_file in rows:
+        emb = np.frombuffer(emb_blob, dtype=np.float32)
+        sim = float(np.dot(query_vec, emb))
+        if sim >= threshold:
+            scored.append({"content": content, "filename": src_file or tname, "score": sim})
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    # Accumulate up to token budget
+    output = []
+    token_count = 0
+    for r in scored[:limit]:
+        chunk_tokens = len(r["content"].split())
+        if token_count + chunk_tokens > max_tokens:
+            break
+        output.append(r)
+        token_count += chunk_tokens
+
+    return output
+
+
+def delete_entries_by_scope_and_filename(scope, filename):
+    """Delete all entries for a specific file within a RAG scope."""
+    conn = _get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT e.id FROM knowledge_entries e
+        JOIN knowledge_tabs t ON e.tab_id = t.id
+        WHERE t.scope = ? AND e.source_filename = ?
+    ''', (scope, filename))
+    entry_ids = [r[0] for r in cursor.fetchall()]
+    if entry_ids:
+        placeholders = ','.join('?' * len(entry_ids))
+        cursor.execute(f'DELETE FROM knowledge_entries WHERE id IN ({placeholders})', entry_ids)
+    # Clean up empty tabs
+    cursor.execute('''
+        DELETE FROM knowledge_tabs WHERE scope = ? AND id NOT IN (
+            SELECT DISTINCT tab_id FROM knowledge_entries
+        )
+    ''', (scope,))
+    conn.commit()
+    conn.close()
+    return len(entry_ids)
+
+
 # ─── Chunking ─────────────────────────────────────────────────────────────────
 
 def _chunk_text(text, max_tokens=400, overlap_tokens=50):

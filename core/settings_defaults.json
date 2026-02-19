@@ -219,6 +219,12 @@
     "_tool_maker_modes": "strict=allowlisted imports only, moderate=blocked dangerous ops, trust=syntax check only"
   },
   
+  "rag": {
+    "RAG_MAX_INJECTION_TOKENS": 4000,
+    "RAG_TOP_K": 5,
+    "RAG_SIMILARITY_THRESHOLD": 0.40
+  },
+
   "auth": {
     "SESSION_TIMEOUT_DAYS": 30
   },

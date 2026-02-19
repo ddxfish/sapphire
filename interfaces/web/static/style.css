@@ -920,6 +920,43 @@ body {
     padding: 4px 0 4px 6px;
 }
 
+.sidebar-accordion-header .sb-badge {
+    font-size: 10px;
+    opacity: 0.5;
+    margin-left: auto;
+}
+
+.sb-upload-btn {
+    font-size: var(--font-xs);
+    color: var(--trim);
+    cursor: pointer;
+    display: block;
+    padding: 4px 0;
+}
+
+.sb-doc-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: var(--font-xs);
+}
+
+.sb-doc-item .sb-doc-del {
+    opacity: 0.4;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: var(--font-xs);
+    padding: 0 2px;
+}
+
+.sb-doc-item .sb-doc-del:hover {
+    opacity: 1;
+    color: var(--error);
+}
+
 /* Kebab buttons */
 .kebab-btn {
     font-size: var(--font-xl);

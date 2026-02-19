@@ -29,6 +29,9 @@ anthropic>=0.39.0
 # Image resize for LLM
 Pillow>=10.0.0
 
+# PDF parsing
+pypdf>=4.0.0
+
 # Cron schedule parsing
 croniter>=1.3.0
 

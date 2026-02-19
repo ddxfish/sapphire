@@ -235,6 +235,58 @@ export default {
 
         // State engine buttons
         setupStoryButtons(container);
+
+        // Document upload handler
+        const docUpload = container.querySelector('#sb-doc-upload');
+        if (docUpload) {
+            docUpload.addEventListener('change', async () => {
+                const file = docUpload.files[0];
+                if (!file) return;
+                const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
+                if (!chatName) return;
+                const form = new FormData();
+                form.append('file', file);
+                try {
+                    const resp = await fetch(`/api/chats/${encodeURIComponent(chatName)}/documents`, {
+                        method: 'POST', body: form
+                    });
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        ui.showToast(`Uploaded ${data.filename} (${data.chunks} chunks)`, 'success');
+                        loadDocuments(container, chatName);
+                    } else {
+                        const err = await resp.json().catch(() => ({}));
+                        ui.showToast(err.detail || 'Upload failed', 'error');
+                    }
+                } catch (e) {
+                    ui.showToast('Upload failed', 'error');
+                }
+                docUpload.value = '';
+            });
+        }
+
+        // Document delete handler (event delegation)
+        const docList = container.querySelector('#sb-doc-list');
+        if (docList) {
+            docList.addEventListener('click', async e => {
+                const btn = e.target.closest('.sb-doc-del');
+                if (!btn) return;
+                const filename = btn.dataset.filename;
+                const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
+                if (!chatName || !filename) return;
+                try {
+                    const resp = await fetch(`/api/chats/${encodeURIComponent(chatName)}/documents/${encodeURIComponent(filename)}`, {
+                        method: 'DELETE'
+                    });
+                    if (resp.ok) {
+                        ui.showToast(`Removed ${filename}`, 'success');
+                        loadDocuments(container, chatName);
+                    }
+                } catch (e) {
+                    ui.showToast('Delete failed', 'error');
+                }
+            });
+        }
     },
 
     async show() {
@@ -250,6 +302,30 @@ function toggleSidebar(container) {
     if (!sidebar) return;
     const collapsed = sidebar.classList.toggle('collapsed');
     localStorage.setItem('sapphire-chat-sidebar', collapsed ? 'collapsed' : 'expanded');
+}
+
+async function loadDocuments(container, chatName) {
+    const list = container.querySelector('#sb-doc-list');
+    const badge = container.querySelector('#sb-doc-count');
+    if (!list) return;
+    try {
+        const resp = await fetch(`/api/chats/${encodeURIComponent(chatName)}/documents`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const docs = data.documents || [];
+        list.innerHTML = docs.map(d =>
+            `<div class="sb-doc-item">
+                <span title="${d.filename} (${d.chunks} chunks)">${d.filename}</span>
+                <button class="sb-doc-del" data-filename="${d.filename}" title="Remove">&times;</button>
+            </div>`
+        ).join('');
+        if (badge) {
+            badge.textContent = docs.length;
+            badge.style.display = docs.length ? '' : 'none';
+        }
+    } catch (e) {
+        console.warn('Failed to load documents:', e);
+    }
 }
 
 async function loadSidebar() {
@@ -443,6 +519,9 @@ async function loadSidebar() {
         } else {
             updateEasyMode(container, settings, init);
         }
+
+        // Load per-chat documents
+        loadDocuments(container, chatName);
 
         sidebarLoaded = true;
     } catch (e) {

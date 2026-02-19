@@ -335,11 +335,46 @@ class LLMChat:
         else:
             user_content = user_input
 
-        return [
+        messages = [
             {"role": "system", "content": system_prompt},
             *history_messages,
             {"role": "user", "content": user_content}
         ]
+
+        # RAG injection — if chat has uploaded documents, search and inject
+        rag_context = self._get_rag_context(user_input)
+        if rag_context:
+            messages.insert(-1, {"role": "user", "content": rag_context})
+
+        return messages
+
+    def _get_rag_context(self, user_input):
+        """Search per-chat RAG documents and return context string, or None."""
+        chat_name = self.session_manager.get_active_chat_name()
+        rag_scope = f"__rag__:{chat_name}"
+
+        try:
+            from functions import knowledge
+            entries = knowledge.get_entries_by_scope(rag_scope)
+            if not entries:
+                return None
+
+            results = knowledge.search_rag(
+                user_input, rag_scope,
+                limit=config.RAG_TOP_K,
+                threshold=config.RAG_SIMILARITY_THRESHOLD,
+                max_tokens=config.RAG_MAX_INJECTION_TOKENS
+            )
+            if not results:
+                return None
+
+            parts = ["[Reference Documents]"]
+            for r in results:
+                parts.append(f"--- {r['filename']} (relevance: {r['score']:.0%}) ---\n{r['content']}")
+            return "\n\n".join(parts)
+        except Exception as e:
+            logger.warning(f"[RAG] Failed to get context: {e}")
+            return None
 
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None):
         return self.streaming_chat.chat_stream(user_input, prefill=prefill, skip_user_message=skip_user_message, images=images, files=files)

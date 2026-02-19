@@ -1167,6 +1167,12 @@ async def delete_chat(chat_name: str, request: Request, _=Depends(require_login)
             if was_active:
                 settings = system.llm_chat.session_manager.get_chat_settings()
                 _apply_chat_settings(system, settings)
+            # Cleanup per-chat RAG documents
+            try:
+                from functions import knowledge
+                knowledge.delete_scope(f"__rag__:{chat_name}")
+            except Exception:
+                pass
             return {"status": "success", "message": f"Deleted: {chat_name}"}
         else:
             raise HTTPException(status_code=400, detail=f"Cannot delete '{chat_name}'")
@@ -3095,6 +3101,97 @@ async def delete_knowledge_entry(entry_id: int, request: Request, _=Depends(requ
     if knowledge.delete_entry(entry_id):
         return {"deleted": entry_id}
     raise HTTPException(status_code=404, detail="Entry not found")
+
+
+# =============================================================================
+# PER-CHAT RAG (Document Context)
+# =============================================================================
+
+@app.post("/api/chats/{chat_name}/documents")
+async def upload_chat_document(chat_name: str, file: UploadFile = File(...), _=Depends(require_login)):
+    """Upload a document for per-chat RAG context."""
+    from functions import knowledge
+
+    filename = file.filename or 'upload.txt'
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+    if ext not in ('txt', 'md', 'pdf'):
+        raise HTTPException(status_code=400, detail="Unsupported file type. Use .txt, .md, or .pdf")
+
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+
+    # Extract text
+    if ext == 'pdf':
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(raw))
+            pages = [page.extract_text() or '' for page in reader.pages]
+            text = '\n\n'.join(p for p in pages if p.strip())
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to read PDF: {e}")
+    else:
+        text = None
+        for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
+            try:
+                text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, ValueError):
+                continue
+        if text is None:
+            raise HTTPException(status_code=400, detail="Could not decode file")
+
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="File is empty or has no extractable text")
+
+    rag_scope = f"__rag__:{chat_name}"
+
+    # Ensure scope + tab exist (one tab per file)
+    knowledge.create_scope(rag_scope)
+    tab_id = knowledge.create_tab(filename, scope=rag_scope, tab_type='user')
+    if not tab_id:
+        # Tab already exists for this filename — delete old entries and re-upload
+        conn = knowledge._get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM knowledge_tabs WHERE name = ? AND scope = ?', (filename, rag_scope))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            tab_id = row[0]
+            knowledge.delete_entries_by_filename(tab_id, filename)
+        else:
+            raise HTTPException(status_code=500, detail="Failed to create document tab")
+
+    chunks = knowledge._chunk_text(text)
+    for i, chunk in enumerate(chunks):
+        knowledge.add_entry(tab_id, chunk, chunk_index=i, source_filename=filename)
+
+    return {"filename": filename, "chunks": len(chunks), "scope": rag_scope}
+
+
+@app.get("/api/chats/{chat_name}/documents")
+async def list_chat_documents(chat_name: str, _=Depends(require_login)):
+    """List uploaded documents for a chat."""
+    from functions import knowledge
+    rag_scope = f"__rag__:{chat_name}"
+    entries = knowledge.get_entries_by_scope(rag_scope)
+    return {"documents": entries}
+
+
+@app.delete("/api/chats/{chat_name}/documents/{filename:path}")
+async def delete_chat_document(chat_name: str, filename: str, _=Depends(require_login)):
+    """Delete a specific document from a chat's RAG scope."""
+    from functions import knowledge
+    rag_scope = f"__rag__:{chat_name}"
+    count = knowledge.delete_entries_by_scope_and_filename(rag_scope, filename)
+    if count == 0:
+        raise HTTPException(status_code=404, detail="Document not found")
+    # If scope is now empty, clean it up
+    remaining = knowledge.get_entries_by_scope(rag_scope)
+    if not remaining:
+        knowledge.delete_scope(rag_scope)
+    return {"deleted": count, "filename": filename}
 
 
 # =============================================================================
