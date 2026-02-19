@@ -4367,6 +4367,8 @@ async def clear_email_credentials(request: Request, _=Depends(require_login)):
 async def test_email_connection(request: Request, _=Depends(require_login)):
     """Test IMAP connection with provided or stored credentials."""
     import imaplib
+    import socket
+    import ssl
     from core.credentials_manager import credentials
 
     data = await request.json() or {}
@@ -4384,22 +4386,34 @@ async def test_email_connection(request: Request, _=Depends(require_login)):
         imap_port = imap_port or stored.get('imap_port', 993)
 
     if not address or not app_password:
-        return {"success": False, "error": "No credentials provided"}
+        missing = []
+        if not address: missing.append("email address")
+        if not app_password: missing.append("app password")
+        return {"success": False, "error": f"Missing {' and '.join(missing)}"}
 
     imap_server = imap_server or 'imap.gmail.com'
     imap_port = int(imap_port) or 993
+    target = f"{imap_server}:{imap_port}"
 
     try:
-        imap = imaplib.IMAP4_SSL(imap_server, imap_port)
+        imap = imaplib.IMAP4_SSL(imap_server, imap_port, timeout=10)
         imap.login(address, app_password)
         _, data_resp = imap.select('INBOX', readonly=True)
         msg_count = int(data_resp[0])
         imap.logout()
-        return {"success": True, "message_count": msg_count}
+        return {"success": True, "message_count": msg_count, "server": target}
     except imaplib.IMAP4.error as e:
-        return {"success": False, "error": f"Authentication failed: {e}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": f"Login failed for {address} — check app password", "detail": str(e), "server": target}
+    except socket.timeout:
+        return {"success": False, "error": f"Connection timed out to {target}", "detail": "Server didn't respond within 10s — check server address and port"}
+    except ConnectionRefusedError:
+        return {"success": False, "error": f"Connection refused by {target}", "detail": "Server rejected the connection — wrong port or server not running"}
+    except socket.gaierror as e:
+        return {"success": False, "error": f"DNS lookup failed for {imap_server}", "detail": "Hostname could not be resolved — check server address"}
+    except ssl.SSLError as e:
+        return {"success": False, "error": f"SSL error connecting to {target}", "detail": f"{e} — port may not support SSL/TLS"}
+    except OSError as e:
+        return {"success": False, "error": f"Network error connecting to {target}", "detail": str(e)}
 
 
 # =============================================================================
@@ -4451,6 +4465,8 @@ async def delete_email_account(scope: str, request: Request, _=Depends(require_l
 async def test_email_account(scope: str, request: Request, _=Depends(require_login)):
     """Test IMAP connection for a specific email account."""
     import imaplib
+    import socket
+    import ssl
     from core.credentials_manager import credentials
 
     data = await request.json() or {}
@@ -4468,22 +4484,34 @@ async def test_email_account(scope: str, request: Request, _=Depends(require_log
         imap_port = imap_port or stored.get('imap_port', 993)
 
     if not address or not app_password:
-        return {"success": False, "error": "No credentials provided"}
+        missing = []
+        if not address: missing.append("email address")
+        if not app_password: missing.append("app password")
+        return {"success": False, "error": f"Missing {' and '.join(missing)}"}
 
     imap_server = imap_server or 'imap.gmail.com'
     imap_port = int(imap_port) or 993
+    target = f"{imap_server}:{imap_port}"
 
     try:
-        imap = imaplib.IMAP4_SSL(imap_server, imap_port)
+        imap = imaplib.IMAP4_SSL(imap_server, imap_port, timeout=10)
         imap.login(address, app_password)
         _, data_resp = imap.select('INBOX', readonly=True)
         msg_count = int(data_resp[0])
         imap.logout()
-        return {"success": True, "message_count": msg_count}
+        return {"success": True, "message_count": msg_count, "server": target}
     except imaplib.IMAP4.error as e:
-        return {"success": False, "error": f"Authentication failed: {e}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": f"Login failed for {address} — check app password", "detail": str(e), "server": target}
+    except socket.timeout:
+        return {"success": False, "error": f"Connection timed out to {target}", "detail": "Server didn't respond within 10s — check server address and port"}
+    except ConnectionRefusedError:
+        return {"success": False, "error": f"Connection refused by {target}", "detail": "Server rejected the connection — wrong port or server not running"}
+    except socket.gaierror as e:
+        return {"success": False, "error": f"DNS lookup failed for {imap_server}", "detail": "Hostname could not be resolved — check server address"}
+    except ssl.SSLError as e:
+        return {"success": False, "error": f"SSL error connecting to {target}", "detail": f"{e} — port may not support SSL/TLS"}
+    except OSError as e:
+        return {"success": False, "error": f"Network error connecting to {target}", "detail": str(e)}
 
 
 # =============================================================================

@@ -220,6 +220,31 @@ function injectStyles() {
       color: var(--text);
       margin-bottom: 4px;
     }
+
+    .email-test-result {
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .email-test-result.success {
+      background: var(--success-light, #d4edda);
+      border: 1px solid var(--success, #28a745);
+      color: var(--success, #28a745);
+    }
+
+    .email-test-result.error {
+      background: var(--error-light, #f8d7da);
+      border: 1px solid var(--error, #dc3545);
+      color: var(--error, #dc3545);
+    }
+
+    .email-test-detail {
+      margin-top: 4px;
+      font-size: 11px;
+      opacity: 0.85;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -437,22 +462,40 @@ async function testAccount(container, scope) {
     });
     const data = await res.json();
 
+    // Clear any previous result
+    container.querySelector('#email-test-result')?.remove();
+
     if (data.success) {
       btn.textContent = `\u2713 Connected (${data.message_count} msgs)`;
       btn.className = 'email-test-btn success';
+      showTestResult(container, true, `Connected to ${data.server || 'server'} — ${data.message_count} messages in inbox`);
     } else {
       btn.textContent = '\u2717 Failed';
       btn.className = 'email-test-btn error';
-      btn.title = data.error || 'Connection failed';
+      showTestResult(container, false, data.error || 'Connection failed', data.detail);
     }
   } catch (e) {
+    container.querySelector('#email-test-result')?.remove();
     btn.textContent = '\u2717 Error';
     btn.className = 'email-test-btn error';
-    btn.title = e.message;
+    showTestResult(container, false, `Request failed: ${e.message}`);
   }
 
   btn.disabled = false;
-  setTimeout(() => { btn.textContent = 'Test'; btn.className = 'email-test-btn'; btn.title = ''; }, 5000);
+  setTimeout(() => { btn.textContent = 'Test'; btn.className = 'email-test-btn'; }, 5000);
+}
+
+
+function showTestResult(container, success, message, detail) {
+  container.querySelector('#email-test-result')?.remove();
+  const div = document.createElement('div');
+  div.id = 'email-test-result';
+  div.className = `email-test-result ${success ? 'success' : 'error'}`;
+  div.innerHTML = `<div class="email-test-msg">${message}</div>${detail ? `<div class="email-test-detail">${detail}</div>` : ''}`;
+  // Insert after the button row
+  const btnRow = container.querySelector('#email-test-btn')?.closest('.email-row');
+  if (btnRow) btnRow.after(div);
+  else container.querySelector('.email-form')?.appendChild(div);
 }
 
 
