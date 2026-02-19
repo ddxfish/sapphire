@@ -299,13 +299,14 @@ function initEventBus() {
         }, 100);
     };
 
-    // System state events
-    eventBus.on(eventBus.Events.PROMPT_CHANGED, () => debouncedUpdateScene());
-    eventBus.on(eventBus.Events.TOOLSET_CHANGED, () => debouncedUpdateScene());
-    eventBus.on(eventBus.Events.SPICE_CHANGED, () => debouncedUpdateScene());
-    eventBus.on(eventBus.Events.COMPONENTS_CHANGED, () => debouncedUpdateScene());
-    eventBus.on(eventBus.Events.PROMPT_DELETED, () => debouncedUpdateScene());
-    eventBus.on(eventBus.Events.SETTINGS_CHANGED, () => debouncedUpdateScene());
+    // System state events — invalidate init cache so views get fresh data on show()
+    const refreshAndUpdateScene = () => { refreshInitData(); debouncedUpdateScene(); };
+    eventBus.on(eventBus.Events.PROMPT_CHANGED, refreshAndUpdateScene);
+    eventBus.on(eventBus.Events.TOOLSET_CHANGED, refreshAndUpdateScene);
+    eventBus.on(eventBus.Events.SPICE_CHANGED, refreshAndUpdateScene);
+    eventBus.on(eventBus.Events.COMPONENTS_CHANGED, refreshAndUpdateScene);
+    eventBus.on(eventBus.Events.PROMPT_DELETED, refreshAndUpdateScene);
+    eventBus.on(eventBus.Events.SETTINGS_CHANGED, refreshAndUpdateScene);
     eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, () => debouncedUpdateScene());
 
     eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
