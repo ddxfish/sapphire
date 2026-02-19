@@ -22,25 +22,21 @@ function updateStoryPromptLabel(container) {
     const promptSel = container.querySelector('#sb-prompt');
     if (!promptSel) return;
 
-    // Remove previous story option, restore original selection
     const existing = promptSel.querySelector('option[data-story]');
-    if (existing) {
-        const orig = promptSel.dataset.originalPrompt;
-        existing.remove();
-        if (orig) promptSel.value = orig;
-    }
+    const hadStoryOption = !!existing;
+    if (existing) existing.remove();
 
     const enabled = container.querySelector('#sb-story-enabled')?.checked;
     const preset = container.querySelector('#sb-story-preset')?.value;
     if (enabled && preset) {
-        promptSel.dataset.originalPrompt = promptSel.value;
         const opt = document.createElement('option');
         opt.value = '__story__';
         opt.dataset.story = 'true';
         const name = preset.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         opt.textContent = `[STORY] ${name}`;
         promptSel.insertBefore(opt, promptSel.firstChild);
-        promptSel.value = '__story__';
+        // Only auto-select story prompt on first appearance (entering story mode)
+        if (!hadStoryOption) promptSel.value = '__story__';
     }
 }
 
@@ -173,7 +169,7 @@ export default {
                     const toggle = container.querySelector('#sb-spice-toggle');
                     if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
                 }
-                if (el.id === 'sb-story-enabled' || el.id === 'sb-story-preset' || el.id === 'sb-prompt') {
+                if (el.id === 'sb-story-enabled' || el.id === 'sb-story-preset') {
                     updateStoryPromptLabel(container);
                 }
                 debouncedSave(container);
