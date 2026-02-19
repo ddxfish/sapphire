@@ -285,6 +285,7 @@ class ContinuityScheduler:
             self._task_pending.pop(task_id, None)
             self._task_running.pop(task_id, None)
             self._task_last_matched.pop(task_id, None)
+            self._task_progress.pop(task_id, None)
             self._save_tasks()
             logger.info(f"[Continuity] Deleted task: {name} ({task_id})")
             return True
