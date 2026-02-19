@@ -38,6 +38,7 @@ SYSTEM_DEFAULTS = {
     "knowledge_scope": "default",
     "people_scope": "default",
     "email_scope": "default",
+    "bitcoin_scope": "default",
     "trim_color": "",
     "persona": None
 }

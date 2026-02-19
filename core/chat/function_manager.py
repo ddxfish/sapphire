@@ -23,6 +23,8 @@ class FunctionManager:
     _current_people_scope = 'default'
     # Class-level email scope - per-chat email account
     _current_email_scope = 'default'
+    # Class-level bitcoin scope - per-chat bitcoin wallet
+    _current_bitcoin_scope = 'default'
     # Class-level RAG scope - per-chat document scope for search_knowledge
     _current_rag_scope = None
     
@@ -52,6 +54,8 @@ class FunctionManager:
         self._people_scope = 'default'
         # Email scope for current execution context (None = disabled)
         self._email_scope = 'default'
+        # Bitcoin scope for current execution context (None = disabled)
+        self._bitcoin_scope = 'default'
         
         # Story engine for games/simulations (None = disabled)
         self._story_engine = None
@@ -409,6 +413,16 @@ class FunctionManager:
     def get_email_scope(self) -> str:
         """Get current email scope. Returns None if email disabled."""
         return self._email_scope
+
+    def set_bitcoin_scope(self, scope: str):
+        """Set bitcoin scope for current execution context. None = disabled."""
+        self._bitcoin_scope = scope
+        FunctionManager._current_bitcoin_scope = scope
+        logger.debug(f"Bitcoin scope set to: {scope}")
+
+    def get_bitcoin_scope(self) -> str:
+        """Get current bitcoin scope. Returns None if bitcoin disabled."""
+        return self._bitcoin_scope
 
     def set_story_engine(self, engine, turn_getter=None):
         """

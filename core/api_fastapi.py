@@ -4515,6 +4515,89 @@ async def test_email_account(scope: str, request: Request, _=Depends(require_log
 
 
 # =============================================================================
+# BITCOIN WALLET ROUTES
+# =============================================================================
+
+@app.get("/api/bitcoin/wallets")
+async def list_bitcoin_wallets(request: Request, _=Depends(require_login)):
+    """List all bitcoin wallets (no private keys)."""
+    from core.credentials_manager import credentials
+    return {"wallets": credentials.list_bitcoin_wallets()}
+
+
+@app.put("/api/bitcoin/wallets/{scope}")
+async def set_bitcoin_wallet(scope: str, request: Request, _=Depends(require_login)):
+    """Create or import a bitcoin wallet for a scope."""
+    from core.credentials_manager import credentials
+    data = await request.json() or {}
+    wif = data.get('wif', '').strip()
+    label = data.get('label', '').strip()
+    generate = data.get('generate', False)
+
+    if generate:
+        try:
+            from bit import Key
+            key = Key()
+            wif = key.to_wif()
+        except ImportError:
+            raise HTTPException(status_code=500, detail="bit library not installed")
+
+    # If no new WIF provided, keep existing (label-only update)
+    if not wif:
+        existing = credentials.get_bitcoin_wallet(scope)
+        wif = existing.get('wif', '')
+    if not wif:
+        raise HTTPException(status_code=400, detail="WIF key is required (or set generate=true)")
+
+    # Validate the WIF
+    try:
+        from bit import Key
+        key = Key(wif)
+        address = key.address
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid WIF key: {e}")
+
+    if credentials.set_bitcoin_wallet(scope, wif, label):
+        return {"success": True, "address": address}
+    raise HTTPException(status_code=500, detail="Failed to save bitcoin wallet")
+
+
+@app.delete("/api/bitcoin/wallets/{scope}")
+async def delete_bitcoin_wallet(scope: str, request: Request, _=Depends(require_login)):
+    """Delete a bitcoin wallet."""
+    from core.credentials_manager import credentials
+    if credentials.delete_bitcoin_wallet(scope):
+        return {"success": True}
+    raise HTTPException(status_code=404, detail=f"Bitcoin wallet '{scope}' not found")
+
+
+@app.post("/api/bitcoin/wallets/{scope}/check")
+async def check_bitcoin_wallet(scope: str, request: Request, _=Depends(require_login)):
+    """Check balance for a bitcoin wallet."""
+    from core.credentials_manager import credentials
+
+    wallet = credentials.get_bitcoin_wallet(scope)
+    if not wallet['wif']:
+        return {"success": False, "error": "No wallet configured for this scope"}
+
+    try:
+        from bit import Key
+        key = Key(wallet['wif'])
+        balance_sat = key.get_balance()
+        balance_btc = f"{int(balance_sat) / 1e8:.8f}"
+        return {
+            "success": True,
+            "address": key.address,
+            "balance_btc": balance_btc,
+            "balance_sat": int(balance_sat),
+        }
+    except ImportError:
+        return {"success": False, "error": "bit library not installed"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
 # SSH PLUGIN ROUTES
 # =============================================================================
 

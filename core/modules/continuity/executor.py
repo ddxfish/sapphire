@@ -76,6 +76,7 @@ class ContinuityExecutor:
                 "people_scope": task.get("people_scope", "none"),
                 "goal_scope": task.get("goal_scope", "none"),
                 "email_scope": task.get("email_scope", "default"),
+                "bitcoin_scope": task.get("bitcoin_scope", "default"),
             }
             
             # Apply voice settings before any TTS calls
@@ -256,6 +257,7 @@ class ContinuityExecutor:
                 "people_scope": "people_scope",
                 "goal_scope": "goal_scope",
                 "email_scope": "email_scope",
+                "bitcoin_scope": "bitcoin_scope",
             }
             for persona_key, task_key in field_map.items():
                 persona_val = ps.get(persona_key)
@@ -327,6 +329,9 @@ class ContinuityExecutor:
 
         if task.get("email_scope"):
             settings["email_scope"] = task["email_scope"]
+
+        if task.get("bitcoin_scope"):
+            settings["bitcoin_scope"] = task["bitcoin_scope"]
 
         # Inject datetime into system prompt if enabled
         if task.get("inject_datetime"):

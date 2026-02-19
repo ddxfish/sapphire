@@ -49,6 +49,7 @@ DEFAULT_CREDENTIALS = {
         "token": ""
     },
     "email_accounts": {},
+    "bitcoin_wallets": {},
     "ssh": {
         "servers": []
     }
@@ -558,6 +559,78 @@ class CredentialsManager:
 
     def has_email_credentials(self) -> bool:
         return self.has_email_account('default')
+
+    # =========================================================================
+    # Bitcoin Wallets (multi-wallet, keyed by scope)
+    # =========================================================================
+
+    def get_bitcoin_wallet(self, scope: str = 'default') -> dict:
+        """Get bitcoin wallet for a scope. WIF is unscrambled on read."""
+        wallets = self._credentials.get('bitcoin_wallets', {})
+        w = wallets.get(scope, {})
+        return {
+            'label': w.get('label', scope),
+            'wif': self._unscramble(w.get('wif', '')),
+        }
+
+    def set_bitcoin_wallet(self, scope: str, wif: str, label: str = '') -> bool:
+        """Set bitcoin wallet for a scope. WIF is scrambled before save."""
+        try:
+            if 'bitcoin_wallets' not in self._credentials:
+                self._credentials['bitcoin_wallets'] = {}
+
+            self._credentials['bitcoin_wallets'][scope] = {
+                'label': label or scope,
+                'wif': self._scramble(wif) if wif else '',
+            }
+
+            if not self._save():
+                logger.error(f"Failed to persist bitcoin wallet '{scope}' to disk")
+                return False
+
+            logger.info(f"Set bitcoin wallet for scope '{scope}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set bitcoin wallet '{scope}': {e}")
+            return False
+
+    def delete_bitcoin_wallet(self, scope: str) -> bool:
+        """Remove a bitcoin wallet by scope."""
+        wallets = self._credentials.get('bitcoin_wallets', {})
+        if scope not in wallets:
+            return False
+        del wallets[scope]
+        if not self._save():
+            logger.error(f"Failed to persist deletion of bitcoin wallet '{scope}'")
+            return False
+        logger.info(f"Deleted bitcoin wallet '{scope}'")
+        return True
+
+    def list_bitcoin_wallets(self) -> list:
+        """List all bitcoin wallets (no WIFs). Derives address from stored key."""
+        wallets = self._credentials.get('bitcoin_wallets', {})
+        result = []
+        for scope, w in wallets.items():
+            # Derive address from WIF for display
+            address = ''
+            wif = self._unscramble(w.get('wif', ''))
+            if wif:
+                try:
+                    from bit import Key
+                    address = Key(wif).address
+                except Exception:
+                    address = '(invalid key)'
+            result.append({
+                'scope': scope,
+                'label': w.get('label', scope),
+                'address': address,
+            })
+        return result
+
+    def has_bitcoin_wallet(self, scope: str = 'default') -> bool:
+        """Check if bitcoin wallet exists for scope."""
+        w = self.get_bitcoin_wallet(scope)
+        return bool(w['wif'])
 
     # =========================================================================
     # SSH

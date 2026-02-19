@@ -7,6 +7,7 @@
     "continuity",
     "homeassistant",
     "email",
+    "bitcoin",
     "ssh"
   ],
   "plugins": {
@@ -43,6 +44,10 @@
     },
     "email": {
       "title": "Email",
+      "showInSidebar": false
+    },
+    "bitcoin": {
+      "title": "Bitcoin",
       "showInSidebar": false
     },
     "ssh": {

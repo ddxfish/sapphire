@@ -337,7 +337,7 @@ async function loadSidebar() {
     if (!chatName) return;
 
     try {
-        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, emailAccountsResp, presetsResp, spiceSetsResp, personasResp] = await Promise.allSettled([
+        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, emailAccountsResp, bitcoinWalletsResp, presetsResp, spiceSetsResp, personasResp] = await Promise.allSettled([
             api.getChatSettings(chatName),
             getInitData(),
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
@@ -346,6 +346,7 @@ async function loadSidebar() {
             fetch('/api/knowledge/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/knowledge/people/scopes').then(r => r.ok ? r.json() : null),
             fetch('/api/email/accounts').then(r => r.ok ? r.json() : null),
+            fetch('/api/bitcoin/wallets').then(r => r.ok ? r.json() : null),
             fetch('/api/story/presets').then(r => r.ok ? r.json() : null),
             fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
             fetch('/api/personas').then(r => r.ok ? r.json() : null)
@@ -360,6 +361,7 @@ async function loadSidebar() {
         const knowledgeScopesData = knowledgeScopesResp.status === 'fulfilled' ? knowledgeScopesResp.value : null;
         const peopleScopesData = peopleScopesResp.status === 'fulfilled' ? peopleScopesResp.value : null;
         const emailAccountsData = emailAccountsResp.status === 'fulfilled' ? emailAccountsResp.value : null;
+        const bitcoinWalletsData = bitcoinWalletsResp.status === 'fulfilled' ? bitcoinWalletsResp.value : null;
         const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
         const spiceSetsData = spiceSetsResp.status === 'fulfilled' ? spiceSetsResp.value : null;
         const personasData = personasResp.status === 'fulfilled' ? personasResp.value : null;
@@ -465,6 +467,17 @@ async function loadSidebar() {
                     `<option value="${a.scope}">${a.scope}${a.address ? ' (' + a.address + ')' : ''}</option>`
                 ).join('');
             setSelect(emailScopeSel, settings.email_scope || 'default');
+        }
+
+        // Populate bitcoin scope dropdown (from configured wallets)
+        const btcScopeSel = container.querySelector('#sb-bitcoin-scope');
+        if (btcScopeSel) {
+            const wallets = bitcoinWalletsData?.wallets || [];
+            btcScopeSel.innerHTML = '<option value="none">None</option>' +
+                wallets.map(w =>
+                    `<option value="${w.scope}">${w.scope}${w.address ? ' (' + w.address.slice(0, 8) + '...)' : ''}</option>`
+                ).join('');
+            setSelect(btcScopeSel, settings.bitcoin_scope || 'default');
         }
 
         // Populate state preset dropdown
@@ -605,6 +618,7 @@ function collectSettings(container) {
         knowledge_scope: getVal(container, '#sb-knowledge-scope') || 'default',
         people_scope: getVal(container, '#sb-people-scope') || 'default',
         email_scope: getVal(container, '#sb-email-scope') || 'default',
+        bitcoin_scope: getVal(container, '#sb-bitcoin-scope') || 'default',
         story_engine_enabled: getChecked(container, '#sb-story-enabled'),
         story_preset: getVal(container, '#sb-story-preset') || null,
         story_in_prompt: getChecked(container, '#sb-story-in-prompt'),

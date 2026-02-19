@@ -152,6 +152,8 @@ class StreamingChat:
             self.main_chat.function_manager.set_people_scope(people_scope if people_scope != 'none' else None)
             email_scope = chat_settings.get('email_scope', 'default')
             self.main_chat.function_manager.set_email_scope(email_scope if email_scope != 'none' else None)
+            bitcoin_scope = chat_settings.get('bitcoin_scope', 'default')
+            self.main_chat.function_manager.set_bitcoin_scope(bitcoin_scope if bitcoin_scope != 'none' else None)
             chat_name = self.main_chat.session_manager.get_active_chat_name()
             self.main_chat.function_manager.set_rag_scope(f"__rag__:{chat_name}")
 
