@@ -425,15 +425,19 @@ def _get_inbox(count=20, folder="inbox"):
 def _format_inbox(messages, folder="inbox"):
     if not messages:
         return f"{folder.title()} is empty."
+    creds = _get_email_creds()
+    account = creds['address'] if creds else 'unknown'
     label = "To" if folder == "sent" else "From"
-    header = f"{folder.title()} ({len(messages)} messages"
+    total = len(messages)
     if folder == "inbox":
-        unread_count = sum(1 for m in messages if m.get('unread'))
-        header += f", {unread_count} unread"
-    header += "):"
+        unread = sum(1 for m in messages if m.get('unread'))
+        read = total - unread
+        header = f"Account: {account}\n{folder.title()} — {unread} unread, {read} read ({total} total)"
+    else:
+        header = f"Account: {account}\n{folder.title()} ({total} messages)"
     lines = [header]
     for m in messages:
-        tag = " (unread)" if folder == "inbox" and m.get('unread') else ""
+        tag = " *NEW*" if folder == "inbox" and m.get('unread') else ""
         lines.append(f"  [{m['index']}] {m['date']} — {m['name']}: {m['subject']}{tag}")
     lines.append("\nUse read_email(index) to read full content.")
     return '\n'.join(lines)
