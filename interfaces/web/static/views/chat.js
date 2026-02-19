@@ -520,6 +520,9 @@ async function loadSidebar() {
             updateEasyMode(container, settings, init);
         }
 
+        // RAG context level
+        setVal(container, '#sb-rag-context', settings.rag_context || 'normal');
+
         // Load per-chat documents
         loadDocuments(container, chatName);
 
@@ -591,7 +594,8 @@ function collectSettings(container) {
         story_engine_enabled: getChecked(container, '#sb-story-enabled'),
         story_preset: getVal(container, '#sb-story-preset') || null,
         story_in_prompt: getChecked(container, '#sb-story-in-prompt'),
-        story_vars_in_prompt: getChecked(container, '#sb-story-vars')
+        story_vars_in_prompt: getChecked(container, '#sb-story-vars'),
+        rag_context: getVal(container, '#sb-rag-context') || 'normal'
     };
 }
 

@@ -21,6 +21,8 @@ class FunctionManager:
     _current_knowledge_scope = 'default'
     # Class-level people scope - accessible from knowledge module
     _current_people_scope = 'default'
+    # Class-level RAG scope - per-chat document scope for search_knowledge
+    _current_rag_scope = None
     
     def __init__(self):
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
@@ -378,6 +380,11 @@ class FunctionManager:
     def get_knowledge_scope(self) -> str:
         """Get current knowledge scope. Returns None if knowledge disabled."""
         return self._knowledge_scope
+
+    def set_rag_scope(self, scope: str):
+        """Set RAG scope for current chat. None = no RAG docs."""
+        self._rag_scope = scope
+        FunctionManager._current_rag_scope = scope
 
     def set_people_scope(self, scope: str):
         """Set people scope for current execution context. None = disabled."""

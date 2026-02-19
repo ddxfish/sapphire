@@ -150,6 +150,8 @@ class StreamingChat:
             self.main_chat.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != 'none' else None)
             people_scope = chat_settings.get('people_scope', 'default')
             self.main_chat.function_manager.set_people_scope(people_scope if people_scope != 'none' else None)
+            chat_name = self.main_chat.session_manager.get_active_chat_name()
+            self.main_chat.function_manager.set_rag_scope(f"__rag__:{chat_name}")
 
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.main_chat.function_manager.enabled_tools

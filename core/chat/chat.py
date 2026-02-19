@@ -348,8 +348,20 @@ class LLMChat:
 
         return messages
 
+    # Per-chat RAG context levels: (top_k, max_tokens)
+    _RAG_LEVELS = {
+        'light':  (2, 1500),
+        'normal': (5, 4000),
+        'heavy':  (10, 8000),
+    }
+
     def _get_rag_context(self, user_input):
         """Search per-chat RAG documents and return context string, or None."""
+        chat_settings = self.session_manager.get_chat_settings()
+        rag_level = chat_settings.get('rag_context', 'normal')
+        if rag_level == 'off':
+            return None
+
         chat_name = self.session_manager.get_active_chat_name()
         rag_scope = f"__rag__:{chat_name}"
 
@@ -359,15 +371,16 @@ class LLMChat:
             if not entries:
                 return None
 
+            top_k, max_tokens = self._RAG_LEVELS.get(rag_level, self._RAG_LEVELS['normal'])
+
             results = knowledge.search_rag(
                 user_input, rag_scope,
-                limit=config.RAG_TOP_K,
+                limit=top_k,
                 threshold=config.RAG_SIMILARITY_THRESHOLD,
-                max_tokens=config.RAG_MAX_INJECTION_TOKENS
+                max_tokens=max_tokens
             )
             if not results:
                 return None
-
             parts = ["[Reference Documents]"]
             for r in results:
                 parts.append(f"--- {r['filename']} (relevance: {r['score']:.0%}) ---\n{r['content']}")
@@ -419,6 +432,8 @@ class LLMChat:
             self.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != 'none' else None)
             people_scope = chat_settings.get('people_scope', 'default')
             self.function_manager.set_people_scope(people_scope if people_scope != 'none' else None)
+            chat_name = self.session_manager.get_active_chat_name()
+            self.function_manager.set_rag_scope(f"__rag__:{chat_name}")
 
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.function_manager.enabled_tools

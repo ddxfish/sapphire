@@ -327,6 +327,14 @@ def _get_current_scope():
         return 'default'
 
 
+def _get_current_rag_scope():
+    try:
+        from core.chat.function_manager import FunctionManager
+        return FunctionManager._current_rag_scope
+    except Exception:
+        return None
+
+
 def _get_current_people_scope():
     try:
         from core.chat.function_manager import FunctionManager
@@ -1293,6 +1301,15 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
         else:
             lines.append("  (none)")
 
+        # Per-chat uploaded documents
+        rag_scope = _get_current_rag_scope()
+        if rag_scope:
+            rag_docs = get_entries_by_scope(rag_scope)
+            if rag_docs:
+                lines.append(f"\n=== Uploaded Documents ({len(rag_docs)}) ===")
+                for d in rag_docs:
+                    lines.append(f"  {d['filename']} — {d['chunks']} chunks, {d['chars']} chars")
+
         if not lines:
             return "Your knowledge base is empty.", True
         return '\n'.join(lines), True
@@ -1302,6 +1319,15 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
     if people_scope:
         results.extend(_search_people(query, people_scope, limit))
     results.extend(_search_entries(query, scope, category, limit))
+    # Also search per-chat RAG documents
+    rag_scope = _get_current_rag_scope()
+    if rag_scope:
+        rag_results = _vector_search_entries(query, rag_scope, limit=limit)
+        seen_ids = {r["id"] for r in results}
+        for r in rag_results:
+            if r["id"] not in seen_ids:
+                r["source"] = "document"
+                results.append(r)
 
     if not results:
         return f"No results for '{query}'.", True
@@ -1317,6 +1343,8 @@ def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope=
     for r in results:
         if r["source"] == "people":
             lines.append(f"---\n[Person] {_format_person(r)}")
+        elif r["source"] == "document":
+            lines.append(f"---\n[Document] {_format_entry(r, query=query)}")
         else:
             lines.append(f"---\n[Knowledge] {_format_entry(r, query=query)}")
 
