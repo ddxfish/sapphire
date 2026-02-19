@@ -4400,6 +4400,85 @@ async def test_email_connection(request: Request, _=Depends(require_login)):
 
 
 # =============================================================================
+# EMAIL ACCOUNTS (multi-account CRUD)
+# =============================================================================
+
+@app.get("/api/email/accounts")
+async def list_email_accounts(request: Request, _=Depends(require_login)):
+    """List all email accounts (no passwords)."""
+    from core.credentials_manager import credentials
+    return {"accounts": credentials.list_email_accounts()}
+
+
+@app.put("/api/email/accounts/{scope}")
+async def set_email_account(scope: str, request: Request, _=Depends(require_login)):
+    """Create or update an email account for a scope."""
+    from core.credentials_manager import credentials
+    data = await request.json() or {}
+    address = data.get('address', '').strip()
+    app_password = data.get('app_password', '').strip()
+    imap_server = data.get('imap_server', 'imap.gmail.com').strip()
+    smtp_server = data.get('smtp_server', 'smtp.gmail.com').strip()
+
+    if not address:
+        raise HTTPException(status_code=400, detail="Email address is required")
+
+    # If no new password provided, keep existing
+    if not app_password:
+        existing = credentials.get_email_account(scope)
+        app_password = existing.get('app_password', '')
+
+    if credentials.set_email_account(scope, address, app_password, imap_server, smtp_server):
+        return {"success": True}
+    raise HTTPException(status_code=500, detail="Failed to save email account")
+
+
+@app.delete("/api/email/accounts/{scope}")
+async def delete_email_account(scope: str, request: Request, _=Depends(require_login)):
+    """Delete an email account."""
+    from core.credentials_manager import credentials
+    if credentials.delete_email_account(scope):
+        return {"success": True}
+    raise HTTPException(status_code=404, detail=f"Email account '{scope}' not found")
+
+
+@app.post("/api/email/accounts/{scope}/test")
+async def test_email_account(scope: str, request: Request, _=Depends(require_login)):
+    """Test IMAP connection for a specific email account."""
+    import imaplib
+    from core.credentials_manager import credentials
+
+    data = await request.json() or {}
+    address = data.get('address', '').strip()
+    app_password = data.get('app_password', '').strip()
+    imap_server = data.get('imap_server', '').strip()
+
+    # Fall back to stored credentials for missing fields
+    if not address or not app_password:
+        stored = credentials.get_email_account(scope)
+        address = address or stored['address']
+        app_password = app_password or stored['app_password']
+        imap_server = imap_server or stored['imap_server']
+
+    if not address or not app_password:
+        return {"success": False, "error": "No credentials provided"}
+
+    imap_server = imap_server or 'imap.gmail.com'
+
+    try:
+        imap = imaplib.IMAP4_SSL(imap_server)
+        imap.login(address, app_password)
+        _, data_resp = imap.select('INBOX', readonly=True)
+        msg_count = int(data_resp[0])
+        imap.logout()
+        return {"success": True, "message_count": msg_count}
+    except imaplib.IMAP4.error as e:
+        return {"success": False, "error": f"Authentication failed: {e}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
 # SSH PLUGIN ROUTES
 # =============================================================================
 

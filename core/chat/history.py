@@ -37,6 +37,7 @@ SYSTEM_DEFAULTS = {
     "goal_scope": "default",
     "knowledge_scope": "default",
     "people_scope": "default",
+    "email_scope": "default",
     "trim_color": "",
     "persona": None
 }

@@ -48,12 +48,7 @@ DEFAULT_CREDENTIALS = {
     "homeassistant": {
         "token": ""
     },
-    "email": {
-        "address": "",
-        "app_password": "",
-        "imap_server": "imap.gmail.com",
-        "smtp_server": "smtp.gmail.com"
-    },
+    "email_accounts": {},
     "ssh": {
         "servers": []
     }
@@ -114,6 +109,20 @@ class CredentialsManager:
                     if key not in self._credentials[section]:
                         self._credentials[section][key] = self._deep_copy(val) if isinstance(val, dict) else val
                         changed = True
+        # Migrate old single "email" key -> "email_accounts"
+        if "email" in self._credentials and "email_accounts" not in self._credentials:
+            old = self._credentials.pop("email")
+            self._credentials["email_accounts"] = {}
+            if old.get("address"):
+                self._credentials["email_accounts"]["default"] = old
+                logger.info("Migrated single email credentials to email_accounts['default']")
+            changed = True
+        elif "email" in self._credentials:
+            old = self._credentials.pop("email")
+            if old.get("address") and "default" not in self._credentials["email_accounts"]:
+                self._credentials["email_accounts"]["default"] = old
+                logger.info("Migrated single email credentials to email_accounts['default']")
+            changed = True
         if changed:
             if not self._save():
                 logger.warning("Schema update could not be saved to disk")
@@ -456,50 +465,89 @@ class CredentialsManager:
         return bool(self.get_ha_token())
     
     # =========================================================================
-    # Email
+    # Email Accounts (multi-account, keyed by scope)
     # =========================================================================
 
-    def get_email_credentials(self) -> dict:
-        """Get email credentials. App password is unscrambled on read."""
-        email = self._credentials.get('email', {})
+    def get_email_account(self, scope: str = 'default') -> dict:
+        """Get email account for a scope. App password is unscrambled on read."""
+        accounts = self._credentials.get('email_accounts', {})
+        acct = accounts.get(scope, {})
         return {
-            'address': email.get('address', ''),
-            'app_password': self._unscramble(email.get('app_password', '')),
-            'imap_server': email.get('imap_server', 'imap.gmail.com'),
-            'smtp_server': email.get('smtp_server', 'smtp.gmail.com'),
+            'address': acct.get('address', ''),
+            'app_password': self._unscramble(acct.get('app_password', '')),
+            'imap_server': acct.get('imap_server', 'imap.gmail.com'),
+            'smtp_server': acct.get('smtp_server', 'smtp.gmail.com'),
         }
+
+    def set_email_account(self, scope: str, address: str, app_password: str,
+                          imap_server: str = 'imap.gmail.com',
+                          smtp_server: str = 'smtp.gmail.com') -> bool:
+        """Set email account for a scope. App password is scrambled before save."""
+        try:
+            if 'email_accounts' not in self._credentials:
+                self._credentials['email_accounts'] = {}
+
+            self._credentials['email_accounts'][scope] = {
+                'address': address,
+                'app_password': self._scramble(app_password) if app_password else '',
+                'imap_server': imap_server,
+                'smtp_server': smtp_server,
+            }
+
+            if not self._save():
+                logger.error(f"Failed to persist email account '{scope}' to disk")
+                return False
+
+            logger.info(f"Set email account for scope '{scope}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set email account '{scope}': {e}")
+            return False
+
+    def delete_email_account(self, scope: str) -> bool:
+        """Remove an email account by scope."""
+        accounts = self._credentials.get('email_accounts', {})
+        if scope not in accounts:
+            return False
+        del accounts[scope]
+        if not self._save():
+            logger.error(f"Failed to persist deletion of email account '{scope}'")
+            return False
+        logger.info(f"Deleted email account '{scope}'")
+        return True
+
+    def list_email_accounts(self) -> list:
+        """List all email accounts (no passwords)."""
+        accounts = self._credentials.get('email_accounts', {})
+        result = []
+        for scope, acct in accounts.items():
+            result.append({
+                'scope': scope,
+                'address': acct.get('address', ''),
+                'imap_server': acct.get('imap_server', 'imap.gmail.com'),
+                'smtp_server': acct.get('smtp_server', 'smtp.gmail.com'),
+            })
+        return result
+
+    def has_email_account(self, scope: str = 'default') -> bool:
+        """Check if email account exists and has credentials."""
+        acct = self.get_email_account(scope)
+        return bool(acct['address'] and acct['app_password'])
+
+    # Backwards-compat wrappers (existing code uses these)
+    def get_email_credentials(self) -> dict:
+        return self.get_email_account('default')
 
     def set_email_credentials(self, address: str, app_password: str,
                               imap_server: str = 'imap.gmail.com',
                               smtp_server: str = 'smtp.gmail.com') -> bool:
-        """Set email credentials. App password is scrambled before save."""
-        try:
-            if 'email' not in self._credentials:
-                self._credentials['email'] = {}
-
-            self._credentials['email']['address'] = address
-            self._credentials['email']['app_password'] = self._scramble(app_password) if app_password else ''
-            self._credentials['email']['imap_server'] = imap_server
-            self._credentials['email']['smtp_server'] = smtp_server
-
-            if not self._save():
-                logger.error("Failed to persist email credentials to disk")
-                return False
-
-            logger.info("Set email credentials")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set email credentials: {e}")
-            return False
+        return self.set_email_account('default', address, app_password, imap_server, smtp_server)
 
     def clear_email_credentials(self) -> bool:
-        """Clear email credentials."""
-        return self.set_email_credentials('', '', 'imap.gmail.com', 'smtp.gmail.com')
+        return self.delete_email_account('default')
 
     def has_email_credentials(self) -> bool:
-        """Check if email credentials are configured."""
-        creds = self.get_email_credentials()
-        return bool(creds['address'] and creds['app_password'])
+        return self.has_email_account('default')
 
     # =========================================================================
     # SSH
@@ -542,8 +590,6 @@ class CredentialsManager:
         
         Shows which credentials are set without exposing actual values.
         """
-        email_creds = self._credentials.get('email', {})
-        email_addr = email_creds.get('address', '')
         summary = {
             "llm": {},
             "socks": {
@@ -553,8 +599,8 @@ class CredentialsManager:
                 "has_token": self.has_ha_token()
             },
             "email": {
-                "has_credentials": self.has_email_credentials(),
-                "address": email_addr[:3] + '***' if email_addr else ''
+                "has_credentials": self.has_email_account('default'),
+                "accounts": len(self._credentials.get('email_accounts', {}))
             }
         }
         

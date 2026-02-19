@@ -2,7 +2,7 @@
 import { fetchNonHeartbeatTasks, fetchHeartbeats, fetchStatus, fetchMergedTimeline,
          createTask, updateTask, deleteTask, runTask,
          fetchPrompts, fetchToolsets, fetchLLMProviders,
-         fetchMemoryScopes, fetchKnowledgeScopes, fetchPeopleScopes, fetchGoalScopes,
+         fetchMemoryScopes, fetchKnowledgeScopes, fetchPeopleScopes, fetchGoalScopes, fetchEmailAccounts,
          fetchPersonas, fetchPersona } from '../shared/continuity-api.js';
 import * as ui from '../ui.js';
 
@@ -436,18 +436,19 @@ async function openEditor(task, isHeartbeat = false) {
     document.querySelector('.sched-editor-overlay')?.remove();
 
     let prompts = [], toolsetsList = [], llmProviders = [], llmMetadata = {};
-    let memoryScopes = [], knowledgeScopes = [], peopleScopes = [], goalScopes = [];
+    let memoryScopes = [], knowledgeScopes = [], peopleScopes = [], goalScopes = [], emailAccounts = [];
     let personas = [];
     try {
-        const [p, ts, llm, ms, ks, ps, gs, per] = await Promise.all([
+        const [p, ts, llm, ms, ks, ps, gs, ea, per] = await Promise.all([
             fetchPrompts(), fetchToolsets(), fetchLLMProviders(),
             fetchMemoryScopes(), fetchKnowledgeScopes(), fetchPeopleScopes(), fetchGoalScopes(),
-            fetchPersonas()
+            fetchEmailAccounts(), fetchPersonas()
         ]);
         prompts = p || []; toolsetsList = ts || [];
         llmProviders = llm.providers || []; llmMetadata = llm.metadata || {};
         memoryScopes = ms || []; knowledgeScopes = ks || [];
         peopleScopes = ps || []; goalScopes = gs || [];
+        emailAccounts = ea || [];
         personas = per || [];
     } catch (e) { console.warn('Editor: failed to fetch options', e); }
 
@@ -675,6 +676,7 @@ async function openEditor(task, isHeartbeat = false) {
                         ${renderScopeField('Knowledge', 'ed-knowledge', t.knowledge_scope, knowledgeScopes, '/api/knowledge/scopes')}
                         ${renderScopeField('People', 'ed-people', t.people_scope, peopleScopes, '/api/knowledge/people/scopes')}
                         ${renderScopeField('Goals', 'ed-goals', t.goal_scope, goalScopes, '/api/goals/scopes')}
+                        ${renderScopeField('Email', 'ed-email', t.email_scope, emailAccounts.map(a => ({name: a.scope, count: null})), null)}
                     </div></div>
                 </details>
 
@@ -999,6 +1001,7 @@ async function openEditor(task, isHeartbeat = false) {
             knowledge_scope: modal.querySelector('#ed-knowledge')?.value || 'none',
             people_scope: modal.querySelector('#ed-people')?.value || 'none',
             goal_scope: modal.querySelector('#ed-goals')?.value || 'none',
+            email_scope: modal.querySelector('#ed-email')?.value || 'default',
             tts_enabled: modal.querySelector('#ed-tts').checked,
             inject_datetime: modal.querySelector('#ed-datetime').checked,
             heartbeat: isHeartbeat,
@@ -1032,6 +1035,7 @@ function renderScopeField(label, id, currentValue, scopes, apiUrl) {
         const count = typeof s === 'object' && s.count != null ? ` (${s.count})` : '';
         return `<option value="${name}" ${currentValue === name ? 'selected' : ''}>${name}${count}</option>`;
     }).join('');
+    const addBtn = apiUrl ? `<button type="button" class="btn-sm sched-add-scope" data-api="${apiUrl}" title="New scope">+</button>` : '';
     return `
         <div class="sched-field">
             <label>${label}</label>
@@ -1041,7 +1045,7 @@ function renderScopeField(label, id, currentValue, scopes, apiUrl) {
                     <option value="default" ${currentValue === 'default' ? 'selected' : ''}>default</option>
                     ${opts}
                 </select>
-                <button type="button" class="btn-sm sched-add-scope" data-api="${apiUrl}" title="New scope">+</button>
+                ${addBtn}
             </div>
         </div>`;
 }

@@ -21,6 +21,8 @@ class FunctionManager:
     _current_knowledge_scope = 'default'
     # Class-level people scope - accessible from knowledge module
     _current_people_scope = 'default'
+    # Class-level email scope - per-chat email account
+    _current_email_scope = 'default'
     # Class-level RAG scope - per-chat document scope for search_knowledge
     _current_rag_scope = None
     
@@ -48,6 +50,8 @@ class FunctionManager:
         self._knowledge_scope = 'default'
         # People scope for current execution context (None = disabled)
         self._people_scope = 'default'
+        # Email scope for current execution context (None = disabled)
+        self._email_scope = 'default'
         
         # Story engine for games/simulations (None = disabled)
         self._story_engine = None
@@ -395,6 +399,16 @@ class FunctionManager:
     def get_people_scope(self) -> str:
         """Get current people scope. Returns None if people disabled."""
         return self._people_scope
+
+    def set_email_scope(self, scope: str):
+        """Set email scope for current execution context. None = disabled."""
+        self._email_scope = scope
+        FunctionManager._current_email_scope = scope
+        logger.debug(f"Email scope set to: {scope}")
+
+    def get_email_scope(self) -> str:
+        """Get current email scope. Returns None if email disabled."""
+        return self._email_scope
 
     def set_story_engine(self, engine, turn_getter=None):
         """

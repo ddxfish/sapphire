@@ -136,6 +136,14 @@ export async function fetchGoalScopes() {
   return data.scopes || [];
 }
 
+// Fetch email accounts
+export async function fetchEmailAccounts() {
+  const res = await fetch('/api/email/accounts');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.accounts || [];
+}
+
 // Fetch tasks filtered by heartbeat
 export async function fetchHeartbeats() {
   const res = await fetch(`${API_BASE}/tasks?heartbeat=true`);

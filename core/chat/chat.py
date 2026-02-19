@@ -432,6 +432,8 @@ class LLMChat:
             self.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != 'none' else None)
             people_scope = chat_settings.get('people_scope', 'default')
             self.function_manager.set_people_scope(people_scope if people_scope != 'none' else None)
+            email_scope = chat_settings.get('email_scope', 'default')
+            self.function_manager.set_email_scope(email_scope if email_scope != 'none' else None)
             chat_name = self.session_manager.get_active_chat_name()
             self.function_manager.set_rag_scope(f"__rag__:{chat_name}")
 
@@ -890,6 +892,8 @@ class LLMChat:
                 self.function_manager.set_knowledge_scope(knowledge_scope if knowledge_scope != "none" else None)
                 people_scope = task_settings.get("people_scope", "none")
                 self.function_manager.set_people_scope(people_scope if people_scope != "none" else None)
+                email_scope = task_settings.get("email_scope", "default")
+                self.function_manager.set_email_scope(email_scope if email_scope != "none" else None)
                 self.function_manager.update_enabled_functions([toolset])
                 tools = self.function_manager.enabled_tools
                 logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")

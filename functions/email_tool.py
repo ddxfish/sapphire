@@ -135,17 +135,24 @@ TOOLS = [
     }
 ]
 
-# ─── Inbox Cache ─────────────────────────────────────────────────────────────
+# ─── Inbox Cache (per-scope) ──────────────────────────────────────────────────
 
-_inbox_cache = {
-    "folder": "inbox", # which folder is cached
-    "messages": [],    # Parsed summaries for AI
-    "raw": [],         # Full message objects for read_email
-    "msg_ids": [],     # IMAP message IDs for mark-as-read / archive
-    "timestamp": 0,
-}
+_inbox_cache = {}  # scope -> {folder, messages, raw, msg_ids, timestamp}
 
 CACHE_TTL = 60  # seconds
+
+def _empty_cache():
+    return {"folder": "inbox", "messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
+
+def _get_cache():
+    scope = _get_current_email_scope() or 'default'
+    if scope not in _inbox_cache:
+        _inbox_cache[scope] = _empty_cache()
+    return _inbox_cache[scope]
+
+def _reset_cache():
+    scope = _get_current_email_scope() or 'default'
+    _inbox_cache[scope] = _empty_cache()
 
 # IMAP folder name candidates (tried in order, first success wins)
 _FOLDER_CANDIDATES = {
@@ -153,7 +160,7 @@ _FOLDER_CANDIDATES = {
     "sent": ["[Gmail]/Sent Mail", "Sent", "Sent Items"],
     "archive": ["Archive", "[Gmail]/All Mail"],
 }
-_resolved_folders = {}  # "sent" -> resolved IMAP folder name
+_resolved_folders = {}  # (scope, folder_key) -> resolved IMAP folder name
 
 
 def _imap_quote(name):
@@ -165,17 +172,20 @@ def _imap_quote(name):
 
 def _resolve_folder(imap, folder_key):
     """Resolve logical folder name to IMAP folder. LIST discovery first, then candidates."""
-    if folder_key in _resolved_folders:
-        name = _resolved_folders[folder_key]
+    scope = _get_current_email_scope() or 'default'
+    cache_key = (scope, folder_key)
+
+    if cache_key in _resolved_folders:
+        name = _resolved_folders[cache_key]
         try:
             imap.select(_imap_quote(name), readonly=True)
             return name
         except imaplib.IMAP4.error:
-            del _resolved_folders[folder_key]
+            del _resolved_folders[cache_key]
 
     if folder_key == "inbox":
         imap.select("INBOX", readonly=True)
-        _resolved_folders["inbox"] = "INBOX"
+        _resolved_folders[cache_key] = "INBOX"
         return "INBOX"
 
     # Discover via LIST first (no select = no BAD errors to corrupt state)
@@ -184,7 +194,7 @@ def _resolve_folder(imap, folder_key):
         try:
             status, _ = imap.select(_imap_quote(name), readonly=True)
             if status == 'OK':
-                _resolved_folders[folder_key] = name
+                _resolved_folders[cache_key] = name
                 return name
         except imaplib.IMAP4.error:
             pass
@@ -194,7 +204,7 @@ def _resolve_folder(imap, folder_key):
         try:
             status, _ = imap.select(_imap_quote(name), readonly=True)
             if status == 'OK':
-                _resolved_folders[folder_key] = name
+                _resolved_folders[cache_key] = name
                 return name
         except imaplib.IMAP4.error:
             continue
@@ -292,10 +302,20 @@ def _extract_body(msg):
     return '(no text content)'
 
 
+def _get_current_email_scope():
+    try:
+        from core.chat.function_manager import FunctionManager
+        return FunctionManager._current_email_scope
+    except Exception:
+        return 'default'
+
 def _get_email_creds():
-    """Get email credentials from credentials manager."""
+    """Get email credentials for current scope."""
     from core.credentials_manager import credentials
-    creds = credentials.get_email_credentials()
+    scope = _get_current_email_scope()
+    if scope is None:
+        return None
+    creds = credentials.get_email_account(scope)
     if not creds['address'] or not creds['app_password']:
         return None
     return creds
@@ -304,20 +324,23 @@ def _get_email_creds():
 # ─── Tool Implementations ────────────────────────────────────────────────────
 
 def _get_inbox(count=20, folder="inbox"):
-    global _inbox_cache
-
     count = min(max(1, count), 50)
     folder = folder if folder in _FOLDER_CANDIDATES else "inbox"
 
+    cache = _get_cache()
+
     # Cache hit — same folder and fresh
-    if (_inbox_cache["folder"] == folder and _inbox_cache["messages"]
-            and (time.time() - _inbox_cache["timestamp"]) < CACHE_TTL):
-        cached = _inbox_cache["messages"][:count]
+    if (cache["folder"] == folder and cache["messages"]
+            and (time.time() - cache["timestamp"]) < CACHE_TTL):
+        cached = cache["messages"][:count]
         logger.info(f"Email {folder}: returning {len(cached)} cached messages")
         return _format_inbox(cached, folder), True
 
     creds = _get_email_creds()
     if not creds:
+        scope = _get_current_email_scope()
+        if scope is None:
+            return "Email is disabled for this chat.", False
         return "Email not configured. Set up email credentials in Settings → Plugins → Email.", False
 
     try:
@@ -335,7 +358,7 @@ def _get_inbox(count=20, folder="inbox"):
         uids = data[0].split()
         if not uids:
             imap.logout()
-            _inbox_cache = {"folder": folder, "messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()}
+            cache.update({"folder": folder, "messages": [], "raw": [], "msg_ids": [], "timestamp": time.time()})
             return f"{folder.title()} is empty.", True
 
         # Get unseen UIDs (only meaningful for inbox)
@@ -380,13 +403,13 @@ def _get_inbox(count=20, folder="inbox"):
 
         imap.logout()
 
-        _inbox_cache = {
+        cache.update({
             "folder": folder,
             "messages": messages,
             "raw": raw_messages,
             "msg_ids": latest,
             "timestamp": time.time(),
-        }
+        })
 
         logger.info(f"Email {folder}: fetched {len(messages)} messages")
         return _format_inbox(messages, folder), True
@@ -417,13 +440,14 @@ def _format_inbox(messages, folder="inbox"):
 
 
 def _read_email(index):
-    if not _inbox_cache["raw"]:
+    cache = _get_cache()
+    if not cache["raw"]:
         return "No inbox loaded. Call get_inbox() first.", False
 
-    if index < 1 or index > len(_inbox_cache["raw"]):
-        return f"Invalid index {index}. Range: 1-{len(_inbox_cache['raw'])}.", False
+    if index < 1 or index > len(cache["raw"]):
+        return f"Invalid index {index}. Range: 1-{len(cache['raw'])}.", False
 
-    msg = _inbox_cache["raw"][index - 1]
+    msg = cache["raw"][index - 1]
     sender = msg.get('From', 'Unknown')
     subject = _decode_header_value(msg.get('Subject', '(no subject)'))
     date_str = msg.get('Date', '?')
@@ -441,9 +465,10 @@ def _read_email(index):
 
 def _mark_as_read(index):
     """Mark a message as read (\\Seen) in IMAP using UID."""
-    if _inbox_cache["folder"] != "inbox":
+    cache = _get_cache()
+    if cache["folder"] != "inbox":
         return  # Only mark read in inbox
-    if not _inbox_cache["msg_ids"] or index < 1 or index > len(_inbox_cache["msg_ids"]):
+    if not cache["msg_ids"] or index < 1 or index > len(cache["msg_ids"]):
         return
     creds = _get_email_creds()
     if not creds:
@@ -452,11 +477,11 @@ def _mark_as_read(index):
         imap = imaplib.IMAP4_SSL(creds['imap_server'])
         imap.login(creds['address'], creds['app_password'])
         imap.select('INBOX')  # read-write
-        imap.uid('store', _inbox_cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
+        imap.uid('store', cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
         imap.logout()
         # Update cache
-        if index <= len(_inbox_cache["messages"]):
-            _inbox_cache["messages"][index - 1]["unread"] = False
+        if index <= len(cache["messages"]):
+            cache["messages"][index - 1]["unread"] = False
         logger.info(f"Email [{index}] marked as read")
     except Exception as e:
         logger.warning(f"Failed to mark email as read: {e}")
@@ -464,15 +489,15 @@ def _mark_as_read(index):
 
 def _archive_emails(indices):
     """Archive emails by moving to Archive folder."""
-    global _inbox_cache
+    cache = _get_cache()
 
-    if _inbox_cache["folder"] != "inbox":
+    if cache["folder"] != "inbox":
         return "Can only archive from inbox view. Use get_inbox() first.", False
 
-    if not _inbox_cache["msg_ids"]:
+    if not cache["msg_ids"]:
         return "No inbox loaded. Call get_inbox() first.", False
 
-    max_idx = len(_inbox_cache["msg_ids"])
+    max_idx = len(cache["msg_ids"])
     bad = [i for i in indices if i < 1 or i > max_idx]
     if bad:
         return f"Invalid indices: {bad}. Range: 1-{max_idx}.", False
@@ -492,8 +517,8 @@ def _archive_emails(indices):
 
         archived = []
         for idx in sorted(set(indices)):
-            uid = _inbox_cache["msg_ids"][idx - 1]
-            subject = _inbox_cache["messages"][idx - 1]["subject"] if idx <= len(_inbox_cache["messages"]) else "?"
+            uid = cache["msg_ids"][idx - 1]
+            subject = cache["messages"][idx - 1]["subject"] if idx <= len(cache["messages"]) else "?"
             imap.uid('copy', uid, 'Archive')
             imap.uid('store', uid, '+FLAGS', '\\Deleted')
             archived.append(f"[{idx}] {subject}")
@@ -502,7 +527,7 @@ def _archive_emails(indices):
         imap.logout()
 
         # Invalidate cache so next get_inbox() is fresh
-        _inbox_cache = {"folder": "inbox", "messages": [], "raw": [], "msg_ids": [], "timestamp": 0}
+        _reset_cache()
 
         logger.info(f"Archived {len(archived)} emails")
         lines = [f"Archived {len(archived)} emails:"]
@@ -536,20 +561,24 @@ def _get_recipients():
 def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
     creds = _get_email_creds()
     if not creds:
+        scope = _get_current_email_scope()
+        if scope is None:
+            return "Email is disabled for this chat.", False
         return "Email not configured. Set up email credentials in Settings → Plugins → Email.", False
 
+    cache = _get_cache()
     reply_headers = {}
     to_addr = None
     to_name = None
 
     # Reply mode — resolve recipient + headers from cached message
     if reply_to_index is not None:
-        if not _inbox_cache["raw"]:
+        if not cache["raw"]:
             return "No inbox loaded. Call get_inbox() first.", False
-        if reply_to_index < 1 or reply_to_index > len(_inbox_cache["raw"]):
-            return f"Invalid index {reply_to_index}. Range: 1-{len(_inbox_cache['raw'])}.", False
+        if reply_to_index < 1 or reply_to_index > len(cache["raw"]):
+            return f"Invalid index {reply_to_index}. Range: 1-{len(cache['raw'])}.", False
 
-        original = _inbox_cache["raw"][reply_to_index - 1]
+        original = cache["raw"][reply_to_index - 1]
         # Reply-to address: use Reply-To header if set, otherwise From
         reply_addr = original.get('Reply-To') or original.get('From', '')
         _, to_addr = email.utils.parseaddr(reply_addr)

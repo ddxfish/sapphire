@@ -1,5 +1,5 @@
-// index.js - Email settings plugin
-// Settings tab in Plugins modal for email (Gmail) configuration
+// index.js - Email settings plugin (multi-account)
+// Settings tab in Plugins modal for email configuration
 
 import { registerPluginSettings } from '../plugins-modal/plugin-registry.js';
 
@@ -18,6 +18,64 @@ function injectStyles() {
       display: flex;
       flex-direction: column;
       gap: 16px;
+    }
+
+    .email-account-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .email-account-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-secondary);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .email-account-item:hover {
+      border-color: var(--accent-blue);
+      background: var(--bg-hover);
+    }
+
+    .email-account-item.active {
+      border-color: var(--accent-blue);
+    }
+
+    .email-account-scope {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+      min-width: 80px;
+    }
+
+    .email-account-addr {
+      font-size: 12px;
+      color: var(--text-muted);
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .email-add-btn {
+      padding: 8px 16px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.15s ease;
+    }
+
+    .email-add-btn:hover {
+      border-color: var(--accent-blue);
+      color: var(--accent-blue);
     }
 
     .email-group {
@@ -140,22 +198,210 @@ function injectStyles() {
     .email-clear-btn:hover {
       background: var(--error-light, #f8d7da);
     }
+
+    .email-back-btn {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.15s ease;
+    }
+
+    .email-back-btn:hover {
+      background: var(--bg-hover);
+    }
+
+    .email-editor-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
   `;
   document.head.appendChild(style);
 }
 
 
-async function testConnection(container) {
-  const getEl = (id) => container.querySelector(`#${id}`) || document.getElementById(id);
+// ─── State ───────────────────────────────────────────────────────────────────
 
-  const btn = getEl('email-test-btn');
-  const addrInput = getEl('email-address');
-  const pwInput = getEl('email-password');
-  const imapInput = getEl('email-imap');
+let _container = null;
+let _accounts = [];
 
-  const address = addrInput?.value?.trim() || '';
-  const app_password = pwInput?.value?.trim() || '';
-  const imap_server = imapInput?.value?.trim() || '';
+
+async function loadAccounts() {
+  try {
+    const res = await fetch('/api/email/accounts');
+    if (res.ok) {
+      const data = await res.json();
+      _accounts = data.accounts || [];
+    }
+  } catch (e) {
+    console.warn('Failed to load email accounts:', e);
+    _accounts = [];
+  }
+  return _accounts;
+}
+
+
+// ─── Account List View ──────────────────────────────────────────────────────
+
+function renderAccountList(container) {
+  _container = container;
+
+  const items = _accounts.map(a => `
+    <div class="email-account-item" data-scope="${a.scope}">
+      <span class="email-account-scope">${a.scope}</span>
+      <span class="email-account-addr">${a.address || '(no address)'}</span>
+    </div>
+  `).join('');
+
+  container.innerHTML = `
+    <div class="email-form">
+      <div class="email-hint">
+        Each scope name maps to a chat's email scope setting. Accounts are managed in Settings, scopes are selected per-chat in the sidebar.
+      </div>
+      <div class="email-account-list">
+        ${items || '<div class="email-hint">No email accounts configured.</div>'}
+      </div>
+      <button type="button" class="email-add-btn" id="email-add-account">+ Add Account</button>
+    </div>
+  `;
+
+  // Click handlers
+  container.querySelectorAll('.email-account-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const scope = el.dataset.scope;
+      const acct = _accounts.find(a => a.scope === scope);
+      renderAccountEditor(container, scope, acct);
+    });
+  });
+
+  container.querySelector('#email-add-account').addEventListener('click', () => {
+    const name = prompt('Scope name for new account (e.g. "sapphire", "anita"):');
+    if (!name || !name.trim()) return;
+    const scope = name.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    if (_accounts.find(a => a.scope === scope)) {
+      renderAccountEditor(container, scope, _accounts.find(a => a.scope === scope));
+      return;
+    }
+    renderAccountEditor(container, scope, null);
+  });
+}
+
+
+// ─── Account Editor View ────────────────────────────────────────────────────
+
+function renderAccountEditor(container, scope, acct) {
+  const s = acct || {};
+
+  container.innerHTML = `
+    <div class="email-form">
+      <div class="email-row" style="align-items:center;gap:12px">
+        <button type="button" class="email-back-btn" id="email-back">\u2190 Back</button>
+        <div class="email-editor-title">${scope}</div>
+      </div>
+
+      <div class="email-group">
+        <label for="email-address">Email Address</label>
+        <input type="email" id="email-address" value="${s.address || ''}" placeholder="you@example.com">
+      </div>
+
+      <div class="email-group">
+        <label for="email-password">App Password</label>
+        <div class="email-row">
+          <input type="password" id="email-password" placeholder="${acct ? 'Leave blank to keep existing...' : 'Enter app password'}">
+          <span class="email-pw-status ${acct ? 'stored' : 'missing'}" id="email-pw-status">${acct ? '\u2713 Stored' : 'Not set'}</span>
+        </div>
+        <div class="email-hint">
+          For Gmail, use an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:var(--accent-blue)">App Password</a> (2FA required).<br>
+          For self-hosted (Dovecot etc.), use the account password. Encrypted on disk.
+        </div>
+      </div>
+
+      <div class="email-servers">
+        <div class="email-servers-title">Server Settings</div>
+        <div class="email-group">
+          <label for="email-imap">IMAP Server</label>
+          <input type="text" id="email-imap" value="${s.imap_server || 'imap.gmail.com'}" placeholder="imap.gmail.com">
+        </div>
+        <div class="email-group" style="margin-top:12px">
+          <label for="email-smtp">SMTP Server</label>
+          <input type="text" id="email-smtp" value="${s.smtp_server || 'smtp.gmail.com'}" placeholder="smtp.gmail.com">
+        </div>
+        <div class="email-hint" style="margin-top:8px">
+          Gmail defaults shown. Change for other providers (e.g. mail.yourdomain.com).
+        </div>
+      </div>
+
+      <div class="email-row" style="gap:12px">
+        <button type="button" class="email-test-btn" id="email-save-btn">Save</button>
+        <button type="button" class="email-test-btn" id="email-test-btn">Test</button>
+        ${acct ? '<button type="button" class="email-clear-btn" id="email-delete-btn">Delete</button>' : ''}
+      </div>
+    </div>
+  `;
+
+  container.querySelector('#email-back').addEventListener('click', () => renderAccountList(container));
+  container.querySelector('#email-save-btn').addEventListener('click', () => saveAccount(container, scope));
+  container.querySelector('#email-test-btn').addEventListener('click', () => testAccount(container, scope));
+  container.querySelector('#email-delete-btn')?.addEventListener('click', () => deleteAccount(container, scope));
+}
+
+
+async function saveAccount(container, scope) {
+  const address = container.querySelector('#email-address')?.value?.trim() || '';
+  const app_password = container.querySelector('#email-password')?.value?.trim() || '';
+  const imap_server = container.querySelector('#email-imap')?.value?.trim() || 'imap.gmail.com';
+  const smtp_server = container.querySelector('#email-smtp')?.value?.trim() || 'smtp.gmail.com';
+
+  if (!address) {
+    alert('Email address is required');
+    return;
+  }
+
+  const payload = { address, imap_server, smtp_server };
+  if (app_password) payload.app_password = app_password;
+
+  const btn = container.querySelector('#email-save-btn');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  try {
+    const res = await fetch(`/api/email/accounts/${encodeURIComponent(scope)}`, {
+      method: 'PUT',
+      headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (data.success) {
+      btn.textContent = '\u2713 Saved';
+      btn.className = 'email-test-btn success';
+      // Update password status
+      const status = container.querySelector('#email-pw-status');
+      if (status) { status.textContent = '\u2713 Stored'; status.className = 'email-pw-status stored'; }
+      // Refresh list
+      await loadAccounts();
+      setTimeout(() => { btn.textContent = 'Save'; btn.className = 'email-test-btn'; btn.disabled = false; }, 2000);
+    } else {
+      throw new Error(data.detail || 'Save failed');
+    }
+  } catch (e) {
+    btn.textContent = '\u2717 Error';
+    btn.className = 'email-test-btn error';
+    btn.title = e.message;
+    setTimeout(() => { btn.textContent = 'Save'; btn.className = 'email-test-btn'; btn.disabled = false; btn.title = ''; }, 3000);
+  }
+}
+
+
+async function testAccount(container, scope) {
+  const btn = container.querySelector('#email-test-btn');
+  const address = container.querySelector('#email-address')?.value?.trim() || '';
+  const app_password = container.querySelector('#email-password')?.value?.trim() || '';
+  const imap_server = container.querySelector('#email-imap')?.value?.trim() || '';
 
   if (!address && !app_password) {
     btn.textContent = 'No credentials';
@@ -174,7 +420,7 @@ async function testConnection(container) {
     if (app_password) payload.app_password = app_password;
     if (imap_server) payload.imap_server = imap_server;
 
-    const res = await fetch('/api/webui/plugins/email/test', {
+    const res = await fetch(`/api/email/accounts/${encodeURIComponent(scope)}/test`, {
       method: 'POST',
       headers: csrfHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload)
@@ -196,153 +442,48 @@ async function testConnection(container) {
   }
 
   btn.disabled = false;
-  setTimeout(() => {
-    btn.textContent = 'Test';
-    btn.className = 'email-test-btn';
-    btn.title = '';
-  }, 5000);
+  setTimeout(() => { btn.textContent = 'Test'; btn.className = 'email-test-btn'; btn.title = ''; }, 5000);
 }
 
 
-async function clearCredentials(container) {
+async function deleteAccount(container, scope) {
+  if (!confirm(`Delete email account "${scope}"? This cannot be undone.`)) return;
+
   try {
-    const res = await fetch('/api/webui/plugins/email/credentials', { method: 'DELETE', headers: csrfHeaders() });
+    const res = await fetch(`/api/email/accounts/${encodeURIComponent(scope)}`, {
+      method: 'DELETE',
+      headers: csrfHeaders()
+    });
     if (res.ok) {
-      const getEl = (id) => container.querySelector(`#${id}`) || document.getElementById(id);
-      const addrInput = getEl('email-address');
-      const pwInput = getEl('email-password');
-      const status = getEl('email-pw-status');
-      if (addrInput) addrInput.value = '';
-      if (pwInput) pwInput.value = '';
-      if (status) {
-        status.textContent = 'Not set';
-        status.className = 'email-pw-status missing';
-      }
+      await loadAccounts();
+      renderAccountList(container);
+    } else {
+      const data = await res.json();
+      alert(data.detail || 'Delete failed');
     }
   } catch (e) {
-    console.error('Failed to clear email credentials:', e);
+    console.error('Failed to delete email account:', e);
+    alert('Delete failed: ' + e.message);
   }
 }
 
+
+// ─── Plugin Registration ────────────────────────────────────────────────────
 
 function renderForm(container, settings) {
-  const s = settings || {};
-
-  container.innerHTML = `
-    <div class="email-form">
-      <div class="email-group">
-        <label for="email-address">Email Address</label>
-        <input type="email" id="email-address" value="${s.address || ''}" placeholder="you@gmail.com">
-      </div>
-
-      <div class="email-group">
-        <label for="email-password">App Password</label>
-        <div class="email-row">
-          <input type="password" id="email-password" placeholder="Enter app password to update...">
-          <span class="email-pw-status missing" id="email-pw-status">Checking...</span>
-        </div>
-        <div class="email-hint">
-          Google requires an <strong>App Password</strong> (not your regular password).<br>
-          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:var(--accent-blue)">
-            Create one here
-          </a> — requires 2FA enabled on your Google account.<br>
-          Leave blank to keep existing password. Password is encrypted on disk.
-        </div>
-      </div>
-
-      <div class="email-row" style="gap:12px">
-        <button type="button" class="email-test-btn" id="email-test-btn">Test</button>
-        <button type="button" class="email-clear-btn" id="email-clear-btn">Clear Credentials</button>
-      </div>
-
-      <div class="email-servers">
-        <div class="email-servers-title">Server Settings</div>
-        <div class="email-group">
-          <label for="email-imap">IMAP Server</label>
-          <input type="text" id="email-imap" value="${s.imap_server || 'imap.gmail.com'}" placeholder="imap.gmail.com">
-        </div>
-        <div class="email-group" style="margin-top:12px">
-          <label for="email-smtp">SMTP Server</label>
-          <input type="text" id="email-smtp" value="${s.smtp_server || 'smtp.gmail.com'}" placeholder="smtp.gmail.com">
-        </div>
-        <div class="email-hint" style="margin-top:8px">
-          Defaults work for Gmail. Change only if using a different provider.
-        </div>
-      </div>
-    </div>
-  `;
-
-  container.querySelector('#email-test-btn').addEventListener('click', () => testConnection(container));
-  container.querySelector('#email-clear-btn').addEventListener('click', () => clearCredentials(container));
-
-  // Check credential status
-  checkStatus(container);
-}
-
-
-async function checkStatus(container) {
-  const status = container.querySelector('#email-pw-status') || document.getElementById('email-pw-status');
-  if (!status) return;
-
-  try {
-    const res = await fetch('/api/webui/plugins/email/credentials');
-    const data = await res.json();
-
-    if (data.has_credentials) {
-      status.textContent = '\u2713 Stored';
-      status.className = 'email-pw-status stored';
-    } else {
-      status.textContent = 'Not set';
-      status.className = 'email-pw-status missing';
-    }
-  } catch (e) {
-    status.textContent = '?';
-    status.className = 'email-pw-status missing';
-  }
+  renderAccountList(container);
 }
 
 
 async function saveSettings(settings) {
-  // Extract credential fields — they go to credentials manager, not settings file
-  const address = settings._address || '';
-  const app_password = settings._app_password || '';
-  const imap_server = settings._imap_server || 'imap.gmail.com';
-  const smtp_server = settings._smtp_server || 'smtp.gmail.com';
-
-  if (address) {
-    try {
-      const payload = { address, imap_server, smtp_server };
-      if (app_password) payload.app_password = app_password;
-
-      const res = await fetch('/api/webui/plugins/email/credentials', {
-        method: 'PUT',
-        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json();
-      console.log('Email: Credentials save result:', data);
-    } catch (e) {
-      console.error('Failed to save email credentials:', e);
-    }
-  }
-
-  // Nothing to save to settings file — all email config is in credentials
+  // Individual account saves happen in the editor — nothing to do here
   return { success: true };
 }
 
 
 function getFormSettings(container) {
-  const getVal = (id) => {
-    const el = container.querySelector(`#${id}`) || document.getElementById(id);
-    return el?.value || '';
-  };
-
-  return {
-    _address: getVal('email-address').trim(),
-    _app_password: getVal('email-password').trim(),
-    _imap_server: getVal('email-imap').trim() || 'imap.gmail.com',
-    _smtp_server: getVal('email-smtp').trim() || 'smtp.gmail.com',
-  };
+  // No form-level settings to collect — accounts are saved individually
+  return {};
 }
 
 
@@ -356,15 +497,10 @@ export default {
       id: 'email',
       name: 'Email',
       icon: '\uD83D\uDCE7',
-      helpText: 'Connect a Gmail account so the AI can read and send email. Requires a Google App Password (2FA must be enabled). Only whitelisted contacts in Mind \u2192 People can receive email.',
+      helpText: 'Configure email accounts for each persona/scope. Each chat can select which email account to use via the sidebar. Supports Gmail (app passwords), Dovecot, and any IMAP/SMTP server.',
       render: renderForm,
       load: async () => {
-        try {
-          const res = await fetch('/api/webui/plugins/email/credentials');
-          if (res.ok) return await res.json();
-        } catch (e) {
-          console.warn('Failed to load email settings:', e);
-        }
+        await loadAccounts();
         return {};
       },
       save: saveSettings,
@@ -375,6 +511,7 @@ export default {
   },
 
   destroy() {
-    // Nothing to clean up
+    _container = null;
+    _accounts = [];
   }
 };
