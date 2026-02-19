@@ -127,8 +127,18 @@ class VoiceChatSystem:
         self._apply_initial_chat_settings()
         self._init_modules()
         self.init_components()
-        
+        self._cleanup_orphaned_rag()
+
         logger.info(f"System init took: {(time.time() - start_time)*1000:.1f}ms")
+
+    def _cleanup_orphaned_rag(self):
+        """Remove RAG scopes for chats that no longer exist."""
+        try:
+            from functions import knowledge
+            chat_names = [c["name"] for c in self.llm_chat.list_chats()]
+            knowledge.cleanup_orphaned_rag_scopes(chat_names)
+        except Exception as e:
+            logger.debug(f"RAG orphan cleanup skipped: {e}")
 
     def _prime_default_prompt(self):
         try:

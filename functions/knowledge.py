@@ -783,6 +783,28 @@ def search_rag(query, scope, limit=5, threshold=0.40, max_tokens=4000):
     return output
 
 
+def cleanup_orphaned_rag_scopes(valid_chat_names):
+    """Delete RAG scopes whose chat no longer exists. Called at startup."""
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT scope FROM knowledge_tabs WHERE scope LIKE '__rag__:%'")
+        rag_scopes = [r[0] for r in cursor.fetchall()]
+        conn.close()
+
+        if not rag_scopes:
+            return
+
+        valid = {f"__rag__:{name}" for name in valid_chat_names}
+        orphaned = [s for s in rag_scopes if s not in valid]
+
+        for scope in orphaned:
+            result = delete_scope(scope)
+            logger.info(f"[RAG] Cleaned up orphaned scope '{scope}': {result}")
+    except Exception as e:
+        logger.warning(f"[RAG] Orphan cleanup failed: {e}")
+
+
 def delete_entries_by_scope_and_filename(scope, filename):
     """Delete all entries for a specific file within a RAG scope."""
     conn = _get_connection()
