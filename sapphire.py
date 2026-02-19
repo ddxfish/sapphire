@@ -52,7 +52,6 @@ try:
     from core.chat import LLMChat, ConversationHistory
     from core.api_fastapi import app, set_system
     from core.settings_manager import settings
-    from core.event_handler import EventScheduler
     from core.ssl_utils import get_ssl_context
     import config
     import string
@@ -126,7 +125,6 @@ class VoiceChatSystem:
         self.llm_chat = LLMChat(self.history, system=self)
         self._prime_default_prompt()
         self._apply_initial_chat_settings()
-        self.event_scheduler = EventScheduler(self)
         self._init_modules()
         self.init_components()
         
@@ -444,17 +442,7 @@ class VoiceChatSystem:
         else:
             logger.info("STT disabled - skipping model initialization")
 
-        logger.info("Starting event scheduler...")
-        event_thread = threading.Thread(target=self.run_event_scheduler, daemon=True)
-        event_thread.start()
-        
         return True
-
-    def run_event_scheduler(self):
-        logger.info("Background event scheduler started.")
-        while True:
-            self.event_scheduler.check_and_trigger_events()
-            time.sleep(1.0)
 
     def stop(self):
         """Stop all components with error isolation - one failure won't block others."""

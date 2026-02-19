@@ -21,7 +21,7 @@ main.py (runner with restart loop)
     ├── STT (core/stt/) → thread in main process
     ├── Wake Word (core/wakeword/)
     ├── FastAPI Server (core/api_fastapi.py) → 0.0.0.0:8073
-    └── Event Scheduler (core/event_handler.py)
+    └── Continuity Scheduler (core/modules/continuity/scheduler.py)
 ```
 
 **Process model:** `main.py` is a runner that spawns `sapphire.py` with automatic restart on crash or restart request (exit code 42). `sapphire.py` spawns the TTS server as a subprocess via `ProcessManager`. STT runs as a thread. The FastAPI/uvicorn server handles all web traffic directly (auth, static files, API, SSE) on a single port. Everything else runs in the main process.
@@ -410,7 +410,6 @@ See dedicated docs:
 | `core/chat/history.py` | Session management |
 | `core/stt/utils.py` | Shared STT guard logic (`can_transcribe()`) |
 | `core/audio/device_manager.py` | Audio device handling |
-| `core/event_handler.py` | Scheduled events |
 | `core/event_bus.py` | Real-time event pub/sub for SSE |
 | `core/modules/continuity/scheduler.py` | Cron-based task scheduler |
 | `core/modules/continuity/executor.py` | Task execution with context isolation |

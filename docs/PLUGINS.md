@@ -102,8 +102,7 @@ This section is for developers and AI assistants creating plugins. It's condense
 plugins/
 └── my_plugin/
     ├── prompt_details.json    # Config (required)
-    ├── my_plugin.py           # Implementation (required)
-    └── events.json            # Scheduled events (optional)
+    └── my_plugin.py           # Implementation (required)
 ```
 
 **Naming convention:** Folder name = file name = class name.
@@ -162,34 +161,6 @@ def process(self, user_input, llm_client=None, active_chat=None):
 
 Multiple keywords: `["what time is it", "time", "current time"]`
 
-### Scheduled Events (events.json)
-
-```json
-{
-    "events": [
-        {
-            "name": "Morning Greeting",
-            "module": "my_plugin",
-            "action": "morning",
-            "parameters": "",
-            "schedule": {
-                "hours": [9],
-                "minutes": [0],
-                "days": []
-            },
-            "append_to_history": false
-        }
-    ]
-}
-```
-
-**Schedule fields:**
-- `hours`: [0-23] - empty = every hour
-- `minutes`: [0-59] - empty = every minute  
-- `days`: ["Monday", "Tuesday", ...] - empty = every day
-
-The `action` value is set as `keyword_match`, `parameters` as `user_input`.
-
 ### Background Services
 
 For plugins needing persistent processes:
@@ -213,7 +184,6 @@ The script runs as a subprocess via ProcessManager. Lower `startup_order` = star
 | `user/plugins/` | Private plugins (gitignored) |
 | `core/modules/` | Core system modules (same structure) |
 | `core/chat/module_loader.py` | Plugin loading |
-| `core/event_handler.py` | Scheduled events |
 
 ## Reference for AI
 
