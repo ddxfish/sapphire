@@ -43,20 +43,37 @@ function injectStyles() {
       background: var(--bg-hover);
     }
 
-    .btc-wallet-scope {
+    .btc-wallet-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .btc-wallet-label {
       font-weight: 600;
       font-size: 13px;
       color: var(--text);
-      min-width: 80px;
+    }
+
+    .btc-wallet-scope {
+      font-size: 11px;
+      color: var(--text-muted);
     }
 
     .btc-wallet-addr {
       font-size: 11px;
       color: var(--text-muted);
-      flex: 1;
       overflow: hidden;
       text-overflow: ellipsis;
       font-family: monospace;
+      white-space: nowrap;
+    }
+
+    .btc-add-row {
+      display: flex;
+      gap: 8px;
     }
 
     .btc-add-btn {
@@ -68,6 +85,7 @@ function injectStyles() {
       cursor: pointer;
       font-size: 13px;
       transition: all 0.15s ease;
+      flex: 1;
     }
 
     .btc-add-btn:hover {
@@ -209,6 +227,18 @@ function injectStyles() {
       border: 1px solid var(--error, #dc3545);
       color: var(--error, #dc3545);
     }
+
+    .btc-wif-reveal {
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg-secondary);
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      color: var(--text);
+      user-select: all;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -240,12 +270,18 @@ async function loadWallets() {
 function renderWalletList(container) {
   _container = container;
 
-  const items = _wallets.map(w => `
+  const items = _wallets.map(w => {
+    const displayLabel = w.label && w.label !== w.scope ? w.label : '';
+    return `
     <div class="btc-wallet-item" data-scope="${w.scope}">
-      <span class="btc-wallet-scope">${w.scope}</span>
+      <div class="btc-wallet-info">
+        <span class="btc-wallet-label">${displayLabel || w.scope}</span>
+        ${displayLabel ? `<span class="btc-wallet-scope">${w.scope}</span>` : ''}
+      </div>
       <span class="btc-wallet-addr">${w.address || '(no key)'}</span>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   container.innerHTML = `
     <div class="btc-form">
@@ -255,7 +291,10 @@ function renderWalletList(container) {
       <div class="btc-wallet-list">
         ${items || '<div class="btc-hint">No Bitcoin wallets configured.</div>'}
       </div>
-      <button type="button" class="btc-add-btn" id="btc-add-wallet">+ Add Wallet</button>
+      <div class="btc-add-row">
+        <button type="button" class="btc-add-btn" id="btc-add-wallet">+ Add Wallet</button>
+        <button type="button" class="btc-add-btn" id="btc-import-file">\u21E5 Import from File</button>
+      </div>
     </div>
   `;
 
@@ -277,6 +316,8 @@ function renderWalletList(container) {
     }
     renderWalletEditor(container, scope, null);
   });
+
+  container.querySelector('#btc-import-file').addEventListener('click', () => importFromFile(container));
 }
 
 
@@ -301,8 +342,8 @@ function renderWalletEditor(container, scope, wallet) {
       ` : ''}
 
       <div class="btc-group">
-        <label for="btc-label">Label</label>
-        <input type="text" id="btc-label" value="${wallet?.label || scope}" placeholder="e.g. Sapphire Main">
+        <label for="btc-label">Nickname</label>
+        <input type="text" id="btc-label" value="${wallet?.label || scope}" placeholder="e.g. Sapphire Main Wallet">
       </div>
 
       <div class="btc-group">
@@ -312,11 +353,13 @@ function renderWalletEditor(container, scope, wallet) {
       </div>
 
       <div id="btc-result"></div>
+      <div id="btc-export-area"></div>
 
-      <div class="btc-row" style="gap:12px">
+      <div class="btc-row" style="gap:12px;flex-wrap:wrap">
         ${!existing ? '<button type="button" class="btc-btn" id="btc-generate">Generate New</button>' : ''}
         <button type="button" class="btc-btn" id="btc-save">Save</button>
         ${existing ? '<button type="button" class="btc-btn" id="btc-check">Check Balance</button>' : ''}
+        ${existing ? '<button type="button" class="btc-btn" id="btc-export">Export Backup</button>' : ''}
         ${existing ? '<button type="button" class="btc-delete-btn" id="btc-delete">Delete</button>' : ''}
       </div>
     </div>
@@ -326,6 +369,7 @@ function renderWalletEditor(container, scope, wallet) {
   container.querySelector('#btc-save').addEventListener('click', () => saveWallet(container, scope));
   container.querySelector('#btc-generate')?.addEventListener('click', () => generateWallet(container, scope));
   container.querySelector('#btc-check')?.addEventListener('click', () => checkBalance(container, scope));
+  container.querySelector('#btc-export')?.addEventListener('click', () => exportWallet(container, scope));
   container.querySelector('#btc-delete')?.addEventListener('click', () => deleteWallet(container, scope));
 }
 
@@ -337,6 +381,102 @@ function showResult(container, success, message) {
   el.textContent = message;
 }
 
+
+// ─── Export / Import ─────────────────────────────────────────────────────────
+
+async function exportWallet(container, scope) {
+  const btn = container.querySelector('#btc-export');
+  btn.disabled = true;
+  btn.textContent = 'Exporting...';
+
+  try {
+    const res = await fetch(`/api/bitcoin/wallets/${encodeURIComponent(scope)}/export`);
+    if (!res.ok) throw new Error((await res.json()).detail || 'Export failed');
+    const data = await res.json();
+
+    const area = container.querySelector('#btc-export-area');
+    area.innerHTML = `
+      <div class="btc-group">
+        <label>WIF Private Key (keep this secret!)</label>
+        <div class="btc-wif-reveal">${data.wif}</div>
+        <div class="btc-row" style="margin-top:6px;gap:8px">
+          <button type="button" class="btc-btn" id="btc-copy-wif">Copy WIF</button>
+          <button type="button" class="btc-btn" id="btc-download">Download .json</button>
+          <button type="button" class="btc-btn" id="btc-hide-export">Hide</button>
+        </div>
+      </div>
+    `;
+
+    area.querySelector('#btc-copy-wif').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(data.wif);
+        showResult(container, true, 'WIF copied to clipboard');
+      } catch { showResult(container, false, 'Copy failed'); }
+    });
+
+    area.querySelector('#btc-download').addEventListener('click', () => {
+      const bundle = { scope: data.scope, label: data.label, address: data.address, wif: data.wif };
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `btc-${scope}.json`; a.click();
+      URL.revokeObjectURL(url);
+      showResult(container, true, 'Downloaded wallet backup');
+    });
+
+    area.querySelector('#btc-hide-export').addEventListener('click', () => { area.innerHTML = ''; });
+
+  } catch (e) {
+    showResult(container, false, `Export failed: ${e.message}`);
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Export Backup';
+}
+
+
+function importFromFile(container) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.addEventListener('change', async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      if (!data.wif) {
+        alert('Invalid wallet file: missing WIF key');
+        return;
+      }
+
+      const scope = data.scope || prompt('Scope name for this wallet:');
+      if (!scope?.trim()) return;
+      const clean = scope.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+
+      const res = await fetch(`/api/bitcoin/wallets/${encodeURIComponent(clean)}`, {
+        method: 'PUT',
+        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ wif: data.wif, label: data.label || clean })
+      });
+      const result = await res.json();
+      if (result.success) {
+        await loadWallets();
+        renderWalletList(container);
+        showResult(container, true, `Imported wallet "${data.label || clean}" (${result.address})`);
+      } else {
+        alert(result.detail || 'Import failed');
+      }
+    } catch (e) {
+      alert('Import failed: ' + e.message);
+    }
+  });
+  input.click();
+}
+
+
+// ─── Wallet Actions ──────────────────────────────────────────────────────────
 
 async function generateWallet(container, scope) {
   const btn = container.querySelector('#btc-generate');
@@ -354,7 +494,6 @@ async function generateWallet(container, scope) {
     if (data.success) {
       showResult(container, true, `Wallet generated! Address: ${data.address}`);
       await loadWallets();
-      // Re-render editor with the new wallet
       const w = _wallets.find(w => w.scope === scope);
       setTimeout(() => renderWalletEditor(container, scope, w), 1500);
     } else {
@@ -373,7 +512,6 @@ async function saveWallet(container, scope) {
   const label = container.querySelector('#btc-label')?.value?.trim() || scope;
   const btn = container.querySelector('#btc-save');
 
-  // If no WIF and wallet exists, just update label
   const existing = _wallets.find(w => w.scope === scope);
   if (!wif && !existing) {
     showResult(container, false, 'WIF key is required for new wallets. Paste one or click Generate New.');
@@ -386,11 +524,6 @@ async function saveWallet(container, scope) {
   try {
     const payload = { label };
     if (wif) payload.wif = wif;
-    else {
-      // Keep existing WIF — backend needs it, send empty to signal "keep"
-      // Actually the backend requires WIF, so we need a flag or to re-read
-      // For label-only update, we re-PUT with generate=false and let backend handle
-    }
 
     const res = await fetch(`/api/bitcoin/wallets/${encodeURIComponent(scope)}`, {
       method: 'PUT',

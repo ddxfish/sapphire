@@ -80,7 +80,6 @@ export async function updateScene() {
         audio.setLocalTtsPlaying(status?.tts_playing || false);
 
         setPromptPrivacyRequired(status?.prompt_privacy_required || false);
-        updateSpice(status?.spice);
         updateStoryIndicator(status?.story);
 
         return status;
@@ -89,42 +88,4 @@ export async function updateScene() {
     }
 }
 
-function updateSpice(spice) {
-    const { spiceIndicator } = getElements();
-    if (!spiceIndicator) return;
-    
-    const tooltipEl = spiceIndicator.querySelector('.spice-tooltip');
-    
-    // Handle missing spice data
-    if (!spice) {
-        spiceIndicator.classList.remove('active', 'unavailable');
-        spiceIndicator.title = 'Spice status unknown';
-        tooltipEl.textContent = '';
-        return;
-    }
-    
-    // Not available in monolith mode
-    if (!spice.available) {
-        spiceIndicator.classList.remove('active');
-        spiceIndicator.classList.add('unavailable');
-        spiceIndicator.title = 'Spice unavailable (monolith prompt)';
-        tooltipEl.textContent = 'Monolith mode';
-        return;
-    }
-    
-    spiceIndicator.classList.remove('unavailable');
-    
-    if (spice.enabled) {
-        spiceIndicator.classList.add('active');
-        spiceIndicator.title = 'Spice enabled (click to disable)';
-        const parts = [];
-        if (spice.current) parts.push(`Active: ${spice.current}`);
-        if (spice.next) parts.push(`Next: ${spice.next}`);
-        tooltipEl.textContent = parts.length ? parts.join('\n') : 'No spice yet';
-    } else {
-        spiceIndicator.classList.remove('active');
-        spiceIndicator.title = 'Spice disabled (click to enable)';
-        tooltipEl.textContent = 'Spice disabled';
-    }
-}
 

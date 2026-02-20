@@ -18,7 +18,6 @@ def settings_defaults():
             "DEFAULT_USERNAME": "TestUser"
         },
         "features": {
-            "MODULES_ENABLED": True,
             "PLUGINS_ENABLED": False
         },
         "llm": {

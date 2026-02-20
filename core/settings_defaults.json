@@ -11,9 +11,7 @@
     "SOCKS_ENABLED": false,
     "SOCKS_HOST": "",
     "SOCKS_PORT": 1080,
-    "SOCKS_TIMEOUT": 10.0,
-    "MOLTBOOK_PROXY_URL": "http://127.0.0.1:8074",
-    "MOLTBOOK_LOCAL_SECRET": ""
+    "SOCKS_TIMEOUT": 10.0
   },
 
   "privacy": {
@@ -29,7 +27,6 @@
   },
   
   "features": {
-    "MODULES_ENABLED": true,
     "PLUGINS_ENABLED": true,
     "FUNCTIONS_ENABLED": true
   },
@@ -73,7 +70,9 @@
     "FASTER_WHISPER_COMPUTE_TYPE": "int8",
     "FASTER_WHISPER_BEAM_SIZE": 3,
     "FASTER_WHISPER_NUM_WORKERS": 8,
-    "FASTER_WHISPER_VAD_FILTER": true
+    "FASTER_WHISPER_VAD_FILTER": true,
+    "STT_HOST": "127.0.0.1",
+    "STT_SERVER_PORT": 5050
   },
   
   "recorder": {
@@ -220,8 +219,6 @@
   },
   
   "rag": {
-    "RAG_MAX_INJECTION_TOKENS": 4000,
-    "RAG_TOP_K": 5,
     "RAG_SIMILARITY_THRESHOLD": 0.40
   },
 

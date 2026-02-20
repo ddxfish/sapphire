@@ -31,7 +31,7 @@ assignees: ''
 
 ## Logs
 <!-- Attach or paste relevant log snippets. Check ~/sapphire/user/logs/ -->
-<!-- sapphire.log is the main one. web_interface.log and kokoro.log may also help. -->
+<!-- sapphire.log is the main one. kokoro.log may also help. -->
 
 ```
 (paste logs here)

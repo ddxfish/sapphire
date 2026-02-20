@@ -82,7 +82,7 @@ def _get_current_bitcoin_scope():
         from core.chat.function_manager import FunctionManager
         return FunctionManager._current_bitcoin_scope
     except Exception:
-        return 'default'
+        return None
 
 
 def _get_wallet_key():

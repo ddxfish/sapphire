@@ -85,7 +85,15 @@ class CredentialsManager:
                 self._ensure_schema()
                 logger.info(f"Loaded credentials from {CREDENTIALS_FILE}")
             except Exception as e:
-                logger.error(f"Failed to load credentials: {e}")
+                logger.critical(f"Credentials file corrupted: {e}")
+                # Back up corrupt file before resetting
+                try:
+                    backup = CREDENTIALS_FILE.with_suffix('.json.corrupt')
+                    import shutil
+                    shutil.copy2(CREDENTIALS_FILE, backup)
+                    logger.critical(f"Corrupt credentials backed up to {backup}")
+                except Exception as backup_err:
+                    logger.error(f"Could not back up corrupt credentials: {backup_err}")
                 self._credentials = self._deep_copy(DEFAULT_CREDENTIALS)
         else:
             logger.info(f"Credentials file does not exist, creating with defaults")
@@ -278,7 +286,7 @@ class CredentialsManager:
             f = Fernet(key)
             return f.decrypt(value[4:].encode()).decode()
         except (InvalidToken, Exception) as e:
-            logger.error(f"Failed to unscramble value: {e}")
+            logger.critical(f"Failed to decrypt credential — encryption key may have changed or salt file lost: {e}")
             return ''
 
     # =========================================================================

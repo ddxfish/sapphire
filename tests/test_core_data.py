@@ -485,13 +485,13 @@ class TestDataLayerIntegration:
         
         assert isinstance(defaults, dict)
         assert "prompt" in defaults
-        assert "ability" in defaults
-    
+        assert "toolset" in defaults
+
     def test_system_defaults_complete(self):
         """SYSTEM_DEFAULTS should have all required keys."""
         from core.chat.history import SYSTEM_DEFAULTS
-        
-        required_keys = ["prompt", "ability", "voice", "spice_enabled"]
+
+        required_keys = ["prompt", "toolset", "voice", "spice_enabled"]
         
         for key in required_keys:
             assert key in SYSTEM_DEFAULTS, f"Missing key: {key}"

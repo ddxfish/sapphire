@@ -52,7 +52,6 @@
       "remove_piece",
       "create_piece",
       "list_pieces",
-      "change_ai_name",
       "change_username",
       "set_tts_voice",
       "list_tools",

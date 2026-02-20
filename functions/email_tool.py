@@ -307,7 +307,7 @@ def _get_current_email_scope():
         from core.chat.function_manager import FunctionManager
         return FunctionManager._current_email_scope
     except Exception:
-        return 'default'
+        return None
 
 def _get_email_creds():
     """Get email credentials for current scope."""
@@ -344,7 +344,7 @@ def _get_inbox(count=20, folder="inbox"):
         return "Email not configured. Set up email credentials in Settings → Plugins → Email.", False
 
     try:
-        imap = imaplib.IMAP4_SSL(creds['imap_server'], creds.get('imap_port', 993))
+        imap = imaplib.IMAP4_SSL(creds['imap_server'], int(creds.get('imap_port', 993)))
         imap.login(creds['address'], creds['app_password'])
 
         # Resolve IMAP folder name (also selects it)
@@ -478,7 +478,7 @@ def _mark_as_read(index):
     if not creds:
         return
     try:
-        imap = imaplib.IMAP4_SSL(creds['imap_server'], creds.get('imap_port', 993))
+        imap = imaplib.IMAP4_SSL(creds['imap_server'], int(creds.get('imap_port', 993)))
         imap.login(creds['address'], creds['app_password'])
         imap.select('INBOX')  # read-write
         imap.uid('store', cache["msg_ids"][index - 1], '+FLAGS', '\\Seen')
@@ -511,7 +511,7 @@ def _archive_emails(indices):
         return "Email not configured.", False
 
     try:
-        imap = imaplib.IMAP4_SSL(creds['imap_server'], creds.get('imap_port', 993))
+        imap = imaplib.IMAP4_SSL(creds['imap_server'], int(creds.get('imap_port', 993)))
         imap.login(creds['address'], creds['app_password'])
 
         # Create Archive folder (no-op if exists)
@@ -645,7 +645,7 @@ def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
         for k, v in reply_headers.items():
             msg[k] = v
 
-        smtp_port = creds.get('smtp_port', 465)
+        smtp_port = int(creds.get('smtp_port', 465))
         if smtp_port == 465:
             smtp = smtplib.SMTP_SSL(creds['smtp_server'], smtp_port)
         else:

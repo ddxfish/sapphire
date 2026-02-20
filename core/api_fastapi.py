@@ -4597,6 +4597,29 @@ async def check_bitcoin_wallet(scope: str, request: Request, _=Depends(require_l
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/bitcoin/wallets/{scope}/export")
+async def export_bitcoin_wallet(scope: str, request: Request, _=Depends(require_login)):
+    """Export a bitcoin wallet (includes WIF for backup)."""
+    from core.credentials_manager import credentials
+
+    wallet = credentials.get_bitcoin_wallet(scope)
+    if not wallet['wif']:
+        raise HTTPException(status_code=404, detail=f"No wallet for scope '{scope}'")
+
+    try:
+        from bit import Key
+        address = Key(wallet['wif']).address
+    except Exception:
+        address = ''
+
+    return {
+        "scope": scope,
+        "label": wallet['label'],
+        "wif": wallet['wif'],
+        "address": address,
+    }
+
+
 # =============================================================================
 # SSH PLUGIN ROUTES
 # =============================================================================

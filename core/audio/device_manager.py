@@ -434,7 +434,7 @@ class DeviceManager:
         Test an input device in a subprocess to isolate potential crashes.
 
         Sounddevice/portaudio can segfault on certain device configurations.
-        Running in a subprocess protects the main Flask process.
+        Running in a subprocess protects the main server process.
 
         Args:
             device_index: Device to test, or None for default

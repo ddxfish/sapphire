@@ -33,7 +33,7 @@ class TestSettingsFlattening:
         
         assert "DEFAULT_USERNAME" in flat
         assert flat["DEFAULT_USERNAME"] == "TestUser"
-        assert "MODULES_ENABLED" in flat
+        assert "PLUGINS_ENABLED" in flat
         assert "identity" not in flat  # Category keys removed
     
     def test_flatten_preserves_config_objects(self, tmp_path, settings_defaults):

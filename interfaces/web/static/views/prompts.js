@@ -463,24 +463,51 @@ function renderAccordionBody(type) {
 }
 
 // ── Prompt CRUD ──
-async function createPrompt() {
-    const name = prompt('New prompt name:');
-    if (!name?.trim()) return;
-    const type = confirm('Create as Assembled prompt?\n\nOK = Assembled (components)\nCancel = Monolith (free text)') ? 'assembled' : 'monolith';
+function createPrompt() {
+    const modal = document.createElement('div');
+    modal.className = 'pr-modal-overlay';
+    modal.innerHTML = `
+        <div class="pr-modal" style="max-width:360px">
+            <div class="pr-modal-header">
+                <h3>New Prompt</h3>
+                <button class="btn-icon" id="pr-new-close">\u2715</button>
+            </div>
+            <div class="pr-modal-body">
+                <input type="text" id="pr-new-name" class="input" placeholder="Prompt name" autofocus style="width:100%;margin-bottom:12px">
+                <div style="display:flex;gap:8px">
+                    <button class="btn-primary" id="pr-new-assembled" style="flex:1">Assembled</button>
+                    <button class="btn-primary" id="pr-new-monolith" style="flex:1">Monolith</button>
+                </div>
+                <p class="text-muted" style="font-size:var(--font-xs);margin-top:8px">Assembled = built from component pieces. Monolith = single free-text block.</p>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    const close = () => modal.remove();
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+    modal.querySelector('#pr-new-close').addEventListener('click', close);
+    modal.querySelector('#pr-new-name').addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 
-    const data = type === 'monolith'
-        ? { type: 'monolith', content: '', privacy_required: false }
-        : { type: 'assembled', components: { character: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
+    async function create(type) {
+        const name = modal.querySelector('#pr-new-name').value.trim();
+        if (!name) { modal.querySelector('#pr-new-name').focus(); return; }
+        const data = type === 'monolith'
+            ? { type: 'monolith', content: '', privacy_required: false }
+            : { type: 'assembled', components: { character: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
+        try {
+            await savePrompt(name, data);
+            selected = name;
+            openAccordion = null;
+            editTarget = {};
+            await loadAll();
+            render();
+            ui.showToast(`Created: ${name}`, 'success');
+        } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+        close();
+    }
 
-    try {
-        await savePrompt(name.trim(), data);
-        selected = name.trim();
-        openAccordion = null;
-        editTarget = {};
-        await loadAll();
-        render();
-        ui.showToast(`Created: ${name.trim()}`, 'success');
-    } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+    modal.querySelector('#pr-new-assembled').addEventListener('click', () => create('assembled'));
+    modal.querySelector('#pr-new-monolith').addEventListener('click', () => create('monolith'));
 }
 
 async function duplicatePrompt() {

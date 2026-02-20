@@ -12,6 +12,7 @@ let heartbeats = [];    // heartbeats only
 let status = {};
 let mergedTimeline = { now: null, past: [], future: [] };
 let pollTimer = null;
+let _docClickBound = false;
 
 export default {
     init(el) { container = el; },
@@ -342,10 +343,15 @@ function bindEvents() {
     const dropdown = container.querySelector('#sched-create-dropdown');
     newBtn?.addEventListener('click', () => dropdown?.classList.toggle('show'));
 
-    // Close dropdown on outside click
-    document.addEventListener('click', e => {
-        if (!e.target.closest('.sched-create-menu')) dropdown?.classList.remove('show');
-    }, { once: false });
+    // Close dropdown on outside click (bind once — survives innerHTML replacement)
+    if (!_docClickBound) {
+        document.addEventListener('click', e => {
+            if (!e.target.closest('.sched-create-menu')) {
+                container?.querySelector('#sched-create-dropdown')?.classList.remove('show');
+            }
+        });
+        _docClickBound = true;
+    }
 
     container.querySelector('.sched-create-dropdown')?.addEventListener('click', e => {
         const opt = e.target.closest('.sched-create-opt');
