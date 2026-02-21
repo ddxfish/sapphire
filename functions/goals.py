@@ -6,6 +6,7 @@ SQLite-backed with subtasks, progress journaling, and memory scope integration.
 
 import sqlite3
 import logging
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -16,6 +17,7 @@ EMOJI = '🎯'
 
 _db_path = None
 _db_initialized = False
+_db_lock = threading.Lock()
 
 VALID_PRIORITIES = ('high', 'medium', 'low')
 VALID_STATUSES = ('active', 'completed', 'abandoned')
@@ -179,57 +181,60 @@ def _ensure_db():
     global _db_initialized
     if _db_initialized:
         return
+    with _db_lock:
+        if _db_initialized:
+            return
 
-    db_path = _get_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path = _get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(db_path, timeout=10)
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA foreign_keys=ON")
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS goals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            priority TEXT NOT NULL DEFAULT 'medium',
-            status TEXT NOT NULL DEFAULT 'active',
-            parent_id INTEGER REFERENCES goals(id),
-            scope TEXT NOT NULL DEFAULT 'default',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            completed_at DATETIME
-        )
-    ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS goals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT,
+                priority TEXT NOT NULL DEFAULT 'medium',
+                status TEXT NOT NULL DEFAULT 'active',
+                parent_id INTEGER REFERENCES goals(id),
+                scope TEXT NOT NULL DEFAULT 'default',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME
+            )
+        ''')
 
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS goal_progress (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-            note TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS goal_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                note TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_scope ON goals(scope)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_parent ON goals(parent_id)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_progress_goal ON goal_progress(goal_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_scope ON goals(scope)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_goals_parent ON goals(parent_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_progress_goal ON goal_progress(goal_id)')
 
-    # Scope registry (mirrors memory_scopes pattern)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS goal_scopes (
-            name TEXT PRIMARY KEY,
-            created DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute("INSERT OR IGNORE INTO goal_scopes (name) VALUES ('default')")
+        # Scope registry (mirrors memory_scopes pattern)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS goal_scopes (
+                name TEXT PRIMARY KEY,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute("INSERT OR IGNORE INTO goal_scopes (name) VALUES ('default')")
 
-    conn.commit()
-    conn.close()
-    _db_initialized = True
-    logger.info(f"Goals database ready at {db_path}")
+        conn.commit()
+        conn.close()
+        _db_initialized = True
+        logger.info(f"Goals database ready at {db_path}")
 
 
 def _get_current_scope():

@@ -438,7 +438,7 @@ def _apply_chat_settings(system, settings: dict):
         if "prompt" in settings:
             prompt_name = settings["prompt"]
             prompt_data = prompts.get_prompt(prompt_name)
-            content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
+            content = prompt_data.get('content', '') if isinstance(prompt_data, dict) else ''
             if content:
                 system.llm_chat.set_system_prompt(content)
                 prompts.set_active_preset_name(prompt_name)
@@ -648,14 +648,14 @@ async def handle_cancel(request: Request, _=Depends(require_login), system=Depen
 
 @app.get("/api/events")
 async def event_stream(request: Request, replay: str = 'false', _=Depends(require_login)):
-    """SSE endpoint for real-time event streaming."""
+    """SSE endpoint for real-time event streaming (async — no threadpool thread consumed)."""
     from core.event_bus import get_event_bus
 
     do_replay = replay.lower() == 'true'
 
-    def generate():
+    async def generate():
         bus = get_event_bus()
-        for event in bus.subscribe(replay=do_replay):
+        async for event in bus.async_subscribe(replay=do_replay):
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
@@ -3371,6 +3371,7 @@ async def start_story(request: Request, _=Depends(require_login), system=Depends
             "story_in_prompt": True,
             "story_vars_in_prompt": False,
             "toolset": "none",
+            "prompt": "__story__",
         }
         system.llm_chat.session_manager.update_chat_settings(story_settings)
 

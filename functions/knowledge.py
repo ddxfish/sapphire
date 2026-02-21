@@ -8,9 +8,11 @@ People are scoped via people_scope. Knowledge tabs are scoped via knowledge_scop
 import sqlite3
 import logging
 import re
+import threading
 import numpy as np
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +21,7 @@ EMOJI = '📖'
 
 _db_path = None
 _db_initialized = False
+_db_lock = threading.Lock()
 
 AVAILABLE_FUNCTIONS = [
     'save_person',
@@ -147,12 +150,16 @@ def _get_db_path():
     return _db_path
 
 
+@contextmanager
 def _get_connection():
     _ensure_db()
-    conn = sqlite3.connect(_get_db_path(), timeout=10)
+    conn = sqlite3.connect(str(_get_db_path()), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _scope_condition(scope, col='scope'):
@@ -166,113 +173,116 @@ def _ensure_db():
     global _db_initialized
     if _db_initialized:
         return
+    with _db_lock:
+        if _db_initialized:
+            return
 
-    db_path = _get_db_path()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path = _get_db_path()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(db_path, timeout=10)
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA foreign_keys=ON")
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA foreign_keys=ON")
 
-    # People (scoped via people_scope)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS people (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            relationship TEXT,
-            phone TEXT,
-            email TEXT,
-            address TEXT,
-            notes TEXT,
-            scope TEXT NOT NULL DEFAULT 'default',
-            embedding BLOB,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    # Migration: add scope column if missing (existing DBs)
-    try:
-        cursor.execute('SELECT scope FROM people LIMIT 1')
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE people ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
-        logger.info("Migrated people table: added scope column")
+        # People (scoped via people_scope)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                relationship TEXT,
+                phone TEXT,
+                email TEXT,
+                address TEXT,
+                notes TEXT,
+                scope TEXT NOT NULL DEFAULT 'default',
+                embedding BLOB,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # Migration: add scope column if missing (existing DBs)
+        try:
+            cursor.execute('SELECT scope FROM people LIMIT 1')
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE people ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
+            logger.info("Migrated people table: added scope column")
 
-    # Migration: add email_whitelisted column if missing
-    try:
-        cursor.execute('SELECT email_whitelisted FROM people LIMIT 1')
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE people ADD COLUMN email_whitelisted INTEGER DEFAULT 0")
-        logger.info("Migrated people table: added email_whitelisted column")
+        # Migration: add email_whitelisted column if missing
+        try:
+            cursor.execute('SELECT email_whitelisted FROM people LIMIT 1')
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE people ADD COLUMN email_whitelisted INTEGER DEFAULT 0")
+            logger.info("Migrated people table: added email_whitelisted column")
 
-    # Unique per name+scope (drop old name-only index)
-    cursor.execute('DROP INDEX IF EXISTS idx_people_name_lower')
-    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_people_name_scope ON people(LOWER(name), scope)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_people_scope ON people(scope)')
+        # Unique per name+scope (drop old name-only index)
+        cursor.execute('DROP INDEX IF EXISTS idx_people_name_lower')
+        cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_people_name_scope ON people(LOWER(name), scope)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_people_scope ON people(scope)')
 
-    # Knowledge tabs (scoped)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS knowledge_tabs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            description TEXT,
-            type TEXT NOT NULL DEFAULT 'user',
-            scope TEXT NOT NULL DEFAULT 'default',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(name, scope)
-        )
-    ''')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_tabs_scope ON knowledge_tabs(scope)')
+        # Knowledge tabs (scoped)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS knowledge_tabs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                type TEXT NOT NULL DEFAULT 'user',
+                scope TEXT NOT NULL DEFAULT 'default',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name, scope)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tabs_scope ON knowledge_tabs(scope)')
 
-    # Knowledge entries (within tabs, chunked + embedded)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS knowledge_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tab_id INTEGER NOT NULL REFERENCES knowledge_tabs(id) ON DELETE CASCADE,
-            content TEXT NOT NULL,
-            chunk_index INTEGER DEFAULT 0,
-            source_filename TEXT,
-            embedding BLOB,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_entries_tab ON knowledge_entries(tab_id)')
+        # Knowledge entries (within tabs, chunked + embedded)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS knowledge_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tab_id INTEGER NOT NULL REFERENCES knowledge_tabs(id) ON DELETE CASCADE,
+                content TEXT NOT NULL,
+                chunk_index INTEGER DEFAULT 0,
+                source_filename TEXT,
+                embedding BLOB,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_entries_tab ON knowledge_entries(tab_id)')
 
-    # FTS5 on entries
-    try:
-        _setup_fts(cursor)
-    except sqlite3.DatabaseError as e:
-        logger.warning(f"Knowledge FTS5 corrupted, rebuilding: {e}")
-        cursor.execute("DROP TABLE IF EXISTS knowledge_fts")
-        cursor.execute("DROP TRIGGER IF EXISTS knowledge_fts_insert")
-        cursor.execute("DROP TRIGGER IF EXISTS knowledge_fts_delete")
-        cursor.execute("DROP TRIGGER IF EXISTS knowledge_fts_update")
+        # FTS5 on entries
+        try:
+            _setup_fts(cursor)
+        except sqlite3.DatabaseError as e:
+            logger.warning(f"Knowledge FTS5 corrupted, rebuilding: {e}")
+            cursor.execute("DROP TABLE IF EXISTS knowledge_fts")
+            cursor.execute("DROP TRIGGER IF EXISTS knowledge_fts_insert")
+            cursor.execute("DROP TRIGGER IF EXISTS knowledge_fts_delete")
+            cursor.execute("DROP TRIGGER IF EXISTS knowledge_fts_update")
+            conn.commit()
+            _setup_fts(cursor)
+
+        # Scope registries
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS knowledge_scopes (
+                name TEXT PRIMARY KEY,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute("INSERT OR IGNORE INTO knowledge_scopes (name) VALUES ('default')")
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS people_scopes (
+                name TEXT PRIMARY KEY,
+                created DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute("INSERT OR IGNORE INTO people_scopes (name) VALUES ('default')")
+
         conn.commit()
-        _setup_fts(cursor)
-
-    # Scope registries
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS knowledge_scopes (
-            name TEXT PRIMARY KEY,
-            created DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute("INSERT OR IGNORE INTO knowledge_scopes (name) VALUES ('default')")
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS people_scopes (
-            name TEXT PRIMARY KEY,
-            created DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute("INSERT OR IGNORE INTO people_scopes (name) VALUES ('default')")
-
-    conn.commit()
-    conn.close()
-    _db_initialized = True
-    logger.info(f"Knowledge database ready at {db_path}")
+        conn.close()
+        _db_initialized = True
+        logger.info(f"Knowledge database ready at {db_path}")
 
 
 def _setup_fts(cursor):
@@ -360,15 +370,14 @@ SIMILARITY_THRESHOLD = 0.40
 
 def get_scopes():
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT scope, COUNT(*) FROM knowledge_tabs GROUP BY scope')
-        tab_counts = {row[0]: row[1] for row in cursor.fetchall()}
-        cursor.execute('SELECT name FROM knowledge_scopes ORDER BY name')
-        registered = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        all_scopes = set(registered) | set(tab_counts.keys()) | {'default'}
-        return [{"name": name, "count": tab_counts.get(name, 0)} for name in sorted(all_scopes)]
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM knowledge_tabs GROUP BY scope')
+            tab_counts = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT name FROM knowledge_scopes ORDER BY name')
+            registered = [row[0] for row in cursor.fetchall()]
+            all_scopes = set(registered) | set(tab_counts.keys()) | {'default'}
+            return [{"name": name, "count": tab_counts.get(name, 0)} for name in sorted(all_scopes)]
     except Exception as e:
         logger.error(f"Error getting knowledge scopes: {e}")
         return [{"name": "default", "count": 0}]
@@ -376,12 +385,11 @@ def get_scopes():
 
 def create_scope(name: str) -> bool:
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO knowledge_scopes (name) VALUES (?)", (name,))
-        conn.commit()
-        conn.close()
-        return True
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO knowledge_scopes (name) VALUES (?)", (name,))
+            conn.commit()
+            return True
     except Exception as e:
         logger.error(f"Failed to create knowledge scope '{name}': {e}")
         return False
@@ -392,19 +400,18 @@ def delete_scope(name: str) -> dict:
     if name == 'default':
         return {"error": "Cannot delete the default scope"}
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM knowledge_tabs WHERE scope = ?', (name,))
-        tab_count = cursor.fetchone()[0]
-        cursor.execute('SELECT COUNT(*) FROM knowledge_entries WHERE tab_id IN (SELECT id FROM knowledge_tabs WHERE scope = ?)', (name,))
-        entry_count = cursor.fetchone()[0]
-        cursor.execute('DELETE FROM knowledge_entries WHERE tab_id IN (SELECT id FROM knowledge_tabs WHERE scope = ?)', (name,))
-        cursor.execute('DELETE FROM knowledge_tabs WHERE scope = ?', (name,))
-        cursor.execute('DELETE FROM knowledge_scopes WHERE name = ?', (name,))
-        conn.commit()
-        conn.close()
-        logger.info(f"Deleted knowledge scope '{name}' with {tab_count} tabs and {entry_count} entries")
-        return {"deleted_tabs": tab_count, "deleted_entries": entry_count}
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM knowledge_tabs WHERE scope = ?', (name,))
+            tab_count = cursor.fetchone()[0]
+            cursor.execute('SELECT COUNT(*) FROM knowledge_entries WHERE tab_id IN (SELECT id FROM knowledge_tabs WHERE scope = ?)', (name,))
+            entry_count = cursor.fetchone()[0]
+            cursor.execute('DELETE FROM knowledge_entries WHERE tab_id IN (SELECT id FROM knowledge_tabs WHERE scope = ?)', (name,))
+            cursor.execute('DELETE FROM knowledge_tabs WHERE scope = ?', (name,))
+            cursor.execute('DELETE FROM knowledge_scopes WHERE name = ?', (name,))
+            conn.commit()
+            logger.info(f"Deleted knowledge scope '{name}' with {tab_count} tabs and {entry_count} entries")
+            return {"deleted_tabs": tab_count, "deleted_entries": entry_count}
     except Exception as e:
         logger.error(f"Failed to delete knowledge scope '{name}': {e}")
         return {"error": str(e)}
@@ -414,15 +421,14 @@ def delete_scope(name: str) -> dict:
 
 def get_people_scopes():
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT scope, COUNT(*) FROM people GROUP BY scope')
-        counts = {row[0]: row[1] for row in cursor.fetchall()}
-        cursor.execute('SELECT name FROM people_scopes ORDER BY name')
-        registered = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        all_scopes = set(registered) | set(counts.keys()) | {'default'}
-        return [{"name": name, "count": counts.get(name, 0)} for name in sorted(all_scopes)]
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM people GROUP BY scope')
+            counts = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT name FROM people_scopes ORDER BY name')
+            registered = [row[0] for row in cursor.fetchall()]
+            all_scopes = set(registered) | set(counts.keys()) | {'default'}
+            return [{"name": name, "count": counts.get(name, 0)} for name in sorted(all_scopes)]
     except Exception as e:
         logger.error(f"Error getting people scopes: {e}")
         return [{"name": "default", "count": 0}]
@@ -430,12 +436,11 @@ def get_people_scopes():
 
 def create_people_scope(name: str) -> bool:
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO people_scopes (name) VALUES (?)", (name,))
-        conn.commit()
-        conn.close()
-        return True
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO people_scopes (name) VALUES (?)", (name,))
+            conn.commit()
+            return True
     except Exception as e:
         logger.error(f"Failed to create people scope '{name}': {e}")
         return False
@@ -445,16 +450,15 @@ def delete_people_scope(name: str) -> dict:
     if name == 'default':
         return {"error": "Cannot delete the default scope"}
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM people WHERE scope = ?', (name,))
-        count = cursor.fetchone()[0]
-        cursor.execute('DELETE FROM people WHERE scope = ?', (name,))
-        cursor.execute('DELETE FROM people_scopes WHERE name = ?', (name,))
-        conn.commit()
-        conn.close()
-        logger.info(f"Deleted people scope '{name}' with {count} people")
-        return {"deleted_people": count}
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM people WHERE scope = ?', (name,))
+            count = cursor.fetchone()[0]
+            cursor.execute('DELETE FROM people WHERE scope = ?', (name,))
+            cursor.execute('DELETE FROM people_scopes WHERE name = ?', (name,))
+            conn.commit()
+            logger.info(f"Deleted people scope '{name}' with {count} people")
+            return {"deleted_people": count}
     except Exception as e:
         logger.error(f"Failed to delete people scope '{name}': {e}")
         return {"error": str(e)}
@@ -463,179 +467,166 @@ def delete_people_scope(name: str) -> dict:
 # ─── People CRUD ──────────────────────────────────────────────────────────────
 
 def get_people(scope='default'):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    scope_sql, scope_params = _scope_condition(scope)
-    cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at, email_whitelisted FROM people WHERE {scope_sql} ORDER BY name', scope_params)
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
-             "email": r[4], "address": r[5], "notes": r[6],
-             "created_at": r[7], "updated_at": r[8],
-             "email_whitelisted": bool(r[9])} for r in rows]
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        scope_sql, scope_params = _scope_condition(scope)
+        cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, created_at, updated_at, email_whitelisted FROM people WHERE {scope_sql} ORDER BY name', scope_params)
+        rows = cursor.fetchall()
+        return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
+                 "email": r[4], "address": r[5], "notes": r[6],
+                 "created_at": r[7], "updated_at": r[8],
+                 "email_whitelisted": bool(r[9])} for r in rows]
 
 
 def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default', person_id=None, email_whitelisted=None):
-    conn = _get_connection()
-    cursor = conn.cursor()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
 
-    # If ID provided, update by ID directly (allows name changes)
-    if person_id:
-        cursor.execute('SELECT id FROM people WHERE id = ?', (person_id,))
-    else:
-        # Fallback: match by name (for AI tool calls)
-        cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?', (name.strip(), scope))
-    existing = cursor.fetchone()
+        # If ID provided, update by ID directly (allows name changes)
+        if person_id:
+            cursor.execute('SELECT id FROM people WHERE id = ?', (person_id,))
+        else:
+            # Fallback: match by name (for AI tool calls)
+            cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?', (name.strip(), scope))
+        existing = cursor.fetchone()
 
-    # Build embed text for semantic search
-    parts = [name.strip()]
-    if relationship: parts.append(f"relationship: {relationship}")
-    if phone: parts.append(f"phone: {phone}")
-    if email: parts.append(f"email: {email}")
-    if address: parts.append(f"address: {address}")
-    if notes: parts.append(f"notes: {notes}")
-    embed_text = '. '.join(parts)
+        # Build embed text for semantic search
+        parts = [name.strip()]
+        if relationship: parts.append(f"relationship: {relationship}")
+        if phone: parts.append(f"phone: {phone}")
+        if email: parts.append(f"email: {email}")
+        if address: parts.append(f"address: {address}")
+        if notes: parts.append(f"notes: {notes}")
+        embed_text = '. '.join(parts)
 
-    embedding_blob = None
-    embedder = _get_embedder()
-    if embedder and embedder.available:
-        embs = embedder.embed([embed_text], prefix='search_document')
-        if embs is not None:
-            embedding_blob = embs[0].tobytes()
+        embedding_blob = None
+        embedder = _get_embedder()
+        if embedder and embedder.available:
+            embs = embedder.embed([embed_text], prefix='search_document')
+            if embs is not None:
+                embedding_blob = embs[0].tobytes()
 
-    now = datetime.now().isoformat()
+        now = datetime.now().isoformat()
 
-    if existing:
-        pid = existing[0]
-        # Update provided fields — empty string clears to NULL, None means "don't touch"
-        updates, params = [], []
-        for col, val in [('relationship', relationship), ('phone', phone),
-                         ('email', email), ('address', address), ('notes', notes)]:
-            if val is not None:
-                updates.append(f'{col} = ?'); params.append(val if val else None)
-        if email_whitelisted is not None:
-            updates.append('email_whitelisted = ?'); params.append(int(email_whitelisted))
-        if name.strip():
-            updates.append('name = ?'); params.append(name.strip())
-        updates.append('embedding = ?'); params.append(embedding_blob)
-        updates.append('updated_at = ?'); params.append(now)
-        params.append(pid)
-        cursor.execute(f'UPDATE people SET {", ".join(updates)} WHERE id = ?', params)
-        conn.commit()
-        conn.close()
-        return pid, False  # (id, is_new)
-    else:
-        cursor.execute(
-            'INSERT INTO people (name, relationship, phone, email, address, notes, scope, embedding, updated_at, email_whitelisted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (name.strip(), relationship, phone, email, address, notes, scope, embedding_blob, now, int(email_whitelisted) if email_whitelisted else 0)
-        )
-        pid = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return pid, True
+        if existing:
+            pid = existing[0]
+            # Update provided fields — empty string clears to NULL, None means "don't touch"
+            updates, params = [], []
+            for col, val in [('relationship', relationship), ('phone', phone),
+                             ('email', email), ('address', address), ('notes', notes)]:
+                if val is not None:
+                    updates.append(f'{col} = ?'); params.append(val if val else None)
+            if email_whitelisted is not None:
+                updates.append('email_whitelisted = ?'); params.append(int(email_whitelisted))
+            if name.strip():
+                updates.append('name = ?'); params.append(name.strip())
+            updates.append('embedding = ?'); params.append(embedding_blob)
+            updates.append('updated_at = ?'); params.append(now)
+            params.append(pid)
+            cursor.execute(f'UPDATE people SET {", ".join(updates)} WHERE id = ?', params)
+            conn.commit()
+            return pid, False  # (id, is_new)
+        else:
+            cursor.execute(
+                'INSERT INTO people (name, relationship, phone, email, address, notes, scope, embedding, updated_at, email_whitelisted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (name.strip(), relationship, phone, email, address, notes, scope, embedding_blob, now, int(email_whitelisted) if email_whitelisted else 0)
+            )
+            pid = cursor.lastrowid
+            conn.commit()
+            return pid, True
 
 
 def delete_person(person_id):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return False
-    cursor.execute('DELETE FROM people WHERE id = ?', (person_id,))
-    conn.commit()
-    conn.close()
-    return True
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        cursor.execute('DELETE FROM people WHERE id = ?', (person_id,))
+        conn.commit()
+        return True
 
 
 # ─── Knowledge Tabs CRUD ─────────────────────────────────────────────────────
 
 def get_tabs(scope='default', tab_type=None):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    scope_sql, scope_params = _scope_condition(scope, 't.scope')
-    if tab_type:
-        cursor.execute(f'''
-            SELECT t.id, t.name, t.description, t.type, t.scope, t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = t.id) as entry_count
-            FROM knowledge_tabs t WHERE {scope_sql} AND t.type = ? ORDER BY t.name
-        ''', scope_params + [tab_type])
-    else:
-        cursor.execute(f'''
-            SELECT t.id, t.name, t.description, t.type, t.scope, t.created_at, t.updated_at,
-                   (SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = t.id) as entry_count
-            FROM knowledge_tabs t WHERE {scope_sql} ORDER BY t.name
-        ''', scope_params)
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": r[0], "name": r[1], "description": r[2], "type": r[3],
-             "scope": r[4], "created_at": r[5], "updated_at": r[6],
-             "entry_count": r[7]} for r in rows]
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        scope_sql, scope_params = _scope_condition(scope, 't.scope')
+        if tab_type:
+            cursor.execute(f'''
+                SELECT t.id, t.name, t.description, t.type, t.scope, t.created_at, t.updated_at,
+                       (SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = t.id) as entry_count
+                FROM knowledge_tabs t WHERE {scope_sql} AND t.type = ? ORDER BY t.name
+            ''', scope_params + [tab_type])
+        else:
+            cursor.execute(f'''
+                SELECT t.id, t.name, t.description, t.type, t.scope, t.created_at, t.updated_at,
+                       (SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = t.id) as entry_count
+                FROM knowledge_tabs t WHERE {scope_sql} ORDER BY t.name
+            ''', scope_params)
+        rows = cursor.fetchall()
+        return [{"id": r[0], "name": r[1], "description": r[2], "type": r[3],
+                 "scope": r[4], "created_at": r[5], "updated_at": r[6],
+                 "entry_count": r[7]} for r in rows]
 
 
 def get_tab_entries(tab_id):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        'SELECT id, content, chunk_index, source_filename, created_at, updated_at FROM knowledge_entries WHERE tab_id = ? ORDER BY chunk_index, created_at',
-        (tab_id,)
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": r[0], "content": r[1], "chunk_index": r[2],
-             "source_filename": r[3], "created_at": r[4], "updated_at": r[5]} for r in rows]
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT id, content, chunk_index, source_filename, created_at, updated_at FROM knowledge_entries WHERE tab_id = ? ORDER BY chunk_index, created_at',
+            (tab_id,)
+        )
+        rows = cursor.fetchall()
+        return [{"id": r[0], "content": r[1], "chunk_index": r[2],
+                 "source_filename": r[3], "created_at": r[4], "updated_at": r[5]} for r in rows]
 
 
 def create_tab(name, scope='default', description=None, tab_type='user'):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            'INSERT INTO knowledge_tabs (name, description, type, scope) VALUES (?, ?, ?, ?)',
-            (name.strip(), description, tab_type, scope)
-        )
-        tab_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
-        return tab_id
-    except sqlite3.IntegrityError:
-        conn.close()
-        return None  # Already exists
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                'INSERT INTO knowledge_tabs (name, description, type, scope) VALUES (?, ?, ?, ?)',
+                (name.strip(), description, tab_type, scope)
+            )
+            tab_id = cursor.lastrowid
+            conn.commit()
+            return tab_id
+        except sqlite3.IntegrityError:
+            return None  # Already exists
 
 
 def update_tab(tab_id, name=None, description=None):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    updates, params = [], []
-    if name is not None:
-        updates.append('name = ?'); params.append(name.strip())
-    if description is not None:
-        updates.append('description = ?'); params.append(description)
-    if not updates:
-        conn.close()
-        return False
-    updates.append('updated_at = ?'); params.append(datetime.now().isoformat())
-    params.append(tab_id)
-    cursor.execute(f'UPDATE knowledge_tabs SET {", ".join(updates)} WHERE id = ?', params)
-    changed = cursor.rowcount > 0
-    conn.commit()
-    conn.close()
-    return changed
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        updates, params = [], []
+        if name is not None:
+            updates.append('name = ?'); params.append(name.strip())
+        if description is not None:
+            updates.append('description = ?'); params.append(description)
+        if not updates:
+            return False
+        updates.append('updated_at = ?'); params.append(datetime.now().isoformat())
+        params.append(tab_id)
+        cursor.execute(f'UPDATE knowledge_tabs SET {", ".join(updates)} WHERE id = ?', params)
+        changed = cursor.rowcount > 0
+        conn.commit()
+        return changed
 
 
 def delete_tab(tab_id):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT name FROM knowledge_tabs WHERE id = ?', (tab_id,))
-    if not cursor.fetchone():
-        conn.close()
-        return False
-    cursor.execute('DELETE FROM knowledge_entries WHERE tab_id = ?', (tab_id,))
-    cursor.execute('DELETE FROM knowledge_tabs WHERE id = ?', (tab_id,))
-    conn.commit()
-    conn.close()
-    return True
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT name FROM knowledge_tabs WHERE id = ?', (tab_id,))
+        if not cursor.fetchone():
+            return False
+        cursor.execute('DELETE FROM knowledge_entries WHERE tab_id = ?', (tab_id,))
+        cursor.execute('DELETE FROM knowledge_tabs WHERE id = ?', (tab_id,))
+        conn.commit()
+        return True
 
 
 # ─── Knowledge Entries CRUD ───────────────────────────────────────────────────
@@ -648,19 +639,18 @@ def add_entry(tab_id, content, chunk_index=0, source_filename=None):
         if embs is not None:
             embedding_blob = embs[0].tobytes()
 
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        'INSERT INTO knowledge_entries (tab_id, content, chunk_index, source_filename, embedding) VALUES (?, ?, ?, ?, ?)',
-        (tab_id, content, chunk_index, source_filename, embedding_blob)
-    )
-    entry_id = cursor.lastrowid
-    # Bump tab updated_at
-    cursor.execute('UPDATE knowledge_tabs SET updated_at = ? WHERE id = ?',
-                   (datetime.now().isoformat(), tab_id))
-    conn.commit()
-    conn.close()
-    return entry_id
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO knowledge_entries (tab_id, content, chunk_index, source_filename, embedding) VALUES (?, ?, ?, ?, ?)',
+            (tab_id, content, chunk_index, source_filename, embedding_blob)
+        )
+        entry_id = cursor.lastrowid
+        # Bump tab updated_at
+        cursor.execute('UPDATE knowledge_tabs SET updated_at = ? WHERE id = ?',
+                       (datetime.now().isoformat(), tab_id))
+        conn.commit()
+        return entry_id
 
 
 def update_entry(entry_id, content):
@@ -671,73 +661,67 @@ def update_entry(entry_id, content):
         if embs is not None:
             embedding_blob = embs[0].tobytes()
 
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        'UPDATE knowledge_entries SET content = ?, embedding = ?, updated_at = ? WHERE id = ?',
-        (content, embedding_blob, datetime.now().isoformat(), entry_id)
-    )
-    changed = cursor.rowcount > 0
-    conn.commit()
-    conn.close()
-    return changed
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE knowledge_entries SET content = ?, embedding = ?, updated_at = ? WHERE id = ?',
+            (content, embedding_blob, datetime.now().isoformat(), entry_id)
+        )
+        changed = cursor.rowcount > 0
+        conn.commit()
+        return changed
 
 
 def delete_entry(entry_id):
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM knowledge_entries WHERE id = ?', (entry_id,))
-    if not cursor.fetchone():
-        conn.close()
-        return False
-    cursor.execute('DELETE FROM knowledge_entries WHERE id = ?', (entry_id,))
-    conn.commit()
-    conn.close()
-    return True
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM knowledge_entries WHERE id = ?', (entry_id,))
+        if not cursor.fetchone():
+            return False
+        cursor.execute('DELETE FROM knowledge_entries WHERE id = ?', (entry_id,))
+        conn.commit()
+        return True
 
 
 def delete_entries_by_filename(tab_id, filename):
     """Delete all entries in a tab that came from a specific uploaded file."""
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = ? AND source_filename = ?',
-                   (tab_id, filename))
-    count = cursor.fetchone()[0]
-    if count:
-        cursor.execute('DELETE FROM knowledge_entries WHERE tab_id = ? AND source_filename = ?',
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM knowledge_entries WHERE tab_id = ? AND source_filename = ?',
                        (tab_id, filename))
-        conn.commit()
-    conn.close()
-    return count
+        count = cursor.fetchone()[0]
+        if count:
+            cursor.execute('DELETE FROM knowledge_entries WHERE tab_id = ? AND source_filename = ?',
+                           (tab_id, filename))
+            conn.commit()
+        return count
 
 
 def get_tabs_by_id(tab_id):
     """Get a single tab by ID."""
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name, type, scope FROM knowledge_tabs WHERE id = ?', (tab_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if not row:
-        return None
-    return {"id": row[0], "name": row[1], "type": row[2], "scope": row[3]}
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, name, type, scope FROM knowledge_tabs WHERE id = ?', (tab_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "name": row[1], "type": row[2], "scope": row[3]}
 
 
 # ─── RAG Helpers ─────────────────────────────────────────────────────────────
 
 def get_entries_by_scope(scope):
     """Get all entries in a scope, grouped by source_filename."""
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT e.source_filename, COUNT(*), SUM(LENGTH(e.content))
-        FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-        WHERE t.scope = ?
-        GROUP BY e.source_filename
-    ''', (scope,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"filename": r[0] or "(untitled)", "chunks": r[1], "chars": r[2]} for r in rows]
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT e.source_filename, COUNT(*), SUM(LENGTH(e.content))
+            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+            WHERE t.scope = ?
+            GROUP BY e.source_filename
+        ''', (scope,))
+        rows = cursor.fetchall()
+        return [{"filename": r[0] or "(untitled)", "chunks": r[1], "chars": r[2]} for r in rows]
 
 
 def search_rag(query, scope, limit=5, threshold=0.40, max_tokens=4000):
@@ -751,16 +735,15 @@ def search_rag(query, scope, limit=5, threshold=0.40, max_tokens=4000):
         return []
     query_vec = query_emb[0]
 
-    conn = _get_connection()
-    cursor = conn.cursor()
-    # Strict scope match — no global overlay for RAG
-    cursor.execute('''
-        SELECT e.id, e.content, t.name, e.embedding, e.source_filename
-        FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-        WHERE t.scope = ? AND e.embedding IS NOT NULL
-    ''', (scope,))
-    rows = cursor.fetchall()
-    conn.close()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        # Strict scope match — no global overlay for RAG
+        cursor.execute('''
+            SELECT e.id, e.content, t.name, e.embedding, e.source_filename
+            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+            WHERE t.scope = ? AND e.embedding IS NOT NULL
+        ''', (scope,))
+        rows = cursor.fetchall()
 
     scored = []
     for eid, content, tname, emb_blob, src_file in rows:
@@ -786,11 +769,10 @@ def search_rag(query, scope, limit=5, threshold=0.40, max_tokens=4000):
 def cleanup_orphaned_rag_scopes(valid_chat_names):
     """Delete RAG scopes whose chat no longer exists. Called at startup."""
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT scope FROM knowledge_tabs WHERE scope LIKE '__rag__:%'")
-        rag_scopes = [r[0] for r in cursor.fetchall()]
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT scope FROM knowledge_tabs WHERE scope LIKE '__rag__:%'")
+            rag_scopes = [r[0] for r in cursor.fetchall()]
 
         if not rag_scopes:
             return
@@ -807,26 +789,25 @@ def cleanup_orphaned_rag_scopes(valid_chat_names):
 
 def delete_entries_by_scope_and_filename(scope, filename):
     """Delete all entries for a specific file within a RAG scope."""
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT e.id FROM knowledge_entries e
-        JOIN knowledge_tabs t ON e.tab_id = t.id
-        WHERE t.scope = ? AND e.source_filename = ?
-    ''', (scope, filename))
-    entry_ids = [r[0] for r in cursor.fetchall()]
-    if entry_ids:
-        placeholders = ','.join('?' * len(entry_ids))
-        cursor.execute(f'DELETE FROM knowledge_entries WHERE id IN ({placeholders})', entry_ids)
-    # Clean up empty tabs
-    cursor.execute('''
-        DELETE FROM knowledge_tabs WHERE scope = ? AND id NOT IN (
-            SELECT DISTINCT tab_id FROM knowledge_entries
-        )
-    ''', (scope,))
-    conn.commit()
-    conn.close()
-    return len(entry_ids)
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT e.id FROM knowledge_entries e
+            JOIN knowledge_tabs t ON e.tab_id = t.id
+            WHERE t.scope = ? AND e.source_filename = ?
+        ''', (scope, filename))
+        entry_ids = [r[0] for r in cursor.fetchall()]
+        if entry_ids:
+            placeholders = ','.join('?' * len(entry_ids))
+            cursor.execute(f'DELETE FROM knowledge_entries WHERE id IN ({placeholders})', entry_ids)
+        # Clean up empty tabs
+        cursor.execute('''
+            DELETE FROM knowledge_tabs WHERE scope = ? AND id NOT IN (
+                SELECT DISTINCT tab_id FROM knowledge_entries
+            )
+        ''', (scope,))
+        conn.commit()
+        return len(entry_ids)
 
 
 # ─── Chunking ─────────────────────────────────────────────────────────────────
@@ -925,79 +906,75 @@ def _sanitize_fts_query(query, use_or=False, use_prefix=False):
 
 def _search_entries(query, scope, category=None, limit=10):
     """Search knowledge entries with cascading FTS + vector + LIKE."""
-    conn = _get_connection()
-    cursor = conn.cursor()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
 
-    # Resolve category filter
-    scope_sql, scope_params = _scope_condition(scope)
-    tab_filter = ""
-    tab_params = []
-    if category:
-        cursor.execute(f'SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND {scope_sql}',
-                       [category] + scope_params)
-        tab = cursor.fetchone()
-        if not tab:
-            conn.close()
-            return []
-        tab_filter = " AND e.tab_id = ?"
-        tab_params = [tab[0]]
-    else:
-        # All tabs in scope
-        cursor.execute(f'SELECT id FROM knowledge_tabs WHERE {scope_sql}', scope_params)
-        tab_ids = [r[0] for r in cursor.fetchall()]
-        if not tab_ids:
-            conn.close()
-            return []
-        placeholders = ','.join('?' * len(tab_ids))
-        tab_filter = f" AND e.tab_id IN ({placeholders})"
-        tab_params = tab_ids
+        # Resolve category filter
+        scope_sql, scope_params = _scope_condition(scope)
+        tab_filter = ""
+        tab_params = []
+        if category:
+            cursor.execute(f'SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND {scope_sql}',
+                           [category] + scope_params)
+            tab = cursor.fetchone()
+            if not tab:
+                return []
+            tab_filter = " AND e.tab_id = ?"
+            tab_params = [tab[0]]
+        else:
+            # All tabs in scope
+            cursor.execute(f'SELECT id FROM knowledge_tabs WHERE {scope_sql}', scope_params)
+            tab_ids = [r[0] for r in cursor.fetchall()]
+            if not tab_ids:
+                return []
+            placeholders = ','.join('?' * len(tab_ids))
+            tab_filter = f" AND e.tab_id IN ({placeholders})"
+            tab_params = tab_ids
 
-    results = []
-    seen_ids = set()
+        results = []
+        seen_ids = set()
 
-    # Strategy 0: Filename match
-    cursor.execute(f'''
-        SELECT e.id, e.content, t.name as tab_name, e.source_filename
-        FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-        WHERE e.source_filename LIKE ?{tab_filter}
-        ORDER BY e.chunk_index LIMIT ?
-    ''', [f'%{query}%'] + tab_params + [limit])
-    for r in cursor.fetchall():
-        results.append({"id": r[0], "content": r[1], "tab": r[2], "file": r[3], "source": "knowledge", "score": 0.96})
-        seen_ids.add(r[0])
+        # Strategy 0: Filename match
+        cursor.execute(f'''
+            SELECT e.id, e.content, t.name as tab_name, e.source_filename
+            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+            WHERE e.source_filename LIKE ?{tab_filter}
+            ORDER BY e.chunk_index LIMIT ?
+        ''', [f'%{query}%'] + tab_params + [limit])
+        for r in cursor.fetchall():
+            results.append({"id": r[0], "content": r[1], "tab": r[2], "file": r[3], "source": "knowledge", "score": 0.96})
+            seen_ids.add(r[0])
 
-    # Strategy 1: FTS AND
-    fts_results = []
-    fts_exact = _sanitize_fts_query(query)
-    if fts_exact:
-        try:
-            cursor.execute(f'''
-                SELECT e.id, e.content, t.name as tab_name, e.source_filename
-                FROM knowledge_fts f
-                JOIN knowledge_entries e ON f.rowid = e.id
-                JOIN knowledge_tabs t ON e.tab_id = t.id
-                WHERE knowledge_fts MATCH ?{tab_filter}
-                ORDER BY bm25(knowledge_fts) LIMIT ?
-            ''', [fts_exact] + tab_params + [limit])
-            fts_results = cursor.fetchall()
+        # Strategy 1: FTS AND
+        fts_results = []
+        fts_exact = _sanitize_fts_query(query)
+        if fts_exact:
+            try:
+                cursor.execute(f'''
+                    SELECT e.id, e.content, t.name as tab_name, e.source_filename
+                    FROM knowledge_fts f
+                    JOIN knowledge_entries e ON f.rowid = e.id
+                    JOIN knowledge_tabs t ON e.tab_id = t.id
+                    WHERE knowledge_fts MATCH ?{tab_filter}
+                    ORDER BY bm25(knowledge_fts) LIMIT ?
+                ''', [fts_exact] + tab_params + [limit])
+                fts_results = cursor.fetchall()
 
-            # Strategy 2: FTS OR + prefix
-            if not fts_results:
-                fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
-                if fts_broad != fts_exact:
-                    cursor.execute(f'''
-                        SELECT e.id, e.content, t.name as tab_name, e.source_filename
-                        FROM knowledge_fts f
-                        JOIN knowledge_entries e ON f.rowid = e.id
-                        JOIN knowledge_tabs t ON e.tab_id = t.id
-                        WHERE knowledge_fts MATCH ?{tab_filter}
-                        ORDER BY bm25(knowledge_fts) LIMIT ?
-                    ''', [fts_broad] + tab_params + [limit])
-                    fts_results = cursor.fetchall()
-        except sqlite3.OperationalError as e:
-            logger.warning(f"Knowledge FTS query failed: {e}")
-
-    conn.close()
+                # Strategy 2: FTS OR + prefix
+                if not fts_results:
+                    fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
+                    if fts_broad != fts_exact:
+                        cursor.execute(f'''
+                            SELECT e.id, e.content, t.name as tab_name, e.source_filename
+                            FROM knowledge_fts f
+                            JOIN knowledge_entries e ON f.rowid = e.id
+                            JOIN knowledge_tabs t ON e.tab_id = t.id
+                            WHERE knowledge_fts MATCH ?{tab_filter}
+                            ORDER BY bm25(knowledge_fts) LIMIT ?
+                        ''', [fts_broad] + tab_params + [limit])
+                        fts_results = cursor.fetchall()
+            except sqlite3.OperationalError as e:
+                logger.warning(f"Knowledge FTS query failed: {e}")
 
     # Add FTS results
     for r in fts_results:
@@ -1016,25 +993,24 @@ def _search_entries(query, scope, category=None, limit=10):
 
     # LIKE fallback only when nothing else worked
     if not results:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        terms = query.lower().split()[:5]
-        if terms:
-            conditions = ' OR '.join(['e.content LIKE ?' for _ in terms])
-            params = [f'%{t}%' for t in terms]
-            cursor.execute(f'''
-                SELECT e.id, e.content, t.name as tab_name, e.source_filename
-                FROM knowledge_entries e
-                JOIN knowledge_tabs t ON e.tab_id = t.id
-                WHERE ({conditions}){tab_filter}
-                ORDER BY e.updated_at DESC LIMIT ?
-            ''', params + tab_params + [limit])
-            for r in cursor.fetchall():
-                if r[0] not in seen_ids:
-                    entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.35}
-                    if r[3]: entry["file"] = r[3]
-                    results.append(entry)
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            terms = query.lower().split()[:5]
+            if terms:
+                conditions = ' OR '.join(['e.content LIKE ?' for _ in terms])
+                params = [f'%{t}%' for t in terms]
+                cursor.execute(f'''
+                    SELECT e.id, e.content, t.name as tab_name, e.source_filename
+                    FROM knowledge_entries e
+                    JOIN knowledge_tabs t ON e.tab_id = t.id
+                    WHERE ({conditions}){tab_filter}
+                    ORDER BY e.updated_at DESC LIMIT ?
+                ''', params + tab_params + [limit])
+                for r in cursor.fetchall():
+                    if r[0] not in seen_ids:
+                        entry = {"id": r[0], "content": r[1], "tab": r[2], "source": "knowledge", "score": 0.35}
+                        if r[3]: entry["file"] = r[3]
+                        results.append(entry)
 
     return results
 
@@ -1049,25 +1025,24 @@ def _vector_search_entries(query, scope, category=None, limit=10):
         return []
     query_vec = query_emb[0]
 
-    conn = _get_connection()
-    cursor = conn.cursor()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
 
-    scope_sql, scope_params = _scope_condition(scope, 't.scope')
-    if category:
-        cursor.execute(f'''
-            SELECT e.id, e.content, t.name, e.embedding, e.source_filename
-            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE {scope_sql} AND LOWER(t.name) = LOWER(?) AND e.embedding IS NOT NULL
-        ''', scope_params + [category])
-    else:
-        cursor.execute(f'''
-            SELECT e.id, e.content, t.name, e.embedding, e.source_filename
-            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE {scope_sql} AND e.embedding IS NOT NULL
-        ''', scope_params)
+        scope_sql, scope_params = _scope_condition(scope, 't.scope')
+        if category:
+            cursor.execute(f'''
+                SELECT e.id, e.content, t.name, e.embedding, e.source_filename
+                FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+                WHERE {scope_sql} AND LOWER(t.name) = LOWER(?) AND e.embedding IS NOT NULL
+            ''', scope_params + [category])
+        else:
+            cursor.execute(f'''
+                SELECT e.id, e.content, t.name, e.embedding, e.source_filename
+                FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+                WHERE {scope_sql} AND e.embedding IS NOT NULL
+            ''', scope_params)
 
-    rows = cursor.fetchall()
-    conn.close()
+        rows = cursor.fetchall()
 
     scored = []
     for eid, content, tname, emb_blob, src_file in rows:
@@ -1092,12 +1067,11 @@ def _search_people(query, scope='default', limit=10):
         query_emb = embedder.embed([query], prefix='search_query')
         if query_emb is not None:
             query_vec = query_emb[0]
-            conn = _get_connection()
-            cursor = conn.cursor()
-            scope_sql, scope_params = _scope_condition(scope)
-            cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, embedding FROM people WHERE {scope_sql} AND embedding IS NOT NULL', scope_params)
-            rows = cursor.fetchall()
-            conn.close()
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                scope_sql, scope_params = _scope_condition(scope)
+                cursor.execute(f'SELECT id, name, relationship, phone, email, address, notes, embedding FROM people WHERE {scope_sql} AND embedding IS NOT NULL', scope_params)
+                rows = cursor.fetchall()
             for pid, name, rel, phone, email, addr, notes, emb_blob in rows:
                 emb = np.frombuffer(emb_blob, dtype=np.float32)
                 sim = float(np.dot(query_vec, emb))
@@ -1110,27 +1084,25 @@ def _search_people(query, scope='default', limit=10):
             return results[:limit]
 
     # LIKE fallback (only when embeddings unavailable) — must actually match query terms
-    conn = _get_connection()
-    cursor = conn.cursor()
-    terms = query.lower().split()[:5]
-    if terms:
-        conditions = ' OR '.join(['(LOWER(name) LIKE ? OR LOWER(relationship) LIKE ? OR LOWER(notes) LIKE ?)' for _ in terms])
-        params = []
-        for t in terms:
-            params.extend([f'%{t}%', f'%{t}%', f'%{t}%'])
-        scope_sql, scope_params = _scope_condition(scope)
-        cursor.execute(f'''
-            SELECT id, name, relationship, phone, email, address, notes
-            FROM people WHERE {scope_sql} AND ({conditions}) ORDER BY name LIMIT ?
-        ''', scope_params + params + [limit])
-        rows = cursor.fetchall()
-        conn.close()
-        # LIKE results get a low fixed score so they sort below vector matches
-        return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
-                 "email": r[4], "address": r[5], "notes": r[6], "source": "people", "score": 0.3} for r in rows]
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        terms = query.lower().split()[:5]
+        if terms:
+            conditions = ' OR '.join(['(LOWER(name) LIKE ? OR LOWER(relationship) LIKE ? OR LOWER(notes) LIKE ?)' for _ in terms])
+            params = []
+            for t in terms:
+                params.extend([f'%{t}%', f'%{t}%', f'%{t}%'])
+            scope_sql, scope_params = _scope_condition(scope)
+            cursor.execute(f'''
+                SELECT id, name, relationship, phone, email, address, notes
+                FROM people WHERE {scope_sql} AND ({conditions}) ORDER BY name LIMIT ?
+            ''', scope_params + params + [limit])
+            rows = cursor.fetchall()
+            # LIKE results get a low fixed score so they sort below vector matches
+            return [{"id": r[0], "name": r[1], "relationship": r[2], "phone": r[3],
+                     "email": r[4], "address": r[5], "notes": r[6], "source": "people", "score": 0.3} for r in rows]
 
-    conn.close()
-    return []
+        return []
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1159,44 +1131,43 @@ def _expand_with_neighbors(results):
         return results
 
     result_ids = {r["id"] for r in results}
-    conn = _get_connection()
-    cursor = conn.cursor()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
 
-    expanded = []
-    for r in results:
-        if r.get("source") != "knowledge" or not r.get("file"):
+        expanded = []
+        for r in results:
+            if r.get("source") != "knowledge" or not r.get("file"):
+                expanded.append(r)
+                continue
+
+            cursor.execute(
+                'SELECT chunk_index, tab_id FROM knowledge_entries WHERE id = ?',
+                (r["id"],))
+            row = cursor.fetchone()
+            if not row or row[0] is None:
+                expanded.append(r)
+                continue
+
+            chunk_idx, tab_id = row
+            cursor.execute('''
+                SELECT id, chunk_index, content FROM knowledge_entries
+                WHERE tab_id = ? AND source_filename = ? AND chunk_index IN (?, ?)
+                ORDER BY chunk_index
+            ''', (tab_id, r["file"], chunk_idx - 1, chunk_idx + 1))
+            neighbors = {n[1]: n[2] for n in cursor.fetchall() if n[0] not in result_ids}
+
+            parts = []
+            if chunk_idx - 1 in neighbors:
+                parts.append(neighbors[chunk_idx - 1])
+            parts.append(r["content"])
+            if chunk_idx + 1 in neighbors:
+                parts.append(neighbors[chunk_idx + 1])
+
+            r = dict(r)
+            r["content"] = '\n\n'.join(parts)
             expanded.append(r)
-            continue
 
-        cursor.execute(
-            'SELECT chunk_index, tab_id FROM knowledge_entries WHERE id = ?',
-            (r["id"],))
-        row = cursor.fetchone()
-        if not row or row[0] is None:
-            expanded.append(r)
-            continue
-
-        chunk_idx, tab_id = row
-        cursor.execute('''
-            SELECT id, chunk_index, content FROM knowledge_entries
-            WHERE tab_id = ? AND source_filename = ? AND chunk_index IN (?, ?)
-            ORDER BY chunk_index
-        ''', (tab_id, r["file"], chunk_idx - 1, chunk_idx + 1))
-        neighbors = {n[1]: n[2] for n in cursor.fetchall() if n[0] not in result_ids}
-
-        parts = []
-        if chunk_idx - 1 in neighbors:
-            parts.append(neighbors[chunk_idx - 1])
-        parts.append(r["content"])
-        if chunk_idx + 1 in neighbors:
-            parts.append(neighbors[chunk_idx + 1])
-
-        r = dict(r)
-        r["content"] = '\n\n'.join(parts)
-        expanded.append(r)
-
-    conn.close()
-    return expanded
+        return expanded
 
 
 def _format_entry(r, query=None, max_len=4000):
@@ -1239,12 +1210,11 @@ def _save_knowledge(category, content, description=None, scope='default'):
     content = content.strip()
 
     # Get or create category (stored as knowledge_tab)
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                   (category, scope))
-    row = cursor.fetchone()
-    conn.close()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
+                       (category, scope))
+        row = cursor.fetchone()
 
     if row:
         tab_id = row[0]
@@ -1269,28 +1239,26 @@ def _save_knowledge(category, content, description=None, scope='default'):
 def _search_knowledge(query=None, category=None, entry_id=None, limit=10, scope='default', people_scope='default'):
     # Mode 1: Read a single entry in full by ID
     if entry_id:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT e.id, e.content, t.name, t.type
-            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE e.id = ?
-        ''', (entry_id,))
-        row = cursor.fetchone()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT e.id, e.content, t.name, t.type
+                FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+                WHERE e.id = ?
+            ''', (entry_id,))
+            row = cursor.fetchone()
         if not row:
             return f"Entry {entry_id} not found.", True
         return f"=== Entry [id:{row[0]}] from '{row[2]}' ({row[3]}) ===\n{row[1]}", True
 
     # Mode 2: Browse a category (no query needed)
     if category and not query:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        scope_sql, scope_params = _scope_condition(scope)
-        cursor.execute(f'SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND {scope_sql}',
-                       [category] + scope_params)
-        tab = cursor.fetchone()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            scope_sql, scope_params = _scope_condition(scope)
+            cursor.execute(f'SELECT id FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND {scope_sql}',
+                           [category] + scope_params)
+            tab = cursor.fetchone()
         if not tab:
             return f"Category '{category}' not found in scope '{scope}'.", True
         entries = get_tab_entries(tab[0])
@@ -1377,23 +1345,34 @@ def _delete_knowledge(entry_id=None, category=None, scope='default'):
     if not entry_id and not category:
         return "Provide id or category to delete.", False
 
-    conn = _get_connection()
-    cursor = conn.cursor()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+
+        if entry_id:
+            # Delete single entry — must belong to an AI tab
+            cursor.execute('''
+                SELECT e.id, e.content, t.id, t.name, t.type
+                FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
+                WHERE e.id = ?
+            ''', (entry_id,))
+            row = cursor.fetchone()
+            if not row:
+                return f"Entry {entry_id} not found.", False
+            if row[4] != 'ai':
+                return f"Cannot delete user-created content (entry {entry_id} in tab '{row[3]}').", False
+            tab_id, tab_name_str = row[2], row[3]
+
+        if category and not entry_id:
+            # Delete entire category — must be AI type
+            cursor.execute('SELECT id, type FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
+                           (category, scope))
+            row = cursor.fetchone()
+            if not row:
+                return f"Category '{category}' not found in scope '{scope}'.", False
+            if row[1] != 'ai':
+                return f"Cannot delete user-created category '{category}'.", False
 
     if entry_id:
-        # Delete single entry — must belong to an AI tab
-        cursor.execute('''
-            SELECT e.id, e.content, t.id, t.name, t.type
-            FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
-            WHERE e.id = ?
-        ''', (entry_id,))
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
-            return f"Entry {entry_id} not found.", False
-        if row[4] != 'ai':
-            return f"Cannot delete user-created content (entry {entry_id} in tab '{row[3]}').", False
-        tab_id, tab_name_str = row[2], row[3]
         delete_entry(entry_id)
         preview = row[1][:100] + ('...' if len(row[1]) > 100 else '')
         logger.info(f"AI deleted entry [{entry_id}] from tab '{tab_name_str}'")
@@ -1406,20 +1385,10 @@ def _delete_knowledge(entry_id=None, category=None, scope='default'):
         return f"Deleted entry [id:{entry_id}] from tab '{tab_name_str}': {preview}", True
 
     if category:
-        # Delete entire category — must be AI type
-        cursor.execute('SELECT id, type FROM knowledge_tabs WHERE LOWER(name) = LOWER(?) AND scope = ?',
-                       (category, scope))
-        row = cursor.fetchone()
-        conn.close()
-        if not row:
-            return f"Category '{category}' not found in scope '{scope}'.", False
-        if row[1] != 'ai':
-            return f"Cannot delete user-created category '{category}'.", False
         delete_tab(row[0])
         logger.info(f"AI deleted category '{category}' (scope: {scope})")
         return f"Deleted category '{category}' and all its entries.", True
 
-    conn.close()
     return "Nothing to delete.", False
 
 

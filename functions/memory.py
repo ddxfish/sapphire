@@ -4,9 +4,11 @@
 import sqlite3
 import logging
 import re
+import threading
 import numpy as np
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,7 @@ EMOJI = '💾'
 # Database location - lazy initialized
 _db_path = None
 _db_initialized = False
+_db_lock = threading.Lock()
 
 # Embedding model - lazy loaded
 _embedder = None
@@ -223,11 +226,15 @@ def _get_db_path():
     return _db_path
 
 
+@contextmanager
 def _get_connection():
     _ensure_db()
     conn = sqlite3.connect(_get_db_path(), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _repair_db(db_path):
@@ -358,97 +365,100 @@ def _ensure_db():
     global _db_initialized
     if _db_initialized:
         return True
+    with _db_lock:
+        if _db_initialized:
+            return True
 
-    try:
-        db_path = _get_db_path()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Health check - detect corruption before doing anything
-        if db_path.exists():
-            try:
-                conn = sqlite3.connect(db_path, timeout=10)
-                cursor = conn.cursor()
-                result = cursor.execute("PRAGMA integrity_check").fetchone()
-                conn.close()
-                if result[0] != 'ok':
-                    logger.error(f"Database integrity check failed: {result[0]}")
-                    _repair_db(db_path)
-            except sqlite3.DatabaseError as e:
-                logger.error(f"Database corrupted: {e}")
-                _repair_db(db_path)
-
-        # Clean up stale WAL/journal files if db was replaced
-        for suffix in ['-wal', '-shm', '-journal']:
-            stale = db_path.with_name(db_path.name + suffix)
-            if stale.exists() and not db_path.exists():
-                stale.unlink()
-
-        conn = sqlite3.connect(db_path, timeout=10)
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-
-        # Core table (may already exist from old schema)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                importance INTEGER DEFAULT 5,
-                keywords TEXT,
-                context TEXT
-            )
-        ''')
-
-        # Migrations: add columns if missing
-        cursor.execute("PRAGMA table_info(memories)")
-        columns = [row[1] for row in cursor.fetchall()]
-
-        if 'scope' not in columns:
-            cursor.execute("ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
-            logger.info("Migration: added scope column")
-        if 'label' not in columns:
-            cursor.execute("ALTER TABLE memories ADD COLUMN label TEXT")
-            logger.info("Migration: added label column")
-        if 'embedding' not in columns:
-            cursor.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
-            logger.info("Migration: added embedding column")
-
-        # Indexes
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
-
-        # FTS5 - try setup, rebuild on corruption
         try:
-            _setup_fts(cursor)
-        except sqlite3.DatabaseError as e:
-            logger.warning(f"FTS5 corrupted, rebuilding: {e}")
-            cursor.execute("DROP TABLE IF EXISTS memories_fts")
-            cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
-            cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
-            cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
+            db_path = _get_db_path()
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Health check - detect corruption before doing anything
+            if db_path.exists():
+                try:
+                    conn = sqlite3.connect(db_path, timeout=10)
+                    cursor = conn.cursor()
+                    result = cursor.execute("PRAGMA integrity_check").fetchone()
+                    conn.close()
+                    if result[0] != 'ok':
+                        logger.error(f"Database integrity check failed: {result[0]}")
+                        _repair_db(db_path)
+                except sqlite3.DatabaseError as e:
+                    logger.error(f"Database corrupted: {e}")
+                    _repair_db(db_path)
+
+            # Clean up stale WAL/journal files if db was replaced
+            for suffix in ['-wal', '-shm', '-journal']:
+                stale = db_path.with_name(db_path.name + suffix)
+                if stale.exists() and not db_path.exists():
+                    stale.unlink()
+
+            conn = sqlite3.connect(db_path, timeout=10)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+
+            # Core table (may already exist from old schema)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    importance INTEGER DEFAULT 5,
+                    keywords TEXT,
+                    context TEXT
+                )
+            ''')
+
+            # Migrations: add columns if missing
+            cursor.execute("PRAGMA table_info(memories)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'scope' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN scope TEXT NOT NULL DEFAULT 'default'")
+                logger.info("Migration: added scope column")
+            if 'label' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN label TEXT")
+                logger.info("Migration: added label column")
+            if 'embedding' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN embedding BLOB")
+                logger.info("Migration: added embedding column")
+
+            # Indexes
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
+
+            # FTS5 - try setup, rebuild on corruption
+            try:
+                _setup_fts(cursor)
+            except sqlite3.DatabaseError as e:
+                logger.warning(f"FTS5 corrupted, rebuilding: {e}")
+                cursor.execute("DROP TABLE IF EXISTS memories_fts")
+                cursor.execute("DROP TRIGGER IF EXISTS memories_fts_insert")
+                cursor.execute("DROP TRIGGER IF EXISTS memories_fts_delete")
+                cursor.execute("DROP TRIGGER IF EXISTS memories_fts_update")
+                conn.commit()
+                _setup_fts(cursor)
+
+            # Scope registry
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS memory_scopes (
+                    name TEXT PRIMARY KEY,
+                    created DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES ('default')")
+
             conn.commit()
-            _setup_fts(cursor)
+            conn.close()
 
-        # Scope registry
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS memory_scopes (
-                name TEXT PRIMARY KEY,
-                created DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES ('default')")
+            _db_initialized = True
+            logger.info(f"Memory database ready at {db_path} (FTS5 + embeddings)")
+            return True
 
-        conn.commit()
-        conn.close()
-
-        _db_initialized = True
-        logger.info(f"Memory database ready at {db_path} (FTS5 + embeddings)")
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to initialize memory database: {e}")
-        return False
+        except Exception as e:
+            logger.error(f"Failed to initialize memory database: {e}")
+            return False
 
 
 _backfill_done = False
@@ -464,11 +474,10 @@ def _backfill_embeddings():
         _backfill_done = True
         return
 
-    conn = _get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, content FROM memories WHERE embedding IS NULL')
-    rows = cursor.fetchall()
-    conn.close()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, content FROM memories WHERE embedding IS NULL')
+        rows = cursor.fetchall()
 
     if not rows:
         _backfill_done = True
@@ -485,20 +494,15 @@ def _backfill_embeddings():
         if embs is None:
             break
         try:
-            conn = _get_connection()
-            cursor = conn.cursor()
-            for row_id, emb in zip(ids, embs):
-                cursor.execute('UPDATE memories SET embedding = ? WHERE id = ?',
-                               (emb.tobytes(), row_id))
-            conn.commit()
-            conn.close()
-            filled += len(batch)
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                for row_id, emb in zip(ids, embs):
+                    cursor.execute('UPDATE memories SET embedding = ? WHERE id = ?',
+                                   (emb.tobytes(), row_id))
+                conn.commit()
+                filled += len(batch)
         except Exception as e:
             logger.error(f"Backfill batch failed: {e}")
-            try:
-                conn.close()
-            except Exception:
-                pass
             break
 
     _backfill_done = True
@@ -526,13 +530,12 @@ def _scope_condition(scope, col='scope'):
 
 def get_scopes():
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
-        memory_counts = {row[0]: row[1] for row in cursor.fetchall()}
-        cursor.execute('SELECT name FROM memory_scopes ORDER BY name')
-        registered = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT scope, COUNT(*) FROM memories GROUP BY scope')
+            memory_counts = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute('SELECT name FROM memory_scopes ORDER BY name')
+            registered = [row[0] for row in cursor.fetchall()]
         all_scopes = set(registered) | set(memory_counts.keys()) | {'default'}
         return [{"name": name, "count": memory_counts.get(name, 0)} for name in sorted(all_scopes)]
     except Exception as e:
@@ -542,11 +545,10 @@ def get_scopes():
 
 def create_scope(name: str) -> bool:
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES (?)", (name,))
-        conn.commit()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR IGNORE INTO memory_scopes (name) VALUES (?)", (name,))
+            conn.commit()
         return True
     except Exception as e:
         logger.error(f"Failed to create scope '{name}': {e}")
@@ -558,14 +560,13 @@ def delete_scope(name: str) -> dict:
     if name == 'default':
         return {"error": "Cannot delete the default scope"}
     try:
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM memories WHERE scope = ?', (name,))
-        count = cursor.fetchone()[0]
-        cursor.execute('DELETE FROM memories WHERE scope = ?', (name,))
-        cursor.execute('DELETE FROM memory_scopes WHERE name = ?', (name,))
-        conn.commit()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM memories WHERE scope = ?', (name,))
+            count = cursor.fetchone()[0]
+            cursor.execute('DELETE FROM memories WHERE scope = ?', (name,))
+            cursor.execute('DELETE FROM memory_scopes WHERE name = ?', (name,))
+            conn.commit()
         logger.info(f"Deleted memory scope '{name}' with {count} memories")
         return {"deleted_count": count}
     except Exception as e:
@@ -649,15 +650,14 @@ def _save_memory(content: str, label: str = None, scope: str = 'default') -> tup
             if embs is not None:
                 embedding_blob = embs[0].tobytes()
 
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            'INSERT INTO memories (content, keywords, scope, label, embedding) VALUES (?, ?, ?, ?, ?)',
-            (content, keywords, scope, label, embedding_blob)
-        )
-        memory_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'INSERT INTO memories (content, keywords, scope, label, embedding) VALUES (?, ?, ?, ?, ?)',
+                (content, keywords, scope, label, embedding_blob)
+            )
+            memory_id = cursor.lastrowid
+            conn.commit()
 
         label_str = f", label: {label}" if label else ""
         logger.info(f"Stored memory ID {memory_id} in scope '{scope}'{label_str}")
@@ -702,22 +702,21 @@ def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
         return []
     query_vec = query_emb[0]
 
-    conn = _get_connection()
-    cursor = conn.cursor()
+    with _get_connection() as conn:
+        cursor = conn.cursor()
 
-    scope_sql, scope_params = _scope_condition(scope)
-    if labels:
-        placeholders = ','.join('?' * len(labels))
-        cursor.execute(
-            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND label IN ({placeholders}) AND embedding IS NOT NULL',
-            scope_params + labels)
-    else:
-        cursor.execute(
-            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND embedding IS NOT NULL',
-            scope_params)
+        scope_sql, scope_params = _scope_condition(scope)
+        if labels:
+            placeholders = ','.join('?' * len(labels))
+            cursor.execute(
+                f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND label IN ({placeholders}) AND embedding IS NOT NULL',
+                scope_params + labels)
+        else:
+            cursor.execute(
+                f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND embedding IS NOT NULL',
+                scope_params)
 
-    rows = cursor.fetchall()
-    conn.close()
+        rows = cursor.fetchall()
 
     if not rows:
         return []
@@ -752,31 +751,27 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
         # Trigger backfill on first search (lazy, one-time)
         _backfill_embeddings()
 
-        conn = _get_connection()
-        cursor = conn.cursor()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
 
-        # Strategy 1: FTS5 exact AND
-        fts_exact = _sanitize_fts_query(query)
-        if fts_exact:
-            try:
-                rows = _fts_search(cursor, fts_exact, scope, labels, limit)
-                if rows:
-                    conn.close()
-                    results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
-                    return f"Found {len(rows)} memories:\n" + "\n".join(results), True
-
-                # Strategy 2: FTS5 OR + prefix
-                fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
-                if fts_broad != fts_exact:
-                    rows = _fts_search(cursor, fts_broad, scope, labels, limit)
+            # Strategy 1: FTS5 exact AND
+            fts_exact = _sanitize_fts_query(query)
+            if fts_exact:
+                try:
+                    rows = _fts_search(cursor, fts_exact, scope, labels, limit)
                     if rows:
-                        conn.close()
                         results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
                         return f"Found {len(rows)} memories:\n" + "\n".join(results), True
-            except sqlite3.OperationalError as e:
-                logger.warning(f"FTS5 query failed: {e}")
 
-        conn.close()
+                    # Strategy 2: FTS5 OR + prefix
+                    fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
+                    if fts_broad != fts_exact:
+                        rows = _fts_search(cursor, fts_broad, scope, labels, limit)
+                        if rows:
+                            results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
+                            return f"Found {len(rows)} memories:\n" + "\n".join(results), True
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"FTS5 query failed: {e}")
 
         # Strategy 3: Vector similarity (semantic)
         vec_results = _vector_search(query, scope, labels, limit)
@@ -787,26 +782,25 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
         # Strategy 4: LIKE fallback
         terms = query.lower().split()[:5]
         if terms:
-            conn = _get_connection()
-            cursor = conn.cursor()
-            conditions = ' OR '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in terms])
-            params = []
-            for term in terms:
-                params.extend([f'%{term}%', f'%{term}%'])
-            if labels:
-                placeholders = ','.join('?' * len(labels))
-                label_filter = f" AND label IN ({placeholders})"
-                params.extend(labels)
-            else:
-                label_filter = ""
-            scope_sql, scope_params = _scope_condition(scope)
-            cursor.execute(f'''
-                SELECT id, content, timestamp, label FROM memories
-                WHERE {scope_sql} AND ({conditions}){label_filter}
-                ORDER BY timestamp DESC LIMIT ?
-            ''', scope_params + params + [limit])
-            rows = cursor.fetchall()
-            conn.close()
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                conditions = ' OR '.join(['(content LIKE ? OR keywords LIKE ?)' for _ in terms])
+                params = []
+                for term in terms:
+                    params.extend([f'%{term}%', f'%{term}%'])
+                if labels:
+                    placeholders = ','.join('?' * len(labels))
+                    label_filter = f" AND label IN ({placeholders})"
+                    params.extend(labels)
+                else:
+                    label_filter = ""
+                scope_sql, scope_params = _scope_condition(scope)
+                cursor.execute(f'''
+                    SELECT id, content, timestamp, label FROM memories
+                    WHERE {scope_sql} AND ({conditions}){label_filter}
+                    ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + params + [limit])
+                rows = cursor.fetchall()
             if rows:
                 results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
                 return f"Found {len(rows)} memories:\n" + "\n".join(results), True
@@ -822,21 +816,20 @@ def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'defau
     try:
         labels = _parse_labels(label)
         scope_sql, scope_params = _scope_condition(scope)
-        conn = _get_connection()
-        cursor = conn.cursor()
-        if labels:
-            placeholders = ','.join('?' * len(labels))
-            cursor.execute(f'''
-                SELECT id, content, timestamp, label FROM memories
-                WHERE {scope_sql} AND label IN ({placeholders}) ORDER BY timestamp DESC LIMIT ?
-            ''', scope_params + labels + [count])
-        else:
-            cursor.execute(f'''
-                SELECT id, content, timestamp, label FROM memories
-                WHERE {scope_sql} ORDER BY timestamp DESC LIMIT ?
-            ''', scope_params + [count])
-        rows = cursor.fetchall()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            if labels:
+                placeholders = ','.join('?' * len(labels))
+                cursor.execute(f'''
+                    SELECT id, content, timestamp, label FROM memories
+                    WHERE {scope_sql} AND label IN ({placeholders}) ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + labels + [count])
+            else:
+                cursor.execute(f'''
+                    SELECT id, content, timestamp, label FROM memories
+                    WHERE {scope_sql} ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + [count])
+            rows = cursor.fetchall()
         if not rows:
             label_note = f" with labels '{label}'" if labels else ""
             return f"No memories stored{label_note}.", True
@@ -851,16 +844,14 @@ def _delete_memory(memory_id: int, scope: str = 'default') -> tuple:
     try:
         if not isinstance(memory_id, int) or memory_id < 1:
             return "Invalid memory ID. Use the number shown in brackets [N].", False
-        conn = _get_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, content FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
-            return f"Memory [{memory_id}] not found in current memory slot.", False
-        cursor.execute('DELETE FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
-        conn.commit()
-        conn.close()
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, content FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
+            row = cursor.fetchone()
+            if not row:
+                return f"Memory [{memory_id}] not found in current memory slot.", False
+            cursor.execute('DELETE FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
+            conn.commit()
         preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
         logger.info(f"Deleted memory ID {memory_id} from scope '{scope}'")
         return f"Deleted memory [{memory_id}]: {preview}", True

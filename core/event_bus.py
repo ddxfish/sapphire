@@ -1,10 +1,11 @@
 # event_bus.py - Central pub/sub event bus for real-time UI updates
+import asyncio
 import threading
 import queue
 import time
 import json
 import logging
-from typing import Generator, Optional, Dict, Any
+from typing import AsyncGenerator, Generator, Optional, Dict, Any
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -15,22 +16,24 @@ class EventBus:
     def __init__(self, replay_size: int = 50):
         self._lock = threading.Lock()
         self._subscribers: Dict[str, queue.Queue] = {}
+        self._async_subscribers: Dict[str, tuple] = {}  # sub_id -> (asyncio.Queue, loop)
         self._replay_buffer: deque = deque(maxlen=replay_size)
         self._subscriber_counter = 0
         logger.info(f"EventBus initialized (replay_size={replay_size})")
     
     def publish(self, event_type: str, data: Optional[Dict[str, Any]] = None):
-        """Publish an event to all subscribers."""
+        """Publish an event to all subscribers (sync and async)."""
         event = {
             "type": event_type,
             "data": data or {},
             "timestamp": time.time()
         }
-        
+
         with self._lock:
             self._replay_buffer.append(event)
             dead_subscribers = []
-            
+
+            # Sync subscribers
             for sub_id, q in self._subscribers.items():
                 try:
                     q.put_nowait(event)
@@ -39,10 +42,21 @@ class EventBus:
                 except Exception as e:
                     logger.error(f"Error publishing to {sub_id}: {e}")
                     dead_subscribers.append(sub_id)
-            
+
             for sub_id in dead_subscribers:
                 del self._subscribers[sub_id]
-        
+
+            # Async subscribers — thread-safe put via event loop
+            dead_async = []
+            for sub_id, (aq, loop) in self._async_subscribers.items():
+                try:
+                    loop.call_soon_threadsafe(aq.put_nowait, event)
+                except RuntimeError:
+                    dead_async.append(sub_id)
+
+            for sub_id in dead_async:
+                del self._async_subscribers[sub_id]
+
         logger.debug(f"Published: {event_type}")
     
     def subscribe(self, replay: bool = True) -> Generator[Dict[str, Any], None, None]:
@@ -97,10 +111,55 @@ class EventBus:
                     del self._subscribers[sub_id]
             logger.info(f"Subscriber disconnected: {sub_id}")
     
+    async def async_subscribe(self, replay: bool = True) -> AsyncGenerator[Dict[str, Any], None]:
+        """Async subscribe to events. No threadpool thread consumed."""
+        sub_id = None
+        aq = asyncio.Queue(maxsize=100)
+        loop = asyncio.get_running_loop()
+
+        with self._lock:
+            self._subscriber_counter += 1
+            sub_id = f"async_sub_{self._subscriber_counter}"
+            self._async_subscribers[sub_id] = (aq, loop)
+
+            if replay:
+                for event in self._replay_buffer:
+                    try:
+                        aq.put_nowait(event)
+                    except asyncio.QueueFull:
+                        break
+
+        logger.info(f"New async subscriber: {sub_id} (replay={replay}) — total: {len(self._subscribers) + len(self._async_subscribers)}")
+
+        boot_version = None
+        try:
+            from core.api_fastapi import BOOT_VERSION
+            boot_version = BOOT_VERSION
+        except Exception:
+            pass
+        yield {"type": "connected", "data": {"sub_id": sub_id, "boot_version": boot_version}, "timestamp": time.time()}
+
+        try:
+            keepalive_count = 0
+            while True:
+                try:
+                    event = await asyncio.wait_for(aq.get(), timeout=15)
+                    yield event
+                except asyncio.TimeoutError:
+                    keepalive_count += 1
+                    logger.debug(f"Keepalive #{keepalive_count} for {sub_id}")
+                    yield {"type": "keepalive", "timestamp": time.time()}
+        except GeneratorExit:
+            logger.info(f"Async subscriber {sub_id} generator closed by client")
+        finally:
+            with self._lock:
+                self._async_subscribers.pop(sub_id, None)
+            logger.info(f"Async subscriber disconnected: {sub_id}")
+
     def subscriber_count(self) -> int:
         """Return current number of subscribers."""
         with self._lock:
-            return len(self._subscribers)
+            return len(self._subscribers) + len(self._async_subscribers)
 
 
 # Singleton instance
