@@ -148,7 +148,7 @@ class VoiceChatSystem:
             chat_names = [c["name"] for c in self.llm_chat.list_chats()]
             knowledge.cleanup_orphaned_rag_scopes(chat_names)
         except Exception as e:
-            logger.debug(f"RAG orphan cleanup skipped: {e}")
+            logger.warning(f"RAG orphan cleanup failed: {e}", exc_info=True)
 
     def _prime_default_prompt(self):
         try:

@@ -577,7 +577,7 @@ class ChatSessionManager:
         self.history_dir.mkdir(parents=True, exist_ok=True)
         
         self._db_path = self.history_dir / "sapphire_history.db"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         
         self.current_chat = ConversationHistory(max_history=max_history)
         self.active_chat_name = "default"
@@ -961,20 +961,21 @@ class ChatSessionManager:
 
     def set_active_chat(self, chat_name: str) -> bool:
         """Switch to a different chat - loads messages AND settings."""
-        if chat_name == self.active_chat_name:
-            return True
+        with self._lock:
+            if chat_name == self.active_chat_name:
+                return True
 
-        self._save_current_chat()
+            self._save_current_chat()
 
-        if self._load_chat(chat_name):
-            self.active_chat_name = chat_name
-            self._save_last_active(chat_name)
-            self._in_tool_cycle = False  # Reset tool cycle state on chat switch
-            logger.info(f"Switched to chat: {chat_name}")
-            return True
-        else:
-            logger.error(f"Failed to switch to chat: {chat_name}")
-            return False
+            if self._load_chat(chat_name):
+                self.active_chat_name = chat_name
+                self._save_last_active(chat_name)
+                self._in_tool_cycle = False  # Reset tool cycle state on chat switch
+                logger.info(f"Switched to chat: {chat_name}")
+                return True
+            else:
+                logger.error(f"Failed to switch to chat: {chat_name}")
+                return False
 
     def get_active_chat_name(self) -> str:
         """Get active chat name."""

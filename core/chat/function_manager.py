@@ -5,6 +5,7 @@ import logging
 import time
 import os
 import importlib
+import threading
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ scope_private:  ContextVar[bool] = ContextVar('scope_private',  default=False)
 class FunctionManager:
     
     def __init__(self):
+        self._tools_lock = threading.Lock()
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
         self.tool_history = []
         self.system_instance = None
@@ -221,60 +223,60 @@ class FunctionManager:
 
     def update_enabled_functions(self, enabled_names: list):
         """Update enabled tools based on function names from config or ability name."""
-        
-        # Determine what ability name was requested
-        requested_ability = enabled_names[0] if len(enabled_names) == 1 else "custom"
-        
-        # Special case: "all" loads every function from every module
-        if len(enabled_names) == 1 and enabled_names[0] == "all":
-            self.current_toolset_name = "all"
-            self._enabled_tools = self.all_possible_tools.copy()
-            logger.info(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
-            return
-        
-        # Special case: "none" disables all functions
-        if len(enabled_names) == 1 and enabled_names[0] == "none":
-            self.current_toolset_name = "none"
-            self._enabled_tools = []
-            logger.info(f"Ability 'none' - all functions disabled")
-            return
-        
-        # Check if this is a module ability name
-        if len(enabled_names) == 1 and enabled_names[0] in self.function_modules:
-            ability_name = enabled_names[0]
-            self.current_toolset_name = ability_name
-            module_info = self.function_modules[ability_name]
-            enabled_names = module_info['available_functions']
-            logger.info(f"Ability '{ability_name}' (module) requesting {len(enabled_names)} functions")
-        
-        # Check if this is a toolset name
-        elif len(enabled_names) == 1 and toolset_manager.toolset_exists(enabled_names[0]):
-            toolset_name = enabled_names[0]
-            self.current_toolset_name = toolset_name
-            enabled_names = toolset_manager.get_toolset_functions(toolset_name)
-            logger.info(f"Ability '{toolset_name}' (toolset) requesting {len(enabled_names)} functions")
-        
-        # Otherwise treat as direct function name list (custom)
-        else:
-            self.current_toolset_name = "custom"
-        
-        # Store expected count before filtering
-        expected_count = len(enabled_names)
-        
-        # Filter to only functions that actually exist
-        self._enabled_tools = [
-            tool for tool in self.all_possible_tools 
-            if tool['function']['name'] in enabled_names
-        ]
-        
-        actual_names = [tool['function']['name'] for tool in self._enabled_tools]
-        missing = set(enabled_names) - set(actual_names)
-        
-        if missing:
-            logger.warning(f"Toolset '{self.current_toolset_name}' missing functions: {missing}")
+        with self._tools_lock:
+            # Determine what ability name was requested
+            requested_ability = enabled_names[0] if len(enabled_names) == 1 else "custom"
 
-        logger.info(f"Toolset '{self.current_toolset_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
-        logger.debug(f"Enabled: {actual_names}")
+            # Special case: "all" loads every function from every module
+            if len(enabled_names) == 1 and enabled_names[0] == "all":
+                self.current_toolset_name = "all"
+                self._enabled_tools = self.all_possible_tools.copy()
+                logger.info(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
+                return
+
+            # Special case: "none" disables all functions
+            if len(enabled_names) == 1 and enabled_names[0] == "none":
+                self.current_toolset_name = "none"
+                self._enabled_tools = []
+                logger.info(f"Ability 'none' - all functions disabled")
+                return
+
+            # Check if this is a module ability name
+            if len(enabled_names) == 1 and enabled_names[0] in self.function_modules:
+                ability_name = enabled_names[0]
+                self.current_toolset_name = ability_name
+                module_info = self.function_modules[ability_name]
+                enabled_names = module_info['available_functions']
+                logger.info(f"Ability '{ability_name}' (module) requesting {len(enabled_names)} functions")
+
+            # Check if this is a toolset name
+            elif len(enabled_names) == 1 and toolset_manager.toolset_exists(enabled_names[0]):
+                toolset_name = enabled_names[0]
+                self.current_toolset_name = toolset_name
+                enabled_names = toolset_manager.get_toolset_functions(toolset_name)
+                logger.info(f"Ability '{toolset_name}' (toolset) requesting {len(enabled_names)} functions")
+
+            # Otherwise treat as direct function name list (custom)
+            else:
+                self.current_toolset_name = "custom"
+
+            # Store expected count before filtering
+            expected_count = len(enabled_names)
+
+            # Filter to only functions that actually exist
+            self._enabled_tools = [
+                tool for tool in self.all_possible_tools
+                if tool['function']['name'] in enabled_names
+            ]
+        
+            actual_names = [tool['function']['name'] for tool in self._enabled_tools]
+            missing = set(enabled_names) - set(actual_names)
+
+            if missing:
+                logger.warning(f"Toolset '{self.current_toolset_name}' missing functions: {missing}")
+
+            logger.info(f"Toolset '{self.current_toolset_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
+            logger.debug(f"Enabled: {actual_names}")
 
     def is_valid_toolset(self, ability_name: str) -> bool:
         """Check if a toolset name is valid (exists in toolsets, modules, or is special)."""

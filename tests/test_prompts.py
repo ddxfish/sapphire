@@ -295,9 +295,10 @@ class TestPromptManagerSaving:
         
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
+            mgr._lock = threading.Lock()
             mgr.USER_DIR = prompts_dir
             mgr._scenario_presets = {"new_preset": {"character": "test"}}
-            
+
             mgr.save_scenario_presets()
             
             saved = json.loads(pieces_file.read_text(encoding='utf-8'))
@@ -312,6 +313,7 @@ class TestPromptManagerSaving:
         
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
+            mgr._lock = threading.Lock()
             mgr.USER_DIR = prompts_dir
             mgr._monoliths = {"test_mono": {"content": "Test prompt content", "privacy_required": False}}
 
@@ -334,9 +336,10 @@ class TestPromptManagerSaving:
         
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
+            mgr._lock = threading.Lock()
             mgr.USER_DIR = prompts_dir
             mgr._components = {"character": {"new": "New persona"}}
-            
+
             mgr.save_components()
             
             saved = json.loads(pieces_file.read_text(encoding='utf-8'))
@@ -351,6 +354,7 @@ class TestPromptManagerSaving:
         
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
+            mgr._lock = threading.Lock()
             mgr.USER_DIR = prompts_dir
             mgr._spices = {"humor": ["joke1", "joke2"]}
             mgr._spice_meta = {}
@@ -397,6 +401,7 @@ class TestPromptManagerEncoding:
         
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
+            mgr._lock = threading.Lock()
             mgr.USER_DIR = prompts_dir
             mgr._monoliths = {"chinese": {"content": "你好世界", "privacy_required": False}}
 

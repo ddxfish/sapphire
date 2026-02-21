@@ -8,6 +8,7 @@ Run with: pytest tests/test_function_manager.py -v
 """
 import pytest
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -30,6 +31,7 @@ class TestAbilityResolution:
         """'all' ability should enable all possible tools."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
             mgr.function_modules = {}
             mgr.all_possible_tools = [
                 {'function': {'name': 'func1'}},
@@ -39,7 +41,7 @@ class TestAbilityResolution:
             mgr._enabled_tools = []
             mgr._mode_filters = {}
             mgr.current_toolset_name = "none"
-            
+
             with patch('core.chat.function_manager.toolset_manager') as mock_ts:
                 mock_ts.toolset_exists.return_value = False
                 mgr.update_enabled_functions(['all'])
@@ -51,6 +53,7 @@ class TestAbilityResolution:
         """'none' ability should disable all tools."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
             mgr.all_possible_tools = [{'function': {'name': 'func1'}}]
             mgr._enabled_tools = mgr.all_possible_tools.copy()
             mgr._mode_filters = {}
@@ -68,6 +71,7 @@ class TestAbilityResolution:
         """Module name ability should load that module's functions."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
             mgr.function_modules = {
                 'web': {'available_functions': ['search', 'fetch']},
                 'meta': {'available_functions': ['view_prompt', 'reset_chat']},
@@ -96,6 +100,7 @@ class TestAbilityResolution:
         """Toolset name ability should load toolset's function list."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
             mgr.function_modules = {}
             mgr.all_possible_tools = [
                 {'function': {'name': 'test_func'}},
@@ -120,6 +125,7 @@ class TestAbilityResolution:
         """Custom function list should enable only those functions."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
             mgr.function_modules = {}
             mgr.all_possible_tools = [
                 {'function': {'name': 'func_a'}},
@@ -218,13 +224,15 @@ class TestExecution:
             mgr._story_engine = None
             mgr._story_engine_enabled = False
             mgr.execution_map = {'test_func': mock_executor}
+            mgr._is_local_map = {'test_func': True}
+            mgr._function_module_map = {}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
-            
+
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
                 result = mgr.execute_function('test_func', {'arg': 'value'})
-            
+
             assert result == "result_data"
             mock_executor.assert_called_once()
     
@@ -238,6 +246,8 @@ class TestExecution:
             mgr._story_engine = None
             mgr._story_engine_enabled = False
             mgr.execution_map = {'disabled_func': MagicMock()}
+            mgr._is_local_map = {}
+            mgr._function_module_map = {}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
             
@@ -257,9 +267,11 @@ class TestExecution:
             mgr._story_engine = None
             mgr._story_engine_enabled = False
             mgr.execution_map = {}
+            mgr._is_local_map = {'orphan_func': True}
+            mgr._function_module_map = {}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
-            
+
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
                 result = mgr.execute_function('orphan_func', {})
@@ -279,6 +291,8 @@ class TestExecution:
             mgr._story_engine = None
             mgr._story_engine_enabled = False
             mgr.execution_map = {'crashy_func': failing_executor}
+            mgr._is_local_map = {'crashy_func': True}
+            mgr._function_module_map = {}
             mgr.tool_history = []
             mgr.tool_history_file = '/tmp/test.json'
             

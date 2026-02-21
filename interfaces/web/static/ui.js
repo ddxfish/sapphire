@@ -391,17 +391,24 @@ export const finishStreaming = async (ephemeral = false) => {
     }
     
     if (streamingMsg) {
+        const chatAtFinish = document.getElementById('chat-select')?.value;
         await new Promise(resolve => setTimeout(resolve, 500));
-        
-        try {
-            const hist = await api.fetchHistory();
-            if (hist && hist.length > 0) {
-                const lastMsg = hist[hist.length - 1];
-                const { clone } = createMessage(lastMsg, hist.length - 1, hist.length, true);
-                streamingMsg.replaceWith(clone);
+
+        // Bail if chat switched during the delay
+        const chatNow = document.getElementById('chat-select')?.value;
+        if (chatNow !== chatAtFinish || !document.contains(streamingMsg)) {
+            console.log('[SWAP] Chat switched during delay, skipping history swap');
+        } else {
+            try {
+                const hist = await api.fetchHistory();
+                if (hist && hist.length > 0) {
+                    const lastMsg = hist[hist.length - 1];
+                    const { clone } = createMessage(lastMsg, hist.length - 1, hist.length, true);
+                    streamingMsg.replaceWith(clone);
+                }
+            } catch (e) {
+                console.error('[SWAP] Failed:', e);
             }
-        } catch (e) {
-            console.error('[SWAP] Failed:', e);
         }
     }
     
