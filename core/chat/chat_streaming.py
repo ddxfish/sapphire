@@ -157,6 +157,10 @@ class StreamingChat:
             chat_name = self.main_chat.session_manager.get_active_chat_name()
             self.main_chat.function_manager.set_rag_scope(f"__rag__:{chat_name}")
 
+            # Snapshot scopes as a plain dict — survives across Starlette's
+            # per-yield context resets, re-applied in execute_function()
+            _scopes = self.main_chat.function_manager.snapshot_scopes()
+
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.main_chat.function_manager.enabled_tools
             provider_key, provider, model_override = self.main_chat._select_provider()
@@ -383,7 +387,7 @@ class StreamingChat:
                         publish(Events.TOOL_EXECUTING, {"name": function_name})
                         
                         try:
-                            function_result = self.main_chat.function_manager.execute_function(function_name, function_args)
+                            function_result = self.main_chat.function_manager.execute_function(function_name, function_args, scopes=_scopes)
                             result_str = str(function_result)
                             clean_result = strip_ui_markers(result_str)
                             
@@ -478,7 +482,8 @@ class StreamingChat:
                             full_content,
                             messages,
                             self.main_chat.session_manager,
-                            provider
+                            provider,
+                            scopes=_scopes
                         )
 
                         # Emit tool events for UI

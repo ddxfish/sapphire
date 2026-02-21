@@ -182,7 +182,7 @@ class ToolCallingEngine:
             })
         return tool_calls_formatted
 
-    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None):
+    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None):
         """
         Execute tool calls and add results to messages array AND history.
         
@@ -218,14 +218,14 @@ class ToolCallingEngine:
                 continue
 
             try:
-                function_result = self.function_manager.execute_function(function_name, function_args)
+                function_result = self.function_manager.execute_function(function_name, function_args, scopes=scopes)
             except Exception as tool_error:
                 logger.error(f"Tool execution failed for {function_name}: {tool_error}", exc_info=True)
                 function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
-            
+
             result_str = str(function_result)
             clean_result = strip_ui_markers(result_str)
-            
+
             if provider:
                 wrapped_msg = provider.format_tool_result(tool_call["id"], function_name, clean_result)
             else:
@@ -250,7 +250,7 @@ class ToolCallingEngine:
 
         return tools_executed
 
-    def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None):
+    def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None, scopes=None):
         """
         Execute text-based function call (LM Studio compatibility).
         
@@ -286,7 +286,7 @@ class ToolCallingEngine:
             history.add_assistant_with_tool_calls(filtered_content, tool_calls_formatted)
 
         try:
-            function_result = self.function_manager.execute_function(function_name, function_args)
+            function_result = self.function_manager.execute_function(function_name, function_args, scopes=scopes)
         except Exception as tool_error:
             logger.error(f"Text-based tool failed for {function_name}: {tool_error}")
             function_result = f"Tool '{function_name}' failed: {str(tool_error)}"

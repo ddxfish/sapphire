@@ -442,6 +442,7 @@ class LLMChat:
             self.function_manager.set_bitcoin_scope(bitcoin_scope if bitcoin_scope != 'none' else None)
             chat_name = self.session_manager.get_active_chat_name()
             self.function_manager.set_rag_scope(f"__rag__:{chat_name}")
+            _scopes = self.function_manager.snapshot_scopes()
 
             # Send only enabled tools - model should only know about active tools
             enabled_tools = self.function_manager.enabled_tools
@@ -573,9 +574,10 @@ class LLMChat:
 
                     tools_executed = self.tool_engine.execute_tool_calls(
                         tool_calls_to_execute,
-                        messages, 
+                        messages,
                         self.session_manager,
-                        provider
+                        provider,
+                        scopes=_scopes
                     )
                     tool_call_count += tools_executed
 
@@ -611,11 +613,12 @@ class LLMChat:
                         last_tool_name = function_call_data["function_call"]["name"]
 
                         self.tool_engine.execute_text_based_tool_call(
-                            function_call_data, 
+                            function_call_data,
                             filtered_content,
                             messages,
                             self.session_manager,
-                            provider
+                            provider,
+                            scopes=_scopes
                         )
 
                         logger.info(f"Text-based tool iteration {i+1} completed")
@@ -905,8 +908,11 @@ class LLMChat:
                 self.function_manager.set_email_scope(email_scope if email_scope != "none" else None)
                 self.function_manager.update_enabled_functions([toolset])
                 tools = self.function_manager.enabled_tools
+                _scopes = self.function_manager.snapshot_scopes()
                 logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")
-            
+            else:
+                _scopes = None
+
             # Select provider
             provider_key = task_settings.get("provider", "auto")
             model_override = task_settings.get("model", "")
@@ -961,7 +967,7 @@ class LLMChat:
                         "tool_calls": tool_calls
                     })
                     tools_executed = self.tool_engine.execute_tool_calls(
-                        tool_calls, messages, None, provider
+                        tool_calls, messages, None, provider, scopes=_scopes
                     )
                     tool_call_count += tools_executed
                     logger.info(f"[ISOLATED] Loop {i+1}: executed {tools_executed} tools (total: {tool_call_count})")
@@ -974,7 +980,7 @@ class LLMChat:
                     if fn_data:
                         filtered = filter_to_thinking_only(response_msg.content)
                         self.tool_engine.execute_text_based_tool_call(
-                            fn_data, filtered, messages, None, provider
+                            fn_data, filtered, messages, None, provider, scopes=_scopes
                         )
                         tool_call_count += 1
                         logger.info(f"[ISOLATED] Loop {i+1}: text-based tool call (total: {tool_call_count})")

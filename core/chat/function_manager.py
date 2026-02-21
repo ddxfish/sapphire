@@ -400,6 +400,23 @@ class FunctionManager:
         """Set per-chat privacy enforcement."""
         scope_private.set(bool(enabled))
 
+    def snapshot_scopes(self) -> dict:
+        """Capture current ContextVar scopes as a plain dict.
+
+        The returned dict can be passed to execute_function(scopes=...)
+        to re-apply scopes after Starlette context resets between yields.
+        """
+        return {
+            'memory': scope_memory.get(),
+            'goal': scope_goal.get(),
+            'knowledge': scope_knowledge.get(),
+            'people': scope_people.get(),
+            'email': scope_email.get(),
+            'bitcoin': scope_bitcoin.get(),
+            'rag': scope_rag.get(),
+            'private': scope_private.get(),
+        }
+
     def set_story_engine(self, engine, turn_getter=None):
         """
         Set story engine for current chat context.
@@ -494,8 +511,23 @@ class FunctionManager:
 
         return ''
 
-    def execute_function(self, function_name, arguments):
-        """Execute a function using the mapped executor."""
+    def execute_function(self, function_name, arguments, scopes=None):
+        """Execute a function using the mapped executor.
+
+        scopes: optional dict to re-apply ContextVars before execution.
+                 Needed because Starlette's iterate_in_threadpool creates
+                 fresh context copies per generator yield.
+        """
+        if scopes:
+            scope_memory.set(scopes.get('memory', 'default'))
+            scope_goal.set(scopes.get('goal', 'default'))
+            scope_knowledge.set(scopes.get('knowledge', 'default'))
+            scope_people.set(scopes.get('people', 'default'))
+            scope_email.set(scopes.get('email', 'default'))
+            scope_bitcoin.set(scopes.get('bitcoin', 'default'))
+            scope_rag.set(scopes.get('rag'))
+            scope_private.set(scopes.get('private', False))
+
         start_time = time.time()
 
         # Validate function is currently enabled
