@@ -919,5 +919,94 @@ class TestContextVarThreadIsolation:
         assert results["thread_b"]["private"] is False
 
 
+# =============================================================================
+# M5: reset() must clear scopes to defaults
+# =============================================================================
+
+class TestResetClearsScopes:
+    """LLMChat.reset() must reset all scopes so stale values don't persist."""
+
+    def test_reset_resets_all_scopes(self):
+        """After reset(), all scopes should be back to defaults."""
+        from core.chat.chat import LLMChat
+        from core.chat.function_manager import (
+            FunctionManager, scope_memory, scope_email, scope_bitcoin, scope_private
+        )
+
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
+            mgr._story_engine = None
+            mgr._story_engine_enabled = False
+
+        # Set non-default scopes
+        mgr.set_memory_scope("private")
+        mgr.set_email_scope("work")
+        mgr.set_bitcoin_scope("wallet_a")
+        mgr.set_private_chat(True)
+
+        with patch.object(LLMChat, '__init__', lambda self: None):
+            chat_obj = LLMChat()
+            chat_obj.function_manager = mgr
+            chat_obj.session_manager = MagicMock()
+
+            chat_obj.reset()
+
+        # All scopes should be reset to defaults
+        assert scope_memory.get() == "default"
+        assert scope_email.get() == "default"
+        assert scope_bitcoin.get() == "default"
+        assert scope_private.get() is False
+
+    def test_reset_clears_story_engine(self):
+        """reset() should clear the story engine."""
+        from core.chat.chat import LLMChat
+        from core.chat.function_manager import FunctionManager
+
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
+            mgr._story_engine = MagicMock()  # Simulate active story engine
+            mgr._story_engine_enabled = True
+
+        with patch.object(LLMChat, '__init__', lambda self: None):
+            chat_obj = LLMChat()
+            chat_obj.function_manager = mgr
+            chat_obj.session_manager = MagicMock()
+
+            chat_obj.reset()
+
+        assert mgr._story_engine is None
+
+
+# =============================================================================
+# M6: switch_chat must clear stale story engine
+# =============================================================================
+
+class TestSwitchChatClearsStoryEngine:
+    """switch_chat must clear story engine so stale state doesn't persist."""
+
+    def test_switch_chat_clears_story_engine(self):
+        """After switch_chat(), story engine should be None."""
+        from core.chat.chat import LLMChat
+        from core.chat.function_manager import FunctionManager
+
+        with patch.object(FunctionManager, '__init__', lambda self: None):
+            mgr = FunctionManager()
+            mgr._tools_lock = threading.Lock()
+            mgr._story_engine = MagicMock()  # Active story engine
+            mgr._story_engine_enabled = True
+
+        with patch.object(LLMChat, '__init__', lambda self: None):
+            chat_obj = LLMChat()
+            chat_obj.function_manager = mgr
+            chat_obj.session_manager = MagicMock()
+            chat_obj.session_manager.set_active_chat.return_value = True
+
+            chat_obj.switch_chat("other_chat")
+
+        assert mgr._story_engine is None
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

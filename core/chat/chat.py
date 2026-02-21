@@ -831,6 +831,15 @@ class LLMChat:
 
     def reset(self):
         self.session_manager.clear()
+        # Reset scopes to defaults so stale values don't leak into the cleared chat
+        self.function_manager.set_memory_scope("default")
+        self.function_manager.set_goal_scope("default")
+        self.function_manager.set_knowledge_scope("default")
+        self.function_manager.set_people_scope("default")
+        self.function_manager.set_email_scope("default")
+        self.function_manager.set_bitcoin_scope("default")
+        self.function_manager.set_private_chat(False)
+        self.function_manager.set_story_engine(None)
         return True
 
     def list_chats(self) -> List[Dict[str, Any]]:
@@ -843,6 +852,9 @@ class LLMChat:
         return self.session_manager.delete_chat(chat_name)
 
     def switch_chat(self, chat_name: str) -> bool:
+        # Clear story engine so stale engine from previous chat doesn't persist
+        # _update_story_engine will recreate it on the next chat() call if needed
+        self.function_manager.set_story_engine(None)
         return self.session_manager.set_active_chat(chat_name)
 
     def get_active_chat(self) -> str:

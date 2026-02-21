@@ -374,6 +374,13 @@ async function loadSidebar() {
             fetch('/api/personas').then(r => r.ok ? r.json() : null)
         ]);
 
+        // Guard: if chat changed while fetching, discard stale results
+        const chatNow = chatSelect?.value;
+        if (chatNow !== chatName) {
+            console.log(`[SIDEBAR] Chat changed during load (${chatName} → ${chatNow}), discarding`);
+            return;
+        }
+
         const settings = settingsResp.status === 'fulfilled' ? settingsResp.value.settings : {};
         ui.setCurrentPersona(settings.persona || null);
         const init = initData.status === 'fulfilled' ? initData.value : null;
