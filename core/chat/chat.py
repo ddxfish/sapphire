@@ -390,8 +390,8 @@ class LLMChat:
                 parts.append(f"--- {r['filename']} (relevance: {r['score']:.0%}) ---\n{r['content']}")
             return "\n\n".join(parts)
         except Exception as e:
-            logger.warning(f"[RAG] Failed to get context: {e}")
-            return None
+            logger.error(f"[RAG] Failed to get context: {e}", exc_info=True)
+            return f"[RAG documents are configured but failed to load: {e}]"
 
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None):
         return self.streaming_chat.chat_stream(user_input, prefill=prefill, skip_user_message=skip_user_message, images=images, files=files)

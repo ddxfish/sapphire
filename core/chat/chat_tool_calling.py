@@ -220,7 +220,7 @@ class ToolCallingEngine:
             try:
                 function_result = self.function_manager.execute_function(function_name, function_args)
             except Exception as tool_error:
-                logger.error(f"Tool execution failed for {function_name}: {tool_error}")
+                logger.error(f"Tool execution failed for {function_name}: {tool_error}", exc_info=True)
                 function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
             
             result_str = str(function_result)

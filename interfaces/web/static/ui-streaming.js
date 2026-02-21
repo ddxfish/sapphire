@@ -595,6 +595,11 @@ export const finishStreaming = (updateToolbarsCallback) => {
             acc.classList.remove('streaming');
         });
 
+        // Remove orphaned tool accordions that never completed (e.g. exceeded MAX_PARALLEL_TOOLS)
+        contentDiv.querySelectorAll('.accordion-tool.loading').forEach(acc => {
+            acc.remove();
+        });
+
         // Wrap consecutive images into galleries
         wrapImageGalleries(contentDiv);
     }

@@ -265,8 +265,9 @@ class StreamingChat:
                                 tool_calls[idx]["function"]["arguments"] = event["arguments"]
 
                             # Early UI hint: show accordion as soon as we know the tool name
+                            # Only for indices within MAX_PARALLEL_TOOLS — excess tools won't execute
                             tc = tool_calls[idx]
-                            if idx not in tool_pending_sent and tc["function"]["name"]:
+                            if idx not in tool_pending_sent and tc["function"]["name"] and idx < config.MAX_PARALLEL_TOOLS:
                                 tool_pending_sent.add(idx)
                                 yield {"type": "tool_pending", "name": tc["function"]["name"], "index": idx}
                         

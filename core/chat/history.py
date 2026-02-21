@@ -804,10 +804,10 @@ class ChatSessionManager:
     def list_chat_files(self) -> List[Dict[str, Any]]:
         """List all available chats with metadata."""
         self._ensure_db()
-        
+
         chats = []
         try:
-            with self._get_connection() as conn:
+            with self._lock, self._get_connection() as conn:
                 cursor = conn.execute(
                     """SELECT name, settings, messages, updated_at FROM chats 
                        ORDER BY updated_at DESC"""
