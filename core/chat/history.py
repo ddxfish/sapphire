@@ -1046,8 +1046,7 @@ class ChatSessionManager:
 
     def _rollback_state_if_needed(self):
         """Rollback story engine to current turn count if enabled."""
-        story_enabled = self.current_settings.get('story_engine_enabled',
-                         self.current_settings.get('state_engine_enabled', False))
+        story_enabled = self.current_settings.get('story_engine_enabled', False)
         if not story_enabled:
             return
 

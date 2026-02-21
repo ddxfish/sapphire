@@ -116,14 +116,8 @@ async function init() {
         // Load views dynamically (isolated — one broken view won't kill the app)
         await loadViews();
 
-        // Init nav rail + router
-        initNavRail();
-        initRouter('chat');
-
-        // Hide nav items for disabled plugins (non-blocking)
-        syncNavWithPlugins();
-
         // === DATA FETCH (can fail without killing the app) ===
+        // Must run BEFORE initRouter so chat dropdown has real data when chat.show() fires
         let initData = null;
         try {
             initData = await getInitData();
@@ -146,7 +140,7 @@ async function init() {
 
         setHistLen(historyLen);
 
-        // Populate chat dropdown + picker
+        // Populate chat dropdown + picker (before router so chat.show() has real chat name)
         if (status?.chats) {
             ui.renderChatDropdown(status.chats, status.active_chat);
         } else {
@@ -157,6 +151,13 @@ async function init() {
         const settings = status?.chat_settings || {};
         updateSendButtonLLM(settings.llm_primary || 'auto', settings.llm_model || '');
         applyTrimColor(settings.trim_color || '');
+
+        // Init nav rail + router (after data so chat sidebar loads with correct chat)
+        initNavRail();
+        initRouter('chat');
+
+        // Hide nav items for disabled plugins (non-blocking)
+        syncNavWithPlugins();
 
         // === UI WIRING (must always run) ===
         initVolumeControls();

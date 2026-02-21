@@ -509,7 +509,7 @@ async function loadSidebar() {
                 (presetsData.presets || []).map(p =>
                     `<option value="${p.name}">${p.display_name} (${p.key_count} keys)</option>`
                 ).join('');
-            setSelect(presetSel, settings.story_preset ?? settings.state_preset ?? '');
+            setSelect(presetSel, settings.story_preset ?? '');
         }
 
         // Set remaining form values
@@ -523,11 +523,11 @@ async function loadSidebar() {
         setToggle(container, '#sb-spice-toggle', settings.spice_enabled !== false,
             `Spice \u00b7 ${settings.spice_turns || 3}`);
         setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
-        const storyEnabled = (settings.story_engine_enabled ?? settings.state_engine_enabled) === true;
-        const storyPreset = settings.story_preset ?? settings.state_preset;
+        const storyEnabled = settings.story_engine_enabled === true;
+        const storyPreset = settings.story_preset;
         setChecked(container, '#sb-story-enabled', storyEnabled);
-        setChecked(container, '#sb-story-in-prompt', (settings.story_in_prompt ?? settings.state_story_in_prompt) !== false);
-        setChecked(container, '#sb-story-vars', (settings.story_vars_in_prompt ?? settings.state_vars_in_prompt) === true);
+        setChecked(container, '#sb-story-in-prompt', settings.story_in_prompt !== false);
+        setChecked(container, '#sb-story-vars', settings.story_vars_in_prompt === true);
 
         // Show [STORY] prefix on prompt when story engine is active
         updateStoryPromptLabel(container);
@@ -947,7 +947,7 @@ async function updateStoryMode(container, settings) {
 
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
     const chatName = chatSelect?.value;
-    const presetName = settings.story_preset ?? settings.state_preset ?? '';
+    const presetName = settings.story_preset ?? '';
 
     // Fetch state and save slots in parallel
     const [stateResp, slotsResp] = await Promise.allSettled([

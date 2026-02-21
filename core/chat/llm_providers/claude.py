@@ -143,10 +143,10 @@ class ClaudeProvider(BaseProvider):
                     elif chat_settings.get('inject_datetime', False):
                         cache_system_prompt = False
                         logger.debug("[CACHE] Datetime injection enabled - skipping system prompt cache")
-                    elif chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False)):
+                    elif chat_settings.get('story_engine_enabled', False):
                         # Only vars in prompt breaks cache (changes every turn)
                         # Story in prompt is cache-friendly (only changes on scene advance)
-                        if chat_settings.get('story_vars_in_prompt', chat_settings.get('state_vars_in_prompt', False)):
+                        if chat_settings.get('story_vars_in_prompt', False):
                             cache_system_prompt = False
                             logger.debug("[CACHE] Story vars in prompt - skipping system prompt cache")
             except Exception as e:

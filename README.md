@@ -48,7 +48,7 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 </tr>
 <tr>
 <td><a href="docs/screenshots/story-engine.png"><img src="docs/screenshots/story-engine.png" alt="Story Engine"/></a></td>
-<td><strong>Story Engine</strong><br/>Built-in game master. Dice rolls with DCs, branching choices, progressive clues, room navigation, state tracking. Run a tabletop RPG, dungeon crawler, or interactive fiction - all from a JSON preset. See <a href="docs/STATE-ENGINE.md">Story Engine</a>.</td>
+<td><strong>Story Engine</strong><br/>Built-in game master. Dice rolls with DCs, branching choices, progressive clues, room navigation, state tracking. Run a tabletop RPG, dungeon crawler, or interactive fiction - all from a JSON preset. See <a href="docs/STORY-ENGINE.md">Story Engine</a>.</td>
 </tr>
 <tr>
 <td><a href="docs/screenshots/edit-past-messages.png"><img src="docs/screenshots/edit-past-messages.png" alt="Edit Messages"/></a></td>
@@ -174,7 +174,7 @@ pip install -r requirements.txt
 | [Home Assistant](docs/HOME-ASSISTANT.md) | Smart home integration |
 | [Image Generation](docs/IMAGE-GEN.md) | SDXL integration with character consistency |
 | [SOCKS Proxy](docs/SOCKS.md) | Privacy proxy for web scraping functions |
-| [Story Engine](docs/STATE-ENGINE.md) | Tabletop RPG, interactive fiction, dungeon crawlers |
+| [Story Engine](docs/STORY-ENGINE.md) | Tabletop RPG, interactive fiction, dungeon crawlers |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |
 | [Technical](docs/TECHNICAL.md) | For nerds |
 

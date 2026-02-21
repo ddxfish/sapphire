@@ -1,3 +1,18 @@
+# 2.0.0 - Knowledge, Privacy, and Polish
+## February 21, 2026
+- Knowledge base system — people, knowledge tabs, scoped entries with embeddings
+- Mind view — unified memories, people, knowledge, AI notes
+- Per-chat private mode — permanently private chats, enforced at provider + tool level
+- Privacy mode fail-closed — errors block cloud access instead of silently passing
+- Story engine — folder-based stories, dynamic tools, prompt override
+- Nav rail with mobile overflow and flyout groups
+- Views migrated from plugins (settings, prompts, toolsets, spices, schedule)
+- Bitcoin wallet, email multi-account, SSH plugins
+- Streaming tool status indicators with pending/running/complete states
+- Wakeword suppression during web UI mic recording
+- Scopes sync across all 4 backends (memory, knowledge, people, goals)
+- Auth: CSRF protection, session management, rate limiting
+- Bug hunt: 17 issues identified, 15 fixed, 2 deferred
 # 1.3.0 - FastAPI uvicorn
 ## February 7, 2026
 - Switched entire app to FastAPI

@@ -450,12 +450,6 @@ class FunctionManager:
         """Get current story engine. Returns None if disabled."""
         return self._story_engine
 
-    # Backward compat aliases
-    def set_state_engine(self, engine, turn_getter=None):
-        return self.set_story_engine(engine, turn_getter)
-
-    def get_state_engine(self):
-        return self.get_story_engine()
 
     def _check_privacy_allowed(self, function_name: str) -> tuple:
         """

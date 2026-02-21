@@ -208,7 +208,7 @@ class LLMChat:
         chat_settings = self.session_manager.get_chat_settings()
 
         # Debug logging for story engine
-        story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+        story_enabled = chat_settings.get('story_engine_enabled', False)
         story_engine = self.function_manager.get_story_engine()
         logger.info(f"[STORY] _get_system_prompt: enabled={story_enabled}, engine_exists={story_engine is not None}")
 
@@ -236,8 +236,8 @@ class LLMChat:
         # Inject story engine block if enabled
         if story_enabled:
             if story_engine:
-                vars_in_prompt = chat_settings.get('story_vars_in_prompt', chat_settings.get('state_vars_in_prompt', False))
-                story_in_prompt = chat_settings.get('story_in_prompt', chat_settings.get('state_story_in_prompt', True))
+                vars_in_prompt = chat_settings.get('story_vars_in_prompt', False)
+                story_in_prompt = chat_settings.get('story_in_prompt', True)
 
                 logger.info(f"[STORY] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={story_engine.preset_name}")
 
@@ -263,7 +263,7 @@ class LLMChat:
         chat_settings = self.session_manager.get_chat_settings()
 
         # Fast path: story engine disabled (99% of users)
-        story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
+        story_enabled = chat_settings.get('story_engine_enabled', False)
         if not story_enabled:
             if self.function_manager.get_story_engine():
                 self.function_manager.set_story_engine(None)
@@ -272,7 +272,7 @@ class LLMChat:
 
         # Story engine is enabled - check if current engine is still valid
         chat_name = self.session_manager.get_active_chat_name()
-        new_preset = chat_settings.get('story_preset', chat_settings.get('state_preset'))
+        new_preset = chat_settings.get('story_preset')
         current_engine = self.function_manager.get_story_engine()
 
         # Fast path: existing engine is valid for this chat+preset

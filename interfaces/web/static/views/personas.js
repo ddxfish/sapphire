@@ -650,10 +650,10 @@ function collectSettings() {
         goal_scope: get('goal_scope') || 'default',
         knowledge_scope: get('knowledge_scope') || 'default',
         people_scope: get('people_scope') || 'default',
-        story_engine_enabled: selectedData?.settings?.story_engine_enabled ?? selectedData?.settings?.state_engine_enabled ?? false,
-        story_preset: selectedData?.settings?.story_preset ?? selectedData?.settings?.state_preset ?? null,
-        story_vars_in_prompt: selectedData?.settings?.story_vars_in_prompt ?? selectedData?.settings?.state_vars_in_prompt ?? false,
-        story_in_prompt: selectedData?.settings?.story_in_prompt ?? selectedData?.settings?.state_story_in_prompt !== false,
+        story_engine_enabled: selectedData?.settings?.story_engine_enabled ?? false,
+        story_preset: selectedData?.settings?.story_preset ?? null,
+        story_vars_in_prompt: selectedData?.settings?.story_vars_in_prompt ?? false,
+        story_in_prompt: selectedData?.settings?.story_in_prompt !== false,
     };
 }
 

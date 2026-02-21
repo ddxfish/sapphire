@@ -706,8 +706,6 @@ class StoryEngine:
             # Flat format: {name}.json
             project_root / "user" / "story_presets" / f"{preset_name}.json",
             project_root / "core" / "story_engine" / "presets" / f"{preset_name}.json",
-            # Backward compat: old directory
-            project_root / "user" / "state_presets" / f"{preset_name}.json",
         ]
         for path in search_paths:
             if path.exists():
