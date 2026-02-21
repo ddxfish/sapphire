@@ -3362,7 +3362,7 @@ async def start_story(request: Request, _=Depends(require_login), system=Depends
         if not system.llm_chat.switch_chat(chat_name):
             raise HTTPException(status_code=500, detail="Failed to switch to story chat")
 
-        # Configure story settings
+        # Configure story settings — toolset "none" so only story tools are active
         story_settings = {
             "story_chat": True,
             "story_display_name": f"[STORY] {story_display}",
@@ -3370,6 +3370,7 @@ async def start_story(request: Request, _=Depends(require_login), system=Depends
             "story_preset": preset_name,
             "story_in_prompt": True,
             "story_vars_in_prompt": False,
+            "toolset": "none",
         }
         system.llm_chat.session_manager.update_chat_settings(story_settings)
 

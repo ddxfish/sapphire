@@ -13,7 +13,7 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
         const hist = await api.fetchHistory();
         const isNew = hist.length > lastLen;
         ui.renderHistory(hist);
-        if (playAudio && isNew && audioFn && hist.length > 0 && typeof playTextFn === 'function') {
+        if (playAudio && isNew && audioFn && hist.length > 0 && typeof audioFn === 'function') {
             const last = hist[hist.length - 1];
             if (last.role === 'assistant') await audioFn(last.content);
         }

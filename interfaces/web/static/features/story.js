@@ -47,13 +47,11 @@ export async function openStoryPicker() {
 
     modal.style.display = 'flex';
 
-    // Close handlers
+    // Close handlers — use onclick to avoid stacking on repeated opens
     const closeBtn = modal.querySelector('#story-modal-close');
     const closeModal = () => { modal.style.display = 'none'; };
-    closeBtn?.addEventListener('click', closeModal, { once: true });
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) closeModal();
-    }, { once: true });
+    if (closeBtn) closeBtn.onclick = closeModal;
+    modal.onclick = (e) => { if (e.target === modal) closeModal(); };
 }
 
 export function initStoryIndicator() {

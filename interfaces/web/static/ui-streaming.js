@@ -181,13 +181,14 @@ const finalizeCodeBlock = () => {
     if (header) {
         const status = header.querySelector('.code-status');
         if (status) {
+            const codeText = state.codeBuf.trimEnd();
             const copyBtn = document.createElement('button');
             copyBtn.className = 'code-copy';
             copyBtn.title = 'Copy code';
             copyBtn.textContent = 'Copy';
             copyBtn.addEventListener('click', async () => {
                 try {
-                    await navigator.clipboard.writeText(state.codeBuf.trimEnd());
+                    await navigator.clipboard.writeText(codeText);
                     copyBtn.textContent = 'Copied!';
                     setTimeout(() => copyBtn.textContent = 'Copy', 2000);
                 } catch (e) {

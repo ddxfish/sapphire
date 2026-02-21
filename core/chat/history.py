@@ -890,8 +890,13 @@ class ChatSessionManager:
                 
                 was_active = (chat_name == self.active_chat_name)
                 
-                # Delete
+                # Delete chat and any story engine state
                 conn.execute("DELETE FROM chats WHERE name = ?", (chat_name,))
+                try:
+                    conn.execute("DELETE FROM state_current WHERE chat_name = ?", (chat_name,))
+                    conn.execute("DELETE FROM state_log WHERE chat_name = ?", (chat_name,))
+                except Exception:
+                    pass  # Tables may not exist if story engine never used
                 conn.commit()
                 logger.info(f"Deleted chat: {chat_name}")
                 
