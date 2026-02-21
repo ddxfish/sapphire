@@ -79,7 +79,17 @@ class VoiceChatSystem:
         self.is_listening = False
         self.current_session = None
         self._processing_lock = threading.Lock()
-        self._web_active = False  # Suppresses wakeword during web UI activity
+        self._web_active_count = 0  # Ref-counted wakeword suppression during web UI activity
+
+    @property
+    def _web_active(self):
+        return self._web_active_count > 0
+
+    def web_active_inc(self):
+        self._web_active_count += 1
+
+    def web_active_dec(self):
+        self._web_active_count = max(0, self._web_active_count - 1)
         
         self.history = ConversationHistory(max_history=config.LLM_MAX_HISTORY)
 

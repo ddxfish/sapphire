@@ -484,7 +484,7 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
 
         # If ID provided, update by ID directly (allows name changes)
         if person_id:
-            cursor.execute('SELECT id FROM people WHERE id = ?', (person_id,))
+            cursor.execute('SELECT id FROM people WHERE id = ? AND scope = ?', (person_id, scope))
         else:
             # Fallback: match by name (for AI tool calls)
             cursor.execute('SELECT id FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?', (name.strip(), scope))
@@ -537,13 +537,14 @@ def create_or_update_person(name, relationship=None, phone=None, email=None, add
 
 
 def delete_person(person_id):
+    scope = _get_current_people_scope()
     with _get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT name FROM people WHERE id = ?', (person_id,))
+        cursor.execute('SELECT name FROM people WHERE id = ? AND scope = ?', (person_id, scope))
         row = cursor.fetchone()
         if not row:
             return False
-        cursor.execute('DELETE FROM people WHERE id = ?', (person_id,))
+        cursor.execute('DELETE FROM people WHERE id = ? AND scope = ?', (person_id, scope))
         conn.commit()
         return True
 
@@ -600,6 +601,7 @@ def create_tab(name, scope='default', description=None, tab_type='user'):
 
 
 def update_tab(tab_id, name=None, description=None):
+    scope = _get_current_scope()
     with _get_connection() as conn:
         cursor = conn.cursor()
         updates, params = [], []
@@ -610,21 +612,22 @@ def update_tab(tab_id, name=None, description=None):
         if not updates:
             return False
         updates.append('updated_at = ?'); params.append(datetime.now().isoformat())
-        params.append(tab_id)
-        cursor.execute(f'UPDATE knowledge_tabs SET {", ".join(updates)} WHERE id = ?', params)
+        params.extend([tab_id, scope])
+        cursor.execute(f'UPDATE knowledge_tabs SET {", ".join(updates)} WHERE id = ? AND scope = ?', params)
         changed = cursor.rowcount > 0
         conn.commit()
         return changed
 
 
 def delete_tab(tab_id):
+    scope = _get_current_scope()
     with _get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT name FROM knowledge_tabs WHERE id = ?', (tab_id,))
+        cursor.execute('SELECT name FROM knowledge_tabs WHERE id = ? AND scope = ?', (tab_id, scope))
         if not cursor.fetchone():
             return False
         cursor.execute('DELETE FROM knowledge_entries WHERE tab_id = ?', (tab_id,))
-        cursor.execute('DELETE FROM knowledge_tabs WHERE id = ?', (tab_id,))
+        cursor.execute('DELETE FROM knowledge_tabs WHERE id = ? AND scope = ?', (tab_id, scope))
         conn.commit()
         return True
 
