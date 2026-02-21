@@ -356,6 +356,15 @@ const stopRec = async () => {
     return encodeWAV(samples, SAMPLE_RATE);
 };
 
+const signalMicActive = (active) => {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    fetch('/api/mic/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+        body: JSON.stringify({ active })
+    }).catch(() => {});
+};
+
 export const handlePress = async (btn) => {
     if (isRec) return;
     const ok = await startRec();
@@ -364,6 +373,7 @@ export const handlePress = async (btn) => {
         btn.classList.add('recording');
         ui.showStatus();
         ui.updateStatus('Recording...');
+        signalMicActive(true);
     }
 };
 
@@ -377,19 +387,21 @@ export const handleRelease = async (btn, triggerSendFn) => {
         ui.updateStatus('Transcribing...');
         try {
             const response = await api.postAudio(blob);
+            // /api/transcribe manages _web_active in its own finally block
             const text = response.text;
-            
+
             if (!text || !text.trim()) {
                 ui.updateStatus('No speech detected');
                 setTimeout(() => ui.hideStatus(), 2000);
                 return null;
             }
-            
+
             ui.hideStatus();
             await triggerSendFn(text);
             return text;
-            
+
         } catch (e) {
+            signalMicActive(false);
             console.error('Transcription failed:', e);
             const msg = e.message?.includes('disabled') || e.message?.includes('not initialized')
                 ? e.message : 'Transcription failed';
@@ -398,6 +410,7 @@ export const handleRelease = async (btn, triggerSendFn) => {
             return null;
         }
     } else {
+        signalMicActive(false);
         ui.hideStatus();
         return null;
     }

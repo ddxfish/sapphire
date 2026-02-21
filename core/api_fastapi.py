@@ -1407,6 +1407,14 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
     return {"text": transcribed_text}
 
 
+@app.post("/api/mic/active")
+async def set_mic_active(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Signal browser mic open/close to suppress wakeword during web UI recording."""
+    data = await request.json()
+    system._web_active = bool(data.get('active', False))
+    return {"ok": True}
+
+
 @app.post("/api/upload/image")
 async def handle_image_upload(image: UploadFile = File(...), _=Depends(require_login), system=Depends(get_system)):
     """Upload an image for chat."""
