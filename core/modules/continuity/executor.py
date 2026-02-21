@@ -128,6 +128,7 @@ class ContinuityExecutor:
         session_manager = self.system.llm_chat.session_manager
         original_chat = session_manager.get_active_chat_name()
         original_toolset = self.system.llm_chat.function_manager.current_toolset_name
+        target_original_settings = None
         target_chat = task.get("chat_target", "").strip()
 
         # Temporarily override global config with per-task limits
@@ -164,6 +165,9 @@ class ContinuityExecutor:
             # Switch to target chat
             if not session_manager.set_active_chat(target_chat):
                 raise RuntimeError(f"Failed to switch to chat: {target_chat}")
+
+            # Snapshot target chat's settings before task overrides them
+            target_original_settings = session_manager.get_chat_settings()
 
             # Apply task settings to chat
             self._apply_task_settings(task, session_manager)
@@ -215,6 +219,10 @@ class ContinuityExecutor:
 
             # Always restore original chat context and toolset
             try:
+                # Restore target chat's original settings before switching away
+                # (set_active_chat saves current settings, so this must come first)
+                if target_original_settings is not None:
+                    session_manager.current_settings = target_original_settings
                 if session_manager.get_active_chat_name() != original_chat:
                     session_manager.set_active_chat(original_chat)
                     logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")

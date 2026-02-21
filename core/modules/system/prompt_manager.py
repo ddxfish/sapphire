@@ -258,86 +258,90 @@ class PromptManager:
     
     def save_scenario_presets(self):
         """Save scenario presets to user/prompts/prompt_pieces.json"""
-        target_path = self.USER_DIR / "prompt_pieces.json"
-        
-        # Load existing data
-        try:
-            with open(target_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
-        
-        # Update scenario_presets section
-        data['scenario_presets'] = self._scenario_presets
-        
-        # Save back
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Saved scenario presets to {target_path}")
+        with self._lock:
+            target_path = self.USER_DIR / "prompt_pieces.json"
+
+            # Load existing data
+            try:
+                with open(target_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
+
+            # Update scenario_presets section
+            data['scenario_presets'] = self._scenario_presets
+
+            # Save back
+            with open(target_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Saved scenario presets to {target_path}")
     
     def save_monoliths(self):
         """Save monoliths to user/prompts/prompt_monoliths.json"""
-        target_path = self.USER_DIR / "prompt_monoliths.json"
+        with self._lock:
+            target_path = self.USER_DIR / "prompt_monoliths.json"
 
-        # Load existing to preserve _comment
-        try:
-            with open(target_path, 'r', encoding='utf-8') as f:
-                old_data = json.load(f)
-            comment = old_data.get('_comment')
-        except Exception:
-            comment = "User monolith prompts"
+            # Load existing to preserve _comment
+            try:
+                with open(target_path, 'r', encoding='utf-8') as f:
+                    old_data = json.load(f)
+                comment = old_data.get('_comment')
+            except Exception:
+                comment = "User monolith prompts"
 
-        # Build fresh dict with new format
-        data = {}
-        if comment:
-            data['_comment'] = comment
-        # Ensure each monolith has the full object structure
-        for name, mono in self._monoliths.items():
-            if isinstance(mono, dict):
-                data[name] = mono
-            else:
-                # Shouldn't happen, but handle gracefully
-                data[name] = {'content': str(mono), 'privacy_required': False}
+            # Build fresh dict with new format
+            data = {}
+            if comment:
+                data['_comment'] = comment
+            # Ensure each monolith has the full object structure
+            for name, mono in self._monoliths.items():
+                if isinstance(mono, dict):
+                    data[name] = mono
+                else:
+                    # Shouldn't happen, but handle gracefully
+                    data[name] = {'content': str(mono), 'privacy_required': False}
 
-        # Save
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Saved monoliths to {target_path}")
+            # Save
+            with open(target_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Saved monoliths to {target_path}")
     
     def save_components(self):
         """Save components to user/prompts/prompt_pieces.json"""
-        target_path = self.USER_DIR / "prompt_pieces.json"
-        
-        # Load existing data
-        try:
-            with open(target_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
-        
-        # Update components section
-        data['components'] = self._components
-        
-        # Save back
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-        logger.info(f"Saved components to {target_path}")
+        with self._lock:
+            target_path = self.USER_DIR / "prompt_pieces.json"
+
+            # Load existing data
+            try:
+                with open(target_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
+
+            # Update components section
+            data['components'] = self._components
+
+            # Save back
+            with open(target_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            logger.info(f"Saved components to {target_path}")
     
     def save_spices(self):
         """Save spices to user/prompts/prompt_spices.json"""
-        target_path = self.USER_DIR / "prompt_spices.json"
+        with self._lock:
+            target_path = self.USER_DIR / "prompt_spices.json"
 
-        # Build data with metadata
-        data = {"_comment": "User spices - managed via Spice Manager"}
-        if self._spice_meta:
-            data["_meta"] = self._spice_meta
-        if self._disabled_categories:
-            data["_disabled_categories"] = sorted(list(self._disabled_categories))
-        data.update(self._spices)
+            # Build data with metadata
+            data = {"_comment": "User spices - managed via Spice Manager"}
+            if self._spice_meta:
+                data["_meta"] = self._spice_meta
+            if self._disabled_categories:
+                data["_disabled_categories"] = sorted(list(self._disabled_categories))
+            data.update(self._spices)
 
-        with open(target_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved spices to {target_path}")
+            with open(target_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved spices to {target_path}")
     
     def is_category_enabled(self, category: str) -> bool:
         """Check if a spice category is enabled."""

@@ -81,16 +81,6 @@ class VoiceChatSystem:
         self._processing_lock = threading.Lock()
         self._web_active_count = 0  # Ref-counted wakeword suppression during web UI activity
 
-    @property
-    def _web_active(self):
-        return self._web_active_count > 0
-
-    def web_active_inc(self):
-        self._web_active_count += 1
-
-    def web_active_dec(self):
-        self._web_active_count = max(0, self._web_active_count - 1)
-        
         self.history = ConversationHistory(max_history=config.LLM_MAX_HISTORY)
 
         base_dir = Path(__file__).parent.resolve()
@@ -116,7 +106,7 @@ class VoiceChatSystem:
                 time.sleep(3)  # Let model load
             else:
                 logger.warning(f"TTS enabled but server.py not found at {tts_script}")
-        
+
         # Initialize TTS client
         logger.info("Initializing TTS client")
         if config.TTS_ENABLED:
@@ -140,6 +130,16 @@ class VoiceChatSystem:
         self._cleanup_orphaned_rag()
 
         logger.info(f"System init took: {(time.time() - start_time)*1000:.1f}ms")
+
+    @property
+    def _web_active(self):
+        return self._web_active_count > 0
+
+    def web_active_inc(self):
+        self._web_active_count += 1
+
+    def web_active_dec(self):
+        self._web_active_count = max(0, self._web_active_count - 1)
 
     def _cleanup_orphaned_rag(self):
         """Remove RAG scopes for chats that no longer exist."""

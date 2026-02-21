@@ -865,7 +865,8 @@ class LLMChat:
         
         task_settings = task_settings or {}
         logger.info(f"[ISOLATED] Starting isolated chat with settings: {list(task_settings.keys())}")
-        
+        original_toolset = self.function_manager.current_toolset_name
+
         try:
             # Build system prompt from task settings
             prompt_name = task_settings.get("prompt", "default")
@@ -1021,3 +1022,5 @@ class LLMChat:
         except Exception as e:
             logger.error(f"[ISOLATED] Chat failed: {e}", exc_info=True)
             return f"Error: {e}"
+        finally:
+            self.function_manager.update_enabled_functions([original_toolset])
