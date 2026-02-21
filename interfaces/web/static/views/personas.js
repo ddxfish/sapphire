@@ -43,7 +43,7 @@ export default {
     },
     hide() {
         // Restore active chat's trim color when leaving persona view
-        fetch('/api/scene').then(r => r.ok ? r.json() : null).then(d => {
+        fetch('/api/status').then(r => r.ok ? r.json() : null).then(d => {
             applyTrimColor(d?.chat_settings?.trim_color || '');
         }).catch(() => applyTrimColor(''));
     }

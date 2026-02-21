@@ -998,9 +998,8 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
             chat_settings = session_manager.get_chat_settings()
             story_enabled = chat_settings.get('story_engine_enabled', chat_settings.get('state_engine_enabled', False))
             if story_enabled:
-                from pathlib import Path
                 from core.story_engine import StoryEngine
-                db_path = Path("user/history/sapphire_history.db")
+                db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
                 if db_path.exists() and chat_name:
                     engine = StoryEngine(chat_name, db_path)
                     preset = chat_settings.get('story_preset', chat_settings.get('state_preset'))
@@ -3391,7 +3390,7 @@ async def list_story_presets(request: Request, _=Depends(require_login)):
 async def get_chat_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Get current state for a chat."""
     from core.story_engine import StoryEngine
-    db_path = Path("user/history/sapphire_history.db")
+    db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
 
@@ -3428,7 +3427,7 @@ async def get_chat_state(chat_name: str, request: Request, _=Depends(require_log
 async def get_chat_state_history(chat_name: str, limit: int = 100, key: str = None, request: Request = None, _=Depends(require_login)):
     """Get state change history."""
     from core.story_engine import StoryEngine
-    db_path = Path("user/history/sapphire_history.db")
+    db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
     engine = StoryEngine(chat_name, db_path)
@@ -3440,7 +3439,7 @@ async def get_chat_state_history(chat_name: str, limit: int = 100, key: str = No
 async def reset_chat_state(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Reset state."""
     from core.story_engine import StoryEngine
-    db_path = Path("user/history/sapphire_history.db")
+    db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
 
@@ -3469,7 +3468,7 @@ async def reset_chat_state(chat_name: str, request: Request, _=Depends(require_l
 async def set_chat_state_value(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Set a state value."""
     from core.story_engine import StoryEngine
-    db_path = Path("user/history/sapphire_history.db")
+    db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database not found")
 
@@ -3495,7 +3494,7 @@ async def set_chat_state_value(chat_name: str, request: Request, _=Depends(requi
 @app.get("/api/story/saves/{preset_name}")
 async def list_game_saves(preset_name: str, request: Request, _=Depends(require_login)):
     """List save slots for a game preset."""
-    saves_dir = Path("user/state_saves") / preset_name
+    saves_dir = PROJECT_ROOT / "user" / "state_saves" / preset_name
     slots = []
     for i in range(1, 6):
         slot_file = saves_dir / f"slot_{i}.json"
@@ -3524,7 +3523,7 @@ async def save_game_state(chat_name: str, request: Request, _=Depends(require_lo
     if not preset_name:
         raise HTTPException(status_code=400, detail="No game preset active")
 
-    db_path = Path("user/history/sapphire_history.db")
+    db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
     engine = StoryEngine(chat_name, db_path)
     state = engine.get_state()
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
@@ -3541,7 +3540,7 @@ async def save_game_state(chat_name: str, request: Request, _=Depends(require_lo
         "messages": messages,
     }
 
-    saves_dir = Path("user/state_saves") / preset_name
+    saves_dir = PROJECT_ROOT / "user" / "state_saves" / preset_name
     saves_dir.mkdir(parents=True, exist_ok=True)
     slot_file = saves_dir / f"slot_{slot}.json"
     with open(slot_file, 'w', encoding='utf-8') as f:
@@ -3566,7 +3565,7 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
     if not preset_name:
         raise HTTPException(status_code=400, detail="No game preset active")
 
-    saves_dir = Path("user/state_saves") / preset_name
+    saves_dir = PROJECT_ROOT / "user" / "state_saves" / preset_name
     slot_file = saves_dir / f"slot_{slot}.json"
     if not slot_file.exists():
         raise HTTPException(status_code=404, detail=f"Slot {slot} is empty")
@@ -3575,7 +3574,7 @@ async def load_game_state(chat_name: str, request: Request, _=Depends(require_lo
         save_data = json.load(f)
 
     # Restore story state
-    db_path = Path("user/history/sapphire_history.db")
+    db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
     engine = StoryEngine(chat_name, db_path)
     turn = system.llm_chat.session_manager.get_turn_count() if system else 0
 

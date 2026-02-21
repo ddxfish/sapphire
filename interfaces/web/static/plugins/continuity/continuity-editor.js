@@ -251,22 +251,29 @@ export default class ContinuityEditor {
       return;
     }
     
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const apis = ['/api/memory/scopes', '/api/knowledge/scopes', '/api/knowledge/people/scopes', '/api/goals/scopes'];
     try {
-      const res = await fetch('/api/memory/scopes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: clean })
-      });
-      if (res.ok) {
+      const results = await Promise.allSettled(apis.map(url =>
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify({ name: clean })
+        })
+      ));
+      const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
+      if (anyOk) {
         const scopeSelect = this.el.querySelector('#task-memory-scope');
-        const opt = document.createElement('option');
-        opt.value = clean;
-        opt.textContent = `${clean} (0)`;
-        scopeSelect.appendChild(opt);
-        scopeSelect.value = clean;
+        if (scopeSelect && !scopeSelect.querySelector(`option[value="${clean}"]`)) {
+          const opt = document.createElement('option');
+          opt.value = clean;
+          opt.textContent = `${clean} (0)`;
+          scopeSelect.appendChild(opt);
+        }
+        if (scopeSelect) scopeSelect.value = clean;
       } else {
-        const err = await res.json();
-        alert(err.error || 'Failed to create');
+        const err = await results[0]?.value?.json?.().catch(() => ({})) || {};
+        alert(err.error || err.detail || 'Failed to create');
       }
     } catch (e) {
       alert('Failed to create scope');

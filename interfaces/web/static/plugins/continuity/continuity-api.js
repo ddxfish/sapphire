@@ -85,12 +85,12 @@ export async function fetchPrompts() {
   return data.prompts || [];
 }
 
-// Fetch abilities/toolsets for dropdown (live)
+// Fetch toolsets for dropdown (live)
 export async function fetchAbilities() {
-  const res = await fetch('/api/abilities');
+  const res = await fetch('/api/toolsets');
   if (!res.ok) return [];
   const data = await res.json();
-  return data.abilities || [];
+  return data.toolsets || [];
 }
 
 // Fetch LLM providers with metadata

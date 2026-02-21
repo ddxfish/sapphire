@@ -947,28 +947,40 @@ async function openEditor(task, isHeartbeat = false) {
     modal.querySelector('#ed-voice')?.addEventListener('change', updateVoicePreview);
     modal.querySelector('#ed-tts')?.addEventListener('change', updateVoicePreview);
 
-    // Scope "+" buttons
+    // Scope "+" buttons — create across ALL scope backends
     modal.querySelectorAll('.sched-add-scope').forEach(btn => {
         btn.addEventListener('click', async () => {
             const name = prompt('New scope name (lowercase, no spaces):');
             if (!name) return;
             const clean = name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
             if (!clean || clean.length > 32) { alert('Invalid name'); return; }
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            const apis = ['/api/memory/scopes', '/api/knowledge/scopes', '/api/knowledge/people/scopes', '/api/goals/scopes'];
             try {
-                const res = await fetch(btn.dataset.api, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: clean })
-                });
-                if (res.ok) {
+                const results = await Promise.allSettled(apis.map(url =>
+                    fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                        body: JSON.stringify({ name: clean })
+                    })
+                ));
+                const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
+                if (anyOk) {
+                    // Add to ALL scope dropdowns in this editor
+                    modal.querySelectorAll('.sched-add-scope').forEach(b => {
+                        const sel = b.previousElementSibling;
+                        if (sel && !sel.querySelector(`option[value="${clean}"]`)) {
+                            const opt = document.createElement('option');
+                            opt.value = clean;
+                            opt.textContent = clean;
+                            sel.appendChild(opt);
+                        }
+                    });
+                    // Select in the dropdown that was clicked
                     const sel = btn.previousElementSibling;
-                    const opt = document.createElement('option');
-                    opt.value = clean;
-                    opt.textContent = clean;
-                    sel.appendChild(opt);
-                    sel.value = clean;
+                    if (sel) sel.value = clean;
                 } else {
-                    const err = await res.json().catch(() => ({}));
+                    const err = await results[0]?.value?.json?.().catch(() => ({})) || {};
                     alert(err.error || err.detail || 'Failed');
                 }
             } catch { alert('Failed to create scope'); }

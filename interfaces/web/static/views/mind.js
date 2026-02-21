@@ -1,6 +1,11 @@
 // views/mind.js - Mind view: Memories, People, Knowledge, AI Knowledge, Goals
 import * as ui from '../ui.js';
 
+function csrfHeaders(extra = {}) {
+    const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    return { 'X-CSRF-Token': token, ...extra };
+}
+
 let container = null;
 let activeTab = 'memories';
 let currentScope = 'default';
@@ -106,21 +111,33 @@ async function render() {
             const results = await Promise.allSettled(apis.map(url =>
                 fetch(url, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ name: clean })
                 })
             ));
-            const anyOk = results.some(r => r.status === 'fulfilled' && r.value.ok);
-            if (anyOk) {
-                const newScope = { name: clean, count: 0 };
-                // Add to caches if not already present
-                for (const cache of [memoryScopeCache, knowledgeScopeCache, peopleScopeCache, goalScopeCache]) {
-                    if (!cache.find(s => s.name === clean)) cache.push(newScope);
+            const caches = [memoryScopeCache, knowledgeScopeCache, peopleScopeCache, goalScopeCache];
+            const labels = ['memory', 'knowledge', 'people', 'goals'];
+            const newScope = { name: clean, count: 0 };
+            let okCount = 0;
+            const failed = [];
+            results.forEach((r, i) => {
+                if (r.status === 'fulfilled' && r.value.ok) {
+                    okCount++;
+                    if (!caches[i].find(s => s.name === clean)) caches[i].push(newScope);
+                } else {
+                    failed.push(labels[i]);
+                    console.warn(`Scope create failed for ${labels[i]}:`, r.status === 'fulfilled' ? r.value.status : r.reason);
                 }
+            });
+            if (okCount > 0) {
                 currentScope = clean;
                 updateScopeDropdown();
                 renderContent();
-                ui.showToast(`Created: ${clean}`, 'success');
+                if (failed.length) {
+                    ui.showToast(`Created ${clean} (failed: ${failed.join(', ')})`, 'warning');
+                } else {
+                    ui.showToast(`Created: ${clean}`, 'success');
+                }
             } else {
                 ui.showToast('Failed to create scope', 'error');
             }
@@ -296,7 +313,7 @@ async function renderMemories(el) {
             if (!confirm('Delete this memory?')) return;
             const id = parseInt(btn.dataset.id);
             try {
-                const resp = await fetch(`/api/memory/${id}?scope=${encodeURIComponent(currentScope)}`, { method: 'DELETE' });
+                const resp = await fetch(`/api/memory/${id}?scope=${encodeURIComponent(currentScope)}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) {
                     ui.showToast('Deleted', 'success');
                     await renderMemories(el);
@@ -349,7 +366,7 @@ function showMemoryEditModal(el, memoryId, content) {
         try {
             const resp = await fetch(`/api/memory/${memoryId}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ content: newContent, scope: currentScope })
             });
             if (resp.ok) {
@@ -410,7 +427,7 @@ async function renderPeople(el) {
         form.append('file', file);
         form.append('scope', currentScope);
         try {
-            const resp = await fetch('/api/knowledge/people/import-vcf', { method: 'POST', body: form });
+            const resp = await fetch('/api/knowledge/people/import-vcf', { method: 'POST', headers: csrfHeaders(), body: form });
             if (!resp.ok) throw new Error('Upload failed');
             const result = await resp.json();
             let msg = `Imported ${result.imported} of ${result.total_in_file} contacts`;
@@ -436,7 +453,7 @@ async function renderPeople(el) {
         btn.addEventListener('click', async () => {
             if (!confirm('Delete this contact?')) return;
             try {
-                const resp = await fetch(`/api/knowledge/people/${btn.dataset.id}`, { method: 'DELETE' });
+                const resp = await fetch(`/api/knowledge/people/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) {
                     ui.showToast('Deleted', 'success');
                     await renderPeople(el);
@@ -499,7 +516,7 @@ function showPersonModal(el, person = null) {
         try {
             const resp = await fetch('/api/knowledge/people', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(body)
             });
             if (resp.ok) {
@@ -557,7 +574,7 @@ async function renderKnowledge(el, tabType) {
         try {
             const resp = await fetch('/api/knowledge/tabs', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ name: name.trim(), scope: currentScope, type: 'user' })
             });
             if (resp.ok) {
@@ -578,7 +595,7 @@ async function renderKnowledge(el, tabType) {
             const name = btn.closest('.mind-accordion')?.querySelector('.mind-accordion-title')?.textContent || 'this category';
             if (!confirm(`Delete "${name}" and all its entries?`)) return;
             try {
-                const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.id}`, { method: 'DELETE' });
+                const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) {
                     ui.showToast('Deleted', 'success');
                     await renderKnowledge(el, tabType);
@@ -691,7 +708,7 @@ async function loadEntries(inner, tabId, tabType) {
                     btn.textContent = 'Uploading...';
                     btn.disabled = true;
                     const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/upload`, {
-                        method: 'POST', body: form
+                        method: 'POST', headers: csrfHeaders(), body: form
                     });
                     if (resp.ok) {
                         const result = await resp.json();
@@ -719,7 +736,7 @@ async function loadEntries(inner, tabId, tabType) {
                 const fname = btn.dataset.filename;
                 if (!confirm(`Delete all chunks from "${fname}"?`)) return;
                 try {
-                    const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/file/${encodeURIComponent(fname)}`, { method: 'DELETE' });
+                    const resp = await fetch(`/api/knowledge/tabs/${btn.dataset.tabId}/file/${encodeURIComponent(fname)}`, { method: 'DELETE', headers: csrfHeaders() });
                     if (resp.ok) {
                         ui.showToast(`Deleted ${fname}`, 'success');
                         inner.dataset.loaded = '';
@@ -750,7 +767,7 @@ async function loadEntries(inner, tabId, tabType) {
             btn.addEventListener('click', async () => {
                 if (!confirm('Delete this entry?')) return;
                 try {
-                    const resp = await fetch(`/api/knowledge/entries/${btn.dataset.id}`, { method: 'DELETE' });
+                    const resp = await fetch(`/api/knowledge/entries/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                     if (resp.ok) {
                         ui.showToast('Deleted', 'success');
                         inner.dataset.loaded = '';
@@ -806,7 +823,7 @@ function showEntryEditModal(inner, tabId, tabType, entryId, content) {
         try {
             const resp = await fetch(`/api/knowledge/entries/${entryId}`, {
                 method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
+                headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ content: newContent })
             });
             if (resp.ok) {
@@ -863,7 +880,7 @@ function showAddEntryModal(inner, tabId, tabType) {
         try {
             const resp = await fetch(`/api/knowledge/tabs/${tabId}/entries`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ content })
             });
             if (resp.ok) {
@@ -998,7 +1015,7 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count) {
             const results = await Promise.allSettled(apis.map(url =>
                 fetch(url, {
                     method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ confirm: 'DELETE' })
                 })
             ));
@@ -1153,7 +1170,7 @@ function bindGoalActions(el) {
         btn.addEventListener('click', async () => {
             if (!confirm('Delete this subtask?')) return;
             try {
-                const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE' });
+                const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) { ui.showToast('Deleted', 'success'); renderGoals(el); }
             } catch (e) { ui.showToast('Failed', 'error'); }
         });
@@ -1167,7 +1184,7 @@ function bindGoalActions(el) {
             try {
                 const resp = await fetch('/api/goals', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ title: title.trim(), parent_id: parseInt(btn.dataset.id), scope: currentScope })
                 });
                 if (resp.ok) { ui.showToast('Subtask added', 'success'); renderGoals(el); }
@@ -1184,7 +1201,7 @@ function bindGoalActions(el) {
             try {
                 const resp = await fetch(`/api/goals/${btn.dataset.id}/progress`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ note: note.trim() })
                 });
                 if (resp.ok) { ui.showToast('Note added', 'success'); renderGoals(el); }
@@ -1211,7 +1228,7 @@ function bindGoalActions(el) {
         btn.addEventListener('click', async () => {
             if (!confirm('Delete this goal and all subtasks/progress?')) return;
             try {
-                const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE' });
+                const resp = await fetch(`/api/goals/${btn.dataset.id}`, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) { ui.showToast('Deleted', 'success'); renderGoals(el); }
             } catch (e) { ui.showToast('Failed', 'error'); }
         });
@@ -1222,7 +1239,7 @@ async function updateGoalStatus(el, goalId, status) {
     try {
         const resp = await fetch(`/api/goals/${goalId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: csrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ status })
         });
         if (resp.ok) { renderGoals(el); }
@@ -1286,14 +1303,14 @@ function showGoalModal(el, goal = null) {
             if (goal) {
                 resp = await fetch(`/api/goals/${goal.id}`, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(body)
                 });
             } else {
                 body.scope = currentScope;
                 resp = await fetch('/api/goals', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(body)
                 });
             }
