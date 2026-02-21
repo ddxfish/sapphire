@@ -79,8 +79,8 @@ TOOLS = [
 
 def _get_current_bitcoin_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_bitcoin_scope
+        from core.chat.function_manager import scope_bitcoin
+        return scope_bitcoin.get()
     except Exception:
         return None
 

@@ -5,6 +5,7 @@ import logging
 import time
 import os
 import importlib
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 import config
@@ -12,23 +13,18 @@ from core.modules.system.toolsets import toolset_manager
 
 logger = logging.getLogger(__name__)
 
+# Per-context scope isolation — each thread/async-task gets its own values
+scope_memory:   ContextVar[str]  = ContextVar('scope_memory',   default='default')
+scope_goal:     ContextVar[str]  = ContextVar('scope_goal',     default='default')
+scope_knowledge:ContextVar[str]  = ContextVar('scope_knowledge',default='default')
+scope_people:   ContextVar[str]  = ContextVar('scope_people',   default='default')
+scope_email:    ContextVar[str]  = ContextVar('scope_email',    default='default')
+scope_bitcoin:  ContextVar[str]  = ContextVar('scope_bitcoin',  default='default')
+scope_rag:      ContextVar       = ContextVar('scope_rag',      default=None)
+scope_private:  ContextVar[bool] = ContextVar('scope_private',  default=False)
+
+
 class FunctionManager:
-    # Class-level memory scope - accessible from memory module
-    _current_memory_scope = 'default'
-    # Class-level goal scope - accessible from goals module
-    _current_goal_scope = 'default'
-    # Class-level knowledge scope - accessible from knowledge module
-    _current_knowledge_scope = 'default'
-    # Class-level people scope - accessible from knowledge module
-    _current_people_scope = 'default'
-    # Class-level email scope - per-chat email account
-    _current_email_scope = 'default'
-    # Class-level bitcoin scope - per-chat bitcoin wallet
-    _current_bitcoin_scope = 'default'
-    # Class-level RAG scope - per-chat document scope for search_knowledge
-    _current_rag_scope = None
-    # Class-level private chat flag - enforces privacy mode per-chat
-    _current_private_chat = False
     
     def __init__(self):
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
@@ -45,19 +41,6 @@ class FunctionManager:
         self._network_functions = set()  # Function names that require network access
         self._is_local_map = {}  # function_name -> is_local value (True, False, or "endpoint")
         self._function_module_map = {}  # function_name -> module_name (for endpoint lookups)
-        
-        # Memory scope for current execution context (None = disabled)
-        self._memory_scope = 'default'
-        # Goal scope for current execution context (None = disabled)
-        self._goal_scope = 'default'
-        # Knowledge scope for current execution context (None = disabled)
-        self._knowledge_scope = 'default'
-        # People scope for current execution context (None = disabled)
-        self._people_scope = 'default'
-        # Email scope for current execution context (None = disabled)
-        self._email_scope = 'default'
-        # Bitcoin scope for current execution context (None = disabled)
-        self._bitcoin_scope = 'default'
         
         # Story engine for games/simulations (None = disabled)
         self._story_engine = None
@@ -361,74 +344,61 @@ class FunctionManager:
             "story_custom_tools": story_custom_names,
         }
 
-    def set_memory_scope(self, scope: str):
+    def set_memory_scope(self, s: str):
         """Set memory scope for current execution context. None = disabled."""
-        self._memory_scope = scope
-        FunctionManager._current_memory_scope = scope  # Update class-level for cross-module access
-        logger.debug(f"Memory scope set to: {scope}")
+        scope_memory.set(s)
+        logger.debug(f"Memory scope set to: {s}")
 
     def get_memory_scope(self) -> str:
-        """Get current memory scope. Returns None if memory disabled."""
-        return self._memory_scope
+        return scope_memory.get()
 
-    def set_goal_scope(self, scope: str):
+    def set_goal_scope(self, s: str):
         """Set goal scope for current execution context. None = disabled."""
-        self._goal_scope = scope
-        FunctionManager._current_goal_scope = scope
-        logger.debug(f"Goal scope set to: {scope}")
+        scope_goal.set(s)
+        logger.debug(f"Goal scope set to: {s}")
 
     def get_goal_scope(self) -> str:
-        """Get current goal scope. Returns None if goals disabled."""
-        return self._goal_scope
+        return scope_goal.get()
 
-    def set_knowledge_scope(self, scope: str):
+    def set_knowledge_scope(self, s: str):
         """Set knowledge scope for current execution context. None = disabled."""
-        self._knowledge_scope = scope
-        FunctionManager._current_knowledge_scope = scope
-        logger.debug(f"Knowledge scope set to: {scope}")
+        scope_knowledge.set(s)
+        logger.debug(f"Knowledge scope set to: {s}")
 
     def get_knowledge_scope(self) -> str:
-        """Get current knowledge scope. Returns None if knowledge disabled."""
-        return self._knowledge_scope
+        return scope_knowledge.get()
 
-    def set_rag_scope(self, scope: str):
+    def set_rag_scope(self, s: str):
         """Set RAG scope for current chat. None = no RAG docs."""
-        self._rag_scope = scope
-        FunctionManager._current_rag_scope = scope
+        scope_rag.set(s)
 
-    def set_people_scope(self, scope: str):
+    def set_people_scope(self, s: str):
         """Set people scope for current execution context. None = disabled."""
-        self._people_scope = scope
-        FunctionManager._current_people_scope = scope
-        logger.debug(f"People scope set to: {scope}")
+        scope_people.set(s)
+        logger.debug(f"People scope set to: {s}")
 
     def get_people_scope(self) -> str:
-        """Get current people scope. Returns None if people disabled."""
-        return self._people_scope
+        return scope_people.get()
 
-    def set_email_scope(self, scope: str):
+    def set_email_scope(self, s: str):
         """Set email scope for current execution context. None = disabled."""
-        self._email_scope = scope
-        FunctionManager._current_email_scope = scope
-        logger.debug(f"Email scope set to: {scope}")
+        scope_email.set(s)
+        logger.debug(f"Email scope set to: {s}")
 
     def get_email_scope(self) -> str:
-        """Get current email scope. Returns None if email disabled."""
-        return self._email_scope
+        return scope_email.get()
 
-    def set_bitcoin_scope(self, scope: str):
+    def set_bitcoin_scope(self, s: str):
         """Set bitcoin scope for current execution context. None = disabled."""
-        self._bitcoin_scope = scope
-        FunctionManager._current_bitcoin_scope = scope
-        logger.debug(f"Bitcoin scope set to: {scope}")
+        scope_bitcoin.set(s)
+        logger.debug(f"Bitcoin scope set to: {s}")
 
     def get_bitcoin_scope(self) -> str:
-        """Get current bitcoin scope. Returns None if bitcoin disabled."""
-        return self._bitcoin_scope
+        return scope_bitcoin.get()
 
     def set_private_chat(self, enabled: bool):
         """Set per-chat privacy enforcement."""
-        FunctionManager._current_private_chat = bool(enabled)
+        scope_private.set(bool(enabled))
 
     def set_story_engine(self, engine, turn_getter=None):
         """
@@ -460,7 +430,7 @@ class FunctionManager:
         """
         from core.privacy import is_privacy_mode, is_allowed_endpoint
 
-        if not is_privacy_mode() and not FunctionManager._current_private_chat:
+        if not is_privacy_mode() and not scope_private.get():
             return True, None
 
         is_local = self._is_local_map.get(function_name)

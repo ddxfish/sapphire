@@ -234,8 +234,8 @@ def _ensure_db():
 
 def _get_current_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_goal_scope
+        from core.chat.function_manager import scope_goal
+        return scope_goal.get()
     except Exception:
         return 'default'
 

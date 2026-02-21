@@ -508,8 +508,8 @@ def _backfill_embeddings():
 
 def _get_current_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_memory_scope
+        from core.chat.function_manager import scope_memory
+        return scope_memory.get()
     except Exception as e:
         logger.warning(f"Could not get memory scope: {e}, using 'default'")
         return 'default'

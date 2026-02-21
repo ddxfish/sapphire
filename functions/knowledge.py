@@ -321,24 +321,24 @@ def _setup_fts(cursor):
 
 def _get_current_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_knowledge_scope
+        from core.chat.function_manager import scope_knowledge
+        return scope_knowledge.get()
     except Exception:
         return 'default'
 
 
 def _get_current_rag_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_rag_scope
+        from core.chat.function_manager import scope_rag
+        return scope_rag.get()
     except Exception:
         return None
 
 
 def _get_current_people_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_people_scope
+        from core.chat.function_manager import scope_people
+        return scope_people.get()
     except Exception:
         return 'default'
 

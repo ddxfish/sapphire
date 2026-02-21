@@ -304,8 +304,8 @@ def _extract_body(msg):
 
 def _get_current_email_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_email_scope
+        from core.chat.function_manager import scope_email
+        return scope_email.get()
     except Exception:
         return None
 
@@ -670,8 +670,8 @@ def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
 
 def _get_current_people_scope():
     try:
-        from core.chat.function_manager import FunctionManager
-        return FunctionManager._current_people_scope
+        from core.chat.function_manager import scope_people
+        return scope_people.get()
     except Exception:
         return 'default'
 
