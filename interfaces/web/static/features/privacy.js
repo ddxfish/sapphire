@@ -26,22 +26,11 @@ export async function fetchPrivacyStatus() {
 
 export async function setPrivacyMode(enabled) {
     try {
-        const resp = await fetch('/api/privacy', {
+        const data = await fetchWithTimeout('/api/privacy', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled })
         });
-
-        const data = await resp.json();
-
-        if (!resp.ok) {
-            // Handle blocked by prompt case
-            if (data.blocked_by_prompt) {
-                showToast(data.error, 'error');
-                return false;
-            }
-            throw new Error(data.error || 'Failed to toggle privacy mode');
-        }
 
         privacyEnabled = data.privacy_mode;
         updatePrivacyUI();

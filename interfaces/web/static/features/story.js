@@ -1,6 +1,7 @@
 // features/story.js - Story Engine pill indicator and controls
 import * as api from '../api.js';
 import * as ui from '../ui.js';
+import { fetchWithTimeout } from '../shared/fetch.js';
 
 let storyMenu = null;
 let storyBtn = null;
@@ -119,9 +120,7 @@ export function closeStoryDropdown() {
 
 async function loadPresets() {
     try {
-        const res = await fetch('/api/story/presets');
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await fetchWithTimeout('/api/story/presets');
         // Filter out base presets (start with _)
         presetsCache = (data.presets || []).filter(p => !p.name.startsWith('_'));
         populatePresetSubmenu();
@@ -183,8 +182,7 @@ async function switchPreset(presetName) {
     if (!chatName) return;
 
     try {
-        // Update chat settings with new preset and enable story engine
-        const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
+        await fetchWithTimeout(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -194,13 +192,12 @@ async function switchPreset(presetName) {
                 }
             })
         });
-        if (!res.ok) throw new Error('Failed to switch preset');
 
         // Ask if user wants to reset progress
         const shouldReset = confirm(`Switched to "${presetName}". Would you like to reset progress and start fresh?`);
 
         if (shouldReset) {
-            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
+            await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}/reset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preset: presetName })
@@ -244,9 +241,7 @@ async function handleAction(action) {
 
 async function showStateView(chatName) {
     try {
-        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}`);
-        if (!res.ok) throw new Error('Failed to fetch state');
-        const data = await res.json();
+        const data = await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}`);
 
         const state = data.state || {};
         const keys = Object.keys(state).filter(k => !k.startsWith('_'));
@@ -272,9 +267,7 @@ async function showStateView(chatName) {
 
 async function showHistory(chatName) {
     try {
-        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/history?limit=20`);
-        if (!res.ok) throw new Error('Failed to fetch history');
-        const data = await res.json();
+        const data = await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}/history?limit=20`);
 
         const history = data.history || [];
         if (history.length === 0) {
@@ -302,12 +295,11 @@ async function resetState(chatName) {
     }
 
     try {
-        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
+        await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}/reset`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ preset: null })  // Reset with current preset
         });
-        if (!res.ok) throw new Error('Failed to reset');
 
         ui.showToast('Story progress reset', 'success');
 
@@ -321,13 +313,11 @@ async function resetState(chatName) {
 
 async function disableStory(chatName) {
     try {
-        // Update chat settings to disable state engine
-        const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
+        await fetchWithTimeout(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ settings: { story_engine_enabled: false } })
         });
-        if (!res.ok) throw new Error('Failed to disable');
 
         ui.showToast('Story engine disabled', 'success');
 
@@ -341,19 +331,17 @@ async function disableStory(chatName) {
 
 async function enableStory(chatName) {
     try {
-        // Update chat settings to enable state engine
-        const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
+        await fetchWithTimeout(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ settings: { story_engine_enabled: true } })
         });
-        if (!res.ok) throw new Error('Failed to enable');
 
         // Ask if user wants to reset progress
         const shouldReset = confirm('Story enabled! Would you like to reset progress and start from the beginning?');
 
         if (shouldReset) {
-            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
+            await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}/reset`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ preset: null })
@@ -461,9 +449,7 @@ async function loadSaveSlots() {
     }
 
     try {
-        const res = await fetch(`/api/story/saves/${encodeURIComponent(currentPreset)}`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await fetchWithTimeout(`/api/story/saves/${encodeURIComponent(currentPreset)}`);
         saveSlotsCache = data.slots || [];
     } catch (e) {
         console.warn('Failed to load save slots:', e);
@@ -540,16 +526,11 @@ async function saveGame(slot) {
     if (!chatName) return;
 
     try {
-        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/save`, {
+        await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot })
         });
-
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || 'Save failed');
-        }
 
         ui.showToast(`Game saved to slot ${slot}`, 'success');
 
@@ -571,16 +552,11 @@ async function loadGame(slot) {
     if (!chatName) return;
 
     try {
-        const res = await fetch(`/api/story/${encodeURIComponent(chatName)}/load`, {
+        await fetchWithTimeout(`/api/story/${encodeURIComponent(chatName)}/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slot })
         });
-
-        if (!res.ok) {
-            const err = await res.json();
-            throw new Error(err.error || 'Load failed');
-        }
 
         ui.showToast(`Game loaded from slot ${slot}`, 'success');
 
