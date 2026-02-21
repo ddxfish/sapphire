@@ -448,6 +448,8 @@ def _apply_chat_settings(system, settings: dict):
 
                 logger.info(f"Applied prompt: {prompt_name}")
 
+        system.llm_chat.function_manager.set_private_chat(settings.get("private_chat", False))
+
         if "memory_scope" in settings:
             scope = settings["memory_scope"]
             system.llm_chat.function_manager.set_memory_scope(scope if scope != "none" else None)
@@ -1155,6 +1157,49 @@ async def create_chat(request: Request, _=Depends(require_login), system=Depends
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to create chat")
+
+
+@app.post("/api/chats/private")
+async def create_private_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Create a permanently private chat (privacy enforced, no toggle)."""
+    try:
+        data = await request.json() or {}
+        raw_name = data.get("name", "").strip()
+        if not raw_name:
+            raw_name = "private"
+        chat_name = "private_" + "".join(c for c in raw_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_').lower()
+
+        # Unique name
+        base_name = chat_name
+        counter = 1
+        existing = {c["name"] for c in system.llm_chat.list_chats()}
+        while chat_name in existing:
+            counter += 1
+            chat_name = f"{base_name}_{counter}"
+
+        if not system.llm_chat.create_chat(chat_name):
+            raise HTTPException(status_code=500, detail="Failed to create private chat")
+        if not system.llm_chat.switch_chat(chat_name):
+            raise HTTPException(status_code=500, detail="Failed to switch to private chat")
+
+        display = raw_name.replace('_', ' ').title()
+        system.llm_chat.session_manager.update_chat_settings({
+            "private_chat": True,
+            "private_display_name": f"[PRIVATE] {display}",
+        })
+
+        settings = system.llm_chat.session_manager.get_chat_settings()
+        _apply_chat_settings(system, settings)
+
+        origin = request.headers.get('X-Session-ID')
+        publish(Events.CHAT_SWITCHED, {"name": chat_name, "origin": origin})
+
+        return {"status": "success", "chat_name": chat_name, "display_name": f"[PRIVATE] {display}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create private chat: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/chats/{chat_name}")

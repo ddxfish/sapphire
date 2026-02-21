@@ -22,6 +22,10 @@ def friendly_llm_error(e):
     error_str = str(e).lower()
     type_name = type(e).__name__
 
+    # Privacy/private chat blocks — pass through the specific message
+    if isinstance(e, ConnectionError) and ('privacy' in error_str or 'private' in error_str):
+        return str(e)
+
     # Connection errors — detect local providers like LM Studio
     if isinstance(e, ConnectionError) or 'ConnectError' in type_name or 'connection' in error_str:
         if any(h in error_str for h in ('127.0.0.1', 'localhost', '0.0.0.0')):
@@ -757,7 +761,8 @@ class LLMChat:
                 try:
                     from core.privacy import is_privacy_mode, is_allowed_endpoint
                     from core.chat.llm_providers import PROVIDER_METADATA
-                    if is_privacy_mode():
+                    is_private = is_privacy_mode() or chat_settings.get('private_chat', False)
+                    if is_private:
                         metadata = PROVIDER_METADATA.get(chat_primary, {})
                         if metadata.get('privacy_check_whitelist'):
                             base_url = providers_config.get(chat_primary, {}).get('base_url', '')
@@ -767,8 +772,9 @@ class LLMChat:
                             raise ConnectionError(f"Provider '{chat_primary}' is a cloud provider and blocked in privacy mode. Use a local LLM or disable privacy mode.")
                 except ConnectionError:
                     raise
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(f"Privacy check failed (defaulting to BLOCK): {e}")
+                    raise ConnectionError("Privacy check encountered an error — blocking provider for safety. Check logs.")
 
                 provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT, model_override=chat_model)
                 if not provider:
@@ -788,7 +794,8 @@ class LLMChat:
             result = get_first_available_provider(
                 providers_config,
                 fallback_order,
-                config.LLM_REQUEST_TIMEOUT
+                config.LLM_REQUEST_TIMEOUT,
+                force_privacy=chat_settings.get('private_chat', False)
             )
             
             if result:

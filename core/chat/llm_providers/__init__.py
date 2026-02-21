@@ -290,7 +290,8 @@ def get_first_available_provider(
     providers_config: Dict[str, Dict[str, Any]],
     fallback_order: List[str],
     request_timeout: float = 240.0,
-    exclude: Optional[List[str]] = None
+    exclude: Optional[List[str]] = None,
+    force_privacy: bool = False
 ) -> Optional[tuple]:
     """
     Get first available provider following fallback order.
@@ -330,7 +331,7 @@ def get_first_available_provider(
         # Privacy mode: only allow local/whitelisted providers
         try:
             from core.privacy import is_privacy_mode, is_allowed_endpoint
-            if is_privacy_mode():
+            if is_privacy_mode() or force_privacy:
                 metadata = PROVIDER_METADATA.get(provider_key, {})
                 if metadata.get('privacy_check_whitelist'):
                     base_url = config.get('base_url', '')

@@ -333,6 +333,9 @@ body {
     font-style: italic;
     opacity: 0.85;
 }
+.chat-picker-private .chat-picker-item-name {
+    color: #3b82f6;
+}
 
 .header-icon-btn.danger-icon { font-size: 14px; }
 .header-icon-btn.danger-icon:hover { color: var(--error); }

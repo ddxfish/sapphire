@@ -27,6 +27,8 @@ class FunctionManager:
     _current_bitcoin_scope = 'default'
     # Class-level RAG scope - per-chat document scope for search_knowledge
     _current_rag_scope = None
+    # Class-level private chat flag - enforces privacy mode per-chat
+    _current_private_chat = False
     
     def __init__(self):
         self.tool_history_file = 'user/history/tools/chat_tool_history.json'
@@ -424,6 +426,10 @@ class FunctionManager:
         """Get current bitcoin scope. Returns None if bitcoin disabled."""
         return self._bitcoin_scope
 
+    def set_private_chat(self, enabled: bool):
+        """Set per-chat privacy enforcement."""
+        FunctionManager._current_private_chat = bool(enabled)
+
     def set_story_engine(self, engine, turn_getter=None):
         """
         Set story engine for current chat context.
@@ -460,7 +466,7 @@ class FunctionManager:
         """
         from core.privacy import is_privacy_mode, is_allowed_endpoint
 
-        if not is_privacy_mode():
+        if not is_privacy_mode() and not FunctionManager._current_private_chat:
             return True, None
 
         is_local = self._is_local_map.get(function_name)

@@ -80,6 +80,28 @@ export default {
             const sbDropdown = container.querySelector('#sb-chat-picker-dropdown');
             if (sbDropdown) {
                 sbDropdown.addEventListener('click', async e => {
+                    // "New Private" button creates a private chat
+                    const privBtn = e.target.closest('[data-action="new-private"]');
+                    if (privBtn) {
+                        sbPicker.classList.remove('open');
+                        const name = prompt('Private chat name:');
+                        if (!name?.trim()) return;
+                        try {
+                            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                            const res = await fetch('/api/chats/private', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                                body: JSON.stringify({ name: name.trim() })
+                            });
+                            if (res.ok) {
+                                const { populateChatDropdown, handleChatChange } = await import('../features/chat-manager.js');
+                                await populateChatDropdown();
+                                await handleChatChange();
+                            }
+                        } catch (err) { console.error('Failed to create private chat:', err); }
+                        return;
+                    }
+
                     // "New Story..." button opens the story picker modal
                     const storyBtn = e.target.closest('[data-action="new-story"]');
                     if (storyBtn) {

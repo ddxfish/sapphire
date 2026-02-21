@@ -423,9 +423,9 @@ export const hasVisibleContent = () => {
 // CHAT MANAGEMENT
 // =============================================================================
 
-export const renderChatDropdown = (chats, activeChat, storyChats = []) => {
+export const renderChatDropdown = (chats, activeChat, storyChats = [], privateChats = []) => {
     // Combine all chats for the hidden select (needs all chats for switching)
-    const allChats = [...chats, ...storyChats];
+    const allChats = [...chats, ...privateChats, ...storyChats];
 
     // Update hidden select (state holder used throughout the app)
     const select = document.getElementById('chat-select');
@@ -440,7 +440,7 @@ export const renderChatDropdown = (chats, activeChat, storyChats = []) => {
         });
     }
 
-    // Build picker items — regular chats first, then story chats with separator
+    // Build picker items — regular chats, then private, then story
     let itemsHtml = chats.map(c => `
         <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
                 data-chat="${c.name}">
@@ -448,6 +448,17 @@ export const renderChatDropdown = (chats, activeChat, storyChats = []) => {
             <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
         </button>
     `).join('');
+
+    if (privateChats.length > 0) {
+        itemsHtml += '<div class="chat-picker-divider"></div>';
+        itemsHtml += privateChats.map(c => `
+            <button class="chat-picker-item chat-picker-private ${c.name === activeChat ? 'active' : ''}"
+                    data-chat="${c.name}">
+                <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+                <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
+            </button>
+        `).join('');
+    }
 
     if (storyChats.length > 0) {
         itemsHtml += '<div class="chat-picker-divider"></div>';
@@ -460,8 +471,9 @@ export const renderChatDropdown = (chats, activeChat, storyChats = []) => {
         `).join('');
     }
 
-    // "New Story..." button at the bottom
+    // Action buttons at the bottom
     itemsHtml += '<div class="chat-picker-divider"></div>';
+    itemsHtml += '<button class="chat-picker-story-btn" data-action="new-private">&#x1F512; New Private...</button>';
     itemsHtml += '<button class="chat-picker-story-btn" data-action="new-story">&#x1F4D6; New Story...</button>';
 
     // Update sidebar chat picker dropdown

@@ -818,11 +818,12 @@ class ChatSessionManager:
                     
                     chats.append({
                         "name": row["name"],
-                        "display_name": settings.get("story_display_name") or row["name"].replace('_', ' ').title(),
+                        "display_name": settings.get("private_display_name") or settings.get("story_display_name") or row["name"].replace('_', ' ').title(),
                         "message_count": len(messages),
                         "is_active": row["name"] == self.active_chat_name,
                         "modified": row["updated_at"],
                         "story_chat": bool(settings.get("story_chat")),
+                        "private_chat": bool(settings.get("private_chat")),
                         "settings": settings
                     })
         except Exception as e:
