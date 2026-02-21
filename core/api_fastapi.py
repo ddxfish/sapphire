@@ -462,6 +462,12 @@ def _apply_chat_settings(system, settings: dict):
         if "people_scope" in settings:
             scope = settings["people_scope"]
             system.llm_chat.function_manager.set_people_scope(scope if scope != "none" else None)
+        if "email_scope" in settings:
+            scope = settings["email_scope"]
+            system.llm_chat.function_manager.set_email_scope(scope if scope != "none" else None)
+        if "bitcoin_scope" in settings:
+            scope = settings["bitcoin_scope"]
+            system.llm_chat.function_manager.set_bitcoin_scope(scope if scope != "none" else None)
 
         if "spice_set" in settings:
             from core.modules.system.spice_sets import spice_set_manager

@@ -127,6 +127,7 @@ class ContinuityExecutor:
         import config
         session_manager = self.system.llm_chat.session_manager
         original_chat = session_manager.get_active_chat_name()
+        original_toolset = self.system.llm_chat.function_manager.current_toolset_name
         target_chat = task.get("chat_target", "").strip()
 
         # Temporarily override global config with per-task limits
@@ -212,13 +213,15 @@ class ContinuityExecutor:
                     _settings.set(config_key, original_val, persist=False)
                 logger.debug(f"[Continuity] Restored config overrides: {list(_config_overrides.keys())}")
 
-            # Always restore original chat context
+            # Always restore original chat context and toolset
             try:
                 if session_manager.get_active_chat_name() != original_chat:
                     session_manager.set_active_chat(original_chat)
                     logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
                     # Don't publish CHAT_SWITCHED — this is backend state restore,
                     # not a UI navigation. Frontend session is authoritative for the user's view.
+                self.system.llm_chat.function_manager.update_enabled_functions([original_toolset])
+                logger.debug(f"[Continuity] Restored toolset to '{original_toolset}'")
             except Exception as e:
                 logger.error(f"[Continuity] Failed to restore chat context: {e}")
                 result["errors"].append(f"Context restore failed: {e}")
@@ -318,13 +321,13 @@ class ContinuityExecutor:
         if task.get("memory_scope"):
             settings["memory_scope"] = task["memory_scope"]
 
-        if task.get("knowledge_scope") and task["knowledge_scope"] != "none":
+        if task.get("knowledge_scope"):
             settings["knowledge_scope"] = task["knowledge_scope"]
 
-        if task.get("people_scope") and task["people_scope"] != "none":
+        if task.get("people_scope"):
             settings["people_scope"] = task["people_scope"]
 
-        if task.get("goal_scope") and task["goal_scope"] != "none":
+        if task.get("goal_scope"):
             settings["goal_scope"] = task["goal_scope"]
 
         if task.get("email_scope"):
