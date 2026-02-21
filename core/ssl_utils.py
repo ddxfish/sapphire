@@ -1,6 +1,7 @@
 # ssl_utils.py - Persistent self-signed SSL certificate management
 import os
 import sys
+import ipaddress
 import logging
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -146,5 +147,3 @@ def get_cert_info():
         return None
 
 
-# Need ipaddress for IP SAN
-import ipaddress

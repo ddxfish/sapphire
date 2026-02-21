@@ -1008,5 +1008,50 @@ class TestSwitchChatClearsStoryEngine:
         assert mgr._story_engine is None
 
 
+# =============================================================================
+# SSH tool: no shell=True (command injection fix)
+# =============================================================================
+
+class TestSSHNoShellTrue:
+    """SSH local execution must not use shell=True."""
+
+    def test_run_local_uses_shlex_not_shell(self):
+        """_run_local should use shlex.split, not shell=True."""
+        import inspect
+        from functions.ssh_tool import _run_local
+        source = inspect.getsource(_run_local)
+        assert "shell=True" not in source, "shell=True still present in _run_local"
+        assert "shlex.split" in source, "shlex.split not used in _run_local"
+
+    def test_run_local_splits_command(self):
+        """_run_local should properly split a command string."""
+        from functions.ssh_tool import _run_local
+        # echo is safe and universal — just verify it doesn't crash
+        result, success = _run_local("echo hello world", timeout=5)
+        assert "hello world" in result
+
+
+# =============================================================================
+# Image upload: PIL decompression bomb guard
+# =============================================================================
+
+class TestImageUploadBoundsCheck:
+    """Image upload must set MAX_IMAGE_PIXELS to prevent OOM."""
+
+    def test_max_image_pixels_is_set(self):
+        """The image upload code should set PIL.Image.MAX_IMAGE_PIXELS."""
+        import inspect
+        # Read the source of the upload route
+        from core.api_fastapi import app
+        # Find the upload_image route handler
+        for route in app.routes:
+            if hasattr(route, 'path') and route.path == '/api/upload/image':
+                handler = route.endpoint
+                source = inspect.getsource(handler)
+                assert "MAX_IMAGE_PIXELS" in source, "MAX_IMAGE_PIXELS not set in upload handler"
+                return
+        pytest.skip("upload_image route not found")
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

@@ -222,9 +222,9 @@ def _run_local(command, timeout):
     logger.info(f"LOCAL $ {command[:100]}")
 
     try:
+        argv = shlex.split(command)
         result = subprocess.run(
-            command,
-            shell=True,
+            argv,
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -1493,6 +1493,8 @@ async def handle_image_upload(image: UploadFile = File(...), _=Depends(require_l
     if max_width > 0:
         try:
             from PIL import Image
+            # Guard against decompression bombs (e.g. 16k×16k PNG → gigabytes of RAM)
+            Image.MAX_IMAGE_PIXELS = 25_000_000  # ~5000x5000
             img = Image.open(BytesIO(contents))
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')

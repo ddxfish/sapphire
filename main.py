@@ -107,7 +107,8 @@ def main():
     
     # Register signal handlers
     signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, handle_signal)
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, handle_signal)
     

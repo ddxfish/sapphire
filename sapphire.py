@@ -496,7 +496,8 @@ def run():
         _shutdown_requested = True
     
     signal.signal(signal.SIGINT, handle_shutdown_signal)
-    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, handle_shutdown_signal)
     if hasattr(signal, 'SIGHUP'):
         signal.signal(signal.SIGHUP, handle_shutdown_signal)
     
