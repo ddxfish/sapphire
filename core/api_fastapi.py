@@ -4199,7 +4199,7 @@ async def get_plugin_settings(plugin_name: str, request: Request, _=Depends(requ
     if not settings_file.exists():
         return {"plugin": plugin_name, "settings": {}}
     try:
-        with open(settings_file) as f:
+        with open(settings_file, encoding='utf-8') as f:
             settings = json.load(f)
         return {"plugin": plugin_name, "settings": settings}
     except Exception:
@@ -4214,7 +4214,7 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
 
     USER_PLUGIN_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     settings_file = USER_PLUGIN_SETTINGS_DIR / f"{plugin_name}.json"
-    with open(settings_file, 'w') as f:
+    with open(settings_file, 'w', encoding='utf-8') as f:
         json.dump(settings, f, indent=2)
 
     return {"status": "success", "plugin": plugin_name, "settings": settings}
@@ -4794,7 +4794,7 @@ async def proxy_sdxl_image(image_id: str, request: Request, _=Depends(require_lo
     sdxl_url = "http://127.0.0.1:5153"
     if settings_file.exists():
         try:
-            with open(settings_file) as f:
+            with open(settings_file, encoding='utf-8') as f:
                 settings = json.load(f)
             sdxl_url = settings.get('api_url', sdxl_url)
         except Exception:

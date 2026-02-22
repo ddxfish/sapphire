@@ -46,7 +46,7 @@ class WhisperSTT:
             device = getattr(config, 'FASTER_WHISPER_DEVICE', 'cuda')
             compute_type = getattr(config, 'FASTER_WHISPER_COMPUTE_TYPE', 'int8')
             num_workers = getattr(config, 'FASTER_WHISPER_NUM_WORKERS', 2)
-            cuda_device = getattr(config, 'FASTER_WHISPER_CUDA_DEVICE', 1)
+            cuda_device = getattr(config, 'FASTER_WHISPER_CUDA_DEVICE', 0)
 
             # Define compute types to try (prioritize configured type)
             gpu_compute_types = ["int8", "int8_float16", "float16", "int8_float32"]

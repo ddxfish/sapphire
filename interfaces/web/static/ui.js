@@ -520,7 +520,7 @@ export const extractEditableContent = (contentEl, timestamp) => {
     const lastThink = details.filter(d => d.querySelector('summary').textContent.includes('Think')).pop();
     
     let text = '';
-    if (lastThink) text = `<think>${lastThink.querySelector('div').textContent}</think>\n\n`;
+    if (lastThink) text = `<think>${lastThink.querySelector('div')?.textContent || ''}</think>\n\n`;
     text += [...contentEl.querySelectorAll('p')].map(p => p.textContent).join('\n\n');
     return { text: text.trim(), timestamp };
 };

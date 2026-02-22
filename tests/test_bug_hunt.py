@@ -1053,5 +1053,81 @@ class TestImageUploadBoundsCheck:
         pytest.skip("upload_image route not found")
 
 
+# =============================================================================
+# Bug Hunt 3: Image upload CSRF token
+# =============================================================================
+
+class TestImageUploadCSRF:
+    """Image upload must include CSRF token header."""
+
+    def test_upload_image_sends_csrf_header(self):
+        """uploadImage() must include X-CSRF-Token in fetch headers."""
+        upload_js = Path(PROJECT_ROOT / "interfaces" / "web" / "static" / "api.js")
+        source = upload_js.read_text(encoding='utf-8')
+        # Find the uploadImage function region
+        start = source.index('uploadImage')
+        end = source.index('};', start)
+        fn_source = source[start:end]
+        assert 'X-CSRF-Token' in fn_source, "uploadImage missing CSRF token header"
+
+
+# =============================================================================
+# Bug Hunt 3: CUDA device default matches settings_defaults.json
+# =============================================================================
+
+class TestCUDADeviceDefault:
+    """STT server CUDA device fallback must match settings_defaults.json."""
+
+    def test_cuda_device_fallback_matches_config(self):
+        """getattr fallback for FASTER_WHISPER_CUDA_DEVICE must be 0."""
+        import inspect
+        from core.stt.server import WhisperSTT
+        source = inspect.getsource(WhisperSTT)
+        # The fallback in getattr should be 0, not 1
+        assert "FASTER_WHISPER_CUDA_DEVICE', 0)" in source, \
+            "CUDA device fallback should be 0 to match settings_defaults.json"
+
+
+# =============================================================================
+# Bug Hunt 3: Plugin settings file encoding
+# =============================================================================
+
+class TestPluginSettingsEncoding:
+    """Plugin settings file operations must specify encoding='utf-8'."""
+
+    def test_plugin_settings_read_has_encoding(self):
+        """get_plugin_settings must open with encoding='utf-8'."""
+        import inspect
+        from core.api_fastapi import get_plugin_settings
+        source = inspect.getsource(get_plugin_settings)
+        assert "encoding='utf-8'" in source or 'encoding="utf-8"' in source
+
+    def test_plugin_settings_write_has_encoding(self):
+        """update_plugin_settings must write with encoding='utf-8'."""
+        import inspect
+        from core.api_fastapi import update_plugin_settings
+        source = inspect.getsource(update_plugin_settings)
+        assert "encoding='utf-8'" in source or 'encoding="utf-8"' in source
+
+
+# =============================================================================
+# Bug Hunt 3: TTS prose extraction null safety
+# =============================================================================
+
+class TestExtractEditableContentNullSafety:
+    """extractEditableContent must use optional chaining on querySelector."""
+
+    def test_think_block_div_uses_optional_chaining(self):
+        """querySelector('div') must use ?. to avoid null deref."""
+        ui_js = Path(PROJECT_ROOT / "interfaces" / "web" / "static" / "ui.js")
+        source = ui_js.read_text(encoding='utf-8')
+        # Find the extractEditableContent function
+        start = source.index('extractEditableContent')
+        end = source.index('};', start)
+        fn_source = source[start:end]
+        assert "querySelector('div')?." in fn_source, \
+            "querySelector('div') must use optional chaining"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

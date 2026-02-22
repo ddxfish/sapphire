@@ -360,8 +360,10 @@ export const uploadImage = async (file) => {
     const formData = new FormData();
     formData.append('image', file);
     
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
     const res = await fetch('/api/upload/image', {
         method: 'POST',
+        headers: { 'X-CSRF-Token': csrf },
         body: formData
     });
     
