@@ -63,7 +63,7 @@ def _load_settings():
         return DEFAULTS.copy()
     
     try:
-        with open(SETTINGS_FILE, 'r') as f:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             user_settings = json.load(f)
         
         # Merge with defaults (user settings override)

@@ -116,7 +116,13 @@ class SettingsManager:
                 self._user = self._flatten_dict(nested)
                 logger.info(f"Loaded user settings from {user_path}")
             except Exception as e:
-                logger.error(f"Failed to load user settings: {e}")
+                logger.error(f"Corrupt settings file at {user_path}: {e} — using defaults until fixed")
+                try:
+                    backup = user_path.with_suffix('.json.corrupt')
+                    shutil.copy2(user_path, backup)
+                    logger.error(f"Backed up corrupt file to {backup}")
+                except Exception:
+                    pass
                 self._user = {}
         else:
             logger.info("No user settings found, using defaults")

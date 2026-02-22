@@ -254,9 +254,9 @@ def _load_settings():
         return DEFAULTS.copy()
     
     try:
-        with open(SETTINGS_FILE, 'r') as f:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             user_settings = json.load(f)
-        
+
         settings = DEFAULTS.copy()
         settings['url'] = user_settings.get('url', DEFAULTS['url']).rstrip('/')
         settings['blacklist'] = user_settings.get('blacklist', DEFAULTS['blacklist'])

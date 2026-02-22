@@ -12,7 +12,7 @@ faulthandler.enable()
 _startup_log = None
 try:
     os.makedirs('user/logs', exist_ok=True)
-    _startup_log = open('user/logs/startup_errors.log', 'a')
+    _startup_log = open('user/logs/startup_errors.log', 'a', encoding='utf-8')
     _startup_log.write(f"\n--- Startup attempt ---\n")
 except Exception:
     pass
