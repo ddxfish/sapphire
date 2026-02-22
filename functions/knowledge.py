@@ -1406,6 +1406,8 @@ def execute(function_name, arguments, config):
         if function_name == "save_person":
             if people_scope is None:
                 return "People contacts are disabled for this chat.", False
+            if people_scope == 'global':
+                return "Cannot write to the global scope. Global is read-only for the AI — only the user can add entries there via the UI.", False
             return _save_person(
                 name=arguments.get('name'),
                 relationship=arguments.get('relationship'),
@@ -1419,6 +1421,8 @@ def execute(function_name, arguments, config):
         elif function_name == "save_knowledge":
             if scope is None:
                 return "Knowledge base is disabled for this chat.", False
+            if scope == 'global':
+                return "Cannot write to the global scope. Global is read-only for the AI — only the user can add entries there via the UI.", False
             return _save_knowledge(
                 category=arguments.get('category'),
                 content=arguments.get('content'),

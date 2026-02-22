@@ -54,10 +54,6 @@ TOOLS = [
                     "parent_id": {
                         "type": "integer",
                         "description": "ID of parent goal to make this a subtask. Omit for top-level goal."
-                    },
-                    "scope": {
-                        "type": "string",
-                        "description": "Goal scope (defaults to current memory scope). Use to organize goals by context."
                     }
                 },
                 "required": ["title"]
@@ -80,10 +76,6 @@ TOOLS = [
                     "status": {
                         "type": "string",
                         "description": "Filter by status: active, completed, abandoned, or all (default: active)"
-                    },
-                    "scope": {
-                        "type": "string",
-                        "description": "Goal scope (defaults to current memory scope)"
                     }
                 },
                 "required": []
@@ -1043,13 +1035,16 @@ def execute(function_name, arguments, config):
         if scope is None:
             return "Goals are disabled when memory is disabled for this chat.", False
 
+        if scope == 'global':
+            return "Cannot write to the global scope. Global is read-only for the AI — only the user can add entries there via the UI.", False
+
         if function_name == "create_goal":
             return _create_goal(
                 title=arguments.get('title'),
                 description=arguments.get('description'),
                 priority=arguments.get('priority', 'medium'),
                 parent_id=arguments.get('parent_id'),
-                scope=arguments.get('scope', scope),
+                scope=scope,
             )
 
         elif function_name == "list_goals":
@@ -1062,7 +1057,7 @@ def execute(function_name, arguments, config):
             return _list_goals(
                 goal_id=goal_id,
                 status=arguments.get('status', 'active'),
-                scope=arguments.get('scope', scope),
+                scope=scope,
             )
 
         elif function_name == "update_goal":

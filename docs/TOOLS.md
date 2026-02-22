@@ -18,19 +18,110 @@ When you ask the AI something like "search for news about SpaceX", the AI recogn
 
 ### Toolsets
 
-Tools are grouped into **toolsets** - named collections you can switch between. Each persona can have its own custom set of tools you choose. See more in [TOOLS.md](TOOLS.md)
+Tools are grouped into **toolsets** - named collections you can switch between. Each persona can have its own custom set of tools you choose. See [TOOLSETS.md](TOOLSETS.md).
 
-### Included Basic Tools
+---
 
-| Tool | What it does |
-|------|--------------|
-| `save_memory` | Store info for future conversations |
-| `search_memory` | Find stored memories by keyword |
-| `get_recent_memories` | Get latest memories |
-| `web_search` | Web search, returns URLs |
-| `get_website` | Fetch webpage content |
-| `get_wikipedia` | Get Wikipedia article |
-| `research_topic` | Multi-source research |
+## Included Tools
+
+Sapphire ships with 15 tool modules containing 74+ functions:
+
+### Memory & Knowledge
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `save_memory` | memory.py | Store info to long-term memory (labeled, embedded) |
+| `search_memory` | memory.py | Semantic + keyword search across memories |
+| `get_recent_memories` | memory.py | Get latest memories, optionally by label |
+| `delete_memory` | memory.py | Remove memory by ID |
+| `save_person` | knowledge.py | Save/update contact info (upsert by name) |
+| `save_knowledge` | knowledge.py | Store reference data in categories (auto-chunks) |
+| `search_knowledge` | knowledge.py | Search people + knowledge + RAG documents |
+| `delete_knowledge` | knowledge.py | Delete AI-created entries or categories |
+| `create_goal` | goals.py | Create goal or subtask with priority |
+| `list_goals` | goals.py | Overview or detailed view of goals |
+| `update_goal` | goals.py | Modify goal fields, log progress notes |
+| `delete_goal` | goals.py | Delete goal with optional subtask cascade |
+| `notepad_read` | notepad.py | Read scratch notepad with line numbers |
+| `notepad_append_lines` | notepad.py | Add lines to notepad |
+| `notepad_delete_lines` | notepad.py | Delete specific lines |
+| `notepad_insert_line` | notepad.py | Insert line at position |
+
+### Web & Research
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `web_search` | web.py | DuckDuckGo search, returns titles + URLs |
+| `get_website` | web.py | Fetch and read full webpage content |
+| `get_wikipedia` | web.py | Get Wikipedia article summary |
+| `research_topic` | web.py | Advanced multi-page research |
+| `get_site_links` | web.py | Extract navigation links from a site |
+| `get_images` | web.py | Extract image URLs from a page |
+| `ask_claude` | ai.py | Query Claude API for complex analysis |
+
+### Self-Modification
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `view_prompt` | meta.py | View current or named system prompt |
+| `switch_prompt` | meta.py | Switch to a different prompt preset |
+| `edit_prompt` | meta.py | Replace monolith prompt content |
+| `set_piece` | meta.py | Set/add assembled prompt component |
+| `remove_piece` | meta.py | Remove from emotions/extras list |
+| `create_piece` | meta.py | Create new prompt piece and activate |
+| `list_pieces` | meta.py | List available pieces for a component |
+| `reset_chat` | meta.py | Clear chat history |
+| `change_username` | meta.py | Update username setting |
+| `set_tts_voice` | meta.py | Change TTS voice |
+| `list_tools` | meta.py | List enabled or all tools |
+| `get_time` | meta.py | Get current date/time |
+
+### Tool Creation
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `tool_save` | toolmaker.py | Create/update custom tool (validated) |
+| `tool_read` | toolmaker.py | Read custom tool source code |
+| `tool_activate` | toolmaker.py | Restart app to load new tools |
+
+### Integrations
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `ha_list_scenes_and_scripts` | homeassistant.py | List HA scenes/scripts |
+| `ha_activate` | homeassistant.py | Run scene or script |
+| `ha_list_areas` | homeassistant.py | List home areas |
+| `ha_area_light` | homeassistant.py | Set area brightness |
+| `ha_area_color` | homeassistant.py | Set area RGB color |
+| `ha_get_thermostat` | homeassistant.py | Get thermostat reading |
+| `ha_set_thermostat` | homeassistant.py | Set target temperature |
+| `ha_list_lights_and_switches` | homeassistant.py | List controllable devices |
+| `ha_set_light` | homeassistant.py | Control specific light |
+| `ha_set_switch` | homeassistant.py | Toggle switch on/off |
+| `ha_notify` | homeassistant.py | Send phone notification |
+| `ha_house_status` | homeassistant.py | Home status snapshot |
+| `generate_scene_image` | image.py | Generate SDXL image from description |
+| `get_inbox` | email_tool.py | Fetch recent emails |
+| `read_email` | email_tool.py | Read email by index |
+| `archive_emails` | email_tool.py | Archive emails |
+| `get_recipients` | email_tool.py | List whitelisted contacts (IDs only) |
+| `send_email` | email_tool.py | Send to whitelisted contact |
+| `get_wallet` | bitcoin_tool.py | Check wallet balance |
+| `send_bitcoin` | bitcoin_tool.py | Send BTC |
+| `get_transactions` | bitcoin_tool.py | Recent transactions |
+| `ssh_get_servers` | ssh_tool.py | List SSH servers |
+| `ssh_run_command` | ssh_tool.py | Execute remote command |
+
+### Utilities
+
+| Tool | Module | What it does |
+|------|--------|--------------|
+| `get_external_ip` | network.py | Public IP via proxy |
+| `check_internet` | network.py | Internet connectivity test |
+| `website_status` | network.py | Check if URL is up |
+| `search_help_docs` | docs.py | Search Sapphire documentation |
+
+---
 
 ## Managing Tools
 
@@ -47,7 +138,7 @@ Each tool file has `ENABLED = True/False` at the top. Set to `False` to disable 
 
 ## Custom Toolsets
 
-Use the **Toolset Manager** in the web UI. see [TOOLSETS.md](TOOLSETS.md)
+Use the **Toolset Manager** in the web UI. See [TOOLSETS.md](TOOLSETS.md).
 
 ## AI Self-Creating Tools (Tool Maker)
 
@@ -176,16 +267,10 @@ def execute(function_name, arguments, config):
 ### Network Flag
 
 Add `"network": True` to tool definitions that access external services (web, APIs, cloud). These tools are highlighted orange in the UI so users know data may leave the machine. SOCKS proxy routing also uses this flag.
-```
 
 **No parameters:**
 ```python
 "parameters": {"type": "object", "properties": {}, "required": []}
-```
-
-**Array parameter:**
-```python
-"items": {"type": "array", "items": {"type": "string"}, "description": "List of items"}
 ```
 
 ### execute() Function
@@ -197,19 +282,16 @@ def execute(function_name, arguments, config):
         function_name: Which tool was called
         arguments: Dict of arguments from the AI
         config: Sapphire config module
-    
+
     Returns:
         (result_string, success_bool)
     """
     if function_name == "my_tool":
-        # Validate
         query = arguments.get('query')
         if not query:
             return "I need a query.", False
-        
-        # Do work
         return f"Result: {query}", True
-    
+
     return f"Unknown: {function_name}", False
 ```
 
@@ -217,6 +299,26 @@ def execute(function_name, arguments, config):
 - `return "Success message", True` - Worked
 - `return "Error message", False` - Failed (AI sees this)
 - `return "No results for X", True` - Empty result (not an error)
+
+### Tool Settings (Optional)
+
+Tools can declare settings that appear in the Settings page under Custom Tools:
+
+```python
+SETTINGS = {
+    'MYTOOL_API_KEY': '',          # string -> text input
+    'MYTOOL_TIMEOUT': 30,          # number -> number input
+    'MYTOOL_ENABLED': True,        # bool -> toggle
+}
+SETTINGS_HELP = {
+    'MYTOOL_API_KEY': 'API key for the external service',
+    'MYTOOL_TIMEOUT': 'Request timeout in seconds',
+}
+```
+
+- Prefix keys with tool name (e.g. `MYTOOL_`) to avoid collisions
+- Access in `execute()` via `config.MYTOOL_API_KEY`
+- Types inferred from default values
 
 ### Best Practices
 
@@ -236,19 +338,6 @@ def execute(function_name, arguments, config):
         import heavy_library  # Only loaded when called
 ```
 
-### Toolsets Format
-
-`user/toolsets/toolsets.json`:
-```json
-{
-  "my_set": {
-    "functions": ["save_memory", "web_search"]
-  }
-}
-```
-
-User file overrides `core/modules/system/toolsets/toolsets.json`.
-
 ### Files Reference
 
 | Path | Purpose |
@@ -263,126 +352,50 @@ User file overrides `core/modules/system/toolsets/toolsets.json`.
 
 Tools are functions the AI calls to interact with systems - web search, memory, device control.
 
-CORE TOOLS AVAILABLE:
-- save_memory(content, keywords) - store info for later
-- search_memory(query) - find stored memories
-- get_recent_memories(count) - get latest memories
-- web_search(query) - web search, returns URLs
-- get_website(url) - fetch webpage content
-- get_wikipedia(topic) - get Wikipedia article
-- research_topic(topic) - multi-source research
+TOOL MODULES (15 total, 74+ functions):
+- memory.py: save_memory, search_memory, get_recent_memories, delete_memory
+- knowledge.py: save_person, save_knowledge, search_knowledge, delete_knowledge
+- goals.py: create_goal, list_goals, update_goal, delete_goal
+- web.py: web_search, get_website, get_wikipedia, research_topic, get_site_links, get_images
+- ai.py: ask_claude
+- meta.py: view_prompt, switch_prompt, edit_prompt, set_piece, remove_piece, create_piece, list_pieces, reset_chat, change_username, set_tts_voice, list_tools, get_time
+- toolmaker.py: tool_save, tool_read, tool_activate
+- homeassistant.py: 12 HA control functions
+- image.py: generate_scene_image
+- email_tool.py: get_inbox, read_email, archive_emails, get_recipients, send_email
+- bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions
+- ssh_tool.py: ssh_get_servers, ssh_run_command
+- network.py: get_external_ip, check_internet, website_status
+- notepad.py: notepad_read, notepad_append_lines, notepad_delete_lines, notepad_insert_line
+- docs.py: search_help_docs
 
-META TOOLS (self-modification):
-- view_prompt() - see current system prompt
-- switch_prompt(name) - change active prompt
-- edit_prompt(content) - replace monolith prompt
-- set_piece/remove_piece/create_piece - edit assembled prompts
-- change_ai_name/change_username - update names
-- set_tts_voice/pitch/speed - adjust voice
-
-TOOL MAKER (create your own tools):
-- tool_save(name, code) - create or update a custom tool
-- tool_read(name) - read tool source code (no args = list all)
-- tool_activate() - restart app to load new tools (ends conversation — save goals first)
-
-CREATING CUSTOM TOOLS:
-Custom tools live in user/functions/. Use tool_save to write them.
-After saving, call tool_activate to restart and load.
-New tools appear in the "All" toolset. User adds to other toolsets manually.
-
-TOOL FILE FORMAT — every tool module needs these exports:
+TOOL FILE FORMAT:
 ```python
 ENABLED = True
 AVAILABLE_FUNCTIONS = ['my_func']
-TOOLS = [
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "my_func",
-            "description": "What this does and WHEN to use it. Be specific.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The input"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    }
-]
-
+TOOLS = [{"type": "function", "function": {"name": "my_func", "description": "...", "parameters": {...}}}]
 def execute(function_name, arguments, config):
-    if function_name == 'my_func':
-        query = arguments.get('query', '')
-        if not query:
-            return "I need a query.", False
-        return f"Result: {query}", True
-    return f"Unknown function: {function_name}", False
+    return "result", True  # (string, bool) tuple
 ```
 
 TOOL FORMAT RULES:
-- TOOLS: list of dicts, each with "type": "function" and "function" key
-- function.name: must match an entry in AVAILABLE_FUNCTIONS
-- function.description: critical — this is how you decide WHEN to call the tool
-- function.parameters: OpenAI function calling schema (type, properties, required)
-- Parameter types: string, integer, number, boolean, array, object
-- No parameters: {"type": "object", "properties": {}, "required": []}
+- function.description: critical — this is how AI decides WHEN to call
 - execute() returns (result_string, success_bool) tuple
-- Return True for success, False for errors. "No results" is True, not False.
-- Use lazy imports for heavy dependencies (import inside execute)
-- "is_local": True means tool works offline. False = needs network. "endpoint" = conditional.
-- "network": True marks tool as using external network (highlighted in UI)
-- Optional: EMOJI = '🔧' for UI display, MODE_FILTER for prompt mode filtering
+- "is_local": True = offline, False = network, "endpoint" = conditional
+- "network": True = highlighted in UI, routed through SOCKS
+- Optional: EMOJI, MODE_FILTER, SETTINGS, SETTINGS_HELP
 
-TOOL SETTINGS (optional):
-Tools can declare settings that appear in the Settings page under the Custom Tools tab.
-```python
-SETTINGS = {
-    'MYTOOL_API_KEY': '',          # string → text input
-    'MYTOOL_TIMEOUT': 30,          # number → number input
-    'MYTOOL_ENABLED': True,        # bool → toggle
-}
-SETTINGS_HELP = {
-    'MYTOOL_API_KEY': 'API key for the external service',
-    'MYTOOL_TIMEOUT': 'Request timeout in seconds',
-}
-```
-- Key naming: prefix with tool name uppercase (e.g. MYTOOL_) to avoid collisions
-- Access in execute() via config.MYTOOL_API_KEY (same as any setting)
-- Types inferred from default values: str=text, int/float=number, bool=toggle
-- SETTINGS_HELP is optional but recommended — shows description under the field
+TOOL SETTINGS:
+- SETTINGS dict: str=text, int/float=number, bool=toggle
+- SETTINGS_HELP dict: descriptions shown under fields
+- Access via config.SETTING_NAME in execute()
 
-VALIDATION:
-tool_save validates code before writing. Three strictness levels (user setting):
-- strict: only allowlisted imports (json, re, datetime, math, requests, pathlib, etc.)
-- moderate: blocks dangerous ops (subprocess, shutil, os.system, eval, exec, etc.)
+VALIDATION (tool_save):
+- strict: allowlisted imports only
+- moderate: blocks dangerous ops
 - trust: syntax check only
-
-WORKFLOW FOR CREATING A TOOL:
-1. Design: decide what the tool does, what parameters it needs
-2. Write: create the code following the format above
-3. Save: tool_save("my_tool", code) — validates and smoke tests
-4. If validation fails: read the error, fix code, save again
-5. Activate: tool_activate() — restarts app, tool loads on startup
-6. Test: use the tool in conversation to verify it works
-7. Iterate: tool_read("my_tool") to review, tool_save to update
-
-TOOL AVAILABILITY:
-- Tools filtered by active toolset (ability)
-- Check toolset in Chat Settings dropdown
-- "Tool not found" = not in current toolset
-
-HOW TOOLS WORK:
-- AI decides when to call based on context
-- Can call multiple tools per response
-- Results returned to AI to incorporate in reply
-- Yellow highlight in UI = tool uses network/cloud
 
 TROUBLESHOOTING:
 - Tool not working: Check it's in active toolset
 - "No executor": Tool file missing or has errors
-- Network tools failing: Check SOCKS proxy if enabled, or network connection
+- Network tools failing: Check SOCKS proxy if enabled

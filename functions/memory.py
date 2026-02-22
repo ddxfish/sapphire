@@ -867,6 +867,8 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
         scope = _get_current_scope()
         if scope is None:
             return "Memory is disabled for this chat.", False
+        if scope == 'global':
+            return "Cannot write to the global scope. Global is read-only for the AI — only the user can add entries there via the UI.", False
 
         if function_name == "save_memory":
             return _save_memory(arguments.get("content", ""), arguments.get("label"), scope)

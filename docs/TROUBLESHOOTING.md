@@ -18,7 +18,7 @@
 - Try http:// and https://
 - Delete cookies for this site
 - Test in private browsing window
-- Delete secret key `~/.config/sapphire/secret_key` 
+- Delete secret key `~/.config/sapphire/secret_key`
 - Restart Sapphire app
 
 **Blank page or "Unauthorized"**
@@ -37,7 +37,7 @@
 ## Audio Issues
 
 **Sample rate detection error on speakers**
-- Cheap USB speakers may not support certain sample rates, so choose "auto detect" or "default" 
+- Cheap USB speakers may not support certain sample rates, so choose "auto detect" or "default"
 - Auto detect will route through OS audio defaults, which can resample the audio to be compatible
 
 **Default audio seems to not work via TTS**
@@ -76,7 +76,7 @@
 
 ## Prompt issues
 **If you broke your default prompts**
-- Gear icon > App Settings > System tab 
+- Gear icon > App Settings > System tab
 - You can reset all prompts to default, or merge the defaults back into yours
 
 ## LLM issues
@@ -97,7 +97,7 @@
 - Local models via LM Studio: May need specific model that outputs `<think>` tags
 
 **Thinking breaks when switching providers**
-- Thinking should transfer between chats 
+- Thinking should transfer between chats
 - Note, models cannot see their past think tags in some cases (Claude)
 - Check if the model you are on supports thinking
 
@@ -185,7 +185,7 @@
 **Slow responses**
 - LLM is the bottleneck. Use a 4B or smaller model to test
 - Reduce `LLM_MAX_HISTORY` to send less context, it gets slower over time
-- Kokoro is slow(er) on my i5-8250u. Nvidia is way faster, or faster CPU too. 
+- Kokoro is slow(er) on my i5-8250u. Nvidia is way faster, or faster CPU too.
 
 **High memory usage**
 - Large LLM models need RAM. 4B model needs ~7GB after KV cache.
@@ -198,6 +198,14 @@ Try Sapphire first. Most won't need this. Only do this if STT and TTS are not us
 
 ```bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+```
+
+## Clean Reinstall
+
+Nuke the conda environment and reinstall from scratch. Your `user/` data is preserved. Use this if your pip packages are messed up. It just reinstalls the packages, doesn't touch Sapphire.
+
+```bash
+conda deactivate && conda remove -n sapphire --all -y && conda create -n sapphire python=3.11 -y && conda activate sapphire && pip install -r requirements.txt && python main.py
 ```
 
 ## Reset Everything (Delete data)

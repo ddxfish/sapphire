@@ -502,7 +502,8 @@ class LLMChat:
                     iteration_time = time.time() - iteration_start_time
                     logger.error(f"LLM call failed on iteration {i+1} after {iteration_time:.1f}s: {llm_error}")
                     
-                    timeout_text = f"I completed {tool_call_count} tool calls but got stuck during processing (timeout after {iteration_time:.1f}s)."
+                    error_brief = str(llm_error)[:200]
+                    timeout_text = f"LLM call to {provider_key} failed after {iteration_time:.1f}s: {error_brief}"
                     if force_prefill:
                         timeout_text = force_prefill + timeout_text
                     

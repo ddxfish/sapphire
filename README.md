@@ -17,89 +17,42 @@ Hear her voice. She dims your lights before bed. She crafts you a dinosaur escap
 
 ## Features
 
-<table>
-<tr>
-<td width="30%"><a href="docs/screenshots/sapphire-ai.png"><img src="docs/screenshots/sapphire-ai.png" alt="Web UI"/></a></td>
-<td><strong>Web UI with STT and TTS</strong><br/>Web or mic/speaker, works together. Mic input → TTS to speaker. Web input → web output. Use your own LLM via LM Studio, llama.cpp, Claude, or OpenAI-compatible APIs.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/settings-wakeword.png"><img src="docs/screenshots/settings-wakeword.png" alt="Wake Word"/></a></td>
-<td><strong>Voice Assistant</strong><br/>Hands-free with wake word, STT, TTS, and VAD. Works with system mic, conference mic, or wireless lapel. Any speaker. Full <a href="docs/INSTALLATION.md">Installation Guide</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/multi-step-tool-reasoning.png"><img src="docs/screenshots/multi-step-tool-reasoning.png" alt="Multi-step Reasoning"/></a></td>
-<td><strong>Multi-step Reasoning</strong><br/>Think → tool → think → tool → answer. Chains reasoning with actions until complete. See <a href="docs/TOOLS.md">Tools</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/per-chat-settings.png"><img src="docs/screenshots/per-chat-settings.png" alt="Per-chat Settings"/></a></td>
-<td><strong>Per-chat Persona</strong><br/>Each chat holds its own prompt, voice, speed, pitch, spice, and toolset. Switch chat = switch persona. See <a href="docs/CONFIGURATION.md">Configuration</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/continuity-scheduling.png"><img src="docs/screenshots/continuity-scheduling.png" alt="Continuity Mode"/></a></td>
-<td><strong>Continuity Mode</strong><br/>Scheduled autonomous AI tasks. Morning greetings, dream mode, alarm clock actions, random hellos. Cron timing with probability gates. See <a href="docs/CONTINUITY.md">Continuity</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/home-assistant-integration.png"><img src="docs/screenshots/home-assistant-integration.png" alt="Home Assistant"/></a></td>
-<td><strong>Home Assistant</strong><br/>Smart home control via voice or text. Lights, scenes, thermostats, switches, phone notifications. See <a href="docs/HOME-ASSISTANT.md">Home Assistant</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/private-mode.png"><img src="docs/screenshots/private-mode.png" alt="Privacy Mode"/></a></td>
-<td><strong>Privacy Mode</strong><br/>Block all cloud connections with one toggle. Only local LLMs allowed. Tools that phone home are disabled. Private prompts stay private - they only activate in privacy mode so your personal data never leaks to cloud providers.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/story-engine.png"><img src="docs/screenshots/story-engine.png" alt="Story Engine"/></a></td>
-<td><strong>Story Engine</strong><br/>Built-in game master. Dice rolls with DCs, branching choices, progressive clues, room navigation, state tracking. Run a tabletop RPG, dungeon crawler, or interactive fiction - all from a JSON preset. See <a href="docs/STORY-ENGINE.md">Story Engine</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/edit-past-messages.png"><img src="docs/screenshots/edit-past-messages.png" alt="Edit Messages"/></a></td>
-<td><strong>Chat History Control</strong><br/>Edit, regenerate, continue, or delete any message-even the AI's responses.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/prompt-editor-assembled.png"><img src="docs/screenshots/prompt-editor-assembled.png" alt="Assembled Prompt" width="48%"/></a> <a href="docs/screenshots/prompt-editor-monolith.png"><img src="docs/screenshots/prompt-editor-monolith.png" alt="Monolith Prompt" width="48%"/></a></td>
-<td><strong>Prompt Editor</strong><br/>Assembled prompts (left) have swappable pieces the AI can edit itself. Monoliths (right) are simpler text blocks. See <a href="docs/PROMPTS.md">Prompts</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/spice-editor.png"><img src="docs/screenshots/spice-editor.png" alt="Spice Editor"/></a></td>
-<td><strong>Spice Injection</strong><br/>Random snippets injected each reply. Keeps stories and conversations from going stale. See <a href="docs/SPICE.md">Spice</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/toolset-editor.png"><img src="docs/screenshots/toolset-editor.png" alt="Toolset Editor"/></a></td>
-<td><strong>Tools and Toolsets</strong><br/>Mix and match tool sets per persona. Easy to create, easy to have the AI make more for you. See <a href="docs/TOOLS.md">Tools</a> and <a href="docs/TOOLSETS.md">Toolsets</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/image-generation.png"><img src="docs/screenshots/image-generation.png" alt="Image Generation"/></a></td>
-<td><strong>Image Generation</strong><br/>SDXL image generation with character replacement. AI describes scenes, characters stay consistent. See <a href="docs/IMAGE-GEN.md">Image Generation</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/backup-manager.png"><img src="docs/screenshots/backup-manager.png" alt="Backup Manager"/></a></td>
-<td><strong>Backup Manager</strong><br/>Scheduled daily, weekly, and monthly zipped backups of user data.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/socks-proxy.png"><img src="docs/screenshots/socks-proxy.png" alt="SOCKS Proxy"/></a></td>
-<td><strong>SOCKS Proxy</strong><br/>Route web tool traffic through SOCKS for privacy. See <a href="docs/SOCKS.md">SOCKS</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/theme-switcher.png"><img src="docs/screenshots/theme-switcher.png" alt="Theme Switcher"/></a></td>
-<td><strong>Themes</strong><br/>13 built-in themes with live preview. Coded by specially trained cats. Results may vary.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/plugin-manager.png"><img src="docs/screenshots/plugin-manager.png" alt="Plugin Manager"/></a></td>
-<td><strong>Plugins</strong><br/>Extensible for both core LLM/persona and web UI. Sidebar auto-populates with plugin controls. See <a href="docs/PLUGINS.md">Plugins</a>.</td>
-</tr>
-<tr>
-<td><a href="docs/screenshots/webui-plugins.png"><img src="docs/screenshots/webui-plugins.png" alt="Web UI Plugins"/></a></td>
-<td><strong>Web UI Plugins</strong><br/>Extensible JavaScript plugins for the web interface. Add widgets to sidebar, gear menu, or settings tabs. See <a href="docs/WEB-PLUGINS.md">Web UI Plugins</a>.</td>
-</tr>
-</table>
+**Persona**
+- **Personas** - [docs](docs/PERSONAS.md) 11 built-in personalities that bundle prompt, voice, tools, model, and data scopes into one switch.
+- **Voice** - Wake word, STT, TTS, and adaptive VAD. Hands-free with any mic and speaker.
+- **Prompts** - [docs](docs/PROMPTS.md) Assembled prompts let you swap one section like location or scenario without touching the rest.
+- **Spice** - [docs](docs/SPICE.md) Random personality snippets injected each reply to keep things unpredictable.
+- **Self-Modification** - The AI edits her own prompt and swaps personality pieces mid-conversation.
+- **Tool Maker** - [docs](docs/TOOLS.md) The AI writes, validates, and installs new tools with their own settings page at runtime.
+- **Stories** - [docs](docs/STORY-ENGINE.md) Interactive fiction with dice, branching choices, room navigation, and persistent state.
+- **Images** - [docs](docs/IMAGE-GEN.md) SDXL with character replacement for visual consistency across scenes.
+
+**Mind**
+- **Memory** - Semantic vector search across 100K+ labeled entries.
+- **Knowledge** - [docs](docs/KNOWLEDGE.md) Organized categories with file upload, auto-chunking, and vector search.
+- **Goals** - Hierarchical with priority and a timestamped progress journal.
+- **People** - [docs](docs/PEOPLE.md) Contact book with privacy-first email. The AI never sees addresses, only recipient IDs.
+- **Heartbeat** - [docs](docs/CONTINUITY.md) Cron-scheduled autonomous tasks. Morning greetings, dream mode, alarms, random check-ins.
+- **Research** - Multi-page web research with site crawling and summarization.
+
+**Integrations**
+- **Home Assistant** - [docs](docs/HOME-ASSISTANT.md) Lights, scenes, thermostats, switches, phone notifications.
+- **Bitcoin** - Balance, send, transaction history.
+- **SSH** - Local and remote command execution on configured servers.
+- **Email** - Inbox, send to whitelisted contacts. AI resolves recipients server-side.
+- **Cloud** (optional) - Claude, GPT, Fireworks. Only active when you enable them. Local-first by default.
+- **Privacy** - One toggle blocks all cloud connections. Fully local, nothing leaves your machine.
+- **Plugins** - [docs](docs/PLUGINS.md) Keyword-triggered AI extensions and JavaScript [web UI plugins](docs/WEB-PLUGINS.md).
+- **74+ Tools** - [docs](docs/TOOLS.md) Web search, Wikipedia, notes, and more. Mix and match via [toolsets](docs/TOOLSETS.md).
 
 ### Use Cases
 
-- **AI companion** - A persistent voice that remembers you, greets you, and grows over time
-- **Voice assistant** - Wake word, hands-free operation, smart home control via Home Assistant
-- **Game master** - Tabletop RPGs, dungeon crawlers, interactive fiction with the Story Engine
 - **Autonomous agent** - Scheduled tasks, morning briefings, dream mode, alarm clock actions
-- **Research assistant** - Web search, memory, notes, multi-step tool reasoning
-- **Privacy-first AI** - Block all cloud connections, run fully local, private prompts that never leak
+- **AI companion** - A persistent voice that remembers you, greets you, and grows over time
+- **Voice assistant** - Wake word, hands-free operation, smart home control
+- **Research assistant** - Web search, memory, knowledge base, multi-step tool reasoning
+- **Interactive fiction** - Story engine with dice, branching choices, and state tracking
+- **Privacy-first AI** - Block all cloud connections, run fully local
 
 ## Quick Start
 
@@ -162,21 +115,12 @@ pip install -r requirements.txt
 
 | Guide | Description |
 |-------|-------------|
-| [Installation](docs/INSTALLATION.md) | Full installation guide, systemd service |
-| [Configuration](docs/CONFIGURATION.md) | How to make it yours |
-| [Prompts](docs/PROMPTS.md) | Monolith vs assembled prompts |
-| [Spice](docs/SPICE.md) | Random personality injection system |
-| [Tools](docs/TOOLS.md) | Creating AI-callable functions (web search, memory, etc.) |
-| [Toolsets](docs/TOOLSETS.md) | Grouping tools into switchable ability sets |
-| [Plugins](docs/PLUGINS.md) | Keyword-triggered UI/voice extensions |
-| [Web UI Plugins](docs/WEB-PLUGINS.md) | JavaScript extensions for the web interface |
-| [Continuity](docs/CONTINUITY.md) | Scheduled autonomous AI tasks |
-| [Home Assistant](docs/HOME-ASSISTANT.md) | Smart home integration |
-| [Image Generation](docs/IMAGE-GEN.md) | SDXL integration with character consistency |
-| [SOCKS Proxy](docs/SOCKS.md) | Privacy proxy for web scraping functions |
-| [Story Engine](docs/STORY-ENGINE.md) | Tabletop RPG, interactive fiction, dungeon crawlers |
+| [Installation](docs/INSTALLATION.md) | Setup guide, systemd service |
+| [Configuration](docs/CONFIGURATION.md) | LLM, scopes, thinking, privacy |
+| [API](docs/API.md) | All 156 REST endpoints |
+| [SOCKS Proxy](docs/SOCKS.md) | Privacy proxy for web tools |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |
-| [Technical](docs/TECHNICAL.md) | For nerds |
+| [Technical](docs/TECHNICAL.md) | Architecture and internals |
 
 ## Contributions
 
