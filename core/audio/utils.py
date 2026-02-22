@@ -5,6 +5,7 @@ Handles format conversion, resampling, and file operations.
 """
 
 import numpy as np
+import sys
 import tempfile
 import os
 import logging
@@ -22,9 +23,10 @@ def get_temp_dir() -> str:
     Returns:
         Path to temp directory
     """
-    shm = '/dev/shm'
-    if os.path.exists(shm) and os.access(shm, os.W_OK):
-        return shm
+    if sys.platform == 'linux':
+        shm = '/dev/shm'
+        if os.path.exists(shm) and os.access(shm, os.W_OK):
+            return shm
     return tempfile.gettempdir()
 
 

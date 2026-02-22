@@ -46,9 +46,10 @@ except Exception as e:
 # --- Cross-platform temp directory ---
 def get_temp_dir():
     """Get optimal temp directory. Prefers /dev/shm (Linux RAM disk) for speed."""
-    shm = '/dev/shm'
-    if os.path.exists(shm) and os.access(shm, os.W_OK):
-        return shm
+    if sys.platform == 'linux':
+        shm = '/dev/shm'
+        if os.path.exists(shm) and os.access(shm, os.W_OK):
+            return shm
     return tempfile.gettempdir()
 
 

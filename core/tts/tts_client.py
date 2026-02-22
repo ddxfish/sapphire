@@ -1,4 +1,5 @@
 import requests
+import sys
 import os
 import tempfile
 import time
@@ -17,9 +18,10 @@ logger = logging.getLogger(__name__)
 
 def get_temp_dir():
     """Get optimal temp directory. Prefers /dev/shm (Linux RAM disk) for speed."""
-    shm = '/dev/shm'
-    if os.path.exists(shm) and os.access(shm, os.W_OK):
-        return shm
+    if sys.platform == 'linux':
+        shm = '/dev/shm'
+        if os.path.exists(shm) and os.access(shm, os.W_OK):
+            return shm
     return tempfile.gettempdir()
 
 
@@ -335,10 +337,14 @@ class TTSClient:
         finally:
             # Clean up temp file
             if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except Exception:
-                    pass
+                for _attempt in range(3):
+                    try:
+                        os.unlink(temp_path)
+                        break
+                    except PermissionError:
+                        time.sleep(0.1)
+                    except Exception:
+                        break
         
     def _generate_and_play_audio(self, text):
         """Generate audio from server and play it using sounddevice OutputStream"""
@@ -458,7 +464,11 @@ class TTSClient:
             return None
         finally:
             if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except Exception:
-                    pass
+                for _attempt in range(3):
+                    try:
+                        os.unlink(temp_path)
+                        break
+                    except PermissionError:
+                        time.sleep(0.1)
+                    except Exception:
+                        break
