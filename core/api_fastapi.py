@@ -3270,15 +3270,14 @@ async def list_memories(request: Request, _=Depends(require_login)):
     """List memories grouped by label for the Mind view."""
     from functions import memory
     scope = request.query_params.get('scope', 'default')
-    conn = memory._get_connection()
-    cursor = conn.cursor()
-    scope_sql, scope_params = memory._scope_condition(scope)
-    cursor.execute(
-        f'SELECT id, content, timestamp, label FROM memories WHERE {scope_sql} ORDER BY label, timestamp DESC',
-        scope_params
-    )
-    rows = cursor.fetchall()
-    conn.close()
+    with memory._get_connection() as conn:
+        cursor = conn.cursor()
+        scope_sql, scope_params = memory._scope_condition(scope)
+        cursor.execute(
+            f'SELECT id, content, timestamp, label FROM memories WHERE {scope_sql} ORDER BY label, timestamp DESC',
+            scope_params
+        )
+        rows = cursor.fetchall()
     grouped = {}
     for mid, content, ts, label in rows:
         key = label or 'unlabeled'
@@ -3300,29 +3299,27 @@ async def update_memory(memory_id: int, request: Request, _=Depends(require_logi
     if len(content) > memory.MAX_MEMORY_LENGTH:
         raise HTTPException(status_code=400, detail=f"Max {memory.MAX_MEMORY_LENGTH} chars")
 
-    conn = memory._get_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
-    if not cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=404, detail="Memory not found")
+    with memory._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Memory not found")
 
-    keywords = memory._extract_keywords(content)
-    label = data.get('label')
+        keywords = memory._extract_keywords(content)
+        label = data.get('label')
 
-    embedding_blob = None
-    embedder = memory._get_embedder()
-    if embedder.available:
-        embs = embedder.embed([content], prefix='search_document')
-        if embs is not None:
-            embedding_blob = embs[0].tobytes()
+        embedding_blob = None
+        embedder = memory._get_embedder()
+        if embedder.available:
+            embs = embedder.embed([content], prefix='search_document')
+            if embs is not None:
+                embedding_blob = embs[0].tobytes()
 
-    cursor.execute(
-        'UPDATE memories SET content = ?, keywords = ?, label = ?, embedding = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ? AND scope = ?',
-        (content, keywords, label, embedding_blob, memory_id, scope)
-    )
-    conn.commit()
-    conn.close()
+        cursor.execute(
+            'UPDATE memories SET content = ?, keywords = ?, label = ?, embedding = ?, timestamp = CURRENT_TIMESTAMP WHERE id = ? AND scope = ?',
+            (content, keywords, label, embedding_blob, memory_id, scope)
+        )
+        conn.commit()
     return {"updated": memory_id}
 
 
