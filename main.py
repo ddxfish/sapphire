@@ -37,6 +37,7 @@ CLEAN_EXIT_CODES = {
     -2, 130,    # SIGINT (Ctrl+C) - negative on Unix, 128+sig on some systems
     -15, 143,   # SIGTERM
     -1, 129,    # SIGHUP
+    3221225786, # STATUS_CONTROL_C_EXIT (0xC000013A) - Windows Ctrl+C termination
 }
 
 
@@ -55,10 +56,16 @@ def handle_signal(signum, frame):
     """Handle termination signals - mark stopping and forward to child."""
     global _runner_stopping
     _runner_stopping = True
-    
+
     if _child_process and _child_process.poll() is None:
         try:
-            _child_process.send_signal(signum)
+            if IS_WINDOWS:
+                # On Windows, Ctrl+C already sent CTRL_C_EVENT to entire console group.
+                # Calling send_signal(SIGINT) would re-send CTRL_C_EVENT to the group
+                # (including ourselves), causing double delivery. Skip it.
+                pass
+            else:
+                _child_process.send_signal(signum)
         except (ProcessLookupError, OSError):
             pass  # Child already dead
     
@@ -80,7 +87,7 @@ def run_sapphire():
             stdout=sys.stdout,
             stderr=sys.stderr
         )
-        
+
         # Wait indefinitely - signals are forwarded via handle_signal(), so Ctrl+C
         # will reach the child. No timeout/watchdog needed; if child hangs, user
         # can still Ctrl+C which sets _runner_stopping and forwards SIGINT.
@@ -88,7 +95,20 @@ def run_sapphire():
         exit_code = _child_process.returncode
         _child_process = None
         return exit_code
-        
+
+    except KeyboardInterrupt:
+        # Windows: KeyboardInterrupt can bypass custom signal handler during wait()
+        if _child_process and _child_process.poll() is None:
+            try:
+                _child_process.wait(timeout=15)
+            except (subprocess.TimeoutExpired, KeyboardInterrupt):
+                try:
+                    _child_process.kill()
+                except OSError:
+                    pass
+        _child_process = None
+        return 0  # Treat Ctrl+C as clean exit
+
     except Exception as e:
         log(f"ERROR: Failed to run sapphire.py: {e}", RED)
         _child_process = None

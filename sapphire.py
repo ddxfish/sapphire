@@ -575,7 +575,11 @@ def run():
 
         # Main loop - check for restart/shutdown signals
         while not _restart_requested and not _shutdown_requested:
-            time.sleep(0.5)
+            try:
+                time.sleep(0.5)
+            except KeyboardInterrupt:
+                # Windows: KeyboardInterrupt can bypass signal handler during sleep
+                _shutdown_requested = True
 
         # Determine exit code
         if _restart_requested:
