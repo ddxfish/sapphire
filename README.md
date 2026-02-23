@@ -46,7 +46,7 @@ Hear her voice as she dims your lights before bed. Use your voice to talk back. 
 - **Desktop/Mobile/Voice** - Run on your local browser, open the same chat to your phone, then finish it on your mic.
 - **65+ Tools** - [TOOLS.md](docs/TOOLS.md) Web search, Wikipedia, notes, and more. Mix and match via [TOOLSETS.md](docs/TOOLSETS.md).
 
-<img src="../sapphire-images/sapphire-chat.png" alt="Sapphire chat interface" width="50%">
+<img alt="sapphire-chat" src="https://github.com/user-attachments/assets/ca3059f8-355c-4842-89be-55e91da086ec" width="50%" />
 
 ### Use Cases
 
