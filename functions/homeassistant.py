@@ -424,12 +424,8 @@ def _find_entity(name: str, domain: str, settings: dict) -> tuple:
     return None, f"Device not found: {name}"
 
 
-def _call_ha_service(domain: str, service: str, data: dict, settings: dict, allow_timeout: bool = False) -> tuple:
-    """Call a Home Assistant service.
-    
-    Args:
-        allow_timeout: If True, treat timeout as success (for slow operations like scenes)
-    """
+def _call_ha_service(domain: str, service: str, data: dict, settings: dict, **_kw) -> tuple:
+    """Call a Home Assistant service. Timeouts are treated as success since HA processes commands async."""
     url = settings['url']
     headers = _get_headers()
     
@@ -441,7 +437,7 @@ def _call_ha_service(domain: str, service: str, data: dict, settings: dict, allo
             f"{url}/api/services/{domain}/{service}",
             headers=headers,
             json=data,
-            timeout=10
+            timeout=15
         )
         
         if response.status_code == 200:
@@ -450,11 +446,9 @@ def _call_ha_service(domain: str, service: str, data: dict, settings: dict, allo
             return f"HA error: HTTP {response.status_code}", False
             
     except requests.exceptions.Timeout:
-        if allow_timeout:
-            # Scene/script activations can take 20+ seconds, but HA is processing
-            logger.info(f"HA service {domain}/{service} timed out but assuming success")
-            return "OK (processing)", True
-        return "HA connection timed out", False
+        # HA often processes the command even when the response is slow
+        logger.info(f"HA service {domain}/{service} timed out but assuming success")
+        return "OK (processing)", True
     except Exception as e:
         return f"HA error: {e}", False
 

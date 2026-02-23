@@ -4345,6 +4345,10 @@ async def test_ha_notify(request: Request, _=Depends(require_login)):
     if not notify_service:
         return {"success": False, "error": "No notify service specified"}
 
+    # Strip 'notify.' prefix if user included it (matches real tool behavior)
+    if notify_service.startswith('notify.'):
+        notify_service = notify_service[7:]
+
     def _test():
         import requests as req
         try:
@@ -4352,7 +4356,7 @@ async def test_ha_notify(request: Request, _=Depends(require_login)):
             payload = {"message": "Test notification from Sapphire", "title": "Sapphire"}
             response = req.post(
                 f"{url}/api/services/notify/{notify_service}",
-                headers=headers, json=payload, timeout=10
+                headers=headers, json=payload, timeout=15
             )
             if response.status_code == 200:
                 return {"success": True}
@@ -4387,8 +4391,80 @@ async def set_ha_token(request: Request, _=Depends(require_login)):
 async def get_ha_token_status(request: Request, _=Depends(require_login)):
     """Check if HA token exists."""
     from core.credentials_manager import credentials
-    has_token = credentials.has_ha_token()
-    return {"has_token": has_token}
+    token = credentials.get_ha_token()
+    return {"has_token": bool(token), "token_length": len(token) if token else 0}
+
+
+@app.post("/api/webui/plugins/homeassistant/entities")
+async def get_ha_entities(request: Request, _=Depends(require_login)):
+    """Fetch visible HA entities (after blacklist filtering)."""
+    from core.credentials_manager import credentials
+
+    data = await request.json() or {}
+    url = data.get('url', '').strip().rstrip('/')
+    token = data.get('token', '').strip()
+    blacklist = data.get('blacklist', [])
+
+    if not token:
+        token = credentials.get_ha_token()
+
+    if not url:
+        return {"success": False, "error": "No URL provided"}
+    if not token:
+        return {"success": False, "error": "No API token found"}
+
+    def _fetch():
+        import requests as req
+        import fnmatch
+        try:
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            response = req.get(f"{url}/api/states", headers=headers, timeout=15)
+            if response.status_code != 200:
+                return {"success": False, "error": f"HTTP {response.status_code}"}
+
+            entities = response.json()
+
+            # Get areas via template API
+            areas = []
+            try:
+                tmpl = req.post(f"{url}/api/template", headers=headers,
+                    json={"template": "{% for area in areas() %}{{ area_name(area) }}||{% endfor %}"},
+                    timeout=10)
+                if tmpl.status_code == 200:
+                    areas = [a.strip() for a in tmpl.text.strip().split('||') if a.strip()]
+            except Exception:
+                pass
+
+            # Count by domain, applying blacklist
+            counts = {"lights": 0, "switches": 0, "scenes": 0, "scripts": 0, "climate": 0}
+            domain_map = {"light": "lights", "switch": "switches", "scene": "scenes",
+                          "script": "scripts", "climate": "climate"}
+
+            for e in entities:
+                eid = e.get('entity_id', '')
+                domain = eid.split('.')[0] if '.' in eid else ''
+                if domain not in domain_map:
+                    continue
+                # Apply blacklist
+                blocked = False
+                for pat in blacklist:
+                    if pat.startswith('area:'):
+                        continue  # Skip area patterns (would need entity-area mapping)
+                    if fnmatch.fnmatch(eid, pat):
+                        blocked = True
+                        break
+                if not blocked:
+                    counts[domain_map[domain]] += 1
+
+            return {"success": True, "counts": counts, "areas": areas}
+        except req.exceptions.Timeout:
+            return {"success": False, "error": "Connection timed out"}
+        except req.exceptions.ConnectionError as e:
+            return {"success": False, "error": f"Cannot connect: {str(e)[:100]}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error: {str(e)[:100]}"}
+
+    return await asyncio.to_thread(_fetch)
 
 
 # =============================================================================
