@@ -2,7 +2,7 @@
 
 Control your smart home through Sapphire. Lights, scenes, thermostats, switches, and phone notifications—all by talking to your AI.
 
-<img src="screenshots/home-assistant-integration.png" alt="Home Assistant integration">
+<img width="50%" alt="sapphire-home-assistant" src="https://github.com/user-attachments/assets/66d00855-cb31-4252-9de5-1571ba72d049" />
 
 ## Setup
 
