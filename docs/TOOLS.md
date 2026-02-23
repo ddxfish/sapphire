@@ -14,7 +14,8 @@ When you ask the AI something like "search for news about SpaceX", the AI recogn
 
 ## Using Tools
 
-<img src="../sapphire-images/sapphire-image-gallery-in-chat.png" alt="Sapphire tool results displayed in chat" width="50%">
+<img width="50%" alt="sapphire-image-gallery-in-chat" src="https://github.com/user-attachments/assets/91e1c1f5-6dbb-4cd7-a05f-927ad354fe47" />
+
 
 ### Toolsets
 
@@ -144,7 +145,8 @@ Use the **Toolset Manager** in the web UI. See [TOOLSETS.md](TOOLSETS.md).
 
 Sapphire can create her own tools using the **Tool Maker** (`tool_save`, `tool_read`, `tool_activate`). The AI writes a tool module, validates it, saves to `user/functions/`, and restarts to load it. No manual file editing needed.
 
-<img src="../sapphire-images/sapphire-settings-custom-tools.png" alt="Sapphire custom tool settings page" width="50%">
+<img width="50%" alt="sapphire-settings-custom-tools" src="https://github.com/user-attachments/assets/7418ab5f-a855-4649-833e-9f497b03085c" />
+
 
 **Validation strictness** is a user setting (`TOOL_MAKER_VALIDATION`):
 - `strict` — Only allowlisted imports (json, re, datetime, math, requests, etc.)
