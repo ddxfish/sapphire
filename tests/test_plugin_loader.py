@@ -492,7 +492,6 @@ def _make_mock_fm():
     fm._network_functions = set()
     fm._is_local_map = {}
     fm._function_module_map = {}
-    fm._function_plugin_map = {}
     fm._mode_filters = {}
     return fm
 

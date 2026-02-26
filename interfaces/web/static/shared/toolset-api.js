@@ -4,6 +4,9 @@ import { fetchWithTimeout } from './fetch.js';
 
 let _initialLoad = true;
 
+// Invalidate cache when plugins change (tools added/removed)
+window.addEventListener('functions-changed', () => { _initialLoad = false; });
+
 // Use init data for first load, then fetch fresh from API
 export async function getToolsets() {
   if (_initialLoad) {

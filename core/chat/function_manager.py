@@ -631,18 +631,6 @@ class FunctionManager:
             except Exception:
                 return 'http://localhost:5153'
 
-        elif module_name == 'homeassistant':
-            # Home Assistant endpoint from plugin settings
-            import json
-            settings_path = Path(config.BASE_DIR) / 'user' / 'webui' / 'plugins' / 'homeassistant.json'
-            try:
-                if settings_path.exists():
-                    with open(settings_path) as f:
-                        return json.load(f).get('url', 'http://homeassistant.local:8123')
-                return 'http://homeassistant.local:8123'  # Default
-            except Exception:
-                return 'http://homeassistant.local:8123'
-
         return ''
 
     def execute_function(self, function_name, arguments, scopes=None):
