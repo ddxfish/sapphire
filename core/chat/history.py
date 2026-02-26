@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # System defaults for chat settings - hardcoded fallbacks
 # Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
 SYSTEM_DEFAULTS = {
-    "prompt": "default",  
+    "prompt": "sapphire",
     "toolset": "all",
     "voice": "af_heart",
     "pitch": 0.98,

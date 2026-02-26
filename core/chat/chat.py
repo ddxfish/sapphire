@@ -885,7 +885,7 @@ class LLMChat:
 
         try:
             # Build system prompt from task settings
-            prompt_name = task_settings.get("prompt", "default")
+            prompt_name = task_settings.get("prompt", "sapphire")
             from core import prompts
             prompt_data = prompts.get_prompt(prompt_name)
             if prompt_data:

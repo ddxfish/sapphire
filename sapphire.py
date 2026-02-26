@@ -175,9 +175,9 @@ class VoiceChatSystem:
                 if chat_defaults_path.exists():
                     with open(chat_defaults_path, 'r', encoding='utf-8') as f:
                         defaults = json.load(f)
-                        prompt_name = defaults.get('prompt', 'default')
+                        prompt_name = defaults.get('prompt', 'sapphire')
                 else:
-                    prompt_name = 'default'
+                    prompt_name = 'sapphire'
                 logger.info(f"Startup prompt from defaults: '{prompt_name}'")
 
             prompt_details = prompts.get_prompt(prompt_name)

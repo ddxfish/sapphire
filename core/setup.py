@@ -324,7 +324,7 @@ def ensure_prompt_files() -> bool:
     Returns True if all files available, False on error.
     """
     # Source: factory defaults shipped with app
-    source_dir = Path(__file__).parent / "modules" / "system" / "prompts"
+    source_dir = Path(__file__).parent / "prompt_defaults"
     # Target: user's working copies
     target_dir = Path(__file__).parent.parent / "user" / "prompts"
     
@@ -362,7 +362,7 @@ def ensure_chat_defaults() -> bool:
     This sets the default prompt, voice, ability, etc. for new installs.
     Returns True if file available, False on error.
     """
-    source = Path(__file__).parent / "modules" / "system" / "prompts" / "chat_defaults.json"
+    source = Path(__file__).parent / "prompt_defaults" / "chat_defaults.json"
     target_dir = Path(__file__).parent.parent / "user" / "settings"
     target = target_dir / "chat_defaults.json"
     
@@ -389,7 +389,7 @@ def reset_prompt_files() -> bool:
     Used for recovery when user prompts are corrupted or botched.
     Returns True on success, False on error.
     """
-    source_dir = Path(__file__).parent / "modules" / "system" / "prompts"
+    source_dir = Path(__file__).parent / "prompt_defaults"
     target_dir = Path(__file__).parent.parent / "user" / "prompts"
     
     files = [
@@ -423,7 +423,7 @@ def reset_chat_defaults() -> bool:
     Force-copy chat_defaults.json from core → user/settings (overwrite).
     Returns True on success, False on error.
     """
-    source = Path(__file__).parent / "modules" / "system" / "prompts" / "chat_defaults.json"
+    source = Path(__file__).parent / "prompt_defaults" / "chat_defaults.json"
     target_dir = Path(__file__).parent.parent / "user" / "settings"
     target = target_dir / "chat_defaults.json"
     
@@ -582,7 +582,7 @@ def merge_prompt_files() -> dict:
     New user keys are preserved.
     Returns dict with merge results per file.
     """
-    source_dir = Path(__file__).parent / "modules" / "system" / "prompts"
+    source_dir = Path(__file__).parent / "prompt_defaults"
     target_dir = Path(__file__).parent.parent / "user" / "prompts"
     
     files = [
