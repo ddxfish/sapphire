@@ -9,7 +9,7 @@ import re
 logger = logging.getLogger(__name__)
 
 # Path to user settings
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 SETTINGS_FILE = os.path.join(PROJECT_ROOT, 'user', 'webui', 'plugins', 'image-gen.json')
 
 # Fallback defaults (used if no user settings exist)
