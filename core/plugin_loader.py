@@ -162,11 +162,12 @@ class PluginLoader:
                     logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
         return []
 
-    def _load_plugin(self, name: str):
-        """Load an enabled plugin — check cached verification, register hooks, voice commands."""
+    def _load_plugin(self, name: str) -> bool:
+        """Load an enabled plugin — check cached verification, register hooks, voice commands.
+        Returns True if loaded, False if blocked."""
         info = self._plugins.get(name)
         if not info:
-            return
+            return False
 
         # Use verification result from scan
         verified = info.get("verified", False)
@@ -177,16 +178,16 @@ class PluginLoader:
                 import config
                 allow_unsigned = config.ALLOW_UNSIGNED_PLUGINS
             except Exception:
-                allow_unsigned = True
+                allow_unsigned = False
 
             if verify_msg == "unsigned" and allow_unsigned:
                 logger.warning(f"[PLUGINS] {name}: unsigned plugin (sideloading enabled)")
             elif verify_msg == "unsigned" and not allow_unsigned:
                 logger.warning(f"[PLUGINS] BLOCKED {name}: unsigned plugin (sideloading disabled)")
-                return
+                return False
             else:
                 logger.error(f"[PLUGINS] BLOCKED {name}: {verify_msg}")
-                return
+                return False
         else:
             logger.info(f"[PLUGINS] {name}: signature verified")
 
@@ -263,6 +264,7 @@ class PluginLoader:
 
         info["loaded"] = True
         logger.info(f"[PLUGINS] Loaded: {name} (priority {base_priority}, {band})")
+        return True
 
     def _load_handler(self, plugin_dir: Path, handler_path: str, hook_name: str):
         """Import a Python handler from a plugin directory.

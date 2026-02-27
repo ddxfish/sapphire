@@ -4243,11 +4243,29 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         if plugin_name in plugin_loader._plugins:
             if new_state:
                 plugin_loader._plugins[plugin_name]["enabled"] = True
-                plugin_loader._load_plugin(plugin_name)
+                loaded = plugin_loader._load_plugin(plugin_name)
+                if not loaded:
+                    # Blocked by verification — revert enabled list
+                    plugin_loader._plugins[plugin_name]["enabled"] = False
+                    if plugin_name in enabled:
+                        enabled.remove(plugin_name)
+                    user_data["enabled"] = enabled
+                    with open(USER_PLUGINS_JSON, 'w') as f:
+                        json.dump(user_data, f, indent=2)
+                    verify_msg = plugin_loader._plugins[plugin_name].get("verify_msg", "unknown")
+                    if "unsigned" in verify_msg:
+                        detail = "Unsigned plugin — enable 'Allow Unsigned Plugins' first"
+                    elif "hash mismatch" in verify_msg or "tamper" in verify_msg.lower():
+                        detail = "Plugin signature is invalid — files were modified after signing"
+                    else:
+                        detail = f"Plugin blocked: {verify_msg}"
+                    raise HTTPException(status_code=403, detail=detail)
             else:
                 plugin_loader.unload_plugin(plugin_name)
                 plugin_loader._plugins[plugin_name]["enabled"] = False
             reload_required = False
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Live plugin toggle failed for {plugin_name}: {e}")
 

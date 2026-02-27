@@ -98,9 +98,15 @@ export default {
         const visible = (ctx.pluginList || []).filter(p => !HIDDEN.has(p.name));
         if (!visible.length) return '<p class="text-muted">No feature plugins available.</p>';
 
+        const allowUnsigned = ctx.settings?.ALLOW_UNSIGNED_PLUGINS ?? false;
+
         return `
-            <div class="plugin-actions" style="margin-bottom:12px;display:flex;gap:8px">
+            <div class="plugin-actions" style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
                 <button class="btn btn-sm" id="rescan-plugins-btn">Rescan Plugins</button>
+                <label class="setting-toggle" style="margin-left:auto">
+                    <input type="checkbox" id="allow-unsigned-toggle" ${allowUnsigned ? 'checked' : ''}>
+                    <span>Allow Unsigned Plugins</span>
+                </label>
             </div>
             <div class="plugin-toggles-list">
                 ${visible.map(p => {
@@ -143,6 +149,45 @@ export default {
     },
 
     attachListeners(ctx, el) {
+        // Sideloading toggle
+        const unsignedToggle = el.querySelector('#allow-unsigned-toggle');
+        if (unsignedToggle) {
+            unsignedToggle.addEventListener('change', async e => {
+                const enabling = e.target.checked;
+
+                if (enabling) {
+                    const confirmed = await showDangerConfirm({
+                        title: 'Allow Unsigned Plugins — No Signature Verification',
+                        warnings: [
+                            'Unsigned plugins have not been verified by Sapphire',
+                            'They can execute arbitrary code with full system access',
+                            'A malicious plugin could steal credentials, modify files, or exfiltrate data',
+                            'Only enable this if you trust the source of your plugins',
+                        ],
+                        buttonLabel: 'Allow Unsigned',
+                    });
+                    if (!confirmed) {
+                        e.target.checked = false;
+                        return;
+                    }
+                }
+
+                try {
+                    const res = await fetch('/api/settings/batch', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ settings: { ALLOW_UNSIGNED_PLUGINS: enabling } })
+                    });
+                    if (!res.ok) throw new Error('Failed to save');
+                    ctx.settings.ALLOW_UNSIGNED_PLUGINS = enabling;
+                    ui.showToast(`Unsigned plugins ${enabling ? 'allowed' : 'blocked'}`, enabling ? 'warning' : 'success');
+                } catch (err) {
+                    e.target.checked = !enabling;
+                    ui.showToast(`Setting failed: ${err.message}`, 'error');
+                }
+            });
+        }
+
         // Rescan button
         const rescanBtn = el.querySelector('#rescan-plugins-btn');
         if (rescanBtn) {
@@ -206,7 +251,10 @@ export default {
 
             try {
                 const res = await fetch(`/api/webui/plugins/toggle/${name}`, { method: 'PUT' });
-                if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+                if (!res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(body.detail || body.error || res.status);
+                }
                 const data = await res.json();
 
                 // Update cached plugin list
@@ -238,7 +286,9 @@ export default {
                 // Revert checkbox
                 e.target.checked = !e.target.checked;
                 if (span) span.textContent = e.target.checked ? 'Enabled' : 'Disabled';
-                ui.showToast(`Toggle failed: ${err.message}`, 'error');
+                const msg = (err.message || 'Unknown error').replace(/^Plugin blocked:\s*/, '');
+                console.warn('Plugin toggle blocked:', msg);
+                ui.showToast(msg, 'error', 5000);
             } finally {
                 toggling.delete(name);
                 // checkbox may be on detached DOM after refreshSidebar, that's fine

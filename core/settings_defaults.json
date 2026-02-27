@@ -225,7 +225,7 @@
   },
   
   "plugins": {
-    "ALLOW_UNSIGNED_PLUGINS": true
+    "ALLOW_UNSIGNED_PLUGINS": false
   },
 
   "setup": {
