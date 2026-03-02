@@ -47,7 +47,12 @@ export default {
             const voiceSel = container?.querySelector('#pa-s-voice');
             if (voiceSel && voicesData) {
                 const current = voiceSel.value;
-                voiceSel.innerHTML = renderVoiceOptions(current);
+                const voices = voicesData.voices || [];
+                const validCurrent = voices.some(v => v.voice_id === current);
+                voiceSel.innerHTML = renderVoiceOptions(validCurrent ? current : (voicesData.default_voice || ''));
+                if (!validCurrent && voicesData.default_voice) {
+                    voiceSel.value = voicesData.default_voice;
+                }
             }
         });
     },

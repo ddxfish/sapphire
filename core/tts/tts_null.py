@@ -7,6 +7,10 @@ class NullTTS:
     """No-op TTS implementation used when TTS_ENABLED=False"""
     
     def __init__(self):
+        self.voice_name = "none"
+        self.pitch_shift = 1.0
+        self.speed = 1.0
+        self.audio_content_type = 'audio/ogg'
         logger.info("TTS disabled - using NullTTS")
         
     def speak(self, text):

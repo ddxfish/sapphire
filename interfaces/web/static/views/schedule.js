@@ -441,12 +441,8 @@ const EMOJI_PICKS = [
     '\uD83D\uDDDD\uFE0F', '\uD83C\uDFF9', '\uD83E\uDEAC', '\uD83D\uDCBF'
 ];
 
-const TTS_VOICES = {
-    'American Female': ['af_bella', 'af_nicole', 'af_heart', 'af_jessica', 'af_sarah', 'af_river', 'af_sky'],
-    'American Male': ['am_adam', 'am_eric', 'am_liam', 'am_michael'],
-    'British Female': ['bf_emma', 'bf_isabella', 'bf_alice', 'bf_lily'],
-    'British Male': ['bm_george', 'bm_daniel', 'bm_lewis']
-};
+// Voices fetched dynamically from active TTS provider
+let _ttsVoicesCache = null;
 
 async function openEditor(task, isHeartbeat = false) {
     document.querySelector('.sched-editor-overlay')?.remove();
@@ -455,10 +451,11 @@ async function openEditor(task, isHeartbeat = false) {
     let memoryScopes = [], knowledgeScopes = [], peopleScopes = [], goalScopes = [], emailAccounts = [];
     let personas = [];
     try {
-        const [p, ts, llm, ms, ks, ps, gs, ea, per] = await Promise.all([
+        const [p, ts, llm, ms, ks, ps, gs, ea, per, ttsV] = await Promise.all([
             fetchPrompts(), fetchToolsets(), fetchLLMProviders(),
             fetchMemoryScopes(), fetchKnowledgeScopes(), fetchPeopleScopes(), fetchGoalScopes(),
-            fetchEmailAccounts(), fetchPersonas()
+            fetchEmailAccounts(), fetchPersonas(),
+            fetch('/api/tts/voices').then(r => r.ok ? r.json() : null)
         ]);
         prompts = p || []; toolsetsList = ts || [];
         llmProviders = llm.providers || []; llmMetadata = llm.metadata || {};
@@ -466,6 +463,7 @@ async function openEditor(task, isHeartbeat = false) {
         peopleScopes = ps || []; goalScopes = gs || [];
         emailAccounts = ea || [];
         personas = per || [];
+        _ttsVoicesCache = ttsV;
     } catch (e) { console.warn('Editor: failed to fetch options', e); }
 
     const isEdit = !!task;
@@ -502,12 +500,15 @@ async function openEditor(task, isHeartbeat = false) {
     const intervalUnit = parsed.mode === 'interval' ? parsed.unit : 'minutes';
     const cronRaw = t.schedule || '0 9 * * *';
 
-    // Voice dropdown options
-    const voiceOpts = Object.entries(TTS_VOICES).map(([group, voices]) =>
-        `<optgroup label="${group}">${voices.map(v =>
-            `<option value="${v}" ${t.voice === v ? 'selected' : ''}>${v}</option>`
-        ).join('')}</optgroup>`
+    // Voice dropdown options — dynamic from active TTS provider
+    const voices = _ttsVoicesCache?.voices || [];
+    let voiceOpts = voices.map(v =>
+        `<option value="${v.voice_id}" ${t.voice === v.voice_id ? 'selected' : ''}>${v.name}${v.category ? ' (' + v.category + ')' : ''}</option>`
     ).join('');
+    // If task has a voice that's not in current provider list, show it as placeholder
+    if (t.voice && !voices.some(v => v.voice_id === t.voice)) {
+        voiceOpts = `<option value="${t.voice}" selected>${t.voice} (other provider)</option>` + voiceOpts;
+    }
 
     const modal = document.createElement('div');
     modal.className = 'sched-editor-overlay';

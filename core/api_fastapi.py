@@ -1426,7 +1426,13 @@ async def tts_preview(request: Request, _=Depends(require_login), system=Depends
     orig_speed = system.tts.speed
 
     try:
-        if voice: system.tts.set_voice(voice)
+        if voice:
+            provider = getattr(config, 'TTS_PROVIDER', 'none')
+            if provider == 'kokoro' and len(voice) >= 20 and voice.isalnum():
+                voice = _tts_default_voice('kokoro')
+            elif provider == 'elevenlabs' and not (len(voice) >= 20 and voice.isalnum()):
+                voice = _tts_default_voice('elevenlabs')
+            system.tts.set_voice(voice)
         if pitch is not None: system.tts.set_pitch(pitch)
         if speed is not None: system.tts.set_speed(speed)
         audio_data = await asyncio.to_thread(system.tts.generate_audio_data, text)
@@ -1887,6 +1893,13 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
             logger.warning(f"Failed to re-apply chat settings after TTS switch: {e}")
     if key == 'TTS_ENABLED':
         await asyncio.to_thread(get_system().toggle_tts, value)
+        if value:
+            try:
+                system = get_system()
+                chat_settings = system.llm_chat.session_manager.get_chat_settings()
+                _apply_chat_settings(system, chat_settings)
+            except Exception as e:
+                logger.warning(f"Failed to re-apply chat settings after TTS toggle: {e}")
     publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
     return {"status": "success", "key": key, "value": value, "tier": tier, "persisted": persist}
 

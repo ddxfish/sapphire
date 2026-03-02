@@ -36,6 +36,10 @@ class ElevenLabsTTSProvider(BaseTTSProvider):
     def _voice_id(self):
         return getattr(config, 'TTS_ELEVENLABS_VOICE_ID', '') or DEFAULT_VOICE_ID
 
+    # ElevenLabs speed range (their API rejects anything outside)
+    SPEED_MIN = 0.7
+    SPEED_MAX = 1.2
+
     def generate(self, text: str, voice: str, speed: float, **kwargs) -> Optional[bytes]:
         """POST to ElevenLabs streaming endpoint, return OGG/Opus bytes.
 
@@ -50,6 +54,11 @@ class ElevenLabsTTSProvider(BaseTTSProvider):
         voice_id = voice if (voice and len(voice) >= 20 and voice.isalnum()) else self._voice_id
         url = f"{ELEVENLABS_TTS_URL}/{voice_id}/stream"
 
+        # Clamp speed to ElevenLabs range (Kokoro allows up to 2.0, ElevenLabs only 0.7-1.2)
+        clamped_speed = max(self.SPEED_MIN, min(self.SPEED_MAX, speed))
+        if clamped_speed != speed:
+            logger.warning(f"ElevenLabs: clamped speed {speed} -> {clamped_speed} (range {self.SPEED_MIN}-{self.SPEED_MAX})")
+
         try:
             with httpx.Client(timeout=60.0) as client:
                 response = client.post(url, headers={
@@ -61,7 +70,7 @@ class ElevenLabsTTSProvider(BaseTTSProvider):
                     'text': text,
                     'model_id': self._model,
                     'voice_settings': {
-                        'speed': speed,
+                        'speed': clamped_speed,
                     },
                 })
 

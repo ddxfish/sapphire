@@ -378,6 +378,16 @@ class ContinuityExecutor:
         except Exception:
             return {}
 
+    def _validate_voice(self, voice: str) -> str:
+        """Validate voice matches current TTS provider, substitute default if mismatched."""
+        import config
+        provider = getattr(config, 'TTS_PROVIDER', 'none')
+        if voice and provider == 'kokoro' and len(voice) >= 20 and voice.isalnum():
+            return 'af_heart'
+        if voice and provider == 'elevenlabs' and not (len(voice) >= 20 and voice.isalnum()):
+            return getattr(config, 'TTS_ELEVENLABS_VOICE_ID', '') or '21m00Tcm4TlvDq8ikWAM'
+        return voice
+
     def _restore_voice(self, snapshot: Dict[str, Any]) -> None:
         """Restore TTS voice/pitch/speed from snapshot."""
         if not snapshot:
@@ -387,7 +397,7 @@ class ContinuityExecutor:
             return
         try:
             if snapshot.get("voice") is not None:
-                tts.set_voice(snapshot["voice"])
+                tts.set_voice(self._validate_voice(snapshot["voice"]))
             if snapshot.get("pitch") is not None:
                 tts.set_pitch(snapshot["pitch"])
             if snapshot.get("speed") is not None:
@@ -403,7 +413,7 @@ class ContinuityExecutor:
             return
         try:
             if task.get("voice"):
-                tts.set_voice(task["voice"])
+                tts.set_voice(self._validate_voice(task["voice"]))
             if task.get("pitch") is not None:
                 tts.set_pitch(task["pitch"])
             if task.get("speed") is not None:

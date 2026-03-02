@@ -354,7 +354,10 @@ class TTSClient:
         try:
             audio_data, samplerate = self._fetch_audio(text)
             if audio_data is None or self.should_stop.is_set():
-                logger.debug(f"[TTS] Fetch returned None={audio_data is None}, stopped={self.should_stop.is_set()}")
+                if audio_data is None and not self.should_stop.is_set():
+                    logger.warning("[TTS] speak_sync: provider returned no audio (check provider logs)")
+                else:
+                    logger.debug(f"[TTS] Fetch stopped={self.should_stop.is_set()}")
                 return
 
             with self.lock:
