@@ -131,11 +131,18 @@ class OpenAICompatProvider(BaseProvider):
         return self._client
     
     def health_check(self) -> bool:
-        """Check endpoint health via models.list()."""
+        """Check endpoint health via models.list(), with HTTP fallback."""
         try:
             self._client.models.list(timeout=self.health_check_timeout)
             return True
         except Exception as e:
+            # Some APIs (xAI/Grok) don't support /models but are otherwise fine.
+            # If we got an HTTP error (not a connection error), the server is alive.
+            err_str = str(e).lower()
+            if '400' in err_str or '403' in err_str or '404' in err_str or '405' in err_str:
+                logger.debug(f"Health check: {self.base_url} doesn't support /models but server is reachable")
+                return True
+
             logger.debug(f"Health check failed for {self.base_url}: {e}")
 
             # Auto-correct missing /v1 suffix (common with llama.cpp, Ollama, etc.)
@@ -176,26 +183,42 @@ class OpenAICompatProvider(BaseProvider):
         result.pop('disable_thinking', None)
 
         model_lower = (self.model or '').lower()
-        
+
         # Detect reasoning models (GPT-5+, o1, o3)
         is_reasoning_model = (
-            model_lower.startswith('gpt-5') or 
-            model_lower.startswith('o1') or 
+            model_lower.startswith('gpt-5') or
+            model_lower.startswith('o1') or
             model_lower.startswith('o3')
         )
-        
+
+        # Detect Grok 4+ models (don't support penalty params or stop)
+        is_grok4 = (
+            model_lower.startswith('grok-4') or
+            model_lower.startswith('grok-code')
+        )
+
         if is_reasoning_model:
             # max_tokens → max_completion_tokens
             if 'max_tokens' in result:
                 result['max_completion_tokens'] = result.pop('max_tokens')
-            
+
             # Remove unsupported sampling params (reasoning models don't use these)
             removed = []
             for unsupported in ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']:
                 if unsupported in result:
                     result.pop(unsupported)
                     removed.append(unsupported)
-            
+
+            if removed:
+                logger.debug(f"Filtered unsupported params for {self.model}: {removed}")
+
+        elif is_grok4:
+            removed = []
+            for unsupported in ['presence_penalty', 'frequency_penalty', 'stop']:
+                if unsupported in result:
+                    result.pop(unsupported)
+                    removed.append(unsupported)
+
             if removed:
                 logger.debug(f"Filtered unsupported params for {self.model}: {removed}")
         

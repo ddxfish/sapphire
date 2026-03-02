@@ -1943,7 +1943,14 @@ async def get_llm_providers(request: Request, _=Depends(require_login)):
     from core.chat.llm_providers import get_available_providers, PROVIDER_METADATA
     providers_config = settings.get('LLM_PROVIDERS', {})
     providers_list = get_available_providers(providers_config)
-    metadata = {k: {'model_options': v.get('model_options'), 'is_local': v.get('is_local', False)}
+    metadata = {k: {
+                    'model_options': v.get('model_options'),
+                    'is_local': v.get('is_local', False),
+                    'required_fields': v.get('required_fields', []),
+                    'default_timeout': v.get('default_timeout', 10.0),
+                    'supports_reasoning': v.get('supports_reasoning', False),
+                    'api_key_env': v.get('api_key_env', ''),
+                }
                 for k, v in PROVIDER_METADATA.items()}
     return {"providers": providers_list, "metadata": metadata}
 

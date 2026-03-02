@@ -116,6 +116,22 @@ PROVIDER_METADATA = {
         'supports_reasoning': True,
         'description': 'Generic Responses API endpoint (Open Responses standard)',
     },
+    'grok': {
+        'display_name': 'Grok (xAI)',
+        'provider_class': 'openai',
+        'required_fields': ['api_key', 'model'],
+        'optional_fields': ['timeout'],
+        'model_options': {
+            'grok-4-1-fast-reasoning': 'Grok 4.1 Fast Reasoning',
+            'grok-4-1-fast-non-reasoning': 'Grok 4.1 Fast',
+            'grok-code-fast-1': 'Grok Code Fast',
+            'grok-3': 'Grok 3',
+            'grok-3-mini': 'Grok 3 Mini',
+        },
+        'is_local': False,
+        'default_timeout': 10.0,
+        'api_key_env': 'XAI_API_KEY',
+    },
     'other': {
         'display_name': 'Other (OpenAI Compatible)',
         'provider_class': 'openai',

@@ -154,6 +154,16 @@
         "reasoning_effort": "medium",
         "reasoning_summary": "detailed"
       },
+      "grok": {
+        "provider": "openai",
+        "display_name": "Grok (xAI)",
+        "base_url": "https://api.x.ai/v1",
+        "api_key_env": "XAI_API_KEY",
+        "model": "grok-4-1-fast-reasoning",
+        "timeout": 10.0,
+        "enabled": false,
+        "use_as_fallback": true
+      },
       "other": {
         "provider": "openai",
         "display_name": "Other (OpenAI Compatible)",
