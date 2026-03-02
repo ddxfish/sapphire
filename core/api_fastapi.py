@@ -578,6 +578,7 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
 
     return {
         "messages": display_messages,
+        "chat_name": system.llm_chat.session_manager.get_active_chat_name(),
         "context": {
             "used": total_used,
             "limit": context_limit,

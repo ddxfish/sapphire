@@ -11,6 +11,15 @@ const handleError = (e, action) => {
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     try {
         const hist = await api.fetchHistory();
+
+        // Guard: skip render if backend is temporarily on a different chat
+        // (e.g. continuity foreground task switched the active chat)
+        const expectedChat = document.getElementById('chat-select')?.value;
+        const returnedChat = api.getLastHistoryChatName();
+        if (returnedChat && expectedChat && returnedChat !== expectedChat) {
+            return { hist: null, len: lastLen };
+        }
+
         const isNew = hist.length > lastLen;
         ui.renderHistory(hist);
         if (playAudio && isNew && audioFn && hist.length > 0 && typeof audioFn === 'function') {

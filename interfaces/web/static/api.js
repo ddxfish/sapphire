@@ -29,12 +29,16 @@ export const fetchStatus = async () => {
     return status;
 };
 
+let _lastHistoryChatName = null;
+export const getLastHistoryChatName = () => _lastHistoryChatName;
+
 export const fetchHistory = async () => {
     const response = await fetchWithTimeout('/api/history');
     // Update context bar if context info is present
     if (response && response.context) {
         updateContextBar(response.context);
     }
+    _lastHistoryChatName = response?.chat_name || null;
     // Return messages array for backward compatibility
     return response.messages || response;
 };
