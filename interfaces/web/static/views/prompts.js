@@ -376,7 +376,7 @@ function bindAccordionBodyEvents(body, type) {
                 const idx = current.indexOf(key);
                 if (idx >= 0) current.splice(idx, 1);
             }
-            selectedData.components[type] = current;
+            selectedData.components[type] = current.sort();
             cb.closest('.pr-chip').classList.toggle('active', cb.checked);
             debouncedSavePrompt();
         });
