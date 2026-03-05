@@ -2,7 +2,7 @@
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
-import { getElements } from '../core/state.js';
+import { getElements, getIsProc } from '../core/state.js';
 import { updateScene, updateSendButtonLLM } from '../features/scene.js';
 import { applyTrimColor } from '../features/chat-settings.js';
 import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/chat-manager.js';
@@ -123,6 +123,14 @@ export default {
                     if (!item) return;
                     const chatName = item.dataset.chat;
                     if (!chatName) return;
+
+                    // Block chat switch while streaming/processing
+                    if (getIsProc()) {
+                        sbPicker.classList.remove('open');
+                        ui.showToast('Cannot switch chats while generating', 'error');
+                        return;
+                    }
+
                     sbPicker.classList.remove('open');
 
                     // Update active states in dropdown

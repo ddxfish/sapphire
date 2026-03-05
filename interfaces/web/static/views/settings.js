@@ -177,7 +177,7 @@ async function loadProviderMeta() {
 function flushCurrentInputs() {
     const el = container?.querySelector('#settings-content');
     if (!el) return;
-    el.querySelectorAll('[data-key]').forEach(input => {
+    el.querySelectorAll('input[data-key], select[data-key], textarea[data-key]').forEach(input => {
         const key = input.dataset.key;
         if (!key || key === 'undefined') return;
         const value = input.type === 'checkbox' ? input.checked : input.value;
