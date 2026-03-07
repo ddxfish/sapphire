@@ -1,10 +1,10 @@
 {
   "plugin": "toolmaker",
   "version": "1.1.0",
-  "signed_at": "2026-03-07T20:13:27.175146+00:00",
+  "signed_at": "2026-03-07T21:41:24.618647+00:00",
   "files": {
-    "plugin.json": "sha256:8313b15b266492ca7cde553dae000cdea60f835559359c05a3b9c8db0eb2eb42",
-    "tools/toolmaker.py": "sha256:c8d2cc8fcf47e5567cd93f978fad08b77992bcbe990ce7f69cfd6845377f66aa"
+    "plugin.json": "sha256:349ad25cf3dfa8d82bc663a72d67bc42341d5210d0dc72f4ade6c4c43dbab25f",
+    "tools/toolmaker.py": "sha256:0e9d71ad012c2dd5160bfd07acf6157b2302d10575f5b50424a0e664a8e339c9"
   },
-  "signature": "aHEbrT0kmyf2OFQQc2lDtciOSEUVy7wwV3QLwGeOe4JuteN4758QG3gaRTbH0rnzFboNyoxzZSXnskmTv1u1Cw=="
+  "signature": "uvSwPLyVJMdQpKRdqv/Deku9xhsUdMnLI3JnoGLoGAfnXf8e0344blEuxOgIv5QVV7cxZhP5J6ZZKz4eL7UvBQ=="
 }
