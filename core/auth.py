@@ -77,3 +77,19 @@ async def require_setup(request: Request):
 def get_client_ip(request: Request) -> str:
     """Get client IP from request. Uses direct connection IP only (X-Forwarded-For is spoofable)."""
     return request.client.host if request.client else '127.0.0.1'
+
+
+# ── Endpoint rate limiting (per-session sliding window) ──────────────────────
+
+_endpoint_limits: dict = defaultdict(list)
+
+
+def check_endpoint_rate(request: Request, endpoint: str, max_calls: int, window: int = 60) -> None:
+    """Raise 429 if session exceeds max_calls within window seconds."""
+    session_id = request.session.get('csrf_token') or get_client_ip(request)
+    key = f"{session_id}:{endpoint}"
+    now = time.time()
+    _endpoint_limits[key] = [t for t in _endpoint_limits[key] if now - t < window]
+    if len(_endpoint_limits[key]) >= max_calls:
+        raise HTTPException(status_code=429, detail=f"Rate limited — max {max_calls} requests per {window}s")
+    _endpoint_limits[key].append(now)

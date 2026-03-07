@@ -772,11 +772,18 @@ class ChatSessionManager:
                     logger.warning(f"Chat not found in database: {chat_name}")
                     return False
                 
-                self.current_chat.messages = json.loads(row["messages"])
+                raw_messages = row["messages"]
+                # Guard against OOM on massive chat blobs (>50MB)
+                if len(raw_messages) > 50 * 1024 * 1024:
+                    logger.warning(f"Chat '{chat_name}' messages blob too large ({len(raw_messages) // 1024 // 1024}MB), truncating to last 5000 messages")
+                    all_msgs = json.loads(raw_messages)
+                    self.current_chat.messages = all_msgs[-5000:]
+                else:
+                    self.current_chat.messages = json.loads(raw_messages)
                 file_settings = json.loads(row["settings"])
                 self.current_settings = SYSTEM_DEFAULTS.copy()
                 self.current_settings.update(file_settings)
-                
+
                 logger.info(f"Loaded chat '{chat_name}' with {len(self.current_chat.messages)} messages")
                 return True
                 

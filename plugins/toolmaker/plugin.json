@@ -12,14 +12,14 @@
         "key": "validation",
         "type": "string",
         "label": "Validation Level",
-        "default": "moderate",
+        "default": "strict",
         "widget": "select",
         "options": [
-          {"label": "Strict — allowlisted imports only", "value": "strict"},
-          {"label": "Moderate — blocks dangerous ops", "value": "moderate"},
-          {"label": "Trust — syntax check only", "value": "trust"}
+          {"label": "Strict — safe imports only (recommended)", "value": "strict"},
+          {"label": "Moderate — blocks dangerous ops, any import", "value": "moderate"},
+          {"label": "Trust — syntax check only (dangerous)", "value": "trust"}
         ],
-        "help": "How strictly to validate AI-written tool code before installation",
+        "help": "How strictly to validate AI-written tool code. Strict allows 40+ safe modules including requests, json, datetime — covers most tools.",
         "confirm": {
           "values": ["trust"],
           "title": "Trust Mode — No Validation",

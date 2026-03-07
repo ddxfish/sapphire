@@ -201,8 +201,19 @@ class ContinuityScheduler:
         with self._lock:
             return self._tasks.get(task_id)
     
+    MAX_TASKS = 25
+    MAX_HEARTBEATS = 4
+
     def create_task(self, data: Dict) -> Dict:
         """Create new task, returns the created task."""
+        with self._lock:
+            total = len(self._tasks)
+            heartbeats = sum(1 for t in self._tasks.values() if t.get('heartbeat'))
+            if data.get('heartbeat') and heartbeats >= self.MAX_HEARTBEATS:
+                raise ValueError(f"Maximum heartbeat tasks reached ({self.MAX_HEARTBEATS})")
+            if total >= self.MAX_TASKS:
+                raise ValueError(f"Maximum tasks reached ({self.MAX_TASKS})")
+
         task = {
             "id": str(uuid.uuid4()),
             "name": data.get("name", "Unnamed Task"),

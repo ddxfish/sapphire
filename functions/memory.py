@@ -627,11 +627,11 @@ def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
         if labels:
             placeholders = ','.join('?' * len(labels))
             cursor.execute(
-                f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND label IN ({placeholders}) AND embedding IS NOT NULL',
+                f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND label IN ({placeholders}) AND embedding IS NOT NULL LIMIT 10000',
                 scope_params + labels)
         else:
             cursor.execute(
-                f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND embedding IS NOT NULL',
+                f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND embedding IS NOT NULL LIMIT 10000',
                 scope_params)
 
         rows = cursor.fetchall()

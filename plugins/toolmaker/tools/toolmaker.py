@@ -31,19 +31,15 @@ _RESERVED_NAMES = {
 
 
 def _get_validation_level():
-    """Read validation level from plugin settings. Trust mode blocked in managed mode."""
+    """Read validation level from plugin settings. Managed mode forces strict."""
+    import os
+    if os.environ.get('SAPPHIRE_MANAGED'):
+        return 'strict'
     try:
         from core.plugin_loader import plugin_loader
-        level = plugin_loader.get_plugin_settings('toolmaker').get('validation', 'moderate')
-        if level == 'trust':
-            import os
-            if os.environ.get('SAPPHIRE_MANAGED'):
-                logger.warning("[MANAGED] Trust mode blocked — forcing moderate")
-                return 'moderate'
-        return level
+        return plugin_loader.get_plugin_settings('toolmaker').get('validation', 'strict')
     except Exception:
-        pass
-    return 'moderate'
+        return 'strict'
 
 
 AVAILABLE_FUNCTIONS = ['tool_load', 'tool_read', 'tool_save']
@@ -67,11 +63,32 @@ _BLOCKED_ATTRS = {
     ('os', 'rename'), ('os', 'kill'), ('os', 'environ'),
 }
 
+# Additional os attrs blocked in managed/Docker mode (env leaks + filesystem enumeration)
+_MANAGED_BLOCKED_ATTRS = {
+    ('os', 'getenv'), ('os', 'listdir'), ('os', 'scandir'), ('os', 'walk'),
+    ('os', 'path'), ('os', 'getcwd'), ('os', 'stat'), ('os', 'lstat'),
+    ('os', 'read'), ('os', 'open'), ('os', 'makedirs'), ('os', 'mkdir'),
+    ('os', 'readlink'), ('os', 'access'), ('os', 'fspath'),
+}
+
 _ALLOWED_STRICT = {
-    'json', 're', 'datetime', 'math', 'collections', 'itertools',
-    'functools', 'hashlib', 'hmac', 'base64', 'urllib', 'requests',
-    'time', 'random', 'string', 'textwrap', 'pathlib', 'logging',
-    'typing', 'enum', 'dataclasses', 'copy', 'os', 'io',
+    # HTTP & data interchange
+    'requests', 'urllib', 'json', 'xml', 'html', 'csv', 'base64',
+    # Text & pattern processing
+    're', 'string', 'textwrap', 'difflib', 'unicodedata',
+    # Date, time, math
+    'datetime', 'zoneinfo', 'calendar', 'time',
+    'math', 'decimal', 'fractions', 'numbers', 'statistics', 'random',
+    # Data structures & functional
+    'collections', 'itertools', 'functools', 'operator', 'copy',
+    # Crypto & encoding
+    'hashlib', 'hmac', 'secrets', 'binascii', 'struct',
+    # Type system & boilerplate
+    'typing', 'enum', 'dataclasses', 'abc',
+    # Misc safe stdlib
+    'uuid', 'logging', 'pprint', 'textwrap', 'contextlib',
+    # Allowed but managed-blocked (belt + suspenders — blocked imports/attrs catch these)
+    'os', 'io', 'pathlib',
 }
 
 # Minimal tool format — embedded in tool_save description so AI always has it
@@ -174,16 +191,18 @@ def _validate_ast(code, strictness):
     except SyntaxError as e:
         return False, f"Syntax error: {e}"
 
-    blocked = _BLOCKED_IMPORTS
+    blocked_imports = _BLOCKED_IMPORTS
+    blocked_attrs = _BLOCKED_ATTRS
     if os.environ.get('SAPPHIRE_MANAGED'):
-        blocked = blocked | _MANAGED_BLOCKED_IMPORTS
+        blocked_imports = blocked_imports | _MANAGED_BLOCKED_IMPORTS
+        blocked_attrs = blocked_attrs | _MANAGED_BLOCKED_ATTRS
 
     for node in ast.walk(tree):
         # Check imports
         if isinstance(node, ast.Import):
             for alias in node.names:
                 mod = alias.name.split('.')[0]
-                if mod in blocked:
+                if mod in blocked_imports:
                     return False, f"Blocked import: {mod}"
                 if strictness == 'strict' and mod not in _ALLOWED_STRICT:
                     return False, f"Import '{mod}' not in allowlist (strict mode)"
@@ -191,7 +210,7 @@ def _validate_ast(code, strictness):
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 mod = node.module.split('.')[0]
-                if mod in blocked:
+                if mod in blocked_imports:
                     return False, f"Blocked import: {mod}"
                 if strictness == 'strict' and mod not in _ALLOWED_STRICT:
                     return False, f"Import '{mod}' not in allowlist (strict mode)"
@@ -203,14 +222,20 @@ def _validate_ast(code, strictness):
 
         # Check dangerous attribute access
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            if (node.value.id, node.attr) in _BLOCKED_ATTRS:
+            if (node.value.id, node.attr) in blocked_attrs:
                 return False, f"Blocked: {node.value.id}.{node.attr}"
 
     return True, ""
 
 
 def _smoke_test(filepath):
-    """Import module and validate structure. Returns (ok, error_msg)."""
+    """Import module and validate structure. Returns (ok, error_msg).
+
+    Note: This executes module-level code, but only AFTER AST validation has
+    blocked all dangerous imports/calls/attrs. In managed mode the AST gate is
+    even stricter (no os.getenv, io, pathlib, filesystem ops). What remains
+    is data declarations (TOOLS, ENABLED) and safe imports (json, requests).
+    """
     module_name = f"_toolmaker_smoke_{filepath.stem}"
     try:
         spec = importlib.util.spec_from_file_location(module_name, filepath)

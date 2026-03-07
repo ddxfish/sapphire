@@ -19,7 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 import config
 from core.auth import (
-    require_login, require_setup, check_rate_limit,
+    require_login, require_setup, check_rate_limit, check_endpoint_rate,
     generate_csrf_token, validate_csrf, get_client_ip
 )
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
@@ -579,6 +579,8 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
 @app.post("/api/chat")
 async def handle_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Non-streaming chat endpoint."""
+    check_endpoint_rate(request, 'chat', max_calls=30, window=60)
+
     data = await request.json()
     if not data or 'text' not in data:
         raise HTTPException(status_code=400, detail="No text provided")
@@ -594,6 +596,8 @@ async def handle_chat(request: Request, _=Depends(require_login), system=Depends
 @app.post("/api/chat/stream")
 async def handle_chat_stream(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Streaming chat endpoint (SSE)."""
+    check_endpoint_rate(request, 'chat', max_calls=30, window=60)
+
     data = await request.json()
     if not data or 'text' not in data:
         raise HTTPException(status_code=400, detail="No text provided")
@@ -1368,15 +1372,22 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
 # TTS ROUTES
 # =============================================================================
 
+_TTS_MAX_CHARS = 50_000  # ~8,000 words / ~20 pages — generous for stories, blocks book dumps
+
 @app.post("/api/tts")
 async def handle_tts_speak(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """TTS speak endpoint."""
+    check_endpoint_rate(request, 'tts', max_calls=30, window=60)
+
     data = await request.json()
     text = data.get('text')
     output_mode = data.get('output_mode', 'play')
 
     if not text:
         raise HTTPException(status_code=400, detail="No text provided")
+
+    if len(text) > _TTS_MAX_CHARS:
+        raise HTTPException(status_code=413, detail=f"Text too long (max {_TTS_MAX_CHARS:,} characters)")
 
     if not config.TTS_ENABLED:
         return {"status": "success", "message": "TTS disabled"}
@@ -1403,11 +1414,16 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
 @app.post("/api/tts/preview")
 async def tts_preview(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Generate TTS audio with custom voice/pitch/speed without changing system state."""
+    check_endpoint_rate(request, 'tts', max_calls=30, window=60)  # shares TTS budget
+
     data = await request.json()
     text = data.get('text', 'Hello!')
     voice = data.get('voice')
     pitch = data.get('pitch')
     speed = data.get('speed')
+
+    if len(text) > _TTS_MAX_CHARS:
+        raise HTTPException(status_code=413, detail=f"Text too long (max {_TTS_MAX_CHARS:,} characters)")
 
     if not config.TTS_ENABLED:
         raise HTTPException(status_code=503, detail="TTS disabled")
@@ -1503,8 +1519,10 @@ async def tts_voices_post(request: Request, _=Depends(require_login), system=Dep
 # =============================================================================
 
 @app.post("/api/transcribe")
-async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_login), system=Depends(get_system)):
+async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=Depends(require_login), system=Depends(get_system)):
     """Transcribe audio to text."""
+    check_endpoint_rate(request, 'transcribe', max_calls=20, window=60)
+
     ok, reason = can_transcribe(system.whisper_client)
     if not ok:
         raise HTTPException(status_code=400, detail=reason)
@@ -1514,6 +1532,8 @@ async def handle_transcribe(audio: UploadFile = File(...), _=Depends(require_log
     try:
         os.close(fd)
         contents = await audio.read()
+        if len(contents) > 25 * 1024 * 1024:  # 25MB max
+            raise HTTPException(status_code=413, detail="Audio file too large (max 25MB)")
         with open(temp_path, 'wb') as f:
             f.write(contents)
         try:
@@ -1668,6 +1688,7 @@ async def set_system_prompt(request: Request, _=Depends(require_login), system=D
 # =============================================================================
 
 _SENSITIVE_SUFFIXES = ('_API_KEY', '_SECRET', '_PASSWORD', '_TOKEN')
+_SENSITIVE_KEYS = {'SAPPHIRE_ROUTER_URL', 'SAPPHIRE_ROUTER_TENANT_ID'}
 
 @app.get("/api/settings")
 async def get_all_settings(request: Request, _=Depends(require_login)):
@@ -1677,7 +1698,10 @@ async def get_all_settings(request: Request, _=Depends(require_login)):
         all_settings = settings.get_all_settings()
         # Mask sensitive values — frontend only needs to know if they're set
         for key in all_settings:
-            if any(key.upper().endswith(s) for s in _SENSITIVE_SUFFIXES) and all_settings[key]:
+            if all_settings[key] and (
+                any(key.upper().endswith(s) for s in _SENSITIVE_SUFFIXES)
+                or key in _SENSITIVE_KEYS
+            ):
                 all_settings[key] = '••••••••'
         user_overrides = settings.get_user_overrides()
         return {
@@ -1887,7 +1911,7 @@ async def get_setting(key: str, request: Request, _=Depends(require_login)):
     value = settings.get(key)
     if value is None:
         raise HTTPException(status_code=404, detail=f"Setting '{key}' not found")
-    if any(key.upper().endswith(s) for s in _SENSITIVE_SUFFIXES) and value:
+    if value and (any(key.upper().endswith(s) for s in _SENSITIVE_SUFFIXES) or key in _SENSITIVE_KEYS):
         value = '••••••••'
     tier = settings.validate_tier(key)
     is_user_override = key in settings.get_user_overrides()
@@ -4597,6 +4621,10 @@ async def install_plugin(
 
         tmp_dir = Path(tempfile.mkdtemp())
         with zipfile.ZipFile(tmp_zip, 'r') as zf:
+            # Reject symlinks in zip (path traversal vector)
+            for info in zf.infolist():
+                if info.external_attr >> 16 & 0o120000 == 0o120000:
+                    raise HTTPException(status_code=400, detail=f"Zip contains symlink: {info.filename}")
             zf.extractall(tmp_dir)
 
         # ── Find plugin.json (root or one level deep) ──
@@ -4690,7 +4718,7 @@ async def install_plugin(
 
         # ── Install ──
         USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(plugin_root, dest)
+        shutil.copytree(plugin_root, dest, symlinks=False)
 
         # ── Write install metadata to plugin state ──
         from datetime import datetime

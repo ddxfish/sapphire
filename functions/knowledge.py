@@ -634,6 +634,8 @@ def delete_tab(tab_id):
 
 # ─── Knowledge Entries CRUD ───────────────────────────────────────────────────
 
+MAX_ENTRIES_PER_SCOPE = 50_000  # ~20MB of text + embeddings
+
 def add_entry(tab_id, content, chunk_index=0, source_filename=None):
     embedding_blob = None
     embedder = _get_embedder()
@@ -644,6 +646,17 @@ def add_entry(tab_id, content, chunk_index=0, source_filename=None):
 
     with _get_connection() as conn:
         cursor = conn.cursor()
+        # Check scope entry cap
+        cursor.execute('''
+            SELECT COUNT(*) FROM knowledge_entries
+            WHERE tab_id IN (SELECT id FROM knowledge_tabs WHERE scope = (
+                SELECT scope FROM knowledge_tabs WHERE id = ?
+            ))
+        ''', (tab_id,))
+        count = cursor.fetchone()[0]
+        if count >= MAX_ENTRIES_PER_SCOPE:
+            raise ValueError(f"Knowledge scope entry limit reached ({MAX_ENTRIES_PER_SCOPE:,})")
+
         cursor.execute(
             'INSERT INTO knowledge_entries (tab_id, content, chunk_index, source_filename, embedding) VALUES (?, ?, ?, ?, ?)',
             (tab_id, content, chunk_index, source_filename, embedding_blob)
@@ -745,6 +758,7 @@ def search_rag(query, scope, limit=5, threshold=0.40, max_tokens=4000):
             SELECT e.id, e.content, t.name, e.embedding, e.source_filename
             FROM knowledge_entries e JOIN knowledge_tabs t ON e.tab_id = t.id
             WHERE t.scope = ? AND e.embedding IS NOT NULL
+            LIMIT 10000
         ''', (scope,))
         rows = cursor.fetchall()
 
