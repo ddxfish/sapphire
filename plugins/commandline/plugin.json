@@ -1,0 +1,36 @@
+{
+  "name": "commandline",
+  "version": "1.0.0",
+  "description": "Command Line — run shell commands on the local machine",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "priority": 50,
+  "managed_hide": true,
+  "capabilities": {
+    "tools": ["tools/commandline.py"],
+    "settings": [
+      {
+        "key": "output_limit",
+        "type": "number",
+        "label": "Output Limit (chars)",
+        "default": 6000,
+        "help": "Maximum characters returned from command output"
+      },
+      {
+        "key": "max_timeout",
+        "type": "number",
+        "label": "Max Timeout (seconds)",
+        "default": 120,
+        "help": "Maximum allowed timeout for any command"
+      },
+      {
+        "key": "blacklist",
+        "type": "string",
+        "label": "Command Blacklist",
+        "widget": "textarea",
+        "default": "rm -rf /\nrm -rf /*\n--no-preserve-root\nmkfs\ndd if=/dev\n:(){ :|:& };:\n> /dev/sda\nchmod -R 777 /\ninit 0\ninit 6",
+        "help": "Blocked patterns, one per line. Checked as regex against commands."
+      }
+    ]
+  }
+}

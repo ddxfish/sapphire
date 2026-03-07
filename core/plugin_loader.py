@@ -5,6 +5,7 @@
 
 import json
 import logging
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -136,6 +137,11 @@ class PluginLoader:
 
             name = manifest.get("name", child.name)
             if not self._validate_manifest(name, manifest):
+                continue
+
+            # Skip plugins hidden in managed mode
+            if manifest.get("managed_hide") and os.environ.get('SAPPHIRE_MANAGED'):
+                logger.debug(f"[PLUGINS] Skipping {name} (managed_hide)")
                 continue
 
             # Enabled if in user config, or if manifest declares default_enabled

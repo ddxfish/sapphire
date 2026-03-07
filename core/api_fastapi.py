@@ -4838,6 +4838,11 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
     data = await request.json()
     settings = data.get("settings", data)
 
+    # Block toolmaker trust mode in managed mode
+    if plugin_name == 'toolmaker' and os.environ.get('SAPPHIRE_MANAGED'):
+        if settings.get('validation') == 'trust':
+            raise HTTPException(status_code=403, detail="Trust mode is disabled in managed mode")
+
     USER_PLUGIN_SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
     settings_file = USER_PLUGIN_SETTINGS_DIR / f"{plugin_name}.json"
     with open(settings_file, 'w', encoding='utf-8') as f:

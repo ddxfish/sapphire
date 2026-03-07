@@ -16,7 +16,7 @@ function escapeHtml(s) {
  * @param {Object} values - Current setting values (merged with defaults by backend)
  * @param {Object} [opts] - {onChange: (key, value) => void}
  */
-export function renderSettingsForm(container, schema, values = {}, { onChange } = {}) {
+export function renderSettingsForm(container, schema, values = {}, { onChange, managed } = {}) {
     if (!schema?.length) {
         container.innerHTML = '<p style="color:var(--text-muted)">No settings available.</p>';
         return;
@@ -39,7 +39,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange } 
 
     // Attach confirm gates and onChange handlers
     for (const field of schema) {
-        if (field.confirm) attachConfirmGate(container, field);
+        if (field.confirm) attachConfirmGate(container, field, managed);
     }
 
     if (onChange) {
@@ -133,7 +133,7 @@ function coerce(value, field) {
 /**
  * Attach a danger confirm gate to a field.
  */
-function attachConfirmGate(container, field) {
+function attachConfirmGate(container, field, managed) {
     const id = `ps-${field.key}`;
     const widget = field.widget || inferWidget(field);
     const el = widget === 'radio'
@@ -148,6 +148,20 @@ function attachConfirmGate(container, field) {
         const newValue = widget === 'toggle' ? String(e.target.checked) : e.target.value;
         if (!conf.values?.includes(newValue)) {
             previousValue = newValue;
+            return;
+        }
+
+        // Block confirm-gated values entirely in managed mode
+        if (managed) {
+            if (widget === 'select') e.target.value = previousValue;
+            else if (widget === 'toggle') { e.target.checked = previousValue === 'true'; }
+            else if (widget === 'radio') {
+                const prev = container.querySelector(`input[name="${id}"][value="${previousValue}"]`);
+                if (prev) prev.checked = true;
+            }
+            const { showToast } = await import('../ui.js');
+            showToast(`${conf.title || 'This option'} is disabled in managed mode`, 'error');
+            e.stopImmediatePropagation();
             return;
         }
 

@@ -95,7 +95,7 @@ async function loadPluginTab(name, source) {
                 name: plugin.title || name,
                 icon: plugin.icon || '\u2699\uFE0F',
                 helpText: `${plugin.title || name} settings`,
-                render: (box, settings) => renderSettingsForm(box, plugin.settings_schema, settings),
+                render: (box, settings) => renderSettingsForm(box, plugin.settings_schema, settings, { managed }),
                 load: () => pluginsAPI.getSettings(name),
                 save: (s) => pluginsAPI.saveSettings(name, s),
                 getSettings: (box) => readSettingsForm(box, plugin.settings_schema),

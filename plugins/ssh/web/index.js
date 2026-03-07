@@ -3,7 +3,6 @@
 
 import { registerPluginSettings } from '/static/shared/plugin-registry.js';
 import pluginsAPI from '/static/shared/plugins-api.js';
-import { showDangerConfirm } from '/static/shared/danger-confirm.js';
 
 function csrfHeaders(extra = {}) {
   const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -306,12 +305,6 @@ function renderForm(container, settings) {
     <div class="ssh-form">
       <div class="ssh-section-title">Servers</div>
 
-      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:8px">
-        <input type="checkbox" id="ssh-localhost" ${s.localhost_enabled ? 'checked' : ''}>
-        Enable localhost
-        <span style="color:var(--text-muted);font-size:11px">(run commands directly on this machine)</span>
-      </label>
-
       <div class="ssh-server-list" id="ssh-server-list"></div>
 
       <div class="ssh-add-form" id="ssh-add-form">
@@ -354,26 +347,6 @@ function renderForm(container, settings) {
   `;
 
   renderServerList(container);
-
-  // Localhost toggle — danger gate every time it's enabled
-  container.querySelector('#ssh-localhost').addEventListener('change', async (e) => {
-    if (e.target.checked) {
-      const confirmed = await showDangerConfirm({
-        title: 'Enable Localhost Execution',
-        warnings: [
-          'The AI will be able to run commands directly on THIS machine',
-          'This is equivalent to giving the AI a terminal session',
-          'File deletion, process management, and system changes are all possible',
-        ],
-        buttonLabel: 'Enable Localhost',
-      });
-      if (!confirmed) {
-        e.target.checked = false;
-        return;
-      }
-    }
-    autoSave(container);
-  });
 
   // Add server button
   container.querySelector('#ssh-add-btn').addEventListener('click', () => {
@@ -435,7 +408,6 @@ async function saveSettings(settings) {
     output_limit: settings._output_limit,
     max_timeout: settings._max_timeout,
     blacklist: settings._blacklist,
-    localhost_enabled: settings._localhost_enabled,
   };
   return pluginsAPI.saveSettings('ssh', pluginSettings);
 }
@@ -450,13 +422,10 @@ function getFormSettings(container) {
   const blacklistText = getVal('ssh-blacklist');
   const blacklist = blacklistText.split('\n').map(s => s.trim()).filter(Boolean);
 
-  const localhostEl = container.querySelector('#ssh-localhost') || document.getElementById('ssh-localhost');
-
   return {
     _output_limit: parseInt(getVal('ssh-output-limit')) || 6000,
     _max_timeout: parseInt(getVal('ssh-max-timeout')) || 120,
     _blacklist: blacklist,
-    _localhost_enabled: localhostEl?.checked || false,
   };
 }
 

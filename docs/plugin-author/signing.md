@@ -27,13 +27,44 @@ On scan, the loader verifies:
 
 When enabled, unsigned plugins load with a warning. Tampered plugins are always blocked regardless of this setting.
 
-## Signing Your Own Plugins
+## Signing Plugins (Official)
 
-For plugin developers distributing through channels other than the official store:
+The signing tool lives at `user/tools/sign_plugin.py`. It requires `cryptography` (already in sapphire's deps) and the private key at `user/plugin_signing_key.pem`.
 
-1. Generate an ed25519 keypair
-2. Hash all signable files in your plugin
-3. Sign the hash manifest with your private key
-4. Ship the `plugin.sig` alongside your plugin
+```bash
+# Sign a single plugin
+python user/tools/sign_plugin.py plugins/my-plugin/
 
-Users install your public key to verify. The official Sapphire public key is baked into `core/plugin_verify.py`.
+# Sign multiple
+python user/tools/sign_plugin.py plugins/ssh/ plugins/email/
+
+# Sign all plugins in plugins/
+python user/tools/sign_plugin.py --all
+```
+
+This hashes all signable files (`.py`, `.json`, `.js`, `.css`, `.html`, `.md`), builds a manifest, signs it with ed25519, and writes `plugin.sig` into the plugin directory.
+
+**Re-sign after any change** to plugin files — even a one-character edit invalidates the signature and the plugin will show as "Tampered".
+
+## Signing Your Own Plugins (Third-Party Authors)
+
+For plugin developers distributing outside the official store:
+
+```bash
+# 1. Generate a keypair (one-time)
+python -c "
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+key = Ed25519PrivateKey.generate()
+print(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode())
+print('Public key (hex):', key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex())
+"
+# Save the PEM output as your private key. Share the public key hex with users.
+
+# 2. Sign your plugin (same tool, point at your key)
+# Edit PRIVATE_KEY_PATH in sign_plugin.py or pass your key path
+
+# 3. Ship plugin.sig with your plugin
+```
+
+Users add your public key hex to their authorized keys to verify your plugins. The official Sapphire public key is baked into `core/plugin_verify.py`.

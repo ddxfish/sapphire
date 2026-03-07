@@ -1,13 +1,12 @@
 # SSH tool — plugin tool
 """
 SSH tool — AI can list servers and run commands on remote machines.
-Uses system `ssh` via subprocess. Servers configured in Settings → Plugins → SSH.
+Uses system `ssh` via subprocess. Servers configured in Settings > Plugins > SSH.
 Commands checked against a configurable blacklist before execution.
 """
 
 import subprocess
 import re
-import shlex
 import json
 import logging
 from pathlib import Path
@@ -15,7 +14,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 ENABLED = True
-EMOJI = '🖥️'
+EMOJI = '\U0001f5a5\ufe0f'
 AVAILABLE_FUNCTIONS = [
     'ssh_get_servers',
     'ssh_run_command',
@@ -45,7 +44,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "ssh_run_command",
-            "description": "Run a command on a server by friendly name (from ssh_get_servers). Use 'localhost' for the local machine. Output is truncated if too long.",
+            "description": "Run a command on a remote server by friendly name (from ssh_get_servers). Output is truncated if too long.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -122,11 +121,6 @@ def _get_max_timeout():
     return settings.get('max_timeout', DEFAULT_MAX_TIMEOUT)
 
 
-def _localhost_enabled():
-    settings = _get_ssh_settings()
-    return bool(settings.get('localhost_enabled', False))
-
-
 def _check_blacklist(command):
     """Check command against blacklist. Returns matching pattern or None."""
     blacklist = _get_blacklist()
@@ -149,20 +143,12 @@ def _get_servers(name=None):
     from core.credentials_manager import credentials
     all_servers = credentials.get_ssh_servers()
     active = [s for s in all_servers if s.get('enabled', True)]
-    localhost = _localhost_enabled()
-
     active_names = [s['name'] for s in active]
-    if localhost:
-        active_names.insert(0, 'localhost')
 
-    if not active and not localhost:
-        return "No SSH servers available. Add or enable servers in Settings → Plugins → SSH.", True
+    if not active:
+        return "No SSH servers available. Add or enable servers in Settings > Plugins > SSH.", True
 
     if name:
-        if name.lower() == 'localhost':
-            if not localhost:
-                return "Localhost is not enabled. Enable it in Settings → Plugins → SSH.", False
-            return "Server: localhost\n  Runs commands directly on this machine (no SSH).", True
         server = next((s for s in active if s['name'].lower() == name.lower()), None)
         if not server:
             return f"Server '{name}' not found. Available: {', '.join(active_names)}", False
@@ -174,79 +160,32 @@ def _get_servers(name=None):
             f"  Key: {server.get('key_path', '~/.ssh/id_ed25519')}"
         ), True
 
-    total = len(active) + (1 if localhost else 0)
-    lines = [f"Servers ({total}):"]
-    if localhost:
-        lines.append("  [localhost] (local machine)")
+    lines = [f"Servers ({len(active)}):"]
     for s in active:
         lines.append(f"  [{s['name']}] {s['user']}@{s['host']}:{s.get('port', 22)}")
     return '\n'.join(lines), True
 
 
 def _run_command(server_name, command, timeout=30):
-    # Blacklist check (applies to all targets including localhost)
     blocked = _check_blacklist(command)
     if blocked:
         logger.warning(f"Command blocked by blacklist: {command!r} matched {blocked!r}")
-        return f"Command blocked by safety filter (matched: {blocked}). Edit blacklist in Settings → Plugins → SSH.", False
+        return f"Command blocked by safety filter (matched: {blocked}). Edit blacklist in Settings > Plugins > SSH.", False
 
-    # Clamp timeout
     max_timeout = _get_max_timeout()
     timeout = min(max(5, timeout), max_timeout)
 
-    # Localhost — direct subprocess, no SSH
-    if server_name.lower() == 'localhost':
-        if not _localhost_enabled():
-            return "Localhost is not enabled. Enable it in Settings → Plugins → SSH.", False
-        return _run_local(command, timeout)
-
-    # Remote server — resolve from enabled servers only
     from core.credentials_manager import credentials
     all_servers = credentials.get_ssh_servers()
     active = [s for s in all_servers if s.get('enabled', True)]
     server = next((s for s in active if s['name'].lower() == server_name.lower()), None)
     if not server:
         active_names = [s['name'] for s in active]
-        if _localhost_enabled():
-            active_names.insert(0, 'localhost')
         if active_names:
             return f"Server '{server_name}' not found. Available: {', '.join(active_names)}", False
         return "No servers available.", False
 
     return _run_remote(server, command, timeout)
-
-
-def _run_local(command, timeout):
-    """Run command locally via subprocess."""
-    logger.info(f"LOCAL $ {command[:100]}")
-
-    try:
-        import sys
-        if sys.platform == 'win32':
-            # shell=True so cmd.exe builtins (dir, type, copy...) work
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                shell=True,
-            )
-        else:
-            argv = shlex.split(command)
-            result = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        return _format_output('localhost', 'local', command, result)
-
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Local command timed out after {timeout}s: {command[:100]}")
-        return f"[localhost] Command timed out after {timeout}s.", False
-    except Exception as e:
-        logger.error(f"Local command error: {e}", exc_info=True)
-        return f"Local command error: {e}", False
 
 
 def _run_remote(server, command, timeout):

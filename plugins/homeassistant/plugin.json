@@ -5,6 +5,7 @@
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
   "priority": 50,
+  "managed_hide": true,
   "capabilities": {
     "tools": ["tools/homeassistant.py"]
   }

@@ -31,10 +31,16 @@ _RESERVED_NAMES = {
 
 
 def _get_validation_level():
-    """Read validation level from plugin settings."""
+    """Read validation level from plugin settings. Trust mode blocked in managed mode."""
     try:
         from core.plugin_loader import plugin_loader
-        return plugin_loader.get_plugin_settings('toolmaker').get('validation', 'moderate')
+        level = plugin_loader.get_plugin_settings('toolmaker').get('validation', 'moderate')
+        if level == 'trust':
+            import os
+            if os.environ.get('SAPPHIRE_MANAGED'):
+                logger.warning("[MANAGED] Trust mode blocked — forcing moderate")
+                return 'moderate'
+        return level
     except Exception:
         pass
     return 'moderate'
