@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 # Cache-bust version — changes every server restart so browsers fetch fresh assets
 BOOT_VERSION = str(int(time.time()))
 
+# App version from VERSION file
+try:
+    APP_VERSION = (Path(__file__).parent.parent / 'VERSION').read_text().strip()
+except Exception:
+    APP_VERSION = '?'
+
 # Project paths — defined early so _build_import_map() can use STATIC_DIR
 PROJECT_ROOT = Path(__file__).parent.parent
 TEMPLATES_DIR = PROJECT_ROOT / "interfaces" / "web" / "templates"
@@ -227,6 +233,7 @@ async def index(request: Request, _=Depends(require_login)):
         "request": request,
         "csrf_token": lambda: csrf_token,
         "v": BOOT_VERSION,
+        "app_version": APP_VERSION,
         "managed": bool(os.environ.get('SAPPHIRE_MANAGED')),
         "import_map": IMPORT_MAP
     })
