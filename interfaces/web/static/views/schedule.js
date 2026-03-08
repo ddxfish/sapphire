@@ -661,10 +661,10 @@ async function openEditor(task, isHeartbeat = false) {
                 </details>
 
                 <details class="sched-accordion">
-                    <summary class="sched-acc-header">Voice <span class="sched-preview" id="ed-voice-preview">${(() => { const on = isHeartbeat ? !!t.tts_enabled : t.tts_enabled !== false; if (!on) return 'No TTS'; return t.browser_tts ? 'Browser' : (t.voice || 'Server'); })()}</span></summary>
+                    <summary class="sched-acc-header">Voice <span class="sched-preview" id="ed-voice-preview">${(() => { const serverOn = isHeartbeat ? !!t.tts_enabled : t.tts_enabled !== false; if (t.browser_tts) return 'Browser'; if (serverOn) return t.voice || 'Server'; return 'No TTS'; })()}</span></summary>
                     <div class="sched-acc-body"><div class="sched-acc-inner">
-                        <div class="sched-checkbox">
-                            <label><input type="checkbox" id="ed-tts" ${t.tts_enabled !== false && !isHeartbeat ? 'checked' : ''}${isHeartbeat && t.tts_enabled ? ' checked' : ''}> Speak response</label>
+                        <div class="sched-checkbox"${window.__managed ? ' style="display:none"' : ''}>
+                            <label><input type="checkbox" id="ed-tts" ${t.tts_enabled !== false && !isHeartbeat ? 'checked' : ''}${isHeartbeat && t.tts_enabled ? ' checked' : ''}> Speak on server speakers</label>
                         </div>
                         <div class="sched-checkbox">
                             <label><input type="checkbox" id="ed-browser-tts" ${t.browser_tts ? 'checked' : ''}> Play in browser <span class="help-tip" data-tip="Send TTS audio to open browser tabs instead of server speakers. One tab claims and plays.">?</span></label>
@@ -955,10 +955,10 @@ async function openEditor(task, isHeartbeat = false) {
     const updateVoicePreview = () => {
         const el = modal.querySelector('#ed-voice-preview');
         if (!el) return;
-        const ttsOn = modal.querySelector('#ed-tts')?.checked;
-        if (!ttsOn) { el.textContent = 'No TTS'; return; }
         const browserTts = modal.querySelector('#ed-browser-tts')?.checked;
-        el.textContent = browserTts ? 'Browser' : (modal.querySelector('#ed-voice')?.value || 'Server');
+        if (browserTts) { el.textContent = 'Browser'; return; }
+        const ttsOn = modal.querySelector('#ed-tts')?.checked;
+        el.textContent = ttsOn ? (modal.querySelector('#ed-voice')?.value || 'Server') : 'No TTS';
     };
     modal.querySelector('#ed-voice')?.addEventListener('change', updateVoicePreview);
     modal.querySelector('#ed-tts')?.addEventListener('change', updateVoicePreview);

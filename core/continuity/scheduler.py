@@ -238,6 +238,7 @@ class ContinuityScheduler:
             "chat_target": data.get("chat_target", ""),  # blank = ephemeral (no chat, no UI)
             "initial_message": data.get("initial_message", "Hello."),
             "tts_enabled": data.get("tts_enabled", True),
+            "browser_tts": data.get("browser_tts", False),
             "inject_datetime": data.get("inject_datetime", False),
             "persona": data.get("persona", ""),
             "voice": data.get("voice", ""),
@@ -294,7 +295,7 @@ class ContinuityScheduler:
             allowed = {
                 "name", "enabled", "schedule", "chance",
                 "provider", "model", "prompt", "toolset", "chat_target",
-                "initial_message", "tts_enabled", "inject_datetime",
+                "initial_message", "tts_enabled", "browser_tts", "inject_datetime",
                 "persona", "voice", "pitch", "speed",
                 "memory_scope", "knowledge_scope", "people_scope", "goal_scope",
                 "heartbeat", "emoji",

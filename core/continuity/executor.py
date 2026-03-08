@@ -100,10 +100,10 @@ class ContinuityExecutor:
                     try: response_cb(response)
                     except Exception: pass
 
-                if tts_enabled and response:
+                if response:
                     if browser_tts:
                         publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
-                    elif hasattr(self.system, 'tts') and self.system.tts:
+                    elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
                         try:
                             self.system.tts.speak_sync(response)
                         except Exception as tts_err:
@@ -209,10 +209,10 @@ class ContinuityExecutor:
                     try: response_cb(response)
                     except Exception: pass
 
-                if tts_enabled and response:
+                if response:
                     if browser_tts:
                         publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
-                    elif hasattr(self.system, 'tts') and self.system.tts:
+                    elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
                         try:
                             self.system.tts.speak_sync(response)
                         except Exception as tts_err:
