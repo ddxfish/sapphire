@@ -11,6 +11,11 @@ Hear her voice as she dims your lights before bed. Use your voice to talk back. 
 <video src="https://github.com/user-attachments/assets/1bc08408-0a7c-46a8-a68a-ee03496e4e81" controls width="100%"></video>
 
 
+[![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/pCdTAnExma)
+[![YouTube](https://img.shields.io/badge/YouTube-Subscribe-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@SapphireBlueAi)
+[![Website](https://img.shields.io/badge/Website-sapphireblue.dev-0ea5e9?logo=googlechrome&logoColor=white)](https://sapphireblue.dev/)
+[![GitHub Stars](https://img.shields.io/github/stars/ddxfish/sapphire?style=flat&logo=github&label=Stars)](https://github.com/ddxfish/sapphire)
+
 ![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL_3.0-blue)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
