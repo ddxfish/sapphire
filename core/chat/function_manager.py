@@ -210,12 +210,8 @@ class FunctionManager:
                         '_plugin': plugin_name,
                     }
 
-                    # Register tool-declared settings
-                    tool_settings = namespace.get('SETTINGS')
-                    if tool_settings and isinstance(tool_settings, dict):
-                        from core.settings_manager import settings as sm
-                        tool_help = namespace.get('SETTINGS_HELP')
-                        sm.register_tool_settings(module_name, tool_settings, tool_help)
+                    # Plugin settings live in user/webui/plugins/{name}.json only
+                    # No register_tool_settings — single settings path, no collisions
 
                     # Track per-tool flags
                     for tool in tools:
@@ -229,17 +225,17 @@ class FunctionManager:
                     if mode_filter:
                         self._mode_filters[module_name] = mode_filter
 
-                    # Dedup and add to all_possible_tools
+                    # Check for function name conflicts — hard error, don't silently corrupt
                     existing_names = {t['function']['name'] for t in self.all_possible_tools}
                     for tool in tools:
                         fname = tool['function']['name']
                         if fname in existing_names:
-                            logger.warning(f"Duplicate tool '{fname}' from plugin '{plugin_name}' — skipping")
-                        else:
-                            self.all_possible_tools.append(tool)
-                            existing_names.add(fname)
+                            owner = self._function_module_map.get(fname, 'unknown')
+                            logger.error(f"\033[91mPlugin '{plugin_name}' tool '{fname}' conflicts with existing tool from '{owner}' — plugin NOT loaded\033[0m")
+                            raise ValueError(f"Tool name '{fname}' already registered by '{owner}'")
 
                     for tool in tools:
+                        self.all_possible_tools.append(tool)
                         self.execution_map[tool['function']['name']] = executor
 
                     # If "all" toolset is active, add new tools to _enabled_tools too
@@ -279,14 +275,7 @@ class FunctionManager:
                                        if t['function']['name'] not in func_names]
                 self._mode_filters.pop(module_name, None)
 
-        # Clean up tool-registered settings so reload doesn't collide with itself
         if to_remove:
-            try:
-                from core.settings_manager import settings as sm
-                for module_name in to_remove:
-                    sm.unregister_tool_settings(module_name)
-            except Exception as e:
-                logger.warning(f"Failed to unregister tool settings for '{plugin_name}': {e}")
             logger.info(f"Plugin '{plugin_name}' tools unregistered: {to_remove}")
 
     def _get_current_prompt_mode(self) -> str:

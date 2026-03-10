@@ -401,34 +401,6 @@ def execute(function_name, arguments, config):
                 except Exception:
                     pass
 
-                # Check for settings collisions (only for plugins that loaded)
-                collision_warnings = []
-                try:
-                    from core.settings_manager import settings as sm
-                    registered_meta = sm.get_tool_settings_meta()
-                    for name in actually_loaded + reloaded:
-                        tool_path = _USER_PLUGINS / name / "tools" / f"{name}.py"
-                        if not tool_path.exists():
-                            continue
-                        ns = {}
-                        try:
-                            exec(compile(tool_path.read_text(encoding='utf-8'), str(tool_path), 'exec'), ns)
-                        except Exception:
-                            continue
-                        declared = ns.get('SETTINGS', {})
-                        if not declared:
-                            continue
-                        module_key = f"plugin_{name}_{name}"
-                        registered_keys = {e['key'] for e in registered_meta.get(module_key, [])}
-                        missing = [k for k in declared if k not in registered_keys]
-                        if missing:
-                            collision_warnings.append(
-                                f"WARNING: Plugin '{name}' settings {missing} collided with existing settings and were skipped. "
-                                f"Prefix setting keys with the plugin name (e.g. '{name.upper()}_{missing[0]}') to avoid collisions."
-                            )
-                except Exception:
-                    pass
-
                 parts = []
                 if actually_loaded:
                     parts.append(f"Loaded {len(actually_loaded)} new: {', '.join(actually_loaded)}")
@@ -436,10 +408,8 @@ def execute(function_name, arguments, config):
                     parts.append(f"Reloaded {len(reloaded)} updated: {', '.join(reloaded)}")
                 if failed_to_load:
                     parts.append(f"FAILED to load {len(failed_to_load)}: {', '.join(failed_to_load)} (check plugin signing/sideloading)")
-                if collision_warnings:
-                    parts.extend(collision_warnings)
                 if parts:
-                    return f"{'. '.join(parts)}. Tools are now available.", not (collision_warnings or failed_to_load)
+                    return f"{'. '.join(parts)}. Tools are now available.", not failed_to_load
                 else:
                     return "Rescan complete — no changes detected.", True
             except Exception as e:
