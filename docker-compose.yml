@@ -1,0 +1,38 @@
+# Sapphire - Docker Compose
+# Usage:
+#   docker compose up        (start)
+#   docker compose pull      (update to latest)
+#   docker compose down      (stop)
+#
+# First run: open https://localhost:8073 and complete setup wizard
+
+services:
+  sapphire:
+    build: .
+    container_name: sapphire
+    restart: unless-stopped
+    ports:
+      - "8073:8073"
+    volumes:
+      # User data — persists across updates
+      - sapphire-data:/app/user
+      # Credentials — API keys, secrets
+      - sapphire-config:/home/sapphire/.config/sapphire
+    environment:
+      # LLM API Keys — uncomment and fill in what you use
+      # ANTHROPIC_API_KEY: "your-key-here"
+      # OPENAI_API_KEY: "your-key-here"
+      # GOOGLE_API_KEY: "your-key-here"
+
+      # LM Studio on host machine (uncomment if using local LLM)
+      # For Docker Desktop (Mac/Windows):
+      # LMSTUDIO_BASE_URL: "http://host.docker.internal:1234/v1"
+      # For Linux Docker:
+      # LMSTUDIO_BASE_URL: "http://172.17.0.1:1234/v1"
+    extra_hosts:
+      # Allows container to reach host services (LM Studio, etc.)
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  sapphire-data:
+  sapphire-config:
