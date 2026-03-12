@@ -48,6 +48,7 @@ export function renderEventTrigger(t, opts = {}) {
                 <option value="_loading" disabled>Loading plugin events...</option>
             </select>
         </div>
+        <div id="ed-task-fields"></div>
         <details class="sched-accordion" style="margin-top:8px">
             <summary class="sched-acc-header">Filter <span class="sched-preview" id="ed-filter-preview">${eventFilter ? 'active' : ''}</span></summary>
             <div class="sched-acc-body"><div class="sched-acc-inner">
@@ -68,14 +69,20 @@ export function renderEventTrigger(t, opts = {}) {
  * @param {Object} opts - { type: 'daemon' | 'webhook' }
  */
 export function wireEventTrigger(modal, opts = {}) {
-    const { type } = opts;
+    const { type, triggerConfig } = opts;
 
     if (type === 'daemon') {
+        // Stash existing trigger_config so task fields can pre-fill on edit
+        const tfContainer = modal.querySelector('#ed-task-fields');
+        if (tfContainer && triggerConfig) {
+            tfContainer.dataset.triggerConfig = JSON.stringify(triggerConfig);
+        }
         _loadEventSources(modal);
 
-        // Update filter hints when source changes
+        // Update filter hints + task fields when source changes
         modal.querySelector('#ed-event-source')?.addEventListener('change', () => {
             _updateFilterHints(modal);
+            _renderTaskFields(modal);
         });
 
         // Update filter preview chip
@@ -116,10 +123,20 @@ export function readEventTrigger(modal) {
         catch { alert('Invalid JSON in filter field'); return null; }
     }
 
+    // Collect task_fields values
+    const taskFieldValues = {};
+    modal.querySelectorAll('[data-task-field]').forEach(el => {
+        const key = el.dataset.taskField;
+        if (el.type === 'checkbox') taskFieldValues[key] = el.checked;
+        else if (el.type === 'number') taskFieldValues[key] = el.value ? Number(el.value) : null;
+        else taskFieldValues[key] = el.value;
+    });
+
     return {
         trigger_config: {
             source: modal.querySelector('#ed-event-source')?.value || '',
             filter,
+            ...taskFieldValues,
         },
         schedule: '0 0 31 2 *', // never fires via cron
         chance: 100,
@@ -170,8 +187,9 @@ async function _loadEventSources(modal) {
         const current = select.dataset.currentValue;
         if (current) select.value = current;
 
-        // Show hints for pre-selected source
+        // Show hints + task fields for pre-selected source
         _updateFilterHints(modal);
+        _renderTaskFields(modal);
     } catch {
         select.innerHTML = '<option value="">Select event source...</option><option value="" disabled>Could not load sources</option>';
     }
@@ -198,6 +216,87 @@ function _updateFilterHints(modal) {
     hintsEl.innerHTML = `<strong>Available keys:</strong> ${fields.map(f =>
         `<code>${f.key}</code>${f.label && f.label !== f.key ? ` (${f.label})` : ''}`
     ).join(', ')}`;
+}
+
+function _renderTaskFields(modal) {
+    const container = modal.querySelector('#ed-task-fields');
+    if (!container) return;
+
+    const sourceName = modal.querySelector('#ed-event-source')?.value;
+    if (!sourceName) { container.innerHTML = ''; return; }
+
+    const source = _sourcesCache.find(s => s.name === sourceName);
+    const fields = source?.task_fields;
+    if (!fields || fields.length === 0) { container.innerHTML = ''; return; }
+
+    // Read current trigger_config for pre-filling (stored on container by editor)
+    const existing = JSON.parse(container.dataset.triggerConfig || '{}');
+
+    let html = '<div class="sched-section-title" style="margin-top:12px">Source Settings</div>';
+    for (const f of fields) {
+        const val = existing[f.key] ?? f.default ?? '';
+        const help = f.help ? ` <span class="help-tip" data-tip="${_esc(f.help)}">?</span>` : '';
+        const req = f.required ? ' <span style="color:var(--error)">*</span>' : '';
+
+        if (f.type === 'select' && f.dynamic) {
+            // Dynamic select — options fetched from API
+            html += `<div class="sched-field">
+                <label>${_esc(f.label || f.key)}${req}${help}</label>
+                <select id="ed-tf-${f.key}" data-task-field="${f.key}" data-dynamic="${_esc(f.dynamic)}" data-current-value="${_esc(String(val))}">
+                    <option value="">Loading...</option>
+                </select></div>`;
+        } else if (f.type === 'select' && f.options) {
+            // Static select
+            const opts = f.options.map(o => {
+                const ov = typeof o === 'string' ? o : o.value;
+                const ol = typeof o === 'string' ? o : (o.label || o.value);
+                return `<option value="${_esc(ov)}" ${String(val) === String(ov) ? 'selected' : ''}>${_esc(ol)}</option>`;
+            }).join('');
+            html += `<div class="sched-field">
+                <label>${_esc(f.label || f.key)}${req}${help}</label>
+                <select id="ed-tf-${f.key}" data-task-field="${f.key}">${opts}</select></div>`;
+        } else if (f.type === 'boolean') {
+            html += `<div class="sched-field" style="flex-direction:row;align-items:center;gap:8px">
+                <input type="checkbox" id="ed-tf-${f.key}" data-task-field="${f.key}" ${val ? 'checked' : ''}>
+                <label for="ed-tf-${f.key}">${_esc(f.label || f.key)}${help}</label></div>`;
+        } else if (f.type === 'number') {
+            html += `<div class="sched-field">
+                <label>${_esc(f.label || f.key)}${req}${help}</label>
+                <input type="number" id="ed-tf-${f.key}" data-task-field="${f.key}" value="${_esc(String(val))}"
+                    ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''}></div>`;
+        } else {
+            // string (default), password
+            const widget = f.widget || 'text';
+            html += `<div class="sched-field">
+                <label>${_esc(f.label || f.key)}${req}${help}</label>
+                <input type="${widget === 'password' ? 'password' : 'text'}" id="ed-tf-${f.key}" data-task-field="${f.key}"
+                    value="${_esc(String(val))}" ${f.placeholder ? `placeholder="${_esc(f.placeholder)}"` : ''}></div>`;
+        }
+    }
+
+    container.innerHTML = html;
+
+    // Fetch dynamic selects
+    container.querySelectorAll('select[data-dynamic]').forEach(async sel => {
+        try {
+            const res = await fetch(sel.dataset.dynamic);
+            if (!res.ok) throw new Error();
+            const data = await res.json();
+            const options = data.accounts || data.options || data || [];
+            sel.innerHTML = '<option value="">Select...</option>';
+            for (const o of options) {
+                const ov = typeof o === 'string' ? o : (o.value || o.id || o.name);
+                const ol = typeof o === 'string' ? o : (o.label || o.name || o.value);
+                const opt = document.createElement('option');
+                opt.value = ov; opt.textContent = ol;
+                sel.appendChild(opt);
+            }
+            const cur = sel.dataset.currentValue;
+            if (cur) sel.value = cur;
+        } catch {
+            sel.innerHTML = '<option value="">Could not load options</option>';
+        }
+    });
 }
 
 function _esc(str) {

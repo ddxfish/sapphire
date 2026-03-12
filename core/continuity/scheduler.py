@@ -599,9 +599,14 @@ class ContinuityScheduler:
     # EVENT-TRIGGERED EXECUTION
     # =========================================================================
 
-    def fire_event_task(self, task_id: str, event_data: str) -> Dict[str, Any]:
+    def fire_event_task(self, task_id: str, event_data: str, reply_callback=None) -> Dict[str, Any]:
         """Fire an event-triggered task (daemon or webhook) with event data.
-        Runs on a worker thread, returns immediately."""
+        Runs on a worker thread, returns immediately.
+
+        Args:
+            reply_callback: Optional callable(task, event_data_dict, response_text)
+                            called when the LLM responds, for routing back to source.
+        """
         with self._lock:
             task = self._tasks.get(task_id)
 
@@ -640,6 +645,20 @@ class ContinuityScheduler:
                 return {"success": True, "queued": True}
             self._task_running[task_id] = True
 
+        # Build response callback — saves last_response + routes reply to daemon source
+        internal_cb = self._make_response_callback(task_id)
+        def _response_callback(response_text: str):
+            internal_cb(response_text)
+            if reply_callback and response_text:
+                try:
+                    event_dict = json.loads(event_data) if isinstance(event_data, str) else event_data
+                except (json.JSONDecodeError, TypeError):
+                    event_dict = {"raw": event_data}
+                try:
+                    reply_callback(task, event_dict, response_text)
+                except Exception as e:
+                    logger.error(f"[Continuity] Reply callback failed for '{task_name}': {e}")
+
         # Run on worker thread
         def _run():
             self._log_activity(task_id, task_name, "started", {"trigger": task_type})
@@ -648,7 +667,7 @@ class ContinuityScheduler:
                     task,
                     event_data=event_data,
                     progress_callback=self._make_progress_callback(task_id),
-                    response_callback=self._make_response_callback(task_id),
+                    response_callback=_response_callback,
                 )
                 with self._lock:
                     if task_id in self._tasks:

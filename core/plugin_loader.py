@@ -86,6 +86,8 @@ class PluginLoader:
         self._routes: Dict[str, list] = {}
         # Daemon event source registry: {plugin_name: [source_defs]}
         self._event_sources: Dict[str, list] = {}
+        # Daemon reply handlers: {plugin_name: callable(task, event_data_dict, response_text)}
+        self._reply_handlers: Dict[str, Callable] = {}
 
     def _is_managed(self):
         """Check if running in managed/Docker mode (single source of truth)."""
@@ -320,6 +322,7 @@ class PluginLoader:
                         "label": src.get("label", src.get("name", name)),
                         "plugin": name,
                         "filter_fields": src.get("filter_fields", []),
+                        "task_fields": src.get("task_fields", []),
                         "description": src.get("description", ""),
                     } for src in event_sources]
                 logger.info(f"[PLUGINS] Registered {len(event_sources)} event source(s) for {name}")
@@ -402,6 +405,7 @@ class PluginLoader:
                         logger.warning(f"[PLUGINS] Failed to delete schedule task {tid}: {e}")
                 self._plugins[name].pop("schedule_task_ids", None)
             self._event_sources.pop(name, None)
+            self._reply_handlers.pop(name, None)
             if name in self._plugins:
                 self._plugins[name]["loaded"] = False
         logger.info(f"[PLUGINS] Unloaded: {name}")
@@ -716,6 +720,25 @@ class PluginLoader:
                 sources.extend(plugin_sources)
         return sources
 
+    def register_reply_handler(self, plugin_name: str, handler: Callable):
+        """Register a reply handler for a daemon plugin.
+
+        The handler is called when an event-triggered task completes:
+            handler(task: dict, event_data: dict, response_text: str)
+        """
+        with self._lock:
+            self._reply_handlers[plugin_name] = handler
+        logger.info(f"[PLUGINS] Registered reply handler for {plugin_name}")
+
+    def _get_reply_handler(self, source_name: str) -> Optional[Callable]:
+        """Find the reply handler for an event source by looking up its plugin."""
+        with self._lock:
+            for plugin_name, sources in self._event_sources.items():
+                for src in sources:
+                    if src["name"] == source_name:
+                        return self._reply_handlers.get(plugin_name)
+        return None
+
     def emit_daemon_event(self, source_name: str, event_data: str):
         """Emit an event from a daemon plugin, triggering matching tasks.
 
@@ -732,8 +755,9 @@ class PluginLoader:
             logger.debug(f"[PLUGINS] No tasks listening for event source '{source_name}'")
             return
 
+        reply_handler = self._get_reply_handler(source_name)
         for task in tasks:
-            self._scheduler.fire_event_task(task["id"], event_data)
+            self._scheduler.fire_event_task(task["id"], event_data, reply_callback=reply_handler)
 
     # ── Settings helpers ──
 

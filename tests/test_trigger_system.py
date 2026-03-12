@@ -535,8 +535,8 @@ class TestPluginDaemonCapability:
         loader.emit_daemon_event("discord_message", '{"text": "hello"}')
 
         assert mock_scheduler.fire_event_task.call_count == 2
-        mock_scheduler.fire_event_task.assert_any_call("task-1", '{"text": "hello"}')
-        mock_scheduler.fire_event_task.assert_any_call("task-2", '{"text": "hello"}')
+        mock_scheduler.fire_event_task.assert_any_call("task-1", '{"text": "hello"}', reply_callback=None)
+        mock_scheduler.fire_event_task.assert_any_call("task-2", '{"text": "hello"}', reply_callback=None)
 
     def test_emit_daemon_event_no_scheduler(self):
         """Emit with no scheduler should not crash."""
@@ -614,3 +614,104 @@ class TestDaemonIntegration:
         assert mock_executor.run.called
         call_kwargs = mock_executor.run.call_args
         assert call_kwargs.kwargs.get("event_data") == '{"user": "Krem", "message": "hey Sapphire"}'
+
+
+class TestReplyHandler:
+    """Tests for daemon reply handler plumbing."""
+
+    def test_register_and_lookup_reply_handler(self):
+        from core.plugin_loader import PluginLoader
+        loader = PluginLoader()
+
+        handler = MagicMock()
+        loader._event_sources["telegram"] = [{"name": "telegram_message", "label": "Telegram Message"}]
+        loader.register_reply_handler("telegram", handler)
+
+        found = loader._get_reply_handler("telegram_message")
+        assert found is handler
+
+    def test_reply_handler_not_found(self):
+        from core.plugin_loader import PluginLoader
+        loader = PluginLoader()
+        assert loader._get_reply_handler("nonexistent") is None
+
+    def test_reply_handler_cleaned_on_unload(self):
+        from core.plugin_loader import PluginLoader
+        loader = PluginLoader()
+
+        handler = MagicMock()
+        loader._reply_handlers["telegram"] = handler
+        loader._event_sources["telegram"] = []
+        loader._plugins["telegram"] = {"loaded": True, "enabled": True, "manifest": {"capabilities": {}}}
+        loader.unload_plugin("telegram")
+
+        assert "telegram" not in loader._reply_handlers
+
+    def test_emit_threads_reply_handler(self):
+        from core.plugin_loader import PluginLoader
+        loader = PluginLoader()
+
+        handler = MagicMock()
+        loader._event_sources["telegram"] = [{"name": "telegram_message", "label": "TM"}]
+        loader.register_reply_handler("telegram", handler)
+
+        mock_scheduler = MagicMock()
+        mock_scheduler.find_tasks_by_event.return_value = [{"id": "t1", "name": "Test"}]
+        loader._scheduler = mock_scheduler
+
+        loader.emit_daemon_event("telegram_message", '{"text": "hi"}')
+        mock_scheduler.fire_event_task.assert_called_once_with("t1", '{"text": "hi"}', reply_callback=handler)
+
+    def test_reply_callback_called_on_response(self, tmp_path):
+        """Reply callback fires when executor produces a response."""
+        from core.continuity.scheduler import ContinuityScheduler
+
+        base_dir = tmp_path / "user" / "continuity"
+        base_dir.mkdir(parents=True)
+
+        reply_results = []
+        def reply_handler(task, event_dict, response_text):
+            reply_results.append({"task_id": task["id"], "event": event_dict, "response": response_text})
+
+        mock_executor = MagicMock()
+        mock_executor.run.return_value = {"success": True, "responses": [{"output": "Hello!"}], "errors": []}
+        # Simulate executor calling response_callback
+        def fake_run(task, event_data=None, progress_callback=None, response_callback=None):
+            if response_callback:
+                response_callback("Hello from Sapphire!")
+            return {"success": True, "responses": [{"output": "Hello!"}], "errors": []}
+        mock_executor.run.side_effect = fake_run
+
+        sched = ContinuityScheduler.__new__(ContinuityScheduler)
+        sched.system = MagicMock()
+        sched.executor = mock_executor
+        sched._running = False
+        sched._thread = None
+        sched._lock = threading.Lock()
+        sched._base_dir = base_dir
+        sched._tasks_path = base_dir / "tasks.json"
+        sched._activity_path = base_dir / "activity.json"
+        sched._tasks = {}
+        sched._activity = []
+        sched._task_running = {}
+        sched._task_pending = {}
+        sched._task_last_matched = {}
+        sched._task_progress = {}
+
+        task = sched.create_task({
+            "name": "Telegram Reply Test",
+            "type": "daemon",
+            "schedule": "0 0 31 2 *",
+            "trigger_config": {"source": "telegram_message"},
+            "initial_message": "Reply to messages.",
+        })
+
+        sched.fire_event_task(task["id"], '{"chat_id": 123, "text": "hey"}', reply_callback=reply_handler)
+
+        import time
+        time.sleep(0.5)
+
+        assert len(reply_results) == 1
+        assert reply_results[0]["task_id"] == task["id"]
+        assert reply_results[0]["event"] == {"chat_id": 123, "text": "hey"}
+        assert reply_results[0]["response"] == "Hello from Sapphire!"

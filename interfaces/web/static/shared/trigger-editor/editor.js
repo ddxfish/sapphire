@@ -136,7 +136,7 @@ export async function openTriggerEditor(task, type, callbacks = {}) {
     if (config.trigger === 'cron') {
         getCurrentCron = wireCronTrigger(modal, { isHeartbeat: type === 'heartbeat' });
     } else {
-        wireEventTrigger(modal, { type });
+        wireEventTrigger(modal, { type, triggerConfig: t.trigger_config });
     }
 
     // Wire AI config
