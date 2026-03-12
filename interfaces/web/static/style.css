@@ -184,6 +184,7 @@ body {
     border-radius: 4px;
     transition: border-color 0.3s, color 0.3s;
     border: 1px solid transparent;
+    text-align: center;
 }
 .nav-version:hover {
     color: var(--text);
@@ -192,6 +193,10 @@ body {
     color: var(--warning-color, #f0ad4e);
     border-color: var(--warning-color, #f0ad4e);
     padding: 3px 6px 3px;
+}
+.nav-branch {
+    font-size: 8px;
+    opacity: 0.85;
 }
 
 /* Mobile overflow */

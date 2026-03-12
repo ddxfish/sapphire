@@ -415,11 +415,19 @@ function initVersionBadge() {
         import('./core/router.js').then(r => r.switchView('settings'));
     });
 
-    // Listen for update-available event from dashboard tab
-    window.addEventListener('update-available', e => {
-        badge.classList.add('update-available');
-        badge.title = `Update available: v${e.detail?.latest}`;
-    });
+    // Fetch branch info at boot — show non-main branches immediately
+    fetch('/api/system/update-check').then(r => r.ok ? r.json() : null).then(data => {
+        if (!data) return;
+        const branch = data.branch;
+        if (branch && branch !== 'main') {
+            badge.innerHTML = `v${window.__appVersion || '?'}<br><span class="nav-branch">${branch}</span>`;
+        }
+        if (data.available) {
+            badge.classList.add('update-available');
+            badge.title = `Update available: v${data.latest}`;
+            window.dispatchEvent(new CustomEvent('update-available', { detail: data }));
+        }
+    }).catch(() => {});
 }
 
 // Boot
