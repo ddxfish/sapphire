@@ -45,6 +45,8 @@ class KokoroTTSProvider(BaseTTSProvider):
                     return response.content
                 logger.error(f"Kokoro server error: {response.status_code}")
                 last_error = f"HTTP {response.status_code}"
+                if 400 <= response.status_code < 500:
+                    break  # client error — retrying won't help
             except Exception as e:
                 last_error = e
 

@@ -69,6 +69,8 @@ class SetupWizard {
       this.settings = {};
       this.initialSettings = {};
       this.completedStep = 0;
+      TABS = ALL_TABS;
+      STEP_NAMES = ALL_STEP_NAMES;
     }
 
     // If wizard is complete and not forced, don't show
@@ -78,7 +80,7 @@ class SetupWizard {
     }
 
     // Start at first incomplete step
-    this.currentStep = Math.min(this.completedStep, 3);
+    this.currentStep = Math.min(this.completedStep, TABS.length - 1);
 
     this.render();
     this.attachEventListeners();
