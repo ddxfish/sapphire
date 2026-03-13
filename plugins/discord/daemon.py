@@ -171,6 +171,16 @@ async def _connect_single(account_name: str, token: str = None):
             if bot_member:
                 mentioned = any(role in bot_member.roles for role in message.role_mentions)
 
+        # Fetch recent history for context (last 10 messages before this one)
+        recent_history = []
+        try:
+            async for msg in message.channel.history(limit=11, before=message):
+                who = msg.author.display_name or msg.author.name
+                recent_history.append(f"{who}: {msg.clean_content or '(no text)'}")
+            recent_history.reverse()  # oldest first
+        except Exception:
+            pass
+
         payload = {
             "account": account_name,
             "guild_id": str(message.guild.id) if message.guild else "",
@@ -184,6 +194,7 @@ async def _connect_single(account_name: str, token: str = None):
             "author_id": str(message.author.id),
             "is_dm": message.guild is None,
             "mentioned": str(mentioned),
+            "recent_history": recent_history,
         }
 
         logger.info(f"[DISCORD] Message from {payload['username']} in #{payload['channel_name']} (mentioned={mentioned})")

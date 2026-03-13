@@ -51,10 +51,19 @@ class ContinuityExecutor:
         elif channel:
             parts.append(f"[#{channel}]")
 
+        # Include recent chat history if available
+        history = obj.get("recent_history", [])
+        if history:
+            parts.append("Recent chat:")
+            for line in history:
+                parts.append(f"  {line}")
+            parts.append("")  # blank line before the trigger message
+
+        # The trigger message itself — emphasized
         if sender:
-            parts.append(f"{sender}: {text}")
+            parts.append(f">>> {sender}: {text}")
         else:
-            parts.append(text)
+            parts.append(f">>> {text}")
         return "\n".join(parts)
 
     def run(self, task: Dict[str, Any], event_data: str = None,
