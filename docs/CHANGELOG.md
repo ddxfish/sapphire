@@ -1,5 +1,8 @@
 # 2.3.2 - Plugin UI Refactor
-- 
+- Complete rework of plugins page
+- Removed all plugins from sidebar
+- Use GEAR ICON now to get plugin settings in plugins page
+- Improved discord, tested on GLM, lower intelligence barrier
 # 2.3.1 - Discord Support 
 - Improved 'tool not available' when changing plugins
 - Discord tools - list chan, read, send
