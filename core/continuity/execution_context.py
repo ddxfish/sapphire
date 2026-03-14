@@ -36,6 +36,7 @@ class ExecutionContext:
         self.scopes = self._build_scopes()
         self.provider_key, self.provider, self.model_override = self._resolve_provider()
         self.gen_params = self._build_gen_params()
+        self.tool_log = []  # List of tool names called during run()
 
     # ── Construction (read-only) ──
 
@@ -141,7 +142,7 @@ class ExecutionContext:
         )
         if result:
             pk, prov = result
-            return pk, prov, ''
+            return pk, prov, model_override
 
         raise ConnectionError("No LLM providers available")
 
@@ -210,6 +211,7 @@ class ExecutionContext:
                     "role": "assistant", "content": filtered,
                     "tool_calls": tool_calls
                 })
+                self.tool_log.extend(tc.get('function', {}).get('name', '?') for tc in tool_calls)
                 tools_executed, tool_images = self.tool_engine.execute_tool_calls(
                     tool_calls, messages, None, self.provider, scopes=self.scopes,
                     allowed_tools=self._allowed_tool_names
@@ -222,6 +224,7 @@ class ExecutionContext:
             elif response_msg.content:
                 fn_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
                 if fn_data:
+                    self.tool_log.append(fn_data.get('name', '?'))
                     filtered = filter_to_thinking_only(response_msg.content)
                     _, tool_images = self.tool_engine.execute_text_based_tool_call(
                         fn_data, filtered, messages, None, self.provider, scopes=self.scopes,

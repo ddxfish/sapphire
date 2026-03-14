@@ -119,6 +119,15 @@ def _get_manager():
     return system.scout_manager
 
 
+def _get_active_chat():
+    """Get the current active chat name."""
+    from core.api_fastapi import get_system
+    try:
+        return get_system().llm_chat.get_active_chat() or ''
+    except Exception:
+        return ''
+
+
 def _get_plugin_settings():
     """Load scout plugin settings."""
     from pathlib import Path
@@ -167,13 +176,14 @@ def execute(function_name, arguments, config):
             model = arguments.get('model', '')
             toolset = arguments.get('toolset', ps.get('default_toolset', 'default'))
             prompt = arguments.get('prompt', 'sapphire')
-            result = manager.spawn(mission, model=model, toolset=toolset, prompt=prompt)
+            result = manager.spawn(mission, model=model, toolset=toolset, prompt=prompt, chat_name=_get_active_chat())
             if 'error' in result:
                 return result['error'], False
-            return f"Scout {result['name']} dispatched (id: {result['id']}). Use check_scouts() to monitor progress.", True
+            provider_info = f" on {model}" if model else ""
+            return f"Scout {result['name']} dispatched{provider_info} (id: {result['id']}). Use check_scouts() to monitor progress.", True
 
         elif function_name == 'check_scouts':
-            scouts = manager.check_all()
+            scouts = manager.check_all(chat_name=_get_active_chat())
             if not scouts:
                 return "No active scouts.", True
             lines = [f"Scouts ({len(scouts)}):"]
@@ -181,6 +191,9 @@ def execute(function_name, arguments, config):
                 status_icon = {'running': '\U0001f7e1', 'done': '\U0001f7e2', 'failed': '\U0001f534', 'cancelled': '\u26aa'}.get(s['status'], '\u2753')
                 lines.append(f"  {status_icon} {s['name']} [{s['id']}] — {s['status']} ({s['elapsed']}s)")
                 lines.append(f"      Mission: {s['mission'][:100]}")
+                tools = s.get('tool_log', [])
+                if tools:
+                    lines.append(f"      Tools called: {', '.join(tools)}")
             return '\n'.join(lines), True
 
         elif function_name == 'recall_scout':
@@ -190,7 +203,12 @@ def execute(function_name, arguments, config):
             result = manager.recall(scout_id)
             if 'error' in result:
                 return result['error'], False
-            return f"Scout {result['name']} ({result['status']}, {result.get('elapsed', '?')}s):\n\n{result['result']}", True
+            # Auto-dismiss after recall — clears the pill from UI
+            if result['status'] in ('done', 'failed', 'cancelled'):
+                manager.dismiss(scout_id)
+            tools_used = result.get('tool_log', [])
+            tools_line = f"\nTools used: {', '.join(tools_used)}" if tools_used else "\nTools used: none"
+            return f"Scout {result['name']} ({result['status']}, {result.get('elapsed', '?')}s):{tools_line}\n\n{result['result']}", True
 
         elif function_name == 'dismiss_scout':
             scout_id = arguments.get('scout_id')

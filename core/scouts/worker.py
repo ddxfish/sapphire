@@ -14,13 +14,15 @@ SCOUT_NAMES = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo']
 class ScoutWorker:
     """Runs an isolated LLM + tool loop in a background thread."""
 
-    def __init__(self, scout_id, name, mission, task_settings, function_manager, tool_engine):
+    def __init__(self, scout_id, name, mission, task_settings, function_manager, tool_engine, chat_name=''):
         self.id = scout_id
         self.name = name
         self.mission = mission
+        self.chat_name = chat_name
         self.status = 'pending'  # pending | running | done | failed | cancelled
         self.result = None
         self.error = None
+        self.tool_log = []  # Names of tools the scout called
         self._start_time = None
         self._end_time = None
         self._cancelled = threading.Event()
@@ -57,6 +59,7 @@ class ScoutWorker:
             ctx = ExecutionContext(self._fm, self._tool_engine, self._task_settings)
             # Run ephemeral (no history)
             self.result = ctx.run(self.mission)
+            self.tool_log = ctx.tool_log
             if self._cancelled.is_set():
                 self.status = 'cancelled'
             else:
@@ -84,4 +87,6 @@ class ScoutWorker:
             'elapsed': self.elapsed,
             'has_result': self.result is not None,
             'error': self.error,
+            'tool_log': self.tool_log,
+            'chat_name': self.chat_name,
         }

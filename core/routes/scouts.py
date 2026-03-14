@@ -1,6 +1,6 @@
 # core/routes/scouts.py — Scout status API for frontend
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from core.auth import require_login
 from core.api_fastapi import get_system
 
@@ -9,12 +9,12 @@ router = APIRouter()
 
 
 @router.get("/api/scouts/status")
-async def scout_status(_=Depends(require_login)):
-    """Get all scout statuses for the UI pill bar."""
+async def scout_status(chat: str = Query('', description="Filter by chat name"), _=Depends(require_login)):
+    """Get scout statuses for the UI pill bar, optionally filtered by chat."""
     system = get_system()
     if not hasattr(system, 'scout_manager'):
         return {"scouts": []}
-    return {"scouts": system.scout_manager.check_all()}
+    return {"scouts": system.scout_manager.check_all(chat_name=chat)}
 
 
 @router.post("/api/scouts/{scout_id}/dismiss")

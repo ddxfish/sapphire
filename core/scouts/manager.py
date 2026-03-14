@@ -26,11 +26,55 @@ class ScoutManager:
         self._name_counter += 1
         return name
 
+    def _resolve_model_to_provider(self, model_str):
+        """Resolve a model string to (provider_key, model_override).
+
+        Handles:
+          - Empty string → ('auto', '')
+          - Exact provider key like 'gemini', 'fireworks' → (key, '')
+          - Model name like 'gemini-2.5-flash' → find provider whose key is a prefix → (key, model_name)
+          - Provider:model like 'fireworks:deepseek-v3' → (provider, model)
+        """
+        if not model_str:
+            return 'auto', ''
+
+        # Explicit provider:model syntax
+        if ':' in model_str:
+            parts = model_str.split(':', 1)
+            return parts[0], parts[1]
+
+        providers_config = getattr(config, 'LLM_PROVIDERS', {})
+        enabled_keys = [k for k, v in providers_config.items() if v.get('enabled')]
+
+        # Exact match on provider key
+        if model_str in providers_config:
+            return model_str, ''
+
+        # Case-insensitive match on provider key
+        for key in enabled_keys:
+            if model_str.lower() == key.lower():
+                return key, ''
+
+        # Check if model string starts with a provider key (e.g. "gemini-2.5-flash" → "gemini")
+        # Also check display_name for fuzzy matching
+        for key in enabled_keys:
+            if model_str.lower().startswith(key.lower()):
+                return key, model_str
+
+            display = providers_config[key].get('display_name', '').lower()
+            if display and model_str.lower().startswith(display.split()[0].lower()):
+                return key, model_str
+
+        # No match — pass as model override with auto provider
+        # This handles cases like "deepseek-v3" where we can't guess the provider
+        logger.warning(f"Could not resolve '{model_str}' to a provider, using auto with model override")
+        return 'auto', model_str
+
     def _active_count(self):
         return sum(1 for s in self._scouts.values() if s.status == 'running')
 
     def spawn(self, mission, model='', toolset='default', prompt='sapphire',
-              persist_history=False) -> dict:
+              persist_history=False, chat_name='') -> dict:
         """Spawn a new scout. Returns {id, name} or {error}."""
         with self._lock:
             if self._active_count() >= self.max_concurrent:
@@ -39,12 +83,16 @@ class ScoutManager:
             scout_id = uuid.uuid4().hex[:8]
             name = self._next_name()
 
-        # Build task_settings matching ExecutionContext's expected format
+        # Resolve model string to provider key + model override
+        # The user might pass a provider key ("gemini"), a model name ("gemini-2.5-flash"),
+        # or nothing (auto). We need to figure out the right provider.
+        provider_key, model_override = self._resolve_model_to_provider(model)
+
         task_settings = {
             'prompt': prompt,
             'toolset': toolset,
-            'provider': 'auto',
-            'model': model,
+            'provider': provider_key,
+            'model': model_override,
             'max_tool_rounds': 10,
             'max_parallel_tools': 3,
             'inject_datetime': True,
@@ -59,12 +107,7 @@ class ScoutManager:
             'discord_scope': 'none',
         }
 
-        # If a specific provider is implied by model string (e.g. "claude-opus-4-6")
-        # let ExecutionContext auto-resolve it
-        if model:
-            task_settings['model'] = model
-
-        worker = ScoutWorker(scout_id, name, mission, task_settings, self._fm, self._tool_engine)
+        worker = ScoutWorker(scout_id, name, mission, task_settings, self._fm, self._tool_engine, chat_name=chat_name)
 
         with self._lock:
             self._scouts[scout_id] = worker
@@ -75,15 +118,19 @@ class ScoutManager:
             'id': scout_id,
             'name': name,
             'mission': mission,
+            'chat_name': chat_name,
         })
 
-        logger.info(f"Scout {name} ({scout_id}) dispatched: {mission[:80]}")
+        logger.info(f"Scout {name} ({scout_id}) dispatched: provider={provider_key}, model={model_override or 'default'}, mission={mission[:80]}")
         return {'id': scout_id, 'name': name}
 
-    def check_all(self) -> list:
-        """Return status of all scouts (active and completed)."""
+    def check_all(self, chat_name='') -> list:
+        """Return status of scouts, optionally filtered by chat."""
         with self._lock:
-            return [s.to_dict() for s in self._scouts.values()]
+            scouts = self._scouts.values()
+            if chat_name:
+                scouts = [s for s in scouts if s.chat_name == chat_name]
+            return [s.to_dict() for s in scouts]
 
     def recall(self, scout_id) -> dict:
         """Get a scout's report. Returns {name, status, result} or {error}."""
@@ -98,6 +145,7 @@ class ScoutManager:
             'status': scout.status,
             'result': scout.result or scout.error or 'No result.',
             'elapsed': scout.elapsed,
+            'tool_log': scout.tool_log,
         }
 
     def dismiss(self, scout_id) -> dict:
