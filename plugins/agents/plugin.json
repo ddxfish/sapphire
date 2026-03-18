@@ -1,7 +1,7 @@
 {
     "name": "agents",
     "version": "2.0.0",
-    "description": "Spawn background AI agents — parallel workers with their own model, tools, and mission",
+    "description": "Background AI Agents",
     "author": "sapphire",
     "icon": "\ud83d\udd2d",
     "priority": 50,

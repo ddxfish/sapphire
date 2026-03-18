@@ -5309,18 +5309,11 @@ a.gallery-caption:hover {
 .pm-card:nth-child(9) { animation-delay: 0.24s; }
 .pm-card:nth-child(10) { animation-delay: 0.27s; }
 
-/* Card body: left (gear+icon stacked) | right (title+meta) */
+/* Card body: content | gear */
 .pm-card-body {
     display: flex;
     gap: 14px;
-}
-.pm-card-left {
-    display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-    min-width: 38px;
 }
 .pm-card-right {
     flex: 1;
@@ -5340,11 +5333,13 @@ a.gallery-caption:hover {
 .pm-gear {
     background: none;
     border: none;
-    font-size: 1.5em;
+    font-size: 1.8em;
     cursor: pointer;
     color: var(--text-muted);
     padding: 0;
     line-height: 1;
+    flex-shrink: 0;
+    align-self: center;
     transition: color 0.2s, transform 0.2s, filter 0.2s;
 }
 .pm-gear:hover {
@@ -5352,9 +5347,9 @@ a.gallery-caption:hover {
     transform: rotate(45deg);
     filter: drop-shadow(0 0 4px var(--trim, rgba(74,158,255,0.6)));
 }
-.pm-gear-spacer { height: 1.5em; }
+.pm-gear-spacer { display: none; }
 
-.pm-icon { font-size: 2.2em; line-height: 1; }
+.pm-icon { font-size: 1.4em; line-height: 1; flex-shrink: 0; }
 .pm-title {
     font-weight: 600;
     font-size: 1.15em;

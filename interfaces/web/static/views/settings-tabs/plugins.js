@@ -168,12 +168,10 @@ function _renderCard(p, locked) {
     return `
         <div class="pm-card${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
             <div class="pm-card-body">
-                <div class="pm-card-left">
-                    ${gearBtn}
-                    <span class="pm-icon">${icon}</span>
-                </div>
+                ${gearBtn}
                 <div class="pm-card-right">
                     <div class="pm-card-top">
+                        <span class="pm-icon">${icon}</span>
                         <span class="pm-title">${_esc(p.title || p.name)}</span>
                         <label class="pm-toggle">
                             <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
