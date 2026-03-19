@@ -56,6 +56,7 @@ class WakeWordDetector:
         
         # Output device setup for tone playback
         self.output_device = None
+        self.output_device_name = None
         self.output_rate = None
         self.tone_available = False
         self._init_output_device()
@@ -70,43 +71,31 @@ class WakeWordDetector:
         self.playback_lock = threading.Lock()
 
     def _init_output_device(self):
-        """Find a working output device for tone playback."""
+        """Find a working output device via DeviceManager (respects AUDIO_OUTPUT_DEVICE setting)."""
+        self.tone_available = False
         try:
-            devices = sd.query_devices()
-        except Exception as e:
-            logger.error(f"Failed to query audio devices for tone: {e}")
-            return
-        
-        # Build list of output devices
-        output_devices = []
-        for i, dev in enumerate(devices):
-            if dev['max_output_channels'] > 0:
-                logger.debug(f"Found output device {i}: {dev['name']} "
-                           f"(default_rate={dev['default_samplerate']})")
-                output_devices.append((i, dev))
-        
-        if not output_devices:
-            logger.warning("No output devices found - wake tone disabled")
-            return
-        
-        # Try default device first
-        try:
-            default_out = sd.default.device[1]
-            if default_out is not None:
-                for idx, dev_info in output_devices:
-                    if idx == default_out:
-                        if self._try_output_device(idx, dev_info):
-                            return
-                        break
-        except Exception:
-            pass
-        
-        # Fall back to any available device
-        for idx, dev_info in output_devices:
-            if self._try_output_device(idx, dev_info):
+            from core.audio import get_device_manager
+            dm = get_device_manager()
+            dev_idx, default_rate, dev_name = dm.find_output_device()
+            if dev_idx is None:
+                logger.warning("No output devices found - wake tone disabled")
                 return
-        
-        logger.warning("No compatible output device found - wake tone disabled")
+
+            dev_info = {'name': dev_name, 'default_samplerate': default_rate}
+            if self._try_output_device(dev_idx, dev_info):
+                self.output_device_name = dev_name
+                return
+
+            logger.warning(f"Output device '{dev_name}' failed, trying all outputs")
+            for dev in dm.get_output_devices():
+                info = {'name': dev.name, 'default_samplerate': dev.default_samplerate}
+                if self._try_output_device(dev.index, info):
+                    self.output_device_name = dev.name
+                    return
+
+            logger.warning("No compatible output device found - wake tone disabled")
+        except Exception as e:
+            logger.error(f"Output device init failed: {e}")
 
     def _try_output_device(self, device_index, dev_info):
         """Try to use an output device, testing sample rates."""
@@ -174,11 +163,19 @@ class WakeWordDetector:
         """Play wake acknowledgment tone using sounddevice's built-in playback."""
         if not self.tone_available or self.tone_data is None:
             return
-        
+
         with self.playback_lock:
             try:
                 sd.play(self.tone_data, self.tone_sample_rate, device=self.output_device)
-                # Don't wait - let it play async
+            except sd.PortAudioError as pa_err:
+                logger.warning(f"Tone output device {self.output_device} failed: {pa_err} — re-probing")
+                self._init_output_device()
+                if self.tone_available:
+                    self._generate_tone()
+                    try:
+                        sd.play(self.tone_data, self.tone_sample_rate, device=self.output_device)
+                    except Exception as e2:
+                        logger.debug(f"Tone playback retry failed: {e2}")
             except Exception as e:
                 logger.debug(f"Tone playback error: {e}")
 

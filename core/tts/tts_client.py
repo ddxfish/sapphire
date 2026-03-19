@@ -48,6 +48,7 @@ class TTSClient:
         
         # Audio output device setup
         self.output_device = None
+        self.output_device_name = None
         self.output_rate = None
         self.audio_available = False
         self._init_output_device()
@@ -62,43 +63,33 @@ class TTSClient:
             logger.warning("Audio playback unavailable - TTS will be silent")
     
     def _init_output_device(self):
-        """Find a working output device and compatible sample rate."""
+        """Find a working output device via DeviceManager (respects AUDIO_OUTPUT_DEVICE setting)."""
+        self.audio_available = False
         try:
-            devices = sd.query_devices()
-        except Exception as e:
-            logger.error(f"Failed to query audio devices: {e}")
-            return
-        
-        # Build list of output devices
-        output_devices = []
-        for i, dev in enumerate(devices):
-            if dev['max_output_channels'] > 0:
-                logger.debug(f"Found output device {i}: {dev['name']} "
-                           f"(default_rate={dev['default_samplerate']})")
-                output_devices.append((i, dev))
-        
-        if not output_devices:
-            logger.error("No output devices found")
-            return
-        
-        # Try default device first
-        try:
-            default_out = sd.default.device[1]
-            if default_out is not None:
-                for idx, dev_info in output_devices:
-                    if idx == default_out:
-                        if self._try_output_device(idx, dev_info):
-                            return
-                        break
-        except Exception:
-            pass
-        
-        # Fall back to any available device
-        for idx, dev_info in output_devices:
-            if self._try_output_device(idx, dev_info):
+            from core.audio import get_device_manager
+            dm = get_device_manager()
+            dev_idx, default_rate, dev_name = dm.find_output_device()
+            if dev_idx is None:
+                logger.error("No output devices found")
                 return
-        
-        logger.error("No compatible output device found")
+
+            # Test sample rates on the resolved device
+            dev_info = {'name': dev_name, 'default_samplerate': default_rate}
+            if self._try_output_device(dev_idx, dev_info):
+                self.output_device_name = dev_name
+                return
+
+            # If configured device fails, fall back to any working output
+            logger.warning(f"Output device '{dev_name}' failed, trying all outputs")
+            for dev in dm.get_output_devices():
+                info = {'name': dev.name, 'default_samplerate': dev.default_samplerate}
+                if self._try_output_device(dev.index, info):
+                    self.output_device_name = dev.name
+                    return
+
+            logger.error("No compatible output device found")
+        except Exception as e:
+            logger.error(f"Output device init failed: {e}")
 
     def _try_output_device(self, device_index, dev_info):
         """Try to use an output device, testing sample rates.
@@ -411,15 +402,31 @@ class TTSClient:
             chunks_written = 0
             stopped_early = False
 
-            with sd.OutputStream(samplerate=samplerate, device=self.output_device,
-                                 channels=1, dtype='float32') as stream:
-                for i in range(0, len(audio_data), chunk_size):
-                    if self.should_stop.is_set() or _stale():
-                        stopped_early = True
-                        break
-                    chunk = audio_data[i:i + chunk_size].reshape(-1, 1)
-                    stream.write(chunk)
-                    chunks_written += 1
+            def _play_stream():
+                nonlocal chunks_written, stopped_early
+                with sd.OutputStream(samplerate=samplerate, device=self.output_device,
+                                     channels=1, dtype='float32') as stream:
+                    for i in range(0, len(audio_data), chunk_size):
+                        if self.should_stop.is_set() or _stale():
+                            stopped_early = True
+                            break
+                        chunk = audio_data[i:i + chunk_size].reshape(-1, 1)
+                        stream.write(chunk)
+                        chunks_written += 1
+
+            try:
+                _play_stream()
+            except sd.PortAudioError as pa_err:
+                logger.warning(f"[TTS] Output device {self.output_device} failed: {pa_err} — re-probing")
+                self._init_output_device()
+                if self.audio_available:
+                    if samplerate != self.output_rate:
+                        audio_data = self._resample(audio_data, samplerate, self.output_rate)
+                        samplerate = self.output_rate
+                        chunk_size = int(samplerate * chunk_dur)
+                    _play_stream()
+                else:
+                    raise
 
             if stopped_early:
                 logger.info(f"[TTS] Stopped early at {chunks_written * chunk_dur:.1f}s / {duration:.1f}s")
