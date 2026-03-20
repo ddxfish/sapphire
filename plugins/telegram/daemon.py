@@ -118,10 +118,16 @@ def _run_loop(plugin_loader, api_id: int, api_hash: str):
 
 
 async def _connect_accounts(plugin_loader, api_id: int, api_hash: str):
-    """Find all session files and connect each account."""
+    """Find session files and connect only accounts with active daemon tasks."""
     from telethon import TelegramClient, events
 
     if not SESSION_DIR.exists():
+        return
+
+    # Only connect accounts that have active daemon tasks
+    active = plugin_loader.active_daemon_accounts("telegram_message")
+    if not active:
+        logger.info("[TELEGRAM] No active daemon tasks — not connecting any accounts")
         return
 
     # Each .session file = one account
@@ -129,6 +135,9 @@ async def _connect_accounts(plugin_loader, api_id: int, api_hash: str):
         account_name = session_file.stem
         if account_name.startswith("_"):
             continue  # skip temp auth sessions
+        if account_name not in active:
+            logger.debug(f"[TELEGRAM] Skipping '{account_name}' — no active daemon task")
+            continue
 
         session_path = str(SESSION_DIR / account_name)
         try:

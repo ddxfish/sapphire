@@ -830,6 +830,12 @@ class PluginLoader:
         for task in tasks:
             self._scheduler.fire_event_task(task["id"], event_data, reply_callback=reply_handler)
 
+    def active_daemon_accounts(self, source_name: str) -> set:
+        """Return set of account names with enabled daemon tasks for a given event source."""
+        if not self._scheduler:
+            return set()
+        return self._scheduler.active_daemon_accounts(source_name)
+
     # ── Settings helpers ──
 
     def get_plugin_settings(self, name: str) -> dict:

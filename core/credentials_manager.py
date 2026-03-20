@@ -694,9 +694,13 @@ class CredentialsManager:
         accounts = self._credentials.get('email_accounts', {})
         result = []
         for scope, acct in accounts.items():
+            addr = acct.get('address', '')
             result.append({
                 'scope': scope,
-                'address': acct.get('address', ''),
+                'name': scope,
+                'value': scope,
+                'label': addr or scope,
+                'address': addr,
                 'auth_type': acct.get('auth_type', 'password'),
                 'imap_server': acct.get('imap_server', ''),
                 'smtp_server': acct.get('smtp_server', ''),

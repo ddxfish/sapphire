@@ -751,6 +751,26 @@ class ContinuityScheduler:
                     results.append(dict(task))
         return results
 
+    def active_daemon_accounts(self, source: str) -> set:
+        """Return set of account names that have enabled daemon tasks for a given source.
+        Reads 'account' from trigger_config or filter. Empty set = no active tasks."""
+        accounts = set()
+        with self._lock:
+            for task in self._tasks.values():
+                if task.get("type") != "daemon" or not task.get("enabled", True):
+                    continue
+                tc = task.get("trigger_config", {})
+                if tc.get("source") != source:
+                    continue
+                acct = tc.get("account", "")
+                if acct:
+                    accounts.add(acct)
+                # Also check filter for legacy tasks without task_field
+                filt = tc.get("filter", {})
+                if isinstance(filt, dict) and filt.get("account"):
+                    accounts.add(filt["account"])
+        return accounts
+
     def find_webhook_task(self, path: str, method: str = "POST") -> Optional[Dict]:
         """Find an enabled webhook task matching path and method."""
         with self._lock:

@@ -30,6 +30,14 @@
         ],
         "task_fields": [
           {
+            "key": "account",
+            "type": "select",
+            "label": "Bot Account",
+            "required": true,
+            "dynamic": "/api/plugin/discord/accounts",
+            "help": "Which Discord bot this daemon listens on. Only this bot will be connected."
+          },
+          {
             "key": "auto_reply",
             "type": "boolean",
             "label": "Auto-reply in channel",

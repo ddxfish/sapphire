@@ -24,6 +24,14 @@
         ],
         "task_fields": [
           {
+            "key": "account",
+            "type": "select",
+            "label": "Email Account",
+            "required": true,
+            "dynamic": "/api/email/accounts",
+            "help": "Which email account this daemon monitors. Only this account will be polled."
+          },
+          {
             "key": "auto_reply",
             "type": "boolean",
             "label": "Auto-reply to sender",

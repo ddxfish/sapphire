@@ -104,7 +104,7 @@ def _run_loop():
 
 
 async def _connect_accounts():
-    """Load all bot tokens from plugin state and connect."""
+    """Load bot tokens from plugin state and connect only those with active daemon tasks."""
     from core.plugin_loader import plugin_loader
     state = plugin_loader.get_plugin_state("discord")
     accounts = state.get("accounts", {})
@@ -113,7 +113,16 @@ async def _connect_accounts():
         logger.info("[DISCORD] No accounts configured — daemon idle")
         return
 
+    # Only connect bots that have active daemon tasks
+    active = plugin_loader.active_daemon_accounts("discord_message")
+    if not active:
+        logger.info("[DISCORD] No active daemon tasks — not connecting any bots")
+        return
+
     for name, meta in accounts.items():
+        if name not in active:
+            logger.debug(f"[DISCORD] Skipping '{name}' — no active daemon task")
+            continue
         token = meta.get("token", "")
         if not token:
             continue

@@ -64,18 +64,25 @@ def _poll_loop():
 
     while not _stop_event.is_set():
         try:
-            accounts = credentials.list_email_accounts()
-            for acct in accounts:
-                if _stop_event.is_set():
-                    return
-                scope = acct["scope"]
-                try:
-                    creds = credentials.get_email_account(scope)
-                    if not creds.get("address"):
+            # Only poll accounts that have active daemon tasks
+            active = _plugin_loader.active_daemon_accounts("email_message")
+            if not active:
+                logger.debug("[EMAIL] No active daemon tasks — skipping poll")
+            else:
+                accounts = credentials.list_email_accounts()
+                for acct in accounts:
+                    if _stop_event.is_set():
+                        return
+                    scope = acct["scope"]
+                    if scope not in active:
                         continue
-                    _check_account(scope, creds)
-                except Exception as e:
-                    logger.warning(f"[EMAIL] Poll failed for '{scope}': {e}")
+                    try:
+                        creds = credentials.get_email_account(scope)
+                        if not creds.get("address"):
+                            continue
+                        _check_account(scope, creds)
+                    except Exception as e:
+                        logger.warning(f"[EMAIL] Poll failed for '{scope}': {e}")
         except Exception as e:
             logger.error(f"[EMAIL] Poll loop error: {e}", exc_info=True)
 
@@ -229,6 +236,12 @@ def _check_account(scope: str, creds: dict):
 
                 from_name, from_addr = _parse_address_header(msg.get("From", ""))
                 _, to_addr = _parse_address_header(msg.get("To", ""))
+
+                # Skip our own outbound mail (SMTP copies, sent-to-inbox)
+                if from_addr and from_addr.lower() == creds.get("address", "").lower():
+                    logger.debug(f"[EMAIL] Skipping own message from {from_addr}")
+                    continue
+
                 subject = _decode_header_value(msg.get("Subject", ""))
                 snippet = _get_snippet(msg)
 
