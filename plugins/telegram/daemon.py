@@ -18,6 +18,7 @@ SESSION_DIR = Path(__file__).parent.parent.parent / "user" / "plugin_state" / "t
 _loop: asyncio.AbstractEventLoop = None
 _thread: threading.Thread = None
 _clients: dict = {}  # {account_name: TelegramClient}
+_self_ids: dict = {}  # {account_name: user_id} — to filter own messages
 _stop_event = threading.Event()
 _plugin_loader = None
 _api_id: int = 0
@@ -98,6 +99,16 @@ def _run_loop(plugin_loader, api_id: int, api_hash: str):
     asyncio.set_event_loop(_loop)
 
     async def _main():
+        # Wait for scheduler to be ready (daemons start before scheduler is set)
+        for _ in range(15):
+            if _stop_event.is_set():
+                return
+            if plugin_loader._scheduler is not None:
+                break
+            await asyncio.sleep(1)
+        else:
+            logger.warning("[TELEGRAM] Scheduler not ready after 15s — connecting anyway")
+
         # Load all session files and connect
         await _connect_accounts(plugin_loader, api_id, api_hash)
 
@@ -171,6 +182,7 @@ async def _connect_accounts(plugin_loader, api_id: int, api_hash: str):
                     continue
 
             me = await client.get_me()
+            _self_ids[account_name] = me.id
             label = f"@{me.username}" if me.username else me.first_name
             logger.info(f"[TELEGRAM] Connected {acct_type}: {account_name} ({label})")
 
@@ -188,6 +200,11 @@ async def _connect_accounts(plugin_loader, api_id: int, api_hash: str):
 async def _handle_message(plugin_loader, account_name: str, event):
     """Handle incoming Telegram message — emit daemon event."""
     try:
+        # Ignore our own messages (bots see their own replies as incoming)
+        self_id = _self_ids.get(account_name)
+        if self_id and event.sender_id == self_id:
+            return
+
         sender = await event.get_sender()
         chat = await event.get_chat()
 
@@ -259,6 +276,7 @@ async def _connect_single(account_name: str):
                 return
 
         me = await client.get_me()
+        _self_ids[account_name] = me.id
 
         @client.on(events.NewMessage(incoming=True))
         async def _on_message(event, _name=account_name):
