@@ -2,7 +2,7 @@
 # Use this for quick setup. For minimal installs, use individual requirements files.
 
 # Core API and Web Interface
-fastapi>=0.109.0
+fastapi>=0.109.0,<1.0.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.6
 jinja2>=3.1.0
@@ -10,8 +10,8 @@ itsdangerous>=2.1.0
 cryptography>=41.0.0
 
 # LLM API Clients
-openai>=1.12.0
-anthropic>=0.39.0
+openai>=1.12.0,<2.0.0
+anthropic>=0.39.0,<1.0.0
 
 # Audio Processing
 numpy>=1.24.0
@@ -28,12 +28,12 @@ bcrypt>=4.0.0
 PySocks>=1.7.1
 
 # TTS (Kokoro)
-psutil
+psutil>=5.9.0
 kokoro
 
 # STT (Faster Whisper)
 faster-whisper>=1.0.0
-torch>=2.0.0
+torch>=2.0.0,<3.0.0
 
 # Wake Word (OpenWakeWord)
 openwakeword>=0.6.0

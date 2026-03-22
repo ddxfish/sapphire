@@ -85,7 +85,8 @@ def run_sapphire():
             [sys.executable, str(script_path)],
             stdin=sys.stdin,
             stdout=sys.stdout,
-            stderr=sys.stderr
+            stderr=sys.stderr,
+            cwd=Path(__file__).parent
         )
 
         # Wait indefinitely - signals are forwarded via handle_signal(), so Ctrl+C

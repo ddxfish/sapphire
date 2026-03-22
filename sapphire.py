@@ -517,20 +517,67 @@ def run():
     if not _tz or _tz == 'UTC':
         try:
             from datetime import datetime
-            # Try ZoneInfo-based detection first (Python 3.9+)
-            import time as _time
-            _tz_name = _time.tzname[0] if _time.daylight == 0 else None
-            # tzname gives abbreviations like 'EST' — not IANA names. Use /etc/localtime instead.
             _tz_name = None
-            # Read /etc/localtime symlink (Linux) — gives proper IANA name
-            from pathlib import Path as _P
-            _link = _P('/etc/localtime')
-            if _link.is_symlink() and 'zoneinfo/' in str(_link.resolve()):
-                _tz_name = str(_link.resolve()).split('zoneinfo/')[-1]
+
+            if sys.platform == 'win32':
+                # Windows: map common Windows timezone IDs to IANA names
+                try:
+                    import subprocess as _sp
+                    _result = _sp.run(
+                        ['powershell', '-NoProfile', '-Command', '[TimeZoneInfo]::Local.Id'],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if _result.returncode == 0 and _result.stdout.strip():
+                        _win_tz = _result.stdout.strip()
+                        # Use zoneinfo to validate/map Windows timezone
+                        try:
+                            from zoneinfo import ZoneInfo
+                            # Python 3.9+ on Windows with tzdata can map Windows zones
+                            import zoneinfo
+                            # Try the Windows key directly (works if tzdata maps it)
+                            _available = zoneinfo.available_timezones()
+                            if _win_tz in _available:
+                                _tz_name = _win_tz
+                        except Exception:
+                            pass
+                        # Fallback: common Windows-to-IANA mapping
+                        if not _tz_name:
+                            _WIN_TO_IANA = {
+                                'Eastern Standard Time': 'America/New_York',
+                                'Central Standard Time': 'America/Chicago',
+                                'Mountain Standard Time': 'America/Denver',
+                                'Pacific Standard Time': 'America/Los_Angeles',
+                                'Alaska Standard Time': 'America/Anchorage',
+                                'Hawaiian Standard Time': 'Pacific/Honolulu',
+                                'US Eastern Standard Time': 'America/Indiana/Indianapolis',
+                                'US Mountain Standard Time': 'America/Phoenix',
+                                'Atlantic Standard Time': 'America/Halifax',
+                                'GMT Standard Time': 'Europe/London',
+                                'W. Europe Standard Time': 'Europe/Berlin',
+                                'Romance Standard Time': 'Europe/Paris',
+                                'Central European Standard Time': 'Europe/Warsaw',
+                                'E. Europe Standard Time': 'Europe/Bucharest',
+                                'Tokyo Standard Time': 'Asia/Tokyo',
+                                'China Standard Time': 'Asia/Shanghai',
+                                'India Standard Time': 'Asia/Kolkata',
+                                'AUS Eastern Standard Time': 'Australia/Sydney',
+                                'New Zealand Standard Time': 'Pacific/Auckland',
+                            }
+                            _tz_name = _WIN_TO_IANA.get(_win_tz)
+                except Exception:
+                    pass
+            else:
+                # Linux: read /etc/localtime symlink for proper IANA name
+                from pathlib import Path as _P
+                _link = _P('/etc/localtime')
+                if _link.is_symlink() and 'zoneinfo/' in str(_link.resolve()):
+                    _tz_name = str(_link.resolve()).split('zoneinfo/')[-1]
+
             if not _tz_name:
                 # Last resort: try tzinfo.key (works with ZoneInfo, not with fixed-offset)
                 _detected = datetime.now().astimezone().tzinfo
                 _tz_name = getattr(_detected, 'key', None)
+
             if _tz_name and _tz_name != 'UTC':
                 settings.set('USER_TIMEZONE', _tz_name, persist=True)
                 logger.info(f"Auto-detected timezone: {_tz_name}")
@@ -591,12 +638,15 @@ def run():
         host_display = 'localhost' if config.WEB_UI_HOST in ('0.0.0.0', '127.0.0.1') else config.WEB_UI_HOST
         url = f"{protocol}://{host_display}:{config.WEB_UI_PORT}"
 
-        # ANSI colors: cyan background, black text, bold
-        CYAN_BG = '\033[46m'
-        BLACK = '\033[30m'
-        BOLD = '\033[1m'
-        RESET = '\033[0m'
-        print(f"\n{CYAN_BG}{BLACK}{BOLD} ✨ SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
+        # Display startup banner
+        if sys.platform == 'win32':
+            print(f"\n SAPPHIRE IS NOW ACTIVE: {url} \n")
+        else:
+            CYAN_BG = '\033[46m'
+            BLACK = '\033[30m'
+            BOLD = '\033[1m'
+            RESET = '\033[0m'
+            print(f"\n{CYAN_BG}{BLACK}{BOLD} SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
 
         logger.info(f"Sapphire is running. Starting uvicorn server...")
 

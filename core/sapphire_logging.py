@@ -3,16 +3,20 @@ import sys
 import faulthandler
 import logging
 import shutil
+from pathlib import Path
 from logging.handlers import TimedRotatingFileHandler
 
 # Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
 faulthandler.enable()
 
+# Resolve project root from this file's location (core/sapphire_logging.py -> project root)
+_BASE_DIR = Path(__file__).parent.parent.resolve()
+
 # Early stderr capture - ensures ANY errors get logged
 _startup_log = None
 try:
-    os.makedirs('user/logs', exist_ok=True)
-    _startup_log = open('user/logs/startup_errors.log', 'a', encoding='utf-8')
+    os.makedirs(_BASE_DIR / 'user' / 'logs', exist_ok=True)
+    _startup_log = open(_BASE_DIR / 'user' / 'logs' / 'startup_errors.log', 'a', encoding='utf-8')
     _startup_log.write(f"\n--- Startup attempt ---\n")
 except Exception:
     pass
@@ -26,19 +30,19 @@ def _log_startup_error(msg):
 
 # Ensure all user directories exist (covers both local and Docker first-boot)
 _USER_DIRS = [
-    'user/logs',
-    'user/history',
-    'user/public/avatars',
-    'user/plugins',
-    'user/plugin_state',
-    'user/webui/plugins',
-    'user/continuity',
-    'user/ssl',
-    'user/prompts',
-    'user/toolsets',
-    'user/personas',
-    'user/spice_sets',
-    'user/story_engine',
+    _BASE_DIR / 'user' / 'logs',
+    _BASE_DIR / 'user' / 'history',
+    _BASE_DIR / 'user' / 'public' / 'avatars',
+    _BASE_DIR / 'user' / 'plugins',
+    _BASE_DIR / 'user' / 'plugin_state',
+    _BASE_DIR / 'user' / 'webui' / 'plugins',
+    _BASE_DIR / 'user' / 'continuity',
+    _BASE_DIR / 'user' / 'ssl',
+    _BASE_DIR / 'user' / 'prompts',
+    _BASE_DIR / 'user' / 'toolsets',
+    _BASE_DIR / 'user' / 'personas',
+    _BASE_DIR / 'user' / 'spice_sets',
+    _BASE_DIR / 'user' / 'story_engine',
 ]
 try:
     for d in _USER_DIRS:
@@ -48,24 +52,24 @@ except Exception as e:
 
 # Copy default avatars if none exist in user dir
 def _init_avatars():
-    avatar_dir = 'user/public/avatars'
-    static_dir = 'interfaces/web/static/users'
+    avatar_dir = _BASE_DIR / 'user' / 'public' / 'avatars'
+    static_dir = _BASE_DIR / 'interfaces' / 'web' / 'static' / 'users'
 
     # Check if ANY avatar already exists (any format)
     for role in ('user', 'assistant'):
         for ext in ('.webp', '.jpg', '.png'):
-            if os.path.exists(os.path.join(avatar_dir, f'{role}{ext}')):
+            if (avatar_dir / f'{role}{ext}').exists():
                 return  # Already have avatars, don't overwrite
 
     # Copy defaults - prefer webp > jpg > png
-    if not os.path.isdir(static_dir):
+    if not static_dir.is_dir():
         return
 
     for role in ('user', 'assistant'):
         for ext in ('.webp', '.jpg', '.png'):
-            src = os.path.join(static_dir, f'{role}{ext}')
-            if os.path.exists(src):
-                dst = os.path.join(avatar_dir, f'{role}{ext}')
+            src = static_dir / f'{role}{ext}'
+            if src.exists():
+                dst = avatar_dir / f'{role}{ext}'
                 try:
                     shutil.copy2(src, dst)
                 except Exception:
@@ -76,7 +80,7 @@ _init_avatars()
 
 # Configure file handler with daily rotation
 file_handler = TimedRotatingFileHandler(
-    'user/logs/sapphire.log',
+    str(_BASE_DIR / 'user' / 'logs' / 'sapphire.log'),
     when='midnight',
     interval=1,
     backupCount=30
