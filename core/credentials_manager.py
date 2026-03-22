@@ -212,9 +212,15 @@ class CredentialsManager:
             providers = user_settings.get('LLM_PROVIDERS', {})
             if not providers:
                 providers = user_settings.get('llm', {}).get('LLM_PROVIDERS', {})
+            # Also check LLM_CUSTOM_PROVIDERS
+            custom_providers = user_settings.get('LLM_CUSTOM_PROVIDERS', {})
+            if not custom_providers:
+                custom_providers = user_settings.get('llm', {}).get('LLM_CUSTOM_PROVIDERS', {})
+            # Merge both for migration scan
+            all_providers = {**providers, **custom_providers}
             migrated_any = False
-            
-            for provider_key, prov_config in providers.items():
+
+            for provider_key, prov_config in all_providers.items():
                 api_key = prov_config.get('api_key', '').strip()
                 if api_key:
                     # Only migrate if we don't already have a key for this provider
@@ -235,7 +241,7 @@ class CredentialsManager:
 
             # Always clear api_key fields from settings.json (even if already in credentials)
             modified = False
-            for provider_key, prov_config in providers.items():
+            for prov_config in list(providers.values()) + list(custom_providers.values()):
                 if prov_config.get('api_key'):
                     prov_config['api_key'] = ''
                     modified = True
@@ -249,10 +255,11 @@ class CredentialsManager:
                 # don't get written back on the next settings.set(..., persist=True)
                 try:
                     from core.settings_manager import settings as sm
-                    mem_providers = sm._config.get('LLM_PROVIDERS', {})
-                    for prov in mem_providers.values():
-                        if isinstance(prov, dict):
-                            prov.pop('api_key', None)
+                    for dict_key in ('LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS'):
+                        mem_providers = sm._config.get(dict_key, {})
+                        for prov in mem_providers.values():
+                            if isinstance(prov, dict):
+                                prov.pop('api_key', None)
                 except Exception:
                     pass  # settings_manager may not be loaded yet — save() defense handles it
 

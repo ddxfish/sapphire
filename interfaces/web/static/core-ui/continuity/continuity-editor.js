@@ -231,8 +231,8 @@ export default class ContinuityEditor {
       }
       
       modelField.style.display = '';
-    } else if (providerKey === 'other' || providerKey === 'lmstudio') {
-      // Free-form model input for "other" and lmstudio
+    } else {
+      // Custom/generic providers — free-form model input
       modelCustom.value = currentModel || '';
       modelCustomField.style.display = '';
     }

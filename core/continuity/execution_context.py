@@ -156,7 +156,7 @@ class ExecutionContext:
         effective_model = self.model_override if self.model_override else self.provider.model
         params = get_generation_params(
             self.provider_key, effective_model,
-            getattr(config, 'LLM_PROVIDERS', {})
+            {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
         )
         if self.model_override:
             params['model'] = self.model_override

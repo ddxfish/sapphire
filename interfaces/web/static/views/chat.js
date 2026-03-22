@@ -825,7 +825,8 @@ function updateModelSelector(container, providerKey, currentModel) {
             select.innerHTML += `<option value="${currentModel}" selected>${currentModel}</option>`;
         }
         if (group) group.style.display = '';
-    } else if (providerKey === 'other') {
+    } else {
+        // Custom/generic providers — free-text model input
         if (custom) custom.value = currentModel || '';
         if (customGroup) customGroup.style.display = '';
     }

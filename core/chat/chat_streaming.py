@@ -167,7 +167,7 @@ class StreamingChat:
             gen_params = get_generation_params(
                 provider_key,
                 effective_model,
-                getattr(config, 'LLM_PROVIDERS', {})
+                {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
             )
             
             # Pass model override to provider if set

@@ -67,7 +67,7 @@ class SettingsManager:
         config_objects = {
             'LLM_PRIMARY', 'LLM_FALLBACK', 'GENERATION_DEFAULTS',
             'FASTER_WHISPER_VAD_PARAMETERS', 'LLM_PROVIDERS',
-            'MODEL_GENERATION_PROFILES'
+            'LLM_CUSTOM_PROVIDERS', 'MODEL_GENERATION_PROFILES'
         }
         return key in config_objects
     
@@ -600,7 +600,7 @@ class SettingsManager:
             'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',
             'FORCE_THINKING', 'THINKING_PREFILL',
             'CLAUDE_THINKING_ENABLED', 'CLAUDE_THINKING_BUDGET',
-            'LLM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
+            'LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
             # SOCKS can be hot-reloaded - session cache is cleared on change
             'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT',
             # Privacy mode is runtime-only, always hot

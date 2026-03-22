@@ -263,7 +263,7 @@ export function wireAIConfig(modal, t, data) {
                 modelSel.innerHTML += `<option value="${t.model}" selected>${t.model}</option>`;
             }
             modelField.style.display = '';
-        } else if (key === 'other' || key === 'lmstudio') {
+        } else {
             modelCustomField.style.display = '';
         }
     };

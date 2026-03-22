@@ -186,7 +186,7 @@ def _resolve_model(model_str):
         parts = model_str.split(':', 1)
         return parts[0], parts[1]
 
-    providers_config = getattr(cfg, 'LLM_PROVIDERS', {})
+    providers_config = {**getattr(cfg, 'LLM_PROVIDERS', {}), **getattr(cfg, 'LLM_CUSTOM_PROVIDERS', {})}
     enabled_keys = [k for k, v in providers_config.items() if v.get('enabled')]
 
     if model_str in providers_config:
@@ -330,7 +330,7 @@ def _agent_options(manager, ps):
         lines.append("Leave model empty to use the current chat model.")
     else:
         import config as cfg
-        providers_config = getattr(cfg, 'LLM_PROVIDERS', {})
+        providers_config = {**getattr(cfg, 'LLM_PROVIDERS', {}), **getattr(cfg, 'LLM_CUSTOM_PROVIDERS', {})}
         lines.append("\nAvailable Providers (no roster \u2014 LLM agents use current chat model by default):")
         for key, pconf in providers_config.items():
             if pconf.get('enabled'):

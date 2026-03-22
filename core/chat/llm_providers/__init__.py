@@ -351,16 +351,29 @@ class ProviderRegistry:
 
         Resolution:
         1. Instance generation_params (if set)
-        2. Default params
+        2. MODEL_GENERATION_PROFILES lookup by model name
+        3. MODEL_GENERATION_PROFILES __fallback__
+        4. Default params
         """
         if providers_config is None:
             providers_config = self._get_all_configs()
 
         config = providers_config.get(provider_key, {})
 
-        # Instance-level override
+        # 1. Instance-level override (highest priority)
         if config.get('generation_params'):
             return {**DEFAULT_GENERATION_PARAMS, **config['generation_params']}
+
+        # 2. Model-name lookup in profiles (preserves tuned params per model)
+        try:
+            import config as app_config
+            profiles = getattr(app_config, 'MODEL_GENERATION_PROFILES', {})
+            if model and model in profiles:
+                return {**DEFAULT_GENERATION_PARAMS, **profiles[model]}
+            if '__fallback__' in profiles:
+                return {**DEFAULT_GENERATION_PARAMS, **profiles['__fallback__']}
+        except ImportError:
+            pass
 
         return dict(DEFAULT_GENERATION_PARAMS)
 
