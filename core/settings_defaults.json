@@ -260,7 +260,7 @@
       "meta-llama/Llama-3.3-70B-Instruct": { "temperature": 0.75, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 }
     },
     "FORCE_THINKING": false,
-    "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",
+    "THINKING_PREFILL": "",
     "CLAUDE_THINKING_ENABLED": true,
     "CLAUDE_THINKING_BUDGET": 10000,
     "IMAGE_UPLOAD_MAX_WIDTH": 1920

@@ -94,7 +94,7 @@ class AudioRecorder:
         """Check if audio chunk is silent using adaptive threshold."""
         level = np.max(np.abs(audio_data.astype(np.float32) / 32768.0))
         self._update_threshold(level)
-        print(f"Level: {level:.4f} | Threshold: {self.adaptive_threshold:.4f}", end='\r')
+        logger.debug(f"Level: {level:.4f} | Threshold: {self.adaptive_threshold:.4f}")
         return level < self.adaptive_threshold
 
     def _open_stream(self) -> bool:
@@ -175,7 +175,7 @@ class AudioRecorder:
         # Wait for beep to finish
         time.sleep(config.RECORDER_BEEP_WAIT_TIME)
         
-        print("\nListening...")
+        logger.info("Listening...")
         
         # Main recording loop
         while self._recording:

@@ -257,8 +257,9 @@ class TTSClient:
             processed_text = tts_event.tts_text
 
         self.stop()
-        self._generation += 1
-        gen = self._generation
+        with self.lock:
+            self._generation += 1
+            gen = self._generation
         self.should_stop.clear()
 
         threading.Thread(

@@ -628,7 +628,7 @@ except Exception as e:
 finally:
     try:
         sd.stop()
-    except:
+    except Exception:
         pass
 '''
         try:

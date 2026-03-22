@@ -111,6 +111,6 @@ USER sapphire
 EXPOSE 8073
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl -fsk https://localhost:8073/api/health || exit 1
+    CMD curl -fsk https://localhost:8073/api/health || curl -fs http://localhost:8073/api/health || exit 1
 
 CMD ["python", "main.py"]
