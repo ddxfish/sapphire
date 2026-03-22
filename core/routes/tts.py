@@ -210,7 +210,7 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
             pass
     if transcribed_text is None:
         raise HTTPException(status_code=500, detail="Transcription failed — check STT provider logs")
-    return {"text": transcribed_text}
+    return {"text": transcribed_text, "quiet": transcribed_text == ""}
 
 
 @router.post("/api/mic/active")

@@ -39,6 +39,7 @@ A tool is a single function the AI can call. A plugin is an autonomous package t
 | [Web UI](web-ui.md) | Shared JS modules, CSS variables, modals, CSRF, style injection |
 | [Signing](signing.md) | Verification states, sideloading, signing your own plugins |
 | [Lifecycle](lifecycle.md) | Startup, live toggle, hot reload, rescan, error isolation |
+| [Publishing](publishing.md) | How to structure your repo and submit to the Sapphire Store |
 | [AI Reference](ai-reference.md) | Compact reference for Sapphire's own use when building plugins |
 
 ---

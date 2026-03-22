@@ -1,8 +1,9 @@
 {
   "name": "sapphire-store",
   "version": "1.0.0",
-  "description": "Browse and install plugins from the Sapphire Store",
+  "description": "Sapphire Store — browse and install community plugins",
   "author": "sapphire",
+  "icon": "🏪",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {

@@ -6,8 +6,8 @@ Enables games, simulations, and interactive stories where AI reads/writes state 
 This module orchestrates:
 - SQLite persistence with WAL mode
 - Feature modules (choices, riddles, navigation)
-- Game types (linear, rooms)
 - Progressive prompt building
+- Per-room YAML + markdown story format
 """
 
 import importlib.util
@@ -20,7 +20,6 @@ from typing import Any, Optional
 
 from .validation import is_system_key, validate_value, infer_type
 from .prompts import PromptBuilder
-from .game_types import get_game_type
 from .features import ChoiceManager, RiddleManager, NavigationManager
 
 # Set up dedicated story engine logger
@@ -47,14 +46,12 @@ class StoryEngine:
         self._progressive_config = None
         self._story_dir = None  # Path to folder containing story.json (None for flat presets)
         self._scene_entered_at_turn = 0
-        self._last_advance_turn = -1  # Track to prevent double-advance in same turn
 
         # Feature managers (initialized on preset load)
         self._choices: Optional[ChoiceManager] = None
         self._riddles: Optional[RiddleManager] = None
         self._navigation: Optional[NavigationManager] = None
         self._prompt_builder: Optional[PromptBuilder] = None
-        self._game_type = None
 
         # Story-specific custom tools
         self._custom_tools = []        # TOOLS schemas from loaded modules
@@ -181,7 +178,7 @@ class StoryEngine:
                     max_scene = entry["constraints"].get("max")
                     if current_scene is not None and max_scene is not None:
                         if current_scene < max_scene:
-                            lines.append("📍 More story ahead — use advance_scene() when ready")
+                            lines.append("📍 More story ahead — use move() when ready")
                         else:
                             lines.append("📍 Final scene — story concludes here")
                         lines.append("")
@@ -312,7 +309,7 @@ class StoryEngine:
                 lines.append("")
             lines.append("READ-ONLY:")
             for key, entry in readonly_keys:
-                hint = "use advance_scene()" if key == iterator_key else "derived"
+                hint = "use move()" if key == iterator_key else "derived"
                 lines.append(self._format_state_line(key, entry, hint))
         
         return "\n".join(lines)
@@ -400,11 +397,7 @@ class StoryEngine:
     
     def _get_available_tools_list(self) -> list:
         """Get list of currently available tool names."""
-        tools = ["get_state()", "set_state(key, value, reason)", "advance_scene(reason)", "roll_dice(count, sides)"]
-        
-        if self._navigation and self._navigation.is_enabled:
-            tools.append("move(direction, reason)")
-        
+        tools = ["get_state()", "set_state(key, value, reason)", "roll_dice(count, sides)", "move(direction, reason)"]
         return tools
     
     def get_state_full(self, key: str = None) -> Any:
@@ -421,16 +414,6 @@ class StoryEngine:
             self._persist_system_key("_scene_entered_at", current_turn, current_turn)
         return current_turn - self._scene_entered_at_turn
 
-    def can_advance_this_turn(self, turn_number: int) -> tuple[bool, str]:
-        """Check if advance_scene is allowed this turn (only once per turn)."""
-        if self._last_advance_turn == turn_number:
-            return False, "Already advanced this turn. Wait for player's next message."
-        return True, ""
-
-    def mark_advanced(self, turn_number: int):
-        """Mark that advance_scene was used this turn."""
-        self._last_advance_turn = turn_number
-    
     def get_visible_state(self, current_turn: int = None) -> dict:
         """Get state filtered by visible_from constraints."""
         iterator_value = self._get_iterator_value()
@@ -622,18 +605,21 @@ class StoryEngine:
     def rollback_to_turn(self, target_turn: int) -> bool:
         """Rollback state to a specific turn by replaying log."""
         try:
+            # Capture preset name before we wipe state_current — it's not in state_log
+            preset_name = self._preset_name
+
             with self._get_connection() as conn:
                 conn.execute("DELETE FROM state_log WHERE chat_name = ? AND turn_number > ?",
                             (self.chat_name, target_turn))
                 conn.execute("DELETE FROM state_current WHERE chat_name = ?", (self.chat_name,))
-                
+
                 cursor = conn.execute(
                     """SELECT key, new_value, changed_by, turn_number, timestamp
                        FROM state_log WHERE chat_name = ? AND turn_number <= ?
                        ORDER BY id ASC""",
                     (self.chat_name, target_turn)
                 )
-                
+
                 rebuilt_state = {}
                 for row in cursor:
                     rebuilt_state[row["key"]] = {
@@ -642,18 +628,25 @@ class StoryEngine:
                         "turn_number": row["turn_number"],
                         "timestamp": row["timestamp"]
                     }
-                
+
                 for key, data in rebuilt_state.items():
                     value = data["value"]
                     conn.execute(
-                        """INSERT INTO state_current 
+                        """INSERT INTO state_current
                            (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (self.chat_name, key, json.dumps(value), infer_type(value),
                          None, None, data["timestamp"], data["changed_by"], data["turn_number"])
                     )
                 conn.commit()
-            
+
+            # Re-persist system keys so _load_state() can find them
+            if preset_name:
+                self._persist_system_key("_preset", preset_name, 0)
+            if self._scene_entered_at_turn is not None:
+                self._persist_system_key("_scene_entered_at", self._scene_entered_at_turn, 0)
+
+            # _load_state -> reload_preset_config restores constraints from preset
             self._load_state()
             logger.info(f"Rolled back '{self.chat_name}' to turn {target_turn}, {len(self._current_state)} keys")
             return True
@@ -700,7 +693,10 @@ class StoryEngine:
         """Find preset file, checking folder format then flat format."""
         project_root = Path(__file__).parent.parent.parent
         search_paths = [
-            # Folder format: {name}/story.json
+            # YAML room format: {name}/story.yaml (preferred)
+            project_root / "user" / "story_presets" / preset_name / "story.yaml",
+            project_root / "core" / "story_engine" / "presets" / preset_name / "story.yaml",
+            # JSON folder format: {name}/story.json
             project_root / "user" / "story_presets" / preset_name / "story.json",
             project_root / "core" / "story_engine" / "presets" / preset_name / "story.json",
             # Flat format: {name}.json
@@ -722,8 +718,12 @@ class StoryEngine:
             return False, f"Preset not found: {preset_name}"
 
         try:
-            with open(preset_path, 'r', encoding='utf-8') as f:
-                preset = json.load(f)
+            if preset_path.name == "story.yaml":
+                from .loader import load_story_yaml
+                preset = load_story_yaml(preset_path.parent)
+            else:
+                with open(preset_path, 'r', encoding='utf-8') as f:
+                    preset = json.load(f)
 
             self.clear_all()
 
@@ -759,19 +759,18 @@ class StoryEngine:
                     )
 
                 conn.execute(
-                    """INSERT OR REPLACE INTO state_current 
+                    """INSERT OR REPLACE INTO state_current
                        (chat_name, key, value, value_type, label, constraints, updated_at, updated_by, turn_number)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (self.chat_name, "_preset", json.dumps(preset_name), "string",
                      "System: Active Preset", None, datetime.now().isoformat(), "system", turn_number)
                 )
                 conn.commit()
-            
+
             # Initialize features
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
-            self._story_dir = preset_path.parent if preset_path.name == "story.json" else None
-            self._game_type = get_game_type(preset)
+            self._story_dir = preset_path.parent if preset_path.name in ("story.json", "story.yaml") else None
             self._init_features(preset, turn_number)
 
             # Initialize scene tracking
@@ -787,7 +786,7 @@ class StoryEngine:
             # Load custom tools from story folder
             self.load_story_tools()
 
-            logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys, game_type={self._game_type.name}")
+            logger.info(f"Loaded preset '{preset_name}' with {len(self._current_state)} keys")
             return True, f"Loaded preset: {preset_name}"
             
         except Exception as e:
@@ -802,35 +801,38 @@ class StoryEngine:
             return False
 
         try:
-            with open(preset_path, 'r', encoding='utf-8') as f:
-                preset = json.load(f)
+            if preset_path.name == "story.yaml":
+                from .loader import load_story_yaml
+                preset = load_story_yaml(preset_path.parent)
+            else:
+                with open(preset_path, 'r', encoding='utf-8') as f:
+                    preset = json.load(f)
 
             self._preset_name = preset_name
             self._progressive_config = preset.get("progressive_prompt")
-            self._story_dir = preset_path.parent if preset_path.name == "story.json" else None
-            self._game_type = get_game_type(preset)
-            
+            self._story_dir = preset_path.parent if preset_path.name in ("story.json", "story.yaml") else None
+
             # Reinitialize features (they need the preset config)
             self._init_features(preset, 0)
-            
+
             # Ensure riddles are initialized
             if self._riddles:
                 self._riddles.ensure_initialized()
-            
+
             # Refresh constraints on existing keys
             initial_state = preset.get("initial_state", {})
             for key, spec in initial_state.items():
                 if key in self._current_state:
                     constraints = {k: v for k, v in spec.items() if k not in ("value", "type", "label")}
                     self._current_state[key]["constraints"] = constraints if constraints else None
-            
+
             # Persist preset name
             self._persist_system_key("_preset", preset_name, 0)
-            
+
             # Reload custom tools from story folder
             self.load_story_tools()
 
-            logger.info(f"Reloaded config for preset '{preset_name}', game_type={self._game_type.name}")
+            logger.info(f"Reloaded config for preset '{preset_name}'")
             return True
         except Exception as e:
             logger.error(f"Failed to reload preset config: {e}")
@@ -865,23 +867,18 @@ class StoryEngine:
         if turn_number > 0 and self._riddles.riddles:
             self._riddles.initialize(turn_number)
         
-        # Navigation only if game type supports it
-        if self._game_type and 'navigation' in self._game_type.features:
-            self._navigation = NavigationManager(
-                preset=preset,
-                state_getter=self.get_state,
-                state_setter=self.set_state
-            )
-        else:
-            self._navigation = None
-        
-        # Prompt builder with game type for layered instructions
-        game_type_name = self._game_type.name if self._game_type else "linear"
+        # Always init navigation (it self-disables if no connections configured)
+        self._navigation = NavigationManager(
+            preset=preset,
+            state_getter=self.get_state,
+            state_setter=self.set_state
+        )
+
+        # Prompt builder
         self._prompt_builder = PromptBuilder(
             preset=preset,
             state_getter=self.get_state,
             scene_turns_getter=scene_turns_getter,
-            game_type=game_type_name
         )
         self._prompt_builder.set_features(
             choices=self._choices,
@@ -891,14 +888,30 @@ class StoryEngine:
     
     # ==================== PROMPT GENERATION ====================
     
-    def format_for_prompt(self, include_vars: bool = True, include_story: bool = True, 
+    def format_for_prompt(self, include_vars: bool = True, include_story: bool = True,
                           current_turn: int = None) -> str:
-        """Format current state for system prompt injection."""
-        logger.info(f"[STATE] format_for_prompt: vars={include_vars}, story={include_story}")
-        
-        parts = []
-        
-        # State variables
+        """Format current state for system prompt injection (combined, legacy)."""
+        static, dynamic = self.format_for_prompt_split(include_vars, include_story, current_turn)
+        parts = [p for p in (static, dynamic) if p]
+        return "\n\n".join(parts) if parts else "(state engine active - use get_state())"
+
+    def format_for_prompt_split(self, include_vars: bool = True, include_story: bool = True,
+                                current_turn: int = None) -> tuple[str, str]:
+        """
+        Format state for prompt injection, split into static and dynamic parts.
+
+        Static: instructions, scene prose, tools hint — changes only on room/scene advance.
+        Dynamic: state variables, clues, turn-gated content — changes every turn.
+
+        Returns:
+            (static_content, dynamic_content) — either may be empty string
+        """
+        logger.info(f"[STATE] format_for_prompt_split: vars={include_vars}, story={include_story}")
+
+        static_parts = []
+        dynamic_parts = []
+
+        # State variables → DYNAMIC (change every turn)
         if include_vars and self._current_state:
             lines = []
             iterator_value = self._get_iterator_value()
@@ -916,42 +929,38 @@ class StoryEngine:
                     elif isinstance(iterator_value, str):
                         if iterator_value != visible_from and visible_from not in visited:
                             continue
-                
+
                 value = entry["value"]
                 label = entry.get("label")
-                
+
                 if isinstance(value, list):
                     value_str = json.dumps(value)
                 elif isinstance(value, bool):
                     value_str = "true" if value else "false"
                 else:
                     value_str = str(value)
-                
+
                 if label and label != key:
                     lines.append(f"{key} ({label}): {value_str}")
                 else:
                     lines.append(f"{key}: {value_str}")
-            
+
             if lines:
-                parts.append("\n".join(lines))
-        
-        # Tools hint
-        tools = ["get_state()", "set_state(key, value, reason)", "roll_dice(count, sides)", "increment_counter(key, amount)"]
-        if self._navigation and self._navigation.is_enabled:
-            tools.insert(2, "move(direction, reason)")
-        if self._choices and self._choices.choices:
-            tools.append("make_choice(choice_id, option, reason)")
-        if self._riddles and self._riddles.riddles:
-            tools.append("attempt_riddle(riddle_id, answer)")
-        parts.append("Tools: " + ", ".join(tools))
-        
-        # Progressive prompt content
+                dynamic_parts.append("\n".join(lines))
+
+        # Tools hint → STATIC
+        tools = ["get_state()", "set_state(key, value, reason)", "roll_dice(count, sides)", "move(direction, reason)"]
+        static_parts.append("Tools: " + ", ".join(tools))
+
+        # Progressive prompt content → split by builder
         if include_story and self._prompt_builder:
-            prompt_content = self._prompt_builder.build(current_turn or 0)
-            if prompt_content:
-                parts.append(prompt_content)
-        
-        return "\n\n".join(parts) if parts else "(state engine active - use get_state())"
+            static_prompt, dynamic_prompt = self._prompt_builder.build_split(current_turn or 0)
+            if static_prompt:
+                static_parts.append(static_prompt)
+            if dynamic_prompt:
+                dynamic_parts.append(dynamic_prompt)
+
+        return "\n\n".join(static_parts), "\n\n".join(dynamic_parts)
     
     # ==================== FEATURE ACCESSORS ====================
     

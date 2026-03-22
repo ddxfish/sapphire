@@ -3,6 +3,8 @@ import json
 import logging
 from pathlib import Path
 
+import yaml
+
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 from core.auth import require_login
@@ -32,7 +34,10 @@ async def start_story(request: Request, _=Depends(require_login), system=Depends
             raise HTTPException(status_code=404, detail=f"Preset not found: {preset_name}")
 
         with open(preset_path, 'r', encoding='utf-8') as f:
-            preset_data = json.load(f)
+            if preset_path.suffix == '.yaml':
+                preset_data = yaml.safe_load(f) or {}
+            else:
+                preset_data = json.load(f)
         story_display = preset_data.get("name", preset_name.replace('_', ' ').title())
 
         # Create unique chat name (sanitize same as create_chat does)
@@ -100,18 +105,24 @@ async def list_story_presets(request: Request, _=Depends(require_login)):
         seen.add(name)
         try:
             with open(preset_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            has_prompt = (preset_file.parent / "prompt.md").exists() if preset_file.name == "story.json" else False
-            has_tools = (preset_file.parent / "tools").is_dir() if preset_file.name == "story.json" else False
+                if preset_file.suffix == '.yaml':
+                    data = yaml.safe_load(f) or {}
+                else:
+                    data = json.load(f)
+            is_folder = preset_file.name in ("story.json", "story.yaml")
+            has_prompt = (preset_file.parent / "prompt.md").exists() if is_folder else False
+            has_tools = (preset_file.parent / "tools").is_dir() if is_folder else False
+            has_rooms = (preset_file.parent / "rooms").is_dir() if is_folder else False
             presets.append({
                 "name": name,
                 "display_name": data.get("name", name),
                 "description": data.get("description", ""),
-                "key_count": len(data.get("initial_state", {})),
+                "key_count": len(data.get("initial_state", data.get("state", {}))),
                 "source": source,
-                "folder": preset_file.name == "story.json",
+                "folder": is_folder,
                 "has_prompt": has_prompt,
                 "has_tools": has_tools,
+                "has_rooms": has_rooms,
             })
         except Exception as e:
             logger.warning(f"Failed to load preset {preset_file}: {e}")
@@ -120,6 +131,9 @@ async def list_story_presets(request: Request, _=Depends(require_login)):
         if not search_dir.exists():
             continue
         source = "user" if "user" in str(search_dir) else "core"
+        # Folder-based: {name}/story.yaml (preferred)
+        for story_file in search_dir.glob("*/story.yaml"):
+            add_preset(story_file.parent.name, story_file, source)
         # Folder-based: {name}/story.json
         for story_file in search_dir.glob("*/story.json"):
             add_preset(story_file.parent.name, story_file, source)

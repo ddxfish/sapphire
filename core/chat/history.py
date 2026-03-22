@@ -929,9 +929,9 @@ class ChatSessionManager:
     def delete_chat(self, chat_name: str) -> bool:
         """Delete chat. Recreates default if deleted, switches active if needed."""
         self._ensure_db()
-        
+
         try:
-            with self._get_connection() as conn:
+            with self._lock, self._get_connection() as conn:
                 # Check if exists
                 cursor = conn.execute(
                     "SELECT 1 FROM chats WHERE name = ?", 
@@ -1035,8 +1035,9 @@ class ChatSessionManager:
                 return False
 
     def get_active_chat_name(self) -> str:
-        """Get active chat name."""
-        return self.active_chat_name
+        """Get active chat name (thread-safe)."""
+        with self._lock:
+            return self.active_chat_name
 
     def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
         if persona is None:
@@ -1106,6 +1107,49 @@ class ChatSessionManager:
 
     def get_turn_count(self) -> int:
         return self.current_chat.get_turn_count()
+
+    def read_chat_messages(self, chat_name: str, provider: str = None) -> List[Dict[str, Any]]:
+        """Read messages from a named chat WITHOUT switching active chat."""
+        self._ensure_db()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT messages FROM chats WHERE name = ?", (chat_name,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return []
+                messages = json.loads(row["messages"])
+                # Apply same trimming as get_messages_for_llm
+                chat = ConversationHistory()
+                chat.messages = messages
+                return chat.get_messages_for_llm(provider=provider)
+        except Exception as e:
+            logger.error(f"Failed to read chat '{chat_name}': {e}")
+            return []
+
+    def append_to_chat(self, chat_name: str, user_content: str, assistant_content: str):
+        """Append a message pair to a named chat WITHOUT switching active chat."""
+        self._ensure_db()
+        timestamp = datetime.now().isoformat()
+        try:
+            with self._lock, self._get_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT messages FROM chats WHERE name = ?", (chat_name,)
+                )
+                row = cursor.fetchone()
+                messages = json.loads(row["messages"]) if row else []
+                messages.append({"role": "user", "content": user_content, "timestamp": timestamp})
+                messages.append({"role": "assistant", "content": assistant_content, "timestamp": timestamp})
+                conn.execute(
+                    """INSERT OR REPLACE INTO chats (name, settings, messages, updated_at)
+                       VALUES (?, COALESCE((SELECT settings FROM chats WHERE name = ?), '{}'), ?, ?)""",
+                    (chat_name, chat_name, json.dumps(messages), timestamp)
+                )
+                conn.commit()
+                logger.debug(f"Appended message pair to chat '{chat_name}'")
+        except Exception as e:
+            logger.error(f"Failed to append to chat '{chat_name}': {e}")
 
     def _rollback_state_if_needed(self):
         """Rollback story engine to current turn count if enabled."""

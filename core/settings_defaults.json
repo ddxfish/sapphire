@@ -24,7 +24,8 @@
       "192.168.0.0/16",
       "10.0.0.0/8",
       "172.16.0.0/12"
-    ]
+    ],
+    "METRICS_ENABLED": true
   },
   
   "backups": {
@@ -275,6 +276,10 @@
   
   "rag": {
     "RAG_SIMILARITY_THRESHOLD": 0.40
+  },
+
+  "memory": {
+    "MEMORY_DEDUP_THRESHOLD": 0.92
   },
 
   "plugins": {

@@ -8,10 +8,7 @@ Supports two modes:
 
 Segments can have conditional variants using "key?condition" syntax.
 
-Instruction layering:
-- _base.json: Universal rules for all game types
-- _linear.json: Linear story mode (advance_scene, choices, riddles)
-- _rooms.json: Room navigation mode (move, compass directions)
+Instructions loaded from _instructions.json (unified for all story types).
 """
 
 import json
@@ -23,65 +20,40 @@ from .conditions import parse_segment_key, match_conditions
 
 logger = logging.getLogger(__name__)
 
-# Cached instructions by game type
-_instructions_cache: dict[str, str] = {}
+# Cached instructions
+_instructions_cache: str = None
 
 
-def load_instructions(game_type: str = "linear") -> str:
-    """
-    Load layered instructions: _base.json + _{game_type}.json
-    
-    Args:
-        game_type: "linear" or "rooms"
-    
-    Returns:
-        Combined instruction string
-    """
+def load_instructions() -> str:
+    """Load unified instructions from _instructions.json."""
     global _instructions_cache
-    
-    if game_type in _instructions_cache:
-        return _instructions_cache[game_type]
-    
+
+    if _instructions_cache is not None:
+        return _instructions_cache
+
     presets_dir = Path(__file__).parent / "presets"
-    parts = []
-    
-    # Layer 1: Universal base
-    base_path = presets_dir / "_base.json"
-    if base_path.exists():
+    instructions_path = presets_dir / "_instructions.json"
+
+    if instructions_path.exists():
         try:
-            with open(base_path, 'r', encoding='utf-8') as f:
-                base_data = json.load(f)
-            base_instructions = base_data.get("instructions", "")
-            if base_instructions:
-                parts.append(base_instructions)
+            with open(instructions_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            _instructions_cache = data.get("instructions", "")
         except Exception as e:
-            logger.warning(f"Could not load _base.json: {e}")
-    
-    # Layer 2: Game type specific
-    type_path = presets_dir / f"_{game_type}.json"
-    if type_path.exists():
-        try:
-            with open(type_path, 'r', encoding='utf-8') as f:
-                type_data = json.load(f)
-            type_instructions = type_data.get("instructions", "")
-            if type_instructions:
-                parts.append(type_instructions)
-        except Exception as e:
-            logger.warning(f"Could not load _{game_type}.json: {e}")
+            logger.warning(f"Could not load _instructions.json: {e}")
+            _instructions_cache = ""
     else:
-        logger.debug(f"No game type overlay found: _{game_type}.json")
-    
-    combined = "\n".join(parts)
-    _instructions_cache[game_type] = combined
-    
-    logger.info(f"[PROMPT] Loaded instructions for game_type={game_type}, {len(combined)} chars")
-    return combined
+        logger.warning("_instructions.json not found")
+        _instructions_cache = ""
+
+    logger.info(f"[PROMPT] Loaded instructions, {len(_instructions_cache)} chars")
+    return _instructions_cache
 
 
 def clear_instructions_cache():
     """Clear the instructions cache (call if files change at runtime)."""
     global _instructions_cache
-    _instructions_cache = {}
+    _instructions_cache = None
 
 
 def select_segment(
@@ -149,12 +121,10 @@ class PromptBuilder:
         preset: dict,
         state_getter: Callable[[str], Any],
         scene_turns_getter: Optional[Callable[[int], int]] = None,  # Now takes current_turn as arg
-        game_type: str = "linear"
     ):
         self._config = preset.get("progressive_prompt", {})
         self._get_state = state_getter
         self._get_scene_turns = scene_turns_getter  # Signature: (current_turn) -> scene_turns
-        self._game_type = game_type
 
         # Feature managers (set by engine after init)
         self._choices = None
@@ -189,10 +159,10 @@ class PromptBuilder:
         Args:
             current_turn: Current turn number for scene_turns calculation
         """
-        logger.info(f"[PROMPT] Building progressive prompt, config={bool(self._config)}, game_type={self._game_type}")
-        
-        # Load layered instructions for this game type
-        instructions = load_instructions(self._game_type)
+        logger.info(f"[PROMPT] Building progressive prompt, config={bool(self._config)}")
+
+        # Load unified instructions
+        instructions = load_instructions()
         base = self._config.get("base", "")
         segments = self._config.get("segments", {})
         iterator_key = self.iterator_key
@@ -250,6 +220,122 @@ class PromptBuilder:
         
         return "\n\n".join(parts)
     
+    def build_split(self, current_turn: int = 0) -> tuple[str, str]:
+        """
+        Build progressive prompt split into static and dynamic parts.
+
+        Static: instructions, base text, current room/scene base segment.
+        Dynamic: conditional segments (turn-gated, state-gated), choices, riddles, exits.
+
+        Returns:
+            (static_content, dynamic_content)
+        """
+        instructions = load_instructions()
+        base = self._config.get("base", "")
+        segments = self._config.get("segments", {})
+        iterator_key = self.iterator_key
+        mode = self.mode
+
+        # Static always gets instructions + base
+        static_parts = []
+        if instructions:
+            static_parts.append(instructions)
+        if base:
+            static_parts.append(base)
+
+        if not iterator_key or not segments:
+            return "\n\n".join(static_parts), ""
+
+        iterator_value = self._get_state(iterator_key)
+        if iterator_value is None:
+            return "\n\n".join(static_parts), ""
+
+        # Collect segments split into base (static) and conditional (dynamic)
+        base_segs, conditional_segs = self._collect_segments_split(
+            segments, iterator_value, mode, current_turn
+        )
+        static_parts.extend(base_segs)
+
+        # Dynamic: conditional segments + feature content
+        dynamic_parts = list(conditional_segs)
+
+        if self._choices:
+            choice_section = self._build_choices_section(current_turn)
+            if choice_section:
+                dynamic_parts.append(choice_section)
+
+        if self._riddles:
+            riddle_section = self._build_riddles_section(iterator_value, current_turn)
+            if riddle_section:
+                dynamic_parts.append(riddle_section)
+
+        if self._navigation and self._navigation.is_enabled:
+            exits = self._navigation.get_exits_with_descriptions()
+            if exits:
+                dynamic_parts.append(f"Exits: {', '.join(exits)}")
+
+        return "\n\n".join(static_parts), "\n\n".join(dynamic_parts)
+
+    def _collect_segments_split(self, segments: dict, iterator_value: Any,
+                                mode: str, current_turn: int = 0) -> tuple[list, list]:
+        """
+        Collect segments split into base (static) and conditional (dynamic).
+
+        Returns:
+            (base_segments, conditional_segments)
+        """
+        base_keys = set()
+        for seg_key in segments.keys():
+            parsed_base, _ = parse_segment_key(seg_key)
+            base_keys.add(parsed_base)
+
+        def scene_turns_for_this_build():
+            if self._get_scene_turns:
+                return self._get_scene_turns(current_turn)
+            return 0
+
+        base_segs = []
+        conditional_segs = []
+        is_numeric = isinstance(iterator_value, (int, float))
+
+        if is_numeric:
+            iv = int(iterator_value)
+            numeric_keys = sorted(int(bk) for bk in base_keys if bk.isdigit())
+
+            for seg_key in numeric_keys:
+                if mode == "cumulative" and seg_key <= iv:
+                    pass
+                elif mode != "cumulative" and seg_key == iv:
+                    pass
+                else:
+                    continue
+
+                sk = str(seg_key)
+                # Base segment (no conditions) → static
+                if sk in segments:
+                    base_segs.append(segments[sk])
+                # Conditional variants → dynamic
+                for full_key, content in segments.items():
+                    parsed_base, conditions = parse_segment_key(full_key)
+                    if parsed_base == sk and conditions:
+                        if match_conditions(conditions, self._get_state, scene_turns_for_this_build):
+                            conditional_segs.append(content)
+
+                if mode != "cumulative":
+                    break
+        else:
+            # String iterator (room names)
+            sk = str(iterator_value)
+            if sk in segments:
+                base_segs.append(segments[sk])
+            for full_key, content in segments.items():
+                parsed_base, conditions = parse_segment_key(full_key)
+                if parsed_base == sk and conditions:
+                    if match_conditions(conditions, self._get_state, scene_turns_for_this_build):
+                        conditional_segs.append(content)
+
+        return base_segs, conditional_segs
+
     def _collect_segments(self, segments: dict, iterator_value: Any, mode: str, current_turn: int = 0) -> list:
         """Collect revealed segments based on iterator value and mode."""
         # Extract base keys from segments

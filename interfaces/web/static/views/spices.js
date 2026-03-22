@@ -1,7 +1,8 @@
 // views/spices.js - Spice manager view with spice sets
 import { getSpices, addSpice, updateSpice, deleteSpice, addCategory, renameCategory, deleteCategory, toggleCategory, reloadSpices,
-         getSpiceSets, getCurrentSpiceSet, activateSpiceSet, saveCustomSpiceSet, deleteSpiceSet, setSpiceSetEmoji } from '../shared/spice-api.js';
+         getSpiceSets, getCurrentSpiceSet, activateSpiceSet, saveCustomSpiceSet, deleteSpiceSet, setSpiceSetEmoji, setCategoryEmoji } from '../shared/spice-api.js';
 import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
+import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
@@ -67,6 +68,7 @@ function render() {
             <div class="panel-left panel-list">
                 <div class="panel-list-header">
                     <span class="panel-list-title">Spice Sets</span>
+                    <button class="btn-sm" id="ss-import" title="Import spice set">\u2B07</button>
                     <button class="btn-sm" id="ss-new" title="Save current as new">+</button>
                 </div>
                 <div class="panel-list-items" id="ss-list">
@@ -94,6 +96,7 @@ function render() {
                             `<button class="btn-primary" id="ss-activate">Activate</button>` :
                             `<span class="badge badge-active">Active</span>`
                         }
+                        <button class="btn-sm" id="ss-export">Export</button>
                         <button class="btn-sm danger" id="ss-delete">Delete</button>
                     </div>
                 </div>
@@ -128,7 +131,7 @@ function renderCategories(enabledSet) {
                     <label class="ss-cat-check" onclick="event.stopPropagation()">
                         <input type="checkbox" data-action="toggle-cat-set" data-cat="${name}" ${inSet ? 'checked' : ''}>
                     </label>
-                    <span class="spice-cat-icon">${catEmoji}</span>
+                    <span class="spice-cat-icon" data-action="cat-emoji" data-cat="${name}" title="Change emoji" style="cursor:pointer">${catEmoji}</span>
                     <div class="spice-cat-info">
                         <span class="spice-cat-name">${name} <span class="spice-cat-count">(${spices.length})</span></span>
                         ${cat.description ? `<span class="spice-cat-desc">${escapeHtml(cat.description)}</span>` : ''}
@@ -258,6 +261,113 @@ function bindEvents() {
         } catch (e) { ui.showToast('Failed to delete', 'error'); }
     });
 
+    // Export
+    container.querySelector('#ss-export')?.addEventListener('click', () => {
+        const selected = spiceSets.find(s => s.name === selectedSetName);
+        if (!selected || !spiceData?.categories) return;
+
+        // Build category data — only the checked categories, with their spices + emoji
+        const enabledSet = new Set(selected.categories || []);
+        const categories = {};
+        for (const [catName, cat] of Object.entries(spiceData.categories)) {
+            if (enabledSet.has(catName)) {
+                categories[catName] = {
+                    spices: cat.spices || [],
+                    emoji: cat.emoji || '',
+                    description: cat.description || '',
+                };
+            }
+        }
+
+        showExportDialog({
+            type: 'Spice Set',
+            name: selectedSetName,
+            filename: `${selectedSetName}.spiceset.json`,
+            data: {
+                sapphire_export: true,
+                type: 'spice_set',
+                version: 1,
+                name: selectedSetName,
+                emoji: selected.emoji || '',
+                categories,
+            },
+        });
+    });
+
+    // Import
+    container.querySelector('#ss-import')?.addEventListener('click', () => {
+        showImportDialog({
+            type: 'Spice Set',
+            overwrites: [
+                { key: 'spices', label: 'Overwrite existing categories with imported spices' },
+            ],
+            existingNames: spiceSets.map(s => s.name),
+            validate: (d) => {
+                if (d.sapphire_export && d.type === 'spice_set' && d.categories) return null;
+                if (d.categories && typeof d.categories === 'object') return null;
+                return 'Invalid spice set format: needs categories';
+            },
+            getName: (d) => d.name || 'imported',
+            onImport: async (data, { name, overwrites }) => {
+                const overwrite = overwrites.spices || false;
+                const importedCats = data.categories || {};
+                const catNames = [];
+
+                // Import each category's spices into the pool
+                for (const [catName, catData] of Object.entries(importedCats)) {
+                    const existing = spiceData?.categories?.[catName];
+                    if (existing && !overwrite) {
+                        // Category exists, keep existing spices, just include in set
+                        catNames.push(catName);
+                        continue;
+                    }
+
+                    if (!existing) {
+                        // Create the category
+                        await addCategory(catName);
+                    }
+
+                    // Set emoji if provided
+                    if (catData.emoji) {
+                        await setCategoryEmoji(catName, catData.emoji);
+                    }
+
+                    // Add spices (replace if overwrite, skip if exists)
+                    if (overwrite && existing) {
+                        // Delete existing spices first (reverse order to keep indices stable)
+                        for (let i = (existing.spices?.length || 0) - 1; i >= 0; i--) {
+                            await deleteSpice(catName, i);
+                        }
+                    }
+
+                    if (overwrite || !existing) {
+                        for (const spiceText of (catData.spices || [])) {
+                            await addSpice(catName, spiceText);
+                        }
+                    }
+
+                    catNames.push(catName);
+                }
+
+                // Create the spice set with these categories
+                await saveCustomSpiceSet(name, catNames);
+                if (data.emoji) {
+                    try { await setSpiceSetEmoji(name, data.emoji); } catch {}
+                }
+                selectedSetName = name;
+
+                const skipped = Object.keys(importedCats).length - catNames.length;
+                const parts = [`${catNames.length} categories`];
+                if (skipped > 0) parts.push(`${skipped} skipped`);
+                ui.showToast(`Imported: ${name} \u2014 ${parts.join(', ')}`, 'success');
+            },
+            onDone: async () => {
+                await loadData();
+                render();
+            },
+        });
+    });
+
     // Category set membership checkboxes
     container.querySelectorAll('[data-action="toggle-cat-set"]').forEach(cb => {
         cb.addEventListener('change', () => debouncedSaveSet());
@@ -295,6 +405,12 @@ async function handleSpiceAction(e) {
     const action = btn.dataset.action;
     const cat = btn.dataset.cat;
     const idx = btn.dataset.idx !== undefined ? parseInt(btn.dataset.idx) : null;
+
+    if (action === 'cat-emoji') {
+        e.stopPropagation(); // Don't toggle the details accordion
+        showCatEmojiPicker(btn, cat);
+        return;
+    }
 
     try {
         if (action === 'add-spice') {
@@ -358,6 +474,54 @@ function debouncedSaveSet() {
             ui.showToast('Save failed', 'error');
         }
     }, 300);
+}
+
+const CAT_EMOJI_GRID = [
+    '\u{1F9C2}', '\u{1F336}\u{FE0F}', '\u{1F525}', '\u{2728}', '\u{1F60E}', '\u{1F3AD}', '\u{1F4AC}', '\u{1F9E0}',
+    '\u{2764}\u{FE0F}', '\u{1F4A1}', '\u{1F3B5}', '\u{1F30C}', '\u{26A1}', '\u{1F48E}', '\u{1F52E}', '\u{1F31F}',
+    '\u{1F308}', '\u{1F335}', '\u{1F43A}', '\u{1F680}', '\u{1F3AF}', '\u{1F4DA}', '\u{2615}', '\u{1F47E}',
+];
+
+function showCatEmojiPicker(anchor, catName) {
+    // Remove any existing picker
+    document.querySelector('.cat-emoji-picker')?.remove();
+
+    const picker = document.createElement('div');
+    picker.className = 'cat-emoji-picker ts-emoji-picker';
+    picker.style.position = 'absolute';
+    picker.style.zIndex = '10001';
+    picker.innerHTML = `
+        <div class="ts-emoji-grid">
+            ${CAT_EMOJI_GRID.map(e => `<button class="ts-emoji-opt" data-emoji="${e}">${e}</button>`).join('')}
+        </div>
+    `;
+
+    // Position near the anchor
+    const rect = anchor.getBoundingClientRect();
+    picker.style.left = rect.left + 'px';
+    picker.style.top = (rect.bottom + 4) + 'px';
+    document.body.appendChild(picker);
+
+    picker.querySelectorAll('.ts-emoji-opt').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                await setCategoryEmoji(catName, btn.dataset.emoji);
+                ui.showToast(`Emoji set for ${catName}`, 'success');
+                await loadData();
+                render();
+            } catch (err) { ui.showToast('Failed', 'error'); }
+            picker.remove();
+        });
+    });
+
+    const close = (e) => {
+        if (!picker.contains(e.target)) {
+            picker.remove();
+            document.removeEventListener('click', close);
+        }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 function escapeHtml(str) {

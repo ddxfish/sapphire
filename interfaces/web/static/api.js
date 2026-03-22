@@ -323,7 +323,7 @@ export const fetchAudio = async (text, signal = null) => {
 
 export const postAudio = async (blob) => {
     const form = new FormData();
-    form.append('audio', blob, 'recording.webm');
+    form.append('audio', blob, 'recording.wav');
     try {
         return await fetchWithTimeout('/api/transcribe', { method: 'POST', body: form }, 120000);
     } catch (e) {

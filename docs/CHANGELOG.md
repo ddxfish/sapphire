@@ -1,3 +1,51 @@
+# 2.4.0 - Presence Update
+## March 19, 2026
+- Milestone release since 2.2.8
+- Bug fixes for stable release
+# 2.3.9 - Sapphire Encyclopedia
+- Full internal help system
+- Search bar, changelog, quick start
+# 2.3.8 - Import Export
+- Added import export across most of the app
+- Prepping for import personas from website store
+# 2.3.7 - Story Engine Rebuild
+- Old story engine was one mega-file
+- New story engine is more per-room
+- Working toward AI making stories
+# 2.3.6 - Spawn agents (plugin)
+- Agents are now registered with core
+- spawn_agent reads the registry
+- Plugins can register any background agent
+# 2.3.5 - Claude Code
+- Added Claude Code tools (does not touch API keys)
+- Sapphire simply calls Claude Code if it is installed
+# 2.3.4 - Agent returns
+- Agents return to the chat they are from
+- They wait for the group to finish
+- Dumps return in chat as user message
+# 2.3.3 - Spawn agents 
+- Background runner for spawning agents
+- UI for agent spawn so people can see
+# 2.3.2 - Plugin UI Refactor
+- Complete rework of plugins page
+- Removed all plugins from sidebar
+- Use GEAR ICON now to get plugin settings in plugins page
+- Improved discord, tested on GLM, lower intelligence barrier
+# 2.3.1 - Discord Support 
+- Improved 'tool not available' when changing plugins
+- Discord tools - list chan, read, send
+- Discord daemon - gives AI last 10 messages before @
+# 2.3.0 - Daemons and Webhooks
+- Daemon checks for activity, only triggers a chat when needed
+- Daemons are far cheaper than heartbeats, no polling!
+- Webhooks trigger sapphire via GET/POST/PUT to integrate with your other systems
+- Plugin manager now has full daemon support
+- Added Telegram Plugin with daemon support to trigger chat
+- Added daemon support to email plugin
+# 2.2.9 - Metrics, Dashboard, Auto update
+- See your local usage metrics, all local
+- Dashboard page for sapphire
+- Auto Updater (required git)
 # 2.2.8 - Docker Support
 - Added Docker image to main build in github
 - One for CPU, one for Nvidia GPU

@@ -18,6 +18,7 @@ This documentation has been reorganized. See the **[Plugin Author Guide](plugin-
 | [Web UI](plugin-author/web-ui.md) | Shared JS modules, CSS variables, modals, CSRF, style injection |
 | [Signing](plugin-author/signing.md) | Verification states, sideloading, signing your own plugins |
 | [Lifecycle](plugin-author/lifecycle.md) | Startup, live toggle, hot reload, rescan, error isolation, full API reference |
+| [Publishing](plugin-author/publishing.md) | How to structure your repo and submit to the Sapphire Store |
 | [AI Reference](plugin-author/ai-reference.md) | Compact reference for Sapphire's own use |
 
 For simple tool creation (no hooks/schedules needed), see [TOOLMAKER.md](TOOLMAKER.md).

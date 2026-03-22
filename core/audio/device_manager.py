@@ -188,17 +188,59 @@ class DeviceManager:
             return "Available input devices:\n" + "\n".join(lines)
         return "No input devices detected. Check audio drivers and connections."
     
-    def resolve_device_by_name(self, name: str) -> Optional[DeviceInfo]:
-        """Find an input device by substring match (case-insensitive).
+    def resolve_device_by_name(self, name: str, output: bool = False) -> Optional[DeviceInfo]:
+        """Find a device by substring match (case-insensitive).
 
         Does a fresh device enumeration to get current indexes.
+
+        Args:
+            name: Substring to match against device names
+            output: If True, search output devices. If False, search input devices.
         """
         devices = self.query_devices(force_refresh=True)
         name_lower = name.lower()
         for dev in devices:
-            if dev.max_input_channels > 0 and name_lower in dev.name.lower():
-                return dev
+            if output:
+                if dev.max_output_channels > 0 and name_lower in dev.name.lower():
+                    return dev
+            else:
+                if dev.max_input_channels > 0 and name_lower in dev.name.lower():
+                    return dev
         return None
+
+    def find_output_device(self) -> Tuple[Optional[int], Optional[int], Optional[str]]:
+        """Find a working output device, respecting AUDIO_OUTPUT_DEVICE setting.
+
+        Returns:
+            (device_index, sample_rate, device_name) or (None, None, None)
+        """
+        config = self._get_settings()
+        configured = getattr(config, 'AUDIO_OUTPUT_DEVICE', None)
+
+        # If configured by name, resolve fresh
+        if configured and configured != 'auto':
+            dev = self.resolve_device_by_name(configured, output=True)
+            if dev:
+                logger.info(f"Output device by name '{configured}': {dev.name} (index {dev.index})")
+                return dev.index, int(dev.default_samplerate), dev.name
+            logger.warning(f"Configured output device '{configured}' not found, falling back")
+
+        # System default
+        try:
+            default_out = sd.default.device[1]
+            if default_out is not None:
+                devices = self.query_devices()
+                for dev in devices:
+                    if dev.index == default_out and dev.max_output_channels > 0:
+                        return dev.index, int(dev.default_samplerate), dev.name
+        except Exception:
+            pass
+
+        # Any output device
+        for dev in self.get_output_devices():
+            return dev.index, int(dev.default_samplerate), dev.name
+
+        return None, None, None
 
     def reopen_device(self, device_name: str,
                       target_rate: Optional[int] = None,

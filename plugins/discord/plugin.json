@@ -1,0 +1,49 @@
+{
+  "name": "discord",
+  "version": "1.0.0",
+  "description": "Discord — bot accounts, messaging, daemon listener",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "icon": "🎮",
+  "priority": 50,
+  "default_enabled": false,
+  "settingsUI": "plugin",
+  "capabilities": {
+    "tools": ["tools/discord_tools.py"],
+    "daemon": {
+      "entry": "daemon.py",
+      "event_sources": [{
+        "name": "discord_message",
+        "label": "Discord Message",
+        "description": "New message received in a Discord channel",
+        "filter_fields": [
+          {"key": "mentioned", "label": "bot was @mentioned (True/False)"},
+          {"key": "guild_name", "label": "server name"},
+          {"key": "channel_name", "label": "channel name"},
+          {"key": "username", "label": "sender username"},
+          {"key": "content_contains", "label": "keyword in message"},
+          {"key": "channel_name_not", "label": "exclude channel name"},
+          {"key": "guild_name_not", "label": "exclude server name"},
+          {"key": "username_not", "label": "exclude username"},
+          {"key": "guild_id", "label": "server ID (advanced)"},
+          {"key": "channel_id", "label": "channel ID (advanced)"}
+        ],
+        "task_fields": [
+          {
+            "key": "auto_reply",
+            "type": "boolean",
+            "label": "Auto-reply in channel",
+            "default": false,
+            "help": "When enabled, the AI's response is sent back to the channel."
+          }
+        ]
+      }]
+    },
+    "routes": [
+      {"method": "GET",    "path": "accounts",         "handler": "routes/accounts.py:list_accounts"},
+      {"method": "POST",   "path": "accounts",         "handler": "routes/accounts.py:add_account"},
+      {"method": "DELETE", "path": "accounts/{name}",   "handler": "routes/accounts.py:delete_account"},
+      {"method": "POST",   "path": "accounts/{name}/test", "handler": "routes/accounts.py:test_account"}
+    ]
+  }
+}

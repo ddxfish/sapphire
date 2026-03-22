@@ -329,73 +329,55 @@ class TestGoalsPermanentFlag:
 
 
 # =============================================================================
-# D3: Foreground continuity must defer when user is streaming
-# Bug: _run_foreground calls set_active_chat(), corrupting chat context mid-stream
-# Fix: Check is_streaming before switching, return early with "deferred" error
+# D3: Foreground continuity must NOT switch active chat
+# Old bug: _run_foreground called set_active_chat(), hijacking UI
+# Fix: read_chat_messages + append_to_chat — no UI impact
 # =============================================================================
 
-class TestForegroundStreamingGuard:
-    """Foreground tasks must not run while user is streaming."""
+class TestForegroundNoUISwitch:
+    """Foreground tasks must never switch the active chat."""
 
-    def test_foreground_defers_when_streaming(self):
-        """If is_streaming is True, foreground task should be deferred."""
+    def test_foreground_never_calls_set_active_chat(self):
+        """_run_foreground must use read/append methods, never set_active_chat."""
         from core.continuity.executor import ContinuityExecutor
 
         with patch.object(ContinuityExecutor, '__init__', lambda self: None):
             executor = ContinuityExecutor()
             executor._resolve_persona = lambda t: t
-
-            executor.system = MagicMock()
-            executor.system.llm_chat.streaming_chat.is_streaming = True
-
-            task = {
-                "name": "heartbeat",
-                "chat_target": "heartbeat_chat",
-                "initial_message": "hello",
-            }
-            result = {"success": False, "task_id": "1", "task_name": "heartbeat",
-                       "responses": [], "errors": []}
-            out = executor._run_foreground(task, result)
-            assert "Deferred" in out["errors"][0]
-            # set_active_chat should never have been called
-            executor.system.llm_chat.session_manager.set_active_chat.assert_not_called()
-
-    def test_foreground_runs_when_not_streaming(self):
-        """If is_streaming is False, foreground task should proceed normally."""
-        from core.continuity.executor import ContinuityExecutor
-
-        with patch.object(ContinuityExecutor, '__init__', lambda self: None):
-            executor = ContinuityExecutor()
-            executor._resolve_persona = lambda t: t
-            executor._apply_task_settings = MagicMock()
             executor._snapshot_voice = MagicMock(return_value={})
             executor._restore_voice = MagicMock()
+            executor._apply_voice = MagicMock()
 
             mock_session = MagicMock()
-            mock_session.get_active_chat_name.return_value = "main"
-            mock_session.set_active_chat.return_value = True
             mock_session.list_chat_files.return_value = [{"name": "task_chat"}]
-            mock_session.get_chat_settings.return_value = {}
+            mock_session.read_chat_messages.return_value = []
+
+            mock_fm = MagicMock()
+            mock_fm.all_possible_tools = []
+            mock_fm._mode_filters = {}
+            mock_fm._apply_mode_filter.return_value = []
 
             executor.system = MagicMock()
             executor.system.llm_chat.session_manager = mock_session
-            executor.system.llm_chat.streaming_chat.is_streaming = False
-            executor.system.llm_chat.function_manager.current_toolset_name = "all"
-            executor.system.process_llm_query.return_value = "ok"
+            executor.system.llm_chat.function_manager = mock_fm
 
             task = {
                 "name": "heartbeat",
                 "chat_target": "task_chat",
-                "prompt": "",
-                "toolset": "",
+                "prompt": "default",
+                "toolset": "none",
                 "tts_enabled": False,
                 "initial_message": "hello",
             }
             result = {"success": False, "task_id": "1", "task_name": "heartbeat",
                        "responses": [], "errors": []}
-            out = executor._run_foreground(task, result)
+
+            with patch('core.continuity.execution_context.ExecutionContext.run', return_value="ok"):
+                out = executor._run_foreground(task, result)
             assert out["success"] is True
-            mock_session.set_active_chat.assert_called()
+            mock_session.set_active_chat.assert_not_called()
+            mock_session.read_chat_messages.assert_called_once()
+            mock_session.append_to_chat.assert_called_once()
 
 
 # =============================================================================

@@ -185,6 +185,7 @@ class Events:
     MESSAGE_ADDED = "message_added"
     MESSAGE_REMOVED = "message_removed"
     CHAT_SWITCHED = "chat_switched"
+    CHAT_CREATED = "chat_created"
     CHAT_CLEARED = "chat_cleared"
     
     # TTS events
@@ -234,3 +235,14 @@ class Events:
 
     # Plugin events
     PLUGIN_RELOADED = "plugin_reloaded"
+
+    # Daemon/webhook events
+    DAEMON_EVENT = "daemon_event"
+    WEBHOOK_FIRED = "webhook_fired"
+
+    # Agent events
+    AGENT_SPAWNED = "agent_spawned"
+    AGENT_COMPLETED = "agent_completed"
+    AGENT_DISMISSED = "agent_dismissed"
+    AGENT_BATCH_COMPLETE = "agent_batch_complete"
+    WORKSPACE_READY = "workspace_ready"

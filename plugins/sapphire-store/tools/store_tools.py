@@ -108,7 +108,7 @@ def _browse(search=None, category=None, sort="newest", plugin_settings=None):
         # If search looks like an exact slug, try detail first
         if search and " " not in search.strip():
             try:
-                r = requests.get(f"{base}plugins/{search.strip()}", timeout=10)
+                r = requests.get(f"{base}items/{search.strip()}", timeout=10)
                 if r.status_code == 200:
                     data = r.json()
                     if not data.get("code"):  # not an error
@@ -119,18 +119,18 @@ def _browse(search=None, category=None, sort="newest", plugin_settings=None):
         # Search or list
         if search:
             params = {"q": search, "per_page": 15}
-            r = requests.get(f"{base}plugins/search", params=params, timeout=10)
+            r = requests.get(f"{base}items/search", params=params, timeout=10)
         else:
             params = {"per_page": 15, "sort": sort or "newest"}
             if category:
                 params["category"] = category
-            r = requests.get(f"{base}plugins", params=params, timeout=10)
+            r = requests.get(f"{base}items", params=params, timeout=10)
 
         if r.status_code != 200:
             return f"Store API error: HTTP {r.status_code}", False
 
         data = r.json()
-        plugins = data.get("plugins", [])
+        plugins = data.get("items", [])
         total = data.get("total", 0)
 
         if not plugins:
@@ -150,7 +150,7 @@ def _browse(search=None, category=None, sort="newest", plugin_settings=None):
         if len(plugins) == 1:
             try:
                 slug = plugins[0]["slug"]
-                dr = requests.get(f"{base}plugins/{slug}", timeout=10)
+                dr = requests.get(f"{base}items/{slug}", timeout=10)
                 if dr.status_code == 200:
                     return _format_plugin_detail(dr.json()), True
             except Exception:
@@ -177,7 +177,7 @@ def _install(slug, plugin_settings=None):
 
     try:
         # Get plugin detail from store
-        r = requests.get(f"{base}plugins/{slug}", timeout=10)
+        r = requests.get(f"{base}items/{slug}", timeout=10)
         if r.status_code != 200:
             return f"Plugin '{slug}' not found in the store.", False
 

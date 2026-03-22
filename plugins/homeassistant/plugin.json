@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Home Assistant — lights, switches, scenes, thermostat, notifications",
   "author": "sapphire",
+  "icon": "🏠",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "managed_hide": true,

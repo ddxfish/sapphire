@@ -96,12 +96,26 @@ class VoiceChatSystem:
         self.init_components()
         self._cleanup_orphaned_rag()
 
+        # Agent system — background workers (types registered by plugins during scan)
+        from core.agents import AgentManager
+        import core.agents as agents_module
+        self.agent_manager = AgentManager()
+        agents_module.agent_manager = self.agent_manager
+        logger.info("Agent manager initialized")
+
         # Load plugins (hooks, voice commands, tools, etc.)
         try:
             from core.plugin_loader import plugin_loader
             plugin_loader.scan(function_manager=self.llm_chat.function_manager)
         except Exception as e:
             logger.error(f"Plugin loader failed: {e}", exc_info=True)
+
+        # Re-apply toolset now that plugin tools are registered
+        # (toolset was applied before plugins loaded, so plugin tools were missed)
+        fm = self.llm_chat.function_manager
+        if fm.current_toolset_name and fm.current_toolset_name != "none":
+            fm.update_enabled_functions([fm.current_toolset_name])
+            logger.info(f"Toolset '{fm.current_toolset_name}' re-applied after plugin scan")
 
         logger.info(f"System init took: {(time.time() - start_time)*1000:.1f}ms")
 
@@ -134,8 +148,12 @@ class VoiceChatSystem:
             try:
                 chat_settings = self.llm_chat.session_manager.get_chat_settings()
                 prompt_name = chat_settings.get('prompt')
-                if prompt_name:
+                # __story__ is a sentinel — story engine loads its own prompt.md via _get_system_prompt
+                if prompt_name and prompt_name != '__story__':
                     logger.info(f"Startup prompt from chat settings: '{prompt_name}'")
+                elif prompt_name == '__story__':
+                    logger.info("Startup prompt: story chat (prompt loaded from story engine)")
+                    prompt_name = None  # fall through to defaults
             except Exception:
                 pass
 
@@ -477,6 +495,7 @@ class VoiceChatSystem:
 
         from core.plugin_loader import plugin_loader as _pl
         stop_actions = [
+            ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
             ("voice components", self.stop_components),
             ("continuity scheduler", lambda: hasattr(self, 'continuity_scheduler') and self.continuity_scheduler and self.continuity_scheduler.stop()),
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
@@ -568,6 +587,10 @@ def run():
         # Wire scheduler into plugin loader for plugin schedule tasks
         from core.plugin_loader import plugin_loader
         plugin_loader.set_scheduler(continuity_scheduler)
+
+        # Background update checker (checks GitHub every 24h)
+        from core.updater import updater as app_updater
+        app_updater.start_background_checker()
 
         # Dev mode: auto-reload plugins on file changes
         import os

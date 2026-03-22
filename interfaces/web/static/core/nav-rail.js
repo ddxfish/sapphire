@@ -1,7 +1,7 @@
 // core/nav-rail.js - Navigation rail with flyout support
 import { switchView } from './router.js';
 
-const MOBILE_MAX_VISIBLE = 5;
+const MOBILE_MAX_VISIBLE = 6;
 
 export function initNavRail() {
     const rail = document.getElementById('nav-rail');

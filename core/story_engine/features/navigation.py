@@ -31,6 +31,7 @@ class NavigationManager:
         self._config = preset.get("progressive_prompt", {}).get("navigation", {})
         self._get_state = state_getter
         self._set_state = state_setter
+        self._death_rooms = self._config.get("death_rooms", {})
     
     @property
     def config(self) -> dict:
@@ -136,29 +137,51 @@ class NavigationManager:
     
     def move(self, direction: str, turn_number: int, reason: str = None) -> tuple[bool, str]:
         """
-        Move in a direction.
-        
+        Move in a direction. Handles death rooms and respawn.
+
         Args:
-            direction: Direction to move
+            direction: Direction to move (or "respawn" to return from death)
             turn_number: Current turn
             reason: Optional reason for movement
-            
+
         Returns:
             (success, message)
         """
         if not self.is_enabled:
             return False, "Navigation not configured. Use set_state() instead."
-        
+
         current_room = self.get_current_room()
+
+        # Handle respawn from death room
+        if direction.lower().strip() == "respawn":
+            if current_room not in self._death_rooms:
+                return False, "You're not in a death room. Use normal directions to move."
+            death_info = self._death_rooms[current_room]
+            respawn_room = death_info.get("respawn")
+            if not respawn_room:
+                return False, "No respawn point configured for this death room."
+            # Apply respawn state changes
+            for key, value in death_info.get("respawn_set", {}).items():
+                self._set_state(key, value, "system", turn_number, "respawn")
+            # Move to respawn room
+            self._set_state(self.position_key, respawn_room, "system", turn_number, "respawned")
+            visited = self._get_state("_visited_rooms") or []
+            if respawn_room not in visited:
+                visited = visited + [respawn_room]
+                self._set_state("_visited_rooms", visited, "system", turn_number, "room visited")
+            room_names = self._config.get("room_names", {})
+            dest_name = room_names.get(respawn_room, respawn_room)
+            return True, f"✓ Respawned at {dest_name}"
+
         destination, error = self.get_room_for_direction(direction)
-        
+
         if not destination:
             return False, error
-        
+
         # Use state_setter to move - this handles blockers automatically
         reason = reason or f"moved {direction}"
         success, msg = self._set_state(self.position_key, destination, "ai", turn_number, reason)
-        
+
         if success:
             # Track visited rooms for fog-of-war
             visited = self._get_state("_visited_rooms") or []
@@ -171,6 +194,17 @@ class NavigationManager:
             dest_name = room_names.get(destination, destination)
             exits = self.get_exits_with_descriptions()
             exits_str = f"\nExits: {', '.join(exits)}" if exits else ""
-            return True, f"✓ Moved to {dest_name}{exits_str}"
+
+            result = f"✓ Moved to {dest_name}{exits_str}"
+
+            # Check if destination is a death room
+            if destination in self._death_rooms:
+                death_info = self._death_rooms[destination]
+                respawn_room = death_info.get("respawn")
+                if respawn_room:
+                    respawn_name = room_names.get(respawn_room, respawn_room)
+                    result += f"\n\n💀 DEATH ROOM — Use move(\"respawn\") to return to {respawn_name}"
+
+            return True, result
 
         return False, msg

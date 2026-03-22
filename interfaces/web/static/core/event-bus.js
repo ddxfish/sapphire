@@ -195,6 +195,7 @@ export const Events = {
     MESSAGE_ADDED: 'message_added',
     MESSAGE_REMOVED: 'message_removed',
     CHAT_SWITCHED: 'chat_switched',
+    CHAT_CREATED: 'chat_created',
     CHAT_CLEARED: 'chat_cleared',
     
     // TTS events
@@ -240,6 +241,11 @@ export const Events = {
 
     // Plugin events
     PLUGIN_RELOADED: 'plugin_reloaded',
+
+    // Agent events
+    AGENT_SPAWNED: 'agent_spawned',
+    AGENT_COMPLETED: 'agent_completed',
+    AGENT_DISMISSED: 'agent_dismissed',
 
     // Connection events
     CONNECTED: 'connected',           // Server confirms SSE subscription

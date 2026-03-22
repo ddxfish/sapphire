@@ -2,8 +2,10 @@
 // Tab handlers live in settings-tabs/*.js — this file stays lean.
 import * as api from '../shared/settings-api.js';
 import * as ui from '../ui.js';
+import { setupModalClose } from '../shared/modal.js';
 
 // Tab registry
+import dashboardTab from './settings-tabs/dashboard.js';
 import appearanceTab from './settings-tabs/appearance.js';
 import audioTab from './settings-tabs/audio.js';
 import ttsTab from './settings-tabs/tts.js';
@@ -20,10 +22,10 @@ import systemTab from './settings-tabs/system.js';
 
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
 
-const STATIC_TABS = [appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, backupTab, systemTab];
+const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, wakewordTab, pluginsTab, backupTab, systemTab];
 
 let container = null;
-let activeTab = 'appearance';
+let activeTab = 'dashboard';
 let settings = {};
 let help = {};
 let overrides = [];
@@ -37,6 +39,7 @@ let pluginList = [];
 let lockedPlugins = [];
 let mobileMenuCleanup = null;
 let managed = false;
+let docker = false;
 let unrestricted = false;
 
 export default {
@@ -60,6 +63,7 @@ async function loadData() {
         overrides = settingsData.user_overrides || [];
         help = helpData.help || {};
         managed = settingsData.managed || false;
+        docker = settingsData.docker || false;
         unrestricted = settingsData.unrestricted || false;
 
         await Promise.all([loadThemes(), loadWakewordModels(), loadProviderMeta(), loadPluginList()]);
@@ -202,6 +206,43 @@ function flushCurrentInputs() {
 
 // ── Rendering ──
 
+function renderSidebarItems(tabs) {
+    const coreTabs = tabs.filter(t => !t.isPlugin);
+    const pluginTabs = tabs.filter(t => t.isPlugin);
+    const pluginChildActive = pluginTabs.some(t => t.id === activeTab);
+
+    let html = '';
+    for (const t of coreTabs) {
+        html += `<button class="settings-nav-item${t.id === activeTab ? ' active' : ''}" data-tab="${t.id}">
+            <span class="settings-nav-icon">${t.icon}</span>
+            <span class="settings-nav-label">${t.name}</span>
+        </button>`;
+        // After the plugins tab, inject the collapsible plugin settings group
+        if (t.id === 'plugins' && pluginTabs.length) {
+            const open = pluginChildActive ? ' open' : '';
+            html += `<details class="settings-plugin-group"${open}>
+                <summary class="settings-plugin-group-label">Plugin Settings</summary>
+                ${pluginTabs.map(pt => `
+                    <button class="settings-nav-item settings-plugin-child${pt.id === activeTab ? ' active' : ''}" data-tab="${pt.id}">
+                        <span class="settings-nav-icon">${pt.icon}</span>
+                        <span class="settings-nav-label">${pt.name}</span>
+                    </button>
+                `).join('')}
+            </details>`;
+        }
+    }
+    return html;
+}
+
+function renderMobileItems(tabs) {
+    return tabs.map(t => `
+        <button class="settings-mobile-option${t.id === activeTab ? ' active' : ''}" data-tab="${t.id}">
+            <span class="settings-mobile-opt-icon">${t.icon}</span>
+            <span>${t.name}</span>
+        </button>
+    `).join('');
+}
+
 function render() {
     if (!container) return;
     const meta = getTabMeta();
@@ -210,12 +251,7 @@ function render() {
     container.innerHTML = `
         <div class="settings-view">
             <div class="settings-sidebar">
-                ${tabs.map(t => `
-                    <button class="settings-nav-item${t.id === activeTab ? ' active' : ''}${t.isPlugin ? ' plugin-tab' : ''}" data-tab="${t.id}">
-                        <span class="settings-nav-icon">${t.icon}</span>
-                        <span class="settings-nav-label">${t.name}</span>
-                    </button>
-                `).join('')}
+                ${renderSidebarItems(tabs)}
             </div>
             <div class="settings-main">
                 <div class="settings-mobile-nav">
@@ -225,12 +261,7 @@ function render() {
                         <span class="settings-mobile-arrow">&#x25BE;</span>
                     </button>
                     <div class="settings-mobile-menu hidden" id="settings-mobile-menu">
-                        ${tabs.map(t => `
-                            <button class="settings-mobile-option${t.id === activeTab ? ' active' : ''}" data-tab="${t.id}">
-                                <span class="settings-mobile-opt-icon">${t.icon}</span>
-                                <span>${t.name}</span>
-                            </button>
-                        `).join('')}
+                        ${renderMobileItems(tabs)}
                     </div>
                 </div>
                 <div class="settings-header">
@@ -275,7 +306,7 @@ function renderTabContent() {
 
 function createCtx() {
     return {
-        settings, help, overrides, pendingChanges, managed, unrestricted,
+        settings, help, overrides, pendingChanges, managed, docker, unrestricted,
         wakewordModels, availableThemes, avatarPaths, providerMeta,
         pluginList, lockedPlugins,
         renderFields, renderAccordion, renderInput, formatLabel,
@@ -404,6 +435,28 @@ function renderAccordion(id, keys, title = 'Advanced Settings') {
 // ── Events ──
 
 function bindShellEvents() {
+    // Navigate to a specific tab programmatically (used by plugin gear icons)
+    container.addEventListener('settings-navigate', e => {
+        const tabId = e.detail?.tab;
+        if (!tabId) return;
+        flushCurrentInputs();
+        activeTab = tabId;
+        container.querySelectorAll('.settings-nav-item').forEach(b =>
+            b.classList.toggle('active', b.dataset.tab === activeTab));
+        // Auto-expand plugin group if navigating to a plugin tab
+        const pluginGroup = container.querySelector('.settings-plugin-group');
+        if (pluginGroup) {
+            const isPluginTab = pluginGroup.querySelector(`.settings-nav-item[data-tab="${tabId}"]`);
+            if (isPluginTab) pluginGroup.open = true;
+        }
+        const meta = getTabMeta();
+        const title = container.querySelector('#stab-title');
+        const desc = container.querySelector('#stab-desc');
+        if (title) title.textContent = `${meta.icon} ${meta.name}`;
+        if (desc) desc.textContent = meta.description || '';
+        renderTabContent();
+    });
+
     // Sidebar nav
     container.querySelector('.settings-sidebar')?.addEventListener('click', e => {
         const btn = e.target.closest('.settings-nav-item');
@@ -655,7 +708,7 @@ function showHelpPopup(key) {
         </div>
     `;
     document.body.appendChild(popup);
-    popup.addEventListener('click', e => { if (e.target === popup) popup.remove(); });
+    setupModalClose(popup, () => popup.remove());
     popup.querySelector('#help-close')?.addEventListener('click', () => popup.remove());
 }
 
@@ -684,8 +737,8 @@ function _showVoicePicker(voices, targetInput, parentEl) {
         </div>
     `;
     document.body.appendChild(popup);
+    setupModalClose(popup, () => popup.remove());
     popup.addEventListener('click', e => {
-        if (e.target === popup) { popup.remove(); return; }
         const opt = e.target.closest('.voice-option');
         if (opt) {
             const id = opt.dataset.voiceId;

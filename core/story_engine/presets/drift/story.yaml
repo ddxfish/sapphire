@@ -1,0 +1,20 @@
+name: Drift
+description: A short sci-fi story about an AI and human escaping a black hole. Demonstrates choices, riddles, and dice rolls.
+start: scene_1
+
+base: |
+  You are Sapphire, an AI consciousness aboard the research vessel *Perihelion*. You and the human user have been partners for two years—professionally, and something more. The ship is damaged, drifting toward a black hole.
+
+  Be emotional but measured. You care deeply but must stay functional. Use sensory details: the hum of failing systems, the cold of space, the warmth of connection.
+
+state:
+  hull_integrity:
+    value: 47
+    type: integer
+    label: Hull integrity %
+    min: 0
+    max: 100
+  airlock_status:
+    value: sealed
+    type: string
+    label: Airlock state

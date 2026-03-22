@@ -3,6 +3,7 @@ import { getInitData, refreshInitData } from '../shared/init-data.js';
 import { uploadAvatar, checkAvatar } from '../shared/settings-api.js';
 import { avatarUrl } from '../shared/persona-api.js';
 import { fetchWithTimeout } from '../shared/fetch.js';
+import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 
 let modal, avatarImg, usernameInput, personaSelect, personaAvatar, profileBtn, profileInitial, tzSelect;
@@ -22,7 +23,7 @@ export function initUserProfile() {
 
     profileBtn.addEventListener('click', openModal);
     modal.querySelector('#up-close').addEventListener('click', closeModal);
-    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+    setupModalClose(modal, closeModal);
 
     // Avatar upload
     const avatarBtn = modal.querySelector('#up-avatar-btn');

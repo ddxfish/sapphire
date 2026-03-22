@@ -4,7 +4,10 @@ Continuity Executor - Runs scheduled tasks with proper context isolation.
 Switches chat context, applies settings, runs LLM, restores original state.
 """
 
+import copy
+import json
 import logging
+import threading
 from datetime import datetime
 from typing import Dict, Any
 from core.event_bus import publish, Events
@@ -14,20 +17,68 @@ logger = logging.getLogger(__name__)
 
 class ContinuityExecutor:
     """Executes continuity tasks with context isolation."""
-    
+
     def __init__(self, system):
         """
         Args:
             system: VoiceChatSystem instance with llm_chat, tts, etc.
         """
         self.system = system
-    
-    def run(self, task: Dict[str, Any], progress_callback=None, response_callback=None) -> Dict[str, Any]:
+        self._voice_lock = threading.Lock()  # guards TTS voice snapshot/apply/restore
+
+    @staticmethod
+    def _format_event_data(event_data: str) -> str:
+        """Format raw event JSON into clean text for the AI.
+
+        If the data is JSON with a 'text' field (e.g. messaging daemons),
+        present it as a clean message. Otherwise pass through raw.
+        """
+        try:
+            obj = json.loads(event_data) if isinstance(event_data, str) else event_data
+        except (json.JSONDecodeError, TypeError):
+            return event_data
+
+        text = obj.get("text") or obj.get("content") or None
+        if not isinstance(obj, dict) or not text:
+            return event_data
+
+        # Build clean message from common fields
+        sender = obj.get("display_name") or obj.get("first_name") or obj.get("username") or obj.get("sender") or ""
+        channel = obj.get("channel_name", "")
+        guild = obj.get("guild_name", "")
+
+        parts = []
+        # Label channel to match tool param name exactly — AI can copy-paste
+        if channel and guild:
+            parts.append(f"channel: {channel}")
+            parts.append(f"server: {guild}")
+        elif channel:
+            parts.append(f"channel: {channel}")
+
+        # Include recent chat history if available
+        history = obj.get("recent_history", [])
+        if history:
+            parts.append("Recent chat:")
+            for line in history:
+                parts.append(f"  {line}")
+            parts.append("")  # blank line before the trigger message
+
+        # The trigger message itself — emphasized
+        if sender:
+            parts.append(f">>> {sender}: {text}")
+        else:
+            parts.append(f">>> {text}")
+        return "\n".join(parts)
+
+    def run(self, task: Dict[str, Any], event_data: str = None,
+            progress_callback=None, response_callback=None) -> Dict[str, Any]:
         """
         Execute a continuity task.
 
         Args:
             task: Task definition dict
+            event_data: Optional event payload (for daemon/webhook triggered tasks).
+                        When present, initial_message is prepended as instructions.
             progress_callback: Optional callable(iteration, total) for progress updates
             response_callback: Optional callable(response_text) called before TTS
 
@@ -38,6 +89,32 @@ class ContinuityExecutor:
         source = task.get("source", "")
         if source.startswith("plugin:"):
             return self._run_plugin_task(task, progress_callback, response_callback)
+
+        # For event-triggered tasks, build message from instructions + event data
+        if event_data is not None:
+            task = copy.deepcopy(task)  # don't mutate original (nested dicts like trigger_config)
+            event_display = self._format_event_data(event_data)
+            instructions = task.get("initial_message", "").strip()
+            if instructions:
+                task["initial_message"] = f"{instructions}\n\n{event_display}"
+            else:
+                task["initial_message"] = event_display
+
+            # Auto-set plugin scopes from event data (e.g. discord account)
+            try:
+                obj = json.loads(event_data) if isinstance(event_data, str) else event_data
+                if isinstance(obj, dict) and obj.get("account"):
+                    trigger = task.get("trigger_config", {})
+                    source = trigger.get("source", "") or trigger.get("event_source", "")
+                    if "discord" in source and not task.get("discord_scope"):
+                        task["discord_scope"] = obj["account"]
+                        # Stash channel_id for auto-reply targeting
+                        if obj.get("channel_id"):
+                            task["_discord_reply_channel_id"] = obj["channel_id"]
+                    elif "email" in source and not task.get("email_scope"):
+                        task["email_scope"] = obj["account"]
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         # Resolve persona defaults into task (task-level fields override persona)
         task = self._resolve_persona(task)
@@ -60,49 +137,74 @@ class ContinuityExecutor:
         # Named chat_target = foreground: switches to that chat, runs, restores
         return self._run_foreground(task, result, progress_callback, response_callback)
     
+    @staticmethod
+    def _extract_task_settings(task: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract execution settings from a task dict for ExecutionContext."""
+        return {
+            "prompt": task.get("prompt", "default"),
+            "toolset": task.get("toolset", "none"),
+            "provider": task.get("provider", "auto"),
+            "model": task.get("model", ""),
+            "inject_datetime": task.get("inject_datetime", False),
+            "max_tool_rounds": task.get("max_tool_rounds"),
+            "max_parallel_tools": task.get("max_parallel_tools"),
+            "context_limit": task.get("context_limit"),
+            "memory_scope": task.get("memory_scope", "default"),
+            "knowledge_scope": task.get("knowledge_scope", "none"),
+            "people_scope": task.get("people_scope", "none"),
+            "goal_scope": task.get("goal_scope", "none"),
+            "email_scope": task.get("email_scope", "default"),
+            "bitcoin_scope": task.get("bitcoin_scope", "default"),
+            "discord_scope": task.get("discord_scope", "default"),
+        }
+
     def _run_background(self, task: Dict[str, Any], result: Dict[str, Any],
                         progress_cb=None, response_cb=None) -> Dict[str, Any]:
-        """Run task in background mode - completely isolated, no session state changes."""
-        task_name = task.get("name", "Unknown")
-        logger.info(f"[Continuity] Running '{task_name}' in BACKGROUND mode (isolated)")
+        """Run task in background mode — fully isolated via ExecutionContext."""
+        from core.continuity.execution_context import ExecutionContext
 
-        # Snapshot voice state for restore
-        original_voice = self._snapshot_voice()
+        task_name = task.get("name", "Unknown")
+        logger.info(f"[Continuity] Running '{task_name}' in BACKGROUND mode (ExecutionContext)")
+
+        with self._voice_lock:
+            original_voice = self._snapshot_voice()
+            try:
+                self._apply_voice(task)
+            except Exception:
+                self._restore_voice(original_voice)
+                raise
 
         try:
-            # Build task settings for isolated_chat
-            task_settings = {
-                "prompt": task.get("prompt", "default"),
-                "toolset": task.get("toolset", "none"),
-                "provider": task.get("provider", "auto"),
-                "model": task.get("model", ""),
-                "inject_datetime": task.get("inject_datetime", False),
-                "memory_scope": task.get("memory_scope", "default"),
-                "knowledge_scope": task.get("knowledge_scope", "none"),
-                "people_scope": task.get("people_scope", "none"),
-                "goal_scope": task.get("goal_scope", "none"),
-                "email_scope": task.get("email_scope", "default"),
-                "bitcoin_scope": task.get("bitcoin_scope", "default"),
-            }
+            task_settings = self._extract_task_settings(task)
+            ctx = ExecutionContext(
+                self.system.llm_chat.function_manager,
+                self.system.llm_chat.tool_engine,
+                task_settings
+            )
 
-            # Apply voice settings before any TTS calls
-            self._apply_voice(task)
+            # Set Discord reply channel for auto-reply targeting
+            reply_ch = task.get("_discord_reply_channel_id")
+            if reply_ch:
+                try:
+                    from plugins.discord.tools.discord_tools import _reply_channel_id
+                    _reply_channel_id.set(reply_ch)
+                except ImportError:
+                    pass
 
             tts_enabled = task.get("tts_enabled", True)
             browser_tts = task.get("browser_tts", False)
             msg = task.get("initial_message", "Hello.")
 
             try:
-                response = self.system.llm_chat.isolated_chat(msg, task_settings)
+                response = ctx.run(msg)
 
-                # Update UI before TTS (which blocks)
                 if response_cb and response:
                     try: response_cb(response)
-                    except Exception: pass
+                    except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                 if response:
                     if browser_tts:
-                        publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
+                        publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
                     elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
                         try:
                             self.system.tts.speak_sync(response)
@@ -116,7 +218,7 @@ class ContinuityExecutor:
                 })
             except Exception as e:
                 error_msg = f"Task failed: {e}"
-                logger.error(f"[Continuity] {error_msg}")
+                logger.error(f"[Continuity] {error_msg}", exc_info=True)
                 result["errors"].append(error_msg)
 
             if progress_cb:
@@ -130,84 +232,83 @@ class ContinuityExecutor:
             result["errors"].append(error_msg)
 
         finally:
-            self._restore_voice(original_voice)
+            with self._voice_lock:
+                self._restore_voice(original_voice)
 
         result["completed_at"] = datetime.now().isoformat()
         return result
-    
+
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any],
                         progress_cb=None, response_cb=None) -> Dict[str, Any]:
-        """Run task in foreground mode - switches to named chat, runs, restores original."""
-        import config
-
-        # Don't switch active chat while user is streaming — would corrupt chat context
-        if self.system.llm_chat.streaming_chat.is_streaming:
-            task_name = task.get("name", "Unknown")
-            logger.warning(f"[Continuity] Deferring foreground task '{task_name}' — user stream active")
-            result["errors"].append("Deferred: user stream in progress")
-            result["completed_at"] = datetime.now().isoformat()
-            return result
+        """Run task with persistent chat history — no UI switching."""
+        from core.continuity.execution_context import ExecutionContext
 
         session_manager = self.system.llm_chat.session_manager
-        original_chat = session_manager.get_active_chat_name()
-        original_toolset = self.system.llm_chat.function_manager.current_toolset_name
-        original_voice = self._snapshot_voice()
-        target_original_settings = None
+        with self._voice_lock:
+            original_voice = self._snapshot_voice()
+            try:
+                self._apply_voice(task)
+            except Exception:
+                self._restore_voice(original_voice)
+                raise
         target_chat = task.get("chat_target", "").strip()
 
-        # Temporarily override global config with per-task limits
-        _config_overrides = {}
-        for task_key, config_key in [
-            ("max_tool_rounds", "MAX_TOOL_ITERATIONS"),
-            ("max_parallel_tools", "MAX_PARALLEL_TOOLS"),
-            ("context_limit", "CONTEXT_LIMIT"),
-        ]:
-            val = task.get(task_key)
-            if val:  # 0 means "use global default"
-                _config_overrides[config_key] = getattr(config, config_key, None)
-                from core.settings_manager import settings as _settings
-                _settings.set(config_key, val, persist=False)
-                logger.debug(f"[Continuity] Override {config_key}: {_config_overrides[config_key]} -> {val}")
-
         try:
-            logger.info(f"[Continuity] Running '{task.get('name')}' in FOREGROUND mode, chat='{target_chat}'")
+            logger.info(f"[Continuity] Running '{task.get('name')}' with chat persistence, chat='{target_chat}'")
 
             # Find existing chat or create new one
-            # Normalize target the same way create_chat does (replace spaces, lowercase)
-            normalized = target_chat.replace(' ', '_').lower()
+            # Normalize the same way create_chat sanitizes: keep alnum/space/dash/underscore
+            normalized = "".join(c for c in target_chat if c.isalnum() or c in (' ', '-', '_')).strip()
+            normalized = normalized.replace(' ', '_').lower()
             existing_chats = {c["name"]: c["name"] for c in session_manager.list_chat_files()}
             match = existing_chats.get(normalized)
             if match:
-                target_chat = match  # Use actual DB name
+                target_chat = match
             else:
                 logger.info(f"[Continuity] Creating new chat: {target_chat}")
                 if not session_manager.create_chat(target_chat):
-                    raise RuntimeError(f"Failed to create chat: {target_chat}")
-                # create_chat lowercases, so resolve the actual name
-                target_chat = target_chat.replace(' ', '_').lower()
+                    # Chat was created between our check and now — use the sanitized name
+                    target_chat = normalized
+                else:
+                    target_chat = normalized
+                    publish(Events.CHAT_CREATED, {"name": target_chat})
 
-            # Switch to target chat
-            if not session_manager.set_active_chat(target_chat):
-                raise RuntimeError(f"Failed to switch to chat: {target_chat}")
+            # Build ExecutionContext — isolated, no singleton mutation
+            task_settings = self._extract_task_settings(task)
+            ctx = ExecutionContext(
+                self.system.llm_chat.function_manager,
+                self.system.llm_chat.tool_engine,
+                task_settings
+            )
 
-            # Snapshot target chat's settings before task overrides them
-            target_original_settings = session_manager.get_chat_settings()
+            # Set Discord reply channel for auto-reply targeting
+            reply_ch = task.get("_discord_reply_channel_id")
+            if reply_ch:
+                try:
+                    from plugins.discord.tools.discord_tools import _reply_channel_id
+                    _reply_channel_id.set(reply_ch)
+                except ImportError:
+                    pass
 
-            # Apply task settings to chat
-            self._apply_task_settings(task, session_manager)
-
-            # Run single execution
             tts_enabled = task.get("tts_enabled", True)
             browser_tts = task.get("browser_tts", False)
             msg = task.get("initial_message", "Hello.")
 
-            try:
-                response = self.system.process_llm_query(msg, skip_tts=True)
+            # Read history from target chat WITHOUT switching active chat
+            history_messages = session_manager.read_chat_messages(
+                target_chat, provider=task_settings.get("provider")
+            )
 
-                # Update UI before TTS (which blocks)
+            try:
+                # Run through isolated ExecutionContext — no singleton contact
+                response = ctx.run(msg, history_messages=history_messages)
+
+                # Persist both messages to target chat WITHOUT switching active chat
+                session_manager.append_to_chat(target_chat, msg, response or "")
+
                 if response_cb and response:
                     try: response_cb(response)
-                    except Exception: pass
+                    except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                 if response:
                     if browser_tts:
@@ -217,6 +318,7 @@ class ContinuityExecutor:
                             self.system.tts.speak_sync(response)
                         except Exception as tts_err:
                             logger.warning(f"[Continuity] TTS failed: {tts_err}")
+
                 result["responses"].append({
                     "iteration": 1,
                     "input": msg,
@@ -224,7 +326,7 @@ class ContinuityExecutor:
                 })
             except Exception as e:
                 error_msg = f"Task failed: {e}"
-                logger.error(f"[Continuity] {error_msg}")
+                logger.error(f"[Continuity] {error_msg}", exc_info=True)
                 result["errors"].append(error_msg)
 
             if progress_cb:
@@ -233,36 +335,13 @@ class ContinuityExecutor:
             result["success"] = len(result["errors"]) == 0
 
         except Exception as e:
-            error_msg = f"Foreground task failed: {e}"
+            error_msg = f"Persistent chat task failed: {e}"
             logger.error(f"[Continuity] {error_msg}", exc_info=True)
             result["errors"].append(error_msg)
 
         finally:
-            # Restore per-task config overrides
-            if _config_overrides:
-                from core.settings_manager import settings as _settings
-                for config_key, original_val in _config_overrides.items():
-                    _settings.set(config_key, original_val, persist=False)
-                logger.debug(f"[Continuity] Restored config overrides: {list(_config_overrides.keys())}")
-
-            # Always restore original chat context, toolset, and voice
-            try:
-                # Restore target chat's original settings before switching away
-                # (set_active_chat saves current settings, so this must come first)
-                if target_original_settings is not None:
-                    session_manager.current_settings = target_original_settings
-                if session_manager.get_active_chat_name() != original_chat:
-                    session_manager.set_active_chat(original_chat)
-                    logger.debug(f"[Continuity] Restored chat context to '{original_chat}'")
-                    # Don't publish CHAT_SWITCHED — this is backend state restore,
-                    # not a UI navigation. Frontend session is authoritative for the user's view.
-                self.system.llm_chat.function_manager.update_enabled_functions([original_toolset])
-                logger.debug(f"[Continuity] Restored toolset to '{original_toolset}'")
-            except Exception as e:
-                logger.error(f"[Continuity] Failed to restore chat context: {e}")
-                result["errors"].append(f"Context restore failed: {e}")
-
-            self._restore_voice(original_voice)
+            with self._voice_lock:
+                self._restore_voice(original_voice)
 
         result["completed_at"] = datetime.now().isoformat()
         return result
@@ -321,7 +400,7 @@ class ContinuityExecutor:
 
             if response_cb and output:
                 try: response_cb(str(output))
-                except Exception: pass
+                except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
         except Exception as e:
             logger.error(f"[Continuity] Plugin task '{task.get('name')}' failed: {e}", exc_info=True)
@@ -365,6 +444,7 @@ class ContinuityExecutor:
                 "goal_scope": "goal_scope",
                 "email_scope": "email_scope",
                 "bitcoin_scope": "bitcoin_scope",
+                "discord_scope": "discord_scope",
             }
             for persona_key, task_key in field_map.items():
                 persona_val = ps.get(persona_key)
@@ -433,68 +513,4 @@ class ContinuityExecutor:
         except Exception as e:
             logger.warning(f"[Continuity] Failed to apply voice settings: {e}")
 
-    def _apply_task_settings(self, task: Dict[str, Any], session_manager) -> None:
-        """Apply task's prompt/ability/LLM/memory/datetime settings to current chat."""
-        settings = {}
-        
-        if task.get("prompt"):
-            settings["prompt"] = task["prompt"]
-            
-            # Also apply to live LLM
-            from core import prompts
-            prompt_data = prompts.get_prompt(task["prompt"])
-            if prompt_data:
-                content = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
-                self.system.llm_chat.set_system_prompt(content)
-                prompts.set_active_preset_name(task["prompt"])
-        
-        if task.get("toolset"):
-            settings["toolset"] = task["toolset"]
-            # Apply to function manager
-            self.system.llm_chat.function_manager.update_enabled_functions([task["toolset"]])
-        
-        if task.get("provider") and task["provider"] != "auto":
-            settings["llm_primary"] = task["provider"]
-        
-        if task.get("model"):
-            settings["llm_model"] = task["model"]
-        
-        if task.get("memory_scope"):
-            settings["memory_scope"] = task["memory_scope"]
-
-        if task.get("knowledge_scope"):
-            settings["knowledge_scope"] = task["knowledge_scope"]
-
-        if task.get("people_scope"):
-            settings["people_scope"] = task["people_scope"]
-
-        if task.get("goal_scope"):
-            settings["goal_scope"] = task["goal_scope"]
-
-        if task.get("email_scope"):
-            settings["email_scope"] = task["email_scope"]
-
-        if task.get("bitcoin_scope"):
-            settings["bitcoin_scope"] = task["bitcoin_scope"]
-
-        # Inject datetime into system prompt if enabled
-        if task.get("inject_datetime"):
-            settings["inject_datetime"] = True
-
-        # Voice settings
-        if task.get("voice"):
-            settings["voice"] = task["voice"]
-        if task.get("pitch") is not None:
-            settings["pitch"] = task["pitch"]
-        if task.get("speed") is not None:
-            settings["speed"] = task["speed"]
-
-        if settings:
-            session_manager.update_chat_settings(settings)
-            logger.debug(f"[Continuity] Applied settings: {settings}")
-
-        # Apply voice to live TTS
-        self._apply_voice(task)
-
-        # Backend state is set — don't broadcast CHAT_SWITCHED to frontend.
-        # Task chat targeting is internal; the user's UI view is authoritative.
+    # _apply_task_settings removed — ExecutionContext handles all isolation now

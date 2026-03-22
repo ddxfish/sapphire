@@ -364,17 +364,21 @@ class CredentialsManager:
         return line
     
     def _save(self) -> bool:
-        """Save credentials to file with restrictive permissions. Returns True on success."""
+        """Save credentials to file with restrictive permissions. Returns True on success.
+        Uses atomic write (temp + rename) to prevent corruption on crash."""
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            
-            with open(CREDENTIALS_FILE, 'w', encoding='utf-8') as f:
+
+            tmp_path = CREDENTIALS_FILE.with_suffix('.tmp')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(self._credentials, f, indent=2)
-            
-            # Set restrictive permissions on Unix
+
+            # Set restrictive permissions on Unix (before rename so file is protected)
             if sys.platform != 'win32':
-                os.chmod(CREDENTIALS_FILE, 0o600)
-            
+                os.chmod(tmp_path, 0o600)
+
+            tmp_path.replace(CREDENTIALS_FILE)
+
             logger.info(f"Saved credentials to {CREDENTIALS_FILE}")
             return True
         except Exception as e:

@@ -2,12 +2,11 @@
 """
 Story Engine Tools - Exposed to AI when story engine is enabled.
 
-Simplified tool set:
+Tool set:
 - get_state: Check values
 - set_state: Modify values (also handles choices and riddle answers)
-- advance_scene: Move story forward
 - roll_dice: Random outcomes
-- move: Navigation (if enabled)
+- move: Navigation between rooms/scenes
 
 All tool returns include full context block with scene, state, and clues.
 """
@@ -19,7 +18,7 @@ from typing import Any, Tuple
 logger = logging.getLogger(__name__)
 
 # Tool names for detection
-STORY_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'advance_scene', 'move'}
+STORY_TOOL_NAMES = {'get_state', 'set_state', 'roll_dice', 'move'}
 
 TOOLS = [
     {
@@ -60,23 +59,6 @@ TOOLS = [
                     }
                 },
                 "required": ["key", "value"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "advance_scene",
-            "description": "Attempt to advance to the next scene/chapter. Will fail if prerequisites aren't met (choices unmade, blockers active). Returns the new scene content on success.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "reason": {
-                        "type": "string",
-                        "description": "Brief reason for advancing (what triggered the transition)"
-                    }
-                },
-                "required": ["reason"]
             }
         }
     },
@@ -159,9 +141,6 @@ def execute(function_name: str, arguments: dict, story_engine, turn_number: int)
         elif function_name == "set_state":
             return _execute_set_state(arguments, story_engine, turn_number)
         
-        elif function_name == "advance_scene":
-            return _execute_advance_scene(arguments, story_engine, turn_number)
-        
         elif function_name == "roll_dice":
             return _execute_roll_dice(arguments, story_engine, turn_number)
         
@@ -217,56 +196,6 @@ def _execute_set_state(arguments: dict, story_engine, turn_number: int) -> Tuple
         # Terminal instruction for riddle attempts - let player react to result
         if is_riddle_attempt:
             context += "\n\n⛔ STOP — Narrate this attempt to the player. Do NOT guess again or make additional tool calls this turn."
-        return context, True
-    else:
-        return msg, False
-
-
-def _execute_advance_scene(arguments: dict, story_engine, turn_number: int) -> Tuple[str, bool]:
-    """Advance to next scene - validates prerequisites."""
-    reason = arguments.get("reason", "story progression")
-
-    # Check if already advanced this turn
-    can_advance, msg = story_engine.can_advance_this_turn(turn_number)
-    if not can_advance:
-        return f"Error: {msg}", False
-
-    # Get iterator config
-    if not story_engine.progressive_config:
-        return "Error: No progressive story configured", False
-
-    iterator_key = story_engine.progressive_config.get("iterator")
-    if not iterator_key:
-        return "Error: No scene iterator configured", False
-    
-    # Get current value
-    current = story_engine.get_state(iterator_key)
-    if current is None:
-        return f"Error: Iterator '{iterator_key}' not found in state", False
-    
-    if not isinstance(current, (int, float)):
-        return f"Error: Iterator '{iterator_key}' must be numeric for advance_scene", False
-    
-    # Calculate next value
-    new_value = int(current) + 1
-    
-    # Check max constraint
-    entry = story_engine.get_state_full(iterator_key)
-    if entry and entry.get("constraints"):
-        constraints = entry["constraints"]
-        max_val = constraints.get("max")
-        if max_val is not None and new_value > max_val:
-            return f"Cannot advance: already at final scene ({current}/{max_val})", False
-    
-    # Try to set - this will check choice blockers
-    success, msg = story_engine.set_state(iterator_key, new_value, "ai", turn_number, reason)
-    
-    if success:
-        story_engine.mark_advanced(turn_number)
-        summary = f"✓ Advanced to scene {new_value}"
-        context = story_engine.get_context_block(turn_number, summary)
-        # Terminal instruction - AI must narrate new scene before more tool calls
-        context += "\n\n⛔ STOP — Narrate this new scene to the player. Do NOT make additional tool calls this turn."
         return context, True
     else:
         return msg, False

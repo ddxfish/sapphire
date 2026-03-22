@@ -426,10 +426,11 @@ const processInlineMarkdown = (html) => {
         return m;
     });
 
-    // Links: [text](url) - block javascript:, data:, vbscript: schemes
+    // Links: [text](url) - allow http(s), mailto, and local paths starting with /
     html = html.replace(/\[([^\]]+)\]\s*\(([^()]*(?:\([^)]*\)[^()]*)*)\)/g, (m, text, url) => {
         url = url.trim().replace(/ /g, '%20');
         if (/^(https?:\/\/|mailto:)/i.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+        if (/^\/[a-zA-Z]/.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
         return m;
     });
     

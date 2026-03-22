@@ -243,7 +243,7 @@ journalctl --user -u sapphire -f
 
 ## Making It Yours
 
-At this point, try Sapphire. If you want to make it yours, continue with [CONFIGURATION.md](CONFIGURATION.md)
+At this point, try Sapphire. If you want to make it yours, continue with [QUICK-START.md](QUICK-START.md)
 
 ---
 

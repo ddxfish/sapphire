@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Bitcoin — check balance, send BTC, view transactions",
   "author": "sapphire",
+  "icon": "₿",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {

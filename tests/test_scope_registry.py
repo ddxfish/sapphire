@@ -21,7 +21,7 @@ class TestScopeRegistry:
 
     def test_all_scopes_present(self):
         expected = {'memory', 'goal', 'knowledge', 'people', 'email',
-                    'bitcoin', 'gcal', 'rag', 'private'}
+                    'bitcoin', 'gcal', 'telegram', 'discord', 'rag', 'private'}
         assert set(SCOPE_REGISTRY.keys()) == expected
 
     def test_each_entry_has_required_keys(self):

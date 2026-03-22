@@ -66,6 +66,14 @@ export function avatarFallback(name, color) {
     return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+export const exportPersona = (name) => fetchWithTimeout(`/api/personas/${encodeURIComponent(name)}/export`);
+
+export const importPersona = (data) => fetchWithTimeout('/api/personas/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+});
+
 export function avatarImg(name, color, cls, avatar) {
     const fb = avatarFallback(name, color);
     const src = avatar ? avatarUrl(name) : fb;

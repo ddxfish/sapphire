@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "SSH — remote command execution on configured servers",
   "author": "sapphire",
+  "icon": "🖥️",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Command Line — run shell commands on the local machine",
   "author": "sapphire",
+  "icon": "💻",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "managed_hide": true,

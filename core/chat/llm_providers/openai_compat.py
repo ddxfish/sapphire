@@ -448,6 +448,7 @@ class OpenAICompatProvider(BaseProvider):
             "model": self.model,
             "messages": clean_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             **params
         }
 
@@ -459,32 +460,60 @@ class OpenAICompatProvider(BaseProvider):
         if self._is_fireworks_reasoning_model():
             request_kwargs["reasoning_effort"] = params.get("reasoning_effort", "medium")
             logger.info(f"[REASONING] Enabled reasoning_effort={request_kwargs['reasoning_effort']} for {self.model}")
-        
+
         if tools:
             request_kwargs["tools"] = self.convert_tools_for_api(tools)
             request_kwargs["tool_choice"] = "auto"
-        
+
         logger.info(f"[OPENAI-COMPAT] Request params: model={request_kwargs.get('model')}, tools={len(request_kwargs.get('tools', []))}")
-        
+
         # Wrap in retry for rate limiting
+        # If stream_options is rejected (local servers like LM Studio/llama.cpp), retry without
         try:
             stream = retry_on_rate_limit(
                 self._client.chat.completions.create,
                 **request_kwargs
             )
         except Exception as e:
-            # Log summary of what failed
-            logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
-            logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
-            raise
+            if "stream_options" in str(e).lower() or "unrecognized" in str(e).lower() or (hasattr(e, 'status_code') and e.status_code in (400, 422)):
+                logger.info(f"[OPENAI-COMPAT] stream_options rejected, retrying without: {e}")
+                request_kwargs.pop("stream_options", None)
+                try:
+                    stream = retry_on_rate_limit(
+                        self._client.chat.completions.create,
+                        **request_kwargs
+                    )
+                except Exception as e2:
+                    logger.error(f"[OPENAI-COMPAT] REQUEST FAILED (retry): {e2}")
+                    raise
+            else:
+                logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
+                logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
+                raise
         
         # Track accumulated state for final response
         full_content = ""
         full_thinking = ""
         tool_calls_acc = []  # List of dicts being built
         finish_reason = None
-        
+        usage = None
+
         for chunk in stream:
+            # Final chunk with usage data (stream_options=include_usage)
+            if hasattr(chunk, 'usage') and chunk.usage:
+                usage = {
+                    "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                    "completion_tokens": chunk.usage.completion_tokens or 0,
+                    "total_tokens": chunk.usage.total_tokens or 0
+                }
+                # Some providers include cache stats
+                cache_read = getattr(chunk.usage, 'prompt_tokens_details', None)
+                if cache_read and hasattr(cache_read, 'cached_tokens'):
+                    cached = cache_read.cached_tokens or 0
+                    if cached > 0:
+                        usage["cache_read_tokens"] = cached
+                        logger.info(f"[CACHE] Stream usage: {cached} cached tokens")
+
             if not chunk.choices:
                 continue
             
@@ -551,12 +580,20 @@ class OpenAICompatProvider(BaseProvider):
             if tc["id"] and tc["name"]
         ]
         
+        # If no visible content but we have thinking, use thinking as content
+        # This handles providers that put the full response in reasoning_content
+        # (e.g., DashScope Qwen3 thinking mode)
+        if not full_content and full_thinking:
+            logger.info(f"[REASONING] No content but have thinking ({len(full_thinking)} chars) — using as content")
+            full_content = full_thinking
+
         final_response = LLMResponse(
             content=full_content if full_content else None,
             tool_calls=final_tool_calls,
-            finish_reason=finish_reason
+            finish_reason=finish_reason,
+            usage=usage
         )
-        
+
         done_event = {"type": "done", "response": final_response}
         if full_thinking:
             done_event["thinking"] = full_thinking
@@ -576,7 +613,12 @@ class OpenAICompatProvider(BaseProvider):
         if reasoning:
             logger.info(f"[REASONING] Non-stream response has reasoning_content ({len(reasoning)} chars)")
             content = message.content or ""
-            message_content = f"<think>{reasoning}</think>\n\n{content}"
+            if content:
+                message_content = f"<think>{reasoning}</think>\n\n{content}"
+            else:
+                # No visible content — use reasoning as the response
+                # (some providers put everything in reasoning_content)
+                message_content = reasoning
         else:
             message_content = message.content
 

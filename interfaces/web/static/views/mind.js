@@ -1,5 +1,7 @@
 // views/mind.js - Mind view: Memories, People, Knowledge, AI Knowledge, Goals
 import * as ui from '../ui.js';
+import { showExportDialog, showImportDialog } from '../shared/import-export.js';
+import { setupModalClose } from '../shared/modal.js';
 
 function csrfHeaders(extra = {}) {
     const token = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -228,9 +230,15 @@ async function renderMemories(el) {
     const labels = Object.keys(groups).sort();
 
     const desc = '<div class="mind-tab-desc">Short identity snippets the AI saves during conversation. Grouped by label — these shape how it remembers you and itself.</div>';
+    const toolbar = `<div class="mind-toolbar">
+        <button class="mind-btn" id="mind-find-dups">Find Duplicates</button>
+        <button class="mind-btn" id="mind-export-memories">Export</button>
+        <button class="mind-btn" id="mind-import-memories">Import</button>
+    </div>`;
 
     if (!labels.length) {
-        el.innerHTML = desc + '<div class="mind-empty">No memories in this scope</div>';
+        el.innerHTML = desc + toolbar + '<div class="mind-empty">No memories in this scope</div>';
+        _bindMemoryIO(el);
         return;
     }
 
@@ -257,7 +265,7 @@ async function renderMemories(el) {
 
     const totalPages = showPagination ? Math.ceil(labels.length / pageLabels.length) : 1;
 
-    el.innerHTML = desc + (showPagination ? `
+    el.innerHTML = desc + toolbar + (showPagination ? `
         <div class="mind-pagination">
             <button class="mind-btn-sm" id="mem-prev" ${memoryPage === 0 ? 'disabled' : ''}>&#x25C0; Prev</button>
             <span class="mind-page-info">${memoryPage + 1} / ${totalPages} (${totalMemories} memories)</span>
@@ -321,6 +329,155 @@ async function renderMemories(el) {
             } catch (e) { ui.showToast('Failed', 'error'); }
         });
     });
+
+    _bindMemoryIO(el);
+}
+
+function _bindMemoryIO(el) {
+    el.querySelector('#mind-export-memories')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/memory/export?scope=${encodeURIComponent(currentScope)}`);
+            if (!resp.ok) throw new Error('Export failed');
+            const data = await resp.json();
+            showExportDialog({
+                type: 'Memories',
+                name: `${currentScope} (${data.count})`,
+                filename: `memories-${currentScope}.json`,
+                data,
+            });
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    });
+
+    el.querySelector('#mind-find-dups')?.addEventListener('click', async () => {
+        try {
+            const btn = el.querySelector('#mind-find-dups');
+            btn.textContent = 'Scanning...';
+            btn.disabled = true;
+            const resp = await fetch(`/api/memory/duplicates?scope=${encodeURIComponent(currentScope)}`);
+            btn.textContent = 'Find Duplicates';
+            btn.disabled = false;
+            if (!resp.ok) throw new Error('Scan failed');
+            const data = await resp.json();
+            if (!data.pairs.length) {
+                ui.showToast('No duplicates found', 'success');
+                return;
+            }
+            _showDuplicatesModal(el, data.pairs);
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    });
+
+    el.querySelector('#mind-import-memories')?.addEventListener('click', () => {
+        showImportDialog({
+            type: 'Memories',
+            existingNames: [],
+            validate: (d) => {
+                if (d.entries && Array.isArray(d.entries)) return null;
+                return 'Invalid format: needs entries array';
+            },
+            getName: (d) => d.scope || currentScope,
+            onImport: async (data, { name }) => {
+                const resp = await fetch('/api/memory/import', {
+                    method: 'POST',
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ entries: data.entries, scope: currentScope }),
+                });
+                if (!resp.ok) throw new Error('Import failed');
+                const result = await resp.json();
+                ui.showToast(`Imported ${result.imported} memories, ${result.skipped} duplicates skipped`, 'success');
+            },
+            onDone: async () => { await renderMemories(el); },
+        });
+    });
+}
+
+function _showDuplicatesModal(el, pairs) {
+    const existing = document.querySelector('.mind-modal-overlay');
+    if (existing) existing.remove();
+
+    let currentIdx = 0;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    document.body.appendChild(overlay);
+
+    function renderPair() {
+        if (currentIdx >= pairs.length) {
+            overlay.remove();
+            ui.showToast('All duplicates reviewed', 'success');
+            renderMemories(el);
+            return;
+        }
+        const pair = pairs[currentIdx];
+        const pct = Math.round(pair.similarity * 100);
+        overlay.innerHTML = `
+            <div class="pr-modal" style="max-width:650px">
+                <div class="pr-modal-header">
+                    <h3>Duplicates (${currentIdx + 1}/${pairs.length}) — ${pct}% similar</h3>
+                    <button class="mind-btn-sm mind-modal-close">&#x2715;</button>
+                </div>
+                <div class="pr-modal-body" style="display:flex;flex-direction:column;gap:12px">
+                    <div style="display:flex;gap:12px">
+                        <div style="flex:1;padding:10px;background:var(--bg-tertiary);border-radius:var(--radius);font-size:var(--font-sm)">
+                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Keep (oldest)</div>
+                            ${escHtml(pair.keep.content)}
+                            ${pair.keep.label ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Label: ${escHtml(pair.keep.label)}</div>` : ''}
+                        </div>
+                        <div style="flex:1;padding:10px;background:var(--bg-tertiary);border-radius:var(--radius);font-size:var(--font-sm);opacity:0.7">
+                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Remove (newer)</div>
+                            ${escHtml(pair.remove.content)}
+                            ${pair.remove.label ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Label: ${escHtml(pair.remove.label)}</div>` : ''}
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;justify-content:center">
+                        <button class="mind-btn" id="dup-combine">Combine</button>
+                        <button class="mind-btn" id="dup-delete">Delete Newer</button>
+                        <button class="mind-btn" id="dup-skip">Skip</button>
+                        <button class="mind-btn" id="dup-skip-all" style="color:var(--text-muted)">Done</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        overlay.querySelector('.mind-modal-close').addEventListener('click', () => {
+            overlay.remove();
+            renderMemories(el);
+        });
+
+        overlay.querySelector('#dup-delete').addEventListener('click', async () => {
+            try {
+                await fetch(`/api/memory/${pair.remove.id}?scope=${encodeURIComponent(currentScope)}`, { method: 'DELETE', headers: csrfHeaders() });
+                currentIdx++;
+                renderPair();
+            } catch { ui.showToast('Delete failed', 'error'); }
+        });
+
+        overlay.querySelector('#dup-combine').addEventListener('click', async () => {
+            // Combine: merge both texts into the older memory, delete the newer
+            const combined = pair.keep.content + '\n' + pair.remove.content;
+            try {
+                await fetch(`/api/memory/${pair.keep.id}`, {
+                    method: 'PUT',
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ content: combined, scope: currentScope }),
+                });
+                await fetch(`/api/memory/${pair.remove.id}?scope=${encodeURIComponent(currentScope)}`, { method: 'DELETE', headers: csrfHeaders() });
+                currentIdx++;
+                renderPair();
+            } catch { ui.showToast('Combine failed', 'error'); }
+        });
+
+        overlay.querySelector('#dup-skip').addEventListener('click', () => {
+            currentIdx++;
+            renderPair();
+        });
+
+        overlay.querySelector('#dup-skip-all').addEventListener('click', () => {
+            overlay.remove();
+            renderMemories(el);
+        });
+    }
+
+    renderPair();
 }
 
 function showMemoryEditModal(el, memoryId, content) {
@@ -352,7 +509,7 @@ function showMemoryEditModal(el, memoryId, content) {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    setupModalClose(overlay, close);
 
     // Focus textarea
     const textarea = overlay.querySelector('#mm-content');
@@ -394,6 +551,8 @@ async function renderPeople(el) {
         <div class="mind-toolbar">
             <button class="mind-btn" id="mind-add-person">+ Add Person</button>
             <button class="mind-btn" id="mind-import-vcf">Import VCF</button>
+            <button class="mind-btn" id="mind-export-people">Export</button>
+            <button class="mind-btn" id="mind-import-people">Import</button>
             <input type="file" id="mind-vcf-input" accept=".vcf" style="display:none">
         </div>
         ${people.length ? `<div class="mind-people-grid">
@@ -461,6 +620,44 @@ async function renderPeople(el) {
             } catch (e) { ui.showToast('Failed', 'error'); }
         });
     });
+
+    // Export/Import people
+    el.querySelector('#mind-export-people')?.addEventListener('click', async () => {
+        try {
+            const resp = await fetch(`/api/knowledge/people/export?scope=${encodeURIComponent(currentScope)}`);
+            if (!resp.ok) throw new Error('Export failed');
+            const data = await resp.json();
+            showExportDialog({
+                type: 'People',
+                name: `${currentScope} (${data.count})`,
+                filename: `people-${currentScope}.json`,
+                data,
+            });
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    });
+
+    el.querySelector('#mind-import-people')?.addEventListener('click', () => {
+        showImportDialog({
+            type: 'People',
+            existingNames: [],
+            validate: (d) => {
+                if (d.entries && Array.isArray(d.entries)) return null;
+                return 'Invalid format: needs entries array';
+            },
+            getName: (d) => d.scope || currentScope,
+            onImport: async (data) => {
+                const resp = await fetch('/api/knowledge/people/import', {
+                    method: 'POST',
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({ entries: data.entries, scope: currentScope }),
+                });
+                if (!resp.ok) throw new Error('Import failed');
+                const result = await resp.json();
+                ui.showToast(`Imported ${result.imported} contacts, ${result.skipped} duplicates skipped`, 'success');
+            },
+            onDone: async () => { await renderPeople(el); },
+        });
+    });
 }
 
 function showPersonModal(el, person = null) {
@@ -495,7 +692,7 @@ function showPersonModal(el, person = null) {
     document.body.appendChild(overlay);
 
     overlay.querySelector('.mind-modal-close').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    setupModalClose(overlay, () => overlay.remove());
 
     overlay.querySelector('#mp-save').addEventListener('click', async () => {
         const name = overlay.querySelector('#mp-name').value.trim();
@@ -548,6 +745,7 @@ async function renderKnowledge(el, tabType) {
         <div class="mind-tab-desc">${knDesc}</div>
         <div class="mind-toolbar">
             ${!isAI ? '<button class="mind-btn" id="mind-new-tab">+ New Category</button>' : ''}
+            <button class="mind-btn" id="mind-import-tab">Import</button>
         </div>
         ${tabs.length ? `<div class="mind-list">
             ${tabs.map(t => `
@@ -555,6 +753,7 @@ async function renderKnowledge(el, tabType) {
                     <summary class="mind-accordion-header">
                         <span class="mind-accordion-title">${escHtml(t.name)}</span>
                         <span class="mind-accordion-count">${t.entry_count} entries</span>
+                        <button class="mind-btn-sm mind-export-tab" data-id="${t.id}" data-name="${escAttr(t.name)}" title="Export">\u21E9</button>
                         <button class="mind-btn-sm mind-del-tab" data-id="${t.id}" title="Delete category">&#x2715;</button>
                     </summary>
                     <div class="mind-accordion-body">
@@ -604,6 +803,61 @@ async function renderKnowledge(el, tabType) {
         });
     });
 
+    // Export tab buttons
+    el.querySelectorAll('.mind-export-tab').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const tabId = parseInt(btn.dataset.id);
+            const tabName = btn.dataset.name;
+            try {
+                const resp = await fetch(`/api/knowledge/tabs/${tabId}/export?scope=${encodeURIComponent(currentScope)}`);
+                if (!resp.ok) throw new Error('Export failed');
+                const data = await resp.json();
+                showExportDialog({
+                    type: 'Knowledge Tab',
+                    name: `${tabName} (${data.count} entries)`,
+                    filename: `knowledge-${tabName.replace(/\s+/g, '_')}.json`,
+                    data,
+                });
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        });
+    });
+
+    // Import tab
+    el.querySelector('#mind-import-tab')?.addEventListener('click', () => {
+        showImportDialog({
+            type: 'Knowledge Tab',
+            overwrites: [
+                { key: 'overwrite', label: 'Overwrite if tab already exists' },
+            ],
+            existingNames: tabs.map(t => t.name),
+            validate: (d) => {
+                if (d.entries && Array.isArray(d.entries) && d.name) return null;
+                return 'Invalid format: needs name and entries array';
+            },
+            getName: (d) => d.name || 'imported',
+            onImport: async (data, { name, overwrites }) => {
+                const resp = await fetch('/api/knowledge/tabs/import', {
+                    method: 'POST',
+                    headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({
+                        name, entries: data.entries, scope: currentScope,
+                        description: data.description, tab_type: data.tab_type || tabType,
+                        overwrite: overwrites.overwrite || false,
+                    }),
+                });
+                if (!resp.ok) throw new Error('Import failed');
+                const result = await resp.json();
+                const msg = result.merged
+                    ? `Merged ${result.imported} entries, ${result.skipped} duplicates skipped`
+                    : `Imported ${result.imported} entries`;
+                ui.showToast(msg, 'success');
+            },
+            onDone: async () => { await renderKnowledge(el, tabType); },
+        });
+    });
+
     // Lazy-load entries on accordion open
     el.querySelectorAll('.mind-accordion').forEach(details => {
         details.addEventListener('toggle', async () => {
@@ -619,7 +873,7 @@ async function renderKnowledge(el, tabType) {
 async function loadEntries(inner, tabId, tabType) {
     const isAI = tabType === 'ai';
     try {
-        const resp = await fetch(`/api/knowledge/tabs/${tabId}`);
+        const resp = await fetch(`/api/knowledge/tabs/${tabId}?scope=${encodeURIComponent(currentScope)}`);
         if (!resp.ok) { inner.innerHTML = '<div class="mind-empty">Failed to load</div>'; return; }
         const data = await resp.json();
         const entries = data.entries || [];
@@ -810,7 +1064,7 @@ function showEntryEditModal(inner, tabId, tabType, entryId, content) {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    setupModalClose(overlay, close);
 
     const textarea = overlay.querySelector('#me-content');
     textarea.focus();
@@ -870,7 +1124,7 @@ function showAddEntryModal(inner, tabId, tabType) {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    setupModalClose(overlay, close);
 
     overlay.querySelector('#mae-content').focus();
 
@@ -935,7 +1189,7 @@ function showDeleteScopeConfirmation(scopeName, typeLabel, count) {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    setupModalClose(overlay, close);
 
     const input1 = overlay.querySelector('#del-scope-confirm-1');
     const nextBtn = overlay.querySelector('#del-scope-next');
@@ -990,7 +1244,7 @@ function showDeleteScopeConfirmation2(scopeName, typeLabel, count) {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    setupModalClose(overlay, close);
 
     const input2 = overlay.querySelector('#del-scope-confirm-2');
     const execBtn = overlay.querySelector('#del-scope-execute');
@@ -1294,7 +1548,7 @@ function showGoalModal(el, goal = null) {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     overlay.querySelector('.mind-modal-cancel').addEventListener('click', close);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    setupModalClose(overlay, close);
 
     overlay.querySelector('#mg-title').focus();
 

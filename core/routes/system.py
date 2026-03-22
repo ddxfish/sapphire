@@ -225,14 +225,22 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
 
 @router.get("/api/continuity/tasks")
 async def list_continuity_tasks(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """List continuity tasks. Optional ?heartbeat=true/false filter."""
+    """List continuity tasks. Optional ?heartbeat=true/false or ?type=daemon/webhook filter."""
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         return {"tasks": []}
     tasks = system.continuity_scheduler.list_tasks()
+
+    # Type filter (new)
+    type_filter = request.query_params.get("type")
+    if type_filter:
+        tasks = [t for t in tasks if t.get("type", "task") == type_filter]
+
+    # Legacy heartbeat filter (backward compat) — excludes daemon/webhook types
     hb_filter = request.query_params.get("heartbeat")
     if hb_filter is not None:
         want_hb = hb_filter.lower() in ("true", "1", "yes")
-        tasks = [t for t in tasks if t.get("heartbeat", False) == want_hb]
+        tasks = [t for t in tasks if t.get("heartbeat", False) == want_hb
+                 and t.get("type", "task") in ("task", "heartbeat")]
     return {"tasks": tasks}
 
 
@@ -496,3 +504,172 @@ async def request_system_shutdown(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=503, detail="Shutdown not available")
     callback()
     return {"status": "shutting_down", "message": "Shutdown initiated"}
+
+
+# =============================================================================
+# UPDATE ROUTES
+# =============================================================================
+
+@router.get("/api/system/update-check")
+async def check_for_update(request: Request, _=Depends(require_login)):
+    """Check GitHub for a newer Sapphire version."""
+    from core.updater import updater
+    from core.settings_manager import settings
+    status = updater.check_for_update(force=True)
+    status['docker'] = settings.is_docker()
+    status['managed'] = settings.is_managed()
+    return status
+
+
+@router.post("/api/system/update")
+async def do_update(request: Request, _=Depends(require_login)):
+    """Run git pull to update Sapphire, then restart."""
+    from core.updater import updater
+    from core.settings_manager import settings
+
+    if settings.is_docker() or settings.is_managed():
+        raise HTTPException(status_code=403, detail="Use docker compose pull to update Docker installations")
+
+    success, message = updater.do_update()
+    if not success:
+        raise HTTPException(status_code=500, detail=message)
+
+    # Trigger restart to load new code
+    from core.api_fastapi import get_restart_callback
+    callback = get_restart_callback()
+    if callback:
+        callback()
+
+    return {"status": "updated", "message": message}
+
+
+# =============================================================================
+# METRICS ROUTES
+# =============================================================================
+
+@router.get("/api/metrics/enabled")
+async def metrics_enabled(request: Request, _=Depends(require_login)):
+    """Check if metrics tracking is enabled."""
+    return {"enabled": getattr(config, 'METRICS_ENABLED', True)}
+
+
+@router.put("/api/metrics/enabled")
+async def set_metrics_enabled(request: Request, _=Depends(require_login)):
+    """Toggle metrics tracking."""
+    from core.settings_manager import settings
+    data = await request.json()
+    enabled = bool(data.get("enabled", True))
+    settings.set("METRICS_ENABLED", enabled)
+    return {"enabled": enabled}
+
+
+@router.get("/api/metrics/summary")
+async def metrics_summary(request: Request, _=Depends(require_login)):
+    """Aggregate token usage summary."""
+    from core.metrics import metrics
+    days = int(request.query_params.get("days", 30))
+    return metrics.summary(days=days)
+
+
+@router.get("/api/metrics/breakdown")
+async def metrics_breakdown(request: Request, _=Depends(require_login)):
+    """Token usage broken down by model."""
+    from core.metrics import metrics
+    days = int(request.query_params.get("days", 30))
+    return {"models": metrics.breakdown_by_model(days=days)}
+
+
+@router.get("/api/metrics/daily")
+async def metrics_daily(request: Request, _=Depends(require_login)):
+    """Daily token usage for charting."""
+    from core.metrics import metrics
+    days = int(request.query_params.get("days", 30))
+    return {"daily": metrics.daily_usage(days=days)}
+
+
+# =============================================================================
+# EVENT ROUTES (Daemons + Webhooks)
+# =============================================================================
+
+@router.get("/api/events/sources")
+async def get_event_sources(request: Request, _=Depends(require_login)):
+    """Get available daemon event sources from loaded plugins."""
+    from core.plugin_loader import plugin_loader
+    return {"sources": plugin_loader.get_event_sources()}
+
+
+@router.post("/api/events/emit/{source_name}")
+async def emit_event(source_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Emit a daemon event to trigger matching tasks. Used by daemon plugins."""
+    if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not available")
+    data = await request.json()
+    event_data = json.dumps(data) if isinstance(data, dict) else str(data)
+
+    from core.plugin_loader import plugin_loader
+    plugin_loader.emit_daemon_event(source_name, event_data)
+    return {"status": "emitted", "source": source_name}
+
+
+@router.api_route("/api/events/webhook/{path:path}", methods=["GET", "POST", "PUT"])
+async def webhook_endpoint(path: str, request: Request, system=Depends(get_system)):
+    """Webhook endpoint — no auth required. Matches path to webhook tasks."""
+    if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
+        raise HTTPException(status_code=503, detail="Scheduler not available")
+
+    method = request.method
+    task = system.continuity_scheduler.find_webhook_task(path, method)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"No webhook configured for {method} /{path}")
+
+    # Verify secret if task has one configured
+    trigger_config = task.get("trigger_config", {})
+    webhook_secret = trigger_config.get("secret")
+    if webhook_secret:
+        import hashlib, hmac
+        auth_header = request.headers.get("x-webhook-secret", "")
+        sig_header = request.headers.get("x-hub-signature-256", "")
+        if sig_header:
+            # GitHub-style HMAC: x-hub-signature-256: sha256=<hex>
+            raw_body = await request.body()
+            expected = "sha256=" + hmac.new(webhook_secret.encode(), raw_body, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig_header, expected):
+                raise HTTPException(status_code=403, detail="Invalid webhook signature")
+        elif auth_header:
+            # Simple secret comparison
+            if not hmac.compare_digest(auth_header, webhook_secret):
+                raise HTTPException(status_code=403, detail="Invalid webhook secret")
+        else:
+            raise HTTPException(status_code=403, detail="Webhook secret required but not provided")
+
+    # Payload size limit (1MB)
+    content_length = int(request.headers.get("content-length", 0))
+    if content_length > 1_048_576:
+        raise HTTPException(status_code=413, detail="Payload too large (max 1MB)")
+
+    # Build event data from request
+    content_type = request.headers.get("content-type", "")
+    if "json" in content_type:
+        try:
+            body = await request.json()
+            event_data = json.dumps(body, indent=2)
+        except Exception:
+            event_data = (await request.body()).decode("utf-8", errors="replace")
+    elif method in ("POST", "PUT"):
+        raw = await request.body()
+        if len(raw) > 1_048_576:
+            raise HTTPException(status_code=413, detail="Payload too large (max 1MB)")
+        event_data = raw.decode("utf-8", errors="replace")
+    else:
+        # GET — use query params
+        event_data = json.dumps(dict(request.query_params))
+
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"[Webhook] {method} /{path} from {client_ip} (task: {task.get('name')})")
+
+    result = system.continuity_scheduler.fire_event_task(task["id"], event_data)
+
+    from core.event_bus import publish, Events
+    publish(Events.WEBHOOK_FIRED, {"path": path, "method": method, "task_id": task["id"]})
+
+    return {"status": "triggered", "task": task["name"], "queued": result.get("queued", False)}

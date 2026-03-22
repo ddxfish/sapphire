@@ -1,11 +1,54 @@
 {
   "name": "email",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Email — read inbox, send to whitelisted contacts via IMAP/SMTP",
   "author": "sapphire",
+  "icon": "📧",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {
-    "tools": ["tools/email_tool.py"]
+    "tools": ["tools/email_tool.py"],
+    "daemon": {
+      "entry": "daemon.py",
+      "event_sources": [{
+        "name": "email_message",
+        "label": "New Email",
+        "description": "New unread email received on an account",
+        "filter_fields": [
+          {"key": "from_address", "label": "sender email"},
+          {"key": "from_name", "label": "sender name"},
+          {"key": "to_address", "label": "recipient email"},
+          {"key": "subject_contains", "label": "keyword in subject"},
+          {"key": "snippet_contains", "label": "keyword in body"},
+          {"key": "account", "label": "account scope"}
+        ],
+        "task_fields": [
+          {
+            "key": "auto_reply",
+            "type": "boolean",
+            "label": "Auto-reply to sender",
+            "default": false,
+            "help": "When enabled, the AI's response is automatically sent as an email reply to the sender."
+          }
+        ]
+      }]
+    },
+    "settings": [
+      {
+        "key": "poll_interval",
+        "type": "number",
+        "label": "Poll Interval (seconds)",
+        "default": 120,
+        "help": "How often to check for new emails. Minimum 30 seconds."
+      },
+      {
+        "key": "allow_all_recipients",
+        "type": "boolean",
+        "label": "Allow sending to any address",
+        "default": false,
+        "help": "WARNING: When enabled, the AI can email anyone — not just whitelisted contacts. It can use recipient IDs from People OR type an email address directly. Use with caution.",
+        "confirm": "allow_all_recipients"
+      }
+    ]
   }
 }

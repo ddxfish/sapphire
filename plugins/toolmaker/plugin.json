@@ -3,6 +3,7 @@
   "version": "1.1.0",
   "description": "Tool Maker — create, read, and activate custom tools",
   "author": "sapphire",
+  "icon": "🔧",
   "url": "https://sapphireblue.dev",
   "priority": 50,
   "capabilities": {

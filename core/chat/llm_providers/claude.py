@@ -104,6 +104,37 @@ class ClaudeProvider(BaseProvider):
         except Exception as e:
             return {"ok": False, "error": str(e)}
     
+    def _build_system_blocks(self, system_prompt: str, dynamic_system: str,
+                             cache_enabled: bool, cache_system_prompt: bool,
+                             cache_ttl: str):
+        """
+        Build system prompt as a single string or multi-block array.
+
+        When caching is active:
+          - Static prompt → cached block (cache_control: ephemeral)
+          - Dynamic content (state vars, clues) → uncached block (no cache_control)
+          This way dynamic story content changes without breaking the cache prefix.
+
+        When caching is off:
+          - Everything combined into a single string.
+        """
+        if cache_enabled and cache_system_prompt:
+            cache_control = {"type": "ephemeral"}
+            if cache_ttl == '1h':
+                cache_control["ttl"] = "1h"
+            blocks = [{"type": "text", "text": system_prompt, "cache_control": cache_control}]
+            if dynamic_system:
+                blocks.append({"type": "text", "text": dynamic_system})
+            logger.info(f"[CACHE] Prompt caching active (TTL: {cache_ttl})"
+                        f"{', +dynamic block' if dynamic_system else ''}")
+            return blocks
+        else:
+            if cache_enabled and not cache_system_prompt:
+                logger.info("[CACHE] Dynamic content detected - tools only, system prompt not cached")
+            if dynamic_system:
+                return f"{system_prompt}\n\n{dynamic_system}"
+            return system_prompt
+
     def _get_cache_config(self) -> tuple:
         """
         Get cache settings dynamically from settings manager.
@@ -144,11 +175,11 @@ class ClaudeProvider(BaseProvider):
                         cache_system_prompt = False
                         logger.debug("[CACHE] Datetime injection enabled - skipping system prompt cache")
                     elif chat_settings.get('story_engine_enabled', False):
-                        # Only vars in prompt breaks cache (changes every turn)
-                        # Story in prompt is cache-friendly (only changes on scene advance)
-                        if chat_settings.get('story_vars_in_prompt', False):
-                            cache_system_prompt = False
-                            logger.debug("[CACHE] Story vars in prompt - skipping system prompt cache")
+                        # Story engine uses split system blocks:
+                        # Static block (instructions, scene prose) → cached
+                        # Dynamic block (state vars, clues, exits) → uncached, doesn't break cache
+                        # So story_in_prompt is now cache-safe with the split approach
+                        pass
             except Exception as e:
                 logger.debug(f"[CACHE] Could not check chat settings: {e}")
         
@@ -161,36 +192,26 @@ class ClaudeProvider(BaseProvider):
         generation_params: Optional[Dict[str, Any]] = None
     ) -> LLMResponse:
         """Send non-streaming chat completion to Claude."""
-        
+
         params = generation_params or {}
-        
+
         # Extract system prompt from messages
-        system_prompt, claude_messages, needs_thinking_disabled = self._convert_messages(messages)
-        
+        system_prompt, claude_messages, needs_thinking_disabled, dynamic_system = self._convert_messages(messages)
+
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": claude_messages,
             "max_tokens": params.get("max_tokens", 4096),
         }
-        
+
         # Prompt caching configuration (read dynamically for hot-reload)
         cache_enabled, cache_ttl, cache_system_prompt = self._get_cache_config()
-        
+
         if system_prompt:
-            if cache_enabled and cache_system_prompt:
-                # Use list format with cache_control for caching
-                cache_control = {"type": "ephemeral"}
-                if cache_ttl == '1h':
-                    cache_control["ttl"] = "1h"
-                request_kwargs["system"] = [
-                    {"type": "text", "text": system_prompt, "cache_control": cache_control}
-                ]
-                logger.info(f"[CACHE] Prompt caching active (TTL: {cache_ttl})")
-            else:
-                request_kwargs["system"] = system_prompt
-                if cache_enabled and not cache_system_prompt:
-                    logger.info("[CACHE] Dynamic content detected - tools only, system prompt not cached")
-        
+            request_kwargs["system"] = self._build_system_blocks(
+                system_prompt, dynamic_system, cache_enabled, cache_system_prompt, cache_ttl
+            )
+
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
         
@@ -265,32 +286,22 @@ class ClaudeProvider(BaseProvider):
         start_time = time.time()
         
         # Extract system prompt from messages
-        system_prompt, claude_messages, needs_thinking_disabled = self._convert_messages(messages)
-        
+        system_prompt, claude_messages, needs_thinking_disabled, dynamic_system = self._convert_messages(messages)
+
         request_kwargs = {
             "model": params.get('model') or self.model,
             "messages": claude_messages,
             "max_tokens": params.get("max_tokens", 4096),
         }
-        
+
         # Prompt caching configuration (read dynamically for hot-reload)
         cache_enabled, cache_ttl, cache_system_prompt = self._get_cache_config()
-        
+
         if system_prompt:
-            if cache_enabled and cache_system_prompt:
-                # Use list format with cache_control for caching
-                cache_control = {"type": "ephemeral"}
-                if cache_ttl == '1h':
-                    cache_control["ttl"] = "1h"
-                request_kwargs["system"] = [
-                    {"type": "text", "text": system_prompt, "cache_control": cache_control}
-                ]
-                logger.info(f"[CACHE] Prompt caching active (TTL: {cache_ttl})")
-            else:
-                request_kwargs["system"] = system_prompt
-                if cache_enabled and not cache_system_prompt:
-                    logger.info("[CACHE] Dynamic content detected - tools only, system prompt not cached")
-        
+            request_kwargs["system"] = self._build_system_blocks(
+                system_prompt, dynamic_system, cache_enabled, cache_system_prompt, cache_ttl
+            )
+
         if "temperature" in params:
             request_kwargs["temperature"] = params["temperature"]
         
@@ -496,18 +507,25 @@ class ClaudeProvider(BaseProvider):
         duration = round(end_time - start_time, 2)
         completion_tokens = usage.get("completion_tokens", 0) if usage else 0
         
+        tokens_dict = {
+            "thinking": len(full_thinking.split()) if full_thinking else 0,  # Rough estimate
+            "content": completion_tokens,
+            "total": usage.get("total_tokens", 0) if usage else 0,
+            "prompt": usage.get("prompt_tokens", 0) if usage else 0
+        }
+        # Forward cache stats from usage
+        if usage:
+            for k in ("cache_read_tokens", "cache_write_tokens"):
+                if usage.get(k):
+                    tokens_dict[k] = usage[k]
+
         metadata = {
             "provider": "claude",
             "model": params.get('model') or self.model,
             "start_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(start_time)),
             "end_time": time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(end_time)),
             "duration_seconds": duration,
-            "tokens": {
-                "thinking": len(full_thinking.split()) if full_thinking else 0,  # Rough estimate
-                "content": completion_tokens,
-                "total": usage.get("total_tokens", 0) if usage else 0,
-                "prompt": usage.get("prompt_tokens", 0) if usage else 0
-            },
+            "tokens": tokens_dict,
             "tokens_per_second": round(completion_tokens / duration, 1) if duration > 0 else 0
         }
         
@@ -602,8 +620,8 @@ class ClaudeProvider(BaseProvider):
         - thinking_raw blocks for tool cycle continuity
         
         Returns:
-            (system_prompt, claude_messages, needs_thinking_disabled)
-            
+            (system_prompt, claude_messages, needs_thinking_disabled, dynamic_system)
+
         needs_thinking_disabled is True if the LAST assistant message with tool_calls
         has no thinking_raw AND tool results haven't been provided yet. This indicates
         an active tool cycle that started without thinking.
@@ -612,15 +630,19 @@ class ClaudeProvider(BaseProvider):
         because Claude won't continue from that point.
         """
         system_prompt = None
+        dynamic_system = None
         claude_messages = []
         needs_thinking_disabled = False
-        
+
         for i, msg in enumerate(messages):
             role = msg.get("role")
             content = msg.get("content", "") or ""
-            
+
             if role == "system":
-                system_prompt = content
+                if msg.get("_dynamic"):
+                    dynamic_system = content
+                else:
+                    system_prompt = content
                 continue
             
             if role == "assistant":
@@ -716,7 +738,7 @@ class ClaudeProvider(BaseProvider):
                     if content and content.strip():
                         claude_messages.append({"role": "user", "content": content})
         
-        return system_prompt, claude_messages, needs_thinking_disabled
+        return system_prompt, claude_messages, needs_thinking_disabled, dynamic_system
     
     def _convert_tools(self, tools: List[Dict[str, Any]], cache_enabled: bool = False, cache_ttl: str = '5m') -> List[Dict[str, Any]]:
         """

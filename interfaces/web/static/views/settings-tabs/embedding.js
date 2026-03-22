@@ -49,6 +49,20 @@ export default {
                     </button>
                     <span id="embedding-test-result" style="margin-left: 0.75rem; font-size: var(--font-sm);"></span>
                 </div>
+            </div>
+            <div class="settings-grid" style="margin-top: 1.5rem;">
+                <div class="setting-row" data-key="MEMORY_DEDUP_THRESHOLD">
+                    <div class="setting-label">
+                        <div class="setting-label-row">
+                            <label>Memory Dedup Threshold</label>
+                            <span class="help-icon" title="Cosine similarity threshold for duplicate memory detection (0.70–0.99). Higher values require closer matches. 0.92 is a good default.">?</span>
+                        </div>
+                    </div>
+                    <div class="setting-input">
+                        <input type="number" id="setting-MEMORY_DEDUP_THRESHOLD" data-key="MEMORY_DEDUP_THRESHOLD"
+                            value="${ctx.settings.MEMORY_DEDUP_THRESHOLD ?? 0.92}" step="0.01" min="0.70" max="0.99">
+                    </div>
+                </div>
             </div>`;
         return html;
     },

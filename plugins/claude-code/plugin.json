@@ -1,0 +1,48 @@
+{
+  "name": "claude-code",
+  "version": "1.0.0",
+  "description": "Claude Code",
+  "author": "Sapphire",
+  "emoji": "⚡",
+  "priority": 50,
+  "capabilities": {
+    "tools": ["tools/claude_code_tools.py"],
+    "settings": [
+      {
+        "key": "mode",
+        "type": "string",
+        "label": "Execution Mode",
+        "default": "standard",
+        "widget": "select",
+        "options": [
+          {"label": "Strict (file ops only, no shell)", "value": "strict"},
+          {"label": "Standard (code + run + test)", "value": "standard"},
+          {"label": "System Killer (unrestricted — danger)", "value": "system_killer", "confirm": "System Killer mode gives Claude Code FULL unrestricted access including shell, package installs, and system commands. Are you sure?"}
+        ],
+        "help": "Controls what Claude Code is allowed to do"
+      },
+      {
+        "key": "workspace_dir",
+        "type": "string",
+        "label": "Workspace Directory",
+        "default": "~/claude-workspaces",
+        "help": "Where Claude Code creates project directories (outside Sapphire)"
+      },
+      {
+        "key": "max_turns",
+        "type": "number",
+        "label": "Max Turns Per Session",
+        "default": 50,
+        "help": "Limits how many iterations Claude Code can take per session"
+      },
+      {
+        "key": "coder_instructions",
+        "type": "string",
+        "widget": "textarea",
+        "label": "Coder Instructions",
+        "default": "You are a code builder. Write clean, working code.\n- Test your work by running it before reporting done\n- Include a README.md with usage instructions\n- Keep it simple and minimal — no over-engineering\n- If you hit a problem you can't solve, describe it clearly in your final response",
+        "help": "Instructions written into CLAUDE.md in every new workspace. Controls Claude Code's behavior and coding style."
+      }
+    ]
+  }
+}

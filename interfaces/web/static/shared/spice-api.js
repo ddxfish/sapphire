@@ -60,6 +60,13 @@ export const toggleCategory = (name) =>
     method: 'POST'
   });
 
+export const setCategoryEmoji = (name, emoji) =>
+  fetchWithTimeout(`/api/spices/category/${encodeURIComponent(name)}/emoji`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ emoji })
+  });
+
 // Spice set API
 let _setsInitialLoad = true;
 

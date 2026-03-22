@@ -10,6 +10,7 @@ import config
 from .history import ConversationHistory, ChatSessionManager, count_tokens
 from .function_manager import FunctionManager
 from core.hooks import hook_runner, HookEvent
+from core.metrics import metrics as token_metrics
 from .chat_streaming import StreamingChat
 from .chat_tool_calling import ToolCallingEngine, filter_to_thinking_only
 from .llm_providers import get_provider, get_provider_for_url, get_provider_by_key, get_first_available_provider, get_generation_params
@@ -259,6 +260,9 @@ class LLMChat:
             context_parts.append(custom_ctx)
 
         # Inject story engine block if enabled
+        # Static story content goes into context_parts (cached with system prompt)
+        # Dynamic story content goes into dynamic_context (separate uncached block)
+        dynamic_context = []
         if story_enabled:
             if story_engine:
                 vars_in_prompt = chat_settings.get('story_vars_in_prompt', False)
@@ -267,26 +271,31 @@ class LLMChat:
                 logger.info(f"[STORY] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={story_engine.preset_name}")
 
                 if vars_in_prompt or story_in_prompt:
-                    # +1 because we're building prompt for the INCOMING message
                     turn = self.session_manager.get_turn_count() + 1
-                    state_block = story_engine.format_for_prompt(
+                    static_block, dynamic_block = story_engine.format_for_prompt_split(
                         include_vars=vars_in_prompt,
                         include_story=story_in_prompt,
                         current_turn=turn
                     )
-                    logger.info(f"[STORY] State block length: {len(state_block)} chars")
-                    context_parts.append(f"<state turn=\"{turn}\">\n{state_block}\n</state>")
+                    if static_block:
+                        context_parts.append(f"<story>\n{static_block}\n</story>")
+                    if dynamic_block:
+                        dynamic_context.append(f"<state turn=\"{turn}\">\n{dynamic_block}\n</state>")
+                    logger.info(f"[STORY] Static: {len(static_block)} chars, Dynamic: {len(dynamic_block)} chars")
         
         # Plugin prompt_inject hook — append to context_parts
         if hook_runner.has_handlers("prompt_inject"):
             inject_event = HookEvent(context_parts=context_parts, config=config)
             hook_runner.fire("prompt_inject", inject_event)
 
-        # Combine all context
+        # Combine all static context into main prompt
         if context_parts:
             prompt = f"{prompt}\n\n{chr(10).join(context_parts)}"
 
-        return prompt, username
+        # Dynamic context returned separately for cache-friendly injection
+        dynamic = "\n".join(dynamic_context) if dynamic_context else None
+
+        return prompt, username, dynamic
 
     def _update_story_engine(self):
         """Initialize or update story engine based on chat settings."""
@@ -343,7 +352,7 @@ class LLMChat:
         logger.info(f"[STORY] Story engine enabled for chat '{chat_name}'")
 
     def _build_base_messages(self, user_input: str, images: list = None, files: list = None):
-        system_prompt, user_name = self._get_system_prompt()
+        system_prompt, user_name, dynamic_context = self._get_system_prompt()
 
         # Flatten files into user_input as fenced code blocks
         if files:
@@ -359,7 +368,9 @@ class LLMChat:
 
         # Build user message content - list if images, string otherwise
         if images:
-            user_content = [{"type": "text", "text": user_input}]
+            user_content = []
+            if user_input:
+                user_content.append({"type": "text", "text": user_input})
             for img in images:
                 user_content.append({
                     "type": "image",
@@ -374,6 +385,11 @@ class LLMChat:
             *history_messages,
             {"role": "user", "content": user_content}
         ]
+
+        # Dynamic story context — injected as separate system content for cache efficiency
+        # This changes every turn (state vars, clues, exits) while the main system prompt stays cached
+        if dynamic_context:
+            messages.insert(1, {"role": "system", "content": dynamic_context, "_dynamic": True})
 
         # RAG injection — if chat has uploaded documents, search and inject
         rag_context = self._get_rag_context(user_input)
@@ -459,7 +475,9 @@ class LLMChat:
             _scopes = self.function_manager.snapshot_scopes()
 
             # Send only enabled tools - model should only know about active tools
+            # Snapshot names for validation — prevents race if plugins reload mid-chat
             enabled_tools = self.function_manager.enabled_tools
+            _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
 
             # DIAGNOSTIC: Log what tools are being sent
             enabled_names = [t['function']['name'] for t in enabled_tools] if enabled_tools else []
@@ -592,7 +610,8 @@ class LLMChat:
                         messages,
                         self.session_manager,
                         provider,
-                        scopes=_scopes
+                        scopes=_scopes,
+                        allowed_tools=_allowed_tool_names
                     )
                     tool_call_count += tools_executed
 
@@ -602,6 +621,7 @@ class LLMChat:
 
                     # Refresh tools list — tool_load may have added new tools
                     enabled_tools = self.function_manager.enabled_tools
+                    _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
 
                     logger.info(f"Tool execution iteration {i+1} completed")
                     continue
@@ -631,7 +651,8 @@ class LLMChat:
                             messages,
                             self.session_manager,
                             provider,
-                            scopes=_scopes
+                            scopes=_scopes,
+                            allowed_tools=_allowed_tool_names
                         )
 
                         if tool_images:
@@ -660,11 +681,13 @@ class LLMChat:
                         "content": response_msg.usage.get("completion_tokens", 0),
                         "total": response_msg.usage.get("total_tokens", 0),
                     }
+                    for k in ("cache_read_tokens", "cache_write_tokens"):
+                        if response_msg.usage.get(k):
+                            tokens_info[k] = response_msg.usage[k]
                 else:
-                    # Estimate from content length
                     est_tokens = len(final_response_content) // 4
                     tokens_info = {"content": est_tokens, "total": est_tokens, "estimated": True}
-                
+
                 metadata = {
                     "provider": provider_key,
                     "model": effective_model,
@@ -674,6 +697,15 @@ class LLMChat:
                     "tokens": tokens_info,
                     "tokens_per_second": round(tokens_info.get("content", 0) / duration, 1) if duration > 0 else 0
                 }
+
+                # Record metrics
+                try:
+                    chat_name = self.session_manager.get_active_chat_name()
+                    token_metrics.record(chat_name, provider_key, effective_model,
+                                         "conversation", metadata,
+                                         estimated=tokens_info.get("estimated", False))
+                except Exception:
+                    pass
                 
                 # post_llm hook — plugins can mutate response before save + TTS
                 if hook_runner.has_handlers("post_llm"):
@@ -728,10 +760,13 @@ class LLMChat:
                     "content": final_response_msg.usage.get("completion_tokens", 0),
                     "total": final_response_msg.usage.get("total_tokens", 0),
                 }
+                for k in ("cache_read_tokens", "cache_write_tokens"):
+                    if final_response_msg.usage.get(k):
+                        tokens_info[k] = final_response_msg.usage[k]
             else:
                 est_tokens = len(final_response_content) // 4
                 tokens_info = {"content": est_tokens, "total": est_tokens, "estimated": True}
-            
+
             metadata = {
                 "provider": provider_key,
                 "model": effective_model,
@@ -741,6 +776,14 @@ class LLMChat:
                 "tokens": tokens_info,
                 "tokens_per_second": round(tokens_info.get("content", 0) / duration, 1) if duration > 0 else 0
             }
+
+            try:
+                chat_name = self.session_manager.get_active_chat_name()
+                token_metrics.record(chat_name, provider_key, effective_model,
+                                     "conversation", metadata,
+                                     estimated=tokens_info.get("estimated", False))
+            except Exception:
+                pass
 
             # post_llm hook — plugins can mutate forced-final response
             if hook_runner.has_handlers("post_llm"):
@@ -965,10 +1008,12 @@ class LLMChat:
                 self.function_manager.set_private_chat(False)
                 self.function_manager.update_enabled_functions([toolset])
                 tools = self.function_manager.enabled_tools
+                _allowed_tool_names = {t["function"]["name"] for t in tools if "function" in t}
                 _scopes = self.function_manager.snapshot_scopes()
                 logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")
             else:
                 _scopes = None
+                _allowed_tool_names = None
 
             # Select provider
             provider_key = task_settings.get("provider", "auto")
@@ -1024,7 +1069,8 @@ class LLMChat:
                         "tool_calls": tool_calls
                     })
                     tools_executed, tool_images = self.tool_engine.execute_tool_calls(
-                        tool_calls, messages, None, provider, scopes=_scopes
+                        tool_calls, messages, None, provider, scopes=_scopes,
+                        allowed_tools=_allowed_tool_names
                     )
                     tool_call_count += tools_executed
                     if tool_images:

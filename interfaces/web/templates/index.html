@@ -83,6 +83,10 @@
             <span class="nav-icon">&#x2699;&#xFE0F;</span>
             <span class="nav-label">Settings</span>
         </button>
+        <button class="nav-item" data-view="help">
+            <span class="nav-icon">&#x1F4D6;</span>
+            <span class="nav-label">Help</span>
+        </button>
 
         <div class="nav-spacer"></div>
 
@@ -98,8 +102,9 @@
             <span class="nav-profile-initial" id="nav-profile-initial">?</span>
         </button>
 
-        <span class="nav-version">v{{ app_version }}</span>
+        <span class="nav-version" id="nav-version" title="Click for dashboard">v{{ app_version }}</span>
     </nav>
+    <script>window.__appVersion = '{{ app_version }}';</script>
 
     <!-- ================================================================
          APP CONTENT (all views live here)
@@ -284,6 +289,18 @@
                                     <select id="sb-gcal-scope"><option value="none">None</option><option value="default">default</option></select>
                                 </div>
                             </div>
+                            <div class="sb-field" data-plugin-scope="telegram">
+                                <label for="sb-telegram-scope">telegram</label>
+                                <div class="sb-field-row">
+                                    <select id="sb-telegram-scope"><option value="none">None</option><option value="default">default</option></select>
+                                </div>
+                            </div>
+                            <div class="sb-field" data-plugin-scope="discord">
+                                <label for="sb-discord-scope">discord</label>
+                                <div class="sb-field-row">
+                                    <select id="sb-discord-scope"><option value="none">None</option><option value="default">default</option></select>
+                                </div>
+                            </div>
                             </div>
                         </div>
 
@@ -437,6 +454,12 @@
             <div class="view-placeholder">
                 <h2>Settings</h2>
                 <p>System settings - coming next</p>
+            </div>
+        </div>
+        <div id="view-help" class="view" style="display:none">
+            <div class="view-placeholder">
+                <h2>Help</h2>
+                <p>Loading encyclopedia...</p>
             </div>
         </div>
     </div>

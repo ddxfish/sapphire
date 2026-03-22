@@ -236,31 +236,20 @@ class TestFunctionManagerThreadSafety:
 class TestTaskSettingsScopes:
     """Continuity task settings must allow explicitly disabling scopes."""
 
-    def test_none_scope_not_filtered(self):
-        """Setting a scope to 'none' should still be applied to chat settings."""
+    def test_none_scope_extracted(self):
+        """Setting a scope to 'none' should be preserved in extracted task settings."""
         from core.continuity.executor import ContinuityExecutor
 
-        with patch.object(ContinuityExecutor, '__init__', lambda self: None):
-            executor = ContinuityExecutor()
+        task = {
+            "knowledge_scope": "none",
+            "people_scope": "none",
+            "goal_scope": "none",
+        }
 
-            task = {
-                "knowledge_scope": "none",
-                "people_scope": "none",
-                "goal_scope": "none",
-            }
-
-            mock_session = MagicMock()
-            executor.system = MagicMock()
-            executor._apply_task_settings(task, mock_session)
-
-            # update_chat_settings should have been called with all three scope keys
-            call_args = mock_session.update_chat_settings.call_args[0][0]
-            assert "knowledge_scope" in call_args
-            assert call_args["knowledge_scope"] == "none"
-            assert "people_scope" in call_args
-            assert call_args["people_scope"] == "none"
-            assert "goal_scope" in call_args
-            assert call_args["goal_scope"] == "none"
+        settings = ContinuityExecutor._extract_task_settings(task)
+        assert settings["knowledge_scope"] == "none"
+        assert settings["people_scope"] == "none"
+        assert settings["goal_scope"] == "none"
 
 
 # =============================================================================
@@ -650,98 +639,79 @@ class TestChatReadsAllScopes:
 # Tier 1: _apply_task_settings passes all scope keys through
 # =============================================================================
 
-class TestApplyTaskSettingsAllScopes:
-    """_apply_task_settings must forward all scope types to session_manager."""
+class TestExtractTaskSettingsAllScopes:
+    """_extract_task_settings must include all scope types."""
 
-    def test_apply_task_settings_all_scope_keys(self):
-        """All 6 scope keys + email + bitcoin must appear in update_chat_settings call."""
+    def test_extract_task_settings_all_scope_keys(self):
+        """All scope keys must appear in extracted task settings."""
         from core.continuity.executor import ContinuityExecutor
 
-        with patch.object(ContinuityExecutor, '__init__', lambda self: None):
-            executor = ContinuityExecutor()
-            executor.system = MagicMock()
+        task = {
+            "memory_scope": "shared",
+            "knowledge_scope": "research",
+            "people_scope": "team",
+            "goal_scope": "work",
+            "email_scope": "work_email",
+            "bitcoin_scope": "wallet_a",
+        }
 
-            task = {
-                "memory_scope": "shared",
-                "knowledge_scope": "research",
-                "people_scope": "team",
-                "goal_scope": "work",
-                "email_scope": "work_email",
-                "bitcoin_scope": "wallet_a",
-            }
-
-            mock_session = MagicMock()
-            executor._apply_task_settings(task, mock_session)
-
-            call_args = mock_session.update_chat_settings.call_args[0][0]
-            for key in ("memory_scope", "knowledge_scope", "people_scope",
-                       "goal_scope", "email_scope", "bitcoin_scope"):
-                assert key in call_args, f"Missing scope key: {key}"
-                assert call_args[key] == task[key]
+        settings = ContinuityExecutor._extract_task_settings(task)
+        for key in ("memory_scope", "knowledge_scope", "people_scope",
+                   "goal_scope", "email_scope", "bitcoin_scope"):
+            assert key in settings, f"Missing scope key: {key}"
+            assert settings[key] == task[key]
 
 
 # =============================================================================
 # Tier 1: _run_foreground saves and restores ALL context
 # =============================================================================
 
-class TestRunForegroundRestoresContext:
-    """_run_foreground must restore chat, toolset, and settings after running."""
+class TestRunForegroundNoUISwitch:
+    """_run_foreground must NOT switch active chat — persists via append_to_chat."""
 
-    def test_run_foreground_restores_all_context(self):
-        """After foreground execution, original chat + toolset + settings must be restored."""
+    def test_run_foreground_never_switches_chat(self):
+        """Foreground task must not call set_active_chat — reads/writes directly."""
         from core.continuity.executor import ContinuityExecutor
 
         with patch.object(ContinuityExecutor, '__init__', lambda self: None):
             executor = ContinuityExecutor()
-            executor._progress_cb = None
-            executor._response_cb = None
 
-            # Mock system with session_manager and function_manager
             mock_session = MagicMock()
-            # First call returns "original_chat" (captured at start),
-            # subsequent calls return "task_chat" (after switch), then "original_chat" after restore
-            _active_chat = ["original_chat"]
-            def fake_get_active():
-                return _active_chat[0]
-            def fake_set_active(name):
-                _active_chat[0] = name
-                return True
-            mock_session.get_active_chat_name.side_effect = fake_get_active
-            mock_session.set_active_chat.side_effect = fake_set_active
             mock_session.list_chat_files.return_value = [{"name": "task_chat"}]
-            original_settings = {"toolset": "all", "memory_scope": "default"}
-            mock_session.get_chat_settings.return_value = original_settings.copy()
+            mock_session.read_chat_messages.return_value = []
 
             mock_fm = MagicMock()
-            mock_fm.current_toolset_name = "original_toolset"
-            mock_fm._tools_lock = threading.Lock()
+            mock_fm.all_possible_tools = []
+            mock_fm._mode_filters = {}
+            mock_fm._apply_mode_filter.return_value = []
 
             executor.system = MagicMock()
             executor.system.llm_chat.session_manager = mock_session
             executor.system.llm_chat.function_manager = mock_fm
-            executor.system.llm_chat.streaming_chat.is_streaming = False
-            executor.system.process_llm_query.return_value = "done"
 
-            task = {
-                "name": "test_task",
-                "chat_target": "task_chat",
-                "prompt": "",
-                "toolset": "",
-                "tts_enabled": False,
-                "initial_message": "hello",
-            }
+            with patch('core.continuity.execution_context.ExecutionContext.run', return_value="done"):
+                task = {
+                    "name": "test_task",
+                    "chat_target": "task_chat",
+                    "prompt": "default",
+                    "toolset": "none",
+                    "tts_enabled": False,
+                    "initial_message": "hello",
+                }
 
-            executor._resolve_persona = lambda t: t
-            executor._apply_task_settings = MagicMock()
-            executor._apply_voice = MagicMock()
+                executor._resolve_persona = lambda t: t
+                executor._apply_voice = MagicMock()
+                executor._snapshot_voice = MagicMock(return_value={})
+                executor._restore_voice = MagicMock()
+                executor._format_event_data = staticmethod(ContinuityExecutor._format_event_data)
 
-            result = executor.run(task)
+                result = executor.run(task)
 
-            # Verify original toolset was restored
-            mock_fm.update_enabled_functions.assert_called_with(["original_toolset"])
+            # NEVER switches active chat
+            mock_session.set_active_chat.assert_not_called()
 
-            # Verify we ended up back on original chat
-            assert _active_chat[0] == "original_chat"
+            # Persists via append_to_chat instead
+            mock_session.append_to_chat.assert_called_once_with("task_chat", "hello", "done")
 
 
 # =============================================================================

@@ -120,6 +120,9 @@ const setAvatarWithFallback = async (img, role) => {
     }
 };
 
+// Cache: persona name → resolved avatar URL (or null if no custom avatar)
+const _personaAvatarCache = new Map();
+
 const setPersonaAvatar = (img, personaName) => {
     if (!avatarsInChat) {
         img.style.display = 'none';
@@ -127,11 +130,31 @@ const setPersonaAvatar = (img, personaName) => {
     }
     img.loading = 'lazy';
 
-    // Use cached URL or build it
+    // Check cache first — avoids repeated 404s for personas without avatars
+    if (_personaAvatarCache.has(personaName)) {
+        const cached = _personaAvatarCache.get(personaName);
+        if (cached) {
+            img.src = cached;
+            img.onerror = () => { img.style.display = 'none'; };
+        } else {
+            // Cached as no custom avatar — use default
+            loadAvatarPaths().then(paths => {
+                if (paths.assistant) {
+                    img.src = paths.assistant;
+                    img.onerror = () => { img.style.display = 'none'; };
+                } else {
+                    img.style.display = 'none';
+                }
+            });
+        }
+        return;
+    }
+
     const url = `/api/personas/${encodeURIComponent(personaName)}/avatar`;
     img.src = url;
+    img.onload = () => { _personaAvatarCache.set(personaName, url); };
     img.onerror = async () => {
-        // Fall back to default assistant avatar
+        _personaAvatarCache.set(personaName, null);
         const paths = await loadAvatarPaths();
         if (paths.assistant) {
             img.src = paths.assistant;
@@ -218,15 +241,17 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
     if (role === 'assistant' && msg.metadata) {
         const meta = msg.metadata;
         const parts = [];
+        const tok = meta.tokens || {};
+        const cumTok = meta.cumulative_tokens || null;
 
         if (meta.duration_seconds) {
             parts.push(`${meta.duration_seconds}s`);
         }
         if (meta.tokens_per_second) {
-            parts.push(`${meta.tokens_per_second} tok/s`);
+            const label = tok.estimated ? 'tok/s est' : 'tok/s';
+            parts.push(`${meta.tokens_per_second} ${label}`);
         }
         if (meta.model) {
-            // Show "provider / model" when provider isn't obvious from model name
             const provider = meta.provider || '';
             const model = meta.model;
             const modelLower = model.toLowerCase();
@@ -234,15 +259,35 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
                 modelLower.startsWith(provider.toLowerCase()) ||
                 modelLower.includes(provider.toLowerCase())
             );
-            if (provider && !providerInModel) {
-                parts.push(`${provider} / ${model}`);
-            } else {
-                parts.push(model);
-            }
+            parts.push(provider && !providerInModel ? `${provider} / ${model}` : model);
+        }
+
+        // Token counts: in / out
+        const prompt = tok.prompt || 0;
+        const content = tok.content || 0;
+        if (prompt || content) {
+            const fmt = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n;
+            parts.push(`${fmt(prompt)} in / ${fmt(content)} out`);
+        }
+
+        // Cache indicator
+        const cacheRead = tok.cache_read_tokens || 0;
+        const cacheWrite = tok.cache_write_tokens || 0;
+        if (cacheRead > 0 && prompt > 0) {
+            const pct = Math.round((cacheRead / prompt) * 100);
+            parts.push(`cache ${pct}%`);
+        } else if (cacheWrite > 0) {
+            parts.push('cache miss');
+        }
+
+        // Cumulative (multi-tool) summary
+        if (cumTok && cumTok.iterations > 1) {
+            const fmt = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n;
+            parts.push(`${cumTok.iterations} calls · ${fmt(cumTok.total)} total`);
         }
 
         if (parts.length > 0) {
-            const metaDiv = createElem('div', { class: 'message-metadata' }, parts.join(' • '));
+            const metaDiv = createElem('div', { class: 'message-metadata' }, parts.join(' · '));
             contentDiv.appendChild(metaDiv);
         }
     }

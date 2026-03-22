@@ -1,0 +1,71 @@
+{
+  "name": "telegram",
+  "version": "1.0.0",
+  "description": "Telegram — daemon messaging via Client API (Telethon)",
+  "author": "sapphire",
+  "url": "https://sapphireblue.dev",
+  "icon": "\u2708\ufe0f",
+  "priority": 50,
+  "default_enabled": false,
+  "settingsUI": "plugin",
+  "capabilities": {
+    "tools": ["tools/telegram_tools.py"],
+    "daemon": {
+      "entry": "daemon.py",
+      "event_sources": [{
+        "name": "telegram_message",
+        "label": "Telegram Message",
+        "description": "New message received on a Telegram account",
+        "filter_fields": [
+          {"key": "chat_id", "label": "Chat ID"},
+          {"key": "username", "label": "Username"},
+          {"key": "chat_type", "label": "Chat Type"}
+        ],
+        "task_fields": [
+          {
+            "key": "account",
+            "type": "select",
+            "label": "Account",
+            "required": true,
+            "dynamic": "/api/plugin/telegram/accounts",
+            "help": "Which Telegram account to listen on"
+          },
+          {
+            "key": "reply_format",
+            "type": "select",
+            "label": "Reply Format",
+            "options": [
+              {"value": "text", "label": "Plain Text"},
+              {"value": "markdown", "label": "Markdown"},
+              {"value": "html", "label": "HTML"}
+            ],
+            "default": "text"
+          }
+        ]
+      }]
+    },
+    "routes": [
+      {"method": "GET",  "path": "accounts",          "handler": "routes/auth.py:list_accounts"},
+      {"method": "POST", "path": "accounts",          "handler": "routes/auth.py:start_auth"},
+      {"method": "POST", "path": "auth/code",         "handler": "routes/auth.py:submit_code"},
+      {"method": "POST", "path": "auth/2fa",          "handler": "routes/auth.py:submit_2fa"},
+      {"method": "DELETE","path": "accounts/{name}",   "handler": "routes/auth.py:delete_account"}
+    ],
+    "settings": [
+      {
+        "key": "api_id",
+        "type": "string",
+        "label": "API ID",
+        "default": "",
+        "help": "From https://my.telegram.org — Apps section. One pair covers all accounts."
+      },
+      {
+        "key": "api_hash",
+        "type": "string",
+        "label": "API Hash",
+        "default": "",
+        "help": "From https://my.telegram.org — Apps section."
+      }
+    ]
+  }
+}

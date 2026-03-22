@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
 import logging
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,8 @@ router = APIRouter()
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
+
+_install_lock = threading.Lock()
 
 # Plugin settings paths
 USER_WEBUI_DIR = PROJECT_ROOT / 'user' / 'webui'
@@ -100,7 +103,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "name": info["name"],
                     "enabled": info.get("enabled", info["name"] in enabled_set),
                     "locked": False,
-                    "title": manifest.get("description", info["name"]).split("—")[0].strip(),
+                    "title": manifest.get("short_name") or manifest.get("description", info["name"]).split("—")[0].strip(),
                     "showInSidebar": False,
                     "collapsible": True,
                     "settingsUI": settings_ui,
@@ -319,7 +322,7 @@ async def install_plugin(
             total_uncompressed = 0
             for info in zf.infolist():
                 # Reject symlinks (path traversal vector)
-                if info.external_attr >> 16 & 0o120000 == 0o120000:
+                if (info.external_attr >> 16) & 0o120000 == 0o120000:
                     raise HTTPException(status_code=400, detail=f"Zip contains symlink: {info.filename}")
                 # Reject path traversal via ..
                 if '..' in info.filename or info.filename.startswith('/'):
@@ -382,47 +385,49 @@ async def install_plugin(
             raise HTTPException(status_code=400, detail=f"Extracted content too large ({total_size // 1024 // 1024}MB, max 100MB)")
 
         # ── Check for existing plugin (replace flow) ──
-        dest = USER_PLUGINS_DIR / name
-        is_update = dest.exists()
-        old_version = None
-        old_author = None
+        # Lock prevents two concurrent installs from corrupting the same plugin
+        with _install_lock:
+            dest = USER_PLUGINS_DIR / name
+            is_update = dest.exists()
+            old_version = None
+            old_author = None
 
-        if is_update:
-            # Read existing manifest for comparison
-            existing_manifest_path = dest / "plugin.json"
-            if existing_manifest_path.exists():
-                try:
-                    existing = json.loads(existing_manifest_path.read_text(encoding="utf-8"))
-                    old_version = existing.get("version")
-                    old_author = existing.get("author")
-                except Exception:
-                    pass
+            if is_update:
+                # Read existing manifest for comparison
+                existing_manifest_path = dest / "plugin.json"
+                if existing_manifest_path.exists():
+                    try:
+                        existing = json.loads(existing_manifest_path.read_text(encoding="utf-8"))
+                        old_version = existing.get("version")
+                        old_author = existing.get("author")
+                    except Exception:
+                        pass
 
-            if not force:
-                return JSONResponse(status_code=409, content={
-                    "detail": "Plugin already exists",
-                    "name": name,
-                    "version": version,
-                    "author": author,
-                    "existing_version": old_version,
-                    "existing_author": old_author,
-                })
+                if not force:
+                    return JSONResponse(status_code=409, content={
+                        "detail": "Plugin already exists",
+                        "name": name,
+                        "version": version,
+                        "author": author,
+                        "existing_version": old_version,
+                        "existing_author": old_author,
+                    })
 
-            # Unload before replacing
-            info = plugin_loader.get_plugin_info(name)
-            if info and info.get("loaded"):
-                plugin_loader.unload_plugin(name)
+                # Unload before replacing
+                info = plugin_loader.get_plugin_info(name)
+                if info and info.get("loaded"):
+                    plugin_loader.unload_plugin(name)
 
-            # Drop stale cache entry so rescan re-reads the new manifest
-            with plugin_loader._lock:
-                plugin_loader._plugins.pop(name, None)
+                # Drop stale cache entry so rescan re-reads the new manifest
+                with plugin_loader._lock:
+                    plugin_loader._plugins.pop(name, None)
 
-            # Delete old plugin dir (state preserved separately)
-            shutil.rmtree(dest)
+                # Delete old plugin dir (state preserved separately)
+                shutil.rmtree(dest)
 
-        # ── Install ──
-        USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(plugin_root, dest, symlinks=False)
+            # ── Install ──
+            USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(plugin_root, dest, symlinks=False)
 
         # ── Write install metadata to plugin state ──
         from datetime import datetime

@@ -111,6 +111,18 @@ export async function fetchNonHeartbeatTasks() {
   catch { return []; }
 }
 
+// Fetch tasks by type
+export async function fetchTasksByType(type) {
+  try { const data = await fetchWithTimeout(`${API_BASE}/tasks?type=${type}`); return data.tasks || []; }
+  catch { return []; }
+}
+
+// Fetch daemon event sources from loaded plugins
+export async function fetchEventSources() {
+  try { const data = await fetchWithTimeout('/api/events/sources'); return data.sources || []; }
+  catch { return []; }
+}
+
 // Fetch personas (list with summary)
 export async function fetchPersonas() {
   try { const data = await fetchWithTimeout('/api/personas'); return data.personas || []; }

@@ -106,6 +106,28 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
             return FileResponse(file_path, media_type=content_type)
     return JSONResponse({"error": "Not found"}, status_code=404)
 
+# Workspace file serving — Claude Code project outputs
+@app.get("/workspace/{project}/{path:path}")
+async def serve_workspace(project: str, path: str, _=Depends(require_login)):
+    """Serve files from Claude Code workspace directories."""
+    try:
+        from core.plugin_loader import plugin_loader
+        settings = plugin_loader.get_plugin_settings("claude-code") or {}
+        ws_dir = settings.get('workspace_dir', '~/claude-workspaces')
+    except Exception:
+        ws_dir = '~/claude-workspaces'
+    workspace_base = Path(os.path.expanduser(ws_dir)).resolve()
+    project_dir = (workspace_base / project).resolve()
+    if not str(project_dir).startswith(str(workspace_base)):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    file_path = (project_dir / path).resolve()
+    if not str(file_path).startswith(str(project_dir)):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    if file_path.exists() and file_path.is_file():
+        content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        return FileResponse(file_path, media_type=content_type)
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
 # Templates
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -422,6 +444,8 @@ from core.routes.story_engine import router as story_engine_router
 from core.routes.system import router as system_router
 from core.routes.plugins import router as plugins_router
 from core.routes.media import router as media_router
+from core.routes.agents import router as agents_router
+from core.routes.docs import router as docs_router
 
 app.include_router(chat_router)
 app.include_router(tts_router)
@@ -432,4 +456,6 @@ app.include_router(story_engine_router)
 app.include_router(system_router)
 app.include_router(plugins_router)
 app.include_router(media_router)
+app.include_router(agents_router)
+app.include_router(docs_router)
 

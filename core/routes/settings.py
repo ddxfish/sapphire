@@ -107,6 +107,7 @@ async def get_all_settings(request: Request, _=Depends(require_login)):
             "user_overrides": list(user_overrides.keys()),
             "count": len(all_settings),
             "managed": settings.is_managed(),
+            "docker": settings.is_docker(),
             "unrestricted": settings.is_unrestricted(),
         }
     except Exception as e:

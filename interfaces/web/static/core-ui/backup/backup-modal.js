@@ -1,6 +1,7 @@
 // backup-modal.js - Backup manager modal UI
 import backupAPI from './backup-api.js';
 import { showToast } from '../../shared/toast.js';
+import { setupModalClose } from '../../shared/modal.js';
 
 class BackupModal {
   constructor() {
@@ -147,14 +148,7 @@ class BackupModal {
   attachEventListeners() {
     this.modal.querySelector('#backup-close').addEventListener('click', () => this.close());
     this.modal.querySelector('#backup-cancel').addEventListener('click', () => this.close());
-    this.modal.addEventListener('click', (e) => {
-      if (e.target === this.modal) this.close();
-    });
-
-    this.escHandler = (e) => {
-      if (e.key === 'Escape') this.close();
-    };
-    document.addEventListener('keydown', this.escHandler);
+    this._cleanupModal = setupModalClose(this.modal, () => this.close());
 
     this.modal.querySelector('#backup-save').addEventListener('click', () => this.saveSettings());
     this.modal.querySelector('#backup-now').addEventListener('click', () => this.createBackup());
@@ -289,7 +283,7 @@ class BackupModal {
 
     this.modal.classList.remove('active');
     setTimeout(() => {
-      document.removeEventListener('keydown', this.escHandler);
+      if (this._cleanupModal) this._cleanupModal();
       this.modal.remove();
       this.modal = null;
       

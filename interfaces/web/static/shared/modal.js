@@ -4,6 +4,30 @@
 /**
  * Escape HTML special characters
  */
+/**
+ * Wire up safe click-outside + ESC key closing for any modal overlay.
+ * Tracks mousedown origin so dragging text outside doesn't dismiss.
+ * @param {HTMLElement} overlay - The overlay element (click target === this to close)
+ * @param {Function} closeFn - Called to close the modal
+ * @returns {Function} cleanup - Call to remove the ESC listener (auto-removed on first ESC)
+ */
+export function setupModalClose(overlay, closeFn) {
+    let mouseDownTarget = null;
+    overlay.addEventListener('mousedown', e => { mouseDownTarget = e.target; });
+    overlay.addEventListener('click', e => {
+        if (e.target === overlay && mouseDownTarget === overlay) closeFn();
+        mouseDownTarget = null;
+    });
+    const escHandler = e => {
+        if (e.key === 'Escape') {
+            closeFn();
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
+    return () => document.removeEventListener('keydown', escHandler);
+}
+
 export function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
@@ -134,16 +158,7 @@ export function showModal(title, fields, onSave = null, options = {}) {
   overlay.querySelector('.modal-x')?.addEventListener('click', close);
   overlay.querySelector('.modal-close')?.addEventListener('click', close);
   overlay.querySelector('.modal-cancel')?.addEventListener('click', close);
-  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
-  
-  // ESC key
-  const escHandler = e => {
-    if (e.key === 'Escape') {
-      close();
-      document.removeEventListener('keydown', escHandler);
-    }
-  };
-  document.addEventListener('keydown', escHandler);
+  setupModalClose(overlay, close);
   
   // Save handler
   overlay.querySelector('.modal-save')?.addEventListener('click', () => {

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
 
+import config
 from core.auth import require_login
 from core.api_fastapi import get_system
 
@@ -414,7 +415,8 @@ async def list_tabs(request: Request, _=Depends(require_login)):
 @router.get("/api/knowledge/tabs/{tab_id}")
 async def get_tab(tab_id: int, request: Request, _=Depends(require_login)):
     from functions import knowledge
-    entries = knowledge.get_tab_entries(tab_id)
+    scope = request.query_params.get('scope', 'default')
+    entries = knowledge.get_tab_entries(tab_id, scope)
     return {"entries": entries}
 
 
@@ -700,3 +702,265 @@ async def delete_memory_api(memory_id: int, request: Request, _=Depends(require_
     if success:
         return {"deleted": memory_id}
     raise HTTPException(status_code=404, detail=result)
+
+
+# =============================================================================
+# MEMORY EXPORT/IMPORT
+# =============================================================================
+
+@router.get("/api/memory/export")
+async def export_memories(request: Request, _=Depends(require_login)):
+    """Export all memories in a scope as JSON (no vectors)."""
+    from functions import memory
+    scope = request.query_params.get('scope', 'default')
+    with memory._get_connection() as conn:
+        cursor = conn.cursor()
+        scope_sql, scope_params = memory._scope_condition(scope)
+        cursor.execute(
+            f'SELECT content, label, timestamp FROM memories WHERE {scope_sql} ORDER BY timestamp',
+            scope_params
+        )
+        entries = [{"text": r[0], "label": r[1], "timestamp": r[2]} for r in cursor.fetchall()]
+    return {
+        "sapphire_export": True, "type": "memories", "version": 1,
+        "scope": scope, "count": len(entries), "entries": entries,
+    }
+
+
+@router.get("/api/memory/duplicates")
+async def find_duplicate_memories(request: Request, _=Depends(require_login)):
+    """Find near-duplicate memories using vector similarity."""
+    import numpy as np
+    from functions import memory
+
+    scope = request.query_params.get('scope', 'default')
+    default_thresh = getattr(config, 'MEMORY_DEDUP_THRESHOLD', 0.92)
+    threshold = float(request.query_params.get('threshold', str(default_thresh)))
+
+    with memory._get_connection() as conn:
+        cursor = conn.cursor()
+        scope_sql, scope_params = memory._scope_condition(scope)
+        cursor.execute(
+            f'SELECT id, content, timestamp, label, embedding FROM memories WHERE {scope_sql} AND embedding IS NOT NULL ORDER BY timestamp',
+            scope_params
+        )
+        rows = cursor.fetchall()
+
+    if len(rows) < 2:
+        return {"pairs": [], "count": 0}
+
+    # Load all embeddings into a matrix for fast comparison
+    ids, contents, timestamps, labels, embeddings = [], [], [], [], []
+    for row_id, content, ts, lbl, emb_blob in rows:
+        ids.append(row_id)
+        contents.append(content)
+        timestamps.append(ts)
+        labels.append(lbl)
+        embeddings.append(np.frombuffer(emb_blob, dtype=np.float32))
+
+    emb_matrix = np.stack(embeddings)  # (N, D)
+
+    # Compute pairwise similarities (dot product on L2-normalized vectors)
+    # Only compute upper triangle to avoid duplicates
+    pairs = []
+    n = len(ids)
+    # Batch: compute full similarity matrix then extract pairs above threshold
+    sim_matrix = emb_matrix @ emb_matrix.T  # (N, N)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            sim = float(sim_matrix[i, j])
+            if sim >= threshold:
+                # Older memory is the one to keep (earlier timestamp / lower index)
+                pairs.append({
+                    "similarity": round(sim, 3),
+                    "keep": {"id": ids[i], "content": contents[i], "timestamp": timestamps[i], "label": labels[i]},
+                    "remove": {"id": ids[j], "content": contents[j], "timestamp": timestamps[j], "label": labels[j]},
+                })
+
+    # Sort by similarity descending (most similar first)
+    pairs.sort(key=lambda p: p["similarity"], reverse=True)
+
+    return {"pairs": pairs[:200], "count": len(pairs)}
+
+
+@router.post("/api/memory/import")
+async def import_memories(request: Request, _=Depends(require_login)):
+    """Import memories from JSON export. Skips exact text duplicates."""
+    import hashlib
+    from functions import memory
+
+    data = await request.json()
+    entries = data.get("entries", [])
+    scope = data.get("scope", "default")
+    if not entries:
+        raise HTTPException(status_code=400, detail="No entries to import")
+
+    # Build hash set of existing memories for dup detection
+    with memory._get_connection() as conn:
+        cursor = conn.cursor()
+        scope_sql, scope_params = memory._scope_condition(scope)
+        cursor.execute(f'SELECT content FROM memories WHERE {scope_sql}', scope_params)
+        existing_hashes = {hashlib.sha256(r[0].strip().lower().encode()).hexdigest() for r in cursor.fetchall()}
+
+    imported = 0
+    skipped = 0
+    for entry in entries:
+        text = (entry.get("text") or "").strip()
+        if not text:
+            continue
+        text_hash = hashlib.sha256(text.strip().lower().encode()).hexdigest()
+        if text_hash in existing_hashes:
+            skipped += 1
+            continue
+        label = entry.get("label")
+        memory._save_memory(text, label=label, scope=scope)
+        existing_hashes.add(text_hash)
+        imported += 1
+
+    return {"imported": imported, "skipped": skipped, "total": len(entries)}
+
+
+# =============================================================================
+# PEOPLE EXPORT/IMPORT
+# =============================================================================
+
+@router.get("/api/knowledge/people/export")
+async def export_people(request: Request, _=Depends(require_login)):
+    """Export all people in a scope as JSON."""
+    from functions import knowledge
+    scope = request.query_params.get('scope', 'default')
+    people = knowledge.get_people(scope)
+    # Strip internal IDs, keep portable fields
+    entries = []
+    for p in people:
+        entries.append({
+            "name": p["name"],
+            "relationship": p.get("relationship"),
+            "phone": p.get("phone"),
+            "email": p.get("email"),
+            "address": p.get("address"),
+            "notes": p.get("notes"),
+        })
+    return {
+        "sapphire_export": True, "type": "people", "version": 1,
+        "scope": scope, "count": len(entries), "entries": entries,
+    }
+
+
+@router.post("/api/knowledge/people/import")
+async def import_people_json(request: Request, _=Depends(require_login)):
+    """Import people from JSON export. Skips duplicates by name+email."""
+    from functions import knowledge
+
+    data = await request.json()
+    entries = data.get("entries", [])
+    scope = data.get("scope", "default")
+    if not entries:
+        raise HTTPException(status_code=400, detail="No entries to import")
+
+    # Build existing set for dup detection (same logic as VCF import)
+    existing = knowledge.get_people(scope)
+    existing_keys = {(p['name'].lower().strip(), (p.get('email') or '').lower().strip()) for p in existing}
+
+    imported = 0
+    skipped = 0
+    for entry in entries:
+        name = (entry.get("name") or "").strip()
+        if not name:
+            continue
+        email = (entry.get("email") or "").strip()
+        dup_key = (name.lower(), email.lower())
+        if dup_key in existing_keys:
+            skipped += 1
+            continue
+        knowledge.create_or_update_person(
+            name=name, relationship=entry.get("relationship"),
+            phone=entry.get("phone"), email=email,
+            address=entry.get("address"), notes=entry.get("notes"),
+            scope=scope
+        )
+        existing_keys.add(dup_key)
+        imported += 1
+
+    return {"imported": imported, "skipped": skipped, "total": len(entries)}
+
+
+# =============================================================================
+# KNOWLEDGE TAB EXPORT/IMPORT
+# =============================================================================
+
+@router.get("/api/knowledge/tabs/{tab_id}/export")
+async def export_knowledge_tab(tab_id: int, request: Request, _=Depends(require_login)):
+    """Export a knowledge tab with all entries as JSON (no vectors)."""
+    from functions import knowledge
+    scope = request.query_params.get('scope', 'default')
+    tabs = knowledge.get_tabs(scope)
+    tab = next((t for t in tabs if t["id"] == tab_id), None)
+    if not tab:
+        raise HTTPException(status_code=404, detail="Tab not found")
+
+    entries = knowledge.get_tab_entries(tab_id, scope=scope)
+    return {
+        "sapphire_export": True, "type": "knowledge_tab", "version": 1,
+        "name": tab["name"], "description": tab.get("description", ""),
+        "tab_type": tab.get("type", "user"), "scope": scope,
+        "count": len(entries),
+        "entries": [{"content": e["content"], "source_filename": e.get("source_filename")} for e in entries],
+    }
+
+
+@router.post("/api/knowledge/tabs/import")
+async def import_knowledge_tab(request: Request, _=Depends(require_login)):
+    """Import a knowledge tab from JSON export. Creates tab, adds entries."""
+    from functions import knowledge
+
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    scope = data.get("scope", "default")
+    entries = data.get("entries", [])
+    if not name:
+        raise HTTPException(status_code=400, detail="Tab name required")
+
+    overwrite = data.get("overwrite", False)
+
+    # Check if tab exists in this scope
+    existing_tabs = knowledge.get_tabs(scope)
+    existing = next((t for t in existing_tabs if t["name"].lower() == name.lower()), None)
+
+    if existing and not overwrite:
+        # Merge: add only entries with text not already in the tab
+        existing_entries = knowledge.get_tab_entries(existing["id"], scope=scope)
+        existing_texts = {e["content"].strip().lower() for e in existing_entries}
+        tab_id = existing["id"]
+        imported = 0
+        skipped = 0
+        for entry in entries:
+            content = (entry.get("content") or "").strip()
+            if not content or content.lower() in existing_texts:
+                skipped += 1
+                continue
+            knowledge.add_entry(tab_id, content, source_filename=entry.get("source_filename"))
+            existing_texts.add(content.lower())
+            imported += 1
+        return {"imported": imported, "skipped": skipped, "tab_id": tab_id, "merged": True}
+    elif existing and overwrite:
+        # Delete existing tab, recreate
+        knowledge.delete_tab(existing["id"])
+
+    # Create new tab
+    tab_type = data.get("tab_type", "user")
+    description = data.get("description")
+    tab_id = knowledge.create_tab(name, scope=scope, description=description, tab_type=tab_type)
+    if not tab_id:
+        raise HTTPException(status_code=500, detail="Failed to create tab")
+
+    imported = 0
+    for entry in entries:
+        content = (entry.get("content") or "").strip()
+        if not content:
+            continue
+        knowledge.add_entry(tab_id, content, source_filename=entry.get("source_filename"))
+        imported += 1
+
+    return {"imported": imported, "skipped": 0, "tab_id": tab_id, "merged": False}

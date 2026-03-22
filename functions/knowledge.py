@@ -573,9 +573,15 @@ def get_tabs(scope='default', tab_type=None):
                  "entry_count": r[7]} for r in rows]
 
 
-def get_tab_entries(tab_id):
+def get_tab_entries(tab_id, scope=None):
     with _get_connection() as conn:
         cursor = conn.cursor()
+        if scope:
+            # Validate tab belongs to requested scope before returning entries
+            cursor.execute('SELECT scope FROM knowledge_tabs WHERE id = ?', (tab_id,))
+            row = cursor.fetchone()
+            if not row or row[0] != scope:
+                return []
         cursor.execute(
             'SELECT id, content, chunk_index, source_filename, created_at, updated_at FROM knowledge_entries WHERE tab_id = ? ORDER BY chunk_index, created_at',
             (tab_id,)

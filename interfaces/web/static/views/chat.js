@@ -9,6 +9,7 @@ import { handleNewChat, handleDeleteChat, handleChatChange } from '../features/c
 import { getInitData, refreshInitData } from '../shared/init-data.js';
 import { switchView } from '../core/router.js';
 import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } from '../shared/persona-api.js';
+import { initAgentStatus } from '../features/agent-status.js';
 
 let sidebarLoaded = false;
 let saveTimer = null;
@@ -45,6 +46,9 @@ function updateStoryPromptLabel(container) {
 
 export default {
     init(container) {
+        // Agent pill bar
+        initAgentStatus();
+
         // Sidebar collapse/expand
         const toggle = container.querySelector('#chat-sidebar-toggle');
         if (toggle) toggle.addEventListener('click', () => toggleSidebar(container));
@@ -373,12 +377,13 @@ async function loadDocuments(container, chatName) {
         if (!resp.ok) return;
         const data = await resp.json();
         const docs = data.documents || [];
-        list.innerHTML = docs.map(d =>
-            `<div class="sb-doc-item">
-                <span title="${d.filename} (${d.chunks} chunks)">${d.filename}</span>
-                <button class="sb-doc-del" data-filename="${d.filename}" title="Remove">&times;</button>
-            </div>`
-        ).join('');
+        list.innerHTML = docs.map(d => {
+            const fn = escapeHtml(d.filename);
+            return `<div class="sb-doc-item">
+                <span title="${fn} (${d.chunks} chunks)">${fn}</span>
+                <button class="sb-doc-del" data-filename="${fn}" title="Remove">&times;</button>
+            </div>`;
+        }).join('');
         if (badge) {
             badge.textContent = docs.length;
             badge.style.display = docs.length ? '' : 'none';
@@ -397,7 +402,7 @@ async function loadSidebar() {
     if (!chatName) return;
 
     try {
-        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, emailAccountsResp, bitcoinWalletsResp, gcalAccountsResp, presetsResp, spiceSetsResp, personasResp, ttsVoicesResp, toolsetCurrentResp] = await Promise.allSettled([
+        const [settingsResp, initData, llmResp, scopesResp, goalScopesResp, knowledgeScopesResp, peopleScopesResp, emailAccountsResp, bitcoinWalletsResp, gcalAccountsResp, telegramAccountsResp, discordAccountsResp, presetsResp, spiceSetsResp, personasResp, ttsVoicesResp, toolsetCurrentResp] = await Promise.allSettled([
             api.getChatSettings(chatName),
             getInitData(),
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
@@ -408,6 +413,8 @@ async function loadSidebar() {
             fetch('/api/email/accounts').then(r => r.ok ? r.json() : null),
             fetch('/api/bitcoin/wallets').then(r => r.ok ? r.json() : null),
             fetch('/api/gcal/accounts').then(r => r.ok ? r.json() : null),
+            fetch('/api/plugin/telegram/accounts').then(r => r.ok ? r.json() : null),
+            fetch('/api/plugin/discord/accounts').then(r => r.ok ? r.json() : null),
             fetch('/api/story/presets').then(r => r.ok ? r.json() : null),
             fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
             fetch('/api/personas').then(r => r.ok ? r.json() : null),
@@ -433,6 +440,8 @@ async function loadSidebar() {
         const emailAccountsData = emailAccountsResp.status === 'fulfilled' ? emailAccountsResp.value : null;
         const bitcoinWalletsData = bitcoinWalletsResp.status === 'fulfilled' ? bitcoinWalletsResp.value : null;
         const gcalAccountsData = gcalAccountsResp.status === 'fulfilled' ? gcalAccountsResp.value : null;
+        const telegramAccountsData = telegramAccountsResp.status === 'fulfilled' ? telegramAccountsResp.value : null;
+        const discordAccountsData = discordAccountsResp.status === 'fulfilled' ? discordAccountsResp.value : null;
         const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
         const spiceSetsData = spiceSetsResp.status === 'fulfilled' ? spiceSetsResp.value : null;
         const personasData = personasResp.status === 'fulfilled' ? personasResp.value : null;
@@ -572,6 +581,28 @@ async function loadSidebar() {
                     `<option value="${a.scope}">${a.label || a.scope}${a.has_token ? ' ✓' : ''}</option>`
                 ).join('');
             setSelect(gcalScopeSel, settings.gcal_scope || 'default');
+        }
+
+        // Populate telegram scope dropdown
+        const telegramScopeSel = container.querySelector('#sb-telegram-scope');
+        if (telegramScopeSel) {
+            const accounts = telegramAccountsData?.accounts || [];
+            telegramScopeSel.innerHTML = '<option value="none">None</option>' +
+                accounts.map(a =>
+                    `<option value="${a.name}">${a.label || a.name}${a.username ? ' (@' + a.username + ')' : ''}</option>`
+                ).join('');
+            setSelect(telegramScopeSel, settings.telegram_scope || 'default');
+        }
+
+        // Populate discord scope dropdown
+        const discordScopeSel = container.querySelector('#sb-discord-scope');
+        if (discordScopeSel) {
+            const accounts = discordAccountsData?.accounts || [];
+            discordScopeSel.innerHTML = '<option value="none">None</option>' +
+                accounts.map(a =>
+                    `<option value="${a.name}">${a.bot_name || a.name}${a.connected ? '' : ' (offline)'}</option>`
+                ).join('');
+            setSelect(discordScopeSel, settings.discord_scope || 'default');
         }
 
         // Hide plugin scope dropdowns when their plugin is disabled
@@ -744,6 +775,8 @@ function collectSettings(container) {
         email_scope: getVal(container, '#sb-email-scope') || 'default',
         bitcoin_scope: getVal(container, '#sb-bitcoin-scope') || 'default',
         gcal_scope: getVal(container, '#sb-gcal-scope') || 'default',
+        telegram_scope: getVal(container, '#sb-telegram-scope') || 'default',
+        discord_scope: getVal(container, '#sb-discord-scope') || 'default',
         story_engine_enabled: getChecked(container, '#sb-story-enabled'),
         story_preset: getVal(container, '#sb-story-preset') || null,
         story_in_prompt: getChecked(container, '#sb-story-in-prompt'),

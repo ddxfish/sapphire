@@ -23,6 +23,8 @@ scope_people:    ContextVar[str]  = ContextVar('scope_people',    default='defau
 scope_email:     ContextVar[str]  = ContextVar('scope_email',     default='default')
 scope_bitcoin:   ContextVar[str]  = ContextVar('scope_bitcoin',   default='default')
 scope_gcal:      ContextVar[str]  = ContextVar('scope_gcal',      default='default')
+scope_telegram:  ContextVar[str]  = ContextVar('scope_telegram',  default='default')
+scope_discord:   ContextVar[str]  = ContextVar('scope_discord',   default='default')
 scope_rag:       ContextVar       = ContextVar('scope_rag',       default=None)
 scope_private:   ContextVar[bool] = ContextVar('scope_private',   default=False)
 
@@ -37,6 +39,8 @@ SCOPE_REGISTRY = {
     'email':     {'var': scope_email,     'default': 'default', 'setting': 'email_scope'},
     'bitcoin':   {'var': scope_bitcoin,   'default': 'default', 'setting': 'bitcoin_scope'},
     'gcal':      {'var': scope_gcal,      'default': 'default', 'setting': 'gcal_scope'},
+    'telegram':  {'var': scope_telegram,  'default': 'default', 'setting': 'telegram_scope'},
+    'discord':   {'var': scope_discord,   'default': 'default', 'setting': 'discord_scope'},
     'rag':       {'var': scope_rag,       'default': None,      'setting': None},
     'private':   {'var': scope_private,   'default': False,     'setting': 'private_chat'},
 }
@@ -398,14 +402,7 @@ class FunctionManager:
         # Add story tools if story engine is active (both engine AND flag must be set)
         if self._story_engine and self._story_engine_enabled:
             from core.story_engine import TOOLS as STORY_TOOLS
-            # Only include move tool if navigation is configured
-            has_navigation = (self._story_engine.navigation is not None and
-                              self._story_engine.navigation.is_enabled)
-            if has_navigation:
-                tools = tools + STORY_TOOLS
-            else:
-                # Exclude move tool for non-navigation presets
-                tools = tools + [t for t in STORY_TOOLS if t['function']['name'] != 'move']
+            tools = tools + STORY_TOOLS
 
             # Add custom story tools from story folder
             custom = self._story_engine.get_story_tools()
@@ -667,22 +664,26 @@ class FunctionManager:
         except Exception:
             return None
 
-    def execute_function(self, function_name, arguments, scopes=None):
+    def execute_function(self, function_name, arguments, scopes=None, allowed_tools=None):
         """Execute a function using the mapped executor.
 
         scopes: optional dict to re-apply ContextVars before execution.
                  Needed because Starlette's iterate_in_threadpool creates
                  fresh context copies per generator yield.
+        allowed_tools: optional set/list of function names that were sent to the LLM.
+                       When provided, validates against this snapshot instead of
+                       current enabled_tools (prevents race conditions on plugin reload).
         """
         if scopes:
             restore_scopes(scopes)
 
         start_time = time.time()
 
-        # Validate function is currently enabled
-        enabled_names = self.get_enabled_function_names()
-        if function_name not in enabled_names:
-            logger.warning(f"Function '{function_name}' called but not enabled. Enabled: {enabled_names}")
+        # Validate function was available when sent to LLM (snapshot)
+        # or is currently enabled (fallback)
+        check_names = set(allowed_tools) if allowed_tools else self.get_enabled_function_names()
+        if function_name not in check_names:
+            logger.warning(f"Function '{function_name}' called but not enabled. Enabled: {check_names}")
             result = f"Error: The tool '{function_name}' is not currently available."
             self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
             return result

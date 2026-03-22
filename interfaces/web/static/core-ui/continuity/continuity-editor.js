@@ -1,6 +1,7 @@
 // continuity-editor.js - Task editor popup
 
 import * as api from './continuity-api.js';
+import { setupModalClose } from '../../shared/modal.js';
 
 export default class ContinuityEditor {
   constructor(task = null, onSave = null, onClose = null) {
@@ -187,10 +188,8 @@ export default class ContinuityEditor {
 
     this.el.addEventListener('click', (e) => this.handleClick(e));
     
-    // Close on overlay click
-    this.el.addEventListener('click', (e) => {
-      if (e.target === this.el) this.close();
-    });
+    // Close on overlay click + ESC
+    setupModalClose(this.el, () => this.close());
   }
 
   updateModelOptions() {

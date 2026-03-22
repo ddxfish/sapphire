@@ -158,7 +158,11 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
     display_messages = format_messages_for_display(raw_messages)
 
     context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
-    history_tokens = sum(count_message_tokens(m.get("content", ""), include_images=False) for m in raw_messages)
+    history_tokens = sum(
+        count_message_tokens(m.get("content", ""), include_images=False)
+        + count_tokens(m.get("thinking", "") or "")
+        for m in raw_messages
+    )
 
     try:
         prompt_content = system.llm_chat.current_system_prompt or ""
@@ -269,6 +273,7 @@ async def handle_chat_stream(request: Request, _=Depends(require_login), system=
             msg = friendly_llm_error(e) or str(e)
             yield f"data: {json.dumps({'error': msg})}\n\n"
         finally:
+            system.llm_chat.streaming_chat.cancel_flag = True
             system.web_active_dec()
 
     return StreamingResponse(
@@ -360,7 +365,11 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
         raw_messages = system.llm_chat.session_manager.get_messages()
         message_count = len(raw_messages)
-        history_tokens = sum(count_message_tokens(m.get("content", ""), include_images=False) for m in raw_messages)
+        history_tokens = sum(
+            count_message_tokens(m.get("content", ""), include_images=False)
+            + count_tokens(m.get("thinking", "") or "")
+            for m in raw_messages
+        )
 
         try:
             prompt_content = system.llm_chat.current_system_prompt or ""
@@ -865,6 +874,13 @@ async def delete_chat(chat_name: str, request: Request, _=Depends(require_login)
             try:
                 from functions import knowledge
                 knowledge.delete_scope(f"__rag__:{chat_name}")
+            except Exception:
+                pass
+            # Dismiss any agents spawned for this chat
+            try:
+                if hasattr(system, 'agent_manager') and system.agent_manager:
+                    for agent in system.agent_manager.check_all(chat_name=chat_name):
+                        system.agent_manager.dismiss(agent['id'])
             except Exception:
                 pass
             return {"status": "success", "message": f"Deleted: {chat_name}"}

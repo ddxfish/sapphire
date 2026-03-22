@@ -1,12 +1,10 @@
-// settings-tabs/plugins.js - Plugin toggles tab
+// settings-tabs/plugins.js - Plugin Manager
 import * as ui from '../../ui.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import pluginsAPI from '../../shared/plugins-api.js';
 
 // Infrastructure plugins hidden from toggle list
-const HIDDEN = new Set([
-    'setup-wizard', 'backup', 'continuity'
-]);
+const HIDDEN = new Set(['setup-wizard', 'backup', 'continuity']);
 
 // Danger confirmation configs for risky plugins
 const DANGER_PLUGINS = {
@@ -89,6 +87,110 @@ const PLUGIN_NAV_MAP = { continuity: 'schedule' };
 // Prevent double-click race condition on toggles
 const toggling = new Set();
 
+// Active filter
+let activeFilter = 'all';
+
+function _esc(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function _tierSort(p) {
+    const order = { official: 0, verified_author: 1, unsigned: 2, failed: 3 };
+    return order[p.verify_tier] ?? 2;
+}
+
+function _sortPlugins(plugins) {
+    return [...plugins].sort((a, b) => {
+        // Enabled first
+        if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+        // Then by trust tier
+        const ta = _tierSort(a), tb = _tierSort(b);
+        if (ta !== tb) return ta - tb;
+        // Then alphabetical
+        return (a.title || a.name).localeCompare(b.title || b.name);
+    });
+}
+
+function _filterPlugins(plugins, filter) {
+    if (filter === 'all') return plugins;
+    if (filter === 'enabled') return plugins.filter(p => p.enabled);
+    if (filter === 'disabled') return plugins.filter(p => !p.enabled);
+    if (filter === 'official') return plugins.filter(p => p.verify_tier === 'official' || (!p.verify_tier && p.verified === true));
+    if (filter === 'user') return plugins.filter(p => p.band === 'user');
+    return plugins;
+}
+
+function _counts(plugins) {
+    return {
+        all: plugins.length,
+        enabled: plugins.filter(p => p.enabled).length,
+        disabled: plugins.filter(p => !p.enabled).length,
+        official: plugins.filter(p => p.verify_tier === 'official' || (!p.verify_tier && p.verified === true)).length,
+        user: plugins.filter(p => p.band === 'user').length,
+    };
+}
+
+function _badgeHTML(p, locked) {
+    if (locked) return '<span class="pm-badge pm-badge-core">Core</span>';
+    const tier = p.verify_tier;
+    if (tier === 'official' || (!tier && p.verified === true))
+        return '<span class="pm-badge pm-badge-official">Official</span>';
+    if (tier === 'verified_author')
+        return `<span class="pm-badge pm-badge-author">${_esc(p.verified_author || 'Verified')}</span>`;
+    if (tier === 'unsigned' || (!tier && p.verify_msg === 'unsigned'))
+        return '<span class="pm-badge pm-badge-unsigned">Unsigned</span>';
+    if (tier === 'failed' || (!tier && p.verified === false && p.verify_msg && p.verify_msg !== 'unsigned'))
+        return '<span class="pm-badge pm-badge-tampered">Tampered</span>';
+    return '';
+}
+
+function _renderCard(p, locked) {
+    const hasSettings = p.settingsUI && p.enabled;
+    const isUser = p.band === 'user';
+    const icon = p.icon || '🔌';
+    const meta = [];
+    if (p.version) meta.push(`v${p.version}`);
+    if (p.author) meta.push(p.author);
+
+    const gearBtn = hasSettings
+        ? `<button class="pm-gear" data-settings-tab="${p.name}" title="Settings">\u2699\uFE0F</button>`
+        : `<span class="pm-gear-spacer"></span>`;
+
+    const actions = [];
+    if (isUser) {
+        actions.push(`<button class="btn btn-sm plugin-update-btn" data-plugin="${_esc(p.name)}">Update</button>`);
+        actions.push(`<button class="btn btn-sm btn-danger plugin-uninstall-btn" data-plugin="${_esc(p.name)}">Uninstall</button>`);
+    }
+
+    return `
+        <div class="pm-card${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
+            <div class="pm-card-body">
+                ${gearBtn}
+                <div class="pm-card-right">
+                    <div class="pm-card-top">
+                        <span class="pm-icon">${icon}</span>
+                        <span class="pm-title">${_esc(p.title || p.name)}</span>
+                        <label class="pm-toggle">
+                            <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
+                                   ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+                            <span class="pm-slider"></span>
+                        </label>
+                    </div>
+                    <div class="pm-card-meta">
+                        ${_badgeHTML(p, locked)}
+                        ${meta.length ? `<span class="pm-version">${_esc(meta.join(' \u00b7 '))}</span>` : ''}
+                        ${p.url ? `<a href="${_esc(p.url)}" target="_blank" rel="noopener" class="pm-web-link">web</a>` : ''}
+                    </div>
+                    ${actions.length ? `<div class="pm-card-actions">${actions.join('')}</div>` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 export default {
     id: 'plugins',
     name: 'Plugins',
@@ -101,16 +203,33 @@ export default {
 
         const allowUnsigned = ctx.settings?.ALLOW_UNSIGNED_PLUGINS ?? false;
         const managedLocked = ctx.managed && !ctx.unrestricted;
+        const counts = _counts(visible);
+        const sorted = _sortPlugins(_filterPlugins(visible, activeFilter));
 
         return `
-            <div class="plugin-actions" style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
-                <button class="btn btn-sm" id="rescan-plugins-btn">Rescan Plugins</button>
-                ${!managedLocked ? `<label class="setting-toggle" style="margin-left:auto">
-                    <input type="checkbox" id="allow-unsigned-toggle" ${allowUnsigned ? 'checked' : ''}>
-                    <span>Allow Unsigned Plugins</span>
-                </label>` : ''}
+            <div class="pm-header">
+                <div class="pm-header-top">
+                    <div class="pm-summary">Plugins <span class="pm-count-total">${counts.all} total \u00b7 ${counts.enabled} enabled</span></div>
+                    <div class="pm-header-actions">
+                        <button class="btn btn-sm pm-action-btn" id="rescan-plugins-btn">\uD83D\uDD04 Rescan</button>
+                        <button class="btn btn-sm btn-primary pm-action-btn" id="pm-install-toggle">+ Install Plugin</button>
+                    </div>
+                </div>
+                ${!managedLocked ? `<div class="pm-unsigned-row">
+                    <label class="pm-unsigned-toggle">
+                        <input type="checkbox" id="allow-unsigned-toggle" ${allowUnsigned ? 'checked' : ''}>
+                        <span>Allow unsigned plugins</span>
+                    </label>
+                </div>` : ''}
+                <div class="pm-filters">
+                    <button class="pm-filter${activeFilter === 'all' ? ' active' : ''}" data-filter="all">All <span class="pm-filter-count">${counts.all}</span></button>
+                    <button class="pm-filter${activeFilter === 'enabled' ? ' active' : ''}" data-filter="enabled">Enabled <span class="pm-filter-count">${counts.enabled}</span></button>
+                    <button class="pm-filter${activeFilter === 'disabled' ? ' active' : ''}" data-filter="disabled">Disabled <span class="pm-filter-count">${counts.disabled}</span></button>
+                    <button class="pm-filter${activeFilter === 'official' ? ' active' : ''}" data-filter="official">Official <span class="pm-filter-count">${counts.official}</span></button>
+                    <button class="pm-filter${activeFilter === 'user' ? ' active' : ''}" data-filter="user">User <span class="pm-filter-count">${counts.user}</span></button>
+                </div>
             </div>
-            <div class="plugin-install-section" style="margin-bottom:16px;padding:14px;background:var(--bg-secondary);border-radius:var(--radius-sm);border:1px solid var(--border);">
+            <div class="pm-install-section" id="pm-install-section" style="display:none">
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                     <input type="text" id="plugin-install-url" placeholder="GitHub URL (e.g. https://github.com/user/plugin)"
                            style="flex:1;padding:8px 10px;background:var(--input-bg);border:1px solid var(--border-light);border-radius:var(--radius-sm);color:var(--text-light);font-size:0.9em;">
@@ -121,73 +240,25 @@ export default {
                     <button class="btn btn-sm" id="plugin-install-file-btn">Upload</button>
                 </div>
             </div>
-            <div class="plugin-toggles-list">
-                ${visible.map(p => {
-                    const locked = ctx.lockedPlugins.includes(p.name);
-                    let verifyBadge = '';
-                    const tier = p.verify_tier;
-                    if (tier === 'official') {
-                        verifyBadge = '<span class="plugin-toggle-badge verified">Official</span>';
-                    } else if (tier === 'verified_author') {
-                        const authorName = p.verified_author || 'Unknown';
-                        verifyBadge = `<span class="plugin-toggle-badge author">Verified Author (${authorName})</span>`;
-                    } else if (tier === 'unsigned' || (!tier && p.verify_msg === 'unsigned')) {
-                        verifyBadge = '<span class="plugin-toggle-badge unsigned">Unsigned</span>';
-                    } else if (tier === 'failed' || (!tier && p.verified === false && p.verify_msg && p.verify_msg !== 'unsigned')) {
-                        verifyBadge = '<span class="plugin-toggle-badge failed">Tampered</span>';
-                    } else if (!tier && p.verified === true) {
-                        // Fallback for old API without verify_tier
-                        verifyBadge = '<span class="plugin-toggle-badge verified">Official</span>';
-                    }
-                    const meta = [];
-                    if (p.version) meta.push(`v${p.version}`);
-                    if (p.author) meta.push(p.author);
-                    const metaStr = meta.length ? `<span class="plugin-toggle-meta">${meta.join(' · ')}</span>` : '';
-                    const urlLink = p.url ? `<a href="${p.url}" target="_blank" rel="noopener" class="plugin-toggle-link">View</a>` : '';
-
-                    const isUser = p.band === 'user';
-                    const userActions = isUser ? `
-                        <div class="plugin-user-actions" style="display:flex;gap:4px;margin-left:8px;">
-                            <button class="btn btn-sm plugin-update-btn" data-plugin="${p.name}"
-                                    style="font-size:0.75em;padding:2px 8px;">Check Update</button>
-                            <button class="btn btn-sm btn-danger plugin-uninstall-btn" data-plugin="${p.name}"
-                                    style="font-size:0.75em;padding:2px 8px;">Uninstall</button>
-                        </div>
-                    ` : '';
-
-                    return `
-                        <div class="plugin-toggle-item${p.enabled ? ' enabled' : ''}" data-plugin="${p.name}">
-                            <div class="plugin-toggle-info">
-                                <div class="plugin-toggle-header">
-                                    <span class="plugin-toggle-name">${p.title || p.name}</span>
-                                    ${locked ? '<span class="plugin-toggle-badge">Core</span>' : ''}
-                                    ${verifyBadge}
-                                    ${urlLink}
-                                </div>
-                                ${metaStr}
-                            </div>
-                            <div style="display:flex;align-items:center;">
-                                <label class="setting-toggle">
-                                    <input type="checkbox" data-plugin-toggle="${p.name}"
-                                           ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
-                                    <span>${p.enabled ? 'Enabled' : 'Disabled'}</span>
-                                </label>
-                                ${userActions}
-                            </div>
-                        </div>
-                    `;
-                }).join('')}
+            <div class="pm-grid">
+                ${sorted.length ? sorted.map(p => _renderCard(p, ctx.lockedPlugins.includes(p.name))).join('')
+                    : '<p class="text-muted" style="grid-column:1/-1;text-align:center;padding:24px 0;">No plugins match this filter.</p>'}
             </div>
         `;
     },
 
     attachListeners(ctx, el) {
+        // Install section toggle
+        el.querySelector('#pm-install-toggle')?.addEventListener('click', () => {
+            const section = el.querySelector('#pm-install-section');
+            if (section) section.style.display = section.style.display === 'none' ? 'block' : 'none';
+        });
+
         // Sideloading toggle
         const unsignedToggle = el.querySelector('#allow-unsigned-toggle');
         if (unsignedToggle) {
             unsignedToggle.addEventListener('change', async e => {
                 const enabling = e.target.checked;
-
                 if (enabling) {
                     const confirmed = await showDangerConfirm({
                         title: 'Allow Unsigned Plugins — No Signature Verification',
@@ -206,12 +277,8 @@ export default {
                             'Sapphire cannot guarantee the safety of unsigned code',
                         ],
                     });
-                    if (!confirmed) {
-                        e.target.checked = false;
-                        return;
-                    }
+                    if (!confirmed) { e.target.checked = false; return; }
                 }
-
                 try {
                     const res = await fetch('/api/settings/batch', {
                         method: 'PUT',
@@ -251,12 +318,31 @@ export default {
                     ui.showToast(`Rescan failed: ${err.message}`, 'error');
                 } finally {
                     rescanBtn.disabled = false;
-                    rescanBtn.textContent = 'Rescan Plugins';
+                    rescanBtn.textContent = 'Rescan';
                 }
             });
         }
 
-        // ── Install from URL ──
+        // Filter pills
+        el.querySelectorAll('.pm-filter').forEach(btn => {
+            btn.addEventListener('click', () => {
+                activeFilter = btn.dataset.filter;
+                ctx.refreshTab();
+            });
+        });
+
+        // Gear → navigate to plugin settings tab via custom event
+        el.querySelectorAll('.pm-gear[data-settings-tab]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tabName = btn.dataset.settingsTab;
+                const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
+                if (settingsView) {
+                    settingsView.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: tabName }, bubbles: true }));
+                }
+            });
+        });
+
+        // Install from URL
         const installUrlBtn = el.querySelector('#plugin-install-url-btn');
         if (installUrlBtn) {
             installUrlBtn.addEventListener('click', async () => {
@@ -268,7 +354,6 @@ export default {
                 try {
                     const result = await pluginsAPI.installPlugin({ url });
                     if (result.conflict) {
-                        // Plugin exists — ask to replace
                         const confirmed = await showDangerConfirm({
                             title: `Replace Plugin: ${result.name}`,
                             warnings: [
@@ -281,7 +366,7 @@ export default {
                         });
                         if (!confirmed) return;
                         const forced = await pluginsAPI.installPlugin({ url, force: true });
-                        ui.showToast(`Updated ${forced.plugin_name} → v${forced.version}`, 'success');
+                        ui.showToast(`Updated ${forced.plugin_name} \u2192 v${forced.version}`, 'success');
                     } else {
                         ui.showToast(`Installed ${result.plugin_name} v${result.version}`, 'success');
                     }
@@ -296,7 +381,7 @@ export default {
             });
         }
 
-        // ── Install from zip upload ──
+        // Install from zip
         const installFileBtn = el.querySelector('#plugin-install-file-btn');
         if (installFileBtn) {
             installFileBtn.addEventListener('click', async () => {
@@ -320,7 +405,7 @@ export default {
                         });
                         if (!confirmed) return;
                         const forced = await pluginsAPI.installPlugin({ file, force: true });
-                        ui.showToast(`Updated ${forced.plugin_name} → v${forced.version}`, 'success');
+                        ui.showToast(`Updated ${forced.plugin_name} \u2192 v${forced.version}`, 'success');
                     } else {
                         ui.showToast(`Installed ${result.plugin_name} v${result.version}`, 'success');
                     }
@@ -335,10 +420,8 @@ export default {
             });
         }
 
-        // Store ctx on el so the handler always uses the latest after refreshTab()
+        // Store ctx for delegated handlers
         el._pluginCtx = ctx;
-
-        // Bind toggle handler once — prevents stacking on repeated renderTabContent() calls
         if (el._pluginsBound) return;
         el._pluginsBound = true;
 
@@ -365,7 +448,6 @@ export default {
             btn.textContent = 'Removing...';
             try {
                 await pluginsAPI.uninstallPlugin(name);
-                // Unregister settings tab if any
                 try {
                     const { unregisterPluginSettings } = await import('../../shared/plugin-registry.js');
                     unregisterPluginSettings(name);
@@ -396,14 +478,13 @@ export default {
                     btn.textContent = `Update to v${result.remote_version}`;
                     btn.disabled = false;
                     btn.classList.add('btn-primary');
-                    // Replace click handler to trigger install
                     btn.classList.remove('plugin-update-btn');
                     btn.addEventListener('click', async () => {
                         btn.disabled = true;
                         btn.textContent = 'Updating...';
                         try {
                             await pluginsAPI.installPlugin({ url: result.source_url, force: true });
-                            ui.showToast(`Updated ${name} → v${result.remote_version}`, 'success');
+                            ui.showToast(`Updated ${name} \u2192 v${result.remote_version}`, 'success');
                             await ctx.refreshTab();
                         } catch (err) {
                             ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
@@ -413,10 +494,7 @@ export default {
                     }, { once: true });
                 } else {
                     btn.textContent = 'Up to date';
-                    setTimeout(() => {
-                        btn.textContent = 'Check Update';
-                        btn.disabled = false;
-                    }, 2000);
+                    setTimeout(() => { btn.textContent = 'Check Update'; btn.disabled = false; }, 2000);
                 }
             } catch (err) {
                 ui.showToast(`Update check failed: ${err.message}`, 'error');
@@ -425,16 +503,16 @@ export default {
             }
         });
 
+        // ── Toggle (delegated) ──
         el.addEventListener('change', async e => {
             const name = e.target.dataset.pluginToggle;
             if (!name) return;
 
             const ctx = el._pluginCtx;
 
-            // Guard against rapid double-clicks
             if (toggling.has(name)) {
                 e.preventDefault();
-                e.target.checked = !e.target.checked;  // revert browser toggle
+                e.target.checked = !e.target.checked;
                 return;
             }
 
@@ -453,26 +531,19 @@ export default {
                         buttonLabel: 'Enable Plugin',
                     });
                     toggling.delete(name);
-                    if (!unsignedOk) {
-                        e.target.checked = false;
-                        return;
-                    }
+                    if (!unsignedOk) { e.target.checked = false; return; }
                 }
             }
 
-            // Danger gate for risky plugins on enable
+            // Danger gate for risky plugins
             const dangerConfig = DANGER_PLUGINS[name];
             if (dangerConfig && e.target.checked) {
                 const ackKey = `sapphire_danger_ack_${name}`;
                 if (!localStorage.getItem(ackKey)) {
-                    // Prevent the toggle from firing until confirmed
                     toggling.add(name);
                     const confirmed = await showDangerConfirm(dangerConfig);
                     toggling.delete(name);
-                    if (!confirmed) {
-                        e.target.checked = false;
-                        return;
-                    }
+                    if (!confirmed) { e.target.checked = false; return; }
                     localStorage.setItem(ackKey, Date.now().toString());
                 }
             }
@@ -480,8 +551,7 @@ export default {
             toggling.add(name);
             e.target.disabled = true;
 
-            const item = e.target.closest('.plugin-toggle-item');
-            const span = e.target.parentElement?.querySelector('span');
+            const card = e.target.closest('.pm-card');
 
             try {
                 const res = await fetch(`/api/webui/plugins/toggle/${name}`, { method: 'PUT' });
@@ -491,43 +561,32 @@ export default {
                 }
                 const data = await res.json();
 
-                // Update cached plugin list
                 const cached = ctx.pluginList.find(p => p.name === name);
                 if (cached) cached.enabled = data.enabled;
 
-                // Load or unload dynamic settings tab
                 if (data.enabled && cached?.settingsUI) {
                     await ctx.loadPluginTab(name, cached.settingsUI);
                 } else if (!data.enabled) {
-                    const { unregisterPluginSettings } = await import(
-                        '../../shared/plugin-registry.js'
-                    );
+                    const { unregisterPluginSettings } = await import('../../shared/plugin-registry.js');
                     unregisterPluginSettings(name);
                     ctx.syncDynamicTabs();
                 }
 
-                // Hide/show associated nav-rail item
                 const navView = PLUGIN_NAV_MAP[name];
                 if (navView) {
                     const navBtn = document.querySelector(`.nav-item[data-view="${navView}"]`);
                     if (navBtn) navBtn.style.display = data.enabled ? '' : 'none';
                 }
 
-                // Update DOM in-place (no full re-render flash)
-                if (item) item.classList.toggle('enabled', data.enabled);
-                if (span) span.textContent = data.enabled ? 'Enabled' : 'Disabled';
-
-                // Only full re-render if tab list changed (plugin with settings UI)
+                // Re-render to update card state, gear visibility, counts
                 if (cached?.settingsUI) ctx.refreshSidebar();
+                await ctx.refreshTab();
 
                 window.dispatchEvent(new CustomEvent('functions-changed'));
                 ui.showToast(`${cached?.title || name} ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
             } catch (err) {
-                // Revert checkbox
                 e.target.checked = !e.target.checked;
-                if (span) span.textContent = e.target.checked ? 'Enabled' : 'Disabled';
                 const msg = (err.message || 'Unknown error').replace(/^Plugin blocked:\s*/, '');
-                console.warn('Plugin toggle blocked:', msg);
                 ui.showToast(msg, 'error', 5000);
             } finally {
                 toggling.delete(name);

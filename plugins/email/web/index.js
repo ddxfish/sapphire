@@ -182,6 +182,70 @@ function renderEmailEditor(body, scope, item, helpers) {
 }
 
 
+function renderWithDaemonSettings(container) {
+    // Poll interval setting above accounts
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = `
+        <div style="margin-bottom:20px;padding:12px 16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-secondary);display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;align-items:center;gap:12px">
+                <label for="email-poll-interval" style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap">Poll Interval</label>
+                <input type="number" id="email-poll-interval" min="30" max="3600" style="width:80px" value="120">
+                <span style="font-size:12px;color:var(--text-muted)">seconds (min 30, requires restart)</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px">
+                <label class="pm-toggle" style="flex-shrink:0">
+                    <input type="checkbox" id="email-allow-all">
+                    <span class="pm-slider"></span>
+                </label>
+                <div>
+                    <span style="font-size:13px;font-weight:600;color:var(--text)">Allow sending to any address</span>
+                    <div style="font-size:11px;color:var(--text-muted)">When off, AI can only email whitelisted contacts. When on, AI can email anyone directly. Requires plugin reload.</div>
+                </div>
+            </div>
+        </div>
+    `;
+    container.appendChild(wrapper);
+
+    // Load current values
+    const _csrf = () => document.querySelector('meta[name="csrf-token"]')?.content;
+    const _saveSettings = async (patch) => {
+        const headers = { 'Content-Type': 'application/json' };
+        const tok = _csrf();
+        if (tok) headers['X-CSRF-Token'] = tok;
+        await fetch('/api/webui/plugins/email/settings', { method: 'PUT', headers, body: JSON.stringify(patch) });
+    };
+
+    fetch('/api/webui/plugins/email/settings').then(r => r.json()).then(data => {
+        const s = data.settings || {};
+        const pollInput = container.querySelector('#email-poll-interval');
+        const allowToggle = container.querySelector('#email-allow-all');
+
+        if (pollInput && s.poll_interval != null) pollInput.value = s.poll_interval;
+        if (allowToggle) allowToggle.checked = !!s.allow_all_recipients;
+
+        pollInput?.addEventListener('change', () => {
+            const val = Math.max(30, parseInt(pollInput.value) || 120);
+            pollInput.value = val;
+            _saveSettings({ poll_interval: val });
+        });
+
+        allowToggle?.addEventListener('change', () => {
+            if (allowToggle.checked) {
+                if (!confirm('WARNING: This allows the AI to email anyone — not just whitelisted contacts. Are you sure?')) {
+                    allowToggle.checked = false;
+                    return;
+                }
+            }
+            _saveSettings({ allow_all_recipients: allowToggle.checked });
+        });
+    }).catch(() => {});
+
+    // Accounts below — render into a sub-container so renderList doesn't wipe our settings
+    const accountsDiv = document.createElement('div');
+    container.appendChild(accountsDiv);
+    manager.renderList(accountsDiv);
+}
+
 export default {
     name: 'email',
 
@@ -191,7 +255,7 @@ export default {
             name: 'Email',
             icon: '\uD83D\uDCE7',
             helpText: 'Configure email accounts for each persona/scope. Each chat can select which email account to use via the sidebar. Works with any IMAP/SMTP server.',
-            render: (c) => manager.renderList(c),
+            render: (c) => renderWithDaemonSettings(c),
             load: async () => { await manager.loadItems(); return {}; },
             save: async () => ({ success: true }),
             getSettings: () => ({})

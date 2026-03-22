@@ -2,6 +2,8 @@
 import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt,
          saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
 import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
+import { showExportDialog, showImportDialog } from '../shared/import-export.js';
+import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
@@ -96,6 +98,7 @@ function renderRoster() {
     return `
         <div class="panel-list-header">
             <span class="panel-list-title">Prompts</span>
+            <button class="btn-sm" id="pr-import" title="Import prompt">\u2B07</button>
             <button class="btn-sm" id="pr-new" title="New prompt">+</button>
         </div>
         <div class="panel-list-items" id="pr-list">
@@ -135,8 +138,8 @@ function renderEditor() {
             </div>
             <div class="pr-header-actions">
                 ${!isActive ? '<button class="btn-primary" id="pr-activate">Activate</button>' : '<span class="badge badge-active">Active</span>'}
-                <button class="btn-sm" id="pr-dup" title="Duplicate prompt">\u2398</button>
-                <button class="btn-sm" id="pr-io" title="Import / Export">\u21C4</button>
+                <button class="btn-sm" id="pr-dup">Duplicate</button>
+                <button class="btn-sm" id="pr-export">Export</button>
                 <button class="btn-sm danger" id="pr-delete" title="Delete prompt">\u2715</button>
             </div>
         </div>
@@ -304,7 +307,87 @@ function bindEvents() {
     layout.querySelector('#pr-activate')?.addEventListener('click', activateCurrentPrompt);
     layout.querySelector('#pr-dup')?.addEventListener('click', duplicatePrompt);
     layout.querySelector('#pr-delete')?.addEventListener('click', deleteCurrentPrompt);
-    layout.querySelector('#pr-io')?.addEventListener('click', () => openImportExport());
+    layout.querySelector('#pr-export')?.addEventListener('click', () => {
+        if (!selected || !selectedData) return;
+        showExportDialog({
+            type: 'Prompt',
+            name: selected,
+            filename: `${selected}.prompt.json`,
+            checkboxes: [
+                { id: 'pieces', label: 'Include pieces used by this prompt', checked: true },
+            ],
+            buildExport: (states) => {
+                const prompt = { ...selectedData };
+                if (prompt.type === 'assembled') delete prompt.content;
+                delete prompt.compiled;
+                delete prompt.char_count;
+                delete prompt.token_count;
+                const bundle = { sapphire_export: true, type: 'prompt', version: 1, name: selected, prompt };
+                if (states.pieces) bundle.components = getUsedPieces();
+                return bundle;
+            },
+        });
+    });
+
+    layout.querySelector('#pr-import')?.addEventListener('click', () => {
+        showImportDialog({
+            type: 'Prompt or Persona',
+            overwrites: [
+                { key: 'overwrite', label: 'Overwrite existing prompt and pieces' },
+            ],
+            existingNames: prompts.map(p => p.name),
+            validate: (d) => {
+                // Standard prompt export
+                if (d.prompt) return null;
+                // Persona bundle with embedded prompt
+                if (d.sapphire_export && d.type === 'persona' && d.prompt) return null;
+                return 'Invalid format: missing prompt data';
+            },
+            getName: (d) => {
+                // Persona bundle: prompt name is nested
+                if (d.sapphire_export && d.type === 'persona') return d.prompt?.name || d.name || 'imported';
+                return d.name || 'imported';
+            },
+            onImport: async (data, { name, overwrites }) => {
+                const overwrite = overwrites.overwrite || false;
+
+                // Extract prompt data — handle persona bundles
+                let promptData, importPieces;
+                if (data.sapphire_export && data.type === 'persona') {
+                    promptData = data.prompt?.data || data.prompt;
+                    importPieces = data.components;
+                } else {
+                    promptData = data.prompt;
+                    importPieces = data.components || data.pieces;
+                }
+
+                // Import pieces
+                let skipped = 0, imported = 0;
+                if (importPieces) {
+                    for (const [type, defs] of Object.entries(importPieces)) {
+                        for (const [key, value] of Object.entries(defs)) {
+                            if (!overwrite && components[type]?.[key]) { skipped++; continue; }
+                            await saveComponent(type, key, value);
+                            imported++;
+                        }
+                    }
+                }
+
+                await savePrompt(name, promptData);
+                if (name === activePromptName) await loadPrompt(name);
+                selected = name;
+                await loadAll();
+                render();
+                updateScene();
+
+                const parts = [`Imported: ${name}`];
+                if (imported) parts.push(`${imported} pieces`);
+                if (skipped) parts.push(`${skipped} skipped`);
+                if (data.sapphire_export && data.type === 'persona') parts.push('(from persona)');
+                ui.showToast(parts.join(' \u2014 '), 'success');
+            },
+        });
+    });
 
     // Privacy
     layout.querySelector('#pr-privacy')?.addEventListener('change', e => {
@@ -484,7 +567,7 @@ function createPrompt() {
     `;
     document.body.appendChild(modal);
     const close = () => modal.remove();
-    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+    setupModalClose(modal, close);
     modal.querySelector('#pr-new-close').addEventListener('click', close);
     modal.querySelector('#pr-new-name').addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
 
@@ -754,142 +837,8 @@ function getUsedPieces() {
     return used;
 }
 
-function openImportExport() {
-    const modal = document.createElement('div');
-    modal.className = 'pr-modal-overlay';
-    modal.innerHTML = `
-        <div class="pr-modal">
-            <div class="pr-modal-header">
-                <h3>Import / Export: ${selected}</h3>
-                <button class="btn-icon" id="pr-io-close">\u2715</button>
-            </div>
-            <div class="pr-modal-body">
-                <div class="pr-io-section">
-                    <h4>Export</h4>
-                    <label class="pr-io-option">
-                        <input type="checkbox" id="io-export-pieces" checked> Include pieces used by this prompt
-                    </label>
-                    <div class="pr-io-buttons">
-                        <button class="btn-sm" id="io-export-clip">Copy to Clipboard</button>
-                        <button class="btn-sm" id="io-export-file">Download File</button>
-                    </div>
-                </div>
-                <hr class="pr-io-divider">
-                <div class="pr-io-section">
-                    <h4>Import</h4>
-                    <label class="pr-io-option">
-                        <input type="checkbox" id="io-import-overwrite"> Overwrite mode (replace existing pieces and prompt)
-                    </label>
-                    <div class="pr-io-buttons">
-                        <button class="btn-sm" id="io-import-clip">Paste from Clipboard</button>
-                        <button class="btn-sm" id="io-import-file">Upload File</button>
-                        <input type="file" id="io-file-input" accept=".json" style="display:none">
-                    </div>
-                    <div id="io-status" class="pr-io-status"></div>
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.body.appendChild(modal);
-    const close = () => modal.remove();
-    modal.addEventListener('click', e => { if (e.target === modal) close(); });
-    modal.querySelector('#pr-io-close').addEventListener('click', close);
-
-    // Export — only pieces used by this prompt
-    function buildExport() {
-        // Strip computed fields (content is rebuilt from components on import)
-        const prompt = { ...selectedData };
-        if (prompt.type === 'assembled') delete prompt.content;
-        delete prompt.compiled;
-        delete prompt.char_count;
-        delete prompt.token_count;
-        const bundle = { name: selected, prompt };
-        if (modal.querySelector('#io-export-pieces').checked) bundle.components = getUsedPieces();
-        return bundle;
-    }
-
-    modal.querySelector('#io-export-clip').addEventListener('click', async () => {
-        try {
-            await navigator.clipboard.writeText(JSON.stringify(buildExport(), null, 2));
-            ui.showToast('Copied to clipboard', 'success');
-        } catch { ui.showToast('Copy failed', 'error'); }
-    });
-
-    modal.querySelector('#io-export-file').addEventListener('click', () => {
-        const data = buildExport();
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = `${selected}.prompt.json`; a.click();
-        URL.revokeObjectURL(url);
-        ui.showToast('Downloaded', 'success');
-    });
-
-    // Import — smart merge by default, overwrite if checked
-    async function doImport(json) {
-        const status = modal.querySelector('#io-status');
-        try {
-            const data = JSON.parse(json);
-            if (!data.prompt) { status.textContent = 'Invalid format: missing prompt data'; return; }
-            const overwrite = modal.querySelector('#io-import-overwrite').checked;
-
-            // Resolve prompt name
-            let name = data.name || selected;
-            const exists = prompts.some(p => p.name === name);
-            if (exists && !overwrite) {
-                const newName = prompt(`Prompt "${name}" already exists. Enter a new name:`, name + '-imported');
-                if (!newName?.trim()) { status.textContent = 'Import cancelled'; return; }
-                name = newName.trim();
-            }
-
-            status.textContent = `Importing "${name}"...`;
-
-            // Import pieces
-            const importPieces = data.components || data.pieces;
-            let skipped = 0, imported = 0;
-            if (importPieces) {
-                for (const [type, defs] of Object.entries(importPieces)) {
-                    for (const [key, value] of Object.entries(defs)) {
-                        if (!overwrite && components[type]?.[key]) { skipped++; continue; }
-                        await saveComponent(type, key, value);
-                        imported++;
-                    }
-                }
-            }
-
-            // Save prompt
-            await savePrompt(name, data.prompt);
-            if (name === activePromptName) await loadPrompt(name);
-            selected = name;
-            await loadAll();
-            render();
-            updateScene();
-            close();
-
-            const parts = [`Imported: ${name}`];
-            if (imported) parts.push(`${imported} pieces`);
-            if (skipped) parts.push(`${skipped} skipped (already exist)`);
-            ui.showToast(parts.join(' \u2014 '), 'success');
-        } catch (e) { status.textContent = `Error: ${e.message}`; }
-    }
-
-    modal.querySelector('#io-import-clip').addEventListener('click', async () => {
-        try {
-            const text = await navigator.clipboard.readText();
-            await doImport(text);
-        } catch { modal.querySelector('#io-status').textContent = 'Clipboard read failed (check permissions)'; }
-    });
-
-    modal.querySelector('#io-import-file').addEventListener('click', () => modal.querySelector('#io-file-input').click());
-    modal.querySelector('#io-file-input').addEventListener('change', e => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = () => doImport(reader.result);
-        reader.readAsText(file);
-    });
-}
+// Old openImportExport() removed — replaced by shared import-export.js module
+// Export/Import handlers are now in bindEvents() using showExportDialog/showImportDialog
 
 // ── Helpers ──
 function formatCount(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n; }

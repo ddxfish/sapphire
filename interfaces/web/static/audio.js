@@ -345,7 +345,7 @@ const stopRec = async () => {
     // Downsample to 16kHz if needed
     const sourceSampleRate = audioContext.sampleRate;
     const samples = downsample(fullBuffer, sourceSampleRate, SAMPLE_RATE);
-    
+
     // Close audio context
     try {
         await audioContext.close();
@@ -391,8 +391,11 @@ export const handleRelease = async (btn, triggerSendFn) => {
             const text = response.text;
 
             if (!text || !text.trim()) {
-                ui.updateStatus('No speech detected');
-                setTimeout(() => ui.hideStatus(), 2000);
+                const msg = response.quiet
+                    ? 'No audio received — check browser mic selection'
+                    : 'No speech detected';
+                ui.updateStatus(msg);
+                setTimeout(() => ui.hideStatus(), 3000);
                 return null;
             }
 

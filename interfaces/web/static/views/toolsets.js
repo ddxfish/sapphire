@@ -1,6 +1,7 @@
 // views/toolsets.js - Toolset manager view
 import { getToolsets, getCurrentToolset, getFunctions, activateToolset, saveCustomToolset, deleteToolset, enableFunctions, setToolsetEmoji } from '../shared/toolset-api.js';
 import { renderPersonaTabs, bindPersonaTabs } from '../shared/persona-tabs.js';
+import { showExportDialog, showImportDialog } from '../shared/import-export.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
 
@@ -92,6 +93,7 @@ function render() {
             <div class="panel-left panel-list">
                 <div class="panel-list-header">
                     <span class="panel-list-title">Toolsets</span>
+                    <button class="btn-sm" id="ts-import" title="Import toolset">\u2B07</button>
                     <button class="btn-sm" id="ts-new" title="Save current as new">+</button>
                 </div>
                 <div class="panel-list-items" id="ts-list">
@@ -121,6 +123,7 @@ function render() {
                             `<button class="btn-primary" id="ts-activate">Activate</button>` :
                             `<span class="badge badge-active">Active</span>`
                         }
+                        ${selected?.type !== 'builtin' ? `<button class="btn-sm" id="ts-export">Export</button>` : ''}
                         ${isEditable ? `<button class="btn-sm danger" id="ts-delete">Delete</button>` : ''}
                     </div>
                 </div>
@@ -300,6 +303,66 @@ function bindEvents() {
             await loadData();
             render();
         } catch (e) { ui.showToast('Failed to delete', 'error'); }
+    });
+
+    // Export
+    container.querySelector('#ts-export')?.addEventListener('click', () => {
+        const selected = toolsets.find(t => t.name === selectedName);
+        if (!selected) return;
+        showExportDialog({
+            type: 'Toolset',
+            name: selectedName,
+            filename: `${selectedName}.toolset.json`,
+            data: {
+                sapphire_export: true,
+                type: 'toolset',
+                version: 1,
+                name: selectedName,
+                emoji: selected.emoji || '',
+                functions: selected.functions || [],
+            },
+        });
+    });
+
+    // Import
+    container.querySelector('#ts-import')?.addEventListener('click', () => {
+        // Collect all known function names for matching report
+        const allFuncs = new Set();
+        if (functions?.modules) {
+            Object.values(functions.modules).forEach(mod =>
+                (mod.functions || []).forEach(f => allFuncs.add(f.name))
+            );
+        }
+
+        showImportDialog({
+            type: 'Toolset',
+            existingNames: toolsets.map(t => t.name),
+            validate: (d) => {
+                if (d.sapphire_export && d.type === 'toolset' && d.functions) return null;
+                if (d.functions && Array.isArray(d.functions)) return null;
+                return 'Invalid toolset format: needs a functions array';
+            },
+            getName: (d) => d.name || 'imported',
+            onImport: async (data, { name }) => {
+                const funcs = data.functions || [];
+                const matched = funcs.filter(f => allFuncs.has(f));
+                const missing = funcs.filter(f => !allFuncs.has(f));
+
+                await saveCustomToolset(name, matched);
+                if (data.emoji) {
+                    try { await setToolsetEmoji(name, data.emoji); } catch {}
+                }
+                selectedName = name;
+
+                const parts = [`${matched.length} tools imported`];
+                if (missing.length) parts.push(`${missing.length} skipped (not installed: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '...' : ''})`);
+                ui.showToast(parts.join(' \u2014 '), missing.length ? 'warning' : 'success');
+            },
+            onDone: async () => {
+                await loadData();
+                render();
+            },
+        });
     });
 
     // Bulk check/uncheck all

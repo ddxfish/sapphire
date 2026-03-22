@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Webcam capture — lets the AI see through your camera",
   "author": "sapphire",
+  "icon": "📷",
   "priority": 50,
   "capabilities": {
     "tools": ["tools/webcam.py"],

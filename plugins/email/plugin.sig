@@ -1,10 +1,11 @@
 {
   "plugin": "email",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "files": {
-    "plugin.json": "sha256:1b56c330bb7df05b03ddb503d57fcce612285372d06fb926addf81f48df680f5",
-    "tools/email_tool.py": "sha256:6fb9d506b1dbda7a373d0a0d1e71c59a4871da517860456dc68429f2e44b72c6",
-    "web/index.js": "sha256:647a90d0f9f8588f30af60540bd2f06f5397dee65b4579553251f932cefe86d3"
+    "daemon.py": "sha256:208a1ef412555936c00b3900ac3331f4c40c5e5c2591688d47dd182cf685714d",
+    "plugin.json": "sha256:d69ad077168869b9a368f51dca81b4e4d15527d90401fffa3345004fd12da04c",
+    "tools/email_tool.py": "sha256:ad2a68a14eb202504d69a91eeda8facb5265de8245d64f24d4fab579cbb0bac9",
+    "web/index.js": "sha256:7a06bb92b017588fe24610152faaa45365e2a44b4c277a596223cc3cf01e317f"
   },
-  "signature": "UPy2kQjimS9QITG1Y/33yfL9y8Fil5jSaJmCWJJB17S8qRBafiQ90/NqqZkIkFI6I+ZQ/wAstFkzfYwSdPonDQ=="
+  "signature": "Zf6m+qdgt5wWYDzzFVIYwPNyQRwet3Q/P4FQX/ZWnGOmUdbl1Xp0DAFJs4k4BU6YR2p0H3BHdBLHdnz0xrXkCw=="
 }

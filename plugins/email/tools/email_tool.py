@@ -30,6 +30,15 @@ AVAILABLE_FUNCTIONS = [
     'send_email',
 ]
 
+def _allow_all_enabled():
+    """Check if allow_all_recipients setting is on."""
+    try:
+        from core.plugin_loader import plugin_loader
+        settings = plugin_loader.get_plugin_settings("email")
+        return bool(settings.get("allow_all_recipients", False))
+    except Exception:
+        return False
+
 TOOLS = [
     {
         "type": "function",
@@ -104,37 +113,49 @@ TOOLS = [
             }
         }
     },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "send_email",
-            "description": "Send an email to a whitelisted contact, or reply to an inbox message. For new emails use recipient_id. For replies use reply_to_index (from get_inbox) — the recipient is resolved from the original message automatically.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "recipient_id": {
-                        "type": "integer",
-                        "description": "Contact ID from get_recipients() — required for new emails, omit when replying"
-                    },
-                    "reply_to_index": {
-                        "type": "integer",
-                        "description": "Email index from get_inbox() to reply to — sets recipient, subject, and threading headers automatically"
-                    },
-                    "subject": {
-                        "type": "string",
-                        "description": "Email subject (auto-set to 'Re: ...' when replying)"
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Email body text"
-                    }
-                },
-                "required": ["body"]
-            }
+]
+
+# Build send_email schema — add address param if allow-all is enabled
+_send_props = {
+    "recipient_id": {
+        "type": "integer",
+        "description": "Contact ID from get_recipients() — required for new emails, omit when replying"
+    },
+    "reply_to_index": {
+        "type": "integer",
+        "description": "Email index from get_inbox() to reply to — sets recipient, subject, and threading headers automatically"
+    },
+    "subject": {
+        "type": "string",
+        "description": "Email subject (auto-set to 'Re: ...' when replying)"
+    },
+    "body": {
+        "type": "string",
+        "description": "Email body text"
+    },
+}
+_send_desc = "Send an email to a whitelisted contact, or reply to an inbox message. For new emails use recipient_id. For replies use reply_to_index (from get_inbox) — the recipient is resolved from the original message automatically."
+
+if _allow_all_enabled():
+    _send_props["address"] = {
+        "type": "string",
+        "description": "Email address to send to directly (only when allow-all is enabled). Use this OR recipient_id, not both."
+    }
+    _send_desc = "Send an email. For contacts use recipient_id (from get_recipients). For any address use the address parameter directly. For replies use reply_to_index (from get_inbox)."
+
+TOOLS.append({
+    "type": "function",
+    "is_local": True,
+    "function": {
+        "name": "send_email",
+        "description": _send_desc,
+        "parameters": {
+            "type": "object",
+            "properties": _send_props,
+            "required": ["body"]
         }
     }
-]
+})
 
 # ─── Inbox Cache (per-scope) ──────────────────────────────────────────────────
 
@@ -633,23 +654,36 @@ def _archive_emails(indices):
 def _get_recipients():
     from functions.knowledge import get_people
 
+    allow_all = _allow_all_enabled()
+
     people_scope = _get_current_people_scope()
-    if people_scope is None:
+    if people_scope is None and not allow_all:
         return "People contacts are disabled for this chat.", False
 
-    people = get_people(people_scope)
-    whitelisted = [p for p in people if p.get('email_whitelisted') and p.get('email')]
+    lines = []
 
-    if not whitelisted:
+    if people_scope is not None:
+        people = get_people(people_scope)
+        if allow_all:
+            contacts = [p for p in people if p.get('email')]
+        else:
+            contacts = [p for p in people if p.get('email_whitelisted') and p.get('email')]
+
+        if contacts:
+            lines.append("Available contacts:")
+            for p in contacts:
+                lines.append(f"  [{p['id']}] {p['name']}")
+
+    if allow_all:
+        lines.append("\nDirect addresses enabled — you can also use the 'address' parameter with any email address.")
+
+    if not lines:
         return "No contacts are whitelisted for email. Add contacts in Mind → People and enable 'Allow email'.", False
 
-    lines = ["Available email recipients:"]
-    for p in whitelisted:
-        lines.append(f"  [{p['id']}] {p['name']}")
     return '\n'.join(lines), True
 
 
-def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
+def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None, address=None):
     creds = _get_email_creds()
     if not creds:
         scope = _get_current_email_scope()
@@ -662,8 +696,19 @@ def _send_email(recipient_id=None, subject=None, body='', reply_to_index=None):
     to_addr = None
     to_name = None
 
+    # Direct address mode (allow-all only)
+    if address is not None:
+        if not _allow_all_enabled():
+            return "Direct email addresses are not allowed. Use recipient_id from get_recipients() instead.", False
+        to_addr = address.strip()
+        to_name = to_addr
+        if not subject:
+            return "subject is required for new emails.", False
+        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', to_addr):
+            return f"Invalid email address: {to_addr}", False
+
     # Reply mode — resolve recipient + headers from cached message
-    if reply_to_index is not None:
+    elif reply_to_index is not None:
         if not cache["raw"]:
             return "No inbox loaded. Call get_inbox() first.", False
         if reply_to_index < 1 or reply_to_index > len(cache["raw"]):
@@ -784,6 +829,7 @@ def execute(function_name, arguments, config):
                 subject=arguments.get('subject'),
                 body=body,
                 reply_to_index=arguments.get('reply_to_index'),
+                address=arguments.get('address'),
             )
         else:
             return f"Unknown email function '{function_name}'.", False

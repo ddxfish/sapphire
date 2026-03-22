@@ -98,7 +98,15 @@ class FasterWhisperProvider(BaseSTTProvider):
                 if len(audio_data.shape) > 1:
                     audio_data = audio_data.mean(axis=1)
 
+                rms = np.sqrt(np.mean(audio_data ** 2))
+                duration = len(audio_data) / sample_rate if sample_rate > 0 else 0
                 max_val = np.max(np.abs(audio_data))
+
+                # Skip near-silent audio — likely wrong mic selected in browser
+                if rms < 0.001:
+                    logger.warning(f"[STT] Audio too quiet ({duration:.1f}s, RMS={rms:.6f}) — check mic selection")
+                    return ""
+
                 if max_val > 0:
                     audio_data = audio_data / max_val
 
@@ -114,7 +122,11 @@ class FasterWhisperProvider(BaseSTTProvider):
                 }
 
                 segments, _ = self.model.transcribe(temp_path, **transcription_params)
-                text = " ".join([segment.text for segment in segments]).strip()
+                # Filter out segments where Whisper thinks there's no speech
+                text = " ".join([
+                    segment.text for segment in segments
+                    if segment.no_speech_prob < 0.7
+                ]).strip()
                 return text
 
             except Exception as e:

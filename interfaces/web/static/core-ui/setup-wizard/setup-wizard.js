@@ -1,5 +1,6 @@
 // setup-wizard.js - Setup wizard modal orchestrator
 
+import { setupModalClose } from '../../shared/modal.js';
 import { injectSetupStyles } from './setup-styles.js';
 import { getSettings, getWizardStep, setWizardStep, checkProviderStatus } from './setup-api.js';
 import voiceTab from './tabs/voice.js';
@@ -184,20 +185,8 @@ class SetupWizard {
       });
     });
 
-    // Close on overlay click (with warning)
-    this.modal.addEventListener('click', (e) => {
-      if (e.target === this.modal) {
-        this.confirmClose();
-      }
-    });
-
-    // ESC key
-    this.escHandler = (e) => {
-      if (e.key === 'Escape') {
-        this.confirmClose();
-      }
-    };
-    document.addEventListener('keydown', this.escHandler);
+    // Close on overlay click + ESC (with warning)
+    this._cleanupModal = setupModalClose(this.modal, () => this.confirmClose());
   }
 
   async handleNext() {
@@ -526,7 +515,7 @@ class SetupWizard {
   close() {
     if (!this.modal) return; // Already closed
     
-    document.removeEventListener('keydown', this.escHandler);
+    if (this._cleanupModal) this._cleanupModal();
     
     this.modal.classList.remove('active');
     

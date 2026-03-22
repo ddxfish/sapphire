@@ -304,6 +304,7 @@ class OpenAIResponsesProvider(BaseProvider):
         tool_calls_acc = {}  # call_id -> {name, arguments, item_id}
         item_id_to_call_id = {}  # item_id -> call_id (for mapping delta events)
         finish_reason = None
+        usage = None
         event_count = 0
         seen_event_types = set()  # Track all event types for debugging
         
@@ -378,6 +379,19 @@ class OpenAIResponsesProvider(BaseProvider):
                 response_obj = getattr(event, 'response', None)
                 if response_obj:
                     finish_reason = getattr(response_obj, 'status', 'completed')
+                    # Parse usage from completed response
+                    resp_usage = getattr(response_obj, 'usage', None)
+                    if resp_usage:
+                        usage = {
+                            "prompt_tokens": getattr(resp_usage, 'input_tokens', 0) or 0,
+                            "completion_tokens": getattr(resp_usage, 'output_tokens', 0) or 0,
+                            "total_tokens": (getattr(resp_usage, 'input_tokens', 0) or 0) + (getattr(resp_usage, 'output_tokens', 0) or 0)
+                        }
+                        if hasattr(resp_usage, 'output_tokens_details'):
+                            details = resp_usage.output_tokens_details
+                            reasoning = getattr(details, 'reasoning_tokens', 0)
+                            if reasoning:
+                                usage["reasoning_tokens"] = reasoning
             
             # Output item events - capture function names here!
             elif event_type == "response.output_item.added":
@@ -421,7 +435,8 @@ class OpenAIResponsesProvider(BaseProvider):
         final_response = LLMResponse(
             content=full_content if full_content else None,
             tool_calls=final_tool_calls,
-            finish_reason=finish_reason
+            finish_reason=finish_reason,
+            usage=usage
         )
         
         done_event = {"type": "done", "response": final_response}

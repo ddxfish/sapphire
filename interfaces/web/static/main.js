@@ -32,6 +32,7 @@ const VIEW_MODULES = {
     schedule: `./views/schedule.js${_v}`,
     mind:     `./views/mind.js${_v}`,
     settings: `./views/settings.js${_v}`,
+    help:     `./views/help.js${_v}`,
 };
 
 async function loadViews() {
@@ -155,6 +156,7 @@ async function init() {
         // Init nav rail + router (after data so chat sidebar loads with correct chat)
         initNavRail();
         initRouter('chat');
+        initVersionBadge();
 
         // Hide nav items for disabled plugins (non-blocking)
         syncNavWithPlugins();
@@ -358,6 +360,10 @@ function initEventBus() {
         populateChatDropdown();
     });
 
+    eventBus.on(eventBus.Events.CHAT_CREATED, () => {
+        populateChatDropdown();
+    });
+
     // Plugin reload/toggle — load new scripts
     eventBus.on(eventBus.Events.PLUGIN_RELOADED, (data) => {
         ui.showToast(`Plugin '${data?.plugin || 'unknown'}' reloaded`, 'success');
@@ -403,6 +409,30 @@ function cleanup() {
     stopMicIconPolling();
     eventBus.disconnect();
     audio.stop();
+}
+
+function initVersionBadge() {
+    const badge = document.getElementById('nav-version');
+    if (!badge) return;
+
+    // Click → navigate to settings dashboard
+    badge.addEventListener('click', () => {
+        import('./core/router.js').then(r => r.switchView('settings'));
+    });
+
+    // Fetch branch info at boot — show non-main branches immediately
+    fetch('/api/system/update-check').then(r => r.ok ? r.json() : null).then(data => {
+        if (!data) return;
+        const branch = data.branch;
+        if (branch && branch !== 'main') {
+            badge.innerHTML = `v${window.__appVersion || '?'}<br><span class="nav-branch">${branch}</span>`;
+        }
+        if (data.available) {
+            badge.classList.add('update-available');
+            badge.title = `Update available: v${data.latest}`;
+            window.dispatchEvent(new CustomEvent('update-available', { detail: data }));
+        }
+    }).catch(() => {});
 }
 
 // Boot

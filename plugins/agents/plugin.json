@@ -1,0 +1,12 @@
+{
+    "name": "agents",
+    "version": "2.0.0",
+    "description": "Background AI Agents",
+    "author": "sapphire",
+    "icon": "\ud83d\udd2d",
+    "priority": 50,
+    "capabilities": {
+        "tools": ["tools/agent_tools.py"],
+        "web": true
+    }
+}

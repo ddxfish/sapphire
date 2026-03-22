@@ -296,7 +296,6 @@ class TestStoryTools:
         assert 'get_state' in tool_names
         assert 'set_state' in tool_names
         assert 'roll_dice' in tool_names
-        assert 'advance_scene' in tool_names
         assert 'move' in tool_names
 
         # STORY_TOOL_NAMES should match

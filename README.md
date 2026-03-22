@@ -34,7 +34,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. It's consumed
 - **Self-Modification** - The AI edits its own prompt and swaps personality pieces and emotions mid-conversation.
 - **Tool Maker** - [TOOLMAKER.md](docs/TOOLMAKER.md) The AI writes, validates, and installs new tools with their own settings page at runtime.
 - **Stories** - [STORY-ENGINE.md](docs/STORY-ENGINE.md) Interactive stories, the AI is your dungeon master and partner, can't see the next room.
-- **Images** - [IMAGE-GEN.md](docs/IMAGE-GEN.md) SDXL with character replacement for visual consistency across scenes.
+- **Images** - [IMAGE-GEN.md](docs/integrations/IMAGE-GEN.md) SDXL with character replacement for visual consistency across scenes.
 
 **Mind**
 - **Memory** - Semantic vector search across 100K+ labeled entries.
@@ -45,10 +45,18 @@ Hey I'm Chris, a solo dev with a burning passion for this project. It's consumed
 - **Research** - Multi-page web research with site crawling and summarization.
 
 **Integrations**
-- **Home Assistant** - [HOME-ASSISTANT.md](docs/HOME-ASSISTANT.md) Lights, scenes, thermostats, switches, phone notifications.
-- **Bitcoin** - Balance, send, transaction history, backup wallet.
-- **SSH** - Local and remote command execution on configured servers.
-- **Email** - Inbox, send to whitelisted contacts. AI resolves recipients server-side.
+- **Discord** - [DISCORD.md](docs/integrations/DISCORD.md) Bot messaging, channel monitoring, auto-reply via daemons.
+- **Telegram** - [TELEGRAM.md](docs/integrations/TELEGRAM.md) Read chats, send messages, daemon auto-response.
+- **Email** - [EMAIL.md](docs/integrations/EMAIL.md) Multi-account inbox, privacy-first sending, daemon auto-reply.
+- **Google Calendar** - [GOOGLE-CALENDAR.md](docs/integrations/GOOGLE-CALENDAR.md) View schedule, add/delete events via OAuth2.
+- **Home Assistant** - [HOME-ASSISTANT.md](docs/integrations/HOME-ASSISTANT.md) Lights, scenes, thermostats, switches, phone notifications.
+- **SSH** - [SSH.md](docs/integrations/SSH.md) Remote command execution with safety blacklists.
+- **Bitcoin** - [BITCOIN.md](docs/integrations/BITCOIN.md) Balance, send, transaction history, multi-wallet.
+- **Image Gen** - [IMAGE-GEN.md](docs/integrations/IMAGE-GEN.md) SDXL with character replacement for visual consistency.
+- **Daemons & Webhooks** - [DAEMONS-WEBHOOKS.md](docs/DAEMONS-WEBHOOKS.md) Background listeners and HTTP triggers for any external service.
+- **Agents** - [AGENTS.md](docs/AGENTS.md) Spawn background AI workers that report back when done.
+- **Import/Export** - [IMPORT-EXPORT.md](docs/IMPORT-EXPORT.md) Share personas, prompts, toolsets, and more as JSON files.
+- **Dashboard** - [DASHBOARD.md](docs/DASHBOARD.md) Token metrics, auto-updater, system controls.
 - **Cloud** (optional) - Claude, GPT, Fireworks. Only active when you enable them. Local-first by default.
 - **Privacy** - One toggle blocks all cloud connections. Fully local, nothing leaves your machine.
 - **Plugins** - [PLUGINS.md](docs/PLUGINS.md) Hooks, tools, voice commands, scheduling, web settings — all in one system.
@@ -111,7 +119,7 @@ The setup wizard walks you through LLM configuration on first run.
 
 ## Docker Quick Start (Alternative)
 
-No conda, no pip, no dependencies. Web UI only — no wake word or local microphone.
+No conda, no pip, no dependencies. Web UI only — no wake word. Benefit is isolation, the AI can't reach your host system.
 
 **Linux / Mac:**
 ```bash
@@ -173,7 +181,7 @@ This removes the Python environment. Delete the `sapphire/` folder to remove eve
 | Guide | Description |
 |-------|-------------|
 | [Installation](docs/INSTALLATION.md) | Setup guide, systemd service |
-| [Configuration](docs/CONFIGURATION.md) | LLM, scopes, thinking, privacy |
+| [Quick Start](docs/QUICK-START.md) | First persona, LLM setup, integrations |
 | [API](docs/API.md) | All 221 REST endpoints |
 | [SOCKS Proxy](docs/SOCKS.md) | Privacy proxy for web tools |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Common issues and fixes |

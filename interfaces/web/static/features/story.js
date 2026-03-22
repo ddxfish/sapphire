@@ -2,6 +2,7 @@
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import { fetchWithTimeout } from '../shared/fetch.js';
+import { setupModalClose } from '../shared/modal.js';
 
 let storyMenu = null;
 let storyBtn = null;
@@ -51,7 +52,7 @@ export async function openStoryPicker() {
     const closeBtn = modal.querySelector('#story-modal-close');
     const closeModal = () => { modal.style.display = 'none'; };
     if (closeBtn) closeBtn.onclick = closeModal;
-    modal.onclick = (e) => { if (e.target === modal) closeModal(); };
+    setupModalClose(modal, closeModal);
 }
 
 export function initStoryIndicator() {

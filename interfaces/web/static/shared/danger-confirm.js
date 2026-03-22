@@ -2,7 +2,7 @@
 // Reusable gate: single or double "type I UNDERSTAND" confirmation
 // Usage: const confirmed = await showDangerConfirm({ title, warnings, ... })
 
-import { escapeHtml } from './modal.js';
+import { escapeHtml, setupModalClose } from './modal.js';
 
 /**
  * Show a danger confirmation modal that requires typing a phrase to proceed.
@@ -146,14 +146,13 @@ function _showStage({ title, warnings, detail, confirmPhrase, buttonLabel, isDan
     const input = overlay.querySelector('.dc-input');
     const confirmBtn = overlay.querySelector('.dc-confirm');
 
-    let escHandler;
+    let cleanupEsc;
     const close = () => {
-        document.removeEventListener('keydown', escHandler);
+        if (cleanupEsc) cleanupEsc();
         overlay.classList.remove('active');
         setTimeout(() => overlay.remove(), 300);
     };
-    escHandler = e => { if (e.key === 'Escape') { close(); onCancel(); } };
-    document.addEventListener('keydown', escHandler);
+    cleanupEsc = setupModalClose(overlay, () => { close(); onCancel(); });
 
     input.addEventListener('input', () => {
         const valid = input.value.trim().toUpperCase() === confirmPhrase.toUpperCase();
@@ -170,7 +169,7 @@ function _showStage({ title, warnings, detail, confirmPhrase, buttonLabel, isDan
 
     overlay.querySelector('.dc-close').addEventListener('click', () => { close(); onCancel(); });
     overlay.querySelector('.dc-cancel').addEventListener('click', () => { close(); onCancel(); });
-    overlay.addEventListener('click', e => { if (e.target === overlay) { close(); onCancel(); } });
+    // click-outside + ESC handled by setupModalClose above
 
     setTimeout(() => input.focus(), 50);
 }
