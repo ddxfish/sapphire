@@ -212,7 +212,7 @@ class TestValidation:
 class TestExecution:
     """Test function execution dispatch."""
     
-    def test_execute_function_dispatches_correctly(self):
+    def test_execute_function_dispatches_correctly(self, tmp_path):
         """execute_function should call the right executor."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -227,7 +227,7 @@ class TestExecution:
             mgr._is_local_map = {'test_func': True}
             mgr._function_module_map = {}
             mgr.tool_history = []
-            mgr.tool_history_file = '/tmp/test.json'
+            mgr.tool_history_file = str(tmp_path / 'test.json')
 
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
@@ -236,7 +236,7 @@ class TestExecution:
             assert result == "result_data"
             mock_executor.assert_called_once()
     
-    def test_execute_function_rejects_disabled_function(self):
+    def test_execute_function_rejects_disabled_function(self, tmp_path):
         """Should reject execution of non-enabled functions."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -249,7 +249,7 @@ class TestExecution:
             mgr._is_local_map = {}
             mgr._function_module_map = {}
             mgr.tool_history = []
-            mgr.tool_history_file = '/tmp/test.json'
+            mgr.tool_history_file = str(tmp_path / 'test.json')
             
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
@@ -257,7 +257,7 @@ class TestExecution:
             
             assert "not currently available" in result
     
-    def test_execute_function_handles_missing_executor(self):
+    def test_execute_function_handles_missing_executor(self, tmp_path):
         """Should handle case where executor is not found."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -270,7 +270,7 @@ class TestExecution:
             mgr._is_local_map = {'orphan_func': True}
             mgr._function_module_map = {}
             mgr.tool_history = []
-            mgr.tool_history_file = '/tmp/test.json'
+            mgr.tool_history_file = str(tmp_path / 'test.json')
 
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0
@@ -278,7 +278,7 @@ class TestExecution:
             
             assert "no execution logic" in result.lower()
     
-    def test_execute_function_handles_executor_exception(self):
+    def test_execute_function_handles_executor_exception(self, tmp_path):
         """Should catch and report executor exceptions."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
@@ -294,7 +294,7 @@ class TestExecution:
             mgr._is_local_map = {'crashy_func': True}
             mgr._function_module_map = {}
             mgr.tool_history = []
-            mgr.tool_history_file = '/tmp/test.json'
+            mgr.tool_history_file = str(tmp_path / 'test.json')
             
             with patch('core.chat.function_manager.config') as mock_cfg:
                 mock_cfg.TOOL_HISTORY_MAX_ENTRIES = 0

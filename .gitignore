@@ -48,6 +48,9 @@ tmp/*
 DONE.md
 .coverage
 TODO-DONE.md
+.env
+.env.*
+!.env.example
 user-krem
 userx
 userz

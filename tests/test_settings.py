@@ -363,7 +363,7 @@ class TestReload:
             mgr._merge_settings.assert_called_once()
             mgr._update_mtime.assert_called_once()
     
-    def test_reset_to_defaults(self):
+    def test_reset_to_defaults(self, tmp_path):
         """reset_to_defaults() should clear user overrides."""
         import threading
         from pathlib import Path
@@ -377,7 +377,7 @@ class TestReload:
             mgr._lock = threading.RLock()
             mgr._merge_settings = lambda: setattr(mgr, '_config', {**mgr._defaults, **mgr._user})
             mgr._update_mtime = lambda: None
-            mgr.BASE_DIR = Path('/tmp/test_settings_reset')
+            mgr.BASE_DIR = tmp_path / 'test_settings_reset'
             
             # Create temp dir so file ops work
             mgr.BASE_DIR.mkdir(exist_ok=True)

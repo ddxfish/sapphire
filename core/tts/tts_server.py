@@ -36,11 +36,19 @@ try:
     import config
     HOST = config.TTS_SERVER_HOST
     PORT = config.TTS_SERVER_PORT
-    logger.info(f"Loaded TTS server config: {HOST}:{PORT}")
 except Exception as e:
     logger.warning(f"Could not load config, using defaults: {e}")
     HOST = '0.0.0.0'
     PORT = 5012
+
+# Sanitize HOST — strip scheme/port if user accidentally sets a URL
+if HOST and HOST.startswith(('http://', 'https://')):
+    HOST = HOST.split('://', 1)[1]
+if HOST and ':' in HOST:
+    HOST = HOST.rsplit(':', 1)[0]
+if not HOST:
+    HOST = '0.0.0.0'
+logger.info(f"TTS server config: {HOST}:{PORT}")
 
 
 # --- Cross-platform temp directory ---

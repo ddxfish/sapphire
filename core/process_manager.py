@@ -221,6 +221,8 @@ class ProcessManager:
         
         def _monitor():
             logger.info(f"Monitor started for '{self.script_path.name}' (interval: {check_interval}s)")
+            consecutive_failures = 0
+            max_consecutive = 5
             
             while self._monitor_running:
                 time.sleep(check_interval)
@@ -230,13 +232,22 @@ class ProcessManager:
                 
                 if self.process and self.process.poll() is not None:
                     exit_code = self.process.returncode
-                    logger.info(f"Process '{self.script_path.name}' died (exit code {exit_code}), restarting...")
+                    consecutive_failures += 1
                     
-                    # Brief delay before restart
-                    time.sleep(2)
+                    if consecutive_failures >= max_consecutive:
+                        logger.error(f"Process '{self.script_path.name}' failed {consecutive_failures} times in a row (last exit code {exit_code}), giving up.")
+                        break
+                    
+                    # Exponential backoff: 2s, 4s, 8s, 16s, 32s
+                    backoff = min(2 ** consecutive_failures, 60)
+                    logger.info(f"Process '{self.script_path.name}' died (exit code {exit_code}), restarting in {backoff}s... (attempt {consecutive_failures}/{max_consecutive})")
+                    time.sleep(backoff)
                     
                     if self._monitor_running:
                         self.start()
+                elif self.process and self.process.poll() is None:
+                    # Process is alive — reset failure counter
+                    consecutive_failures = 0
             
             logger.info(f"Monitor stopped for '{self.script_path.name}'")
         

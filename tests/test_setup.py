@@ -3,7 +3,7 @@ import pytest
 import sys
 import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestGetConfigDir:
@@ -387,7 +387,7 @@ class TestEnsurePromptFiles:
     
     def test_copies_missing_files(self, tmp_path):
         """Should copy missing prompt files from core to user."""
-        from core.setup import ensure_prompt_files
+        from core.setup import ensure_prompt_files  # noqa: F401
         
         # Create source files
         source_dir = tmp_path / 'core' / 'modules' / 'system' / 'prompts'
@@ -396,12 +396,8 @@ class TestEnsurePromptFiles:
         (source_dir / 'prompt_pieces.json').write_text('{}')
         (source_dir / 'prompt_spices.json').write_text('{}')
         
-        target_dir = tmp_path / 'user' / 'prompts'
-        
-        with patch('core.setup.Path') as mock_path:
-            # This is complex to mock properly, so we'll just test the function exists
-            # and doesn't crash
-            pass
+        # This is complex to mock properly, so we'll just test the function exists
+        assert callable(ensure_prompt_files)
     
     def test_skips_existing_files(self, tmp_path):
         """Should not overwrite existing user files."""
@@ -422,9 +418,12 @@ class TestEnsureChatDefaults:
         source = source_dir / 'chat_defaults.json'
         source.write_text('{"prompt": "default"}')
         
-        target_dir = tmp_path / 'user' / 'settings'
-        target = target_dir / 'chat_defaults.json'
+        _target_dir = tmp_path / 'user' / 'settings'
+        _target = _target_dir / 'chat_defaults.json'
         
         # This requires mocking Path(__file__) which is complex
         # Just verify function exists
         assert callable(ensure_chat_defaults)
+
+
+        

@@ -1,10 +1,8 @@
 # sapphire.py - Sapphire Voice Assistant Core Application
-import os
 import sys
 import time
 import signal
 import threading
-import subprocess
 from pathlib import Path
 
 # Windows: Set event loop policy before ANY asyncio usage (imports like FastAPI trigger it)
@@ -13,7 +11,7 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # CRITICAL: Import logging setup FIRST before any core modules
-import core.sapphire_logging
+import core.sapphire_logging  # noqa: F401 — side-effect: configures logging
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -196,7 +194,7 @@ class VoiceChatSystem:
                 self.llm_chat.function_manager.update_enabled_functions([toolset_name])
                 logger.info(f"Applied toolset on startup: {toolset_name}")
             
-            logger.info(f"Applied chat settings on startup")
+            logger.info("Applied chat settings on startup")
         except Exception as e:
             logger.warning(f"Could not apply initial settings: {e}")
 
@@ -598,7 +596,7 @@ def run():
         RESET = '\033[0m'
         print(f"\n{CYAN_BG}{BLACK}{BOLD} ✨ SAPPHIRE IS NOW ACTIVE: {url} {RESET}\n")
 
-        logger.info(f"Sapphire is running. Starting uvicorn server...")
+        logger.info("Sapphire is running. Starting uvicorn server...")
 
         # Run uvicorn - this blocks until shutdown
         # Using a thread so we can still check for restart signals
