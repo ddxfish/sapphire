@@ -1,42 +1,42 @@
 # Core API and Web Interface
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-python-multipart>=0.0.6
-jinja2>=3.1.0
-itsdangerous>=2.1.0
-cryptography>=41.0.0
+fastapi>=0.109.0,<1.0
+uvicorn[standard]>=0.27.0,<1.0
+python-multipart>=0.0.6,<1.0
+jinja2>=3.1.0,<4.0
+itsdangerous>=2.1.0,<3.0
+cryptography>=41.0.0,<44.0
 
 # LLM API Client
-openai>=1.12.0
+openai>=1.12.0,<3.0
 
 # Audio Processing (wakeword, TTS, STT, local playback)
-numpy>=1.24.0
-sounddevice>=0.4.6
-soundfile>=0.12.1
+numpy>=1.24.0,<3.0
+sounddevice>=0.4.6,<1.0
+soundfile>=0.12.1,<1.0
 
 # Tokenization
-tiktoken>=0.5.0
+tiktoken>=0.5.0,<1.0
 
 # HTTP and Web, for functions that use web
-requests>=2.31.0
-beautifulsoup4>=4.12.0
-bcrypt>=4.0.0
-PySocks>=1.7.1
+requests>=2.31.0,<3.0
+beautifulsoup4>=4.12.0,<5.0
+bcrypt>=4.0.0,<5.0
+PySocks>=1.7.1,<2.0
 
 # Anthropic Claude API (optional - only needed if using Claude provider)
-anthropic>=0.39.0
+anthropic>=0.39.0,<1.0
 
 # Image resize for LLM
-Pillow>=10.0.0
+Pillow>=10.0.0,<12.0
 
 # PDF parsing
-pypdf>=4.0.0
+pypdf>=4.0.0,<6.0
 
 # Cron schedule parsing
-croniter>=1.3.0
+croniter>=1.3.0,<3.0
 
 # Bitcoin wallet
-bit>=0.8.0
+bit>=0.8.0,<1.0
 
 # Timezone data (required on Windows, bundled on Linux/macOS)
 tzdata>=2024.1

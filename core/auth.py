@@ -15,8 +15,24 @@ RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 5  # attempts per window
 
 
+def _prune_rate_limits() -> None:
+    """Remove stale entries to prevent unbounded memory growth."""
+    now = time.time()
+    if len(_rate_limits) > 1000:
+        stale = [ip for ip, times in _rate_limits.items()
+                 if not times or now - times[-1] > RATE_LIMIT_WINDOW]
+        for ip in stale:
+            del _rate_limits[ip]
+    if len(_endpoint_limits) > 1000:
+        stale = [key for key, times in _endpoint_limits.items()
+                 if not times or now - times[-1] > 300]
+        for key in stale:
+            del _endpoint_limits[key]
+
+
 def check_rate_limit(ip: str) -> bool:
     """Returns True if rate limited, False if OK."""
+    _prune_rate_limits()
     now = time.time()
     _rate_limits[ip] = [t for t in _rate_limits[ip] if now - t < RATE_LIMIT_WINDOW]
     if len(_rate_limits[ip]) >= RATE_LIMIT_MAX:
@@ -37,7 +53,9 @@ def validate_csrf(request: Request, token: Optional[str] = None) -> bool:
     if token is None:
         return False
     session_token = request.session.get('csrf_token')
-    return token is not None and token == session_token
+    if token is None or session_token is None:
+        return False
+    return secrets.compare_digest(token, session_token)
 
 
 async def require_login(request: Request):

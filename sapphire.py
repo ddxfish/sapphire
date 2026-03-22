@@ -154,8 +154,8 @@ class VoiceChatSystem:
                 elif prompt_name == '__story__':
                     logger.info("Startup prompt: story chat (prompt loaded from story engine)")
                     prompt_name = None  # fall through to defaults
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to load startup prompt from chat settings: %s", e)
 
             # Priority 2: chat_defaults.json
             if not prompt_name:
@@ -551,8 +551,8 @@ def run():
             if _tz_name and _tz_name != 'UTC':
                 settings.set('USER_TIMEZONE', _tz_name, persist=True)
                 logger.info(f"Auto-detected timezone: {_tz_name}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to auto-detect timezone: %s", e)
 
     print("Starting Sapphire Voice Chat System")
     try:

@@ -102,8 +102,8 @@ def save_password_hash(password: str) -> str | None:
         logger.error("bcrypt module not available")
         return None
     
-    if not password or len(password) < 4:
-        logger.error("Password too short")
+    if not password or len(password) < 8:
+        logger.error("Password too short (minimum 8 characters)")
         return None
     
     try:
@@ -554,19 +554,18 @@ def ensure_chat_database() -> bool:
     try:
         db_dir.mkdir(parents=True, exist_ok=True)
         
-        conn = sqlite3.connect(str(db_path), timeout=30.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chats (
-                name TEXT PRIMARY KEY,
-                settings TEXT NOT NULL,
-                messages TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(str(db_path), timeout=30.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chats (
+                    name TEXT PRIMARY KEY,
+                    settings TEXT NOT NULL,
+                    messages TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            conn.commit()
         
         logger.info(f"Chat database ready at {db_path}")
         return True

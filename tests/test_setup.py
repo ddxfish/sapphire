@@ -168,11 +168,11 @@ class TestPasswordHash:
                 assert secret_file.exists()
     
     def test_save_password_hash_too_short(self, tmp_path):
-        """Should reject passwords shorter than 4 characters."""
+        """Should reject passwords shorter than 8 characters."""
         from core.setup import save_password_hash
-        
+
         with patch('core.setup.CONFIG_DIR', tmp_path):
-            result = save_password_hash('abc')
+            result = save_password_hash('short')
             
             assert result is None
     

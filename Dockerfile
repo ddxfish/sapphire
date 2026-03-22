@@ -7,7 +7,7 @@
 # ============================================================
 # Stage 1: Base + system deps
 # ============================================================
-ARG BASE_IMAGE=python:3.11
+ARG BASE_IMAGE=python:3.11-slim
 FROM ${BASE_IMAGE} AS base
 
 # Prevent interactive prompts during apt-get (tzdata, etc.)

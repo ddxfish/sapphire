@@ -33,6 +33,7 @@ if [ -d "$SAPPHIRE_DIR/.git" ]; then
     if ! git diff --quiet 2>/dev/null; then
         warn "You have local changes. Stashing them before pull..."
         git stash
+        warn "To recover your changes later, run: cd $SAPPHIRE_DIR && git stash pop"
     fi
 
     git pull || fail "git pull failed — check your network connection"
@@ -60,15 +61,33 @@ echo ""
 warn "This will download ~3-4GB of dependencies. Grab coffee."
 echo ""
 
-# System deps
+# System deps — detect package manager
 info "Installing system packages (may ask for sudo password)..."
-sudo apt-get update -qq
-sudo apt-get install -y libportaudio2 libsndfile1 git || fail "Failed to install system packages"
+if command -v apt-get &>/dev/null; then
+    sudo apt-get update -qq
+    sudo apt-get install -y libportaudio2 libsndfile1 git || fail "Failed to install system packages"
+elif command -v dnf &>/dev/null; then
+    sudo dnf install -y portaudio libsndfile git || fail "Failed to install system packages"
+elif command -v pacman &>/dev/null; then
+    sudo pacman -S --noconfirm portaudio libsndfile git || fail "Failed to install system packages"
+else
+    fail "Unsupported package manager. Please install libportaudio, libsndfile, and git manually, then re-run."
+fi
 
 # Miniconda
 if ! command -v conda &>/dev/null; then
     info "Installing Miniconda..."
     wget -q --show-progress https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
+
+    # Verify download integrity
+    info "Verifying Miniconda checksum..."
+    EXPECTED_SHA=$(curl -sL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh.sha256 | awk '{print $1}')
+    ACTUAL_SHA=$(sha256sum /tmp/miniconda.sh | awk '{print $1}')
+    if [ -n "$EXPECTED_SHA" ] && [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+        rm -f /tmp/miniconda.sh
+        fail "Miniconda checksum mismatch! Expected: $EXPECTED_SHA Got: $ACTUAL_SHA"
+    fi
+
     bash /tmp/miniconda.sh -b -p "$HOME/miniconda3" || fail "Miniconda install failed"
     rm -f /tmp/miniconda.sh
     "$HOME/miniconda3/bin/conda" init bash >/dev/null 2>&1

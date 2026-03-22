@@ -88,8 +88,8 @@ class EventBus:
         try:
             from core.api_fastapi import BOOT_VERSION
             boot_version = BOOT_VERSION
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get BOOT_VERSION: %s", e)
         yield {"type": "connected", "data": {"sub_id": sub_id, "boot_version": boot_version}, "timestamp": time.time()}
 
         try:
@@ -135,8 +135,8 @@ class EventBus:
         try:
             from core.api_fastapi import BOOT_VERSION
             boot_version = BOOT_VERSION
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get BOOT_VERSION for async subscriber: %s", e)
         yield {"type": "connected", "data": {"sub_id": sub_id, "boot_version": boot_version}, "timestamp": time.time()}
 
         try:

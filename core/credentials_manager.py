@@ -244,8 +244,8 @@ class CredentialsManager:
                     for prov in mem_providers.values():
                         if isinstance(prov, dict):
                             prov.pop('api_key', None)
-                except Exception:
-                    pass  # settings_manager may not be loaded yet — save() defense handles it
+                except Exception as e:
+                    logger.debug("Could not strip API keys from in-memory settings: %s", e)
 
         except Exception as e:
             logger.warning(f"Failed to migrate settings.json API keys: {e}")
@@ -303,8 +303,8 @@ class CredentialsManager:
                     for settings_key in self._SERVICE_KEY_MAP:
                         if settings_key in sm._config:
                             sm._config[settings_key] = ''
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Could not strip service keys from in-memory config: %s", e)
 
         except Exception as e:
             logger.warning(f"Failed to migrate service API keys: {e}")
@@ -836,7 +836,8 @@ class CredentialsManager:
                 try:
                     from bit import Key
                     address = Key(wif).address
-                except Exception:
+                except Exception as e:
+                    logger.debug("Could not derive bitcoin address: %s", e)
                     address = '(invalid key)'
             result.append({
                 'scope': scope,

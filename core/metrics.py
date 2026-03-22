@@ -61,8 +61,8 @@ class TokenMetrics:
             import config
             if not getattr(config, 'METRICS_ENABLED', True):
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to check METRICS_ENABLED: %s", e)
         tokens = metadata.get("tokens", {})
         duration = metadata.get("duration_seconds", 0)
 

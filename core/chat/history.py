@@ -948,12 +948,12 @@ class ChatSessionManager:
                 try:
                     conn.execute("DELETE FROM state_current WHERE chat_name = ?", (chat_name,))
                     conn.execute("DELETE FROM state_log WHERE chat_name = ?", (chat_name,))
-                except Exception:
-                    pass  # Tables may not exist if story engine never used
+                except Exception as e:
+                    logger.debug("Could not delete story state for chat %s: %s", chat_name, e)
                 try:
                     conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (chat_name,))
-                except Exception:
-                    pass  # Table may not exist yet
+                except Exception as e:
+                    logger.debug("Could not delete tool_images for chat %s: %s", chat_name, e)
                 conn.commit()
                 logger.info(f"Deleted chat: {chat_name}")
                 
@@ -1004,8 +1004,8 @@ class ChatSessionManager:
             if marker.exists():
                 name = marker.read_text(encoding='utf-8').strip()
                 return name if name else None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not read last active chat marker: %s", e)
         return None
 
     def _save_last_active(self, chat_name):
@@ -1013,8 +1013,8 @@ class ChatSessionManager:
         marker = self.history_dir / ".active_chat"
         try:
             marker.write_text(chat_name, encoding='utf-8')
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Could not save active chat marker: %s", e)
 
     def set_active_chat(self, chat_name: str) -> bool:
         """Switch to a different chat - loads messages AND settings."""
@@ -1211,8 +1211,8 @@ class ChatSessionManager:
             with self._get_connection() as conn:
                 conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (self.active_chat_name,))
                 conn.commit()
-        except Exception:
-            pass  # Table may not exist yet
+        except Exception as e:
+            logger.debug("Could not clear tool_images for %s: %s", self.active_chat_name, e)
 
         # Always clear state for this chat (even if engine currently disabled)
         try:
