@@ -1,6 +1,6 @@
 {
   "name": "avatar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "3D Avatar \u2014 animated presence that reacts to Sapphire's state in real-time",
   "author": "sapphire",
   "icon": "\ud83d\udc8e",
@@ -13,6 +13,9 @@
       "icon": "\ud83d\udc8e",
       "content": "sidebar.html",
       "script": "sidebar.js"
+    },
+    "hooks": {
+      "prompt_inject": "hooks/prompt_inject.py"
     }
   }
 }

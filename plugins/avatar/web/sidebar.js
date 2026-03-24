@@ -258,8 +258,12 @@ export async function init(container) {
     // --- State machine ---
     let current = 'wave';
     let resetTimer = null;
+    let _aiAnimLockUntil = 0;  // AI-triggered animations are protected until this timestamp
 
     function setState(name, force = false) {
+        // AI-triggered animation guard — block all state changes during the lock window
+        if (Date.now() < _aiAnimLockUntil) return;
+
         const state = STATES[name];
         if (!state) return;
 
@@ -287,6 +291,51 @@ export async function init(container) {
         const unsub = eventBus.on(event, () => setState(transition.state, transition.force));
         if (unsub) unsubs.push(unsub);
     }
+
+    // AI-triggered animations: <<avatar: trackname>> in chat responses
+    let _avatarReturnTimer = null;
+    const avatarUnsub = eventBus.on('avatar_animate', (data) => {
+        const { track, duration } = data || {};
+        console.log(`[Avatar] Received avatar_animate: track="${track}" lock=${Date.now() < _aiAnimLockUntil}`);
+        const action = actions[track];
+        if (!action) {
+            console.warn(`[Avatar] Track "${track}" not found in model`);
+            return;
+        }
+
+        clearTimeout(_avatarReturnTimer);
+
+        // Lock state machine — protect this animation for its duration (min 2s)
+        const clipDuration = action.getClip().duration * 1000;
+        const lockMs = duration || Math.max(clipDuration, 2000);
+        _aiAnimLockUntil = Date.now() + lockMs;
+
+        // Play as oneshot overlay
+        action.reset();
+        action.setLoop(THREE.LoopOnce);
+        action.clampWhenFinished = true;
+        if (currentAction) action.crossFadeFrom(currentAction, CROSSFADE_MS / 1000, true);
+        action.play();
+        currentAction = action;
+
+        // Return to previous state when done
+        const returnToPrev = () => {
+            if (currentAction !== action) return;  // something else took over
+            crossfadeTo(current);  // re-enter current state machine state
+        };
+
+        if (duration) {
+            _avatarReturnTimer = setTimeout(returnToPrev, duration);
+        } else {
+            mixer.addEventListener('finished', function onDone(e) {
+                if (e.action === action) {
+                    mixer.removeEventListener('finished', onDone);
+                    returnToPrev();
+                }
+            });
+        }
+    });
+    if (avatarUnsub) unsubs.push(avatarUnsub);
 
     // Render loop
     const clock = new THREE.Clock();

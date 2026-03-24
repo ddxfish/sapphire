@@ -57,7 +57,7 @@ export async function handleSend() {
     try {
         let streamOk = false;
         const audioFn = getTtsEnabled() ? audio.playText : null;
-        
+
         await api.streamChat(
             txt,
             chunk => {

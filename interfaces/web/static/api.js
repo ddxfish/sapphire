@@ -1,5 +1,6 @@
 // api.js - Backend communication
 import { fetchWithTimeout } from './shared/fetch.js';
+import { dispatch } from './core/event-bus.js';
 
 export { fetchWithTimeout };
 
@@ -167,6 +168,7 @@ const processSSEData = (data, handlers) => {
 };
 
 export const streamChatContinue = async (text, prefill, onChunk, onComplete, onError, signal = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null) => {
+    onChunk = _wrapChunkWithAvatarScan(onChunk);
     let reader = null;
     try {
         const res = await fetch('/api/chat/stream', {
@@ -233,7 +235,27 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
     }
 };
 
+// Avatar tag scanner — wraps onChunk to detect <<avatar: trackname>> in streamed responses
+function _wrapChunkWithAvatarScan(onChunk) {
+    let buf = '';
+    return (chunk) => {
+        onChunk(chunk);
+        buf += chunk;
+        const re = /<<avatar:\s*([a-zA-Z0-9_]+)(?:\s+(\d+(?:\.\d+)?s))?>>/g;
+        for (const match of buf.matchAll(re)) {
+            const track = match[1];
+            const duration = match[2] ? parseFloat(match[2]) * 1000 : null;
+            console.log(`[Avatar] Tag detected: track="${track}" duration=${duration}`);
+            dispatch('avatar_animate', { track, duration });
+        }
+        // Keep only possible partial tag
+        const lastOpen = buf.lastIndexOf('<<');
+        buf = lastOpen >= 0 && buf.indexOf('>>', lastOpen) < 0 ? buf.slice(lastOpen) : '';
+    };
+}
+
 export const streamChat = async (text, onChunk, onComplete, onError, signal = null, prefill = null, onToolStart = null, onToolEnd = null, onStreamStarted = null, onIterationStart = null, images = null, files = null) => {
+    onChunk = _wrapChunkWithAvatarScan(onChunk);
     let reader = null;
     try {
         const body = { text };
