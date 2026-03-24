@@ -33,7 +33,11 @@
   
   "BACKUPS_ENABLED": {
     "short": "Enable automatic backup system",
-    "long": "When enabled, the system will automatically create backups of the user/ directory on a schedule. Daily backups run at 3am, weekly on Sundays, monthly on the 1st. Manual backups can be triggered from the UI."
+    "long": "When enabled, the system will automatically create backups of the user/ directory on a schedule. Runs at BACKUPS_HOUR daily, weekly on Sundays, monthly on the 1st. Manual backups can be triggered from the UI."
+  },
+  "BACKUPS_HOUR": {
+    "short": "Hour of day to run scheduled backups (0-23, local time)",
+    "long": "The hour in local time when daily/weekly/monthly backups run. Default is 3 (3am). Set to any hour 0-23. Uses your system's local timezone."
   },
   "BACKUPS_KEEP_DAILY": {
     "short": "Number of daily backups to retain",

@@ -504,6 +504,7 @@ class VoiceChatSystem:
             ("settings watcher", settings.stop_file_watcher),
             ("prompt watcher", lambda: prompts.prompt_manager.stop_file_watcher()),
             ("toolset watcher", toolset_manager.stop_file_watcher),
+            ("spice set watcher", lambda: __import__('core.spice_sets', fromlist=['spice_set_manager']).spice_set_manager.stop_file_watcher()),
             ("plugin watcher", _pl.stop_watcher),
         ]
 
@@ -612,6 +613,10 @@ def run():
 
         toolset_manager.start_file_watcher()
         logger.info("Toolset file watcher started")
+
+        from core.spice_sets import spice_set_manager
+        spice_set_manager.start_file_watcher()
+        logger.info("Spice set file watcher started")
 
         # Display clickable URL for user
         protocol = 'https' if config.WEB_UI_SSL_ADHOC else 'http'

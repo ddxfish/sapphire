@@ -30,6 +30,7 @@
   
   "backups": {
     "BACKUPS_ENABLED": true,
+    "BACKUPS_HOUR": 3,
     "BACKUPS_KEEP_DAILY": 7,
     "BACKUPS_KEEP_WEEKLY": 4,
     "BACKUPS_KEEP_MONTHLY": 3,

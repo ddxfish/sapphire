@@ -142,16 +142,16 @@ class Backup:
 
 
     def start_scheduler(self):
-        """Start background thread that runs scheduled backups daily at 3am."""
+        """Start background thread that runs scheduled backups at BACKUPS_HOUR (default 3am local time)."""
         import threading
         from datetime import timedelta
 
         def _backup_loop():
             import time
             while True:
+                hour = getattr(config, 'BACKUPS_HOUR', 3)
                 now = datetime.now()
-                # Calculate seconds until next 3am
-                target = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                target = now.replace(hour=hour, minute=0, second=0, microsecond=0)
                 if target <= now:
                     target += timedelta(days=1)
                 wait_seconds = (target - now).total_seconds()
@@ -165,7 +165,8 @@ class Backup:
 
         thread = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
         thread.start()
-        logger.info("Backup scheduler started (daily at 3am)")
+        hour = getattr(config, 'BACKUPS_HOUR', 3)
+        logger.info(f"Backup scheduler started (daily at {hour}:00 local time)")
 
 
 backup_manager = Backup()

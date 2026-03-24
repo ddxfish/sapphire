@@ -22,9 +22,12 @@ class STTProviderRegistry(BaseProviderRegistry):
             return
         self._core_registered = True
         from core.stt.providers.faster_whisper import FasterWhisperProvider
+        from core.stt.providers.fireworks_whisper import FireworksWhisperProvider
         from core.stt.stt_null import NullWhisperClient
         self.register_core('faster_whisper', FasterWhisperProvider, 'Faster Whisper (Local)',
                           is_local=True)
+        self.register_core('fireworks_whisper', FireworksWhisperProvider, 'Fireworks Whisper (Cloud)',
+                          requires_api_key=True, api_key_env='STT_FIREWORKS_API_KEY')
         self.register_core('none', NullWhisperClient, 'None (disabled)', is_local=True)
 
     def get_all(self):
