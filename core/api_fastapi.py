@@ -106,6 +106,17 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
             return FileResponse(file_path, media_type=content_type)
     return JSONResponse({"error": "Not found"}, status_code=404)
 
+# Avatar assets (user/avatar/)
+@app.get("/api/avatar/{filename}")
+async def serve_avatar_asset(filename: str, _=Depends(require_login)):
+    """Serve avatar files from user/avatar/."""
+    avatar_dir = (PROJECT_ROOT / "user" / "avatar").resolve()
+    file_path = (avatar_dir / filename).resolve()
+    if not str(file_path).startswith(str(avatar_dir)) or not file_path.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+    return FileResponse(file_path, media_type=content_type)
+
 # Workspace file serving — Claude Code project outputs
 @app.get("/workspace/{project}/{path:path}")
 async def serve_workspace(project: str, path: str, _=Depends(require_login)):

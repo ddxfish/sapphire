@@ -89,13 +89,14 @@ export default {
             if (data?.key === 'TTS_PROVIDER') refreshVoiceDropdown();
         });
 
-        // Accordion headers in sidebar
-        container.querySelectorAll('.sidebar-accordion-header').forEach(header => {
-            header.addEventListener('click', () => {
-                const content = header.nextElementSibling;
-                const open = header.classList.toggle('open');
-                content.style.display = open ? 'block' : 'none';
-            });
+        // Accordion headers in sidebar (event delegation — handles core + plugin accordions)
+        const sbFull = container.querySelector('.sb-full-content');
+        if (sbFull) sbFull.addEventListener('click', e => {
+            const header = e.target.closest('.sidebar-accordion-header');
+            if (!header) return;
+            const content = header.nextElementSibling;
+            const open = header.classList.toggle('open');
+            content.style.display = open ? 'block' : 'none';
         });
 
         // Sidebar chat picker
@@ -390,6 +391,67 @@ async function loadDocuments(container, chatName) {
         }
     } catch (e) {
         console.warn('Failed to load documents:', e);
+    }
+}
+
+async function _loadPluginAccordions(container, init) {
+    const slot = container.querySelector('#sb-plugin-accordions');
+    if (!slot) return;
+
+    // Get plugin list with accordion declarations
+    const enabledPlugins = new Set(init?.plugins_config?.enabled || []);
+    let plugins = [];
+    try {
+        const resp = await fetch('/api/webui/plugins');
+        if (resp.ok) {
+            const data = await resp.json();
+            plugins = (data.plugins || []).filter(p =>
+                enabledPlugins.has(p.name) && p.sidebar_accordion
+            );
+        }
+    } catch (e) { return; }
+
+    // Clear previous plugin accordions
+    slot.innerHTML = '';
+
+    for (const plugin of plugins) {
+        const acc = plugin.sidebar_accordion;
+        const section = document.createElement('div');
+        section.className = 'sidebar-section sidebar-accordion';
+        section.dataset.pluginAccordion = plugin.name;
+
+        const header = document.createElement('div');
+        header.className = 'sidebar-accordion-header';
+        header.innerHTML = `<span class="accordion-arrow">&#x25B6;</span>` +
+            `<span>${acc.icon || ''} ${acc.title || plugin.name}</span>`;
+
+        const content = document.createElement('div');
+        content.className = 'sidebar-accordion-content';
+        content.style.display = 'none';
+
+        section.appendChild(header);
+        section.appendChild(content);
+        slot.appendChild(section);
+
+        // Load HTML content from plugin web dir
+        if (acc.content) {
+            try {
+                const htmlResp = await fetch(`/plugin-web/${plugin.name}/${acc.content}`);
+                if (htmlResp.ok) content.innerHTML = await htmlResp.text();
+            } catch (e) {
+                content.innerHTML = `<div class="sb-field" style="color:var(--error)">Failed to load</div>`;
+            }
+        }
+
+        // Load + init JS module (re-inits on each sidebar reload — module is cached by browser)
+        if (acc.script) {
+            try {
+                const mod = await import(`/plugin-web/${plugin.name}/${acc.script}`);
+                if (mod.init) mod.init(content, plugin.name);
+            } catch (e) {
+                console.warn(`[SIDEBAR] Failed to load accordion script for ${plugin.name}:`, e);
+            }
+        }
     }
 }
 
@@ -720,6 +782,9 @@ async function loadSidebar() {
 
         // Load per-chat documents
         loadDocuments(container, chatName);
+
+        // Inject plugin-registered accordions
+        await _loadPluginAccordions(container, init);
 
         sidebarLoaded = true;
     } catch (e) {

@@ -1,3 +1,6 @@
+# 2.4.5 - Avatar and Sidebar
+- Plugins can tap into sidebar and SSE
+- Avatar plugin waved at me and my heart skipped a beat
 # 2.4.4 - Modular core
 - STT TTS and embeddings are modular
 - can be switched via plugins
