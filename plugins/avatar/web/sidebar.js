@@ -3,6 +3,7 @@ import * as eventBus from '/static/core/event-bus.js';
 import * as audio from '/static/audio.js';
 import { triggerSendWithText } from '/static/handlers/send-handlers.js';
 import { createEnvironment } from './environment.js';
+import { createCameraOrbitSystem } from './camera-orbits.js';
 
 const THREE_CDN = 'https://esm.sh/three@0.170.0';
 const GLTF_CDN = 'https://esm.sh/three@0.170.0/addons/loaders/GLTFLoader.js';
@@ -285,6 +286,19 @@ export async function init(container) {
     controls.maxPolarAngle = Math.PI * 0.85;
     controls.update();
 
+    // Camera orbit system
+    const orbitSystem = createCameraOrbitSystem(camera, controls, THREE);
+
+    // Orbit toggle button
+    const btnOrbit = container.querySelector('#avatar-btn-orbit');
+    if (btnOrbit) {
+        btnOrbit.classList.add('orbit-active');  // on by default
+        btnOrbit.addEventListener('click', () => {
+            const on = orbitSystem.toggle();
+            btnOrbit.classList.toggle('orbit-active', on);
+        });
+    }
+
     // Double-click to reset camera
     canvas.addEventListener('dblclick', () => {
         camera.position.set(camPos.x, camPos.y, camPos.z);
@@ -350,6 +364,10 @@ export async function init(container) {
         const maxDim = Math.max(size.x, size.y, size.z);
         controls.minDistance = maxDim * 0.3;
         controls.maxDistance = maxDim * 10;
+
+        // Feed model info to orbit system and randomize start position
+        orbitSystem.setModelInfo(center, size.y);
+        orbitSystem.randomStart();
 
         mixer = new THREE.AnimationMixer(gltf.scene);
 
@@ -531,6 +549,7 @@ export async function init(container) {
         const delta = clock.getDelta();
         if (mixer) mixer.update(delta);
         env.update(delta);
+        orbitSystem.update(delta);
         controls.update();
         resize();
         renderer.render(scene, camera);
@@ -545,6 +564,7 @@ export async function init(container) {
         clearTimeout(_avatarReturnTimer);
         clearInterval(_micPoll);
         unsubs.forEach(fn => fn());
+        orbitSystem.cleanup();
         controls.dispose();
         renderer.dispose();
         document.removeEventListener('keydown', _onEscKey);

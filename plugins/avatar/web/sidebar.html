@@ -54,6 +54,10 @@
     .avatar-ctrl-btn:hover {
         background: rgba(74,158,255,0.6);
     }
+    .avatar-ctrl-btn.orbit-active {
+        background: rgba(74,158,255,0.35);
+        border: 1px solid rgba(74,158,255,0.5);
+    }
 
     /* Fullwindow STT mic */
     #avatar-mic {
@@ -94,6 +98,7 @@
 <div id="avatar-display" style="position:relative; width:100%; padding:0;">
     <canvas id="avatar-canvas" style="width:100%; height:280px; display:block; border-radius:6px;"></canvas>
     <div id="avatar-controls">
+        <button class="avatar-ctrl-btn" id="avatar-btn-orbit" title="Toggle auto-orbit">&#x27F3;</button>
         <button class="avatar-ctrl-btn" id="avatar-btn-expand" title="Expand">&#x2922;</button>
         <button class="avatar-ctrl-btn" id="avatar-btn-fullscreen" title="Fullscreen">&#x26F6;</button>
     </div>
