@@ -73,6 +73,67 @@ export async function init(container) {
     const statusEl = container.querySelector('#avatar-status');
     if (!canvas) return;
 
+    // --- Display mode controls ---
+    const displayEl = container.querySelector('#avatar-display');
+    const btnExpand = container.querySelector('#avatar-btn-expand');
+    const btnFullscreen = container.querySelector('#avatar-btn-fullscreen');
+    let displayMode = 'sidebar';
+
+    function setDisplayMode(mode) {
+        if (mode === displayMode) return;
+        if (displayMode === 'fullscreen' && document.fullscreenElement) {
+            document.exitFullscreen?.();
+        }
+        displayMode = mode;
+        if (mode === 'sidebar') {
+            displayEl.classList.remove('avatar-fullwindow');
+            canvas.style.height = '280px';
+            if (btnExpand) { btnExpand.innerHTML = '&#x2922;'; btnExpand.title = 'Expand'; }
+            if (btnFullscreen) btnFullscreen.style.display = '';
+        } else if (mode === 'fullwindow') {
+            displayEl.classList.add('avatar-fullwindow');
+            canvas.style.height = '100%';
+            if (btnExpand) { btnExpand.innerHTML = '&#x2715;'; btnExpand.title = 'Collapse'; }
+            if (btnFullscreen) btnFullscreen.style.display = '';
+        } else if (mode === 'fullscreen') {
+            displayEl.classList.add('avatar-fullwindow');
+            canvas.style.height = '100%';
+            displayEl.requestFullscreen?.().catch(() => { displayMode = 'fullwindow'; });
+            if (btnExpand) { btnExpand.innerHTML = '&#x2715;'; btnExpand.title = 'Exit fullscreen'; }
+            if (btnFullscreen) btnFullscreen.style.display = 'none';
+        }
+    }
+
+    btnExpand?.addEventListener('click', () => {
+        setDisplayMode(displayMode === 'sidebar' ? 'fullwindow' : 'sidebar');
+    });
+    btnFullscreen?.addEventListener('click', () => setDisplayMode('fullscreen'));
+
+    const _onEscKey = (e) => {
+        if (e.key === 'Escape' && displayMode === 'fullwindow') {
+            setDisplayMode('sidebar');
+        }
+    };
+    const _onFsChange = () => {
+        if (!document.fullscreenElement && displayMode === 'fullscreen') {
+            displayMode = 'fullwindow'; // prevent recursive exitFullscreen call
+            setDisplayMode('sidebar');
+        }
+    };
+    document.addEventListener('keydown', _onEscKey);
+    document.addEventListener('fullscreenchange', _onFsChange);
+
+    // Early cleanup — covers cases where Three.js or model loading fails
+    _cleanup = () => {
+        document.removeEventListener('keydown', _onEscKey);
+        document.removeEventListener('fullscreenchange', _onFsChange);
+        if (displayMode !== 'sidebar') {
+            displayEl.classList.remove('avatar-fullwindow');
+            canvas.style.height = '280px';
+        }
+        _cleanup = null;
+    };
+
     // --- Load config from backend ---
     let avatarConfig = {};
     let modelFile = 'sapphire.glb';
@@ -400,6 +461,12 @@ export async function init(container) {
         unsubs.forEach(fn => fn());
         controls.dispose();
         renderer.dispose();
+        document.removeEventListener('keydown', _onEscKey);
+        document.removeEventListener('fullscreenchange', _onFsChange);
+        if (displayMode !== 'sidebar') {
+            displayEl.classList.remove('avatar-fullwindow');
+            canvas.style.height = '280px';
+        }
         _cleanup = null;
     };
 
