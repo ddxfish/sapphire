@@ -88,7 +88,7 @@ class ContinuityScheduler:
 
         # Per-task run state: tracks busy flag, queued fires, and last matched minute
         self._task_running: Dict[str, bool] = {}
-        self._task_pending: Dict[str, int] = {}
+        self._task_pending: Dict[str, list] = {}  # task_id -> [(event_data, reply_cb), ...]
         self._task_last_matched: Dict[str, str] = {}  # task_id -> "YYYY-MM-DD HH:MM"
         self._task_progress: Dict[str, Dict] = {}  # task_id -> {iteration, total}
         self._event_threads: list = []  # track spawned event worker threads
@@ -334,7 +334,7 @@ class ContinuityScheduler:
                     task[key] = data[key]
             
             # Reset run state — clears pending queue and allows fresh cron match
-            self._task_pending[task_id] = 0
+            self._task_pending[task_id] = []
             self._task_last_matched.pop(task_id, None)
 
             self._save_tasks()
@@ -420,7 +420,7 @@ class ContinuityScheduler:
                 live_task = self._tasks.get(task_id)
                 if not live_task or not live_task.get("enabled", True):
                     logger.info(f"[Continuity] '{task_name}' disabled — stopping execution")
-                    self._task_pending[task_id] = 0
+                    self._task_pending[task_id] = []
                     self._task_running[task_id] = False
                     self._task_progress.pop(task_id, None)
                     break
@@ -453,9 +453,10 @@ class ContinuityScheduler:
 
             # Check for queued fires
             with self._lock:
-                if self._task_pending.get(task_id, 0) > 0:
-                    self._task_pending[task_id] -= 1
-                    logger.info(f"[Continuity] '{task_name}' draining queue ({self._task_pending[task_id]} remaining)")
+                queue = self._task_pending.get(task_id, [])
+                if queue:
+                    queue.pop(0)  # Cron queues don't carry data, just drain
+                    logger.info(f"[Continuity] '{task_name}' draining queue ({len(queue)} remaining)")
                     continue  # Run again immediately
                 else:
                     self._task_running[task_id] = False
@@ -529,9 +530,10 @@ class ContinuityScheduler:
             # If task is already running, queue it instead of overlapping
             with self._lock:
                 if self._task_running.get(task_id, False):
-                    self._task_pending[task_id] = self._task_pending.get(task_id, 0) + 1
-                    logger.info(f"[Continuity] '{task_name}' busy — queued (pending: {self._task_pending[task_id]})")
-                    self._log_activity(task_id, task_name, "queued", {"pending": self._task_pending[task_id]})
+                    queue = self._task_pending.setdefault(task_id, [])
+                    queue.append((None, None))  # Cron queues don't carry event data
+                    logger.info(f"[Continuity] '{task_name}' busy — queued (pending: {len(queue)})")
+                    self._log_activity(task_id, task_name, "queued", {"pending": len(queue)})
                     continue
                 self._task_running[task_id] = True
 
@@ -658,40 +660,46 @@ class ContinuityScheduler:
                     logger.debug(f"[Continuity] '{task_name}' filter active but event data not parseable as JSON, rejecting")
                     return {"success": False, "error": "Event data not JSON-parseable, filter requires JSON"}
 
-        # If already running, queue
+        # If already running, queue with actual event data (not just a counter)
         with self._lock:
             if self._task_running.get(task_id, False):
-                pending = self._task_pending.get(task_id, 0)
-                if pending >= 50:
-                    logger.warning(f"[Continuity] '{task_name}' queue full ({pending} pending), dropping event")
+                queue = self._task_pending.get(task_id, [])
+                if len(queue) >= 50:
+                    logger.warning(f"[Continuity] '{task_name}' queue full ({len(queue)} pending), dropping event")
                     return {"success": False, "error": "Event queue full"}
-                self._task_pending[task_id] = pending + 1
-                logger.info(f"[Continuity] '{task_name}' busy — queued event ({pending + 1} pending)")
+                queue.append((event_data, reply_callback))
+                self._task_pending[task_id] = queue
+                logger.info(f"[Continuity] '{task_name}' busy — queued event ({len(queue)} pending)")
                 return {"success": True, "queued": True}
             self._task_running[task_id] = True
 
         # Build response callback — saves last_response + routes reply to daemon source
         internal_cb = self._make_response_callback(task_id)
-        def _response_callback(response_text: str):
-            internal_cb(response_text)
-            if reply_callback and response_text:
-                try:
-                    event_dict = json.loads(event_data) if isinstance(event_data, str) else event_data
-                except (json.JSONDecodeError, TypeError):
-                    event_dict = {"raw": event_data}
-                try:
-                    reply_callback(task, event_dict, response_text)
-                except Exception as e:
-                    logger.error(f"[Continuity] Reply callback failed for '{task_name}': {e}")
+        def _make_reply_cb(cur_event_data, cur_reply_callback):
+            def _response_callback(response_text: str):
+                internal_cb(response_text)
+                if cur_reply_callback and response_text:
+                    try:
+                        event_dict = json.loads(cur_event_data) if isinstance(cur_event_data, str) else cur_event_data
+                    except (json.JSONDecodeError, TypeError):
+                        event_dict = {"raw": cur_event_data}
+                    try:
+                        cur_reply_callback(task, event_dict, response_text)
+                    except Exception as e:
+                        logger.error(f"[Continuity] Reply callback failed for '{task_name}': {e}")
+            return _response_callback
 
         # Run on worker thread — executes once then drains any queued events
+        cur_event_data = event_data
+        cur_reply_callback = reply_callback
         def _run():
+            nonlocal cur_event_data, cur_reply_callback
             while True:
                 # Check task still exists and is enabled
                 with self._lock:
                     live_task = self._tasks.get(task_id)
                     if not live_task or not live_task.get("enabled", True):
-                        self._task_pending[task_id] = 0
+                        self._task_pending[task_id] = []
                         self._task_running[task_id] = False
                         self._task_progress.pop(task_id, None)
                         break
@@ -700,9 +708,9 @@ class ContinuityScheduler:
                 try:
                     result = self.executor.run(
                         task,
-                        event_data=event_data,
+                        event_data=cur_event_data,
                         progress_callback=self._make_progress_callback(task_id),
-                        response_callback=_response_callback,
+                        response_callback=_make_reply_cb(cur_event_data, cur_reply_callback),
                     )
                     with self._lock:
                         if task_id in self._tasks:
@@ -721,11 +729,12 @@ class ContinuityScheduler:
                     with self._lock:
                         self._task_progress.pop(task_id, None)
 
-                # Drain queued events or release
+                # Drain queued events (with their actual data) or release
                 with self._lock:
-                    if self._task_pending.get(task_id, 0) > 0:
-                        self._task_pending[task_id] -= 1
-                        logger.info(f"[Continuity] '{task_name}' draining event queue ({self._task_pending[task_id]} remaining)")
+                    queue = self._task_pending.get(task_id, [])
+                    if queue:
+                        cur_event_data, cur_reply_callback = queue.pop(0)
+                        logger.info(f"[Continuity] '{task_name}' draining event queue ({len(queue)} remaining)")
                         continue
                     else:
                         self._task_running[task_id] = False

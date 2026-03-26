@@ -237,10 +237,32 @@ async def security_headers(request: Request, call_next):
 
 
 # Session middleware - added AFTER HTTP middleware so it's outermost (Starlette LIFO)
-_password_hash = get_password_hash()
+# Use a dedicated session secret file (not the password hash) so sessions survive
+# password changes and are stable from first boot through setup completion.
+def _get_session_secret():
+    from core.setup import CONFIG_DIR
+    secret_file = CONFIG_DIR / 'session_secret'
+    if secret_file.exists():
+        try:
+            return secret_file.read_text().strip()
+        except Exception:
+            pass
+    # Generate and persist a new secret
+    secret = secrets.token_hex(32)
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        secret_file.write_text(secret)
+        import sys
+        if sys.platform != 'win32':
+            import os as _os
+            _os.chmod(secret_file, 0o600)
+    except Exception:
+        pass  # Falls back to ephemeral secret (session won't survive restart)
+    return secret
+
 app.add_middleware(
     SessionMiddleware,
-    secret_key=_password_hash if _password_hash else secrets.token_hex(32),
+    secret_key=_get_session_secret(),
     session_cookie="sapphire_session",
     max_age=30 * 24 * 60 * 60,  # 30 days
     same_site="lax",

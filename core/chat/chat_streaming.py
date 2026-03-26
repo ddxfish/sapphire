@@ -78,6 +78,7 @@ class StreamingChat:
             self.cancel_flag = False
             self.current_stream = None
             self.ephemeral = False
+            self.main_chat.session_manager._is_streaming = True
 
             # Update story engine FIRST (before building messages) based on current settings
             self.main_chat._update_story_engine()
@@ -756,4 +757,5 @@ class StreamingChat:
             self._cleanup_stream()
             self.cancel_flag = False
             self.is_streaming = False
+            self.main_chat.session_manager._is_streaming = False
             publish(Events.AI_TYPING_END)

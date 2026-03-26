@@ -624,6 +624,8 @@ class ChatSessionManager:
         
         # Track if we're in an active tool cycle (for Claude thinking_raw)
         self._in_tool_cycle = False
+        # Prevent chat switching during active streaming (would corrupt both chats)
+        self._is_streaming = False
         
         # Initialize database
         self._init_db()
@@ -1024,6 +1026,10 @@ class ChatSessionManager:
         with self._lock:
             if chat_name == self.active_chat_name:
                 return True
+
+            if self._is_streaming:
+                logger.warning(f"Cannot switch to '{chat_name}' — streaming in progress on '{self.active_chat_name}'")
+                return False
 
             self._save_current_chat()
 

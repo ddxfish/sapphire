@@ -364,7 +364,8 @@ const signalMicActive = (active) => {
     fetch('/api/mic/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-        body: JSON.stringify({ active })
+        body: JSON.stringify({ active }),
+        keepalive: !active,  // keepalive on deactivation — survives tab close/navigation
     }).catch(() => {});
 };
 
