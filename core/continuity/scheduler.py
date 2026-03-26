@@ -171,11 +171,13 @@ class ContinuityScheduler:
             self._activity = []
     
     def _save_activity(self):
-        """Save activity log to JSON file."""
+        """Save activity log to JSON file (atomic write)."""
         try:
             data = {"activity": self._activity[-50:]}  # Keep last 50
-            with open(self._activity_path, 'w', encoding='utf-8') as f:
+            tmp_path = self._activity_path.with_suffix('.tmp')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
+            tmp_path.replace(self._activity_path)
         except Exception as e:
             logger.error(f"[Continuity] Failed to save activity: {e}")
     

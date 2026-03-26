@@ -70,7 +70,8 @@ export default {
             result.textContent = '';
             result.style.color = '';
             try {
-                const res = await fetch('/api/tts/test', { method: 'POST' });
+                const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                const res = await fetch('/api/tts/test', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
                 if (!res.ok) throw new Error(`Server error (${res.status})`);
                 const data = await res.json();
                 if (data.success) {

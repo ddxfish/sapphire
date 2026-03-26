@@ -303,7 +303,8 @@ export default {
                 rescanBtn.disabled = true;
                 rescanBtn.textContent = 'Scanning...';
                 try {
-                    const res = await fetch('/api/plugins/rescan', { method: 'POST' });
+                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                    const res = await fetch('/api/plugins/rescan', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
                     if (!res.ok) throw new Error('Rescan failed');
                     const data = await res.json();
                     const added = data.added?.length || 0;

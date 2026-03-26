@@ -381,7 +381,8 @@ class SetupWizard {
     }
 
     try {
-      const res = await fetch('/api/system/restart', { method: 'POST' });
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+      const res = await fetch('/api/system/restart', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
       if (res.ok) {
         // Show restarting message
         const content = this.modal.querySelector('.setup-wizard-content');

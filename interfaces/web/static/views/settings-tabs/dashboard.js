@@ -49,7 +49,8 @@ export default {
         el.querySelector('#dash-restart')?.addEventListener('click', async () => {
             if (!confirm('Restart Sapphire?')) return;
             try {
-                await fetch('/api/system/restart', { method: 'POST' });
+                const csrf1 = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                await fetch('/api/system/restart', { method: 'POST', headers: { 'X-CSRF-Token': csrf1 } });
                 ui.showToast('Restarting...', 'success');
                 setTimeout(() => pollForRestart(), 2000);
             } catch { ui.showToast('Restart failed', 'error'); }
@@ -59,7 +60,8 @@ export default {
         el.querySelector('#dash-shutdown')?.addEventListener('click', async () => {
             if (!confirm('Shut down Sapphire? You will need to restart it manually.')) return;
             try {
-                await fetch('/api/system/shutdown', { method: 'POST' });
+                const csrf2 = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                await fetch('/api/system/shutdown', { method: 'POST', headers: { 'X-CSRF-Token': csrf2 } });
                 ui.showToast('Shutting down...', 'success');
             } catch { ui.showToast('Shutdown failed', 'error'); }
         });
@@ -132,7 +134,8 @@ async function doUpdate(el) {
     if (btn) { btn.disabled = true; btn.textContent = 'Updating...'; }
 
     try {
-        const res = await fetch('/api/system/update', { method: 'POST' });
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        const res = await fetch('/api/system/update', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
         if (!res.ok) {
             const err = await res.json();
             throw new Error(err.detail || 'Update failed');

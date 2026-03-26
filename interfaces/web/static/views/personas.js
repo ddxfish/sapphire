@@ -522,7 +522,8 @@ function bindEvents() {
     // Clear default
     container.querySelector('#pa-clear-default')?.addEventListener('click', async () => {
         try {
-            await fetch('/api/personas/default', { method: 'DELETE' });
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            await fetch('/api/personas/default', { method: 'DELETE', headers: { 'X-CSRF-Token': csrf } });
             defaultPersona = '';
             render();
             ui.showToast('Default cleared', 'success');

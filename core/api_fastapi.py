@@ -326,6 +326,13 @@ async def setup_submit(request: Request):
         return RedirectResponse(url="/setup?error=rate", status_code=302)
 
     form = await request.form()
+
+    # CSRF check
+    csrf_token = form.get('csrf_token')
+    if not validate_csrf(request, csrf_token):
+        logger.warning(f"CSRF validation failed on setup from {client_ip}")
+        return RedirectResponse(url="/setup?error=csrf", status_code=302)
+
     password = form.get('password', '')
     confirm = form.get('confirm', '')
 
@@ -405,7 +412,8 @@ from core.tts.utils import validate_voice as _validate_tts_voice, default_voice 
 
 
 def _apply_chat_settings(system, settings: dict):
-    """Apply chat settings to the system (TTS, prompt, ability, state engine)."""
+    """Apply chat settings to the system (TTS, prompt, ability, state engine).
+    Each section is isolated so one failure doesn't skip the rest."""
     try:
         if "voice" in settings:
             voice = _validate_tts_voice(settings["voice"])
@@ -414,7 +422,10 @@ def _apply_chat_settings(system, settings: dict):
             system.tts.set_pitch(settings["pitch"])
         if "speed" in settings:
             system.tts.set_speed(settings["speed"])
+    except Exception as e:
+        logger.error(f"Error applying TTS settings: {e}")
 
+    try:
         if "prompt" in settings:
             prompt_name = settings["prompt"]
             prompt_data = prompts.get_prompt(prompt_name)
@@ -427,10 +438,16 @@ def _apply_chat_settings(system, settings: dict):
                     prompts.apply_scenario(prompt_name)
 
                 logger.info(f"Applied prompt: {prompt_name}")
+    except Exception as e:
+        logger.error(f"Error applying prompt settings: {e}")
 
+    try:
         from core.chat.function_manager import apply_scopes_from_settings
         apply_scopes_from_settings(system.llm_chat.function_manager, settings)
+    except Exception as e:
+        logger.error(f"Error applying scope settings: {e}")
 
+    try:
         if "spice_set" in settings:
             from core.spice_sets import spice_set_manager
             set_name = settings["spice_set"]
@@ -442,14 +459,20 @@ def _apply_chat_settings(system, settings: dict):
                 prompts.invalidate_spice_picks()
                 spice_set_manager.active_name = set_name
                 logger.info(f"Applied spice set: {set_name}")
+    except Exception as e:
+        logger.error(f"Error applying spice set: {e}")
 
+    try:
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
             toolset_name = settings[toolset_key]
             system.llm_chat.function_manager.update_enabled_functions([toolset_name])
             logger.info(f"Applied toolset: {toolset_name}")
             publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
+    except Exception as e:
+        logger.error(f"Error applying toolset: {e}")
 
+    try:
         system.llm_chat._update_story_engine()
 
         if settings.get('story_engine_enabled') is not None:
@@ -459,9 +482,8 @@ def _apply_chat_settings(system, settings: dict):
                 "action": "story_engine_update",
                 "function_count": toolset_info.get("function_count", 0)
             })
-
     except Exception as e:
-        logger.error(f"Error applying chat settings: {e}", exc_info=True)
+        logger.error(f"Error applying story engine settings: {e}")
 
 
 # =============================================================================

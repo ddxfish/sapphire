@@ -212,7 +212,8 @@ export async function handleRestart() {
         return;
     }
     try {
-        await fetch('/api/system/restart', { method: 'POST' });
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        await fetch('/api/system/restart', { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
         showRestartingScreen();
     } catch (e) {
         console.error('Restart failed:', e);

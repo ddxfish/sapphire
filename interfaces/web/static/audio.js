@@ -170,6 +170,8 @@ export const playText = async (txt, cacheKey = null) => {
             console.error('Audio error:', e);
             isStreaming = false;
             ui.hideStatus();
+            cleanup();
+            ui.showToast('Audio playback failed — check TTS provider', 'error');
         };
 
         await player.play();
@@ -323,6 +325,10 @@ const startRec = async () => {
 
 const stopRec = async () => {
     if (!audioContext || audioChunks.length === 0) {
+        // Clean up resources even if no audio was captured (quick tap)
+        try { sourceNode?.disconnect(); processorNode?.disconnect(); } catch {}
+        if (audioContext) { try { audioContext.close(); } catch {} audioContext = null; }
+        if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
         return null;
     }
     

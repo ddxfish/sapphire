@@ -33,7 +33,8 @@ export async function uploadAvatar(role, file) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('role', role);
-    const res = await fetch('/api/avatar/upload', { method: 'POST', body: formData });
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const res = await fetch('/api/avatar/upload', { method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: formData });
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || `Upload failed: ${res.status}`);
