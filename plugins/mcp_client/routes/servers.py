@@ -21,7 +21,9 @@ def _save_servers(servers):
     except Exception:
         existing = {}
     existing["servers"] = servers
-    settings_path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
+    tmp_path = settings_path.with_suffix('.tmp')
+    tmp_path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
+    tmp_path.replace(settings_path)
 
 
 async def list_servers(**kwargs):

@@ -312,6 +312,13 @@ class FunctionManager:
 
                 logger.info(f"Plugin '{plugin_name}' tool '{module_name}': {len(tools)} tools registered")
 
+            except ModuleNotFoundError as e:
+                logger.error(f"Missing dependency for plugin tool '{tool_path}': {e}")
+                from core.event_bus import publish, Events
+                publish(Events.PLUGIN_LOAD_ERROR, {
+                    "plugin": plugin_name, "error": f"Missing pip package: {e.name or e}",
+                    "hint": f"pip install {e.name}" if e.name else str(e)
+                })
             except Exception as e:
                 logger.error(f"Failed to load plugin tool '{tool_path}': {e}", exc_info=True)
 

@@ -526,9 +526,13 @@ def _get_inbox(count=20, folder="inbox"):
 
     except imaplib.IMAP4.error as e:
         logger.error(f"IMAP error: {e}")
+        try: imap.logout()
+        except Exception: pass
         return f"Email login failed — check credentials. Error: {e}", False
     except Exception as e:
         logger.error(f"Email {folder} error: {e}", exc_info=True)
+        try: imap.logout()
+        except Exception: pass
         return f"Failed to fetch {folder}: {e}", False
 
 
@@ -598,6 +602,8 @@ def _mark_as_read(index):
         logger.info(f"Email [{index}] marked as read")
     except Exception as e:
         logger.warning(f"Failed to mark email as read: {e}")
+        try: imap.logout()
+        except Exception: pass
 
 
 def _archive_emails(indices):
@@ -648,6 +654,8 @@ def _archive_emails(indices):
 
     except Exception as e:
         logger.error(f"Archive error: {e}", exc_info=True)
+        try: imap.logout()
+        except Exception: pass
         return f"Failed to archive: {e}", False
 
 

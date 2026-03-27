@@ -184,8 +184,10 @@ class SpiceSetManager:
             self.USER_DIR.mkdir(parents=True, exist_ok=True)
             data = {"_comment": "Your spice sets"}
             data.update(self._sets)
-            with open(user_path, 'w', encoding='utf-8') as f:
+            tmp_path = user_path.with_suffix('.tmp')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
+            tmp_path.replace(user_path)
             self._last_mtimes[str(user_path)] = user_path.stat().st_mtime
             logger.info(f"Saved {len(self._sets)} spice sets to {user_path}")
             return True

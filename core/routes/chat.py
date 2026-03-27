@@ -470,6 +470,10 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         from core.toolsets import toolset_manager
         from core.routes.content import _build_spice_response
         from core.routes.plugins import _get_merged_plugins
+        from core.plugin_loader import plugin_loader
+        def _get_load_errors():
+            try: return plugin_loader.get_load_errors()
+            except Exception: return []
 
         function_manager = system.llm_chat.function_manager
         session_manager = system.llm_chat.session_manager
@@ -617,7 +621,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             },
             "wizard_step": wizard_step,
             "avatars": avatars,
-            "plugins_config": plugins_config
+            "plugins_config": plugins_config,
+            "load_errors": _get_load_errors()
         }
     except Exception as e:
         logger.error(f"Error getting init data: {e}", exc_info=True)

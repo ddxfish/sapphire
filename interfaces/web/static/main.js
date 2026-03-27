@@ -123,6 +123,13 @@ async function init() {
         try {
             initData = await getInitData();
             ui.initFromInitData(initData);
+            // Show any plugin load errors from startup (before SSE was connected)
+            if (initData?.load_errors?.length) {
+                for (const err of initData.load_errors) {
+                    const hint = err.hint ? ` — ${err.hint}` : '';
+                    ui.showToast(`Plugin '${err.plugin}': ${err.error}${hint}`, 'error', 10000);
+                }
+            }
         } catch (e) {
             console.warn('[Init] Could not fetch init data:', e);
         }
@@ -370,6 +377,12 @@ function initEventBus() {
         reloadPluginScripts();
     });
     document.addEventListener('sapphire:plugin_toggled', () => reloadPluginScripts());
+
+    // Plugin load errors — show missing deps as toasts
+    eventBus.on(eventBus.Events.PLUGIN_LOAD_ERROR, (data) => {
+        const hint = data?.hint ? ` — ${data.hint}` : '';
+        ui.showToast(`Plugin '${data?.plugin}': ${data?.error}${hint}`, 'error', 10000);
+    });
 
     // Server restart detection — full state resync
     eventBus.on(eventBus.Events.SERVER_RESTARTED, async () => {

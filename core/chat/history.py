@@ -935,6 +935,10 @@ class ChatSessionManager:
         """Delete chat. Recreates default if deleted, switches active if needed."""
         self._ensure_db()
 
+        if self._is_streaming and chat_name == self.active_chat_name:
+            logger.warning(f"Cannot delete '{chat_name}' — streaming in progress")
+            return False
+
         try:
             with self._lock, self._get_connection() as conn:
                 # Check if exists
@@ -1158,13 +1162,15 @@ class ChatSessionManager:
                     "SELECT messages FROM chats WHERE name = ?", (chat_name,)
                 )
                 row = cursor.fetchone()
-                messages = json.loads(row["messages"]) if row else []
+                if not row:
+                    logger.warning(f"Chat '{chat_name}' not found — skipping append (may have been deleted)")
+                    return
+                messages = json.loads(row["messages"])
                 messages.append({"role": "user", "content": user_content, "timestamp": timestamp})
                 messages.append({"role": "assistant", "content": assistant_content, "timestamp": timestamp})
                 conn.execute(
-                    """INSERT OR REPLACE INTO chats (name, settings, messages, updated_at)
-                       VALUES (?, COALESCE((SELECT settings FROM chats WHERE name = ?), '{}'), ?, ?)""",
-                    (chat_name, chat_name, json.dumps(messages), timestamp)
+                    """UPDATE chats SET messages = ?, updated_at = ? WHERE name = ?""",
+                    (json.dumps(messages), timestamp, chat_name)
                 )
                 conn.commit()
                 logger.debug(f"Appended message pair to chat '{chat_name}'")

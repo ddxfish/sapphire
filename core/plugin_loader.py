@@ -80,6 +80,7 @@ class PluginLoader:
         # {plugin_name: {manifest, path, enabled, band, state}}
         self._plugins: Dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._load_errors: list = []  # Accumulates startup errors for frontend display
         self._function_manager = None  # Set via scan() for plugin tool loading
         self._scheduler = None  # Set via set_scheduler() for plugin schedule tasks
         self._watcher_running = False
@@ -382,6 +383,15 @@ class PluginLoader:
                             logger.info(f"[PLUGINS] Started daemon thread for {name}")
                         else:
                             logger.info(f"[PLUGINS] Daemon for {name} deferred until scheduler ready")
+                except ModuleNotFoundError as e:
+                    logger.error(f"[PLUGINS] Missing dependency for daemon '{name}': {e}")
+                    err_data = {
+                        "plugin": name, "error": f"Missing pip package: {e.name or e}",
+                        "hint": f"pip install {e.name}" if e.name else str(e)
+                    }
+                    self._load_errors.append(err_data)
+                    from core.event_bus import publish, Events
+                    publish(Events.PLUGIN_LOAD_ERROR, err_data)
                 except Exception as e:
                     logger.error(f"[PLUGINS] Failed to load daemon for {name}: {e}", exc_info=True)
 
@@ -1004,6 +1014,12 @@ class PluginLoader:
     def get_enabled_plugins(self) -> List[str]:
         """Names of enabled plugins."""
         return [n for n, info in self._plugins.items() if info["enabled"]]
+
+    def get_load_errors(self) -> list:
+        """Get accumulated plugin load errors (for startup toast display)."""
+        errors = list(self._load_errors)
+        self._load_errors.clear()
+        return errors
 
     def get_loaded_plugins(self) -> List[str]:
         """Names of currently loaded plugins."""

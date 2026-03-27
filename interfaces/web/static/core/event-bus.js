@@ -241,6 +241,7 @@ export const Events = {
 
     // Plugin events
     PLUGIN_RELOADED: 'plugin_reloaded',
+    PLUGIN_LOAD_ERROR: 'plugin_load_error',
 
     // Agent events
     AGENT_SPAWNED: 'agent_spawned',
