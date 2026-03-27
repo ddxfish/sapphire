@@ -103,8 +103,10 @@ class PersonaManager:
             self.USER_DIR.mkdir(parents=True, exist_ok=True)
             data = {"_comment": "Your personas"}
             data.update(self._personas)
-            with open(user_path, 'w', encoding='utf-8') as f:
+            tmp_path = user_path.with_suffix('.tmp')
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
+            tmp_path.replace(user_path)
             logger.debug(f"Saved {len(self._personas)} personas")
             return True
         except Exception as e:

@@ -244,18 +244,22 @@ def _get_session_secret():
     secret_file = CONFIG_DIR / 'session_secret'
     if secret_file.exists():
         try:
-            return secret_file.read_text().strip()
+            val = secret_file.read_text().strip()
+            if val:  # Guard against empty/truncated file from crash
+                return val
         except Exception:
             pass
-    # Generate and persist a new secret
+    # Generate and persist a new secret (atomic write)
     secret = secrets.token_hex(32)
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        secret_file.write_text(secret)
+        tmp_path = secret_file.with_suffix('.tmp')
+        tmp_path.write_text(secret)
         import sys
         if sys.platform != 'win32':
             import os as _os
-            _os.chmod(secret_file, 0o600)
+            _os.chmod(tmp_path, 0o600)
+        tmp_path.replace(secret_file)
     except Exception:
         pass  # Falls back to ephemeral secret (session won't survive restart)
     return secret

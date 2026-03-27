@@ -682,28 +682,29 @@ class CredentialsManager:
                           imap_port: int = 993,
                           smtp_port: int = 465) -> bool:
         """Set email account for a scope. App password is scrambled before save."""
-        try:
-            if 'email_accounts' not in self._credentials:
-                self._credentials['email_accounts'] = {}
+        with self._lock:
+            try:
+                if 'email_accounts' not in self._credentials:
+                    self._credentials['email_accounts'] = {}
 
-            self._credentials['email_accounts'][scope] = {
-                'address': address,
-                'app_password': self._scramble(app_password) if app_password else '',
-                'imap_server': imap_server,
-                'smtp_server': smtp_server,
-                'imap_port': imap_port,
-                'smtp_port': smtp_port,
-            }
+                self._credentials['email_accounts'][scope] = {
+                    'address': address,
+                    'app_password': self._scramble(app_password) if app_password else '',
+                    'imap_server': imap_server,
+                    'smtp_server': smtp_server,
+                    'imap_port': imap_port,
+                    'smtp_port': smtp_port,
+                }
 
-            if not self._save():
-                logger.error(f"Failed to persist email account '{scope}' to disk")
+                if not self._save():
+                    logger.error(f"Failed to persist email account '{scope}' to disk")
+                    return False
+
+                logger.info(f"Set email account for scope '{scope}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set email account '{scope}': {e}")
                 return False
-
-            logger.info(f"Set email account for scope '{scope}'")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set email account '{scope}': {e}")
-            return False
 
     def delete_email_account(self, scope: str) -> bool:
         """Remove an email account by scope."""
@@ -745,34 +746,35 @@ class CredentialsManager:
                                 oauth_tenant_id: str, oauth_refresh_token: str,
                                 oauth_access_token: str = '', oauth_expires_at: float = 0) -> bool:
         """Set an OAuth2-authenticated email account for a scope."""
-        try:
-            if 'email_accounts' not in self._credentials:
-                self._credentials['email_accounts'] = {}
+        with self._lock:
+            try:
+                if 'email_accounts' not in self._credentials:
+                    self._credentials['email_accounts'] = {}
 
-            self._credentials['email_accounts'][scope] = {
-                'address': address,
-                'auth_type': 'oauth2',
-                'imap_server': imap_server,
-                'smtp_server': smtp_server,
-                'imap_port': imap_port,
-                'smtp_port': smtp_port,
-                'oauth_client_id': oauth_client_id,
-                'oauth_client_secret': self._scramble(oauth_client_secret) if oauth_client_secret else '',
-                'oauth_tenant_id': oauth_tenant_id,
-                'oauth_refresh_token': self._scramble(oauth_refresh_token) if oauth_refresh_token else '',
-                'oauth_access_token': oauth_access_token,
-                'oauth_expires_at': oauth_expires_at,
-            }
+                self._credentials['email_accounts'][scope] = {
+                    'address': address,
+                    'auth_type': 'oauth2',
+                    'imap_server': imap_server,
+                    'smtp_server': smtp_server,
+                    'imap_port': imap_port,
+                    'smtp_port': smtp_port,
+                    'oauth_client_id': oauth_client_id,
+                    'oauth_client_secret': self._scramble(oauth_client_secret) if oauth_client_secret else '',
+                    'oauth_tenant_id': oauth_tenant_id,
+                    'oauth_refresh_token': self._scramble(oauth_refresh_token) if oauth_refresh_token else '',
+                    'oauth_access_token': oauth_access_token,
+                    'oauth_expires_at': oauth_expires_at,
+                }
 
-            if not self._save():
-                logger.error(f"Failed to persist OAuth email account '{scope}' to disk")
+                if not self._save():
+                    logger.error(f"Failed to persist OAuth email account '{scope}' to disk")
+                    return False
+
+                logger.info(f"Set OAuth email account for scope '{scope}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set OAuth email account '{scope}': {e}")
                 return False
-
-            logger.info(f"Set OAuth email account for scope '{scope}'")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set OAuth email account '{scope}': {e}")
-            return False
 
     def update_email_oauth_tokens(self, scope: str, access_token: str, expires_at: float,
                                    refresh_token: str = '') -> bool:
@@ -827,24 +829,25 @@ class CredentialsManager:
 
     def set_bitcoin_wallet(self, scope: str, wif: str, label: str = '') -> bool:
         """Set bitcoin wallet for a scope. WIF is scrambled before save."""
-        try:
-            if 'bitcoin_wallets' not in self._credentials:
-                self._credentials['bitcoin_wallets'] = {}
+        with self._lock:
+            try:
+                if 'bitcoin_wallets' not in self._credentials:
+                    self._credentials['bitcoin_wallets'] = {}
 
-            self._credentials['bitcoin_wallets'][scope] = {
-                'label': label or scope,
-                'wif': self._scramble(wif) if wif else '',
-            }
+                self._credentials['bitcoin_wallets'][scope] = {
+                    'label': label or scope,
+                    'wif': self._scramble(wif) if wif else '',
+                }
 
-            if not self._save():
-                logger.error(f"Failed to persist bitcoin wallet '{scope}' to disk")
+                if not self._save():
+                    logger.error(f"Failed to persist bitcoin wallet '{scope}' to disk")
+                    return False
+
+                logger.info(f"Set bitcoin wallet for scope '{scope}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set bitcoin wallet '{scope}': {e}")
                 return False
-
-            logger.info(f"Set bitcoin wallet for scope '{scope}'")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set bitcoin wallet '{scope}': {e}")
-            return False
 
     def delete_bitcoin_wallet(self, scope: str) -> bool:
         """Remove a bitcoin wallet by scope."""
@@ -905,27 +908,28 @@ class CredentialsManager:
                          calendar_id: str = 'primary', refresh_token: str = '',
                          label: str = '') -> bool:
         """Set Google Calendar account for a scope. Secrets are scrambled before save."""
-        try:
-            if 'gcal_accounts' not in self._credentials:
-                self._credentials['gcal_accounts'] = {}
+        with self._lock:
+            try:
+                if 'gcal_accounts' not in self._credentials:
+                    self._credentials['gcal_accounts'] = {}
 
-            self._credentials['gcal_accounts'][scope] = {
-                'client_id': client_id,
-                'client_secret': self._scramble(client_secret) if client_secret else '',
-                'refresh_token': self._scramble(refresh_token) if refresh_token else '',
-                'calendar_id': calendar_id or 'primary',
-                'label': label or scope,
-            }
+                self._credentials['gcal_accounts'][scope] = {
+                    'client_id': client_id,
+                    'client_secret': self._scramble(client_secret) if client_secret else '',
+                    'refresh_token': self._scramble(refresh_token) if refresh_token else '',
+                    'calendar_id': calendar_id or 'primary',
+                    'label': label or scope,
+                }
 
-            if not self._save():
-                logger.error(f"Failed to persist gcal account '{scope}' to disk")
+                if not self._save():
+                    logger.error(f"Failed to persist gcal account '{scope}' to disk")
+                    return False
+
+                logger.info(f"Set gcal account for scope '{scope}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set gcal account '{scope}': {e}")
                 return False
-
-            logger.info(f"Set gcal account for scope '{scope}'")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set gcal account '{scope}': {e}")
-            return False
 
     def update_gcal_tokens(self, scope: str, refresh_token: str, access_token: str = '', expires_at: float = 0) -> bool:
         """Update OAuth tokens for an existing gcal account (called after OAuth callback)."""
@@ -987,18 +991,19 @@ class CredentialsManager:
 
     def set_ssh_servers(self, servers: list) -> bool:
         """Replace the full SSH servers list."""
-        try:
-            if 'ssh' not in self._credentials:
-                self._credentials['ssh'] = {}
-            self._credentials['ssh']['servers'] = servers
-            if not self._save():
-                logger.error("Failed to persist SSH servers to disk")
+        with self._lock:
+            try:
+                if 'ssh' not in self._credentials:
+                    self._credentials['ssh'] = {}
+                self._credentials['ssh']['servers'] = servers
+                if not self._save():
+                    logger.error("Failed to persist SSH servers to disk")
+                    return False
+                logger.info(f"Saved {len(servers)} SSH servers")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to set SSH servers: {e}")
                 return False
-            logger.info(f"Saved {len(servers)} SSH servers")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set SSH servers: {e}")
-            return False
 
     # =========================================================================
     # Utility

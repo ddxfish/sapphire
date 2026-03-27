@@ -303,8 +303,8 @@ class WakeWordDetector:
             except Exception:
                 pass
 
-            # Restart wakeword audio stream after TTS is done
-            if self.audio_recorder:
+            # Restart wakeword audio stream after TTS is done (only if still enabled)
+            if self.audio_recorder and self.running:
                 logger.debug("Restarting wakeword audio stream after STT/TTS")
                 self.audio_recorder.start_recording()
 
@@ -373,6 +373,10 @@ class WakeWordDetector:
                         time.sleep(5)
 
     def start_listening(self):
+        if self.running:
+            logger.warning("Wake detector already listening — skipping duplicate start")
+            return
+
         if not self.audio_recorder:
             logger.error("No audio recorder set")
             raise ValueError("No audio recorder set")
