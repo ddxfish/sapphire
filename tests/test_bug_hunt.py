@@ -675,6 +675,7 @@ class TestRunForegroundNoUISwitch:
 
         with patch.object(ContinuityExecutor, '__init__', lambda self: None):
             executor = ContinuityExecutor()
+            executor._voice_lock = threading.Lock()
 
             mock_session = MagicMock()
             mock_session.list_chat_files.return_value = [{"name": "task_chat"}]

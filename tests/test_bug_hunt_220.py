@@ -13,6 +13,7 @@ import pytest
 import sys
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -343,6 +344,7 @@ class TestForegroundNoUISwitch:
 
         with patch.object(ContinuityExecutor, '__init__', lambda self: None):
             executor = ContinuityExecutor()
+            executor._voice_lock = threading.Lock()
             executor._resolve_persona = lambda t: t
             executor._snapshot_voice = MagicMock(return_value={})
             executor._restore_voice = MagicMock()

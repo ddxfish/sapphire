@@ -47,6 +47,7 @@ class TestSchedulerTypeField:
         sched._task_pending = {}
         sched._task_last_matched = {}
         sched._task_progress = {}
+        sched._event_threads = []
         sched._load_tasks()
         sched._load_activity()
 
@@ -164,6 +165,7 @@ class TestSchedulerEventFinders:
         sched._task_pending = {}
         sched._task_last_matched = {}
         sched._task_progress = {}
+        sched._event_threads = []
         return sched
 
     def test_find_tasks_by_event(self, tmp_path):
@@ -256,6 +258,7 @@ class TestFireEventTask:
         sched._task_pending = {}
         sched._task_last_matched = {}
         sched._task_progress = {}
+        sched._event_threads = []
         return sched
 
     def test_fire_event_task_success(self, tmp_path):
@@ -342,6 +345,7 @@ class TestCronSkipsEventTasks:
         sched._task_pending = {}
         sched._task_last_matched = {}
         sched._task_progress = {}
+        sched._event_threads = []
 
         # Create a daemon with a schedule that would match every minute
         sched.create_task({
@@ -566,6 +570,7 @@ class TestDaemonIntegration:
         sched._task_pending = {}
         sched._task_last_matched = {}
         sched._task_progress = {}
+        sched._event_threads = []
 
         # Create a daemon task
         task = sched.create_task({
@@ -674,6 +679,7 @@ class TestReplyHandler:
         sched._task_pending = {}
         sched._task_last_matched = {}
         sched._task_progress = {}
+        sched._event_threads = []
 
         task = sched.create_task({
             "name": "Telegram Reply Test",
