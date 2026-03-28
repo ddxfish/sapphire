@@ -32,6 +32,11 @@ def _get_git_branch():
 
 async def get_full_status(**kwargs):
     """GET /api/plugin/status/full — comprehensive system snapshot."""
+    return get_full_status_sync()
+
+
+def get_full_status_sync():
+    """GET /api/plugin/status/full — comprehensive system snapshot."""
     try:
         import config
         from core.api_fastapi import get_system, APP_VERSION

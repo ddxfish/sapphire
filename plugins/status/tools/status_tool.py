@@ -40,10 +40,8 @@ def execute(function_name, arguments, config=None):
     include_providers = arguments.get("include_providers", False)
 
     try:
-        # Reuse the route's data gathering
-        import asyncio
-        from plugins.status.routes.status import get_full_status
-        data = asyncio.get_event_loop().run_until_complete(get_full_status())
+        from plugins.status.routes.status import get_full_status_sync
+        data = get_full_status_sync()
 
         if "error" in data:
             return f"Status unavailable: {data['error']}", False

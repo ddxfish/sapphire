@@ -26,12 +26,47 @@
         (function() {
             const saved = localStorage.getItem('sapphire-theme') || 'dark';
             document.documentElement.setAttribute('data-theme', saved);
-            // Load theme CSS file
-            const link = document.createElement('link');
-            link.id = 'theme-stylesheet';
-            link.rel = 'stylesheet';
-            link.href = '/static/themes/' + saved + '.css?v={{ v }}';
-            document.head.appendChild(link);
+
+            // Check if this is a plugin theme (has saved theme data with CSS URL)
+            var themeDataStr = localStorage.getItem('sapphire-theme-data');
+            var themeData = null;
+            try { themeData = themeDataStr ? JSON.parse(themeDataStr) : null; } catch(e) {}
+
+            if (themeData && themeData.id === saved && themeData.css) {
+                // Plugin theme — load from plugin CSS URL
+                var link = document.createElement('link');
+                link.id = 'plugin-theme-css';
+                link.rel = 'stylesheet';
+                link.href = themeData.css;
+                document.head.appendChild(link);
+                // Also load scripts if any
+                if (themeData.scripts) {
+                    themeData.scripts.forEach(function(src) {
+                        var s = document.createElement('script');
+                        s.src = src;
+                        s.dataset.themeScript = saved;
+                        document.body.appendChild(s);
+                    });
+                }
+            } else {
+                // Core theme — load from static/themes/
+                var link = document.createElement('link');
+                link.id = 'theme-stylesheet';
+                link.rel = 'stylesheet';
+                link.href = '/static/themes/' + saved + '.css?v={{ v }}';
+                document.head.appendChild(link);
+            }
+
+            // Restore chat-style data attributes from localStorage
+            try {
+                for (var i = 0; i < localStorage.length; i++) {
+                    var key = localStorage.key(i);
+                    if (key && key.endsWith('-chat-style')) {
+                        var prefix = key.replace('-chat-style', '');
+                        document.documentElement.setAttribute('data-' + prefix + '-chat', localStorage.getItem(key));
+                    }
+                }
+            } catch(e) {}
         })();
     </script>
     <script>

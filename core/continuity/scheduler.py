@@ -213,21 +213,27 @@ class ContinuityScheduler:
         if not task:
             return
         task_name = task.get("name", "Unknown")
-
-        # Check delete_after_run (fires before max_runs check — one-shot delete)
-        if task.get("delete_after_run"):
-            logger.info(f"[Continuity] '{task_name}' — delete_after_run, removing task")
-            del self._tasks[task_id]
-            self._task_pending.pop(task_id, None)
-            self._task_running.pop(task_id, None)
-            self._task_last_matched.pop(task_id, None)
-            return
-
         max_runs = task.get("max_runs", 0)
-        if max_runs <= 0:
-            return
-        task["run_count"] = task.get("run_count", 0) + 1
-        if task["run_count"] >= max_runs:
+
+        # Increment counter (always, even for delete_after_run — for logging accuracy)
+        if max_runs > 0:
+            task["run_count"] = task.get("run_count", 0) + 1
+
+        # Check delete_after_run — fires after max_runs is reached (or immediately if max_runs=0)
+        if task.get("delete_after_run"):
+            if max_runs <= 0 or task.get("run_count", 1) >= max_runs:
+                queued = len(self._task_pending.get(task_id, []))
+                if queued:
+                    logger.warning(f"[Continuity] '{task_name}' — delete_after_run dropping {queued} queued events")
+                logger.info(f"[Continuity] '{task_name}' — delete_after_run, removing task")
+                del self._tasks[task_id]
+                self._task_pending.pop(task_id, None)
+                self._task_running.pop(task_id, None)
+                self._task_last_matched.pop(task_id, None)
+                return
+
+        # Auto-disable at max runs
+        if max_runs > 0 and task.get("run_count", 0) >= max_runs:
             task["enabled"] = False
             logger.info(f"[Continuity] '{task_name}' completed {task['run_count']}/{max_runs} runs — auto-disabled")
 

@@ -310,6 +310,11 @@ function _renderThemeSettings(panel, theme) {
 
 
 function _applyTheme(theme) {
+    // 0. Clear old chat-style data attributes (prevents bleed between themes)
+    Array.from(document.documentElement.attributes)
+        .filter(a => a.name.startsWith('data-') && a.name.endsWith('-chat'))
+        .forEach(a => document.documentElement.removeAttribute(a.name));
+
     // 1. Remove old theme scripts
     document.querySelectorAll('script[data-theme-script]').forEach(s => s.remove());
 
@@ -319,7 +324,7 @@ function _applyTheme(theme) {
         document.documentElement.setAttribute('data-theme', theme.id);
         localStorage.setItem('sapphire-theme', theme.id);
         const link = document.getElementById('theme-stylesheet');
-        if (link) link.href = theme.css;
+        if (link) { link.href = theme.css; link.disabled = false; }
         else {
             const l = document.createElement('link');
             l.id = 'theme-stylesheet'; l.rel = 'stylesheet';
@@ -329,6 +334,8 @@ function _applyTheme(theme) {
         // Remove plugin theme CSS if any
         const pluginCSS = document.getElementById('plugin-theme-css');
         if (pluginCSS) pluginCSS.remove();
+        // Clear plugin theme data from localStorage
+        localStorage.removeItem('sapphire-theme-data');
     } else {
         // Plugin themes use their own CSS file
         document.documentElement.setAttribute('data-theme', theme.id);
@@ -348,9 +355,9 @@ function _applyTheme(theme) {
             pluginCSS.href = theme.css;
             document.head.appendChild(pluginCSS);
         }
-        // Remove core theme stylesheet to avoid conflicts
+        // Disable core theme stylesheet to avoid conflicts
         const coreLink = document.getElementById('theme-stylesheet');
-        if (coreLink) coreLink.href = '';
+        if (coreLink) coreLink.disabled = true;
     }
 
     // 3. Load scripts (animated backgrounds)
