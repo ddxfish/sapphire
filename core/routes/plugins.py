@@ -434,9 +434,10 @@ async def install_plugin(
             content_length = int(r.headers.get("Content-Length", 0))
             if content_length > MAX_ZIP_SIZE:
                 raise HTTPException(status_code=400, detail=f"Zip too large ({content_length // 1024 // 1024}MB, max 50MB)")
-            tmp_zip = Path(tempfile.mktemp(suffix=".zip"))
+            fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+            tmp_zip = Path(tmp_path)
             downloaded = 0
-            with open(tmp_zip, "wb") as f:
+            with os.fdopen(fd, "wb") as f:
                 for chunk in r.iter_content(8192):
                     downloaded += len(chunk)
                     if downloaded > MAX_ZIP_SIZE:
@@ -444,7 +445,9 @@ async def install_plugin(
                     f.write(chunk)
         else:
             # File upload
-            tmp_zip = Path(tempfile.mktemp(suffix=".zip"))
+            fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            tmp_zip = Path(tmp_path)
             content = await file.read()
             if len(content) > MAX_ZIP_SIZE:
                 raise HTTPException(status_code=400, detail=f"Zip too large ({len(content) // 1024 // 1024}MB, max 50MB)")

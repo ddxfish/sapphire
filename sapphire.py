@@ -406,6 +406,11 @@ class VoiceChatSystem:
             self.tts_server_manager = None
             logger.info("Kokoro TTS server stopped")
 
+    def switch_embedding_provider(self, provider_name):
+        """Hot-swap embedding provider at runtime."""
+        from core.embeddings import switch_embedding_provider as _switch
+        _switch(provider_name)
+
     def switch_tts_provider(self, provider_name):
         """Hot-swap TTS provider at runtime."""
         logger.info(f"Switching TTS provider to: {provider_name}")

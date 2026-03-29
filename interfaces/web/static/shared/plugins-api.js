@@ -34,7 +34,7 @@ const pluginsAPI = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || `Failed to toggle: ${res.status}`);
+      throw new Error(err.detail || `Failed to toggle: ${res.status}`);
     }
     const data = await res.json();
     // Notify app so plugin scripts can be loaded/unloaded

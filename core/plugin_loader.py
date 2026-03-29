@@ -75,7 +75,7 @@ class PluginState:
     def clear(self):
         with self._lock:
             self._data = {}
-        self._save()
+            self._save()
 
 
 class PluginLoader:
