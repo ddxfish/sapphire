@@ -69,10 +69,8 @@ export default {
             <div id="providers-list">${coreCards}</div>
 
             <div style="margin-top:24px">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                    <h4 style="margin:0">Custom Providers</h4>
-                    <button class="btn btn-sm btn-primary" id="add-custom-provider">+ Add Provider</button>
-                </div>
+                <h4 style="margin:0 0 12px">Custom Providers</h4>
+                <button class="btn btn-primary" id="add-custom-provider" style="width:100%;padding:10px 16px;font-size:var(--font-md);margin-bottom:14px">+ Add Provider</button>
                 <div id="custom-providers-list">
                     ${customRows || '<p class="text-muted" style="font-size:var(--font-sm)">No custom providers. Click + Add Provider to connect Fireworks, OpenRouter, LM Studio, and more.</p>'}
                 </div>

@@ -516,21 +516,26 @@ body {
     position: absolute;
     right: 0;
     top: 12px;
-    padding: 16px 6px;
+    padding: 20px 10px;
     border: 1px solid var(--trim, var(--border));
     border-right: none;
     border-radius: var(--radius-sm) 0 0 var(--radius-sm);
     background: var(--bg-secondary);
     color: var(--trim, var(--text-muted));
     cursor: pointer;
-    font-size: 14px;
+    font-size: 18px;
     z-index: 10;
     transition: color 0.15s, background 0.15s;
 }
 
 .sb-expand-tab:hover { color: var(--text); background: var(--trim-light, var(--bg-hover)); }
 
-.chat-sidebar.collapsed + .sb-expand-tab { display: block; }
+.chat-sidebar.collapsed + .sb-expand-tab { display: block; animation: sb-pulse 2s ease-in-out 3; }
+
+@keyframes sb-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; background: var(--trim-light, var(--bg-hover)); }
+}
 
 .chat-sidebar-inner {
     padding: 12px;
@@ -655,20 +660,24 @@ body {
 .sb-chat-actions {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    gap: 3px;
-    padding-bottom: 6px;
+    justify-content: flex-start;
+    gap: 6px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
     margin-bottom: 8px;
     border-bottom: 1px solid var(--border);
 }
 
 .sb-chat-actions > .sb-icon-btn,
 .sb-chat-actions > .sb-kebab > .sb-icon-btn {
-    width: 28px;
-    height: 26px;
+    width: 32px;
+    height: 30px;
     display: flex;
     align-items: center;
     justify-content: center;
+    font-size: 15px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
     font-size: 13px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-subtle);
