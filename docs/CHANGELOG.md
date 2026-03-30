@@ -1,3 +1,15 @@
+# 2.5.0 - Plugin Expansion
+## March 30, 2026
+- You need to re-add your LLMs in settings! trust me, better
+- STT, TTS, LLM, embeddings are all plugin-capable (make tts plugin etc)
+- Plugins can tap into sidebar
+- New Apps page - plugins can have status/settings/etc pages
+- Bring your own avatar: Rigged GLB file with animation tracks
+- MCP support, just add url and tools appear
+- Total LLM refactor
+- LLM credentials usable by plugin authors
+- Theme support with their own settings
+- THANK YOU to our plugin authors, y'all are awesome
 # 2.4.8 - Theme Expansion
 - Themes switcher enhanced
 - Allow theme folders
