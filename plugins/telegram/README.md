@@ -12,7 +12,7 @@ Bot accounts are safe, simple, and purpose-built for automation. No ban risk.
 2. Send `/newbot`, choose a display name, choose a username (must end in `bot`)
 3. BotFather gives you a token like `123456:ABC-DEF1234ghIkl-zyx57W2v`
 4. In Sapphire, go to **Settings > Telegram**
-5. Make sure **API ID** and **API Hash** are set (from https://my.telegram.org)
+5. Make sure **API ID** and **API Hash** are set (from https://my.telegram.org — create an app if you haven't; the URL/platform/description fields don't matter, use `https://localhost` or leave blank)
 6. Click **+ Add Bot**, paste your token, give it a name, click Connect
 7. Create a daemon task in **Schedule** to auto-reply to messages
 
@@ -36,7 +36,7 @@ Client accounts log in as a real Telegram user. Full access to everything a huma
 
 ### Setup
 
-1. Go to https://my.telegram.org and get your **API ID** and **API Hash**
+1. Go to https://my.telegram.org and get your **API ID** and **API Hash** (create an app if you haven't; the URL/platform/description fields don't matter, use `https://localhost` or leave blank)
 2. In Sapphire, go to **Settings > Telegram** and enter them
 3. Click **+ Add Client**, enter a name and phone number
 4. Enter the verification code Telegram sends you
