@@ -5,7 +5,7 @@
     "README.md": "sha256:df6f4cf5a924392011f0c61531e0f768198fe082ad772a2aaaa617030b5297a3",
     "bone_mapper.py": "sha256:57aa0dc284effd5cc50d771550c8977aa81532ef1d5d0745ac9c7809f211784d",
     "build_avatar.py": "sha256:4eee73a9cc27beb0ea76113e7f13c877da86bbe699be1e62138d460c8e1baf91",
-    "build_avatar_sapphire.py": "sha256:2d6132a91660d652f7cc8d06902d1e60069309d9f44bfa3fcf06057d4fc4e3cc",
+    "build_avatar_sapphire.py": "sha256:6c392cd1ef24b5b70a197998dde3b4c6f9924d24e6331c282fcede426da94d6f",
     "glb_merger.py": "sha256:6baccd4aced1a2fb5d97bc0b679ea58b8f0bc35527abadbc1dd9b3ace99d13ca",
     "glb_parser.py": "sha256:86faa6b6aa71e317eef840981ec7a923e885826b980738e5a127972d2a9ec4b9",
     "hooks/prompt_inject.py": "sha256:888234461ac360d5362788a87f3f3c0e0f48ea5b4eda5efca1aa25189d34ab79",
@@ -25,5 +25,5 @@
     "web/sidebar.html": "sha256:c0d25cc097f997c3413abd941e6bbbde238cb6c65e35a0d19885d75b40fc5e25",
     "web/sidebar.js": "sha256:92e176d03aa5e9ab42f9895f41766547a0c8a3ad0c1eba98106d4839c5b1ac5e"
   },
-  "signature": "dwJyr5YHWIjaLIPj/CQVCiMQPTrPR4R47SuRWx5dqtw1+LscambcFdtpp0PjrKxdkcAdf5aPj67H+KmHUD0vCw=="
+  "signature": "8L5iHiTFOdlkhRbywvWJUf+rdqOI9+TbALApIJrWbydiTIPmBB0T+9iHpYtAUvpcYQQtGzDytOG2mL8ENzkhDA=="
 }
