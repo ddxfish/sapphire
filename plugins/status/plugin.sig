@@ -2,10 +2,10 @@
   "plugin": "status",
   "version": "1.0.0",
   "files": {
-    "app/index.js": "sha256:05e4723a54493e4c6c79f0b1e4f23f0bd9c1f846bfcfe02685f5300b10652309",
+    "app/index.js": "sha256:d9455b02d4cd984a53a5151d0917eb132404bea6f7b40489e5875ee35d9d0a9a",
     "plugin.json": "sha256:78efcfe6fb6d51f62f57adb8f81f25e9abd8eed9467f15cf5976f59234174db4",
-    "routes/status.py": "sha256:8adb05602400b9d9c60f88ac7a3854052bf3c432ec8feca7491b18e83d054aeb",
-    "tools/status_tool.py": "sha256:76adf95ae2e7b35d4b64227f1606ce95154efb360557f17d504a652ffc23900c"
+    "routes/status.py": "sha256:540d0b889a98e7ba0a24e241b591fe536da8699988784e7c360087ec1306234b",
+    "tools/status_tool.py": "sha256:1d802a9af50c8ac76fd60ced222634222671aeeb1f6c62651aad414dac3e032a"
   },
-  "signature": "dCkmwqsDuYxwWclklp5VupG0xbMmuSVWJ6Tr1sAamiYjeZcksbpz1QwXs0RZTeyFup+t+re3cfHsCl4duMdbBw=="
+  "signature": "JvggTwXndQC4AcIpwv7SRAav5ifkkvqpw54Dcwnz+t71IqHBYgIaHUdqAN+IOCqM5MeSItphoHsA9EiTgphNDQ=="
 }

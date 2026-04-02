@@ -1,4 +1,4 @@
-"""System status tool — lets Sapphire see her own state."""
+"""Self-awareness tool — lets Sapphire see her own state, time, and environment."""
 
 import logging
 
@@ -11,18 +11,15 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "system_status",
-            "description": "Get Sapphire's current system status — active model, provider, services, plugins, and diagnostics. Use this when the user asks about your current configuration, what model you're running, or to help troubleshoot issues.",
+            "name": "get_self_info",
+            "description": "Get your current system status, configuration, date/time, active model, services, plugins, memory stats, and diagnostics. Use this when asked about yourself, your current state, what time it is, what model you're running, or to help troubleshoot issues.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "include_plugins": {
-                        "type": "boolean",
-                        "description": "Include full plugin list in output (default: false)"
-                    },
-                    "include_providers": {
-                        "type": "boolean",
-                        "description": "Include LLM provider details (default: false)"
+                    "detail": {
+                        "type": "string",
+                        "enum": ["brief", "full"],
+                        "description": "brief = key info + time/date, full = everything including plugins, providers, tools, mind stats"
                     }
                 },
                 "required": []
@@ -33,11 +30,10 @@ TOOLS = [
 
 
 def execute(function_name, arguments, config=None):
-    if function_name != "system_status":
+    if function_name != "get_self_info":
         return f"Unknown function: {function_name}", False
 
-    include_plugins = arguments.get("include_plugins", False)
-    include_providers = arguments.get("include_providers", False)
+    detail = arguments.get("detail", "brief")
 
     try:
         from plugins.status.routes.status import get_full_status_sync
@@ -48,17 +44,26 @@ def execute(function_name, arguments, config=None):
 
         lines = []
 
-        # Identity
+        # Identity + time (always included)
         ident = data.get("identity", {})
         uptime_m = ident.get("uptime_seconds", 0) // 60
         uptime_h, uptime_m = divmod(uptime_m, 60)
         env = "Docker" if ident.get("docker") else ident.get("os", "Unknown")
+        lines.append(f"Date/Time: {ident.get('datetime', '?')} {ident.get('timezone', '')}")
         lines.append(f"Sapphire v{ident.get('app_version', '?')} | Python {ident.get('python_version', '?')} | {env} | Uptime: {uptime_h}h {uptime_m}m")
+
+        # Update
+        update = data.get("update", {})
+        if update.get("available"):
+            lines.append(f"UPDATE AVAILABLE: v{update.get('latest_version', '?')}")
 
         # Active session
         s = data.get("session", {})
         lines.append(f"Chat: {s.get('chat', '?')} | Prompt: {s.get('prompt', '?')} | Persona: {s.get('persona') or 'none'}")
         lines.append(f"LLM: {s.get('llm_primary', '?')} ({s.get('llm_model', 'default')}) | Toolset: {s.get('toolset', '?')} ({s.get('function_count', 0)} tools)")
+        lines.append(f"Parallel: {s.get('parallel_tool_calls', 1)} | Max iterations: {s.get('max_iterations', 10)} | Theme: {s.get('theme', 'default')}")
+        if s.get('user_timezone'):
+            lines.append(f"App timezone: {s['user_timezone']}")
         lines.append(f"Scopes: memory={s.get('memory_scope', '?')}, knowledge={s.get('knowledge_scope', '?')}")
 
         # Services
@@ -70,23 +75,44 @@ def execute(function_name, arguments, config=None):
         tts_str = f"{tts.get('provider', 'off')}" + (f" ({tts.get('voice', '')})" if tts.get('voice') else "")
         lines.append(f"TTS: {tts_str} | STT: {stt.get('provider', 'off')} | Wakeword: {'ON' if ww.get('enabled') else 'OFF'} | Embeddings: {emb.get('provider', 'off')}")
 
+        # Audio
+        audio = data.get("audio", {})
+        if audio:
+            lines.append(f"Audio: in={audio.get('input', 'default')}, out={audio.get('output', 'default')}")
+
         # Daemons
         daemons = data.get("daemons", {})
         if daemons:
-            daemon_str = ", ".join(f"{k}: {v}" for k, v in daemons.items())
-            lines.append(f"Daemons: {daemon_str}")
+            lines.append(f"Daemons: {', '.join(f'{k}: {v}' for k, v in daemons.items())}")
 
         # Tasks
         t = data.get("tasks", {})
-        lines.append(f"Tasks: {t.get('total', 0)} total, {t.get('enabled', 0)} enabled, {t.get('running', 0)} running now")
+        lines.append(f"Tasks: {t.get('total', 0)} total, {t.get('enabled', 0)} enabled, {t.get('running', 0)} running")
+
+        # Backup
+        backup = data.get("backup", {})
+        if backup.get("count") is not None:
+            lines.append(f"Backups: {backup['count']}{' (latest: ' + backup.get('latest_date', '?') + ')' if backup.get('latest') else ''}")
+
+        # Mind
+        mind = data.get("mind", {})
+        if mind:
+            scopes = mind.get("scopes", [])
+            lines.append(f"Mind scopes: {', '.join(scopes) if scopes else 'none'}")
+            lines.append(f"  Memories: {mind.get('memories', 0)} total")
+            mem_scopes = mind.get("memory_scopes", {})
+            if mem_scopes:
+                lines.append(f"    by scope: {', '.join(f'{k}: {v}' for k, v in mem_scopes.items())}")
+            lines.append(f"  People: {mind.get('people', 0)} total")
+            lines.append(f"  Knowledge: {mind.get('knowledge_total', 0)} entries")
 
         # Metrics
         m = data.get("metrics", {})
         if m.get("total_tokens"):
             lines.append(f"Token usage (7d): {m['total_tokens']:,} total | {m.get('total_calls', 0)} calls")
 
-        # Optional: providers
-        if include_providers:
+        if detail == "full":
+            # Providers
             provs = data.get("providers", [])
             if provs:
                 lines.append("\nLLM Providers:")
@@ -96,20 +122,25 @@ def execute(function_name, arguments, config=None):
                     local = " (local)" if p.get("is_local") else ""
                     lines.append(f"  {p.get('name', p.get('key', '?'))}: {status}, {key_status}{local}")
 
-        # Optional: plugins
-        if include_plugins:
+            # Plugins
             plugs = data.get("plugins", [])
             if plugs:
                 loaded = [p for p in plugs if p.get("loaded")]
-                disabled = [p for p in plugs if not p.get("enabled")]
-                lines.append(f"\nPlugins: {len(loaded)} loaded, {len(disabled)} disabled")
+                lines.append(f"\nPlugins: {len(loaded)} loaded / {len(plugs)} total")
                 for p in plugs:
                     status = "loaded" if p.get("loaded") else ("enabled" if p.get("enabled") else "disabled")
                     ver = f" v{p['version']}" if p.get("version") else ""
-                    lines.append(f"  {p['name']}{ver}: {status}")
+                    tier = p.get("verify_tier", "unsigned")
+                    deps = f" [MISSING: {', '.join(p['missing_deps'])}]" if p.get("missing_deps") else ""
+                    lines.append(f"  {p['name']}{ver}: {status} ({tier}){deps}")
+
+            # Tools
+            tool_names = s.get("tool_names", [])
+            if tool_names:
+                lines.append(f"\nEnabled tools ({len(tool_names)}): {', '.join(tool_names)}")
 
         return "\n".join(lines), True
 
     except Exception as e:
-        logger.error(f"system_status failed: {e}", exc_info=True)
+        logger.error(f"get_self_info failed: {e}", exc_info=True)
         return f"Failed to gather status: {e}", False

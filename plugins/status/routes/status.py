@@ -46,6 +46,13 @@ def get_full_status_sync():
         fm = system.llm_chat.function_manager
 
         # Identity
+        import locale
+        try:
+            tz_name = datetime.now().astimezone().tzname()
+            tz_offset = datetime.now().astimezone().strftime('%z')
+        except Exception:
+            tz_name, tz_offset = "UTC", "+0000"
+
         identity = {
             "app_version": APP_VERSION,
             "python_version": platform.python_version(),
@@ -54,6 +61,8 @@ def get_full_status_sync():
             "uptime_seconds": int(time.time() - _boot_time),
             "hostname": platform.node(),
             "branch": _get_git_branch(),
+            "timezone": f"{tz_name} ({tz_offset})",
+            "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
         # Active session
@@ -66,8 +75,13 @@ def get_full_status_sync():
             "llm_model": chat_settings.get("llm_model", ""),
             "toolset": fm.current_toolset_name,
             "function_count": len(fm._enabled_tools),
+            "tool_names": sorted(t['function']['name'] for t in fm._enabled_tools),
             "memory_scope": chat_settings.get("memory_scope", "default"),
             "knowledge_scope": chat_settings.get("knowledge_scope", "default"),
+            "parallel_tool_calls": getattr(config, 'MAX_PARALLEL_TOOLS', 1),
+            "max_iterations": getattr(config, 'MAX_TOOL_ITERATIONS', 10),
+            "theme": getattr(config, 'THEME', 'default'),
+            "user_timezone": getattr(config, 'USER_TIMEZONE', ''),
         }
 
         # Services
@@ -161,7 +175,7 @@ def get_full_status_sync():
         except Exception:
             pass
 
-        # Plugins
+        # Plugins (with verification status)
         plugins = []
         try:
             from core.plugin_loader import plugin_loader
@@ -172,6 +186,8 @@ def get_full_status_sync():
                     "enabled": info.get("enabled", False),
                     "band": info.get("band", ""),
                     "version": info.get("manifest", {}).get("version", ""),
+                    "verify_tier": info.get("verify_tier", "unsigned"),
+                    "missing_deps": info.get("missing_deps", []),
                 })
         except Exception:
             pass
@@ -184,6 +200,94 @@ def get_full_status_sync():
         except Exception:
             pass
 
+        # Audio devices
+        audio_info = {}
+        try:
+            audio_info["input"] = getattr(config, 'AUDIO_INPUT_DEVICE', 'default')
+            audio_info["output"] = getattr(config, 'AUDIO_OUTPUT_DEVICE', 'default')
+        except Exception:
+            pass
+
+        # Backup stats
+        backup_info = {}
+        try:
+            from core.backup import backup_manager
+            backups = backup_manager.list_backups()
+            backup_info["count"] = len(backups)
+            if backups:
+                backup_info["latest"] = backups[0].get("filename", "")
+                backup_info["latest_date"] = backups[0].get("date", "")
+                backup_info["latest_size"] = backups[0].get("size", 0)
+        except Exception:
+            pass
+
+        # Update check (use cached result if available)
+        update_info = {}
+        try:
+            update_file = Path(__file__).parent.parent.parent.parent / "user" / "webui" / "update_check.json"
+            if update_file.exists():
+                import json as _json
+                cached = _json.loads(update_file.read_text(encoding="utf-8"))
+                update_info["available"] = cached.get("update_available", False)
+                update_info["latest_version"] = cached.get("latest_version", "")
+                update_info["current_version"] = APP_VERSION
+        except Exception:
+            pass
+
+        # Mind / Knowledge / Memory stats
+        mind_info = {"scopes": [], "memories": 0, "memory_scopes": {}, "people": 0, "people_by_scope": {},
+                     "knowledge_total": 0, "knowledge_scopes": {}}
+        user_dir = Path(__file__).parent.parent.parent.parent / "user"
+        try:
+            import sqlite3
+
+            # Memories (user/memory.db)
+            mem_path = user_dir / "memory.db"
+            if mem_path.exists():
+                conn = sqlite3.connect(str(mem_path))
+                c = conn.cursor()
+                try:
+                    c.execute("SELECT scope, COUNT(*) FROM memories GROUP BY scope")
+                    mind_info["memory_scopes"] = {r[0]: r[1] for r in c.fetchall()}
+                    mind_info["memories"] = sum(mind_info["memory_scopes"].values())
+                except Exception:
+                    pass
+                try:
+                    c.execute("SELECT name FROM memory_scopes")
+                    mind_info["scopes"] = sorted(set(mind_info.get("scopes", []) + [r[0] for r in c.fetchall()]))
+                except Exception:
+                    pass
+                conn.close()
+
+            # Knowledge + People (user/knowledge.db)
+            kb_path = user_dir / "knowledge.db"
+            if kb_path.exists():
+                conn = sqlite3.connect(str(kb_path))
+                c = conn.cursor()
+                # People
+                try:
+                    c.execute("SELECT scope, COUNT(*) FROM people GROUP BY scope")
+                    mind_info["people_by_scope"] = {r[0]: r[1] for r in c.fetchall()}
+                    mind_info["people"] = sum(mind_info["people_by_scope"].values())
+                except Exception:
+                    pass
+                # Knowledge entries by scope (via tabs)
+                try:
+                    c.execute("SELECT t.scope, COUNT(e.id) FROM knowledge_tabs t LEFT JOIN knowledge_entries e ON e.tab_id = t.id GROUP BY t.scope")
+                    mind_info["knowledge_scopes"] = {r[0]: r[1] for r in c.fetchall()}
+                    mind_info["knowledge_total"] = sum(mind_info["knowledge_scopes"].values())
+                except Exception:
+                    pass
+                # Collect all scope names
+                try:
+                    c.execute("SELECT name FROM knowledge_scopes")
+                    mind_info["scopes"] = sorted(set(mind_info.get("scopes", []) + [r[0] for r in c.fetchall()]))
+                except Exception:
+                    pass
+                conn.close()
+        except Exception:
+            pass
+
         return {
             "identity": identity,
             "session": active_session,
@@ -193,6 +297,10 @@ def get_full_status_sync():
             "tasks": tasks_info,
             "plugins": plugins,
             "metrics": metrics,
+            "audio": audio_info,
+            "backup": backup_info,
+            "update": update_info,
+            "mind": mind_info,
         }
 
     except Exception as e:
