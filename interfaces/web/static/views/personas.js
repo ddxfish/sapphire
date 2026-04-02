@@ -687,8 +687,12 @@ function bindEvents() {
         }
     });
 
-    // Name/tagline changes (debounced save)
-    container.querySelector('#pa-name')?.addEventListener('input', () => debouncedSave());
+    // Name changes only on blur (rename triggers re-render which yanks focus)
+    container.querySelector('#pa-name')?.addEventListener('blur', () => debouncedSave());
+    container.querySelector('#pa-name')?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    });
+    // Tagline changes (debounced save on input is fine)
     container.querySelector('#pa-tagline')?.addEventListener('input', () => debouncedSave());
 
     // Provider change → update model dropdown
