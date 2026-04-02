@@ -20,6 +20,10 @@ TOOLS = [
                         "type": "string",
                         "enum": ["brief", "full"],
                         "description": "brief = key info + time/date, full = everything including plugins, providers, tools, mind stats"
+                    },
+                    "include_errors": {
+                        "type": "boolean",
+                        "description": "Include last 20 WARNING/ERROR log lines for troubleshooting (default: false)"
                     }
                 },
                 "required": []
@@ -34,6 +38,7 @@ def execute(function_name, arguments, config=None):
         return f"Unknown function: {function_name}", False
 
     detail = arguments.get("detail", "brief")
+    include_errors = arguments.get("include_errors", False)
 
     try:
         from plugins.status.routes.status import get_full_status_sync
@@ -138,6 +143,22 @@ def execute(function_name, arguments, config=None):
             tool_names = s.get("tool_names", [])
             if tool_names:
                 lines.append(f"\nEnabled tools ({len(tool_names)}): {', '.join(tool_names)}")
+
+        # Recent errors
+        if include_errors:
+            try:
+                from plugins.status.routes.status import get_logs_sync
+                log_data = get_logs_sync()  # no request = defaults (200 lines, ALL)
+                error_lines = [l for l in (log_data.get("lines", [])) if l["level"] in ("WARNING", "ERROR", "CRITICAL")]
+                recent = error_lines[-20:]
+                if recent:
+                    lines.append(f"\nRecent warnings/errors ({len(recent)}):")
+                    for l in recent:
+                        lines.append(f"  [{l['level']}] {l['text']}")
+                else:
+                    lines.append("\nNo recent warnings or errors.")
+            except Exception:
+                lines.append("\nCould not read logs.")
 
         return "\n".join(lines), True
 

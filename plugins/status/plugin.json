@@ -14,7 +14,8 @@
     },
     "tools": ["tools/status_tool.py"],
     "routes": [
-      {"method": "GET", "path": "full", "handler": "routes/status.py:get_full_status"}
+      {"method": "GET", "path": "full", "handler": "routes/status.py:get_full_status"},
+      {"method": "GET", "path": "logs", "handler": "routes/status.py:get_logs"}
     ]
   }
 }

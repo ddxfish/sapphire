@@ -308,6 +308,69 @@ def get_full_status_sync():
         return {"error": str(e)}
 
 
+LOG_PATH = Path(__file__).parent.parent.parent.parent / "user" / "logs" / "sapphire.log"
+LOG_LEVELS = {'DEBUG': 10, 'INFO': 20, 'WARNING': 30, 'ERROR': 40, 'CRITICAL': 50}
+
+
+async def get_logs(**kwargs):
+    """GET /api/plugin/status/logs?lines=200&level=WARNING&search=telegram"""
+    return get_logs_sync(kwargs.get('request'))
+
+
+def get_logs_sync(request=None):
+    lines_param = 200
+    level_param = 'ALL'
+    search_param = ''
+
+    if request:
+        lines_param = int(request.query_params.get('lines', 200))
+        level_param = request.query_params.get('level', 'ALL').upper()
+        search_param = request.query_params.get('search', '').strip()
+
+    lines_param = min(lines_param, 2000)  # cap at 2000
+
+    if not LOG_PATH.exists():
+        return {"lines": [], "total": 0, "filtered": 0}
+
+    # Read last N*3 lines to have enough after filtering
+    try:
+        with open(LOG_PATH, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+    except Exception as e:
+        return {"lines": [], "total": 0, "error": str(e)}
+
+    total = len(all_lines)
+
+    # Parse and filter
+    min_level = LOG_LEVELS.get(level_param, 0)
+    search_lower = search_param.lower()
+    result = []
+
+    for raw in all_lines:
+        raw = raw.rstrip('\n')
+        if not raw:
+            continue
+
+        # Parse level from format: "2026-04-02 12:51:43,953 - name - LEVEL - message"
+        level = 'INFO'
+        parts = raw.split(' - ', 3)
+        if len(parts) >= 3:
+            level = parts[2].strip()
+
+        level_num = LOG_LEVELS.get(level, 20)
+
+        if level_param != 'ALL' and level_num < min_level:
+            continue
+        if search_lower and search_lower not in raw.lower():
+            continue
+
+        result.append({"text": raw, "level": level})
+
+    # Return last N
+    filtered = result[-lines_param:]
+    return {"lines": filtered, "total": total, "filtered": len(result), "showing": len(filtered)}
+
+
 def _check_provider_key(provider_key):
     """Check if a provider has an API key via credentials or env."""
     try:

@@ -2,12 +2,17 @@
 
 let _interval = null;
 let _container = null;
+let _logViewerOpen = false;  // persist across refreshes
 
 export async function render(container) {
     _container = container;
     container.innerHTML = '<div class="status-loading">Loading status...</div>';
     await refresh();
-    _interval = setInterval(refresh, 10000);
+    _interval = setInterval(() => {
+        // Skip refresh while log viewer is open — don't nuke the DOM mid-read
+        if (_logViewerOpen) return;
+        refresh();
+    }, 10000);
 }
 
 export function cleanup() {
@@ -212,6 +217,30 @@ function renderDashboard(el, d) {
                 </div>
             </div>
 
+            <!-- Row 7: Logs -->
+            <div class="status-row">
+                <div class="status-card" style="grid-column: 1 / -1">
+                    <details id="log-viewer-details">
+                        <summary class="status-card-title" style="cursor:pointer;user-select:none">
+                            Application Logs
+                        </summary>
+                        <div class="log-controls">
+                            <div class="log-filters">
+                                <button class="log-filter active" data-level="ALL">All</button>
+                                <button class="log-filter" data-level="WARNING">Warn+</button>
+                                <button class="log-filter" data-level="ERROR">Error+</button>
+                            </div>
+                            <input type="text" class="log-search" id="log-search" placeholder="Search logs..." spellcheck="false">
+                            <span class="log-count" id="log-count"></span>
+                            <button class="log-refresh-btn" id="log-refresh" title="Refresh">\u21BB</button>
+                        </div>
+                        <div class="log-output" id="log-output">
+                            <div class="status-meta" style="padding:20px;text-align:center">Loading...</div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+
             <!-- Diagnostics -->
             <div class="status-row">
                 <div class="status-card" style="grid-column: 1 / -1">
@@ -263,6 +292,42 @@ function renderDashboard(el, d) {
             }
             .status-copy-btn:hover { border-color: var(--accent); }
             .status-loading { color: var(--text-muted); text-align: center; padding: 40px; }
+            .log-controls { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+            .log-filters { display: flex; gap: 4px; }
+            .log-filter {
+                padding: 3px 10px; border-radius: 10px; border: 1px solid var(--border);
+                background: var(--bg); color: var(--text-muted); font-size: var(--font-xs);
+                cursor: pointer;
+            }
+            .log-filter:hover { border-color: var(--accent); }
+            .log-filter.active { background: var(--accent, #4a9eff); color: #fff; border-color: var(--accent); }
+            .log-search {
+                flex: 1; min-width: 120px; padding: 4px 8px; border-radius: 6px;
+                border: 1px solid var(--border); background: var(--bg);
+                color: var(--text); font-size: var(--font-sm); font-family: monospace;
+            }
+            .log-search:focus { border-color: var(--accent); outline: none; }
+            .log-count { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; }
+            .log-refresh-btn {
+                border: 1px solid var(--border); background: var(--bg); color: var(--text);
+                padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 14px;
+            }
+            .log-refresh-btn:hover { border-color: var(--accent); }
+            .log-output {
+                max-height: 400px; overflow-y: auto; border: 1px solid var(--border);
+                border-radius: 6px; background: #0a0a14; font-family: monospace;
+                font-size: 11px; line-height: 1.5;
+            }
+            .log-line { padding: 1px 8px; border-bottom: 1px solid rgba(255,255,255,0.03); white-space: pre-wrap; word-break: break-all; }
+            .log-line.DEBUG { color: #666; }
+            .log-line.INFO { color: #b0b0c0; }
+            .log-line.WARNING { color: #ffa726; }
+            .log-line.ERROR { color: #ef5350; }
+            .log-line.CRITICAL { color: #ef5350; font-weight: bold; }
+            .log-line .log-ts { color: #555; }
+            .log-line .log-src { color: #6a6aaa; }
+            .log-line .log-lvl { font-weight: 600; }
+            .log-line mark { background: rgba(255,200,0,0.3); color: inherit; border-radius: 2px; }
         </style>
     `;
 
@@ -321,6 +386,92 @@ function renderDashboard(el, d) {
         btn.textContent = 'Copied!';
         setTimeout(() => btn.textContent = 'Copy Diagnostics', 2000);
     });
+
+    // === Log Viewer ===
+    let logLevel = 'ALL';
+    let logSearch = '';
+    let logLoaded = false;
+
+    const logDetails = el.querySelector('#log-viewer-details');
+    if (logDetails) {
+        logDetails.addEventListener('toggle', () => {
+            _logViewerOpen = logDetails.open;
+            if (logDetails.open && !logLoaded) {
+                logLoaded = true;
+                fetchLogs(el);
+            }
+        });
+    }
+
+    // Filter buttons
+    el.querySelectorAll('.log-filter').forEach(btn => {
+        btn.addEventListener('click', () => {
+            el.querySelectorAll('.log-filter').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            logLevel = btn.dataset.level;
+            fetchLogs(el);
+        });
+    });
+
+    // Search
+    let searchTimer = null;
+    const searchInput = el.querySelector('#log-search');
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => {
+                logSearch = searchInput.value;
+                fetchLogs(el);
+            }, 300);
+        });
+    }
+
+    // Refresh
+    el.querySelector('#log-refresh')?.addEventListener('click', () => fetchLogs(el));
+
+    async function fetchLogs(container) {
+        const output = container.querySelector('#log-output');
+        const countEl = container.querySelector('#log-count');
+        if (!output) return;
+
+        const params = new URLSearchParams({ lines: 500, level: logLevel });
+        if (logSearch) params.set('search', logSearch);
+
+        try {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            const res = await fetch(`/api/plugin/status/logs?${params}`, { headers: { 'X-CSRF-Token': csrf } });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+
+            if (countEl) {
+                countEl.textContent = `${data.showing || 0} / ${data.filtered || 0} lines (${data.total || 0} total)`;
+            }
+
+            if (!data.lines?.length) {
+                output.innerHTML = '<div class="status-meta" style="padding:20px;text-align:center">No log entries match</div>';
+                return;
+            }
+
+            const searchLower = (logSearch || '').toLowerCase();
+            output.innerHTML = data.lines.map(line => {
+                let text = esc(line.text);
+                // Highlight search matches
+                if (searchLower && searchLower.length >= 2) {
+                    const re = new RegExp(`(${searchLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+                    text = text.replace(re, '<mark>$1</mark>');
+                }
+                // Color-code parts: timestamp - source - level - message
+                text = text.replace(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d+)( - )([^ ]+)( - )(\w+)( - )/,
+                    '<span class="log-ts">$1</span>$2<span class="log-src">$3</span>$4<span class="log-lvl">$5</span>$6');
+                return `<div class="log-line ${esc(line.level)}">${text}</div>`;
+            }).join('');
+
+            // Scroll to bottom
+            output.scrollTop = output.scrollHeight;
+        } catch (e) {
+            output.innerHTML = `<div class="status-meta" style="padding:20px;text-align:center;color:#ef5350">Failed to load logs: ${esc(e.message)}</div>`;
+        }
+    }
 }
 
 function esc(s) { return String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
