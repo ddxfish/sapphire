@@ -247,8 +247,10 @@ async def _connect_single(account_name: str, token: str = None):
         from plugins.discord.tools.discord_tools import get_send_count
         payload["_send_count_before"] = get_send_count(account_name)
 
-        # Start typing indicator while LLM processes
-        _start_typing(message.channel)
+        # Only start typing if this message will likely be processed
+        # (i.e. if mentioned and tasks require it, don't type on every message)
+        if mentioned:
+            _start_typing(message.channel)
 
         _plugin_loader.emit_daemon_event("discord_message", json.dumps(payload))
 
@@ -294,19 +296,21 @@ def _get_channel_cooldown(channel_id_str):
 
 
 def _start_typing(channel):
-    """Start a typing indicator loop for a channel."""
+    """Start a typing indicator loop for a channel. Auto-stops after 120s."""
     channel_id = channel.id
 
     async def _typing_loop():
         try:
             async with channel.typing():
-                # typing() auto-renews every ~10s, we just hold it open
-                while True:
+                # Auto-timeout after 120s — safety net if reply handler never fires
+                for _ in range(24):  # 24 * 5s = 120s
                     await asyncio.sleep(5)
         except asyncio.CancelledError:
             pass
         except Exception:
             pass
+        finally:
+            _typing_tasks.pop(channel_id, None)
 
     # Cancel any existing typing task for this channel
     old = _typing_tasks.pop(channel_id, None)
