@@ -19,6 +19,7 @@ _loop: asyncio.AbstractEventLoop = None
 _thread: threading.Thread = None
 _clients: dict = {}  # {account_name: TelegramClient}
 _self_ids: dict = {}  # {account_name: user_id} — to filter own messages
+_typing_tasks: dict = {}  # {chat_id: asyncio.Task} — active typing indicators
 _stop_event = threading.Event()
 _plugin_loader = None
 _api_id: int = 0
@@ -224,10 +225,68 @@ async def _handle_message(plugin_loader, account_name: str, event):
         }
 
         logger.debug(f"[TELEGRAM] Message from {payload['username'] or payload['first_name']} in {chat_type}")
-        plugin_loader.emit_daemon_event("telegram_message", json.dumps(payload))
+
+        _start_typing(account_name, event.chat_id)
+        await asyncio.sleep(0.1)  # Yield to let typing task send first request
+        accepted = plugin_loader.emit_daemon_event("telegram_message", json.dumps(payload))
+        if not accepted:
+            _stop_typing(event.chat_id)
 
     except Exception as e:
         logger.error(f"[TELEGRAM] Error handling message: {e}", exc_info=True)
+
+
+def _start_typing(account_name: str, chat_id: int):
+    """Start a typing indicator loop for a chat. Auto-stops after 120s.
+
+    Telegram typing indicators expire after ~5s, so we re-send every 4s.
+    Uses raw SetTypingRequest which works for both bots and user accounts.
+    """
+    async def _typing_loop():
+        client = _clients.get(account_name)
+        if not client:
+            return
+        try:
+            from telethon.tl.functions.messages import SetTypingRequest
+            from telethon.tl.types import SendMessageTypingAction, SendMessageCancelAction
+            await client(SetTypingRequest(peer=chat_id, action=SendMessageTypingAction()))
+            for _ in range(30):  # 30 * 4s = 120s safety timeout
+                await asyncio.sleep(4)
+                await client(SetTypingRequest(peer=chat_id, action=SendMessageTypingAction()))
+            # Cancel typing on timeout
+            try:
+                await client(SetTypingRequest(peer=chat_id, action=SendMessageCancelAction()))
+            except Exception:
+                pass
+        except asyncio.CancelledError:
+            # Cancel the typing indicator cleanly
+            try:
+                await client(SetTypingRequest(peer=chat_id, action=SendMessageCancelAction()))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        finally:
+            _typing_tasks.pop(chat_id, None)
+
+    # Cancel any existing typing task for this chat
+    old = _typing_tasks.pop(chat_id, None)
+    if old and not old.done():
+        old.cancel()
+
+    if _loop and _loop.is_running():
+        _typing_tasks[chat_id] = _loop.create_task(_typing_loop())
+
+
+def _stop_typing(chat_id: int):
+    """Stop the typing indicator for a chat."""
+    task = _typing_tasks.pop(chat_id, None)
+    if task and not task.done():
+        loop = _loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(task.cancel)
+        else:
+            task.cancel()
 
 
 async def send_message(account_name: str, chat_id: int, text: str, parse_mode: str = None):
@@ -333,6 +392,13 @@ def _reply_handler(task, event_data: dict, response_text: str):
     """Route LLM response back to the Telegram chat that triggered the daemon."""
     chat_id = event_data.get("chat_id")
     account = event_data.get("account") or task.get("trigger_config", {}).get("account", "")
+
+    # Stop typing indicator regardless of outcome
+    if chat_id:
+        try:
+            _stop_typing(int(chat_id))
+        except (ValueError, TypeError):
+            pass
 
     if not chat_id or not account:
         logger.warning("[TELEGRAM] Reply handler missing chat_id or account")
