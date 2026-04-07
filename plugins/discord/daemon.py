@@ -193,8 +193,8 @@ async def _connect_single(account_name: str, token: str = None):
     @client.event
     async def on_message(message):
         logger.debug(f"[DISCORD] on_message fired: author={message.author} bot={message.author.bot} content={message.content[:50] if message.content else '(empty)'}")
-        # Ignore own messages and other bots
-        if message.author == client.user or message.author.bot:
+        # Always ignore own messages (self-loop prevention)
+        if message.author == client.user:
             return
 
         # Check direct @user mention
@@ -204,6 +204,11 @@ async def _connect_single(account_name: str, token: str = None):
             bot_member = message.guild.get_member(client.user.id)
             if bot_member:
                 mentioned = any(role in bot_member.roles for role in message.role_mentions)
+
+        # Other bots: only respond if they explicitly @mention us (Round Table semantics)
+        # Prevents passive spam while allowing intentional bot-to-bot conversation
+        if message.author.bot and not mentioned:
+            return
 
         # Fetch recent history for context (last 10 messages before this one)
         # Include author IDs so the LLM can mention participants via <@id> format
