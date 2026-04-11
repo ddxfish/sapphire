@@ -7,16 +7,39 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Settings keys that a persona can bundle
-PERSONA_SETTINGS_KEYS = [
+# Static (non-scope) persona settings keys. Scope keys are merged dynamically
+# from SCOPE_REGISTRY by get_persona_settings_keys() — function, not constant, because
+# plugins can register new scopes at runtime and a module-import snapshot would miss them.
+_STATIC_PERSONA_SETTINGS_KEYS = [
     "prompt", "toolset", "spice_set", "voice", "pitch", "speed",
     "spice_enabled", "spice_turns", "inject_datetime", "custom_context",
-    "llm_primary", "llm_model", "memory_scope", "goal_scope",
-    "knowledge_scope", "people_scope", "email_scope", "bitcoin_scope", "gcal_scope",
+    "llm_primary", "llm_model",
     "trim_color",
     "story_engine_enabled", "story_preset", "story_vars_in_prompt",
     "story_in_prompt"
 ]
+
+
+def get_persona_settings_keys() -> list:
+    """Return the full list of keys a persona can bundle. Dynamic — includes
+    all scope setting keys currently in SCOPE_REGISTRY at call time.
+
+    Fixes a pre-existing silent bug where telegram_scope and discord_scope
+    were missing from the hardcoded list and got stripped from saved personas.
+    """
+    from core.chat.function_manager import scope_setting_keys
+    return _STATIC_PERSONA_SETTINGS_KEYS + scope_setting_keys()
+
+
+def __getattr__(name):
+    """Module-level backcompat shim for `from ... import PERSONA_SETTINGS_KEYS`.
+
+    External read-only callers still work — they get the current dynamic list.
+    Tests that PATCH this name must migrate to patching `get_persona_settings_keys`.
+    """
+    if name == 'PERSONA_SETTINGS_KEYS':
+        return get_persona_settings_keys()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class PersonaManager:
@@ -350,8 +373,10 @@ class PersonaManager:
         return safe.replace(' ', '_').lower()
 
     def _clean_settings(self, settings: dict) -> dict:
-        """Only keep recognized settings keys."""
-        return {k: v for k, v in settings.items() if k in PERSONA_SETTINGS_KEYS}
+        """Only keep recognized settings keys. Calls get_persona_settings_keys()
+        so new plugin scopes are picked up without restart."""
+        allowed = set(get_persona_settings_keys())
+        return {k: v for k, v in settings.items() if k in allowed}
 
 
 # Singleton instance

@@ -314,11 +314,6 @@ class ContinuityScheduler:
             "voice": data.get("voice", ""),
             "pitch": data.get("pitch", None),
             "speed": data.get("speed", None),
-            "memory_scope": data.get("memory_scope", "none"),
-            "knowledge_scope": data.get("knowledge_scope", "none"),
-            "people_scope": data.get("people_scope", "none"),
-            "goal_scope": data.get("goal_scope", "none"),
-            "email_scope": data.get("email_scope", "default"),
             "heartbeat": data.get("heartbeat", False),
             "emoji": data.get("emoji", ""),
             "context_limit": data.get("context_limit", 0),
@@ -336,7 +331,13 @@ class ContinuityScheduler:
             "last_response": None,
             "created": _user_now().isoformat()
         }
-        
+
+        # Dynamically include all scope keys from SCOPE_REGISTRY so plugin scopes
+        # propagate without code changes. Default 'none' for new tasks (disabled by default).
+        from core.chat.function_manager import scope_setting_keys
+        for setting_key in scope_setting_keys():
+            task[setting_key] = data.get(setting_key, "none")
+
         # Auto-generate webhook secret if not provided
         if task_type == "webhook":
             tc = task.get("trigger_config", {})
@@ -373,18 +374,20 @@ class ContinuityScheduler:
                 except Exception as e:
                     raise ValueError(f"Invalid cron schedule: {e}")
             
-            # Update allowed fields
+            # Update allowed fields. Scope keys are pulled dynamically from SCOPE_REGISTRY
+            # so new plugin scopes can be updated on tasks without touching this set.
+            from core.chat.function_manager import scope_setting_keys
             allowed = {
                 "name", "type", "enabled", "schedule", "trigger_config", "chance",
                 "provider", "model", "prompt", "toolset", "chat_target",
                 "initial_message", "tts_enabled", "browser_tts", "inject_datetime",
                 "persona", "voice", "pitch", "speed",
-                "memory_scope", "knowledge_scope", "people_scope", "goal_scope", "email_scope",
                 "heartbeat", "emoji",
                 "context_limit", "max_parallel_tools", "max_tool_rounds",
                 "active_hours_start", "active_hours_end",
                 "max_runs", "delete_after_run"
             }
+            allowed.update(scope_setting_keys())
             for key in allowed:
                 if key in data:
                     task[key] = data[key]

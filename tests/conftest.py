@@ -7,6 +7,25 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Pre-register plugin-style scopes BEFORE test collection imports any test module.
+# Real plugin_loader.scan() doesn't run during pytest, so we fake the scopes that
+# plugins would register. This lets test modules do
+# `from core.chat.function_manager import scope_email` (after Phase 3c removes the
+# module-level names) and have the import resolve via the module's __getattr__ shim.
+#
+# Phase 1: this is a no-op because all 11 scopes are still hardcoded as module-level
+# ContextVars in function_manager.py. Once Phase 3c deletes the 5 plugin scope names,
+# this fixture is what keeps test collection working.
+try:
+    from core.chat.function_manager import register_plugin_scope
+    for _scope_key in ('email', 'bitcoin', 'gcal', 'telegram', 'discord'):
+        register_plugin_scope(_scope_key, plugin_name='pytest-conftest')
+except Exception as _e:
+    # Don't crash collection if function_manager can't be imported — let
+    # individual tests surface the real error.
+    import warnings
+    warnings.warn(f"conftest scope pre-registration failed: {_e}")
+
 import pytest
 
 

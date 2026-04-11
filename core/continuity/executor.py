@@ -152,20 +152,27 @@ class ContinuityExecutor:
                 task["initial_message"] = event_display
 
             # Auto-set plugin scopes from event data (e.g. discord account)
+            # Event source → scope key mapping for auto-fill.
+            # Extracted to a list so adding a new event-emitting plugin only touches this table,
+            # not the surrounding logic. (Future: move this into the scope manifest capability
+            # so plugins can self-declare `"event_source_keyword": "discord"`.)
+            _EVENT_SOURCE_SCOPE_MAP = [
+                ("discord",  "discord_scope"),
+                ("telegram", "telegram_scope"),
+                ("email",    "email_scope"),
+            ]
             try:
                 obj = json.loads(event_data) if isinstance(event_data, str) else event_data
                 if isinstance(obj, dict) and obj.get("account"):
                     trigger = task.get("trigger_config", {})
                     source = trigger.get("source", "") or trigger.get("event_source", "")
-                    if "discord" in source and not task.get("discord_scope"):
-                        task["discord_scope"] = obj["account"]
-                        # Stash channel_id for auto-reply targeting
-                        if obj.get("channel_id"):
-                            task["_discord_reply_channel_id"] = obj["channel_id"]
-                    elif "telegram" in source and not task.get("telegram_scope"):
-                        task["telegram_scope"] = obj["account"]
-                    elif "email" in source and not task.get("email_scope"):
-                        task["email_scope"] = obj["account"]
+                    for keyword, scope_key in _EVENT_SOURCE_SCOPE_MAP:
+                        if keyword in source and not task.get(scope_key):
+                            task[scope_key] = obj["account"]
+                            # Discord needs channel_id for auto-reply targeting
+                            if keyword == "discord" and obj.get("channel_id"):
+                                task["_discord_reply_channel_id"] = obj["channel_id"]
+                            break
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -192,8 +199,11 @@ class ContinuityExecutor:
     
     @staticmethod
     def _extract_task_settings(task: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract execution settings from a task dict for ExecutionContext."""
-        return {
+        """Extract execution settings from a task dict for ExecutionContext.
+        Scope keys are pulled dynamically from SCOPE_REGISTRY so new plugin scopes
+        propagate to scheduled tasks without code changes."""
+        from core.chat.function_manager import scope_setting_keys
+        settings = {
             "prompt": task.get("prompt", "default"),
             "toolset": task.get("toolset", "none"),
             "provider": task.get("provider", "auto"),
@@ -202,16 +212,10 @@ class ContinuityExecutor:
             "max_tool_rounds": task.get("max_tool_rounds"),
             "max_parallel_tools": task.get("max_parallel_tools"),
             "context_limit": task.get("context_limit"),
-            "memory_scope": task.get("memory_scope", "default"),
-            "knowledge_scope": task.get("knowledge_scope", "none"),
-            "people_scope": task.get("people_scope", "none"),
-            "goal_scope": task.get("goal_scope", "none"),
-            "email_scope": task.get("email_scope", "default"),
-            "bitcoin_scope": task.get("bitcoin_scope", "default"),
-            "discord_scope": task.get("discord_scope", "default"),
-            "telegram_scope": task.get("telegram_scope", "default"),
-            "gcal_scope": task.get("gcal_scope", "default"),
         }
+        for setting_key in scope_setting_keys():
+            settings[setting_key] = task.get(setting_key, "default")
+        return settings
 
     def _run_background(self, task: Dict[str, Any], result: Dict[str, Any],
                         progress_cb=None, response_cb=None) -> Dict[str, Any]:
@@ -515,7 +519,10 @@ class ContinuityExecutor:
             ps = persona.get("settings", {})
             resolved = dict(task)
 
-            # Persona provides defaults — task-level fields override
+            # Persona provides defaults — task-level fields override.
+            # Non-scope fields are static; scope fields are pulled dynamically from
+            # SCOPE_REGISTRY so new plugin scopes flow through persona inheritance.
+            from core.chat.function_manager import scope_setting_keys
             field_map = {
                 "prompt": "prompt",
                 "toolset": "toolset",
@@ -525,16 +532,10 @@ class ContinuityExecutor:
                 "llm_primary": "provider",
                 "llm_model": "model",
                 "inject_datetime": "inject_datetime",
-                "memory_scope": "memory_scope",
-                "knowledge_scope": "knowledge_scope",
-                "people_scope": "people_scope",
-                "goal_scope": "goal_scope",
-                "email_scope": "email_scope",
-                "bitcoin_scope": "bitcoin_scope",
-                "discord_scope": "discord_scope",
-                "telegram_scope": "telegram_scope",
-                "gcal_scope": "gcal_scope",
             }
+            # Scope keys: persona key == task key (e.g. memory_scope → memory_scope)
+            for setting_key in scope_setting_keys():
+                field_map[setting_key] = setting_key
             for persona_key, task_key in field_map.items():
                 persona_val = ps.get(persona_key)
                 task_val = resolved.get(task_key)

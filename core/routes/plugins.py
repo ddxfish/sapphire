@@ -130,6 +130,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "has_script": has_script,
                     "sidebar_accordion": manifest.get("capabilities", {}).get("sidebar_accordion"),
                     "missing_deps": info.get("missing_deps", []),
+                    "essential": manifest.get("essential", False),
                 })
     except Exception:
         pass

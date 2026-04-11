@@ -46,13 +46,38 @@ SCOPE_REGISTRY = {
 }
 
 
+def register_plugin_scope(key: str, plugin_name: str = "", default='default'):
+    """Register a scope ContextVar from a plugin manifest. Called by plugin_loader.
+
+    Idempotent: if the key is already registered, logs a warning and returns the existing var.
+    Validates that `key` is a proper identifier to prevent malformed registry entries.
+    """
+    if key in SCOPE_REGISTRY:
+        logger.warning(f"Scope key '{key}' already registered, skipping duplicate from '{plugin_name}'")
+        return SCOPE_REGISTRY[key]['var']
+    if not key or not isinstance(key, str) or not key.isidentifier():
+        logger.error(f"Invalid scope key '{key}' from '{plugin_name}' — must be a valid Python identifier")
+        return None
+    var = ContextVar(f'scope_{key}', default=default)
+    SCOPE_REGISTRY[key] = {'var': var, 'default': default, 'setting': f'{key}_scope'}
+    logger.info(f"Registered scope '{key}' from plugin '{plugin_name}'")
+    return var
+
+
 def apply_scopes_from_settings(fm, settings: dict):
     """Apply scope values from a chat_settings dict to ContextVars.
-    Converts 'none' string to None (disabled). Used by chat.py, chat_streaming.py, api_fastapi.py."""
-    for name, reg in SCOPE_REGISTRY.items():
-        key = reg['setting']
+    Converts 'none' string to None (disabled). Used by chat.py, chat_streaming.py, api_fastapi.py.
+
+    Uses list() snapshot over SCOPE_REGISTRY to protect against concurrent modification
+    during plugin hot-reload (would otherwise raise RuntimeError: dict changed size during iteration).
+    """
+    # Build set of known scope setting keys for unknown-key detection (debug log)
+    known_settings = set()
+    for name, reg in list(SCOPE_REGISTRY.items()):
+        key = reg.get('setting')
         if not key:
             continue
+        known_settings.add(key)
         if key in settings:
             val = settings[key]
             # Bool settings (private_chat) — coerce to bool
@@ -65,21 +90,28 @@ def apply_scopes_from_settings(fm, settings: dict):
                 val = reg['default']
             reg['var'].set(val)
 
+    # Debug: log settings keys that look like scopes but have no matching registry entry
+    # (helps diagnose plugin load-order issues)
+    for k in settings:
+        if isinstance(k, str) and k.endswith('_scope') and k not in known_settings:
+            logger.debug(f"apply_scopes_from_settings: key '{k}' has no matching scope in SCOPE_REGISTRY (plugin not loaded?)")
+
 
 def reset_scopes():
-    """Reset all scopes to defaults."""
-    for reg in SCOPE_REGISTRY.values():
+    """Reset all scopes to defaults. Uses list() snapshot for hot-reload safety."""
+    for reg in list(SCOPE_REGISTRY.values()):
         reg['var'].set(reg['default'])
 
 
 def snapshot_all_scopes() -> dict:
-    """Capture all ContextVar scopes as a plain dict."""
-    return {name: reg['var'].get() for name, reg in SCOPE_REGISTRY.items()}
+    """Capture all ContextVar scopes as a plain dict. Uses list() snapshot."""
+    return {name: reg['var'].get() for name, reg in list(SCOPE_REGISTRY.items())}
 
 
 def restore_scopes(scopes: dict):
-    """Restore scopes from a snapshot dict."""
-    for name, reg in SCOPE_REGISTRY.items():
+    """Restore scopes from a snapshot dict. Missing keys reset to default.
+    Uses list() snapshot for hot-reload safety."""
+    for name, reg in list(SCOPE_REGISTRY.items()):
         if name in scopes:
             reg['var'].set(scopes[name])
         else:
@@ -87,8 +119,21 @@ def restore_scopes(scopes: dict):
 
 
 def scope_setting_keys() -> list:
-    """Return all setting keys that map to scopes (for defaults/persona reset)."""
-    return [reg['setting'] for reg in SCOPE_REGISTRY.values() if reg['setting'] and reg['setting'] != 'private_chat']
+    """Return all setting keys that map to scopes (for defaults/persona reset).
+    Uses list() snapshot for hot-reload safety. Excludes private_chat (bool, not a dropdown)."""
+    return [reg['setting'] for reg in list(SCOPE_REGISTRY.values())
+            if reg.get('setting') and reg['setting'] != 'private_chat']
+
+
+def scope_defaults_dict() -> dict:
+    """Return a dict mapping scope setting keys to their default values.
+    Used by get_system_defaults() and similar merge sites."""
+    result = {}
+    for name, reg in list(SCOPE_REGISTRY.items()):
+        setting = reg.get('setting')
+        if setting and setting != 'private_chat':
+            result[setting] = reg['default'] if reg['default'] is not None else 'default'
+    return result
 
 
 class FunctionManager:
@@ -637,21 +682,10 @@ class FunctionManager:
         """Generic scope getter."""
         return SCOPE_REGISTRY[name]['var'].get()
 
-    # Legacy setters/getters — kept for backward compat with direct callers
-    def set_memory_scope(self, s): scope_memory.set(s)
-    def get_memory_scope(self): return scope_memory.get()
-    def set_goal_scope(self, s): scope_goal.set(s)
-    def get_goal_scope(self): return scope_goal.get()
-    def set_knowledge_scope(self, s): scope_knowledge.set(s)
-    def get_knowledge_scope(self): return scope_knowledge.get()
-    def set_people_scope(self, s): scope_people.set(s)
-    def get_people_scope(self): return scope_people.get()
-    def set_email_scope(self, s): scope_email.set(s)
-    def get_email_scope(self): return scope_email.get()
-    def set_bitcoin_scope(self, s): scope_bitcoin.set(s)
-    def get_bitcoin_scope(self): return scope_bitcoin.get()
-    def set_gcal_scope(self, s): scope_gcal.set(s)
-    def get_gcal_scope(self): return scope_gcal.get()
+    # rag and private are core scopes (not plugin-registered, not deleted in any phase)
+    # Their wrappers stay as thin convenience methods. Per-scope setters for the 7 plugin-style
+    # scopes (memory/goal/knowledge/people/email/bitcoin/gcal) were deleted in v7 — use the
+    # generic set_scope('memory', val) / get_scope('memory') at lines 632-638 instead.
     def set_rag_scope(self, s): scope_rag.set(s)
     def set_private_chat(self, enabled): scope_private.set(bool(enabled))
 

@@ -447,17 +447,17 @@ class TestScopeSnapshot:
     """Scope snapshots must capture all scope types."""
 
     def test_snapshot_captures_all_scopes(self):
-        """snapshot_scopes should include all 8 scope types."""
+        """snapshot_scopes should include all scope types (11 in current registry)."""
         from core.chat.function_manager import FunctionManager
 
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            mgr.set_memory_scope("mem_scope")
-            mgr.set_goal_scope("goal_scope")
-            mgr.set_knowledge_scope("know_scope")
-            mgr.set_people_scope("ppl_scope")
-            mgr.set_email_scope("email_scope")
-            mgr.set_bitcoin_scope("btc_scope")
+            mgr.set_scope('memory', "mem_scope")
+            mgr.set_scope('goal', "goal_scope")
+            mgr.set_scope('knowledge', "know_scope")
+            mgr.set_scope('people', "ppl_scope")
+            mgr.set_scope('email', "email_scope")
+            mgr.set_scope('bitcoin', "btc_scope")
             mgr.set_private_chat(True)
             mgr.set_rag_scope("rag_scope")
 
@@ -480,15 +480,15 @@ class TestScopeSnapshot:
 
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            mgr.set_memory_scope("test_mem")
-            mgr.set_email_scope("test_email")
+            mgr.set_scope('memory', "test_mem")
+            mgr.set_scope('email', "test_email")
             mgr.set_private_chat(True)
 
             snap = mgr.snapshot_scopes()
 
             # Clear scopes
-            mgr.set_memory_scope(None)
-            mgr.set_email_scope(None)
+            mgr.set_scope('memory', None)
+            mgr.set_scope('email', None)
             mgr.set_private_chat(False)
 
             assert scope_memory.get() is None
@@ -889,9 +889,9 @@ class TestResetClearsScopes:
             mgr._story_engine_enabled = False
 
         # Set non-default scopes
-        mgr.set_memory_scope("private")
-        mgr.set_email_scope("work")
-        mgr.set_bitcoin_scope("wallet_a")
+        mgr.set_scope('memory', "private")
+        mgr.set_scope('email', "work")
+        mgr.set_scope('bitcoin', "wallet_a")
         mgr.set_private_chat(True)
 
         with patch.object(LLMChat, '__init__', lambda self: None):

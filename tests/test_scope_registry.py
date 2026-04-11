@@ -218,13 +218,14 @@ class TestFunctionManagerScopeWrappers:
             assert scope_memory.get() == 'shared'
             assert scope_gcal.get() == 'sawyer'
 
-    def test_legacy_setters_still_work(self):
+    def test_generic_set_get_scope(self):
+        """Generic set_scope/get_scope replaces deleted per-scope wrappers (Phase 1c, v7)."""
         with patch.object(FunctionManager, '__init__', lambda self: None):
             mgr = FunctionManager()
-            mgr.set_memory_scope('legacy')
-            assert mgr.get_memory_scope() == 'legacy'
-            mgr.set_gcal_scope('cal_legacy')
-            assert mgr.get_gcal_scope() == 'cal_legacy'
+            mgr.set_scope('memory', 'generic_test')
+            assert mgr.get_scope('memory') == 'generic_test'
+            mgr.set_scope('gcal', 'cal_generic')
+            assert mgr.get_scope('gcal') == 'cal_generic'
 
 
 class TestContextVarThreadIsolation:

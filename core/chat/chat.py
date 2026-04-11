@@ -478,6 +478,12 @@ class LLMChat:
             self.session_manager.add_user_message(user_input)
             
             # Set scopes for this chat context
+            # Reset first to prevent bleed: when a chat's saved settings don't include
+            # a newly-registered plugin scope, apply_scopes would leave the previous
+            # chat's value in place. reset_scopes() puts every scope back to its default
+            # before we apply the chat's specific values on top.
+            from core.chat.function_manager import reset_scopes
+            reset_scopes()
             chat_settings = self.session_manager.get_chat_settings()
             self.function_manager.apply_scopes(chat_settings)
             chat_name = self.session_manager.get_active_chat_name()

@@ -14,9 +14,10 @@ from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
-# System defaults for chat settings - hardcoded fallbacks
+# Static (non-scope) system defaults for chat settings.
+# Scope defaults are merged in dynamically by get_system_defaults() from SCOPE_REGISTRY.
 # Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
-SYSTEM_DEFAULTS = {
+_STATIC_SYSTEM_DEFAULTS = {
     "prompt": "sapphire",
     "toolset": "all",
     "voice": "af_heart",
@@ -33,25 +34,45 @@ SYSTEM_DEFAULTS = {
     "story_preset": None,           # Preset to load (e.g., "crystal_prophecy")
     "story_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
     "story_in_prompt": True,        # Include story segments in prompt (cache-friendly)
-    "memory_scope": "default",
-    "goal_scope": "default",
-    "knowledge_scope": "default",
-    "people_scope": "default",
-    "email_scope": "default",
-    "bitcoin_scope": "default",
-    "gcal_scope": "default",
-    "telegram_scope": "default",
-    "discord_scope": "default",
     "trim_color": "",
     "persona": None
 }
 
+
+def get_system_defaults() -> dict:
+    """Return the current system defaults dict, including dynamic scope defaults
+    from SCOPE_REGISTRY. This is the source of truth for chat setting defaults.
+
+    Function (not constant) because plugins can register new scopes at any time —
+    a snapshot at module-import would miss them. Safe to call repeatedly.
+    """
+    from core.chat.function_manager import scope_defaults_dict
+    defaults = dict(_STATIC_SYSTEM_DEFAULTS)
+    # Merge scope defaults; static keys win if there's a collision
+    for setting_key, default_val in scope_defaults_dict().items():
+        if setting_key not in defaults:
+            defaults[setting_key] = default_val
+    return defaults
+
+
+def __getattr__(name):
+    """Module-level backcompat shim for `from core.chat.history import SYSTEM_DEFAULTS`.
+
+    External read-only callers still work transparently — they get the current dict
+    (with dynamic scope keys). Internal callers in this module use get_system_defaults()
+    directly. Tests that PATCH `SYSTEM_DEFAULTS` must migrate to patching
+    `get_system_defaults` (returned by this shim is a fresh dict, not mutable state).
+    """
+    if name == 'SYSTEM_DEFAULTS':
+        return get_system_defaults()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 def get_user_defaults() -> Dict[str, Any]:
     """
     Get user's custom chat defaults, falling back to system defaults.
-    Priority: SYSTEM_DEFAULTS < chat_defaults.json < DEFAULT_PERSONA
+    Priority: get_system_defaults() < chat_defaults.json < DEFAULT_PERSONA
     """
-    merged = SYSTEM_DEFAULTS.copy()
+    merged = get_system_defaults()
 
     # User chat_defaults.json as base layer (if it exists)
     user_defaults_path = Path(__file__).parent.parent.parent / "user" / "settings" / "chat_defaults.json"
@@ -620,7 +641,7 @@ class ChatSessionManager:
         
         self.current_chat = ConversationHistory(max_history=max_history)
         self.active_chat_name = "default"
-        self.current_settings = SYSTEM_DEFAULTS.copy()
+        self.current_settings = get_system_defaults()
         
         # Track if we're in an active tool cycle (for Claude thinking_raw)
         self._in_tool_cycle = False
@@ -760,10 +781,10 @@ class ChatSessionManager:
                 # Handle both formats
                 if isinstance(data, dict) and "messages" in data:
                     messages = data["messages"]
-                    settings = data.get("settings", SYSTEM_DEFAULTS.copy())
+                    settings = data.get("settings", get_system_defaults())
                 elif isinstance(data, list):
                     messages = data
-                    settings = SYSTEM_DEFAULTS.copy()
+                    settings = get_system_defaults()
                 else:
                     logger.warning(f"Unknown JSON format in {json_path}, skipping")
                     continue
@@ -818,7 +839,7 @@ class ChatSessionManager:
                 else:
                     self.current_chat.messages = json.loads(raw_messages)
                 file_settings = json.loads(row["settings"])
-                self.current_settings = SYSTEM_DEFAULTS.copy()
+                self.current_settings = get_system_defaults()
                 self.current_settings.update(file_settings)
 
                 logger.info(f"Loaded chat '{chat_name}' with {len(self.current_chat.messages)} messages")

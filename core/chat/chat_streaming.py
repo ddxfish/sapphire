@@ -147,6 +147,11 @@ class StreamingChat:
                 yield {"type": "content", "text": force_prefill}
             
             # Set scopes for this chat context
+            # Reset first to prevent bleed across chats when plugin scopes come and go
+            # (a chat saved before a plugin was enabled wouldn't have its scope key in settings,
+            # and apply_scopes only sets keys present in the dict → stale value survives).
+            from core.chat.function_manager import reset_scopes
+            reset_scopes()
             chat_settings = self.main_chat.session_manager.get_chat_settings()
             self.main_chat.function_manager.apply_scopes(chat_settings)
             chat_name = self.main_chat.session_manager.get_active_chat_name()

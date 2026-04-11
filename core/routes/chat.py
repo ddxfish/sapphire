@@ -590,6 +590,53 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         # Plugins config (merged: static + user overrides)
         plugins_config = _get_merged_plugins()
 
+        # Scope declarations — frontend uses this to render scope dropdowns dynamically
+        # in the chat sidebar, trigger editor, persona editor, etc. (Phase 1: 4 core
+        # entries; Phase 3 will add 5 plugin scopes; Phase 4 will move the core 4 into
+        # the memory plugin manifest. The structure is the same throughout.)
+        CORE_SCOPE_DECLARATIONS = [
+            {"key": "memory",    "label": "memory",  "plugin": None,
+             "endpoint": "/api/memory/scopes",            "data_key": "scopes",
+             "value_field": "name", "name_field": "name",
+             "label_template": "{name} ({count})", "format_js": None,
+             "nav_target": "mind:memories"},
+            {"key": "goal",      "label": "goals",   "plugin": None,
+             "endpoint": "/api/goals/scopes",             "data_key": "scopes",
+             "value_field": "name", "name_field": "name",
+             "label_template": "{name} ({count})", "format_js": None,
+             "nav_target": "mind:goals"},
+            {"key": "knowledge", "label": "knowl.",  "plugin": None,
+             "endpoint": "/api/knowledge/scopes",         "data_key": "scopes",
+             "value_field": "name", "name_field": "name",
+             "label_template": "{name} ({count})", "format_js": None,
+             "nav_target": "mind:knowledge"},
+            {"key": "people",    "label": "people",  "plugin": None,
+             "endpoint": "/api/knowledge/people/scopes",  "data_key": "scopes",
+             "value_field": "name", "name_field": "name",
+             "label_template": "{name} ({count})", "format_js": None,
+             "nav_target": "mind:people"},
+        ]
+        scope_declarations = list(CORE_SCOPE_DECLARATIONS)
+        # Plugin-declared scopes (populated in Phase 3 when manifests get capabilities.scopes)
+        for plugin_name, info in plugin_loader._plugins.items():
+            if not info.get("loaded") or not info.get("enabled"):
+                continue
+            manifest = info.get("manifest", {}) or {}
+            for scope_def in manifest.get("capabilities", {}).get("scopes", []):
+                scope_declarations.append({
+                    "key": scope_def["key"],
+                    "label": scope_def.get("label", scope_def["key"]),
+                    "plugin": plugin_name,
+                    "endpoint": scope_def["endpoint"],
+                    "data_key": scope_def.get("data_key", "accounts"),
+                    "value_field": scope_def.get("value_field", "name"),
+                    "name_field": scope_def.get("name_field", "name"),
+                    "label_template": scope_def.get("label_template", "{name}"),
+                    "format_js": (f"/plugin-web/{plugin_name}/{scope_def['format_js']}"
+                                  if scope_def.get("format_js") else None),
+                    "nav_target": scope_def.get("nav_target"),
+                })
+
         return {
             "toolsets": {
                 "list": toolsets_list,
@@ -622,6 +669,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             "wizard_step": wizard_step,
             "avatars": avatars,
             "plugins_config": plugins_config,
+            "scope_declarations": scope_declarations,
             "load_errors": _get_load_errors()
         }
     except Exception as e:
@@ -939,8 +987,8 @@ async def get_chat_settings(chat_name: str, request: Request, _=Depends(require_
         if isinstance(data, dict) and "settings" in data:
             settings = data["settings"]
         else:
-            from core.chat.history import SYSTEM_DEFAULTS
-            settings = SYSTEM_DEFAULTS.copy()
+            from core.chat.history import get_system_defaults
+            settings = get_system_defaults()
 
         return {"settings": settings}
     except HTTPException:
