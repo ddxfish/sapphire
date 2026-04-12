@@ -603,11 +603,24 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 continue
             manifest = info.get("manifest", {}) or {}
             for scope_def in manifest.get("capabilities", {}).get("scopes", []):
+                # Defensive extraction: a sloppy third-party plugin manifest with
+                # missing `key` or `endpoint` must not break /api/init for all users.
+                # plugin_loader uses .get() and tolerates missing fields, so a
+                # malformed scope makes it into _plugins — we skip it here with a
+                # warning log instead of raising KeyError and bricking the sidebar.
+                if not isinstance(scope_def, dict):
+                    logger.warning(f"Plugin '{plugin_name}' has non-dict scope entry, skipping: {scope_def!r}")
+                    continue
+                key = scope_def.get("key")
+                endpoint = scope_def.get("endpoint")
+                if not key or not endpoint:
+                    logger.warning(f"Plugin '{plugin_name}' has malformed scope (missing key or endpoint), skipping: {scope_def!r}")
+                    continue
                 scope_declarations.append({
-                    "key": scope_def["key"],
-                    "label": scope_def.get("label", scope_def["key"]),
+                    "key": key,
+                    "label": scope_def.get("label", key),
                     "plugin": plugin_name,
-                    "endpoint": scope_def["endpoint"],
+                    "endpoint": endpoint,
                     "data_key": scope_def.get("data_key", "accounts"),
                     "value_field": scope_def.get("value_field", "name"),
                     "name_field": scope_def.get("name_field", "name"),

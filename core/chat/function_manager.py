@@ -323,42 +323,48 @@ class FunctionManager:
             canonical_name = "plugins." + ".".join(parts)
 
             try:
-                # sys.modules idempotency check — reuse if already imported
-                existing_mod = sys.modules.get(canonical_name)
-                if existing_mod is not None and hasattr(existing_mod, '__dict__'):
-                    logger.debug(f"Plugin '{plugin_name}' tool '{canonical_name}' already in sys.modules — reusing")
-                    namespace = existing_mod.__dict__
-                else:
-                    source = tool_path.read_text(encoding="utf-8")
-                    namespace = {"__file__": str(tool_path), "__name__": canonical_name}
-                    exec(compile(source, str(tool_path), "exec"), namespace)
-                    # Install the exec'd namespace as a real module in sys.modules
-                    # so future `from plugins.memory.tools import memory_tools` calls
-                    # resolve to the SAME module object (no split state).
-                    mod_stub = types.ModuleType(canonical_name)
-                    mod_stub.__dict__.update(namespace)
-                    mod_stub.__file__ = str(tool_path)
-                    sys.modules[canonical_name] = mod_stub
-
-                if not namespace.get('ENABLED', True):
-                    logger.info(f"Plugin tool '{module_name}' is disabled")
-                    continue
-
-                tools = namespace.get('TOOLS', [])
-                executor = namespace.get('execute')
-
-                if not tools or not executor:
-                    logger.warning(f"Plugin tool '{tool_path}' missing TOOLS or execute()")
-                    continue
-
-                available_functions = namespace.get('AVAILABLE_FUNCTIONS')
-                if available_functions:
-                    tools = [t for t in tools if t['function']['name'] in available_functions]
-
-                emoji = namespace.get('EMOJI', '')
-                mode_filter = namespace.get('MODE_FILTER')
-
+                # Phase 4 (v2): the sys.modules idempotency check + install must happen
+                # INSIDE `_tools_lock` to close the race where a concurrent route handler
+                # could do a lazy `from plugins.memory.tools import memory_tools` via
+                # PEP 420 namespace package between our None-check and our install,
+                # creating a shadow module with split `_db_lock` state. Acquiring the
+                # lock before the check ensures exactly one module object wins.
                 with self._tools_lock:
+                    # sys.modules idempotency check — reuse if already imported
+                    existing_mod = sys.modules.get(canonical_name)
+                    if existing_mod is not None and hasattr(existing_mod, '__dict__'):
+                        logger.debug(f"Plugin '{plugin_name}' tool '{canonical_name}' already in sys.modules — reusing")
+                        namespace = existing_mod.__dict__
+                    else:
+                        source = tool_path.read_text(encoding="utf-8")
+                        namespace = {"__file__": str(tool_path), "__name__": canonical_name}
+                        exec(compile(source, str(tool_path), "exec"), namespace)
+                        # Install the exec'd namespace as a real module in sys.modules
+                        # so future `from plugins.memory.tools import memory_tools` calls
+                        # resolve to the SAME module object (no split state).
+                        mod_stub = types.ModuleType(canonical_name)
+                        mod_stub.__dict__.update(namespace)
+                        mod_stub.__file__ = str(tool_path)
+                        sys.modules[canonical_name] = mod_stub
+
+                    if not namespace.get('ENABLED', True):
+                        logger.info(f"Plugin tool '{module_name}' is disabled")
+                        continue
+
+                    tools = namespace.get('TOOLS', [])
+                    executor = namespace.get('execute')
+
+                    if not tools or not executor:
+                        logger.warning(f"Plugin tool '{tool_path}' missing TOOLS or execute()")
+                        continue
+
+                    available_functions = namespace.get('AVAILABLE_FUNCTIONS')
+                    if available_functions:
+                        tools = [t for t in tools if t['function']['name'] in available_functions]
+
+                    emoji = namespace.get('EMOJI', '')
+                    mode_filter = namespace.get('MODE_FILTER')
+
                     # Check for function name conflicts BEFORE mutating state
                     existing_names = {t['function']['name'] for t in self.all_possible_tools}
                     for tool in tools:

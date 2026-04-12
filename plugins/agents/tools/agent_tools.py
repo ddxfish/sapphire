@@ -147,7 +147,7 @@ def _create_llm_worker():
 
             provider_key, model_override = _resolve_model(self._model)
 
-            # Phase 2i: scope values now come from the assigned persona instead of a
+            # Phase 2i: scope values come from the assigned persona instead of a
             # hardcoded 9-scope dict. The built-in 'agent' persona (added to
             # core/personas/personas.json) provides lean background-worker defaults
             # that match prior behavior: memory/knowledge/people = 'default',
@@ -156,13 +156,48 @@ def _create_llm_worker():
             # the Persona editor and flow through automatically.
             persona = persona_manager.get(self._prompt) or {}
             persona_settings = persona.get('settings', {}) if isinstance(persona, dict) else {}
+
+            # Phase 5 defensive fallback (day-ruiner scout): `persona_manager._load()`
+            # early-returns when `user/personas/personas.json` exists, which means
+            # newly-added built-in personas (like 'agent' from Phase 2i) don't
+            # auto-seed on existing installs. If the 'agent' persona is missing,
+            # we would silently degrade to "all scopes at default" (max reach),
+            # exactly the opposite of the lean intent. Synthesize the lean defaults
+            # inline so background workers get the intended safe posture regardless
+            # of whether the persona file has been updated.
+            if not persona_settings and self._prompt == 'agent':
+                logger.info("[agents] 'agent' persona not seeded — using inline lean defaults")
+                persona_settings = {
+                    'prompt': 'agent',
+                    'toolset': 'default',
+                    'spice_enabled': False,
+                    'inject_datetime': True,
+                    'memory_scope': 'default',
+                    'goal_scope': 'none',
+                    'knowledge_scope': 'default',
+                    'people_scope': 'default',
+                    'email_scope': 'none',
+                    'bitcoin_scope': 'none',
+                    'gcal_scope': 'none',
+                    'telegram_scope': 'none',
+                    'discord_scope': 'none',
+                }
+
             # Extract only the scope keys from persona settings (other fields like
-            # voice/spice don't apply to background agents — provider/model/prompt/
-            # toolset are handled explicitly below via worker args).
+            # voice/spice don't apply to background agents — provider/model/toolset
+            # are handled explicitly below via worker args).
             scope_settings = {k: v for k, v in persona_settings.items() if k.endswith('_scope')}
 
+            # Phase 5 fix (chaos scout): resolve the actual prompt file name from
+            # the persona's nested `prompt` field. Persona names and prompt file
+            # names are two different namespaces — a persona 'quirk_bot' might use
+            # prompt file 'sapphire'. Without this resolution, ExecutionContext
+            # would try to load a prompt file by the persona name and fall back
+            # to "You are a helpful assistant" — silent voice loss.
+            prompt_file_name = persona_settings.get('prompt', self._prompt)
+
             task_settings = {
-                'prompt': self._prompt,
+                'prompt': prompt_file_name,
                 'toolset': self._toolset,
                 'provider': provider_key,
                 'model': model_override,
@@ -427,7 +462,10 @@ def _spawn_agent(manager, arguments, ps):
         # Special keyword 'self' means "inherit the spawning chat's current persona"
         # so Sapphire can explicitly extend herself into an agent when she wants to.
         # Fallback for 'self' when no active persona is set: 'agent'.
-        requested_prompt = arguments.get('prompt', 'agent')
+        # Using `or 'agent'` (not `default=`) so empty-string and None both fall
+        # through to the lean default — an LLM explicitly passing `prompt=''`
+        # would otherwise bypass the 'self' check and end up with no persona.
+        requested_prompt = arguments.get('prompt') or 'agent'
         if requested_prompt == 'self':
             inherited = _get_current_chat_persona()
             requested_prompt = inherited or 'agent'

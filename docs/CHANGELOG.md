@@ -1,3 +1,14 @@
+# 2.5.9 - Beta test of new scope system
+- Complete refactor of scopes (dropdowns for email, etc)
+- Plugins can easily add scopes like new accounts
+- Daemons and heartbeats support those new scopes
+- Personas support all scopes now
+- Memory system is now a plugin
+# 2.5.5 - Prep for major refactor
+- Bots see other bot ids on telegram (critical for @mention)
+- Added telegram add_contact tool, only works in client mode
+- Tool calling errors reach toast UI
+- Deleted personas dont re-appear
 # 2.5.4 - Plugin enhancements
 - Discord cooldown, typing..., and @mention support
 - Telegram supports voice clips as returns
