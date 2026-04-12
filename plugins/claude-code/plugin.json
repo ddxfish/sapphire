@@ -39,9 +39,23 @@
         "key": "coder_instructions",
         "type": "string",
         "widget": "textarea",
-        "label": "Coder Instructions",
-        "default": "You are a code builder. Write clean, working code.\n- Test your work by running it before reporting done\n- Include a README.md with usage instructions\n- Keep it simple and minimal — no over-engineering\n- If you hit a problem you can't solve, describe it clearly in your final response",
-        "help": "Instructions written into CLAUDE.md in every new workspace. Controls Claude Code's behavior and coding style."
+        "label": "Coder Instructions (Base CLAUDE.md)",
+        "default": "You are a code builder. Write clean, working code.\n- Test your work by running it before reporting done\n- Include a README.md with usage instructions\n- Keep it simple and minimal — no over-engineering\n- If you hit a problem you can't solve, describe it clearly in your final response\n- If you notice anything noteworthy, write it to NOTES.md",
+        "help": "Base layer instructions written into CLAUDE.md for every session. Plugin builds add capability-specific docs on top of this."
+      },
+      {
+        "key": "plugin_build_model",
+        "type": "string",
+        "label": "Plugin Build Model",
+        "default": "",
+        "help": "Model for plugin builder sessions (e.g. 'sonnet', 'haiku'). Empty = use default model."
+      },
+      {
+        "key": "max_budget_usd",
+        "type": "number",
+        "label": "Budget Cap (USD)",
+        "default": 5,
+        "help": "Maximum dollar amount per Claude Code session. Prevents runaway costs on autonomous builds."
       }
     ]
   }

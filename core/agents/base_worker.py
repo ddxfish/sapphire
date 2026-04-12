@@ -75,6 +75,9 @@ class BaseWorker:
                 'name': self.name,
                 'status': self.status,
                 'elapsed': self.elapsed,
+                'result': self.result,
+                'error': self.error,
+                'agent_type': getattr(self, 'tool_log', ['unknown'])[0],
             })
             if self._on_complete:
                 try:

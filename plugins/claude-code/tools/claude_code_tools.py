@@ -318,8 +318,21 @@ def _validate_plugin(workspace):
         results['ast_check'] = False
         logger.warning(f"[claude-code] Could not run AST validation: {e}")
 
-    # 3. Tool files exist (if declared)
+    # Normalize tools — Claude Code sometimes writes a string instead of a list
     tools = manifest.get('capabilities', {}).get('tools', [])
+    if isinstance(tools, str):
+        tools = [tools]
+        # Auto-fix the manifest on disk so plugin_loader can load it
+        manifest['capabilities']['tools'] = tools
+        try:
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+            logger.info(f"[claude-code] Auto-fixed manifest: tools string → list")
+            results['manifest_auto_fixed'] = True
+        except Exception:
+            pass
+
+    # 3. Tool files exist (if declared)
     if tools:
         all_exist = all(os.path.isfile(os.path.join(workspace, t)) for t in tools)
         results['tool_files_exist'] = all_exist
@@ -614,13 +627,24 @@ def _write_claude_md(workspace, coder_instructions=None, project_name='project',
         logger.warning(f"[claude-code] Could not write CLAUDE.md: {e}")
 
 
-def _build_claude_args(mission, settings, session_id=None):
+def _build_claude_args(mission, settings, session_id=None, model_override=None):
     mode = settings.get('mode', 'standard')
     max_turns = int(settings.get('max_turns', 50))
     args = ['claude', '-p', mission, '--output-format', 'json']
     if session_id:
         args.extend(['--resume', session_id])
     args.extend(['--max-turns', str(max_turns)])
+
+    # Model override (plugin builds can use cheaper models)
+    model = model_override or settings.get('plugin_build_model', '')
+    if model:
+        args.extend(['--model', model])
+
+    # Budget cap
+    budget = settings.get('max_budget_usd')
+    if budget and float(budget) > 0:
+        args.extend(['--max-budget-usd', str(float(budget))])
+
     if mode == 'strict':
         args.extend(['--allowedTools', 'Read,Edit,Write,Glob,Grep'])
     elif mode == 'system_killer':
@@ -980,26 +1004,49 @@ def _activate_plugin(arguments):
     # Rescan and enable
     try:
         from core.plugin_loader import plugin_loader
-        result = plugin_loader.rescan()
-        added = result.get('added', [])
 
-        # Enable if not already
-        if name not in [p['name'] for p in plugin_loader.get_all_plugin_info() if p.get('enabled')]:
-            # Toggle enable
-            from core.event_bus import publish, Events
-            plugin_loader.toggle_plugin(name, True)
+        # Rescan to discover the new plugin
+        plugin_loader.rescan()
+
+        info = plugin_loader.get_plugin_info(name)
+        if not info:
+            lines.append(f"\n**Plugin not found after rescan.** Check plugin.json 'name' field matches '{name}'.")
+            return '\n'.join(lines), False
+
+        # Enable if not already enabled — write to user/webui/plugins.json
+        if not info.get('enabled'):
+            enabled_path = Path(_SAPPHIRE_ROOT) / 'user' / 'webui' / 'plugins.json'
+            try:
+                enabled_data = json.loads(enabled_path.read_text(encoding='utf-8')) if enabled_path.exists() else {}
+            except Exception:
+                enabled_data = {}
+            enabled_list = enabled_data.get('enabled', [])
+            if name not in enabled_list:
+                enabled_list.append(name)
+                enabled_data['enabled'] = enabled_list
+                enabled_path.parent.mkdir(parents=True, exist_ok=True)
+                enabled_path.write_text(json.dumps(enabled_data, indent=2), encoding='utf-8')
+
+            # Reload to actually load the plugin
+            try:
+                plugin_loader.reload_plugin(name)
+            except Exception:
+                # First load — need to mark enabled and re-scan
+                plugin_loader._plugins[name]['enabled'] = True
+                plugin_loader._load_plugin(name)
 
         info = plugin_loader.get_plugin_info(name)
         loaded = info.get('loaded', False) if info else False
 
         lines.append(f"\n**Plugin activated: {name}**")
         if loaded:
-            # Get tool list
-            manifest = info.get('manifest', {})
-            tools = manifest.get('capabilities', {}).get('tools', [])
+            manifest_info = info.get('manifest', {})
+            tool_list = manifest_info.get('capabilities', {}).get('tools', [])
+            if isinstance(tool_list, str):
+                tool_list = [tool_list]
             lines.append(f"- Status: loaded and enabled")
-            if tools:
-                lines.append(f"- Tool files: {', '.join(tools)}")
+            if tool_list:
+                lines.append(f"- Tool files: {', '.join(tool_list)}")
         else:
             lines.append(f"- Status: enabled but not loaded (check logs for errors)")
 
