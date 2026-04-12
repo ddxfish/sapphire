@@ -15,35 +15,71 @@ from core.toolsets import toolset_manager
 logger = logging.getLogger(__name__)
 
 
-# Per-context scope isolation — each thread/async-task gets its own values
-scope_memory:    ContextVar[str]  = ContextVar('scope_memory',    default='default')
-scope_goal:      ContextVar[str]  = ContextVar('scope_goal',      default='default')
-scope_knowledge: ContextVar[str]  = ContextVar('scope_knowledge', default='default')
-scope_people:    ContextVar[str]  = ContextVar('scope_people',    default='default')
-scope_email:     ContextVar[str]  = ContextVar('scope_email',     default='default')
-scope_bitcoin:   ContextVar[str]  = ContextVar('scope_bitcoin',   default='default')
-scope_gcal:      ContextVar[str]  = ContextVar('scope_gcal',      default='default')
-scope_telegram:  ContextVar[str]  = ContextVar('scope_telegram',  default='default')
-scope_discord:   ContextVar[str]  = ContextVar('scope_discord',   default='default')
+# Per-context scope isolation — each thread/async-task gets its own values.
+#
+# Only CORE scopes (rag, private) are hardcoded at module load. Everything else —
+# memory, goal, knowledge, people, email, bitcoin, gcal, telegram, discord — is
+# registered dynamically by plugins via register_plugin_scope(). The 5 plugin
+# scopes (email/bitcoin/gcal/telegram/discord) come from their respective plugin
+# manifests in Phase 3. The 4 memory-domain scopes (memory/goal/knowledge/people)
+# still come from CORE_SCOPE_DECLARATIONS in /api/init until Phase 4 moves them
+# into the memory plugin's manifest.
+#
+# `rag` is not a user-settable dropdown — it's set programmatically per-chat via
+# `scope_rag.set(f'__rag__:{chat_name}')` in chat.py. `private` is a boolean
+# toggle, also not a plugin scope. Both stay hardcoded forever.
 scope_rag:       ContextVar       = ContextVar('scope_rag',       default=None)
 scope_private:   ContextVar[bool] = ContextVar('scope_private',   default=False)
 
 # Scope registry — single source of truth for all scope operations.
-# Adding a new scope = one ContextVar above + one entry here. That's it.
+# Memory/goal/knowledge/people start here (added dynamically in _seed_core_scopes below).
+# Plugin scopes get added by plugin_loader at plugin-scan time.
 # 'setting' is the key in chat_settings dict (None = not user-settable via sidebar).
 SCOPE_REGISTRY = {
-    'memory':    {'var': scope_memory,    'default': 'default', 'setting': 'memory_scope'},
-    'goal':      {'var': scope_goal,      'default': 'default', 'setting': 'goal_scope'},
-    'knowledge': {'var': scope_knowledge, 'default': 'default', 'setting': 'knowledge_scope'},
-    'people':    {'var': scope_people,    'default': 'default', 'setting': 'people_scope'},
-    'email':     {'var': scope_email,     'default': 'default', 'setting': 'email_scope'},
-    'bitcoin':   {'var': scope_bitcoin,   'default': 'default', 'setting': 'bitcoin_scope'},
-    'gcal':      {'var': scope_gcal,      'default': 'default', 'setting': 'gcal_scope'},
-    'telegram':  {'var': scope_telegram,  'default': 'default', 'setting': 'telegram_scope'},
-    'discord':   {'var': scope_discord,   'default': 'default', 'setting': 'discord_scope'},
     'rag':       {'var': scope_rag,       'default': None,      'setting': None},
     'private':   {'var': scope_private,   'default': False,     'setting': 'private_chat'},
 }
+
+
+def _seed_core_scopes():
+    """Seed the 4 core memory-domain scopes (memory/goal/knowledge/people) at
+    module load. Plugin loader will register the 5 plugin scopes later. Phase 4
+    will move these 4 into the memory plugin's manifest and delete this function.
+    """
+    _core = [
+        ('memory',    'default'),
+        ('goal',      'default'),
+        ('knowledge', 'default'),
+        ('people',    'default'),
+    ]
+    for key, default in _core:
+        if key in SCOPE_REGISTRY:
+            continue
+        var = ContextVar(f'scope_{key}', default=default)
+        SCOPE_REGISTRY[key] = {'var': var, 'default': default, 'setting': f'{key}_scope'}
+
+
+_seed_core_scopes()
+
+
+def __getattr__(name):
+    """Backcompat shim for `from core.chat.function_manager import scope_email`
+    style imports. Resolves `scope_<key>` attribute access against SCOPE_REGISTRY.
+
+    IMPORTANT: This catches module attribute access from OUTSIDE the module. It
+    does NOT catch in-module global name lookups (Python doesn't call module
+    __getattr__ for global name resolution inside a function's own body). All
+    legacy per-scope setter methods that did `scope_email.set(s)` as a global
+    lookup were deleted in Phase 1c. Only `_check_privacy_allowed()` still does
+    a direct global lookup on `scope_private`, which is a core scope that stays
+    hardcoded as a real module-level name below.
+    """
+    if name.startswith('scope_'):
+        key = name[6:]
+        reg = SCOPE_REGISTRY.get(key)
+        if reg:
+            return reg['var']
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def register_plugin_scope(key: str, plugin_name: str = "", default='default'):

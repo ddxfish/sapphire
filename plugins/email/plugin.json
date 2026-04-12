@@ -8,6 +8,17 @@
   "priority": 50,
   "capabilities": {
     "tools": ["tools/email_tool.py"],
+    "scopes": [
+      {
+        "key": "email",
+        "label": "email",
+        "endpoint": "/api/email/accounts",
+        "data_key": "accounts",
+        "value_field": "scope",
+        "name_field": "scope",
+        "label_template": "{scope}"
+      }
+    ],
     "daemon": {
       "entry": "daemon.py",
       "event_sources": [{

@@ -11,6 +11,17 @@
   "settingsUI": "plugin",
   "capabilities": {
     "tools": ["tools/telegram_tools.py"],
+    "scopes": [
+      {
+        "key": "telegram",
+        "label": "telegram",
+        "endpoint": "/api/plugin/telegram/accounts",
+        "data_key": "accounts",
+        "value_field": "name",
+        "name_field": "name",
+        "label_template": "{label}"
+      }
+    ],
     "daemon": {
       "entry": "daemon.py",
       "event_sources": [{

@@ -9,6 +9,17 @@
   "default_enabled": false,
   "capabilities": {
     "tools": ["tools/calendar.py"],
+    "scopes": [
+      {
+        "key": "gcal",
+        "label": "calendar",
+        "endpoint": "/api/gcal/accounts",
+        "data_key": "accounts",
+        "value_field": "scope",
+        "name_field": "scope",
+        "label_template": "{label}"
+      }
+    ],
     "routes": [
       {
         "method": "GET",

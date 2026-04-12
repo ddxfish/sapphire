@@ -308,6 +308,26 @@ class PluginLoader:
 
         capabilities = manifest.get("capabilities", {})
 
+        # Register scope ContextVars BEFORE daemons and tools (Phase 3).
+        # Plugin tool and daemon modules may do `from core.chat.function_manager
+        # import scope_email` (etc.) at call time; those imports resolve via
+        # function_manager.__getattr__ which looks up SCOPE_REGISTRY. If the
+        # scope hasn't been registered yet, the import raises AttributeError.
+        # Order MUST be: scope register → daemons → tools → hooks → routes.
+        scope_defs = capabilities.get("scopes", [])
+        if scope_defs:
+            try:
+                from core.chat.function_manager import register_plugin_scope
+                for scope_def in scope_defs:
+                    key = scope_def.get("key")
+                    if not key:
+                        continue
+                    # Manifest can override the default value (e.g. None for disabled-by-default)
+                    default = scope_def.get("default", "default")
+                    register_plugin_scope(key, plugin_name=name, default=default)
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: failed to register scopes: {e}", exc_info=True)
+
         # Register hooks
         hooks = capabilities.get("hooks", {})
         for hook_name, handler_path in hooks.items():
