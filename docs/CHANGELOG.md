@@ -1,4 +1,8 @@
-# 2.5.9 - Beta test of new scope system
+# 2.5.7 - pytest expansions
+- from 30% coverage to 45%
+- basic route tests
+- mock plugin load
+# 2.5.6 - Beta test of new scope system
 - Complete refactor of scopes (dropdowns for email, etc)
 - Plugins can easily add scopes like new accounts
 - Daemons and heartbeats support those new scopes
