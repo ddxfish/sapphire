@@ -56,7 +56,7 @@ TOOLS = [
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "Which prompt/personality the agent uses — only for 'llm' type. Default: 'agent' (lean, no personality)."
+                        "description": "Which persona the agent runs under (controls voice, toolset, and scope defaults) — only for 'llm' type. Default: 'agent' (lean background worker — no personality, minimal scopes, safe for automation). Special keyword 'self' inherits the spawning chat's current persona, useful when you want the agent to sound like you and have your scope set. Or pass any persona name string (e.g. 'sapphire', 'cobalt')."
                     },
                     "project_name": {
                         "type": "string",
@@ -265,6 +265,24 @@ def _get_active_chat():
         return ''
 
 
+def _get_current_chat_persona():
+    """Return the persona name the active chat is currently running under.
+
+    Used by spawn_agent to resolve the special `prompt='self'` keyword —
+    "spawn an agent that inherits the spawning chat's current persona".
+
+    Returns None if no persona is set on the chat, or if anything goes wrong.
+    Callers fall back to 'agent' (the lean background-worker persona) in that case.
+    """
+    from core.api_fastapi import get_system
+    try:
+        settings = get_system().llm_chat.session_manager.get_chat_settings()
+        persona = settings.get('persona')
+        return persona if persona else None
+    except Exception:
+        return None
+
+
 def _get_plugin_settings():
     """Load agent plugin settings."""
     from pathlib import Path
@@ -370,12 +388,19 @@ def _agent_options(manager, ps):
     for t in sorted(toolset_names):
         lines.append(f"  - {t}")
 
-    # Prompts
+    # Prompts / personas available for the spawn_agent `prompt` parameter.
+    # Special: 'self' means "inherit the spawning chat's current persona".
     from core import prompts
     prompt_list = prompts.list_prompts()
-    lines.append("\nAvailable Prompts:")
+    lines.append("\nAvailable Personas (for the `prompt` parameter):")
+    lines.append("  - agent  (default, lean background worker — no personality, minimal scopes)")
+    lines.append("  - self   (special: inherit the spawning chat's current persona)")
+    seen = {'agent'}
     for p in prompt_list:
         name = p if isinstance(p, str) else p.get('name', str(p))
+        if name in seen:
+            continue
+        seen.add(name)
         lines.append(f"  - {name}")
 
     return '\n'.join(lines)
@@ -395,7 +420,19 @@ def _spawn_agent(manager, arguments, ps):
     if agent_type == 'llm':
         model_arg = arguments.get('model', '')
         kwargs['toolset'] = arguments.get('toolset', ps.get('default_toolset', 'default'))
-        kwargs['prompt'] = arguments.get('prompt', 'sapphire')
+
+        # Phase 5: `prompt` resolution.
+        # Default is 'agent' (lean background-worker persona with minimal scopes,
+        # no personality layer) — matches the tool description contract.
+        # Special keyword 'self' means "inherit the spawning chat's current persona"
+        # so Sapphire can explicitly extend herself into an agent when she wants to.
+        # Fallback for 'self' when no active persona is set: 'agent'.
+        requested_prompt = arguments.get('prompt', 'agent')
+        if requested_prompt == 'self':
+            inherited = _get_current_chat_persona()
+            requested_prompt = inherited or 'agent'
+            logger.info(f"[agents] spawn_agent: prompt='self' resolved to '{requested_prompt}'")
+        kwargs['prompt'] = requested_prompt
 
         # Resolve roster name to provider:model
         resolved_model = model_arg
