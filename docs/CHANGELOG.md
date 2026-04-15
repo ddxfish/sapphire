@@ -1,7 +1,12 @@
+# 2.5.9 - Trinity
+- Will be for Patreon users 
+- Published explanation on website of eigenresonance
+- Sapphire can refactor core in a loop she directs
+- Plugin: Clock (timer alarm stopwatch)
 # 2.5.8 - Agents upgrade (Claude Code)
 - Claude Code has plugin agent
 - Plugin agent supercedes toolmaker (if Claude Code is present)
-- Added tools/ask-sapphire.sh for Claude Code
+- Added tools/ask-sapphire.sh for Claude Code to ask sapphire to test
 - Added tools/malbolge.py for 5x simultaneous persona triggers
 - Added examples for plugins for Claude Code
 # 2.5.7 - pytest expansions

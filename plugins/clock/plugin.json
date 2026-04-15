@@ -1,0 +1,13 @@
+{
+  "name": "clock",
+  "short_name": "Clock",
+  "version": "1.0.0",
+  "description": "Time tools — current time, countdown timers, stopwatches, one-shot alarms.",
+  "author": "sapphire",
+  "icon": "⏰",
+  "priority": 30,
+  "default_enabled": true,
+  "capabilities": {
+    "tools": ["tools/clock_tools.py"]
+  }
+}

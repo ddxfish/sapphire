@@ -29,13 +29,12 @@ AVAILABLE_FUNCTIONS = [
     'change_username',
     'set_tts_voice',
     'list_tools',
-    'get_time',
 ]
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
-    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_username', 'set_tts_voice', 'list_tools', 'get_time'],
+    "monolith": ['view_prompt', 'switch_prompt', 'reset_chat', 'edit_prompt', 'change_username', 'set_tts_voice', 'list_tools'],
+    "assembled": ['view_prompt', 'switch_prompt', 'reset_chat', 'set_piece', 'remove_piece', 'create_piece', 'list_pieces', 'change_username', 'set_tts_voice', 'list_tools'],
 }
 
 # Available TTS voices (prefix: am=American Male, af=American Female, bm=British Male, bf=British Female)
@@ -157,19 +156,6 @@ TOOLS = [
                         "description": "Optional: 'enabled' (default) or 'all'"
                     }
                 },
-                "required": []
-            }
-        }
-    },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
-            "name": "get_time",
-            "description": "Get the current system date and time.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
                 "required": []
             }
         }
@@ -684,16 +670,6 @@ def execute(function_name, arguments, config):
             except Exception as e:
                 logger.error(f"Error listing tools: {e}")
                 return f"Error listing tools: {e}", False
-
-        elif function_name == "get_time":
-            from datetime import datetime
-            from zoneinfo import ZoneInfo
-            tz_name = getattr(app_config, 'USER_TIMEZONE', 'UTC') or 'UTC'
-            try: user_tz = ZoneInfo(tz_name)
-            except Exception: user_tz = ZoneInfo('UTC')
-            now = datetime.now(user_tz)
-            tz_label = tz_name if tz_name != 'UTC' else 'UTC'
-            return f"{now.strftime('%A, %B %d, %Y at %I:%M:%S %p')} ({tz_label})", True
 
         # === Monolith-only tools ===
 
