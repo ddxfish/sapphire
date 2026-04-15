@@ -182,11 +182,13 @@ async def _connect_single(account_name: str, token: str = None):
         try:
             from core.plugin_loader import plugin_loader
             state = plugin_loader.get_plugin_state("discord")
-            accounts = state.get("accounts", {})
-            if account_name in accounts:
-                accounts[account_name]["bot_name"] = client.user.name
-                accounts[account_name]["bot_id"] = client.user.id
-                state.save("accounts", accounts)
+            def _patch(accts):
+                accts = dict(accts or {})
+                if account_name in accts:
+                    accts[account_name]["bot_name"] = client.user.name
+                    accts[account_name]["bot_id"] = client.user.id
+                return accts
+            state.update_with_lock("accounts", _patch, default={})
         except Exception:
             pass
 

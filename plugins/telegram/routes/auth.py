@@ -96,17 +96,20 @@ async def start_bot_auth(**kwargs):
         me = await client.get_me()
         await client.disconnect()
 
-        # Save account metadata
+        # Save account metadata atomically
         state = _get_state()
-        accounts_meta = state.get("accounts", {})
-        accounts_meta[account_name] = {
+        new_account = {
             "type": "bot",
             "bot_token": bot_token,
             "username": me.username or "",
             "display_name": me.first_name or account_name,
             "user_id": me.id,
         }
-        state.save("accounts", accounts_meta)
+        def _add(accts):
+            accts = dict(accts or {})
+            accts[account_name] = new_account
+            return accts
+        state.update_with_lock("accounts", _add, default={})
 
         logger.info(f"[TELEGRAM] Bot '{account_name}' authenticated as @{me.username or me.first_name}")
 
@@ -264,11 +267,13 @@ async def delete_account(**kwargs):
     if session_path.exists():
         session_path.unlink()
 
-    # Remove metadata
+    # Remove metadata atomically
     state = _get_state()
-    accounts_meta = state.get("accounts", {})
-    accounts_meta.pop(account_name, None)
-    state.save("accounts", accounts_meta)
+    def _remove(accts):
+        accts = dict(accts or {})
+        accts.pop(account_name, None)
+        return accts
+    state.update_with_lock("accounts", _remove, default={})
 
     logger.info(f"[TELEGRAM] Deleted account '{account_name}'")
     return {"status": "deleted", "account_name": account_name}
@@ -289,17 +294,20 @@ async def _finalize_auth(account_name, client, phone):
     if temp_path.exists():
         shutil.move(str(temp_path), str(perm_path))
 
-    # Save account metadata
+    # Save account metadata atomically
     state = _get_state()
-    accounts_meta = state.get("accounts", {})
-    accounts_meta[account_name] = {
+    new_account = {
         "type": "client",
         "phone": phone,
         "username": me.username or "",
         "display_name": me.first_name or account_name,
         "user_id": me.id,
     }
-    state.save("accounts", accounts_meta)
+    def _add(accts):
+        accts = dict(accts or {})
+        accts[account_name] = new_account
+        return accts
+    state.update_with_lock("accounts", _add, default={})
 
     # Clean up pending auth
     _pending_auth.pop(account_name, None)

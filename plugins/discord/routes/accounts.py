@@ -51,15 +51,18 @@ async def add_account(**kwargs):
     if not account_name:
         return {"error": "Invalid account name"}
 
-    # Store in plugin state
+    # Store in plugin state — atomic RMW so concurrent add_account calls don't
+    # clobber each other's entries.
     state = _get_state()
-    accounts = state.get("accounts", {})
-    accounts[account_name] = {
-        "token": token,
-        "bot_name": "",
-        "bot_id": "",
-    }
-    state.save("accounts", accounts)
+    def _add(accounts):
+        accounts = dict(accounts or {})
+        accounts[account_name] = {
+            "token": token,
+            "bot_name": "",
+            "bot_id": "",
+        }
+        return accounts
+    state.update_with_lock("accounts", _add, default={})
 
     # Try to connect in the running daemon
     try:
@@ -96,11 +99,13 @@ async def delete_account(**kwargs):
             pass
         _clients.pop(account_name, None)
 
-    # Remove from state
+    # Remove from state — atomic RMW
     state = _get_state()
-    accounts = state.get("accounts", {})
-    accounts.pop(account_name, None)
-    state.save("accounts", accounts)
+    def _remove(accounts):
+        accounts = dict(accounts or {})
+        accounts.pop(account_name, None)
+        return accounts
+    state.update_with_lock("accounts", _remove, default={})
 
     logger.info(f"[DISCORD] Deleted account '{account_name}'")
     return {"status": "deleted", "account_name": account_name}
@@ -132,10 +137,15 @@ async def test_account(**kwargs):
                 if resp.status == 200:
                     data = await resp.json()
                     bot_name = data.get("username", "Unknown")
-                    # Update metadata
-                    accounts[account_name]["bot_name"] = bot_name
-                    accounts[account_name]["bot_id"] = data.get("id", "")
-                    state.save("accounts", accounts)
+                    # Update metadata atomically — another writer (delete or
+                    # add) may have changed accounts since our read above.
+                    def _patch(accts):
+                        accts = dict(accts or {})
+                        if account_name in accts:
+                            accts[account_name]["bot_name"] = bot_name
+                            accts[account_name]["bot_id"] = data.get("id", "")
+                        return accts
+                    state.update_with_lock("accounts", _patch, default={})
                     return {"success": True, "bot_name": bot_name, "bot_id": data.get("id", "")}
                 elif resp.status == 401:
                     return {"success": False, "error": "Invalid bot token"}
@@ -153,9 +163,13 @@ async def test_account(**kwargs):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json_mod.loads(resp.read())
                 bot_name = data.get("username", "Unknown")
-                accounts[account_name]["bot_name"] = bot_name
-                accounts[account_name]["bot_id"] = data.get("id", "")
-                state.save("accounts", accounts)
+                def _patch(accts):
+                    accts = dict(accts or {})
+                    if account_name in accts:
+                        accts[account_name]["bot_name"] = bot_name
+                        accts[account_name]["bot_id"] = data.get("id", "")
+                    return accts
+                state.update_with_lock("accounts", _patch, default={})
                 return {"success": True, "bot_name": bot_name, "bot_id": data.get("id", "")}
         except Exception as e:
             return {"success": False, "error": str(e)}

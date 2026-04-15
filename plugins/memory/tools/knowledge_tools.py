@@ -1259,9 +1259,19 @@ def _save_knowledge(category, content, description=None, scope='default'):
     # Chunk if needed
     chunks = _chunk_text(content)
     entry_ids = []
-    for i, chunk in enumerate(chunks):
-        eid = add_entry(tab_id, chunk, chunk_index=i)
-        entry_ids.append(eid)
+    try:
+        for i, chunk in enumerate(chunks):
+            eid = add_entry(tab_id, chunk, chunk_index=i)
+            entry_ids.append(eid)
+    except sqlite3.IntegrityError as e:
+        # Most likely the tab was deleted between our SELECT and these INSERTs.
+        # Without this guard the user loses their content silently after we've
+        # already burned embedding compute. Tell them clearly so they can retry.
+        logger.warning(f"Knowledge write to '{category}' (scope '{scope}') hit FK error: {e}. "
+                       f"Likely the tab was deleted mid-write. Saved {len(entry_ids)} of {len(chunks)} chunks.")
+        partial = f" (partial: {len(entry_ids)}/{len(chunks)} chunks saved)" if entry_ids else ""
+        return (f"Category '{category}' was deleted while saving{partial}. "
+                f"Re-create it (or pick a different category) and try again."), False
 
     ids_str = ', '.join(f'id:{eid}' for eid in entry_ids)
     chunk_note = f" ({len(chunks)} chunks)" if len(chunks) > 1 else ""

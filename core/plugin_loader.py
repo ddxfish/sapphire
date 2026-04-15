@@ -68,9 +68,19 @@ class PluginState:
 
     def _save(self):
         PLUGIN_STATE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = self._path.with_suffix('.json.tmp')
-        tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-        tmp.replace(self._path)
+        # Unique tmp suffix per-process so concurrent writers can't truncate
+        # each other's tmp file before rename. Lock ordering still matters
+        # for content correctness (use update_with_lock for RMW), but this
+        # ensures the on-disk tmp never collides.
+        import os as _os
+        tmp = self._path.with_suffix(f'.json.tmp.{_os.getpid()}.{id(self):x}')
+        try:
+            tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+            tmp.replace(self._path)
+        finally:
+            if tmp.exists():
+                try: tmp.unlink()
+                except Exception: pass
 
     def get(self, key: str, default=None):
         with self._lock:
@@ -94,6 +104,23 @@ class PluginState:
         with self._lock:
             self._data = {}
             self._save()
+
+    def update_with_lock(self, key: str, mutator, default=None):
+        """Atomic read-modify-write for a single key.
+
+        mutator(current_value) -> new_value, called under self._lock so two
+        concurrent updates can't clobber each other (the bug family that hit
+        MCP, discord, telegram — read the dict, mutate, save, second writer
+        loses the first writer's change).
+
+        Returns the new value.
+        """
+        with self._lock:
+            current = self._data.get(key, default)
+            new_value = mutator(current)
+            self._data[key] = new_value
+            self._save()
+            return new_value
 
 
 class PluginLoader:

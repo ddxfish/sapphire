@@ -11,19 +11,42 @@ def _get_settings():
     return plugin_loader.get_plugin_settings("mcp_client") or {}
 
 
-def _save_servers(servers):
-    """Save server configs to plugin settings file."""
+import threading as _threading
+_save_lock = _threading.Lock()
+
+
+def _update_servers(mutator):
+    """Atomic read-modify-write for the 'servers' key in mcp_client.json.
+
+    mutator(current_servers) -> new_servers. Holds a per-file lock across the
+    full span so concurrent add_server / remove_server calls can't clobber
+    each other (sibling family of the MCP save-destroys-servers bug). Unique
+    tmp suffix prevents cross-writer .tmp truncation.
+    """
     from pathlib import Path
+    import os as _os
     settings_path = Path(__file__).parent.parent.parent.parent / "user" / "webui" / "plugins" / "mcp_client.json"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        existing = json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
-    except Exception:
-        existing = {}
-    existing["servers"] = servers
-    tmp_path = settings_path.with_suffix('.tmp')
-    tmp_path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
-    tmp_path.replace(settings_path)
+    with _save_lock:
+        try:
+            existing = json.loads(settings_path.read_text(encoding='utf-8')) if settings_path.exists() else {}
+        except Exception:
+            existing = {}
+        existing["servers"] = mutator(existing.get("servers", {}))
+        tmp_path = settings_path.with_suffix(f'.tmp.{_os.getpid()}.{id(existing):x}')
+        try:
+            tmp_path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
+            tmp_path.replace(settings_path)
+        finally:
+            if tmp_path.exists():
+                try: tmp_path.unlink()
+                except Exception: pass
+
+
+def _save_servers(servers):
+    """Compatibility shim for callers that already have the full new dict.
+    NEW callers should use _update_servers(mutator) for atomic RMW."""
+    _update_servers(lambda _old: servers)
 
 
 async def list_servers(**kwargs):
@@ -118,9 +141,12 @@ async def add_server(**kwargs):
     else:
         return {"error": f"Unknown server type: {server_type}"}
 
-    # Save config
-    servers[name] = config
-    _save_servers(servers)
+    # Save config — atomic RMW so concurrent add_server calls don't clobber each other
+    def _add(srvs):
+        srvs = dict(srvs or {})
+        srvs[name] = config
+        return srvs
+    _update_servers(_add)
 
     # Connect
     try:
@@ -148,11 +174,12 @@ async def remove_server(**kwargs):
     except Exception as e:
         logger.warning(f"[MCP] Error disconnecting '{name}': {e}")
 
-    # Remove from config
-    settings = _get_settings()
-    servers = settings.get("servers", {})
-    servers.pop(name, None)
-    _save_servers(servers)
+    # Remove from config — atomic RMW
+    def _remove(srvs):
+        srvs = dict(srvs or {})
+        srvs.pop(name, None)
+        return srvs
+    _update_servers(_remove)
 
     return {"status": "removed", "name": name}
 

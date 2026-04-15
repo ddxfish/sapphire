@@ -920,9 +920,27 @@ async def get_plugin_settings(plugin_name: str, request: Request, _=Depends(requ
     return {"plugin": plugin_name, "settings": settings}
 
 
+_settings_locks: dict = {}
+_settings_locks_guard = threading.Lock()
+
+def _get_settings_lock(plugin_name: str) -> threading.Lock:
+    """Per-plugin file lock for atomic settings RMW. Lazy-created on first use."""
+    with _settings_locks_guard:
+        lk = _settings_locks.get(plugin_name)
+        if lk is None:
+            lk = threading.Lock()
+            _settings_locks[plugin_name] = lk
+        return lk
+
+
 @router.put("/api/webui/plugins/{plugin_name}/settings")
 async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(require_login)):
-    """Update plugin settings."""
+    """Update plugin settings.
+
+    Holds a per-plugin lock across the read-merge-write so two concurrent PUTs
+    don't lose each other's keys (sibling of the MCP save-destroys-servers
+    bug). Unique tmp suffix prevents shared-.tmp truncation between writers.
+    """
     _require_known_plugin(plugin_name)
     data = await request.json()
     settings = data.get("settings", data)
@@ -939,20 +957,28 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
     # Shallow-merge over existing so side-channel keys (e.g. MCP's `servers`)
     # and partial patches (e.g. email's single-field updates) don't clobber
     # unrelated state. Full resets go through DELETE.
-    existing = {}
-    if settings_file.exists():
-        try:
-            existing = json.loads(settings_file.read_text(encoding='utf-8'))
-            if not isinstance(existing, dict):
+    with _get_settings_lock(plugin_name):
+        existing = {}
+        if settings_file.exists():
+            try:
+                existing = json.loads(settings_file.read_text(encoding='utf-8'))
+                if not isinstance(existing, dict):
+                    existing = {}
+            except Exception:
                 existing = {}
-        except Exception:
-            existing = {}
-    merged = {**existing, **settings}
+        merged = {**existing, **settings}
 
-    tmp_path = settings_file.with_suffix('.tmp')
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(merged, f, indent=2)
-    tmp_path.replace(settings_file)
+        # Unique tmp suffix per call so concurrent writers can't truncate each
+        # other's tmp file before rename.
+        tmp_path = settings_file.with_suffix(f'.tmp.{os.getpid()}.{id(merged):x}')
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(merged, f, indent=2)
+            tmp_path.replace(settings_file)
+        finally:
+            if tmp_path.exists():
+                try: tmp_path.unlink()
+                except Exception: pass
 
     return {"status": "success", "plugin": plugin_name, "settings": merged}
 
