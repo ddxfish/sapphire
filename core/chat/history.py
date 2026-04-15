@@ -865,17 +865,27 @@ class ChatSessionManager:
         with self._lock:
             try:
                 with self._get_connection() as conn:
-                    conn.execute(
-                        """INSERT OR REPLACE INTO chats (name, settings, messages, updated_at)
-                           VALUES (?, ?, ?, ?)""",
+                    # UPDATE (not INSERT OR REPLACE) + rowcount check so a late
+                    # writer — agent completion, post_chat hook, etc. — can't
+                    # resurrect a chat that was just deleted. create_chat is
+                    # the sole path that creates rows.
+                    cur = conn.execute(
+                        """UPDATE chats SET settings = ?, messages = ?, updated_at = ?
+                           WHERE name = ?""",
                         (
-                            self.active_chat_name,
                             json.dumps(self.current_settings),
                             json.dumps(self.current_chat.messages),
-                            datetime.now().isoformat()
+                            datetime.now().isoformat(),
+                            self.active_chat_name,
                         )
                     )
                     conn.commit()
+                    if cur.rowcount == 0:
+                        logger.warning(
+                            f"Save to chat '{self.active_chat_name}' affected 0 rows — "
+                            f"chat was deleted. Dropping save to avoid resurrecting it."
+                        )
+                        return
                 logger.debug(f"Saved chat '{self.active_chat_name}' ({len(self.current_chat.messages)} messages)")
             except Exception as e:
                 logger.error(f"Failed to save chat '{self.active_chat_name}': {e}")

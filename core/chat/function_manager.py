@@ -72,9 +72,19 @@ def register_plugin_scope(key: str, plugin_name: str = "", default='default'):
         logger.error(f"Invalid scope key '{key}' from '{plugin_name}' — must be a valid Python identifier")
         return None
     var = ContextVar(f'scope_{key}', default=default)
-    SCOPE_REGISTRY[key] = {'var': var, 'default': default, 'setting': f'{key}_scope'}
+    SCOPE_REGISTRY[key] = {'var': var, 'default': default, 'setting': f'{key}_scope', 'plugin': plugin_name}
     logger.info(f"Registered scope '{key}' from plugin '{plugin_name}'")
     return var
+
+
+def unregister_plugin_scope(key: str):
+    """Remove a scope from the registry. Called by plugin_loader on unload so
+    the next register_plugin_scope for the same key picks up manifest changes
+    (different default, etc.) instead of hitting the idempotent early-return
+    and silently keeping the stale registration."""
+    if key in SCOPE_REGISTRY:
+        SCOPE_REGISTRY.pop(key, None)
+        logger.info(f"Unregistered scope '{key}'")
 
 
 def apply_scopes_from_settings(fm, settings: dict):

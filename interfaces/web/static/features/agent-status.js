@@ -282,6 +282,20 @@ export function initAgentStatus() {
 
     ensureBar();
 
+    // Same-client chat switch fires a DOM 'chat-activated' event on #chat-select.
+    // The event bus's CHAT_SWITCHED SSE event drops self-originated messages
+    // (intentional — prevents echo) so we'd miss our own chat switch without
+    // this listener. Re-poll + re-render so Chat B's agent pills show up
+    // immediately instead of waiting up to 3s for the next poll tick.
+    const chatSelect = document.getElementById('chat-select');
+    if (chatSelect) {
+        chatSelect.addEventListener('chat-activated', () => {
+            poll();
+            renderPills();
+            if (pendingReports.size > 0) setTimeout(() => drainAgentReport(), 500);
+        });
+    }
+
     eventBus.on('agent_spawned', (data) => {
         agents.set(data.id, {
             id: data.id,

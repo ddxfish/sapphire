@@ -184,6 +184,26 @@ def _create_plugin_worker():
                 if saved_ws:
                     workspace = saved_ws
 
+            # Chaos #5: refuse silent overwrites of existing plugins when we're
+            # not resuming a known session. Without this, the LLM can build
+            # a plugin that shares a name with an existing one and stomp files.
+            if not self._session_id and os.path.isdir(workspace) and os.listdir(workspace):
+                self.error = (
+                    f"Plugin directory '{self.plugin_name}' already exists with contents. "
+                    f"Pick a unique name, or pass session_id to resume an existing build."
+                )
+                self.status = 'failed'
+                return
+
+            # Chaos #2: same sanity gate CodeWorker uses. Catches missing
+            # `claude` CLI up front with an install hint instead of later
+            # FileNotFoundError buried inside _run_claude.
+            safety_err = _sanity_check(workspace)
+            if safety_err:
+                self.error = safety_err
+                self.status = 'failed'
+                return
+
             try:
                 os.makedirs(workspace, exist_ok=True)
             except OSError as e:
@@ -248,13 +268,21 @@ def _create_plugin_worker():
                 except Exception:
                     pass
 
-            # Add guidance so Sapphire knows what to do next
-            all_passed = all(validation.values())
+            # Add guidance so Sapphire knows what to do next. We skip the
+            # private '_missing_files' key (it's used to format a specific
+            # error hint below, not shown as a standalone pass/fail row).
+            public_checks = {k: v for k, v in validation.items() if not k.startswith('_')}
+            all_passed = all(public_checks.values())
             if all_passed:
                 lines.append(f"\n**Next step:** Call `activate_plugin(name='{self.plugin_name}')` to enable it.")
             else:
-                failed = [k for k, v in validation.items() if not v]
+                failed = [k for k, v in public_checks.items() if not v]
                 lines.append(f"\n**Issues found:** {', '.join(failed)}")
+                # Chaos #10: surface WHICH files are missing so the follow-up
+                # agent doesn't rediscover what the validator already knew.
+                missing = validation.get('_missing_files') or []
+                if missing:
+                    lines.append(f"**Missing files:** {', '.join(missing)}")
                 lines.append(f"**To fix:** Use `spawn_agent(agent_type='claude_code_plugin', "
                              f"plugin_name='{self.plugin_name}')` to resume. "
                              f"Describe the specific error so Claude Code can fix it.")
@@ -310,16 +338,41 @@ def _validate_plugin(workspace):
 
     # 2. Declared files exist
     all_files_ok = True
+    missing_files = []
     for tool_rel in tools:
         if not os.path.isfile(os.path.join(workspace, tool_rel)):
             all_files_ok = False
+            missing_files.append(tool_rel)
     # Check provider entry if declared
     providers = manifest.get('capabilities', {}).get('providers', {})
     for sys_name, prov in providers.items():
         entry = prov.get('entry', 'provider.py')
         if not os.path.isfile(os.path.join(workspace, entry)):
             all_files_ok = False
+            missing_files.append(f"{entry} (provider:{sys_name})")
     results['files_exist'] = all_files_ok
+    # Chaos #10: name the missing files so a follow-up agent or a human
+    # doesn't have to rediscover what the validator already knew.
+    if missing_files:
+        results['_missing_files'] = missing_files
+
+    # Chaos #4: refuse ghost plugins (manifest exists but declares zero
+    # meaningful capabilities). The per-capability loops above vacuously pass
+    # when their lists are empty, so an empty plugin.json was landing with
+    # all-True validation.
+    caps = manifest.get('capabilities', {}) or {}
+    has_capability = (
+        bool(caps.get('tools'))
+        or bool(caps.get('hooks'))
+        or bool(caps.get('daemon'))
+        or bool(caps.get('routes'))
+        or bool(caps.get('providers'))
+        or bool(caps.get('scopes'))
+        or bool(caps.get('settings'))
+        or bool(caps.get('app'))
+        or bool(caps.get('schedule'))
+    )
+    results['has_capability'] = has_capability
 
     # 3. Syntax check on all .py files (compile only — no import restrictions)
     syntax_ok = True
@@ -681,9 +734,18 @@ def _run_claude(args, workspace, timeout_minutes=30):
     except Exception as e:
         return None, f"Failed to run Claude Code: {e}"
 
-    if result.returncode != 0 and not result.stdout.strip():
+    if result.returncode != 0:
+        # Chaos #6: non-zero exit = error, regardless of whether stdout has
+        # parseable JSON. Previously we let returncode!=0 slide when stdout
+        # was non-empty, but that swallowed budget-cap-mid-gen and similar
+        # partial-success cases where claude produced SOME output but didn't
+        # finish the task. Caller retries are cheap; swallowed failures aren't.
         stderr_tail = (result.stderr or '')[-500:]
-        return None, f"Claude Code exited with error (code {result.returncode}): {stderr_tail}"
+        stdout_tail = (result.stdout or '').strip()[-300:]
+        return None, (
+            f"Claude Code exited with error (code {result.returncode}). "
+            f"stderr: {stderr_tail!r} stdout_tail: {stdout_tail!r}"
+        )
 
     try:
         data = json.loads(result.stdout)
@@ -913,18 +975,23 @@ def _activate_plugin(arguments):
     if not os.path.isdir(workspace):
         return f"Plugin directory not found: user/plugins/{name}/", False
 
-    # Run validation
+    # Run validation. Keys starting with '_' are diagnostic payloads (e.g.
+    # `_missing_files`), not checks — skip them for pass/fail logic.
     validation = _validate_plugin(workspace)
-    all_passed = all(validation.values())
+    public_checks = {k: v for k, v in validation.items() if not k.startswith('_')}
+    all_passed = all(public_checks.values())
 
     lines = ["**Plugin Validation:**"]
-    for check, passed in validation.items():
+    for check, passed in public_checks.items():
         icon = '\u2713' if passed else '\u2717'
         lines.append(f"  {icon} {check}")
 
     if not all_passed:
-        failed = [k for k, v in validation.items() if not v]
+        failed = [k for k, v in public_checks.items() if not v]
         lines.append(f"\n**Cannot activate** — failed checks: {', '.join(failed)}")
+        missing = validation.get('_missing_files') or []
+        if missing:
+            lines.append(f"**Missing files:** {', '.join(missing)}")
         lines.append(f"**To fix:** Use `spawn_agent(agent_type='claude_code_plugin', "
                      f"plugin_name='{name}')` with the error details in the mission. "
                      f"Do NOT troubleshoot with run_command.")
@@ -942,25 +1009,42 @@ def _activate_plugin(arguments):
             lines.append(f"\n**Plugin not found after rescan.** Check plugin.json 'name' field matches '{name}'.")
             return '\n'.join(lines), False
 
-        # Enable if not already enabled — write to user/webui/plugins.json
+        # Enable if not already enabled.
+        # Chaos #8: reload FIRST, persist to plugins.json only after we've
+        # confirmed the plugin actually loaded. Otherwise plugins.json ends up
+        # referencing a broken plugin that fails on every boot.
         if not info.get('enabled'):
-            enabled_path = Path(_SAPPHIRE_ROOT) / 'user' / 'webui' / 'plugins.json'
-            try:
-                enabled_data = json.loads(enabled_path.read_text(encoding='utf-8')) if enabled_path.exists() else {}
-            except Exception:
-                enabled_data = {}
-            enabled_list = enabled_data.get('enabled', [])
-            if name not in enabled_list:
-                enabled_list.append(name)
-                enabled_data['enabled'] = enabled_list
-                enabled_path.parent.mkdir(parents=True, exist_ok=True)
-                enabled_path.write_text(json.dumps(enabled_data, indent=2), encoding='utf-8')
-
             # Mark enabled in memory BEFORE reload — rescan set it False
             # because plugins.json wasn't written yet when rescan read it
             if name in plugin_loader._plugins:
                 plugin_loader._plugins[name]['enabled'] = True
             plugin_loader.reload_plugin(name)
+
+            # Only persist to plugins.json if the reload actually loaded it
+            post_reload = plugin_loader.get_plugin_info(name) or {}
+            if post_reload.get('loaded'):
+                enabled_path = Path(_SAPPHIRE_ROOT) / 'user' / 'webui' / 'plugins.json'
+                try:
+                    enabled_data = json.loads(enabled_path.read_text(encoding='utf-8')) if enabled_path.exists() else {}
+                except Exception:
+                    enabled_data = {}
+                enabled_list = enabled_data.get('enabled', [])
+                if name not in enabled_list:
+                    enabled_list.append(name)
+                    enabled_data['enabled'] = enabled_list
+                    enabled_path.parent.mkdir(parents=True, exist_ok=True)
+                    enabled_path.write_text(json.dumps(enabled_data, indent=2), encoding='utf-8')
+            else:
+                # Reload failed — roll back in-memory enabled so state matches
+                # reality, and DO NOT write plugins.json (would stick a broken
+                # plugin in the enabled list across boots).
+                if name in plugin_loader._plugins:
+                    plugin_loader._plugins[name]['enabled'] = False
+                lines.append(f"\n**Reload failed — plugin not loaded.** Not persisting to plugins.json.")
+                verify_msg = (post_reload.get('verify_msg') or '').strip()
+                if verify_msg and 'unsigned' not in verify_msg:
+                    lines.append(f"Reason: {verify_msg}")
+                return '\n'.join(lines), False
 
         info = plugin_loader.get_plugin_info(name)
         loaded = info.get('loaded', False) if info else False

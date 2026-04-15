@@ -642,11 +642,26 @@ class PluginLoader:
         return None
 
     def unload_plugin(self, name: str):
-        """Unload a plugin — deregister all hooks, tools, routes, providers, schedule tasks, and event sources."""
+        """Unload a plugin — deregister all hooks, tools, routes, providers, schedule tasks, event sources, and scopes."""
         hook_runner.unregister_plugin(name)
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)
         self._unregister_routes(name)
+
+        # Unregister scopes this plugin contributed so a later manifest edit
+        # with a different default takes effect on re-register instead of
+        # hitting register_plugin_scope's idempotent early-return.
+        try:
+            info_for_scopes = self._plugins.get(name, {})
+            scope_defs = info_for_scopes.get("manifest", {}).get("capabilities", {}).get("scopes", [])
+            if scope_defs:
+                from core.chat.function_manager import unregister_plugin_scope
+                for sd in scope_defs:
+                    key = sd.get("key")
+                    if key:
+                        unregister_plugin_scope(key)
+        except Exception as e:
+            logger.warning(f"[PLUGINS] {name}: failed to unregister scopes: {e}")
 
         # Unregister providers — reset active setting if it pointed to this plugin
         info = self._plugins.get(name, {})
@@ -814,6 +829,55 @@ class PluginLoader:
         # Delete state
         state_file = PLUGIN_STATE_DIR / f"{name}.json"
         state_file.unlink(missing_ok=True)
+
+        # Sweep sibling files/dirs in plugin_state whose name starts with
+        # the plugin name (+ '-' or '_' separator). Catches conventions
+        # like `{name}-logs/`, `{name}_sessions/`, `{name}-sessions.json`.
+        # Without this, e.g. uninstalling telegram leaves
+        # `telegram_sessions/` with live credentials on disk (H5).
+        try:
+            for prefix in (f"{name}-", f"{name}_"):
+                for extra in PLUGIN_STATE_DIR.glob(f"{prefix}*"):
+                    try:
+                        if extra.is_dir():
+                            shutil.rmtree(extra)
+                        else:
+                            extra.unlink()
+                        logger.info(f"[PLUGINS] Uninstall: removed sibling {extra.name}")
+                    except Exception as e:
+                        logger.warning(f"[PLUGINS] Could not remove {extra}: {e}")
+        except Exception as e:
+            logger.warning(f"[PLUGINS] Uninstall sibling sweep failed: {e}")
+
+        # Manifest-declared extra cleanup paths — for plugins whose state
+        # files/dirs DON'T follow the `{name}-*` convention (e.g. Google
+        # Calendar's `gcal-csrf.json`). Paths are relative to project root
+        # or user/; we resolve inside user/ and refuse anything that
+        # escapes that sandbox.
+        try:
+            manifest = info.get("manifest", {}) if info else {}
+            extra_paths = manifest.get("capabilities", {}).get("cleanup_paths", [])
+            user_root = (PROJECT_ROOT / "user").resolve()
+            for rel in extra_paths:
+                if not isinstance(rel, str):
+                    continue
+                candidate = (user_root / rel).resolve()
+                try:
+                    candidate.relative_to(user_root)
+                except ValueError:
+                    logger.warning(f"[PLUGINS] Uninstall cleanup refused path outside user/: {rel}")
+                    continue
+                if candidate.exists():
+                    try:
+                        if candidate.is_dir():
+                            shutil.rmtree(candidate)
+                        else:
+                            candidate.unlink()
+                        logger.info(f"[PLUGINS] Uninstall: removed declared {rel}")
+                    except Exception as e:
+                        logger.warning(f"[PLUGINS] Could not remove {candidate}: {e}")
+        except Exception as e:
+            logger.warning(f"[PLUGINS] Uninstall manifest-cleanup failed: {e}")
 
         # Evict cached PluginState so reinstall gets fresh instance
         with self._plugin_state_cache_lock:

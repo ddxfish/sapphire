@@ -9,6 +9,7 @@
   "default_enabled": false,
   "capabilities": {
     "tools": ["tools/calendar.py"],
+    "cleanup_paths": ["plugin_state/gcal-csrf.json"],
     "scopes": [
       {
         "key": "gcal",
