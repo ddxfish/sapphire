@@ -16,8 +16,8 @@ if [ -z "${MESSAGE:-}" ]; then
     exit 1
 fi
 
-# Prepend header so Sapphire knows this is Claude Code, not Krem typing
-FULL_MESSAGE="[Claude Code via terminal — not Krem]
+# Prepend header so Sapphire knows this is Claude Code, not the user typing
+FULL_MESSAGE="[Claude Code via terminal — not the user]
 ---
 $MESSAGE"
 
