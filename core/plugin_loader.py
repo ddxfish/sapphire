@@ -159,12 +159,13 @@ class PluginLoader:
         self._function_manager = function_manager
         self._plugins.clear()
         enabled_list = self._get_enabled_list()
+        disabled_list = self._get_disabled_list()
 
         # System plugins (priority band 0-99)
-        self._scan_dir(SYSTEM_PLUGINS_DIR, band="system", enabled_list=enabled_list)
+        self._scan_dir(SYSTEM_PLUGINS_DIR, band="system", enabled_list=enabled_list, disabled_list=disabled_list)
 
         # User plugins (priority band 100-199)
-        self._scan_dir(USER_PLUGINS_DIR, band="user", enabled_list=enabled_list)
+        self._scan_dir(USER_PLUGINS_DIR, band="user", enabled_list=enabled_list, disabled_list=disabled_list)
 
         # Load enabled plugins
         loaded = 0
@@ -185,10 +186,12 @@ class PluginLoader:
 
         logger.info(f"[PLUGINS] Scan complete: {len(self._plugins)} found, {loaded} loaded")
 
-    def _scan_dir(self, directory: Path, band: str, enabled_list: list):
+    def _scan_dir(self, directory: Path, band: str, enabled_list: list, disabled_list: list = None):
         """Scan a directory for plugin.json manifests."""
         if not directory.exists():
             return
+        if disabled_list is None:
+            disabled_list = []
 
         for child in sorted(directory.iterdir()):
             if not child.is_dir():
@@ -212,8 +215,10 @@ class PluginLoader:
                 logger.debug(f"[PLUGINS] Skipping {name} (managed_hide)")
                 continue
 
-            # Enabled if in user config, or if manifest declares default_enabled
-            is_enabled = name in enabled_list or manifest.get("default_enabled", False)
+            # Enabled if user enabled it, OR manifest default_enabled AND user didn't explicitly disable it
+            is_enabled = (name in enabled_list) or (
+                manifest.get("default_enabled", False) and name not in disabled_list
+            )
 
             # Verify signature on discovery (before any code loads)
             verified, verify_msg, verify_meta = verify_plugin(child)
@@ -276,6 +281,17 @@ class PluginLoader:
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
                     return data.get("enabled", [])
+                except Exception as e:
+                    logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
+        return []
+
+    def _get_disabled_list(self) -> list:
+        """Read explicitly-disabled plugins (overrides default_enabled)."""
+        for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    return data.get("disabled", [])
                 except Exception as e:
                     logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
         return []
@@ -1002,6 +1018,7 @@ class PluginLoader:
         Returns dict with 'added' and 'removed' plugin name lists.
         """
         enabled_list = self._get_enabled_list()
+        disabled_list = self._get_disabled_list()
         new_found = []
         removed = []
         needs_reload = []
@@ -1046,7 +1063,9 @@ class PluginLoader:
                         continue
 
                     verified, verify_msg, verify_meta = verify_plugin(child)
-                    is_enabled = name in enabled_list or manifest.get("default_enabled", False)
+                    is_enabled = (name in enabled_list) or (
+                        manifest.get("default_enabled", False) and name not in disabled_list
+                    )
 
                     try:
                         mtime = manifest_path.stat().st_mtime

@@ -181,15 +181,7 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         except Exception:
             pass
 
-        if currently_enabled:
-            if plugin_name in enabled:
-                enabled.remove(plugin_name)
-            new_state = False
-        else:
-            if plugin_name not in enabled:
-                enabled.append(plugin_name)
-            new_state = True
-
+        # Load existing user_data up-front so we can maintain the disabled list
         USER_WEBUI_DIR.mkdir(parents=True, exist_ok=True)
         user_data = {}
         if USER_PLUGINS_JSON.exists():
@@ -198,7 +190,24 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                     user_data = json.load(f)
             except Exception:
                 pass
+        disabled = list(user_data.get("disabled", []))
+
+        if currently_enabled:
+            if plugin_name in enabled:
+                enabled.remove(plugin_name)
+            # Record explicit disable so default_enabled plugins stay off across reboots
+            if plugin_name not in disabled:
+                disabled.append(plugin_name)
+            new_state = False
+        else:
+            if plugin_name not in enabled:
+                enabled.append(plugin_name)
+            if plugin_name in disabled:
+                disabled.remove(plugin_name)
+            new_state = True
+
         user_data["enabled"] = enabled
+        user_data["disabled"] = disabled
         tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(user_data, f, indent=2)
