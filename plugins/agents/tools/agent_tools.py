@@ -288,6 +288,17 @@ try:
     from core.agents import agent_manager as _mgr
     if _mgr is not None:
         _register_llm_type(_mgr)
+    else:
+        # Silent failure here was a scout finding. If boot order ever regresses
+        # and plugin scan runs before AgentManager is constructed, agents won't
+        # register and spawn_agent(type='llm') will return "Unknown agent type".
+        # Loud warning makes the regression visible.
+        logger.warning(
+            "[agents] agent_manager is None at plugin load — LLM agent type NOT "
+            "registered. Plugin loaded before AgentManager was constructed; "
+            "check boot order in sapphire.py (plugin_loader.scan should run "
+            "AFTER AgentManager() is created)."
+        )
 except Exception as e:
     logger.warning(f"Failed to register LLM agent type at load: {e}")
 

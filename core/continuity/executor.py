@@ -141,9 +141,14 @@ class ContinuityExecutor:
         if source.startswith("plugin:"):
             return self._run_plugin_task(task, progress_callback, response_callback)
 
+        # Deepcopy to protect against update_task mutating the dict while we
+        # read it. Scheduler passes live refs from self._tasks.values(), so
+        # a concurrent UI edit of this task would otherwise produce incoherent
+        # merged settings (new persona name + old toolset, etc.)
+        task = copy.deepcopy(task)
+
         # For event-triggered tasks, build message from instructions + event data
         if event_data is not None:
-            task = copy.deepcopy(task)  # don't mutate original (nested dicts like trigger_config)
             event_display = self._format_event_data(event_data)
             instructions = task.get("initial_message", "").strip()
             if instructions:

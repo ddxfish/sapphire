@@ -485,6 +485,16 @@ try:
     if _mgr is not None:
         _register_code_type(_mgr)
         _register_plugin_type(_mgr)
+    else:
+        # Silent failure here was a scout finding. If boot order ever regresses
+        # and plugin scan runs before AgentManager is constructed, agents won't
+        # register and spawn_agent(type='claude_code') will return "Unknown agent
+        # type". Loud warning makes the regression visible.
+        logger.warning(
+            "[claude-code] agent_manager is None at plugin load — claude_code + "
+            "claude_code_plugin agent types NOT registered. Plugin loaded before "
+            "AgentManager was constructed; check boot order in sapphire.py."
+        )
 except Exception as e:
     logger.warning(f"Failed to register claude_code agent types at load: {e}")
 
