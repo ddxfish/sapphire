@@ -29,28 +29,6 @@ let _personaHandler = null;
 
 const SAVE_DEBOUNCE = 500;
 
-function updateStoryPromptLabel(container) {
-    const promptSel = container.querySelector('#sb-prompt');
-    if (!promptSel) return;
-
-    const existing = promptSel.querySelector('option[data-story]');
-    const hadStoryOption = !!existing;
-    if (existing) existing.remove();
-
-    const enabled = container.querySelector('#sb-story-enabled')?.checked;
-    const preset = container.querySelector('#sb-story-preset')?.value;
-    if (enabled && preset) {
-        const opt = document.createElement('option');
-        opt.value = '__story__';
-        opt.dataset.story = 'true';
-        const name = preset.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-        opt.textContent = `[STORY] ${name}`;
-        promptSel.insertBefore(opt, promptSel.firstChild);
-        // Only auto-select story prompt on first appearance (entering story mode)
-        if (!hadStoryOption) promptSel.value = '__story__';
-    }
-}
-
 export default {
     init(container) {
         // Agent pill bar
@@ -179,15 +157,6 @@ export default {
                         return;
                     }
 
-                    // "New Story..." button opens the story picker modal
-                    const storyBtn = e.target.closest('[data-action="new-story"]');
-                    if (storyBtn) {
-                        sbPicker.classList.remove('open');
-                        const { openStoryPicker } = await import('../features/story.js');
-                        openStoryPicker();
-                        return;
-                    }
-
                     const item = e.target.closest('.chat-picker-item');
                     if (!item) return;
                     const chatName = item.dataset.chat;
@@ -286,9 +255,6 @@ export default {
                     const toggle = container.querySelector('#sb-spice-toggle');
                     if (toggle) toggle.textContent = `Spice \u00b7 ${el.value}`;
                 }
-                if (el.id === 'sb-story-enabled' || el.id === 'sb-story-preset') {
-                    updateStoryPromptLabel(container);
-                }
                 debouncedSave(container);
             };
             // Both 'change' (selects, checkboxes, color) and 'input' (range sliders, textareas)
@@ -346,9 +312,6 @@ export default {
                 }
             });
         }
-
-        // State engine buttons
-        setupStoryButtons(container);
 
         // Document upload handler
         const docUpload = container.querySelector('#sb-doc-upload');
@@ -524,12 +487,11 @@ async function loadSidebar() {
         const initEarly = await initDataPromise;
         const scopeDeclarations = initEarly?.scope_declarations || [];
 
-        const [settingsResp, initData, llmResp, scopeDataResp, presetsResp, spiceSetsResp, personasResp, ttsVoicesResp, toolsetCurrentResp] = await Promise.allSettled([
+        const [settingsResp, initData, llmResp, scopeDataResp, spiceSetsResp, personasResp, ttsVoicesResp, toolsetCurrentResp] = await Promise.allSettled([
             api.getChatSettings(chatName),
             initDataPromise,
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
             fetchScopeData(scopeDeclarations),
-            fetch('/api/story/presets').then(r => r.ok ? r.json() : null),
             fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
             fetch('/api/personas').then(r => r.ok ? r.json() : null),
             fetch('/api/tts/voices').then(r => r.ok ? r.json() : null),
@@ -548,7 +510,6 @@ async function loadSidebar() {
         const init = initData.status === 'fulfilled' ? initData.value : null;
         const llmData = llmResp.status === 'fulfilled' ? llmResp.value : null;
         const scopeFetchedData = scopeDataResp.status === 'fulfilled' ? scopeDataResp.value : {};
-        const presetsData = presetsResp.status === 'fulfilled' ? presetsResp.value : null;
         const spiceSetsData = spiceSetsResp.status === 'fulfilled' ? spiceSetsResp.value : null;
         const personasData = personasResp.status === 'fulfilled' ? personasResp.value : null;
         const ttsVoicesData = ttsVoicesResp.status === 'fulfilled' ? ttsVoicesResp.value : null;
@@ -577,17 +538,6 @@ async function loadSidebar() {
                 .map(t => `<option value="${t.name}">${t.name} (${t.function_count})</option>`)
                 .join('');
             setSelect(toolsetSel, settings.toolset || settings.ability || 'all');
-        }
-
-        // Patch toolset label with live story tool count
-        const liveToolset = toolsetCurrentResp.status === 'fulfilled' ? toolsetCurrentResp.value : null;
-        if (toolsetSel && liveToolset?.story_tools > 0) {
-            const selected = toolsetSel.options[toolsetSel.selectedIndex];
-            if (selected) {
-                const name = liveToolset.name || selected.value;
-                const total = liveToolset.function_count || 0;
-                selected.textContent = `${name} + Story (${total})`;
-            }
         }
 
         // Populate spice set dropdown (fresh from API, not cached init)
@@ -653,16 +603,6 @@ async function loadSidebar() {
             await populateScopeOptions(scopeContainer, scopeDeclarations, scopeFetchedData, settings, rendererOptions);
         }
 
-        // Populate state preset dropdown
-        const presetSel = container.querySelector('#sb-story-preset');
-        if (presetSel && presetsData) {
-            presetSel.innerHTML = '<option value="">None</option>' +
-                (presetsData.presets || []).map(p =>
-                    `<option value="${p.name}">${p.display_name} (${p.key_count} keys)</option>`
-                ).join('');
-            setSelect(presetSel, settings.story_preset ?? '');
-        }
-
         // Populate voice dropdown from active TTS provider
         const voiceSel = container.querySelector('#sb-voice');
         const voices = ttsVoicesData?.voices || [];
@@ -699,14 +639,6 @@ async function loadSidebar() {
         setToggle(container, '#sb-spice-toggle', settings.spice_enabled !== false,
             `Spice \u00b7 ${settings.spice_turns || 3}`);
         setToggle(container, '#sb-datetime-toggle', settings.inject_datetime === true);
-        const storyEnabled = settings.story_engine_enabled === true;
-        const storyPreset = settings.story_preset;
-        setChecked(container, '#sb-story-enabled', storyEnabled);
-        setChecked(container, '#sb-story-in-prompt', settings.story_in_prompt !== false);
-        setChecked(container, '#sb-story-vars', settings.story_vars_in_prompt === true);
-
-        // Show [STORY] prefix on prompt when story engine is active
-        updateStoryPromptLabel(container);
 
         // Trim color
         const trimInput = container.querySelector('#sb-trim-color');
@@ -733,16 +665,9 @@ async function loadSidebar() {
         if (pitchSlider) updateSliderFill(pitchSlider);
         if (speedSlider) updateSliderFill(speedSlider);
 
-        // Swap tab label and content based on story chat
-        const isStoryChat = settings.story_chat === true;
         const firstTab = container.querySelector('.sb-mode-tab[data-mode="easy"]');
-        if (firstTab) firstTab.textContent = isStoryChat ? 'Story' : 'Persona';
-
-        if (isStoryChat) {
-            await updateStoryMode(container, settings);
-        } else {
-            updateEasyMode(container, settings, init);
-        }
+        if (firstTab) firstTab.textContent = 'Persona';
+        updateEasyMode(container, settings, init);
 
         // RAG context level
         setVal(container, '#sb-rag-context', settings.rag_context || 'normal');
@@ -816,9 +741,8 @@ async function saveSettings(container, chatNameOverride = null) {
                 const selected = toolsetSel.options[toolsetSel.selectedIndex];
                 if (selected) {
                     const name = result.toolset.name || selected.value;
-                    const total = (result.functions?.length || 0) + (result.state_tools?.length || 0);
-                    const st = result.toolset.story_tools || 0;
-                    selected.textContent = st ? `${name} + Story (${total})` : `${name} (${total})`;
+                    const total = (result.functions?.length || 0);
+                    selected.textContent = `${name} (${total})`;
                 }
             }
         }
@@ -855,10 +779,6 @@ function collectSettings(container) {
         llm_model: getSelectedModel(container),
         trim_color: trimColor,
         ...scopeValues,
-        story_engine_enabled: getChecked(container, '#sb-story-enabled'),
-        story_preset: getVal(container, '#sb-story-preset') || null,
-        story_in_prompt: getChecked(container, '#sb-story-in-prompt'),
-        story_vars_in_prompt: getChecked(container, '#sb-story-vars'),
         rag_context: getVal(container, '#sb-rag-context') || 'normal'
     };
 }
@@ -912,36 +832,6 @@ function getSelectedModel(container) {
         return (container.querySelector('#sb-llm-model-custom')?.value || '').trim();
     }
     return '';
-}
-
-function setupStoryButtons(container) {
-    container.querySelector('#sb-story-view')?.addEventListener('click', async () => {
-        const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
-        if (!chatName) return;
-        try {
-            const resp = await fetch(`/api/story/${encodeURIComponent(chatName)}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                const str = Object.entries(data.state || {})
-                    .map(([k, v]) => `${v.label || k}: ${JSON.stringify(v.value)}`).join('\n');
-                alert(`State:\n\n${str || '(empty)'}`);
-            }
-        } catch (e) { ui.showToast('Failed', 'error'); }
-    });
-
-    container.querySelector('#sb-story-reset')?.addEventListener('click', async () => {
-        const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
-        if (!chatName || !confirm('Reset story?')) return;
-        const preset = getVal(container, '#sb-story-preset');
-        try {
-            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ preset: preset || null })
-            });
-            ui.showToast('Story reset', 'success');
-        } catch (e) { ui.showToast('Failed', 'error'); }
-    });
 }
 
 // === Easy/Full sidebar mode ===
@@ -1207,203 +1097,6 @@ function updateEasyMode(container, settings, init) {
             if (p?.tagline && el) el.textContent = p.tagline;
         })
         .catch(() => {});
-}
-
-// ==================== Story Mode Tab ====================
-
-async function updateStoryMode(container, settings) {
-    const gridEl = container.querySelector('#sb-persona-grid');
-    const detailEl = container.querySelector('#sb-persona-detail');
-    if (!gridEl && !detailEl) return;
-
-    const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
-    const chatName = chatSelect?.value;
-    const presetName = settings.story_preset ?? '';
-
-    // Fetch state and save slots in parallel
-    const [stateResp, slotsResp] = await Promise.allSettled([
-        chatName ? fetch(`/api/story/${encodeURIComponent(chatName)}`).then(r => r.ok ? r.json() : null) : null,
-        presetName ? fetch(`/api/story/saves/${encodeURIComponent(presetName)}`).then(r => r.ok ? r.json() : null) : null,
-    ]);
-    const stateData = stateResp.status === 'fulfilled' ? stateResp.value : null;
-    const slotsData = slotsResp.status === 'fulfilled' ? slotsResp.value : null;
-
-    // Story display name
-    const storyDisplay = (settings.story_display_name || presetName || 'Story').replace(/^\[STORY\]\s*/, '');
-
-    // Hide persona grid, use detail area for story content
-    if (gridEl) gridEl.innerHTML = '';
-
-    if (!detailEl) return;
-
-    // Build state variable rows
-    const state = stateData?.state || {};
-    const stateKeys = Object.keys(state).filter(k => !k.startsWith('_'));
-    let stateRows = '';
-    if (stateKeys.length === 0) {
-        stateRows = '<div class="sb-story-empty">No state variables</div>';
-    } else {
-        stateRows = stateKeys.map(k => {
-            const v = state[k];
-            const label = v.label || k;
-            const val = v.value ?? '';
-            const displayVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
-            return `
-                <div class="sb-story-var" data-key="${escapeHtml(k)}">
-                    <span class="sb-story-var-label">${escapeHtml(label)}</span>
-                    <span class="sb-story-var-value" title="Click to edit">${escapeHtml(displayVal)}</span>
-                </div>`;
-        }).join('');
-    }
-
-    // Build save slot buttons
-    const slots = slotsData?.slots || [];
-    const slotButtons = (action) => {
-        let html = '';
-        for (let i = 1; i <= 5; i++) {
-            const slot = slots.find(s => s.slot === i);
-            const isEmpty = !slot || slot.empty;
-            const timestamp = isEmpty ? 'Empty' : formatSlotTime(slot.timestamp);
-            const turn = isEmpty ? '' : ` \u2022 Turn ${slot.turn}`;
-            html += `<button class="sb-story-slot" data-action="${action}" data-slot="${i}">
-                <span class="sb-story-slot-num">${i}</span>
-                <span class="sb-story-slot-info">${timestamp}${turn}</span>
-            </button>`;
-        }
-        return html;
-    };
-
-    // Progress info
-    const turnCount = stateData?.key_count || 0;
-    const presetLabel = stateData?.preset || presetName;
-
-    detailEl.innerHTML = `
-        <div class="sb-story-header">
-            <span class="sb-story-title">${escapeHtml(storyDisplay)}</span>
-            <span class="sb-story-meta">${turnCount} variables \u2022 ${escapeHtml(presetLabel)}</span>
-        </div>
-        ${easyAccordion('State', `<div class="sb-story-vars">${stateRows}</div>`, { desc: `${stateKeys.length} vars` })}
-        ${easyAccordion('Save', `<div class="sb-story-slots">${slotButtons('save')}</div>`, { desc: 'Save progress' })}
-        ${easyAccordion('Load', `<div class="sb-story-slots">${slotButtons('load')}</div>`, { desc: 'Restore progress' })}
-        <div class="sb-story-actions">
-            <button class="sb-btn-sm sb-story-reset-btn">Reset Story</button>
-        </div>
-    `;
-
-    // Wire state variable editing
-    detailEl.querySelectorAll('.sb-story-var-value').forEach(el => {
-        el.addEventListener('click', () => {
-            if (el.querySelector('input')) return; // already editing
-            const row = el.closest('.sb-story-var');
-            const key = row?.dataset.key;
-            if (!key) return;
-
-            const current = el.textContent;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'sb-story-var-input';
-            input.value = current;
-            el.textContent = '';
-            el.appendChild(input);
-            input.focus();
-            input.select();
-
-            const commit = async () => {
-                const newVal = input.value;
-                el.textContent = newVal;
-                if (newVal !== current && chatName) {
-                    try {
-                        await fetch(`/api/story/${encodeURIComponent(chatName)}/set`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ key, value: newVal })
-                        });
-                    } catch (e) {
-                        el.textContent = current; // revert on error
-                        ui.showToast('Failed to update variable', 'error');
-                    }
-                }
-            };
-            input.addEventListener('blur', commit, { once: true });
-            input.addEventListener('keydown', e => {
-                if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-                if (e.key === 'Escape') { el.textContent = current; }
-            });
-        });
-    });
-
-    // Wire save/load slots
-    detailEl.querySelectorAll('.sb-story-slot').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const action = btn.dataset.action;
-            const slot = parseInt(btn.dataset.slot);
-            if (!chatName) return;
-
-            if (action === 'save') {
-                try {
-                    await fetch(`/api/story/${encodeURIComponent(chatName)}/save`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ slot })
-                    });
-                    ui.showToast(`Saved to slot ${slot}`, 'success');
-                    await updateStoryMode(container, settings); // refresh slots
-                } catch (e) {
-                    ui.showToast('Save failed', 'error');
-                }
-            } else if (action === 'load') {
-                const slotData = slots.find(s => s.slot === slot);
-                if (!slotData || slotData.empty) {
-                    ui.showToast(`Slot ${slot} is empty`, 'info');
-                    return;
-                }
-                if (!confirm(`Load save from slot ${slot}? Chat history and state will be restored.`)) return;
-                try {
-                    await fetch(`/api/story/${encodeURIComponent(chatName)}/load`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ slot })
-                    });
-                    ui.showToast(`Loaded slot ${slot}`, 'success');
-                    // Refresh chat messages + story state
-                    const { setHistLen, refresh } = await import('../core/state.js');
-                    const len = await refresh(false);
-                    setHistLen(len);
-                    await updateStoryMode(container, settings);
-                } catch (e) {
-                    ui.showToast('Load failed', 'error');
-                }
-            }
-        });
-    });
-
-    // Wire reset button
-    detailEl.querySelector('.sb-story-reset-btn')?.addEventListener('click', async () => {
-        if (!confirm('Reset story progress? This will restart from the beginning.')) return;
-        if (!chatName) return;
-        try {
-            await fetch(`/api/story/${encodeURIComponent(chatName)}/reset`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ preset: presetName || null })
-            });
-            ui.showToast('Story reset', 'success');
-            await updateStoryMode(container, settings);
-        } catch (e) {
-            ui.showToast('Reset failed', 'error');
-        }
-    });
-
-    // Accordion headers are handled by delegated click on #sb-persona-detail (bound once in init)
-}
-
-function formatSlotTime(isoString) {
-    if (!isoString) return 'Empty';
-    try {
-        const d = new Date(isoString);
-        return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
-               d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch { return 'Saved'; }
 }
 
 function easyAccordion(title, content, opts = {}) {

@@ -236,21 +236,6 @@ class LLMChat:
         context_parts = []
         chat_settings = self.session_manager.get_chat_settings()
 
-        # Debug logging for story engine
-        story_enabled = chat_settings.get('story_engine_enabled', False)
-        story_engine = self.function_manager.get_story_engine()
-        logger.info(f"[STORY] _get_system_prompt: enabled={story_enabled}, engine_exists={story_engine is not None}")
-
-        # Story prompt override: use prompt.md unless user explicitly picked a different prompt
-        active_prompt = chat_settings.get('prompt', '')
-        if story_enabled and story_engine and active_prompt in ('__story__', ''):
-            story_prompt = story_engine.story_prompt
-            if story_prompt:
-                prompt = story_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
-                logger.info(f"[STORY] Using story prompt override ({len(story_prompt)} chars)")
-        elif story_enabled and story_engine:
-            logger.info(f"[STORY] User override: using '{active_prompt}' instead of story prompt")
-
         # Inject datetime if enabled (user's timezone)
         if chat_settings.get('inject_datetime', False):
             from datetime import datetime
@@ -269,30 +254,6 @@ class LLMChat:
         if custom_ctx:
             context_parts.append(custom_ctx)
 
-        # Inject story engine block if enabled
-        # Static story content goes into context_parts (cached with system prompt)
-        # Dynamic story content goes into dynamic_context (separate uncached block)
-        dynamic_context = []
-        if story_enabled:
-            if story_engine:
-                vars_in_prompt = chat_settings.get('story_vars_in_prompt', False)
-                story_in_prompt = chat_settings.get('story_in_prompt', True)
-
-                logger.info(f"[STORY] Prompt injection: vars={vars_in_prompt}, story={story_in_prompt}, preset={story_engine.preset_name}")
-
-                if vars_in_prompt or story_in_prompt:
-                    turn = self.session_manager.get_turn_count() + 1
-                    static_block, dynamic_block = story_engine.format_for_prompt_split(
-                        include_vars=vars_in_prompt,
-                        include_story=story_in_prompt,
-                        current_turn=turn
-                    )
-                    if static_block:
-                        context_parts.append(f"<story>\n{static_block}\n</story>")
-                    if dynamic_block:
-                        dynamic_context.append(f"<state turn=\"{turn}\">\n{dynamic_block}\n</state>")
-                    logger.info(f"[STORY] Static: {len(static_block)} chars, Dynamic: {len(dynamic_block)} chars")
-        
         # Plugin prompt_inject hook — append to context_parts
         if hook_runner.has_handlers("prompt_inject"):
             inject_event = HookEvent(context_parts=context_parts, config=config)
@@ -302,64 +263,7 @@ class LLMChat:
         if context_parts:
             prompt = f"{prompt}\n\n{chr(10).join(context_parts)}"
 
-        # Dynamic context returned separately for cache-friendly injection
-        dynamic = "\n".join(dynamic_context) if dynamic_context else None
-
-        return prompt, username, dynamic
-
-    def _update_story_engine(self):
-        """Initialize or update story engine based on chat settings."""
-        chat_settings = self.session_manager.get_chat_settings()
-
-        # Fast path: story engine disabled (99% of users)
-        story_enabled = chat_settings.get('story_engine_enabled', False)
-        if not story_enabled:
-            if self.function_manager.get_story_engine():
-                self.function_manager.set_story_engine(None)
-                logger.debug("[STORY] Story engine disabled")
-            return
-
-        # Story engine is enabled - check if current engine is still valid
-        chat_name = self.session_manager.get_active_chat_name()
-        new_preset = chat_settings.get('story_preset')
-        current_engine = self.function_manager.get_story_engine()
-
-        # Fast path: existing engine is valid for this chat+preset
-        if (current_engine and
-            current_engine.chat_name == chat_name and
-            current_engine.preset_name == new_preset):
-            return
-
-        # Need to create or update engine
-        from core.story_engine import StoryEngine
-        db_path = self.session_manager._db_path
-
-        if current_engine and current_engine.preset_name != new_preset:
-            logger.info(f"[STORY] Preset changed: '{current_engine.preset_name}' → '{new_preset}'")
-
-        # Create new story engine for this chat
-        engine = StoryEngine(chat_name, db_path)
-
-        if new_preset:
-            db_preset = engine.preset_name
-            needs_fresh_load = (db_preset != new_preset) or engine.is_empty()
-
-            if needs_fresh_load:
-                turn = self.session_manager.get_turn_count()
-                success, msg = engine.load_preset(new_preset, turn)
-                if success:
-                    logger.info(f"[STORY] Loaded preset '{new_preset}' for chat '{chat_name}'")
-                else:
-                    logger.warning(f"[STORY] Failed to load preset '{new_preset}': {msg}")
-            else:
-                engine.reload_preset_config(new_preset)
-                logger.info(f"[STORY] Reloaded config for existing state in '{chat_name}'")
-
-        self.function_manager.set_story_engine(
-            engine,
-            lambda: self.session_manager.get_turn_count()
-        )
-        logger.info(f"[STORY] Story engine enabled for chat '{chat_name}'")
+        return prompt, username, None
 
     def _build_base_messages(self, user_input: str, images: list = None, files: list = None):
         system_prompt, user_name, dynamic_context = self._get_system_prompt()
@@ -457,9 +361,6 @@ class LLMChat:
             chat_start_time = time.time()
             self.refresh_spice_if_needed()
             logger.info(f"[CHAT] CHAT: user said something here")
-
-            # Update story engine FIRST (before building messages) based on current settings
-            self._update_story_engine()
 
             # Plugin pre_chat hook — can modify input, bypass LLM, or stop propagation
             if hook_runner.has_handlers("pre_chat"):
@@ -937,7 +838,6 @@ class LLMChat:
         self.session_manager.clear()
         from core.chat.function_manager import reset_scopes
         reset_scopes()
-        self.function_manager.set_story_engine(None)
         return True
 
     def list_chats(self) -> List[Dict[str, Any]]:
@@ -950,9 +850,6 @@ class LLMChat:
         return self.session_manager.delete_chat(chat_name)
 
     def switch_chat(self, chat_name: str) -> bool:
-        # Clear story engine so stale engine from previous chat doesn't persist
-        # _update_story_engine will recreate it on the next chat() call if needed
-        self.function_manager.set_story_engine(None)
         return self.session_manager.set_active_chat(chat_name)
 
     def get_active_chat(self) -> str:

@@ -35,10 +35,9 @@ def request_shutdown():
     logger.info("Shutdown requested")
 
 # Bootstrap user files before any modules try to load them
-from core.setup import ensure_prompt_files, ensure_chat_defaults, ensure_story_presets
+from core.setup import ensure_prompt_files, ensure_chat_defaults
 ensure_prompt_files()
 ensure_chat_defaults()
-ensure_story_presets()
 
 # Run data migrations (e.g. persona -> character rename)
 from core.migration import run_all as run_migrations
@@ -188,12 +187,8 @@ class VoiceChatSystem:
             try:
                 chat_settings = self.llm_chat.session_manager.get_chat_settings()
                 prompt_name = chat_settings.get('prompt')
-                # __story__ is a sentinel — story engine loads its own prompt.md via _get_system_prompt
-                if prompt_name and prompt_name != '__story__':
+                if prompt_name:
                     logger.info(f"Startup prompt from chat settings: '{prompt_name}'")
-                elif prompt_name == '__story__':
-                    logger.info("Startup prompt: story chat (prompt loaded from story engine)")
-                    prompt_name = None  # fall through to defaults
             except Exception:
                 pass
 

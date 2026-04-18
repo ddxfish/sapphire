@@ -174,12 +174,6 @@ class ClaudeProvider(BaseProvider):
                     elif chat_settings.get('inject_datetime', False):
                         cache_system_prompt = False
                         logger.debug("[CACHE] Datetime injection enabled - skipping system prompt cache")
-                    elif chat_settings.get('story_engine_enabled', False):
-                        # Story engine uses split system blocks:
-                        # Static block (instructions, scene prose) → cached
-                        # Dynamic block (state vars, clues, exits) → uncached, doesn't break cache
-                        # So story_in_prompt is now cache-safe with the split approach
-                        pass
             except Exception as e:
                 logger.debug(f"[CACHE] Could not check chat settings: {e}")
         

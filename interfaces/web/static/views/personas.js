@@ -771,10 +771,6 @@ function collectSettings() {
         llm_model: getSelectedModel(),
         trim_color: get('trim_color') || '#4a9eff',
         ...scopeFields,
-        story_engine_enabled: selectedData?.settings?.story_engine_enabled ?? false,
-        story_preset: selectedData?.settings?.story_preset ?? null,
-        story_vars_in_prompt: selectedData?.settings?.story_vars_in_prompt ?? false,
-        story_in_prompt: selectedData?.settings?.story_in_prompt !== false,
     };
 }
 

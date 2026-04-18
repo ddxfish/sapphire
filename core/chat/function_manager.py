@@ -177,12 +177,6 @@ class FunctionManager:
         self._network_functions = set()  # Function names that require network access
         self._is_local_map = {}  # function_name -> is_local value (True, False, or "endpoint")
         self._function_module_map = {}  # function_name -> module_name (for endpoint lookups)
-        
-        # Story engine for games/simulations (None = disabled)
-        self._story_engine = None
-        self._story_engine_enabled = False  # Explicit enabled flag
-        self._turn_getter = None  # Callable that returns current turn number
-        
         # Track what was REQUESTED, not reverse-engineered
         self.current_toolset_name = "none"
         
@@ -601,18 +595,8 @@ class FunctionManager:
 
     @property
     def enabled_tools(self) -> list:
-        """Get enabled tools filtered by current prompt mode, plus story tools if active."""
+        """Get enabled tools filtered by current prompt mode."""
         tools = self._apply_mode_filter(self._enabled_tools)
-
-        # Add story tools if story engine is active (both engine AND flag must be set)
-        if self._story_engine and self._story_engine_enabled:
-            from core.story_engine import TOOLS as STORY_TOOLS
-            tools = tools + STORY_TOOLS
-
-            # Add custom story tools from story folder
-            custom = self._story_engine.get_story_tools()
-            if custom:
-                tools = tools + custom
 
         # Final dedup — Claude API requires unique tool names
         seen = set()
@@ -735,15 +719,6 @@ class FunctionManager:
         
         mode = self._get_current_prompt_mode()
 
-        # Include story tool info
-        story_tool_count = 0
-        story_custom_names = []
-        if self._story_engine and self._story_engine_enabled:
-            from core.story_engine import STORY_TOOL_NAMES
-            story_tool_count = len(STORY_TOOL_NAMES)
-            story_custom_names = [t['function']['name'] for t in self._story_engine.get_story_tools()]
-            story_tool_count += len(story_custom_names)
-
         return {
             "name": self.current_toolset_name,
             "function_count": actual_count,
@@ -752,8 +727,6 @@ class FunctionManager:
             "enabled_functions": self.get_enabled_function_names(),
             "prompt_mode": mode,
             "status": "ok" if base_count == expected_count else "partial",
-            "story_tools": story_tool_count,
-            "story_custom_tools": story_custom_names,
         }
 
     # --- Scope methods (thin wrappers around registry functions) ---
@@ -780,27 +753,6 @@ class FunctionManager:
     def apply_scopes(self, settings: dict):
         """Apply scopes from chat_settings dict."""
         apply_scopes_from_settings(self, settings)
-
-    def set_story_engine(self, engine, turn_getter=None):
-        """
-        Set story engine for current chat context.
-
-        Args:
-            engine: StoryEngine instance, or None to disable
-            turn_getter: Callable that returns current turn number
-        """
-        self._story_engine = engine
-        self._story_engine_enabled = engine is not None  # Track enabled state
-        self._turn_getter = turn_getter
-        if engine:
-            logger.info(f"Story engine enabled for chat '{engine.chat_name}'")
-        else:
-            logger.debug("Story engine disabled")
-
-    def get_story_engine(self):
-        """Get current story engine. Returns None if disabled."""
-        return self._story_engine
-
 
     def _check_privacy_allowed(self, function_name: str) -> tuple:
         """
@@ -913,65 +865,40 @@ class FunctionManager:
                 self._log_tool_call(function_name, arguments, result, time.time() - start_time, True)
                 return result
 
-        # Execute — 3 paths: story tools, custom story tools, standard
+        # Execute tool
         result = None
-        from core.story_engine import STORY_TOOL_NAMES, execute as story_execute
+        success = False
+        emap = executor_snapshot if executor_snapshot else self.execution_map
+        executor = emap.get(function_name)
+        if not executor:
+            logger.error(f"No executor found for function '{function_name}'")
+            result = f"The tool {function_name} is recognized but has no execution logic."
+            self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
+            return result
 
-        if function_name in STORY_TOOL_NAMES:
-            if not self._story_engine or not self._story_engine_enabled:
-                result = f"Error: Story engine not active for tool '{function_name}'"
-                self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
-                return result
-
-            turn = self._turn_getter() if self._turn_getter else 0
-            try:
-                result, success = story_execute(function_name, arguments, self._story_engine, turn)
-            except Exception as e:
-                logger.error(f"Error executing story tool {function_name}: {e}")
-                result = f"Error executing {function_name}: {str(e)}"
-                success = False
-
-        elif (self._story_engine and self._story_engine_enabled and
-                function_name in self._story_engine.story_tool_names):
-            try:
-                result, success = self._story_engine.execute_story_tool(function_name, arguments)
-            except Exception as e:
-                logger.error(f"Error executing custom story tool {function_name}: {e}")
-                result = f"Error executing {function_name}: {str(e)}"
-                success = False
-
-        else:
-            emap = executor_snapshot if executor_snapshot else self.execution_map
-            executor = emap.get(function_name)
-            if not executor:
-                logger.error(f"No executor found for function '{function_name}'")
-                result = f"The tool {function_name} is recognized but has no execution logic."
-                self._log_tool_call(function_name, arguments, result, time.time() - start_time, False)
-                return result
-
-            try:
-                # For plugin tools, inject plugin settings (4th arg) + credentials (5th arg)
-                plugin_settings = self._get_plugin_settings_for(function_name)
-                if plugin_settings is not None:
-                    from core.credentials_manager import credentials
-                    import inspect
-                    try:
-                        sig = inspect.signature(executor)
-                        nparams = len(sig.parameters)
-                    except (ValueError, TypeError):
-                        nparams = 5  # assume full signature
-                    if nparams >= 5:
-                        result, success = executor(function_name, arguments, config, plugin_settings, credentials)
-                    elif nparams >= 4:
-                        result, success = executor(function_name, arguments, config, plugin_settings)
-                    else:
-                        result, success = executor(function_name, arguments, config)
+        try:
+            # For plugin tools, inject plugin settings (4th arg) + credentials (5th arg)
+            plugin_settings = self._get_plugin_settings_for(function_name)
+            if plugin_settings is not None:
+                from core.credentials_manager import credentials
+                import inspect
+                try:
+                    sig = inspect.signature(executor)
+                    nparams = len(sig.parameters)
+                except (ValueError, TypeError):
+                    nparams = 5  # assume full signature
+                if nparams >= 5:
+                    result, success = executor(function_name, arguments, config, plugin_settings, credentials)
+                elif nparams >= 4:
+                    result, success = executor(function_name, arguments, config, plugin_settings)
                 else:
                     result, success = executor(function_name, arguments, config)
-            except Exception as e:
-                logger.error(f"Error executing function {function_name}: {e}")
-                result = f"Error executing {function_name}: {str(e)}"
-                success = False
+            else:
+                result, success = executor(function_name, arguments, config)
+        except Exception as e:
+            logger.error(f"Error executing function {function_name}: {e}")
+            result = f"Error executing {function_name}: {str(e)}"
+            success = False
 
         execution_time = time.time() - start_time
         if result is None:

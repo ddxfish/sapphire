@@ -354,33 +354,6 @@
                             </div>
                         </div>
 
-                        <!-- Story Engine Accordion -->
-                        <div class="sidebar-section sidebar-accordion">
-                            <div class="sidebar-accordion-header">
-                                <span class="accordion-arrow">&#x25B6;</span>
-                                <span>Story Engine</span>
-                            </div>
-                            <div class="sidebar-accordion-content" style="display:none">
-                                <div class="sb-field">
-                                    <label><input type="checkbox" id="sb-story-enabled"> Enable</label>
-                                </div>
-                                <div class="sb-field">
-                                    <label for="sb-story-preset">preset</label>
-                                    <select id="sb-story-preset"><option value="">None</option></select>
-                                </div>
-                                <div class="sb-field">
-                                    <label><input type="checkbox" id="sb-story-in-prompt" checked> Story in prompt</label>
-                                </div>
-                                <div class="sb-field">
-                                    <label><input type="checkbox" id="sb-story-vars"> Variables in prompt</label>
-                                </div>
-                                <div class="sb-field sb-actions">
-                                    <button type="button" id="sb-story-view" class="sb-btn-sm">View</button>
-                                    <button type="button" id="sb-story-reset" class="sb-btn-sm">Reset</button>
-                                </div>
-                            </div>
-                        </div>
-
                         <!-- Plugin-registered accordions (injected by JS) -->
                         <div id="sb-plugin-accordions"></div>
 
@@ -492,19 +465,6 @@
             <button id="image-modal-prev" class="image-modal-nav image-modal-prev-btn">&#8249;</button>
             <button id="image-modal-next" class="image-modal-nav image-modal-next-btn">&#8250;</button>
             <div id="image-modal-counter" class="image-modal-counter"></div>
-        </div>
-    </div>
-
-    <!-- Story Picker Modal -->
-    <div id="story-picker-modal" class="story-modal-overlay" style="display:none">
-        <div class="story-modal">
-            <div class="story-modal-header">
-                <h3>Start a Story</h3>
-                <button class="btn-icon" id="story-modal-close">&times;</button>
-            </div>
-            <div class="story-modal-body">
-                <div class="story-preset-grid" id="story-preset-grid"></div>
-            </div>
         </div>
     </div>
 

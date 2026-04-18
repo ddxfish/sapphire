@@ -14,7 +14,6 @@ from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system, _apply_chat_settings, PROJECT_ROOT
 from core.event_bus import publish, Events
 from core import prompts
-from core.story_engine import STORY_TOOL_NAMES
 from core.stt.stt_null import NullWhisperClient as _NullWhisperClient
 from core.stt.utils import can_transcribe
 from core.wakeword.wakeword_null import NullWakeWordDetector as _NullWakeWordDetector
@@ -340,10 +339,6 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             except Exception:
                 pass
 
-        story_enabled = chat_settings.get('story_engine_enabled', False)
-        if story_enabled and not system.llm_chat.function_manager.get_story_engine():
-            system.llm_chat._update_story_engine()
-
         prompt_state = prompts.get_current_state()
         prompt_name = prompts.get_active_preset_name()
         prompt_char_count = prompts.get_prompt_char_count()
@@ -380,48 +375,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
         total_used = history_tokens + prompt_tokens
         context_percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
 
-        story_status = None
-        try:
-            story_enabled_status = chat_settings.get('story_engine_enabled', False)
-            story_preset = chat_settings.get('story_preset', '')
-            if story_enabled_status:
-                story_status = {
-                    "enabled": True,
-                    "preset": story_preset,
-                    "preset_display": story_preset.replace('_', ' ').title() if story_preset else ''
-                }
-                live_engine = system.llm_chat.function_manager.get_story_engine()
-                if live_engine and live_engine.story_prompt:
-                    story_status["has_prompt"] = True
-                if live_engine and hasattr(live_engine, 'preset_config'):
-                    story_status["turn"] = getattr(live_engine, 'current_turn', 0)
-                    visible_state = live_engine.get_visible_state() if hasattr(live_engine, 'get_visible_state') else {}
-                    story_status["key_count"] = len(visible_state)
-                    preset_config = live_engine.preset_config or {}
-                    iterator_key = preset_config.get('progressive_prompt', {}).get('iterator', 'scene')
-                    iterator_val = live_engine.get_state(iterator_key) if hasattr(live_engine, 'get_state') else None
-                    if iterator_val is not None:
-                        story_status["iterator_key"] = iterator_key
-                        story_status["iterator_value"] = iterator_val
-                        state_def = preset_config.get('initial_state', {}).get(iterator_key, {})
-                        if state_def.get('type') == 'integer' and state_def.get('max'):
-                            story_status["iterator_max"] = state_def['max']
-        except Exception as e:
-            logger.warning(f"Error getting story status: {e}")
-
-        # Collect all story tool names (built-in + custom)
-        all_story_names = set(STORY_TOOL_NAMES)
-        live_engine = system.llm_chat.function_manager.get_story_engine()
-        if live_engine:
-            all_story_names |= live_engine.story_tool_names
-
-        state_tools = [f for f in function_names if f in all_story_names]
-        user_tools = [f for f in function_names if f not in all_story_names]
-
-        # Story prompt override: prefix prompt name so user knows story prompt is active
-        if live_engine and live_engine.story_prompt:
-            prompt_name = f"[STORY] {prompt_name}"
-            prompt_char_count = len(live_engine.story_prompt)
+        user_tools = list(function_names)
 
         return {
             "prompt_name": prompt_name,
@@ -430,7 +384,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "prompt": prompt_state,
             "toolset": toolset_info,
             "functions": user_tools,
-            "state_tools": state_tools,
+            "state_tools": [],
             "has_cloud_tools": has_cloud_tools,
             "tts_enabled": config.TTS_ENABLED,
             "tts_provider": getattr(config, 'TTS_PROVIDER', 'none'),
@@ -454,7 +408,6 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
                 "limit": context_limit,
                 "percent": context_percent
             },
-            "story": story_status,
             "chats": system.llm_chat.list_chats(),
             "chat_settings": chat_settings
         }
@@ -699,23 +652,6 @@ async def remove_history_messages(request: Request, _=Depends(require_login), sy
             chat_name = session_manager.get_active_chat_name()
             session_manager.clear()
 
-            chat_settings = session_manager.get_chat_settings()
-            story_enabled = chat_settings.get('story_engine_enabled', False)
-            if story_enabled:
-                from core.story_engine import StoryEngine
-                db_path = PROJECT_ROOT / "user" / "history" / "sapphire_history.db"
-                if db_path.exists() and chat_name:
-                    engine = StoryEngine(chat_name, db_path)
-                    preset = chat_settings.get('story_preset')
-                    if preset:
-                        engine.load_preset(preset, 1)
-                    else:
-                        engine.clear_all()
-
-                    live_engine = system.llm_chat.function_manager.get_story_engine()
-                    if live_engine and live_engine.chat_name == chat_name:
-                        live_engine.reload_from_db()
-
             origin = request.headers.get('X-Session-ID')
             publish(Events.CHAT_CLEARED, {"chat_name": chat_name, "origin": origin})
             return {"status": "success", "message": "All chat history cleared."}
@@ -830,13 +766,9 @@ async def import_history(request: Request, _=Depends(require_login), system=Depe
 
 @router.get("/api/chats")
 async def list_chats(request: Request, type: str = None, _=Depends(require_login), system=Depends(get_system)):
-    """List chats. Optional ?type=regular|story to filter."""
+    """List chats."""
     try:
         chats = system.llm_chat.list_chats()
-        if type == "regular":
-            chats = [c for c in chats if not c.get("story_chat")]
-        elif type == "story":
-            chats = [c for c in chats if c.get("story_chat")]
         active_chat = system.llm_chat.get_active_chat()
         return {"chats": chats, "active_chat": active_chat}
     except Exception as e:
@@ -1016,20 +948,13 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
         fm = system.llm_chat.function_manager
         toolset_info = fm.get_current_toolset_info()
         function_names = fm.get_enabled_function_names()
-        from core.story_engine import STORY_TOOL_NAMES
-        all_story_names = set(STORY_TOOL_NAMES)
-        engine = fm.get_story_engine()
-        if engine:
-            all_story_names |= engine.story_tool_names
-        state_tools = [f for f in function_names if f in all_story_names]
-        user_tools = [f for f in function_names if f not in all_story_names]
 
         return {
             "status": "success",
             "message": f"Settings updated for '{chat_name}'",
             "toolset": toolset_info,
-            "functions": user_tools,
-            "state_tools": state_tools,
+            "functions": list(function_names),
+            "state_tools": [],
         }
     except HTTPException:
         raise

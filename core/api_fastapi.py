@@ -508,20 +508,6 @@ def _apply_chat_settings(system, settings: dict):
     except Exception as e:
         logger.error(f"Error applying toolset: {e}")
 
-    try:
-        system.llm_chat._update_story_engine()
-
-        if settings.get('story_engine_enabled') is not None:
-            toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
-            publish(Events.TOOLSET_CHANGED, {
-                "name": toolset_info.get("name", "custom"),
-                "action": "story_engine_update",
-                "function_count": toolset_info.get("function_count", 0)
-            })
-    except Exception as e:
-        logger.error(f"Error applying story engine settings: {e}")
-
-
 # =============================================================================
 # ROUTE MODULES
 # =============================================================================
@@ -531,7 +517,6 @@ from core.routes.tts import router as tts_router
 from core.routes.settings import router as settings_router
 from core.routes.content import router as content_router
 from core.routes.knowledge import router as knowledge_router
-from core.routes.story_engine import router as story_engine_router
 from core.routes.system import router as system_router
 from core.routes.plugins import router as plugins_router
 from core.routes.media import router as media_router
@@ -543,7 +528,6 @@ app.include_router(tts_router)
 app.include_router(settings_router)
 app.include_router(content_router)
 app.include_router(knowledge_router)
-app.include_router(story_engine_router)
 app.include_router(system_router)
 app.include_router(plugins_router)
 app.include_router(media_router)

@@ -80,9 +80,6 @@ class StreamingChat:
             self.ephemeral = False
             self.main_chat.session_manager._is_streaming = True
 
-            # Update story engine FIRST (before building messages) based on current settings
-            self.main_chat._update_story_engine()
-
             # Plugin pre_chat hook — can modify input, bypass LLM, or stop propagation
             if hook_runner.has_handlers("pre_chat"):
                 hook_event = HookEvent(input=user_input, config=config,

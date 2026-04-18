@@ -72,12 +72,7 @@ export const cancelGeneration = () => fetchWithTimeout('/api/cancel', {
     headers: { 'Content-Type': 'application/json' }
 }, 5000);
 export const fetchChatList = (type) => fetchWithTimeout(type ? `/api/chats?type=${type}` : '/api/chats', {}, 10000);
-export const startStory = (preset) => fetchWithTimeout('/api/story/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ preset })
-}, 10000);
-export const createChat = (name) => fetchWithTimeout('/api/chats', { 
+export const createChat = (name) => fetchWithTimeout('/api/chats', {
     method: 'POST', 
     headers: { 'Content-Type': 'application/json' }, 
     body: JSON.stringify({ name }) 

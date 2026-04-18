@@ -33,8 +33,6 @@ class TestRouteRegistration:
         # knowledge.py
         "/api/knowledge/tabs", "/api/knowledge/scopes",
         "/api/knowledge/people", "/api/memory/scopes",
-        # story_engine.py
-        "/api/story/start", "/api/story/presets",
         # system.py
         "/api/backup/list", "/api/continuity/tasks",
         "/api/setup/wizard-step", "/api/avatars",
@@ -50,7 +48,7 @@ class TestRouteRegistration:
         paths = [r.path for r in app.routes if isinstance(r, APIRoute)]
         assert path in paths, f"Route {path} not registered"
 
-    def test_all_nine_routers_included(self):
+    def test_all_routers_included(self):
         """Each route module's router should contribute at least one route."""
         from core.api_fastapi import app
         from fastapi.routing import APIRoute
@@ -63,7 +61,6 @@ class TestRouteRegistration:
             "settings":     "/api/settings",
             "content":      "/api/prompts",
             "knowledge":    "/api/knowledge/tabs",
-            "story_engine": "/api/story/start",
             "system":       "/api/backup/list",
             "plugins":      "/api/webui/plugins",
             "media":        "/api/tool-image/{image_id}",
@@ -92,7 +89,6 @@ class TestImportIntegrity:
         "core.routes.settings",
         "core.routes.content",
         "core.routes.knowledge",
-        "core.routes.story_engine",
         "core.routes.system",
         "core.routes.plugins",
         "core.routes.media",
@@ -111,7 +107,7 @@ class TestImportIntegrity:
         route_modules = [
             "core.routes.chat", "core.routes.tts", "core.routes.settings",
             "core.routes.content", "core.routes.knowledge",
-            "core.routes.story_engine", "core.routes.system",
+            "core.routes.system",
             "core.routes.plugins", "core.routes.media",
         ]
         for name in route_modules:

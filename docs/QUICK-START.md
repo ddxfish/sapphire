@@ -282,7 +282,6 @@ See [DAEMONS-WEBHOOKS.md](DAEMONS-WEBHOOKS.md) for webhooks, advanced filters, a
 
 Now that you're set up, explore:
 
-- [STORY-ENGINE.md](STORY-ENGINE.md) — Interactive stories and games
 - [CONTINUITY.md](CONTINUITY.md) — Scheduled tasks (morning greetings, dream mode)
 - [KNOWLEDGE.md](KNOWLEDGE.md) — Organized knowledge base
 - [AGENTS.md](AGENTS.md) — Spawn background AI workers

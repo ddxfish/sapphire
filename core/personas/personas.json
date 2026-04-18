@@ -22,11 +22,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#4a9eff",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#4a9eff"
     }
   },
   "cobalt": {
@@ -51,11 +47,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#3d7aff",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#3d7aff"
     }
   },
   "anita": {
@@ -80,11 +72,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#ff6b9d",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#ff6b9d"
     }
   },
   "claude": {
@@ -109,11 +97,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#b07aff",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#b07aff"
     }
   },
   "alfred": {
@@ -138,11 +122,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#c4a265",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#c4a265"
     }
   },
   "lovelace": {
@@ -167,11 +147,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#00d4aa",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#00d4aa"
     }
   },
   "einstein": {
@@ -196,11 +172,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#ffa500",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#ffa500"
     }
   },
   "nexus": {
@@ -225,11 +197,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#00ff88",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#00ff88"
     }
   },
   "cantos": {
@@ -254,11 +222,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#ff4500",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#ff4500"
     }
   },
   "yuki": {
@@ -283,11 +247,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#ff69b4",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#ff69b4"
     }
   },
   "eddie": {
@@ -312,16 +272,12 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#ffdd44",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#ffdd44"
     }
   },
   "agent": {
     "name": "agent",
-    "tagline": "Background worker — lean, focused, no personality layer",
+    "tagline": "Background worker \u2014 lean, focused, no personality layer",
     "avatar": null,
     "avatar_full": null,
     "settings": {
@@ -346,11 +302,7 @@
       "gcal_scope": "none",
       "telegram_scope": "none",
       "discord_scope": "none",
-      "trim_color": "#888888",
-      "story_engine_enabled": false,
-      "story_preset": null,
-      "story_vars_in_prompt": false,
-      "story_in_prompt": true
+      "trim_color": "#888888"
     }
   }
 }

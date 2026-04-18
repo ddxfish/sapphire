@@ -38,7 +38,6 @@ _USER_DIRS = [
     'user/toolsets',
     'user/personas',
     'user/spice_sets',
-    'user/story_engine',
 ]
 try:
     for d in _USER_DIRS:

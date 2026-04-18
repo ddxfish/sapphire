@@ -15,8 +15,6 @@ _STATIC_PERSONA_SETTINGS_KEYS = [
     "spice_enabled", "spice_turns", "inject_datetime", "custom_context",
     "llm_primary", "llm_model",
     "trim_color",
-    "story_engine_enabled", "story_preset", "story_vars_in_prompt",
-    "story_in_prompt"
 ]
 
 

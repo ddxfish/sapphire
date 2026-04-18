@@ -11,11 +11,9 @@ export async function populateChatDropdown() {
     const { chatSelect } = getElements();
     try {
         const data = await api.fetchChatList();
-        // Separate regular chats from story chats
-        const regularChats = data.chats.filter(c => !c.story_chat && !c.private_chat);
-        const storyChats = data.chats.filter(c => c.story_chat);
+        const regularChats = data.chats.filter(c => !c.private_chat);
         const privateChats = data.chats.filter(c => c.private_chat);
-        ui.renderChatDropdown(regularChats, data.active_chat, storyChats, privateChats);
+        ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats);
     } catch (e) {
         console.error('Failed to load chat list:', e);
         if (chatSelect && chatSelect.options.length === 0) {

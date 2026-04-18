@@ -33,7 +33,6 @@ Hey I'm Chris, a solo dev with a burning passion for this project. It's consumed
 - **Spice** - [SPICE.md](docs/SPICE.md) Random prompt snippets injected each reply to keep things unpredictable.
 - **Self-Modification** - The AI edits its own prompt and swaps personality pieces and emotions mid-conversation.
 - **Tool Maker** - [TOOLMAKER.md](docs/TOOLMAKER.md) The AI writes, validates, and installs new tools with their own settings page at runtime.
-- **Stories** - [STORY-ENGINE.md](docs/STORY-ENGINE.md) Interactive stories, the AI is your dungeon master and partner, can't see the next room.
 - **Images** - SDXL with character replacement for visual consistency across scenes.
 
 **Mind**
@@ -199,7 +198,6 @@ This removes the Python environment. Delete the `sapphire/` folder to remove eve
 | [Plugin Author Guide](docs/plugin-author/README.md) | Build plugins with hooks, tools, providers, apps, themes |
 | [API](docs/API.md) | All ~280 REST endpoints |
 | [Agents](docs/AGENTS.md) | Background AI workers |
-| [Story Engine](docs/STORY-ENGINE.md) | Interactive fiction and games |
 | [Backups](docs/BACKUPS.md) | Automatic and manual backup system |
 | [Docker](docs/DOCKER.md) | Container deployment with GPU support |
 | [Technical](docs/TECHNICAL.md) | Architecture and internals |

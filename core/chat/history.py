@@ -30,10 +30,6 @@ _STATIC_SYSTEM_DEFAULTS = {
     "custom_context": "",
     "llm_primary": "auto",      # "auto", "none", or provider key like "claude"
     "llm_model": "",            # Empty = use provider default, or specific model override
-    "story_engine_enabled": False,  # Story engine for games/simulations
-    "story_preset": None,           # Preset to load (e.g., "crystal_prophecy")
-    "story_vars_in_prompt": False,  # Include state variables in prompt (breaks caching)
-    "story_in_prompt": True,        # Include story segments in prompt (cache-friendly)
     "trim_color": "",
     "persona": None
 }
@@ -689,41 +685,6 @@ class ChatSessionManager:
                     )
                 """)
                 
-                # State engine tables
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS state_current (
-                        chat_name TEXT NOT NULL,
-                        key TEXT NOT NULL,
-                        value TEXT NOT NULL,
-                        value_type TEXT,
-                        label TEXT,
-                        constraints TEXT,
-                        updated_at TEXT NOT NULL,
-                        updated_by TEXT NOT NULL,
-                        turn_number INTEGER NOT NULL,
-                        PRIMARY KEY (chat_name, key)
-                    )
-                """)
-                
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS state_log (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        chat_name TEXT NOT NULL,
-                        key TEXT NOT NULL,
-                        old_value TEXT,
-                        new_value TEXT NOT NULL,
-                        changed_by TEXT NOT NULL,
-                        turn_number INTEGER NOT NULL,
-                        timestamp TEXT NOT NULL,
-                        reason TEXT
-                    )
-                """)
-                
-                conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_state_log_chat_turn
-                    ON state_log(chat_name, turn_number)
-                """)
-
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS tool_images (
                         id TEXT PRIMARY KEY,
@@ -914,11 +875,10 @@ class ChatSessionManager:
                     
                     chats.append({
                         "name": row["name"],
-                        "display_name": settings.get("private_display_name") or settings.get("story_display_name") or row["name"].replace('_', ' ').title(),
+                        "display_name": settings.get("private_display_name") or row["name"].replace('_', ' ').title(),
                         "message_count": row["msg_count"] or 0,
                         "is_active": row["name"] == self.active_chat_name,
                         "modified": row["updated_at"],
-                        "story_chat": bool(settings.get("story_chat")),
                         "private_chat": bool(settings.get("private_chat")),
                         "settings": settings
                     })
@@ -992,11 +952,6 @@ class ChatSessionManager:
                 
                 # Delete chat and any associated data
                 conn.execute("DELETE FROM chats WHERE name = ?", (chat_name,))
-                try:
-                    conn.execute("DELETE FROM state_current WHERE chat_name = ?", (chat_name,))
-                    conn.execute("DELETE FROM state_log WHERE chat_name = ?", (chat_name,))
-                except Exception:
-                    pass  # Tables may not exist if story engine never used
                 try:
                     conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (chat_name,))
                 except Exception:
@@ -1239,28 +1194,10 @@ class ChatSessionManager:
         except Exception as e:
             logger.error(f"Failed to append to chat '{chat_name}': {e}")
 
-    def _rollback_state_if_needed(self):
-        """Rollback story engine to current turn count if enabled."""
-        story_enabled = self.current_settings.get('story_engine_enabled', False)
-        if not story_enabled:
-            return
-
-        try:
-            from core.story_engine import StoryEngine
-            new_turn = self.get_turn_count()
-            engine = StoryEngine(self.active_chat_name, self._db_path)
-
-            if not engine.is_empty():
-                engine.rollback_to_turn(new_turn)
-                logger.info(f"[STORY] Rolled back state to turn {new_turn} after message removal")
-        except Exception as e:
-            logger.error(f"[STORY] Failed to rollback state: {e}")
-
     def remove_last_messages(self, count: int) -> bool:
         result = self.current_chat.remove_last_messages(count)
         if result:
             self._save_current_chat()
-            self._rollback_state_if_needed()
             publish(Events.MESSAGE_REMOVED, {"count": count})
         return result
 
@@ -1268,7 +1205,6 @@ class ChatSessionManager:
         result = self.current_chat.remove_from_user_message(user_content)
         if result:
             self._save_current_chat()
-            self._rollback_state_if_needed()
             publish(Events.MESSAGE_REMOVED, {"from": "user_message"})
         return result
 
@@ -1276,7 +1212,6 @@ class ChatSessionManager:
         result = self.current_chat.remove_from_assistant_timestamp(timestamp)
         if result:
             self._save_current_chat()
-            self._rollback_state_if_needed()
             publish(Events.MESSAGE_REMOVED, {"from": "assistant_timestamp"})
         return result
 
@@ -1302,16 +1237,6 @@ class ChatSessionManager:
         except Exception:
             pass  # Table may not exist yet
 
-        # Always clear state for this chat (even if engine currently disabled)
-        try:
-            from core.story_engine import StoryEngine
-            engine = StoryEngine(self.active_chat_name, self._db_path)
-            if not engine.is_empty():
-                engine.clear_all()
-                logger.info(f"[STORY] Cleared state for chat '{self.active_chat_name}'")
-        except Exception as e:
-            logger.error(f"[STORY] Failed to clear state: {e}")
-        
         publish(Events.CHAT_CLEARED)
 
     def edit_message_by_content(self, role: str, original_content: str, new_content: str) -> bool:

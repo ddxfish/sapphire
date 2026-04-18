@@ -1,8 +1,7 @@
-// features/scene.js - Scene state polling, LLM indicator, spice/story status
+// features/scene.js - Scene state polling, LLM indicator, spice status
 import * as api from '../api.js';
 import * as audio from '../audio.js';
 import { getElements, setTtsEnabled, setSttEnabled, setSttReady, setPromptPrivacyRequired } from '../core/state.js';
-import { updateStoryIndicator } from './story.js';
 
 // Call this when chat's primary LLM is known (from chat-manager, chat-settings)
 export function updateSendButtonLLM(primary, model = '') {
@@ -81,7 +80,6 @@ export async function updateScene() {
         audio.setLocalTtsPlaying(status?.tts_playing || false);
 
         setPromptPrivacyRequired(status?.prompt_privacy_required || false);
-        updateStoryIndicator(status?.story);
 
         return status;
     } catch {
