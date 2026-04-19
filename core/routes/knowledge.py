@@ -40,6 +40,49 @@ async def test_embedding(request: Request, _=Depends(require_login)):
     return {"success": True, "provider": provider, "dimensions": dim, "ms": elapsed}
 
 
+@router.get("/api/embedding/integrity")
+async def embedding_integrity(request: Request, _=Depends(require_login)):
+    """Report how stored vectors are stamped vs the active provider.
+
+    Used by the Settings UI to warn before a provider swap: shows how many
+    memory/knowledge/people vectors would become invisible to vector search
+    if the user proceeded. Powers the 'Swap anyway?' confirmation dialog.
+    """
+    from core.embeddings import integrity_report
+    return integrity_report()
+
+
+@router.post("/api/embedding/reembed")
+async def embedding_reembed_start(request: Request, _=Depends(require_login)):
+    """Kick off a background re-embed of all stored vectors stamped with a
+    non-active provider (or legacy unstamped). Fires SSE `reembed_progress`
+    events throughout. Idempotent: refuses if already running."""
+    from core.embeddings.reembed import start_reembed
+    ok, msg = start_reembed()
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    return {"status": "started", "message": msg}
+
+
+@router.get("/api/embedding/reembed/status")
+async def embedding_reembed_status(request: Request, _=Depends(require_login)):
+    """Current re-embed status snapshot. Useful for clients that missed the
+    SSE events or opened the page mid-run."""
+    from core.embeddings.reembed import get_status
+    return get_status()
+
+
+@router.post("/api/embedding/reembed/cancel")
+async def embedding_reembed_cancel(request: Request, _=Depends(require_login)):
+    """Request graceful cancellation of an in-progress re-embed. Worker
+    finishes current batch then exits (no half-stamped rows)."""
+    from core.embeddings.reembed import cancel_reembed
+    ok, msg = cancel_reembed()
+    if not ok:
+        raise HTTPException(status_code=409, detail=msg)
+    return {"status": "cancelling", "message": msg}
+
+
 # =============================================================================
 # MEMORY SCOPE ROUTES
 # =============================================================================

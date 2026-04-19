@@ -256,6 +256,13 @@ class Events:
     # stale." AIX-class bug. (Added 2026-04-19 after Scout 3 dispatch.)
     MIND_CHANGED = "mind_changed"
 
+    # Re-embed pipeline progress — fired by the background worker as it
+    # walks memories/knowledge_entries/people, re-generating vectors under
+    # the current provider. Payload is the full status snapshot (running,
+    # total, done, current_table, errors, etc). Settings UI uses this to
+    # show a live progress bar without polling.
+    REEMBED_PROGRESS = "reembed_progress"
+
     # Agent events
     AGENT_SPAWNED = "agent_spawned"
     AGENT_COMPLETED = "agent_completed"

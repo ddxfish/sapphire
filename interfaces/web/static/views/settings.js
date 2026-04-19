@@ -668,6 +668,43 @@ async function saveChanges() {
     const saveBtn = container?.querySelector('#settings-save');
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
 
+    // Embedding provider swap gate: swapping providers leaves existing stored
+    // vectors stamped with the old provider, which means they're invisible to
+    // vector search under the new one until re-embedded. Show the user real
+    // counts and let them back out. This is the ONLY multi-setting gate — the
+    // embedding surface touches 3 DBs and years of data.
+    if ('EMBEDDING_PROVIDER' in valid && valid.EMBEDDING_PROVIDER !== settings.EMBEDDING_PROVIDER) {
+        try {
+            const res = await fetch('/api/embedding/integrity');
+            if (res.ok) {
+                const report = await res.json();
+                const tables = report.tables || {};
+                const countAffected = (t) => (t.matching_active || 0) + (t.legacy_unstamped || 0);
+                const mem = countAffected(tables.memories || {});
+                const know = countAffected(tables.knowledge_entries || {});
+                const people = countAffected(tables.people || {});
+                const total = mem + know + people;
+                if (total > 0) {
+                    const msg =
+                        `Swap embedding provider to "${valid.EMBEDDING_PROVIDER}"?\n\n` +
+                        `This will make existing vectors invisible to semantic search until re-embedded:\n` +
+                        `  • ${mem} memory vectors\n` +
+                        `  • ${know} knowledge-entry vectors\n` +
+                        `  • ${people} people vectors\n\n` +
+                        `The data itself is preserved. FTS5 text search still works on all rows. ` +
+                        `A re-embed pipeline is coming soon — for now, plan to re-save memories/knowledge manually if needed.`;
+                    if (!confirm(msg)) {
+                        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
+                        return;
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[embedding] integrity pre-save check failed:', e);
+            // Don't block save on a fetch failure — user is trying to do the right thing
+        }
+    }
+
     try {
         const parsed = {};
         for (const [key, value] of Object.entries(valid)) {

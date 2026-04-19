@@ -266,6 +266,85 @@ class NullEmbedder:
 from core.provider_registry import BaseProviderRegistry
 
 
+def _validate_plugin_provider_class(cls, plugin_name, key):
+    """Static contract check — enforced at plugin registration time.
+
+    A well-meaning plugin author shouldn't be able to eat the user's memory
+    with a sloppy embedding provider. The required contract is minimal:
+      - `embed(texts, prefix)` method
+      - `available` property
+      - `PROVIDER_ID` stable string — stamped on every vector this provider
+        writes. Missing this would mean stored vectors can't be filtered
+        after a swap.
+    `DIMENSION` is optional — remote providers learn dim at first call.
+
+    Returns list of error strings; empty means OK.
+    """
+    errs = []
+    if not callable(getattr(cls, 'embed', None)):
+        errs.append("missing callable `embed(texts, prefix)` method")
+    if not hasattr(cls, 'available'):
+        errs.append("missing `available` property")
+    pid = getattr(cls, 'PROVIDER_ID', None)
+    if not pid or not isinstance(pid, str):
+        errs.append(
+            "missing `PROVIDER_ID` class attribute — required for plugin "
+            "embedding providers. This stable string is stamped on every "
+            "vector your provider writes so a future provider swap can "
+            "filter out your rows cleanly. Pick a short stable identifier "
+            "like 'myplugin:model-v1'."
+        )
+    return errs
+
+
+def _canary_embed(instance):
+    """Runtime check on an instance. Runs once when a plugin-backed provider
+    is instantiated; result is cached per class. Returns (ok, message).
+
+    A plugin provider that fails this canary is NOT usable — we fall back to
+    NullEmbedder so Sapphire boots but vector search is disabled. Loud log
+    so the user sees exactly what's wrong.
+    """
+    import numpy as _np
+    if not getattr(instance, 'available', False):
+        # A provider that reports unavailable is a legal state (e.g. API URL
+        # not configured). Don't fail — NullEmbedder-equivalent behavior.
+        return True, "provider reports unavailable, skipping canary"
+    try:
+        out = instance.embed(['canary check'], prefix='search_document')
+    except Exception as e:
+        return False, f"embed() raised: {type(e).__name__}: {e}"
+    if out is None:
+        # None = transient failure, not a contract break. Allow — next call retries.
+        return True, "embed() returned None at canary (transient); contract OK"
+    try:
+        out = _np.asarray(out)
+    except Exception as e:
+        return False, f"embed() returned unconvertible type {type(out).__name__}: {e}"
+    if out.ndim != 2 or out.shape[0] != 1:
+        return False, f"embed() returned shape {out.shape}, expected (1, D)"
+    if out.dtype != _np.float32:
+        return False, (
+            f"embed() returned dtype {out.dtype}, expected float32. "
+            f"Plugin authors: call `.astype(np.float32)` on your output."
+        )
+    if not _np.all(_np.isfinite(out)):
+        return False, "embed() returned non-finite values (NaN or Inf)"
+    norm = float(_np.linalg.norm(out[0]))
+    if not (0.95 < norm < 1.05):
+        return False, (
+            f"embed() returned non-normalized vector (L2 norm = {norm:.3f}). "
+            f"Expected unit-length. Normalize with `v / np.linalg.norm(v)` "
+            f"before returning — cosine-similarity search assumes unit vectors."
+        )
+    return True, "ok"
+
+
+# Cache canary result per plugin provider class (id-keyed so hot-reload of a
+# plugin creates a new class object and re-runs the canary).
+_plugin_canary_cache = {}
+
+
 class EmbeddingRegistry(BaseProviderRegistry):
     """Embedding provider registry — core + plugin providers."""
 
@@ -279,6 +358,20 @@ class EmbeddingRegistry(BaseProviderRegistry):
         self.register_core('sapphire_router', SapphireRouterEmbedder, 'Sapphire Router', is_local=False)
         self.register_core('none', NullEmbedder, 'None (disabled)', is_local=True)
 
+    def register_plugin(self, key, provider_class, display_name, plugin_name, **metadata):
+        """Plugin registers a custom provider. Runs static contract validation
+        before accepting the registration — a plugin with a broken provider
+        class is refused outright rather than left to cause data corruption
+        later."""
+        errs = _validate_plugin_provider_class(provider_class, plugin_name, key)
+        if errs:
+            logger.error(
+                f"[embedding] Plugin '{plugin_name}' provider '{key}' failed contract: "
+                + "; ".join(errs)
+            )
+            return  # Do not register — user will see provider missing from UI
+        return super().register_plugin(key, provider_class, display_name, plugin_name, **metadata)
+
     def create(self, key, **kwargs):
         entry = self._core.get(key) or self._plugins.get(key)
         if not entry:
@@ -287,11 +380,34 @@ class EmbeddingRegistry(BaseProviderRegistry):
             entry = self._core.get('none')
             if not entry:
                 return None
+        cls = entry['class']
+        is_plugin = key in self._plugins
         try:
-            return entry['class']()
+            instance = cls()
         except Exception as e:
             logger.error(f"[embedding] Failed to create '{key}': {e}")
             return NullEmbedder()
+
+        # Plugin providers go through a runtime canary — validates they actually
+        # produce sane vectors. Core providers are trusted (tested in-repo).
+        # Result cached per class so we only pay this cost once per process.
+        if is_plugin:
+            cached = _plugin_canary_cache.get(id(cls))
+            if cached is None:
+                ok, msg = _canary_embed(instance)
+                _plugin_canary_cache[id(cls)] = (ok, msg)
+                if ok:
+                    logger.info(f"[embedding] Plugin '{key}' canary passed: {msg}")
+                else:
+                    logger.error(
+                        f"[embedding] Plugin '{key}' failed canary — disabling. "
+                        f"Reason: {msg}"
+                    )
+                    return NullEmbedder()
+            elif not cached[0]:
+                logger.debug(f"[embedding] Plugin '{key}' canary previously failed — using null")
+                return NullEmbedder()
+        return instance
 
 
 embedding_registry = EmbeddingRegistry()
@@ -369,3 +485,94 @@ def stamp_embedding(vector, embedder=None):
         embedder = get_embedder()
     provider_id = getattr(embedder, 'provider_id', None) if embedder else None
     return arr.tobytes(), provider_id, int(arr.shape[0])
+
+
+def integrity_report():
+    """Scan all vector-storing tables and report stamp distribution.
+
+    Used by the UI to show the user what they'd invalidate before swapping
+    providers, and by the re-embed pipeline to find rows that need attention.
+
+    Returns:
+        {
+            'active': {'provider': str|None, 'dim': int|None},
+            'tables': {
+                'memories': {
+                    'total': int,              # rows with a blob
+                    'matching_active': int,    # rows that current provider can search
+                    'legacy_unstamped': int,   # rows with NULL provider (pre-provenance)
+                    'other_stamps': int,       # rows stamped with a different provider/dim
+                    'by_stamp': [{'provider': str|None, 'dim': int|None, 'count': int}]
+                },
+                'knowledge_entries': {...},
+                'people': {...}
+            }
+        }
+    """
+    import sqlite3 as _sql
+    report = {'active': {}, 'tables': {}}
+    active_pid, active_dim = current_provenance()
+    report['active'] = {'provider': active_pid, 'dim': active_dim}
+
+    def _scan(open_conn_ctx, table):
+        try:
+            with open_conn_ctx() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f'SELECT embedding_provider, embedding_dim, COUNT(*) '
+                    f'FROM {table} WHERE embedding IS NOT NULL '
+                    f'GROUP BY embedding_provider, embedding_dim'
+                )
+                rows = cur.fetchall()
+        except _sql.OperationalError:
+            # Table or columns missing (first boot, pre-migration) — report empty.
+            return {
+                'total': 0, 'matching_active': 0, 'legacy_unstamped': 0,
+                'other_stamps': 0, 'by_stamp': [],
+            }
+        total = 0
+        matching = 0
+        legacy = 0
+        other = 0
+        by_stamp = []
+        for pid, dim, count in rows:
+            total += count
+            by_stamp.append({'provider': pid, 'dim': dim, 'count': count})
+            if pid is None or dim is None:
+                legacy += count
+            elif active_pid and active_dim and pid == active_pid and dim == active_dim:
+                matching += count
+            else:
+                other += count
+        by_stamp.sort(key=lambda x: x['count'], reverse=True)
+        return {
+            'total': total,
+            'matching_active': matching,
+            'legacy_unstamped': legacy,
+            'other_stamps': other,
+            'by_stamp': by_stamp,
+        }
+
+    try:
+        from plugins.memory.tools import memory_tools as _mt
+        report['tables']['memories'] = _scan(_mt._get_connection, 'memories')
+    except Exception as e:
+        logger.debug(f"integrity_report: memories scan failed: {e}")
+        report['tables']['memories'] = {
+            'total': 0, 'matching_active': 0, 'legacy_unstamped': 0,
+            'other_stamps': 0, 'by_stamp': [],
+        }
+
+    try:
+        from plugins.memory.tools import knowledge_tools as _kt
+        report['tables']['knowledge_entries'] = _scan(_kt._get_connection, 'knowledge_entries')
+        report['tables']['people'] = _scan(_kt._get_connection, 'people')
+    except Exception as e:
+        logger.debug(f"integrity_report: knowledge scan failed: {e}")
+        for t in ('knowledge_entries', 'people'):
+            report['tables'].setdefault(t, {
+                'total': 0, 'matching_active': 0, 'legacy_unstamped': 0,
+                'other_stamps': 0, 'by_stamp': [],
+            })
+
+    return report
