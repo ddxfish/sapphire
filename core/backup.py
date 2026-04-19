@@ -200,6 +200,15 @@ class Backup:
                     logger.info(f"Backup scheduler: {result}")
                 except Exception as e:
                     logger.error(f"Backup scheduler failed: {e}")
+                # Piggyback the daily backup run with metrics retention —
+                # both are low-priority "housekeep at 3am" tasks and there's
+                # no reason to spin up a separate scheduler just for this.
+                # Scout 1 longevity finding (2026-04-19).
+                try:
+                    from core.metrics import metrics
+                    metrics.prune(keep_days=90)
+                except Exception as e:
+                    logger.warning(f"Metrics prune during backup cycle failed: {e}")
 
         thread = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
         thread.start()

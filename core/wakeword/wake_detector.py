@@ -419,11 +419,34 @@ class WakeWordDetector:
                         self.audio_recorder.stop_recording()
                         time.sleep(1)
                         self.audio_recorder.start_recording()
+                        # Verify recovery actually succeeded — start_recording
+                        # swallows exceptions and leaves stream=None on failure.
+                        # Without this check, the loop keeps polling a None
+                        # stream forever and the user thinks wakeword is up
+                        # when it's silently dead. Scout 4 finding (2026-04-19).
+                        if self.audio_recorder.get_stream() is None:
+                            raise RuntimeError("start_recording returned but stream is None")
                         logger.info("Attempted stream recovery after persistent errors")
                         consecutive_errors = 0
                     except Exception as recovery_err:
                         logger.error(f"Stream recovery failed: {recovery_err}")
-                        time.sleep(5)
+                        # Publish a CONTINUITY_TASK_ERROR so the UI surfaces
+                        # "wakeword is silently dead." Otherwise the UI toggle
+                        # still reads on, but Sapphire can't hear.
+                        try:
+                            from core.event_bus import publish, Events
+                            publish(Events.CONTINUITY_TASK_ERROR, {
+                                "task": "Wake Word",
+                                "error": f"Wake word stream recovery failed ({type(recovery_err).__name__}: "
+                                         f"{recovery_err}). Audio input is dead — check mic, restart "
+                                         f"Sapphire, or toggle wake word off/on.",
+                            })
+                        except Exception:
+                            pass
+                        # Stop the loop rather than spin forever on a dead
+                        # stream. UI state will follow once the loop exits.
+                        self.running = False
+                        break
 
     def start_listening(self):
         if self.running:

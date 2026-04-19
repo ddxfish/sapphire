@@ -161,6 +161,33 @@ class TokenMetrics:
             logger.error(f"[METRICS] Breakdown failed: {e}")
             return []
 
+    def prune(self, keep_days: int = 90) -> int:
+        """Delete token_usage rows older than `keep_days`. Returns count deleted.
+
+        Scout 1 longevity finding (2026-04-19): without pruning, this table
+        grows ~180k rows/year and eventually degrades the summary-query
+        performance at year 2+. 90-day window preserves all UI views (default
+        30-day summary) plus a 3x buffer for anyone doing historical queries.
+        Call from a daily continuity cron, or one-shot from the UI.
+        """
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=keep_days)).isoformat()
+        try:
+            with self._lock:
+                conn = sqlite3.connect(str(DB_PATH))
+                cur = conn.execute(
+                    "DELETE FROM token_usage WHERE timestamp < ?", (cutoff,)
+                )
+                deleted = cur.rowcount
+                conn.commit()
+                conn.close()
+            if deleted:
+                logger.info(f"[METRICS] Pruned {deleted} rows older than {keep_days}d")
+            return deleted
+        except Exception as e:
+            logger.error(f"[METRICS] Prune failed: {e}")
+            return 0
+
     def daily_usage(self, days: int = 30) -> List[Dict]:
         """Daily token totals for charting."""
         from datetime import timedelta
