@@ -2,6 +2,11 @@
 # Pluggable embedding provider — local ONNX or remote API (same Nomic model)
 
 import logging
+import os
+import sys
+import threading
+from pathlib import Path as _Path
+
 import numpy as np
 import config
 
@@ -9,6 +14,27 @@ logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = 'nomic-ai/nomic-embed-text-v1.5'
 EMBEDDING_ONNX_FILE = 'onnx/model_quantized.onnx'
+
+# Pin a HuggingFace model revision for reproducibility. Default None = latest,
+# which is the historical behavior. Setting this to a specific commit SHA
+# locks the vector space — if upstream republishes the model, embeddings
+# from that point forward won't drift. Users who want pinning set this via
+# config.EMBEDDING_MODEL_REVISION.
+EMBEDDING_MODEL_REVISION = getattr(config, 'EMBEDDING_MODEL_REVISION', None)
+
+# Windows MAX_PATH safety: the HuggingFace cache directory nests quite deep
+# (`~/.cache/huggingface/hub/models--{slug}/snapshots/<40charSHA>/...`), which
+# routinely overflows Windows' 260-char path limit especially when combined
+# with a non-ASCII username. Redirect the cache to a project-local short path
+# on Windows. Linux/macOS keep the default HF location so existing caches work.
+if sys.platform == 'win32' and not os.environ.get('HF_HOME'):
+    try:
+        _hf_home = _Path(__file__).parent.parent.parent / 'user' / 'models' / 'hf'
+        _hf_home.mkdir(parents=True, exist_ok=True)
+        os.environ['HF_HOME'] = str(_hf_home)
+        logger.info(f"Set HF_HOME={_hf_home} for Windows MAX_PATH safety")
+    except Exception as _e:
+        logger.debug(f"HF_HOME redirect skipped: {_e}")
 
 
 class LocalEmbedder:
@@ -35,30 +61,77 @@ class LocalEmbedder:
     def dimension(self):
         return self.DIMENSION
 
+    # Stored so the UI/status endpoints can explain silent fallbacks to users
+    # ("embeddings disabled because onnxruntime is missing" vs "because the
+    # model download failed"). Cleared on successful load.
+    load_error: str | None = None
+
     def _load(self):
         if self.session is not None:
             return
+        # Import deps first so a missing native lib (e.g. onnxruntime DLL on
+        # Windows without VC++ redist) surfaces distinctly from a model fetch
+        # failure. Previous behavior swallowed both as the same generic
+        # "Failed to load embedding model" — scout finding #16.
         try:
             import onnxruntime as ort
+        except ImportError as e:
+            self.load_error = (
+                f"onnxruntime import failed: {e}. "
+                "Install with `pip install onnxruntime` (Windows users: also install "
+                "the Microsoft Visual C++ 2019 Redistributable)."
+            )
+            logger.error(f"Embedding load: {self.load_error}")
+            self.session = None
+            return
+        try:
             from transformers import AutoTokenizer
+        except ImportError as e:
+            self.load_error = f"transformers import failed: {e}. Install with `pip install transformers`."
+            logger.error(f"Embedding load: {self.load_error}")
+            self.session = None
+            return
+        try:
             from huggingface_hub import hf_hub_download
+        except ImportError as e:
+            self.load_error = f"huggingface_hub import failed: {e}. Install with `pip install huggingface_hub`."
+            logger.error(f"Embedding load: {self.load_error}")
+            self.session = None
+            return
 
+        # Model fetch + session init. Separate try so its failure has its
+        # own message, not conflated with import errors above.
+        rev = EMBEDDING_MODEL_REVISION  # None = latest
+        try:
             try:
                 self.tokenizer = AutoTokenizer.from_pretrained(
-                    EMBEDDING_MODEL, trust_remote_code=True, local_files_only=True)
+                    EMBEDDING_MODEL, trust_remote_code=True, local_files_only=True,
+                    revision=rev,
+                )
                 model_path = hf_hub_download(
-                    EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, local_files_only=True)
+                    EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, local_files_only=True,
+                    revision=rev,
+                )
             except Exception:
-                logger.info(f"Downloading embedding model: {EMBEDDING_MODEL}")
+                logger.info(
+                    f"Downloading embedding model: {EMBEDDING_MODEL}"
+                    + (f" @ revision {rev}" if rev else "")
+                )
                 self.tokenizer = AutoTokenizer.from_pretrained(
-                    EMBEDDING_MODEL, trust_remote_code=True)
-                model_path = hf_hub_download(EMBEDDING_MODEL, EMBEDDING_ONNX_FILE)
+                    EMBEDDING_MODEL, trust_remote_code=True, revision=rev,
+                )
+                model_path = hf_hub_download(
+                    EMBEDDING_MODEL, EMBEDDING_ONNX_FILE, revision=rev,
+                )
 
             self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
             self.input_names = [i.name for i in self.session.get_inputs()]
-            logger.info(f"Embedding model loaded: {EMBEDDING_MODEL} (quantized ONNX)")
+            self.load_error = None
+            rev_note = f" (revision pinned: {rev})" if rev else " (revision: latest)"
+            logger.info(f"Embedding model loaded: {EMBEDDING_MODEL} (quantized ONNX){rev_note}")
         except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
+            self.load_error = f"Model fetch/load failed: {e}"
+            logger.error(f"Embedding load: {self.load_error}")
             self.session = None
 
     def embed(self, texts, prefix='search_document'):
@@ -138,7 +211,10 @@ class RemoteEmbedder:
         if not url:
             return None
         try:
-            import httpx
+            client = _get_http_client()
+            if client is None:
+                logger.error("Remote embedding: httpx not installed")
+                return None
             from core.credentials_manager import credentials
             key = credentials.get_service_api_key('embedding') or getattr(config, 'EMBEDDING_API_KEY', '')
             headers = {}
@@ -146,8 +222,8 @@ class RemoteEmbedder:
                 headers['Authorization'] = f'Bearer {key}'
 
             prefixed = [f'{prefix}: {t}' for t in texts]
-            resp = httpx.post(url, json={'input': prefixed, 'model': EMBEDDING_MODEL},
-                              headers=headers, timeout=30.0)
+            resp = client.post(url, json={'input': prefixed, 'model': EMBEDDING_MODEL},
+                               headers=headers, timeout=30.0)
             resp.raise_for_status()
             data = resp.json().get('data', [])
             if not data:
@@ -200,12 +276,15 @@ class SapphireRouterEmbedder:
         if not url:
             return None
         try:
-            import httpx
+            client = _get_http_client()
+            if client is None:
+                logger.error("Sapphire Router embeddings: httpx not installed")
+                return None
             headers = {'Content-Type': 'application/json'}
             tenant_id = self._get_tenant_id()
             if tenant_id:
                 headers['X-Tenant-ID'] = tenant_id
-            resp = httpx.post(
+            resp = client.post(
                 f'{url}/v1/embeddings/embed',
                 json={'texts': texts, 'prefix': prefix},
                 headers=headers,
@@ -372,6 +451,37 @@ class EmbeddingRegistry(BaseProviderRegistry):
             return  # Do not register — user will see provider missing from UI
         return super().register_plugin(key, provider_class, display_name, plugin_name, **metadata)
 
+    def unregister_plugin(self, plugin_name):
+        """When a plugin unloads, also swap the active embedder away from
+        any provider the plugin owned. Without this, the singleton keeps an
+        instance of a now-unloaded class alive — future calls crash on
+        reference to a GC'd class object, or worse, keep working with stale
+        code. Scout finding #15."""
+        # Discover classes owned by this plugin before super removes them.
+        with self._lock:
+            owned_classes = {id(v.get('class')) for k, v in self._plugins.items()
+                             if v.get('plugin_name') == plugin_name}
+        # If the active singleton is an instance of an owned class, reset it.
+        # FTS still works on all rows; vector search will resume once the user
+        # picks another provider — far better than letting a dead class sit.
+        try:
+            global _embedder
+            if _embedder is not None and id(type(_embedder)) in owned_classes:
+                logger.info(
+                    f"[embedding] Plugin '{plugin_name}' unloading while its "
+                    f"provider was active — switching to 'none'."
+                )
+                switch_embedding_provider('none')
+        except Exception as e:
+            logger.debug(f"unregister_plugin active-swap failed: {e}")
+        # Clear canary cache for these classes so a reload validates fresh.
+        try:
+            for cls_id in owned_classes:
+                _plugin_canary_cache.pop(cls_id, None)
+        except Exception:
+            pass
+        return super().unregister_plugin(plugin_name)
+
     def create(self, key, **kwargs):
         entry = self._core.get(key) or self._plugins.get(key)
         if not entry:
@@ -415,9 +525,27 @@ embedding_registry = EmbeddingRegistry()
 
 # ─── Singleton + hot-swap ────────────────────────────────────────────────────
 
-import threading
 _embedder = None
 _embedder_lock = threading.Lock()
+
+# Shared httpx client for remote providers — reused across calls so we don't
+# burn TIME_WAIT connections on high-volume RAG ingest. Lazy-initialized since
+# httpx may not be available in minimal installs. Scout longevity finding #20.
+_shared_httpx_client = None
+_shared_httpx_lock = threading.Lock()
+
+
+def _get_http_client():
+    global _shared_httpx_client
+    if _shared_httpx_client is None:
+        with _shared_httpx_lock:
+            if _shared_httpx_client is None:
+                try:
+                    import httpx as _httpx
+                    _shared_httpx_client = _httpx.Client(timeout=30.0)
+                except ImportError:
+                    return None
+    return _shared_httpx_client
 
 
 def get_embedder():

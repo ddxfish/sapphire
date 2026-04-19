@@ -94,6 +94,42 @@ class Backup:
             except Exception as e:
                 logger.debug(f"WAL checkpoint skipped for {db_path.name}: {e}")
 
+    def _db_housekeeping(self, is_weekly: bool = False):
+        """Run DB integrity_check daily and VACUUM weekly against every
+        SQLite file under user/. Runs at 3am alongside backups so it doesn't
+        contend with active chats.
+
+        VACUUM rebuilds the entire DB and reclaims page space freed by
+        deletes — without it, the file grows monotonically even as content
+        shrinks. `integrity_check` catches corruption that'd otherwise stay
+        invisible until the next restart.
+        """
+        for db_path in self.user_dir.rglob("*.db"):
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=15)
+            except Exception as e:
+                logger.debug(f"Housekeeping: cannot open {db_path.name}: {e}")
+                continue
+            try:
+                result = conn.execute("PRAGMA integrity_check").fetchone()
+                if result and result[0] != 'ok':
+                    logger.error(
+                        f"Housekeeping: {db_path.name} integrity_check returned "
+                        f"{result[0]!r} — backup exists if recovery is needed"
+                    )
+                else:
+                    logger.debug(f"Housekeeping: {db_path.name} integrity_check OK")
+                if is_weekly:
+                    logger.info(f"Housekeeping: VACUUM {db_path.name}")
+                    conn.execute("VACUUM")
+            except Exception as e:
+                logger.warning(f"Housekeeping failed for {db_path.name}: {e}")
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def list_backups(self):
         """List all backups grouped by type."""
         backups = {"daily": [], "weekly": [], "monthly": [], "manual": []}
@@ -209,6 +245,16 @@ class Backup:
                     metrics.prune(keep_days=90)
                 except Exception as e:
                     logger.warning(f"Metrics prune during backup cycle failed: {e}")
+
+                # DB housekeeping. integrity_check daily (cheap), VACUUM
+                # weekly (Sunday; exclusive-lock, takes longer). Runs at
+                # 3am when nobody's using Sapphire. Scout longevity finding
+                # #18 — without this, BLOB-heavy DBs grow monotonically
+                # and silent corruption goes undetected until restart.
+                try:
+                    self._db_housekeeping(is_weekly=(datetime.now().weekday() == 6))
+                except Exception as e:
+                    logger.warning(f"DB housekeeping failed: {e}")
 
         thread = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
         thread.start()

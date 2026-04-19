@@ -517,9 +517,28 @@ def get_people(scope='default'):
                  "email_whitelisted": bool(r[9])} for r in rows]
 
 
+MAX_PEOPLE_PER_SCOPE = 50_000
+
+
 def create_or_update_person(name, relationship=None, phone=None, email=None, address=None, notes=None, scope='default', person_id=None, email_whitelisted=None):
     with _get_connection() as conn:
         cursor = conn.cursor()
+        # Cap check — only for new person insertions; updates to existing
+        # rows don't change the count. person_id or name match = update path.
+        if not person_id:
+            cursor.execute(
+                'SELECT COUNT(*) FROM people WHERE LOWER(name) = LOWER(?) AND scope = ?',
+                (name.strip(), scope)
+            )
+            name_match = cursor.fetchone()[0]
+            if name_match == 0:
+                cursor.execute('SELECT COUNT(*) FROM people WHERE scope = ?', (scope,))
+                total = cursor.fetchone()[0]
+                if total >= MAX_PEOPLE_PER_SCOPE:
+                    raise ValueError(
+                        f"People scope '{scope}' is at the row limit ({MAX_PEOPLE_PER_SCOPE:,}). "
+                        f"Delete some entries or use a different scope before adding more."
+                    )
 
         # If ID provided, update by ID directly (allows name changes)
         if person_id:

@@ -614,6 +614,12 @@ def _sanitize_fts_query(query: str, use_or=False, use_prefix=False) -> str:
 
 MAX_MEMORY_LENGTH = 512
 
+# Per-scope row cap. Prevents a runaway AI (or import) from ballooning a
+# single scope to millions of rows — vector search scales poorly past this.
+# Knowledge entries already have a 50k cap; memories/people get the same
+# ceiling for consistency. Scout longevity finding: symmetric caps.
+MAX_MEMORIES_PER_SCOPE = 50_000
+
 
 def _save_memory(content: str, label: str = None, scope: str = 'default') -> tuple:
     try:
@@ -621,6 +627,14 @@ def _save_memory(content: str, label: str = None, scope: str = 'default') -> tup
             return "Cannot save empty memory.", False
         if len(content) > MAX_MEMORY_LENGTH:
             return f"Memory too long ({len(content)} chars). Max is {MAX_MEMORY_LENGTH}. Write a shorter, more concise memory.", False
+        # Cap check — count rows in scope before writing.
+        with _get_connection() as conn:
+            count = conn.execute(
+                'SELECT COUNT(*) FROM memories WHERE scope = ?', (scope,)
+            ).fetchone()[0]
+        if count >= MAX_MEMORIES_PER_SCOPE:
+            return (f"Memory scope '{scope}' is at the row limit ({MAX_MEMORIES_PER_SCOPE:,}). "
+                    f"Delete some memories or switch scope before saving more."), False
 
         content = content.strip()
         keywords = _extract_keywords(content)
