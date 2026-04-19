@@ -1,3 +1,8 @@
+# 2.5.10 - Test Suite Expansion
+- Test coverage tripled
+- For self-coding checks
+- Allows plugins to be random .zip urls
+- Clock plugin (stopwatch, timer, alarm, clock)
 # 2.5.9 - Trinity
 - Will be for Patreon users 
 - Published explanation on website of eigenresonance

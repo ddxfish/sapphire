@@ -494,6 +494,15 @@ def delete_scope(name: str) -> dict:
             cursor.execute('DELETE FROM memory_scopes WHERE name = ?', (name,))
             conn.commit()
         logger.info(f"Deleted memory scope '{name}' with {count} memories")
+        # Sweep any chat whose settings still point at this now-deleted scope.
+        # Without this, apply_scopes_from_settings on next activation would set
+        # scope_memory to the ghost string and the AI writes into a room the UI
+        # can't show. Scout 2 finding (2026-04-18).
+        try:
+            from core.chat.scope_cleanup import sweep_orphaned_scope_ref
+            sweep_orphaned_scope_ref('memory_scope', name)
+        except Exception as e:
+            logger.warning(f"memory_scope sweep after delete failed: {e}")
         return {"deleted_count": count}
     except Exception as e:
         logger.error(f"Failed to delete memory scope '{name}': {e}")

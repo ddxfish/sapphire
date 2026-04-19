@@ -315,7 +315,13 @@ def delete_scope(name: str) -> dict:
             cursor.execute('DELETE FROM goal_scopes WHERE name = ?', (name,))
             conn.commit()
             logger.info(f"Deleted goal scope '{name}' with {goal_count} goals")
-            return {"deleted_goals": goal_count}
+        # Sweep orphan refs OUTSIDE the DB connection — helper opens its own.
+        try:
+            from core.chat.scope_cleanup import sweep_orphaned_scope_ref
+            sweep_orphaned_scope_ref('goal_scope', name)
+        except Exception as e:
+            logger.warning(f"goal_scope sweep after delete failed: {e}")
+        return {"deleted_goals": goal_count}
     except Exception as e:
         logger.error(f"Failed to delete goal scope '{name}': {e}")
         return {"error": str(e)}

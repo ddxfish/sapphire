@@ -358,6 +358,7 @@ def event_bus_capture(monkeypatch):
         'core.continuity.executor',
         'core.continuity.scheduler',
         'core.wakeword.wake_detector',
+        'core.chat.history',
     )
     for _mod_name in _MODULE_LEVEL_PUBLISH_IMPORTERS:
         try:

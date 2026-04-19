@@ -417,7 +417,12 @@ def delete_scope(name: str) -> dict:
             cursor.execute('DELETE FROM knowledge_scopes WHERE name = ?', (name,))
             conn.commit()
             logger.info(f"Deleted knowledge scope '{name}' with {tab_count} tabs and {entry_count} entries")
-            return {"deleted_tabs": tab_count, "deleted_entries": entry_count}
+        try:
+            from core.chat.scope_cleanup import sweep_orphaned_scope_ref
+            sweep_orphaned_scope_ref('knowledge_scope', name)
+        except Exception as e:
+            logger.warning(f"knowledge_scope sweep after delete failed: {e}")
+        return {"deleted_tabs": tab_count, "deleted_entries": entry_count}
     except Exception as e:
         logger.error(f"Failed to delete knowledge scope '{name}': {e}")
         return {"error": str(e)}
@@ -464,7 +469,12 @@ def delete_people_scope(name: str) -> dict:
             cursor.execute('DELETE FROM people_scopes WHERE name = ?', (name,))
             conn.commit()
             logger.info(f"Deleted people scope '{name}' with {count} people")
-            return {"deleted_people": count}
+        try:
+            from core.chat.scope_cleanup import sweep_orphaned_scope_ref
+            sweep_orphaned_scope_ref('people_scope', name)
+        except Exception as e:
+            logger.warning(f"people_scope sweep after delete failed: {e}")
+        return {"deleted_people": count}
     except Exception as e:
         logger.error(f"Failed to delete people scope '{name}': {e}")
         return {"error": str(e)}

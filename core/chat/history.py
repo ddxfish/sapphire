@@ -1276,6 +1276,71 @@ class ChatSessionManager:
             logger.error(f"Failed to update settings: {e}")
             return False
 
+    def reset_chat_scope_ref(self, setting_key: str, deleted_scope: str,
+                             reset_to: str = 'default') -> list:
+        """Sweep every chat's settings; any chat whose settings[setting_key] equals
+        `deleted_scope` has that key rewritten to `reset_to`.
+
+        Called when a scope is permanently deleted (memory/goal/knowledge/people)
+        so chats don't silently keep pointing at a dead scope name. Without this,
+        apply_scopes_from_settings on next activation sets the ContextVar to the
+        ghost string and the AI writes into a room nobody sees in the UI — the
+        same bug class as the mind.js hardcoded-scope one.
+
+        Returns list of chat names that were updated. Publishes
+        CHAT_SETTINGS_CHANGED per affected chat. If the ACTIVE chat was affected,
+        the caller is responsible for re-applying scopes (we avoid importing
+        api_fastapi here to keep the dep graph clean).
+        """
+        from datetime import datetime
+        affected = []
+        try:
+            with self._lock, self._get_connection() as conn:
+                cursor = conn.execute("SELECT name, settings FROM chats")
+                for row in cursor.fetchall():
+                    try:
+                        s = json.loads(row['settings'])
+                    except Exception:
+                        continue
+                    if s.get(setting_key) == deleted_scope:
+                        s[setting_key] = reset_to
+                        affected.append((row['name'], json.dumps(s)))
+                for chat_name, new_settings_json in affected:
+                    conn.execute(
+                        "UPDATE chats SET settings = ?, updated_at = ? WHERE name = ?",
+                        (new_settings_json, datetime.utcnow().isoformat() + 'Z', chat_name),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"reset_chat_scope_ref failed for {setting_key}:{deleted_scope}: {e}")
+            return [name for name, _ in affected]
+
+        affected_names = [name for name, _ in affected]
+        # If the active chat was touched, reload its in-memory settings so the
+        # next get_chat_settings() sees the rewrite.
+        if self.active_chat_name in affected_names:
+            try:
+                self._load_chat(self.active_chat_name)
+            except Exception as e:
+                logger.warning(f"reload after scope sweep failed: {e}")
+
+        for name in affected_names:
+            try:
+                publish(Events.CHAT_SETTINGS_CHANGED, {
+                    "chat": name,
+                    "origin": "scope_cleanup",
+                    "reason": f"{setting_key}:{deleted_scope}→{reset_to}",
+                })
+            except Exception:
+                pass
+
+        if affected_names:
+            logger.info(
+                f"Swept {setting_key}={deleted_scope!r} from {len(affected_names)} "
+                f"chat(s) → {reset_to!r}: {affected_names}"
+            )
+        return affected_names
+
     def __len__(self):
         return len(self.current_chat)
 
