@@ -1702,15 +1702,52 @@ async def test_ssh_connection(request: Request, _=Depends(require_login)):
 # PLUGIN ROUTE DISPATCHER
 # =============================================================================
 
+def _check_plugin_bearer(plugin_name: str, request: Request) -> bool:
+    """Check if request Authorization header has a valid bearer token registered
+    by the plugin. Plugins register bearer tokens by writing to
+    `user/plugin_state/{plugin_name}_mcp_key.json` with shape `{"key": "..."}`.
+    Used by MCP endpoints where the caller is a tool (e.g. Claude Code) with
+    its own credentials rather than a browser session. Returns False if no
+    token file, or if header doesn't match."""
+    import json
+    import secrets
+    from pathlib import Path
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return False
+    token = auth[len('Bearer '):].strip()
+    if not token:
+        return False
+    project_root = Path(__file__).parent.parent.parent
+    key_file = project_root / 'user' / 'plugin_state' / f'{plugin_name}_mcp_key.json'
+    if not key_file.exists():
+        return False
+    try:
+        expected = json.loads(key_file.read_text()).get('key', '')
+    except Exception:
+        return False
+    if not expected:
+        return False
+    return secrets.compare_digest(token, expected)
+
+
 @router.api_route("/api/plugin/{plugin_name}/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def plugin_route_dispatch(plugin_name: str, path: str, request: Request, _=Depends(require_login)):
+async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
     """Dispatch requests to plugin-registered HTTP routes.
 
-    Auth and CSRF are enforced by the framework — plugins cannot bypass them.
-    Routes are registered via plugin.json capabilities.routes declarations.
-    """
+    Auth: session by default (require_login). A plugin may ALSO accept bearer
+    tokens by dropping a key file at `user/plugin_state/{plugin}_mcp_key.json`.
+    If the `Authorization: Bearer ...` header matches the plugin's registered
+    key, session login is bypassed. Tools without a bearer fall through to
+    session auth as before. Plugins cannot weaken session CSRF; they can
+    only add an additional bearer-token auth path."""
     from core.plugin_loader import plugin_loader
     from core.auth import check_endpoint_rate
+
+    # Bearer-token bypass for plugins that registered a key file. Falls
+    # through to require_login if no bearer or bearer invalid.
+    if not _check_plugin_bearer(plugin_name, request):
+        await require_login(request)
 
     # Rate limit: 30 requests per 60s per session per plugin
     check_endpoint_rate(request, f"plugin_route:{plugin_name}", max_calls=30)

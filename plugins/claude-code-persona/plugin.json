@@ -1,0 +1,44 @@
+{
+  "name": "claude-code-persona",
+  "short_name": "Claude Code Persona",
+  "version": "0.1.0",
+  "description": "MCP-accessible memory slot for Claude Code. Gives Claude experience continuity across sessions without touching Sapphire's own memory.",
+  "author": "sapphire",
+  "icon": "\ud83e\udde9",
+  "priority": 50,
+  "default_enabled": false,
+  "capabilities": {
+    "tools": ["tools/claude_persona.py"],
+    "routes": [
+      {
+        "method": "POST",
+        "path": "mcp",
+        "handler": "routes/mcp.py:handle_mcp"
+      },
+      {
+        "method": "GET",
+        "path": "key",
+        "handler": "routes/mcp.py:get_key"
+      },
+      {
+        "method": "POST",
+        "path": "regenerate-key",
+        "handler": "routes/mcp.py:regenerate_key"
+      }
+    ],
+    "settings": [
+      {
+        "key": "CLAUDE_MCP_KEY_DISPLAY",
+        "type": "string",
+        "widget": "button",
+        "label": "MCP Key",
+        "button_label": "Show MCP Key",
+        "button_label_connected": "Regenerate Key",
+        "action": "/api/plugin/claude-code-persona/key",
+        "status": "/api/plugin/claude-code-persona/key",
+        "disconnect": "/api/plugin/claude-code-persona/regenerate-key",
+        "help": "Bearer token for Claude Code's MCP config. See README for claude_desktop_config.json setup. Regenerating invalidates existing sessions."
+      }
+    ]
+  }
+}

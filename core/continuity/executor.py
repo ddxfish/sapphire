@@ -335,17 +335,33 @@ class ContinuityExecutor:
 
     def _run_foreground(self, task: Dict[str, Any], result: Dict[str, Any],
                         progress_cb=None, response_cb=None) -> Dict[str, Any]:
-        """Run task with persistent chat history — no UI switching."""
+        """Run task with persistent chat history — no UI switching.
+
+        Voice-lock discipline: the lock is held for the ENTIRE duration of
+        the task (snapshot → apply → LLM → TTS → restore). Before 2026-04-19
+        the lock was released between apply and restore, which let a second
+        concurrent task's `_apply_voice` run over the first's — task A would
+        then speak with B's voice during overlap, and if B finished first
+        and restored "original" (really A's voice), the user could hear
+        half-swapped voices for the rest of A's run. Holding the lock across
+        serializes concurrent foreground tasks but keeps TTS correctness.
+        """
         from core.continuity.execution_context import ExecutionContext
 
         session_manager = self.system.llm_chat.session_manager
-        with self._voice_lock:
+        self._voice_lock.acquire()
+        voice_applied = False
+        try:
             original_voice = self._snapshot_voice()
             try:
                 self._apply_voice(task)
+                voice_applied = True
             except Exception:
                 self._restore_voice(original_voice)
                 raise
+        except Exception:
+            self._voice_lock.release()
+            raise
         target_chat = task.get("chat_target", "").strip()
 
         try:

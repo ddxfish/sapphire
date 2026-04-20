@@ -1,0 +1,222 @@
+"""MCP (Model Context Protocol) JSON-RPC endpoint for Claude Code Persona.
+
+Implements the subset of MCP needed for tool-use:
+  - initialize  — handshake + capability declaration
+  - tools/list  — return tool schemas
+  - tools/call  — execute a tool
+
+Authentication: bearer token stored in user/plugin_state/claude_mcp_key.json.
+Generated on first plugin load, shown in the plugin's settings UI so the user
+can paste it into their Claude Code MCP config.
+
+Claude Code config (claude_desktop_config.json or equivalent):
+    {
+      "mcpServers": {
+        "sapphire-memory": {
+          "type": "http",
+          "url": "https://localhost:8073/api/plugin/claude-code-persona/mcp",
+          "headers": {"Authorization": "Bearer <key from UI>"}
+        }
+      }
+    }
+"""
+import json
+import logging
+import secrets
+from pathlib import Path
+
+from fastapi import Response
+
+logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
+# Filename convention matched by core/routes/plugins.py::_check_plugin_bearer:
+# `{plugin_name}_mcp_key.json` where plugin_name matches plugin.json's "name".
+# Changing this requires updating the dispatcher's filename pattern too.
+_KEY_FILE = PROJECT_ROOT / 'user' / 'plugin_state' / 'claude-code-persona_mcp_key.json'
+
+
+def _get_or_create_key() -> str:
+    """Return the bearer token; generate and persist one on first call."""
+    if _KEY_FILE.exists():
+        try:
+            return json.loads(_KEY_FILE.read_text()).get('key', '') or _generate_and_save()
+        except Exception:
+            pass
+    return _generate_and_save()
+
+
+def _generate_and_save() -> str:
+    _KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    key = secrets.token_urlsafe(32)
+    # Atomic write: tmp + rename
+    tmp = _KEY_FILE.with_suffix('.json.tmp')
+    tmp.write_text(json.dumps({'key': key}, indent=2), encoding='utf-8')
+    tmp.replace(_KEY_FILE)
+    logger.info("[claude-code-persona] Generated new MCP bearer key")
+    return key
+
+
+def _check_auth(request) -> bool:
+    """Validate bearer token from Authorization header."""
+    expected = _get_or_create_key()
+    auth = request.headers.get('Authorization', '') if hasattr(request, 'headers') else ''
+    if not auth.startswith('Bearer '):
+        return False
+    provided = auth[len('Bearer '):].strip()
+    # Constant-time compare to prevent timing attacks on the key
+    return secrets.compare_digest(provided, expected)
+
+
+def _jsonrpc_error(req_id, code: int, message: str) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+
+def _jsonrpc_result(req_id, result: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+# MCP tool schemas — mirror the tool definitions in claude_persona.py, minus
+# the Sapphire-side read tool (that one is for Sapphire's toolset, not MCP).
+_MCP_TOOLS = [
+    {
+        "name": "save_claude_memory",
+        "description": (
+            "Save a memory to Claude's persistent memory scope. Visible to future "
+            "Claude Code sessions. Max 512 chars. Optional label for filtering."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "The memory content."},
+                "label": {"type": "string", "description": "Optional tag/label."}
+            },
+            "required": ["content"]
+        }
+    },
+    {
+        "name": "search_claude_memory",
+        "description": "Search Claude's persistent memory via semantic + full-text.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "label": {"type": "string"},
+                "limit": {"type": "integer", "default": 10}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "get_recent_claude_memories",
+        "description": "Get the most recent entries from Claude's memory.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "default": 10},
+                "label": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "delete_claude_memory",
+        "description": "Delete an entry from Claude's memory by ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "integer"}
+            },
+            "required": ["memory_id"]
+        }
+    }
+]
+
+
+def _call_tool(name: str, args: dict) -> dict:
+    """Dispatch an MCP tools/call to the underlying scope-locked memory ops.
+    Returns an MCP-shaped result dict with `content` array."""
+    try:
+        # Reuse the tools module's execute() so there's ONE implementation path
+        # and the scope-lock guarantees hold identically for MCP and in-chat use.
+        from plugins.claude_code_persona.tools import claude_persona
+    except ImportError:
+        # Package name has hyphens → import by file path.
+        import importlib.util
+        import sys
+        here = Path(__file__).resolve().parent.parent
+        mod_path = here / 'tools' / 'claude_persona.py'
+        spec = importlib.util.spec_from_file_location('claude_persona_tools', mod_path)
+        claude_persona = importlib.util.module_from_spec(spec)
+        sys.modules['claude_persona_tools'] = claude_persona
+        spec.loader.exec_module(claude_persona)
+
+    result, success = claude_persona.execute(name, args, None)
+    return {
+        "content": [{"type": "text", "text": str(result)}],
+        "isError": not success,
+    }
+
+
+def handle_mcp(body=None, request=None, **_):
+    """Plugin route handler for MCP JSON-RPC calls."""
+    if request is None or not _check_auth(request):
+        return _jsonrpc_error(None, -32001, "Unauthorized — check bearer token")
+
+    if not isinstance(body, dict):
+        return _jsonrpc_error(None, -32700, "Parse error — JSON-RPC body expected")
+
+    req_id = body.get('id')
+    method = body.get('method', '')
+    params = body.get('params', {}) or {}
+
+    if method == 'initialize':
+        # Advertise tool capability only — no resources, no prompts, no sampling.
+        return _jsonrpc_result(req_id, {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": {"name": "sapphire-claude-memory", "version": "0.1.0"},
+            "instructions": (
+                "Claude's persistent memory on this Sapphire install. "
+                "Four tools: save/search/get_recent/delete — scope-locked to 'claude'. "
+                "On session start, call get_recent_claude_memories or search_claude_memory "
+                "to load continuity. End with save_claude_memory to leave a note forward."
+            ),
+        })
+
+    if method == 'notifications/initialized':
+        # Notifications receive no JSON-RPC response — HTTP 202 Accepted with
+        # empty body is the MCP-spec shape. Returning a JSON-RPC body here
+        # confuses the client (what we had before: {"jsonrpc":"2.0"} without
+        # id — malformed). HTTP 202 tells the client "we got it, nothing to
+        # say back."
+        return Response(status_code=202)
+
+    if method == 'tools/list':
+        return _jsonrpc_result(req_id, {"tools": _MCP_TOOLS})
+
+    if method == 'tools/call':
+        name = params.get('name', '')
+        args = params.get('arguments', {}) or {}
+        valid_tools = {t['name'] for t in _MCP_TOOLS}
+        if name not in valid_tools:
+            return _jsonrpc_error(req_id, -32602, f"Unknown tool: {name}")
+        try:
+            return _jsonrpc_result(req_id, _call_tool(name, args))
+        except Exception as e:
+            logger.error(f"[claude-code-persona] tools/call {name} failed: {e}", exc_info=True)
+            return _jsonrpc_error(req_id, -32603, f"Tool execution failed: {e}")
+
+    return _jsonrpc_error(req_id, -32601, f"Method not found: {method}")
+
+
+def get_key(request=None, **_):
+    """Return the MCP bearer key. Requires Sapphire session auth (handled by
+    plugin route framework since this route has no `auth: bearer` on it —
+    standard CSRF+session)."""
+    return {"key": _get_or_create_key()}
+
+
+def regenerate_key(request=None, **_):
+    """Generate a fresh key, invalidating any existing sessions. Session-authed."""
+    new_key = _generate_and_save()
+    return {"key": new_key, "regenerated": True}
