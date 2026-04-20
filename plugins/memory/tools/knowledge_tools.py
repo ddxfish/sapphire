@@ -362,8 +362,11 @@ def _get_current_scope():
     try:
         from core.chat.function_manager import scope_knowledge
         return scope_knowledge.get()
-    except Exception:
-        return 'default'
+    except Exception as e:
+        # Fail disabled, not defaulted — see memory_tools._get_current_scope
+        # comment. Silent-default was a real bug class.
+        logger.warning(f"Could not get knowledge scope: {e}, returning None (disabled)")
+        return None
 
 
 def _get_current_rag_scope():

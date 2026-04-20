@@ -120,6 +120,14 @@ class Backup:
                 else:
                     logger.debug(f"Housekeeping: {db_path.name} integrity_check OK")
                 if is_weekly:
+                    # VACUUM cannot run inside a transaction. Python sqlite3's
+                    # default isolation mode auto-begins one after any SELECT
+                    # (like the PRAGMA above), so `conn.execute("VACUUM")` here
+                    # raises "cannot VACUUM from within a transaction" — and
+                    # the outer try/except silently swallows it. Switching to
+                    # autocommit (isolation_level=None) lets VACUUM run.
+                    # Scout finding 2026-04-20 — weekly VACUUM was a no-op.
+                    conn.isolation_level = None
                     logger.info(f"Housekeeping: VACUUM {db_path.name}")
                     conn.execute("VACUUM")
             except Exception as e:

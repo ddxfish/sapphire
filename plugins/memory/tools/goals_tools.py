@@ -257,8 +257,11 @@ def _get_current_scope():
     try:
         from core.chat.function_manager import scope_goal
         return scope_goal.get()
-    except Exception:
-        return 'default'
+    except Exception as e:
+        # Fail disabled, not defaulted — see memory_tools._get_current_scope
+        # comment. Silent-default was a real bug class.
+        logger.warning(f"Could not get goal scope: {e}, returning None (disabled)")
+        return None
 
 
 # ─── Public API (used by api_fastapi.py) ──────────────────────────────────────

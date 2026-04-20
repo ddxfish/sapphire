@@ -483,8 +483,13 @@ def _get_current_scope():
         from core.chat.function_manager import scope_memory
         return scope_memory.get()
     except Exception as e:
-        logger.warning(f"Could not get memory scope: {e}, using 'default'")
-        return 'default'
+        # Return None (not 'default') so the executor falls into the
+        # "disabled" branch instead of silently writing to the default
+        # scope. Silent-default was a real bug class — see 2026-04-20
+        # witch hunt. If ContextVar resolution fails, failing disabled is
+        # safer than leaking a memory into an unrelated scope.
+        logger.warning(f"Could not get memory scope: {e}, returning None (disabled)")
+        return None
 
 
 def _scope_condition(scope, col='scope'):

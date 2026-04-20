@@ -21,16 +21,28 @@ import ssl
 import sys
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KEY_FILE = PROJECT_ROOT / 'user' / 'plugin_state' / 'claude-code-persona_mcp_key.json'
 BASE = os.environ.get('SAPPHIRE_BASE', 'https://localhost:8073')
 ENDPOINT = f'{BASE}/api/plugin/claude-code-persona/mcp'
 
-# Loopback-only, self-signed cert — verify off is safe here.
-_ssl_ctx = ssl.create_default_context()
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode = ssl.CERT_NONE
+# TLS verification policy: we ship with verify-off because Sapphire's default
+# cert is self-signed and the expected target is loopback. If SAPPHIRE_BASE
+# points at a remote host, refuse to bypass cert verification — that'd be a
+# silent MITM window for anyone who can intercept the path. Force the user to
+# either use a cert a browser would trust, or keep it on localhost.
+_host = (urlparse(BASE).hostname or '').lower()
+_LOOPBACK = {'localhost', '127.0.0.1', '::1'}
+if _host in _LOOPBACK:
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode = ssl.CERT_NONE
+else:
+    # Remote target → verify normally. Self-signed cert on a remote host will
+    # fail loudly, which is the correct behavior.
+    _ssl_ctx = ssl.create_default_context()
 
 
 def _read_key() -> str:
