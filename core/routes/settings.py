@@ -170,6 +170,42 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
         if locked:
             logger.warning(f"[MANAGED] Batch: filtered locked keys: {locked}")
         settings_dict = {k: v for k, v in settings_dict.items() if not settings.is_locked(k)}
+    # Server-side gate for EMBEDDING_PROVIDER swap. The JS shows a count-of-affected
+    # confirmation dialog, but that gate is client-side only — a direct curl, a stale
+    # browser tab, or a toolmaker-generated plugin could silently swap the provider
+    # and leave N memories/knowledge rows invisible to search. Require explicit
+    # `confirm_embedding_swap: true` when the swap would invalidate vectors.
+    # Scout finding #3 — 2026-04-20.
+    if 'EMBEDDING_PROVIDER' in settings_dict:
+        new_provider = settings_dict['EMBEDDING_PROVIDER']
+        current_provider = settings.get('EMBEDDING_PROVIDER')
+        if new_provider and new_provider != current_provider and not data.get('confirm_embedding_swap'):
+            try:
+                from core.embeddings import integrity_report
+                report = integrity_report()
+                tables = report.get('tables', {}) or {}
+                def _count(t):
+                    return (t.get('matching_active') or 0) + (t.get('legacy_unstamped') or 0)
+                affected = sum(_count(tables.get(t, {})) for t in ('memories', 'knowledge_entries', 'people'))
+                if affected > 0:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "embedding_swap_requires_confirmation",
+                            "affected_vectors": affected,
+                            "message": (
+                                f"Swapping EMBEDDING_PROVIDER would make {affected} stored "
+                                "vectors invisible to semantic search until re-embedded. "
+                                "Resubmit with `confirm_embedding_swap: true` to proceed."
+                            ),
+                        },
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Embedding swap gate: integrity check failed: {e}")
+                # If integrity check fails, fall through — we don't want to break
+                # legitimate swaps just because the report errored.
     results = []
     # Defer provider switches until after all settings are applied
     # (e.g. API key must be in config before provider init reads it)

@@ -673,6 +673,9 @@ async function saveChanges() {
     // vector search under the new one until re-embedded. Show the user real
     // counts and let them back out. This is the ONLY multi-setting gate — the
     // embedding surface touches 3 DBs and years of data.
+    // The server enforces the same gate via 409 — this UI path is for the
+    // friendly count-of-affected display.
+    let confirmEmbeddingSwap = false;
     if ('EMBEDDING_PROVIDER' in valid && valid.EMBEDDING_PROVIDER !== settings.EMBEDDING_PROVIDER) {
         try {
             const res = await fetch('/api/embedding/integrity');
@@ -697,6 +700,7 @@ async function saveChanges() {
                         if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save Changes'; }
                         return;
                     }
+                    confirmEmbeddingSwap = true;
                 }
             }
         } catch (e) {
@@ -711,7 +715,7 @@ async function saveChanges() {
             parsed[key] = api.parseValue(value, settings[key]);
         }
 
-        const result = await api.updateSettingsBatch(parsed);
+        const result = await api.updateSettingsBatch(parsed, { confirm_embedding_swap: confirmEmbeddingSwap });
         await api.reloadSettings();
         ui.showToast(`Saved ${Object.keys(parsed).length} settings`, 'success');
 

@@ -5,11 +5,13 @@ export async function getAllSettings() {
     return await fetchWithTimeout('/api/settings');
 }
 
-export async function updateSettingsBatch(settings) {
+export async function updateSettingsBatch(settings, opts = {}) {
+    const body = { settings };
+    if (opts.confirm_embedding_swap) body.confirm_embedding_swap = true;
     return await fetchWithTimeout('/api/settings/batch', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings })
+        body: JSON.stringify(body)
     });
 }
 

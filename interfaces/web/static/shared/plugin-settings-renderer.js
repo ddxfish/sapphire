@@ -99,9 +99,27 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
             }).catch(() => {});
         }
 
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const url = btn.dataset.actionUrl;
-            if (url) window.location.href = url;
+            if (!url) return;
+            // Default behavior is browser navigation — required for OAuth flows
+            // that expect the server to 302-redirect to an external auth page.
+            // Plugins that return JSON (e.g. an API key to display) MUST set
+            // `action_mode: "display"` in the manifest — otherwise the raw JSON
+            // body lands in the URL bar / browser history and leaks the secret.
+            // Scout finding #9 — 2026-04-20.
+            const mode = field.action_mode || 'navigate';
+            if (mode === 'display') {
+                try {
+                    const res = await fetch(url);
+                    const data = await res.json().catch(() => ({}));
+                    _showActionResult(field, data, res.ok);
+                } catch (e) {
+                    _showActionResult(field, { error: String(e) }, false);
+                }
+                return;
+            }
+            window.location.href = url;
         });
     }
 
@@ -273,4 +291,60 @@ function attachConfirmGate(container, field, managed) {
     } else {
         el.addEventListener('change', handler);
     }
+}
+
+// Minimal modal for displaying action results (keys, tokens, etc.). Built in
+// JS to avoid requiring plugin authors to ship CSS. The value is rendered in
+// a selectable <input readonly> so users can copy it without it landing in
+// browser history or URL bar.
+function _showActionResult(field, data, ok) {
+    const existing = document.getElementById('ps-action-modal');
+    if (existing) existing.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'ps-action-modal';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:10000';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--bg-primary,#0f1020);color:var(--text,#e1e1e6);padding:24px;border-radius:10px;min-width:360px;max-width:80vw;border:1px solid var(--border,#333)';
+    const title = document.createElement('h3');
+    title.textContent = field.label || field.key || 'Result';
+    title.style.cssText = 'margin:0 0 12px 0';
+    box.appendChild(title);
+    if (!ok) {
+        const err = document.createElement('div');
+        err.style.cssText = 'color:var(--error,#f44);margin-bottom:12px';
+        err.textContent = `Request failed: ${data?.error || 'Unknown error'}`;
+        box.appendChild(err);
+    } else if (data && typeof data === 'object') {
+        // Find the most likely display value — a string field (key/token/etc.)
+        const displayKey = Object.keys(data).find(k => typeof data[k] === 'string' && data[k].length > 0);
+        if (displayKey) {
+            const lbl = document.createElement('div');
+            lbl.style.cssText = 'font-size:var(--font-sm,13px);color:var(--text-muted);margin-bottom:4px';
+            lbl.textContent = displayKey;
+            box.appendChild(lbl);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.readOnly = true;
+            input.value = data[displayKey];
+            input.style.cssText = 'width:100%;font-family:monospace;padding:8px;background:var(--bg-secondary,#1a1b2e);color:var(--text,#e1e1e6);border:1px solid var(--border,#333);border-radius:6px;font-size:var(--font-sm,13px)';
+            input.addEventListener('focus', () => input.select());
+            box.appendChild(input);
+        } else {
+            const pre = document.createElement('pre');
+            pre.style.cssText = 'background:var(--bg-secondary,#1a1b2e);padding:8px;border-radius:6px;overflow:auto;max-height:40vh';
+            pre.textContent = JSON.stringify(data, null, 2);
+            box.appendChild(pre);
+        }
+    }
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:16px';
+    const close = document.createElement('button');
+    close.textContent = 'Close';
+    close.style.cssText = 'padding:8px 16px;background:var(--accent,#4a7);color:#fff;border:0;border-radius:6px;cursor:pointer';
+    close.addEventListener('click', () => wrap.remove());
+    btnRow.appendChild(close);
+    box.appendChild(btnRow);
+    wrap.appendChild(box);
+    wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
+    document.body.appendChild(wrap);
 }

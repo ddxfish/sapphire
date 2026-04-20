@@ -580,15 +580,26 @@ class ContinuityExecutor:
                 "inject_datetime": "inject_datetime",
             }
             # Scope keys: persona key == task key (e.g. memory_scope → memory_scope)
-            for setting_key in scope_setting_keys():
+            scope_keys = set(scope_setting_keys())
+            for setting_key in scope_keys:
                 field_map[setting_key] = setting_key
+            # Sentinel values that mean "no preference, fall through to persona default".
+            # For scope keys, 'none' is EXPLICIT opt-out ("disable this scope") and must
+            # NOT fall through — otherwise a task saying memory_scope='none' silently
+            # inherits the persona's real scope and writes into shared memory. That's
+            # the silent-default class of bug. Scout finding #5 — 2026-04-20.
+            _empty_sentinels = ("", "auto", "none", "default", None)
+            _empty_sentinels_scope = ("", "auto", "default", None)  # 'none' excluded
             for persona_key, task_key in field_map.items():
                 persona_val = ps.get(persona_key)
                 task_val = resolved.get(task_key)
-                # Use persona value if task field is empty/default
-                if persona_val and not task_val:
+                if not persona_val:
+                    continue
+                if not task_val:
                     resolved[task_key] = persona_val
-                elif persona_val and task_val in ("", "auto", "none", "default", None):
+                    continue
+                sentinels = _empty_sentinels_scope if task_key in scope_keys else _empty_sentinels
+                if task_val in sentinels:
                     resolved[task_key] = persona_val
 
             logger.info(f"[Continuity] Resolved persona '{persona_name}' into task settings")

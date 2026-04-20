@@ -300,12 +300,19 @@ def _run():
     the active provider. Cancellable between batches. Never raises — writes
     any failure to _state.last_error so the UI can surface it."""
     try:
-        from core.embeddings import get_embedder
+        from core.embeddings import get_embedder, current_provenance
         embedder = get_embedder()
         if not embedder or not embedder.available:
             with _state.lock:
                 _state.last_error = "Active embedding provider is not available"
             return
+
+        # Snapshot the provenance we started with. If the active provider
+        # changes mid-run (user toggles, plugin unloads, etc.), stamped rows
+        # would land under the OLD provider id in a DB whose active provider
+        # is NEW — making integrity strictly worse. Between-table checks
+        # below bail cleanly if drift is detected. Scout finding #4.
+        start_prov = current_provenance()
 
         counts = _count_pending(embedder)
         with _state.lock:
@@ -318,11 +325,23 @@ def _run():
             logger.info("Re-embed: nothing to do (all rows already current)")
             return
 
+        def _provenance_changed():
+            now_prov = current_provenance()
+            if now_prov != start_prov:
+                with _state.lock:
+                    _state.last_error = (
+                        f"Provider changed mid-run ({start_prov} -> {now_prov}) — aborting"
+                    )
+                    _state.cancel_requested = True
+                logger.error(f"Re-embed aborted: provenance drift {start_prov} -> {now_prov}")
+                return True
+            return False
+
         _process_memories(embedder)
-        if _cancel_check():
+        if _cancel_check() or _provenance_changed():
             return
         _process_knowledge_entries(embedder)
-        if _cancel_check():
+        if _cancel_check() or _provenance_changed():
             return
         _process_people(embedder)
 

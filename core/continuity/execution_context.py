@@ -8,6 +8,7 @@
 
 import logging
 import time
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 
@@ -15,6 +16,12 @@ import config
 from core.chat.llm_providers import get_provider_by_key, get_first_available_provider, get_generation_params
 
 logger = logging.getLogger(__name__)
+
+# Tracks the persona of the task currently running in this thread/async context.
+# Set by ExecutionContext.run() and used by tools that need to know the
+# *parent's* persona — notably spawn_agent(prompt='self'), which must inherit
+# from the spawning agent, NOT from the user's foreground chat. Scout #7.
+current_task_persona: ContextVar[Optional[str]] = ContextVar('current_task_persona', default=None)
 
 
 class ExecutionContext:
@@ -106,7 +113,9 @@ class ExecutionContext:
     def _build_scopes(self) -> Optional[Dict]:
         """Build scopes from task settings. Sets ContextVars for this thread only.
         Always resets scopes to prevent bleed between queued task iterations."""
-        from core.chat.function_manager import apply_scopes_from_settings, reset_scopes, snapshot_all_scopes
+        from core.chat.function_manager import (
+            apply_scopes_from_settings, reset_scopes, snapshot_all_scopes, SCOPE_REGISTRY,
+        )
 
         # Always reset first — prevents scope bleed when queue drains multiple
         # iterations on the same thread (previous task's scopes would linger)
@@ -117,6 +126,21 @@ class ExecutionContext:
 
         # Apply task-specific scopes to this thread's ContextVars
         apply_scopes_from_settings(self.fm, self.task_settings)
+        # For the 'agent' persona specifically, any scope the task DIDN'T list
+        # explicitly gets forced to None (disabled). Without this, a plugin that
+        # registers a new scope *after* the agent persona was defined (in
+        # personas.json or the inline fallback) would leave that scope at the
+        # registry default ('default'), silently granting the agent access.
+        # Scout #16 — 2026-04-20. The scope default is 'default' (a real scope
+        # name); the agent contract says "disabled unless explicitly listed."
+        if self.task_settings.get('prompt') == 'agent':
+            for name, reg in list(SCOPE_REGISTRY.items()):
+                setting_key = reg.get('setting')
+                if setting_key and setting_key not in self.task_settings:
+                    try:
+                        reg['var'].set(None)
+                    except Exception as e:
+                        logger.warning(f"[ExecCtx] Could not force-disable scope {name}: {e}")
         # Also clear rag/private since tasks don't use those
         self.fm.set_rag_scope(None)
         self.fm.set_private_chat(False)
@@ -179,6 +203,18 @@ class ExecutionContext:
         """
         from core.chat.chat import filter_to_thinking_only, _inject_tool_images
 
+        # Stamp this thread's ContextVar with the running task's persona so
+        # tools invoked during the loop (spawn_agent, etc.) can inherit the
+        # CORRECT parent. Reset on exit so nothing leaks back to the shared
+        # main-chat path. Scout #7 — 2026-04-20.
+        _persona_token = current_task_persona.set(self.task_settings.get("prompt"))
+        try:
+            return self._run_inner(user_input, history_messages,
+                                   filter_to_thinking_only, _inject_tool_images)
+        finally:
+            current_task_persona.reset(_persona_token)
+
+    def _run_inner(self, user_input, history_messages, filter_to_thinking_only, _inject_tool_images):
         # Build messages
         if history_messages is not None:
             # Foreground mode — use existing chat history

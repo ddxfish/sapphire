@@ -560,6 +560,21 @@ def get_embedder():
 
 def switch_embedding_provider(provider_name):
     global _embedder
+    # Refuse to swap while a re-embed is running — mid-run provider changes
+    # cause the worker to stamp rows with the OLD provider id into a DB whose
+    # active provider is NEW, strictly worse than before. The re-embed worker
+    # also bails on drift, but this is the authoritative interlock: don't let
+    # the swap happen in the first place. Scout finding #4.
+    try:
+        from core.embeddings.reembed import get_status as _reembed_status
+        status = _reembed_status()
+        if status.get('running'):
+            raise RuntimeError(
+                "Cannot switch embedding provider while a re-embed is running. "
+                "Cancel the re-embed first, then retry the swap."
+            )
+    except ImportError:
+        pass  # reembed module unavailable — proceed
     with _embedder_lock:
         logger.info(f"Switching embedding provider to: {provider_name}")
         _embedder = embedding_registry.create(provider_name or 'none')

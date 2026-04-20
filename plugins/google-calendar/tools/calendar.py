@@ -136,8 +136,13 @@ def _get_gcal_scope():
     try:
         from core.chat.function_manager import scope_gcal
         return scope_gcal.get()
-    except Exception:
-        return 'default'
+    except Exception as e:
+        # Fail disabled, not defaulted. Same silent-default class we closed
+        # in memory/knowledge/goals on 2026-04-20. If ContextVar resolution
+        # fails, a task with gcal_scope='none' must not silently inherit
+        # another scope's refresh token.
+        logger.warning(f"Could not get gcal scope: {e}, returning None (disabled)")
+        return None
 
 
 def _get_gcal_creds():

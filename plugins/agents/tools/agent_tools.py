@@ -331,14 +331,28 @@ def _get_active_chat():
 
 
 def _get_current_chat_persona():
-    """Return the persona name the active chat is currently running under.
+    """Return the persona name the current execution is running under.
 
     Used by spawn_agent to resolve the special `prompt='self'` keyword —
-    "spawn an agent that inherits the spawning chat's current persona".
+    "spawn an agent that inherits the spawning context's current persona".
 
-    Returns None if no persona is set on the chat, or if anything goes wrong.
-    Callers fall back to 'agent' (the lean background-worker persona) in that case.
+    **Priority order (Scout #7 — 2026-04-20):**
+      1. If we're inside an ExecutionContext run (agent task, heartbeat task,
+         daemon callback), use the RUNNING TASK's persona — not the user's
+         foreground chat. Otherwise an agent with scope='none' chain-spawning
+         `prompt='self'` would silently inherit the USER's default scopes.
+      2. Otherwise fall back to the active chat's persona (foreground case:
+         user hits "spawn agent" while chatting as sapphire → child inherits
+         sapphire).
+      3. None if neither resolves — caller uses 'agent' default.
     """
+    try:
+        from core.continuity.execution_context import current_task_persona
+        task_persona = current_task_persona.get()
+        if task_persona:
+            return task_persona
+    except Exception:
+        pass
     from core.api_fastapi import get_system
     try:
         settings = get_system().llm_chat.session_manager.get_chat_settings()
