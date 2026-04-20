@@ -118,10 +118,14 @@ def test_llm_worker_inline_fallback_when_agent_persona_missing(at, monkeypatch):
     )
     worker.run()
 
-    # Inline fallback kicked in: memory_scope=default, goal_scope=none, etc
-    assert captured_settings.get('memory_scope') == 'default'
+    # Inline fallback kicked in with lean defaults. 2026-04-19: every scope
+    # flipped to 'none' — agents shouldn't read from or write to the user's
+    # personal memory/knowledge/people/goals by default. See agent_tools.py
+    # for the rationale comment.
+    assert captured_settings.get('memory_scope') == 'none'
     assert captured_settings.get('goal_scope') == 'none'
-    assert captured_settings.get('knowledge_scope') == 'default'
+    assert captured_settings.get('knowledge_scope') == 'none'
+    assert captured_settings.get('people_scope') == 'none'
     assert captured_settings.get('email_scope') == 'none'
     assert captured_settings.get('bitcoin_scope') == 'none'
 

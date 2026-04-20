@@ -173,10 +173,17 @@ def _create_llm_worker():
             # early-returns when `user/personas/personas.json` exists, which means
             # newly-added built-in personas (like 'agent' from Phase 2i) don't
             # auto-seed on existing installs. If the 'agent' persona is missing,
-            # we would silently degrade to "all scopes at default" (max reach),
-            # exactly the opposite of the lean intent. Synthesize the lean defaults
-            # inline so background workers get the intended safe posture regardless
-            # of whether the persona file has been updated.
+            # we synthesize the lean defaults inline so background workers get
+            # the intended safe posture regardless.
+            #
+            # 2026-04-19 scope tightening: every scope → 'none'. Agents are
+            # headless coders/workers; they shouldn't read from OR write to the
+            # user's personal memory/knowledge/people/goals. Old default of
+            # 'default' quietly let agent observations pollute Sapphire's shared
+            # memory. `'none'` → save_memory/search_memory return "disabled"
+            # explicitly, which is the right failure mode. Keep aligned with
+            # `core/personas/personas.json::agent.settings` so swapping persona
+            # source doesn't change behavior.
             if not persona_settings and self._prompt == 'agent':
                 logger.info("[agents] 'agent' persona not seeded — using inline lean defaults")
                 persona_settings = {
@@ -184,10 +191,10 @@ def _create_llm_worker():
                     'toolset': 'default',
                     'spice_enabled': False,
                     'inject_datetime': True,
-                    'memory_scope': 'default',
+                    'memory_scope': 'none',
                     'goal_scope': 'none',
-                    'knowledge_scope': 'default',
-                    'people_scope': 'default',
+                    'knowledge_scope': 'none',
+                    'people_scope': 'none',
                     'email_scope': 'none',
                     'bitcoin_scope': 'none',
                     'gcal_scope': 'none',
