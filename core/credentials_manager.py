@@ -944,6 +944,19 @@ class CredentialsManager:
             accounts[scope]['expires_at'] = expires_at
             return self._save()
 
+    def get_gcal_tokens_snapshot(self, scope: str) -> dict:
+        """Return access_token + expires_at for a gcal scope under the
+        credentials lock. Used by the token-refresh path so read/write on
+        the short-lived cache don't race with concurrent updates.
+        Refresh_token is returned separately via get_gcal_account()."""
+        with self._lock:
+            accounts = self._credentials.get('gcal_accounts', {})
+            acct = accounts.get(scope, {})
+            return {
+                'access_token': acct.get('access_token', ''),
+                'expires_at': acct.get('expires_at', 0),
+            }
+
     def delete_gcal_account(self, scope: str) -> bool:
         """Remove a Google Calendar account by scope."""
         with self._lock:
