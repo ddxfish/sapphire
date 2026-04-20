@@ -381,8 +381,12 @@ def _get_current_people_scope():
     try:
         from core.chat.function_manager import scope_people
         return scope_people.get()
-    except Exception:
-        return 'default'
+    except Exception as e:
+        # Fail disabled, not defaulted — silent-default class (2026-04-20).
+        # Executor checks `if people_scope is None` and returns the disabled
+        # message; falling back to 'default' would leak People-DB writes.
+        logger.warning(f"Could not get people scope: {e}, returning None (disabled)")
+        return None
 
 
 def _get_embedder():
