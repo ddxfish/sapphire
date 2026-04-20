@@ -16,6 +16,12 @@ class BaseWorker:
         self.result = None
         self.error = None
         self.tool_log = []
+        # Non-fatal degradation signal. Subclasses set this when the run
+        # technically completed but the output is a placeholder — tool-loop
+        # exhaustion, context overflow, empty LLM. Surfaces to the frontend
+        # via AGENT_COMPLETED so the pill can render amber-with-tooltip
+        # instead of green-success. None = clean run. Scout #15 — 2026-04-20.
+        self.warning = None
         self._start_time = None
         self._end_time = None
         self._cancelled = threading.Event()
@@ -91,6 +97,7 @@ class BaseWorker:
                     'elapsed': self.elapsed,
                     'result': self.result,
                     'error': self.error,
+                    'warning': self.warning,
                     'agent_type': getattr(self, '_agent_type', 'unknown'),
                 })
             except Exception as e:
@@ -122,6 +129,7 @@ class BaseWorker:
             'elapsed': self.elapsed,
             'has_result': self.result is not None,
             'error': self.error,
+            'warning': self.warning,
             'tool_log': self.tool_log,
             'chat_name': self.chat_name,
         }

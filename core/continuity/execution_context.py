@@ -44,6 +44,12 @@ class ExecutionContext:
         self.provider_key, self.provider, self.model_override = self._resolve_provider()
         self.gen_params = self._build_gen_params()
         self.tool_log = []  # List of tool names called during run()
+        # Populated by run() when the LLM loop didn't produce a real reply
+        # (tool-round exhaustion, context overflow, empty LLM output). Lets
+        # callers distinguish "clean done with response" from "done with a
+        # placeholder" so agent UI / status reports don't render a green
+        # success for a no-op run. Scout #15 — 2026-04-20. None = clean run.
+        self.degraded_reason: Optional[str] = None
 
     # ── Construction (read-only) ──
 
@@ -328,11 +334,18 @@ class ExecutionContext:
             else:
                 # Synthesize a final message so the conversation isn't left with
                 # an orphaned user turn. Use the specific overflow reason if we
-                # broke on context, generic fallback otherwise.
+                # broke on context, generic fallback otherwise. Both paths set
+                # degraded_reason so callers (LLMWorker → agent UI) can render
+                # this run as degraded rather than green-success. Scout #15.
                 if overflow_reason:
                     final_content = overflow_reason
+                    self.degraded_reason = overflow_reason
                 else:
                     final_content = "(No response — tool loop exhausted or LLM returned empty)"
+                    self.degraded_reason = (
+                        f"Tool loop exhausted after {max_iterations} rounds without "
+                        f"a final reply. Tools called: {', '.join(self.tool_log) or '(none)'}."
+                    )
                 messages.append({"role": "assistant", "content": final_content})
 
         # Expose messages generated during this run. Only include if we got a response —

@@ -409,12 +409,27 @@ def _canary_embed(instance):
         )
     if not _np.all(_np.isfinite(out)):
         return False, "embed() returned non-finite values (NaN or Inf)"
+    # Unit-vector check. Hard fail outside 0.90–1.10 (blatantly non-normalized).
+    # Warn-but-accept in the 0.90-0.95 / 1.05-1.10 drift band — a provider that
+    # normalizes in float32 after a sum-pool on short inputs can legitimately
+    # produce 0.9499 from accumulated FP error, and the old ±5% window would
+    # reject it silently (fall back to NullEmbedder, vector search dies). The
+    # drift-band warning gives plugin authors a visible signal to tighten
+    # their normalization before bounds drift further. Scout #17 — 2026-04-20.
     norm = float(_np.linalg.norm(out[0]))
-    if not (0.95 < norm < 1.05):
+    if not (0.90 < norm < 1.10):
         return False, (
             f"embed() returned non-normalized vector (L2 norm = {norm:.3f}). "
             f"Expected unit-length. Normalize with `v / np.linalg.norm(v)` "
             f"before returning — cosine-similarity search assumes unit vectors."
+        )
+    if not (0.95 <= norm <= 1.05):
+        # Drift band — accept, but nudge the plugin author.
+        logger.warning(
+            f"[embedding] Canary norm = {norm:.4f} is in the drift band (0.90-0.95 "
+            f"or 1.05-1.10). Provider accepted, but your normalization is close to "
+            f"failing the {type(instance).__name__} canary. Consider tightening "
+            f"(e.g. `v / np.linalg.norm(v).astype(np.float32)`) before it drifts further."
         )
     return True, "ok"
 

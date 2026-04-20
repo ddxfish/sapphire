@@ -370,3 +370,202 @@ def test_run_foreground_back_to_back_does_not_deadlock():
     acquired = ex._voice_lock.acquire(blocking=False)
     assert acquired, "_voice_lock still held after two serial _run_foreground calls"
     ex._voice_lock.release()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Agent degradation signal (#15) — an agent whose LLM loop exhausted
+#    tool rounds or blew context must NOT render as a green success. Backend
+#    marks `degraded_reason` on ExecutionContext; LLMWorker carries it as
+#    `warning`; AGENT_COMPLETED event payload includes it; frontend renders
+#    amber. These tests exercise the backend half of that contract.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_execution_context_marks_tool_loop_exhaustion_as_degraded():
+    """When the LLM loop exhausts its iterations without producing a real
+    assistant reply, ExecutionContext.degraded_reason must be set."""
+    from core.continuity.execution_context import ExecutionContext
+
+    fm = MagicMock()
+    fm.all_possible_tools = []
+    fm._apply_mode_filter = lambda x: x
+    te = MagicMock()
+
+    # LLM always responds with tool calls that "do nothing" — forces the
+    # loop to exhaust without producing an assistant reply.
+    response_msg = MagicMock()
+    response_msg.has_tool_calls = True
+    response_msg.get_tool_calls_as_dicts.return_value = [
+        {"id": "tc1", "function": {"name": "noop", "arguments": "{}"}}
+    ]
+    response_msg.content = ""
+    te.call_llm_with_metrics.return_value = response_msg
+    te.execute_tool_calls.return_value = (1, [])
+
+    task_settings = {
+        "prompt": "agent",
+        "toolset": "all",  # resolves via all_possible_tools=[] → None
+        "max_tool_rounds": 3,
+        "provider": "auto",
+    }
+
+    with patch.object(ExecutionContext, "_build_prompt", return_value="sys"), \
+         patch.object(ExecutionContext, "_resolve_provider", return_value=("k", MagicMock(), "")), \
+         patch.object(ExecutionContext, "_build_gen_params", return_value={}), \
+         patch.object(ExecutionContext, "_resolve_tools", return_value=[{"function": {"name": "noop"}}]), \
+         patch.object(ExecutionContext, "_build_scopes", return_value={}), \
+         patch("core.continuity.execution_context.count_tokens", create=True, return_value=10):
+        ctx = ExecutionContext(fm, te, task_settings)
+        ctx._allowed_tool_names = {"noop"}
+        # Patch count_tokens inside the function at call time too
+        with patch("core.chat.history.count_tokens", return_value=10):
+            result = ctx.run("do something impossible")
+
+    assert ctx.degraded_reason is not None, (
+        "ExecutionContext completed a tool-loop-exhausted run without setting "
+        "degraded_reason — agent UI would render this as green success."
+    )
+    assert "tool loop" in ctx.degraded_reason.lower() or "exhausted" in ctx.degraded_reason.lower(), (
+        f"degraded_reason text doesn't identify exhaustion: {ctx.degraded_reason!r}"
+    )
+    assert result, "final_content should be the placeholder string, not empty"
+
+
+def test_execution_context_clean_run_has_no_degraded_reason():
+    """A clean LLM reply leaves degraded_reason as None — the UI stays green."""
+    from core.continuity.execution_context import ExecutionContext
+
+    fm = MagicMock()
+    fm.all_possible_tools = []
+    fm._apply_mode_filter = lambda x: x
+    te = MagicMock()
+
+    response_msg = MagicMock()
+    response_msg.has_tool_calls = False
+    response_msg.content = "A real reply."
+    te.call_llm_with_metrics.return_value = response_msg
+    te.extract_function_call_from_text.return_value = None
+
+    task_settings = {"prompt": "agent", "toolset": "all", "provider": "auto"}
+
+    with patch.object(ExecutionContext, "_build_prompt", return_value="sys"), \
+         patch.object(ExecutionContext, "_resolve_provider", return_value=("k", MagicMock(), "")), \
+         patch.object(ExecutionContext, "_build_gen_params", return_value={}), \
+         patch.object(ExecutionContext, "_resolve_tools", return_value=[{"function": {"name": "x"}}]), \
+         patch.object(ExecutionContext, "_build_scopes", return_value={}):
+        ctx = ExecutionContext(fm, te, task_settings)
+        ctx._allowed_tool_names = {"x"}
+        with patch("core.chat.history.count_tokens", return_value=10):
+            result = ctx.run("hello")
+
+    assert ctx.degraded_reason is None, (
+        f"Clean run set degraded_reason={ctx.degraded_reason!r} — "
+        "false-positive amber pill."
+    )
+    assert result == "A real reply."
+
+
+def test_base_worker_surfaces_warning_in_event_payload():
+    """AGENT_COMPLETED event payload must include `warning` so the frontend
+    can render amber when an agent's run degraded."""
+    from core.agents.base_worker import BaseWorker
+
+    class _TestWorker(BaseWorker):
+        def run(self):
+            self.result = "(No response — tool loop exhausted)"
+            self.warning = "Tool loop exhausted after 3 rounds"
+
+    captured = []
+
+    def _fake_publish(event, data):
+        captured.append((event, data))
+
+    with patch("core.event_bus.publish", _fake_publish):
+        w = _TestWorker("id-1", "TestBot", "mission")
+        w.start()
+        w._thread.join(timeout=2.0)
+
+    assert captured, "no events published"
+    # Find the AGENT_COMPLETED event
+    from core.event_bus import Events
+    comp = [d for e, d in captured if e == Events.AGENT_COMPLETED]
+    assert comp, f"no AGENT_COMPLETED event found; got: {[e for e,_ in captured]}"
+    assert "warning" in comp[0], "AGENT_COMPLETED payload missing 'warning' field"
+    assert comp[0]["warning"] == "Tool loop exhausted after 3 rounds"
+
+
+def test_base_worker_to_dict_includes_warning():
+    """GET /api/agents/status returns to_dict() for each worker. Frontend
+    polls this when it misses the event — needs warning present for amber
+    rendering on late-arriving status."""
+    from core.agents.base_worker import BaseWorker
+    w = BaseWorker("id-1", "TestBot", "mission")
+    w.warning = "some degradation"
+    d = w.to_dict()
+    assert "warning" in d, "to_dict() missing 'warning' key"
+    assert d["warning"] == "some degradation"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Canary norm tolerance (#17) — widened to 0.90–1.10. A provider that
+#    lands at 0.9499 due to FP32 accumulation must pass (with a drift
+#    warning), not silently fall back to NullEmbedder.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _fake_instance_returning_vector(vec):
+    """Build a minimal provider instance the canary will accept."""
+    import numpy as np
+    inst = MagicMock()
+    inst.available = True
+    inst.embed.return_value = np.asarray([vec], dtype=np.float32)
+    # Use a real class name so the drift warning has something to print.
+    type(inst).__name__ = "FakeProvider"
+    return inst
+
+
+def test_canary_accepts_drift_band_low():
+    """A provider at L2=0.9499 (scout-cited example) must pass the canary."""
+    import numpy as np
+    from core.embeddings import _canary_embed
+    # Scale a unit vector to norm=0.9499
+    v = np.ones(4, dtype=np.float32)
+    v = v / np.linalg.norm(v) * 0.9499
+    ok, msg = _canary_embed(_fake_instance_returning_vector(v))
+    assert ok, f"canary rejected a 0.9499-norm vector (drift band): {msg}"
+
+
+def test_canary_accepts_drift_band_high():
+    """A provider at L2=1.06 must still pass — symmetric drift band."""
+    import numpy as np
+    from core.embeddings import _canary_embed
+    v = np.ones(4, dtype=np.float32)
+    v = v / np.linalg.norm(v) * 1.06
+    ok, msg = _canary_embed(_fake_instance_returning_vector(v))
+    assert ok, f"canary rejected a 1.06-norm vector (drift band): {msg}"
+
+
+def test_canary_rejects_blatantly_non_normalized():
+    """A provider returning a vector with norm=10 is still a hard fail —
+    widened bounds don't open the floodgates for real contract violations."""
+    import numpy as np
+    from core.embeddings import _canary_embed
+    v = np.ones(4, dtype=np.float32) * 5.0  # norm will be ~10
+    ok, msg = _canary_embed(_fake_instance_returning_vector(v))
+    assert not ok, "canary should reject a clearly non-unit vector (norm~10)"
+    assert "non-normalized" in msg.lower() or "norm" in msg.lower()
+
+
+def test_canary_drift_band_logs_warning(caplog):
+    """A drift-band vector must log a warning so the plugin author sees the
+    signal — 'you're accepted but your normalization is drifting.'"""
+    import logging
+    import numpy as np
+    from core.embeddings import _canary_embed
+    v = np.ones(4, dtype=np.float32)
+    v = v / np.linalg.norm(v) * 0.9499
+    with caplog.at_level(logging.WARNING, logger="core.embeddings"):
+        ok, _ = _canary_embed(_fake_instance_returning_vector(v))
+    assert ok
+    warned = any("drift band" in rec.message.lower() for rec in caplog.records)
+    assert warned, "expected a 'drift band' warning in the log for 0.9499-norm vector"

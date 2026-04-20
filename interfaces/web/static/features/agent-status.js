@@ -17,6 +17,7 @@ const STATUS_COLORS = {
     running: '#f0ad4e',
     pending: '#f0ad4e',
     done: '#5cb85c',
+    degraded: '#e6c229',   // amber — technically completed but output is a placeholder
     failed: '#d9534f',
     cancelled: '#888',
 };
@@ -84,9 +85,15 @@ function renderPills() {
             bar.appendChild(pill);
         }
 
-        pill.dataset.status = agent.status;
-        pill.style.borderColor = STATUS_COLORS[agent.status] || '#888';
-        pill.title = `${agent.name}: ${agent.mission || ''}\nStatus: ${agent.status}`;
+        // If the agent carries a warning (tool-loop exhaustion, context overflow,
+        // empty LLM), render it as 'degraded' — amber, not green. Prevents the
+        // user from trusting a no-op run as success. Scout #15 — 2026-04-20.
+        const effectiveStatus = (agent.status === 'done' && agent.warning)
+            ? 'degraded' : agent.status;
+        pill.dataset.status = effectiveStatus;
+        pill.style.borderColor = STATUS_COLORS[effectiveStatus] || '#888';
+        const warnTip = agent.warning ? `\nWarning: ${agent.warning}` : '';
+        pill.title = `${agent.name}: ${agent.mission || ''}\nStatus: ${effectiveStatus}${warnTip}`;
     }
 
     for (const pill of bar.querySelectorAll('.agent-pill')) {
@@ -312,6 +319,9 @@ export function initAgentStatus() {
         const agent = agents.get(data.id);
         if (agent) {
             agent.status = data.status || 'done';
+            // Warning field = degradation reason (tool-loop exhaustion, overflow,
+            // empty LLM). Stored so the pill can render amber instead of green.
+            agent.warning = data.warning || null;
             renderPills();
         }
     });

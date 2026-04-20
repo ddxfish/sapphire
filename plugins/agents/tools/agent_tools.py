@@ -234,6 +234,11 @@ def _create_llm_worker():
             raw = ctx.run(self.mission)
             self.result = re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip() if raw else ''
             self.tool_log = ctx.tool_log
+            # If the run degraded to a placeholder (tool loop exhausted, context
+            # overflow, empty LLM), the executor populates degraded_reason. Carry
+            # it as a warning so the agent pill renders amber instead of green.
+            # Scout #15 — 2026-04-20.
+            self.warning = getattr(ctx, 'degraded_reason', None)
 
     return LLMWorker
 
