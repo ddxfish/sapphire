@@ -2,6 +2,8 @@
 - Can swap embeddings model to smaller larger
 - Can make plugin for embedding
 - Has re-embed tool that must be run
+- Memory has new password feature
+- Redid Mind > Memory UX
 # 2.5.10 - Test Suite Expansion
 - Test coverage tripled
 - For self-coding checks

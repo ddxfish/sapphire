@@ -38,7 +38,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": f"Save information to long-term memory. Keep under 450 characters — be concise. Assign a label to categorize. Suggested labels: {SUGGESTED_LABELS}. You can create new labels too. Use 'self' for your own self-knowledge.",
+            "description": f"Save information to long-term memory. Keep under 450 characters — be concise. Assign a label to categorize. Suggested labels: {SUGGESTED_LABELS}. You can create new labels too. Use 'self' for your own self-knowledge. If the user asked for this memory to be private with a shared word (a \"private key\"), pass it as `private_key` — the row will only be returned by searches that include the same key.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -49,6 +49,10 @@ TOOLS = [
                     "label": {
                         "type": "string",
                         "description": f"Category label (e.g. {SUGGESTED_LABELS})"
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "Optional plaintext shared word that gates this memory. Only set when the user explicitly asks for a private memory using a word they told you. Leave unset otherwise."
                     }
                 },
                 "required": ["content"]
@@ -60,7 +64,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_memory",
-            "description": "Search stored memories using semantic similarity and full-text search. Understands meaning, not just keywords. Optionally filter by label.",
+            "description": "Search stored memories using semantic similarity and full-text search. Understands meaning, not just keywords. Optionally filter by label. Private memories (those saved with a private_key) only appear when the caller passes the matching `private_key`.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -76,6 +80,10 @@ TOOLS = [
                         "type": "integer",
                         "description": "Maximum results to return",
                         "default": 10
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "If the user gave you a private word to access their gated memories, pass it here to include matching private rows in results."
                     }
                 },
                 "required": ["query"]
@@ -87,7 +95,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Get the most recent memories, optionally filtered by label.",
+            "description": "Get the most recent memories, optionally filtered by label. Private memories require the matching `private_key` to surface.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -99,6 +107,10 @@ TOOLS = [
                     "label": {
                         "type": "string",
                         "description": "Filter by label(s), comma-separated for multiple (e.g. 'family,people')"
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "If the user gave you a private word to access their gated memories, pass it here to include matching private rows."
                     }
                 }
             }
@@ -109,13 +121,17 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "delete_memory",
-            "description": "Delete a memory by its ID number",
+            "description": "Delete a memory by its ID number. Private memories require the matching `private_key` to delete.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_id": {
                         "type": "integer",
                         "description": "The ID number of the memory to delete (shown in brackets like [42])"
+                    },
+                    "private_key": {
+                        "type": "string",
+                        "description": "Required to delete a private (gated) memory. Must match what was set on save."
                     }
                 },
                 "required": ["memory_id"]
@@ -359,11 +375,23 @@ def _ensure_db():
             if 'embedding_dim' not in columns:
                 cursor.execute("ALTER TABLE memories ADD COLUMN embedding_dim INTEGER")
                 logger.info("Migration: added embedding_dim column")
+            # Private-key gating. NULL = public (default, visible to all tool
+            # calls within the scope). Non-NULL = row only appears when a
+            # search/get/delete call explicitly passes that same plaintext key.
+            # No hashing — the threat model isn't disk encryption, it's
+            # cross-persona behavioral separation (Sapphire-GLM has the key
+            # from in-chat context, Claude-via-MCP never learns it). Plaintext
+            # is intentional so the Mind UI can render the key for review.
+            # TODO L137-139 — 2026-04-21.
+            if 'private_key' not in columns:
+                cursor.execute("ALTER TABLE memories ADD COLUMN private_key TEXT")
+                logger.info("Migration: added private_key column")
 
             # Indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_scope ON memories(scope)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_label ON memories(label)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_memory_private_key ON memories(private_key)')
 
             # FTS5 - try setup, rebuild on corruption
             try:
@@ -499,6 +527,23 @@ def _scope_condition(scope, col='scope'):
     return f"{col} IN (?, 'global')", [scope]
 
 
+def _private_key_clause(private_key, col='private_key'):
+    """Return (sql_fragment, params) for the private_key gate.
+
+    No key supplied → caller only sees public rows (private_key IS NULL).
+    Key supplied → caller sees public rows AND any row whose key matches.
+
+    Plaintext compare on purpose — see migration comment. The "security" is
+    cross-persona behavioral, not crypto: Sapphire-GLM has the key in chat
+    context, Claude-via-MCP doesn't expose the param, public callers don't
+    pass one. A row with a key is a row that requires the matching word to
+    surface.
+    """
+    if private_key:
+        return f"({col} IS NULL OR {col} = ?)", [private_key]
+    return f"{col} IS NULL", []
+
+
 # ─── Public API (used by api_fastapi.py) ─────────────────────────────────────
 
 def get_scopes():
@@ -629,7 +674,8 @@ MAX_MEMORY_LENGTH = 512
 MAX_MEMORIES_PER_SCOPE = 50_000
 
 
-def _save_memory(content: str, label: str = None, scope: str = 'default') -> tuple:
+def _save_memory(content: str, label: str = None, scope: str = 'default',
+                 private_key: str = None) -> tuple:
     try:
         if not content or not content.strip():
             return "Cannot save empty memory.", False
@@ -647,6 +693,9 @@ def _save_memory(content: str, label: str = None, scope: str = 'default') -> tup
         content = content.strip()
         keywords = _extract_keywords(content)
         label = label.strip().lower() if label else None
+        # Normalize private_key — empty string from a sloppy caller acts as
+        # NULL (public). Any non-empty value is stored verbatim, plaintext.
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
 
         # Generate embedding + stamp provenance. Stamping is atomic with the
         # embedder reference we used — a concurrent provider swap can't retag
@@ -664,48 +713,50 @@ def _save_memory(content: str, label: str = None, scope: str = 'default') -> tup
         with _get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                'INSERT INTO memories (content, keywords, scope, label, embedding, embedding_provider, embedding_dim) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (content, keywords, scope, label, embedding_blob, embedding_provider, embedding_dim)
+                'INSERT INTO memories (content, keywords, scope, label, private_key, embedding, embedding_provider, embedding_dim) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (content, keywords, scope, label, private_key, embedding_blob, embedding_provider, embedding_dim)
             )
             memory_id = cursor.lastrowid
             conn.commit()
 
         label_str = f", label: {label}" if label else ""
-        logger.info(f"Stored memory ID {memory_id} in scope '{scope}'{label_str}")
+        priv_str = " [private]" if private_key else ""
+        logger.info(f"Stored memory ID {memory_id} in scope '{scope}'{label_str}{priv_str}")
         try:
             from core.mind_events import publish_mind_changed
             publish_mind_changed('memory', scope, 'save')
         except Exception:
             pass
-        return f"Memory saved (ID: {memory_id}{label_str})", True
+        return f"Memory saved (ID: {memory_id}{label_str}{priv_str})", True
 
     except Exception as e:
         logger.error(f"Error saving memory: {e}")
         return f"Failed to save memory: {e}", False
 
 
-def _fts_search(cursor, fts_query, scope, labels, limit):
+def _fts_search(cursor, fts_query, scope, labels, limit, private_key=None):
     scope_sql, scope_params = _scope_condition(scope, 'm.scope')
+    pk_sql, pk_params = _private_key_clause(private_key, 'm.private_key')
     if labels:
         placeholders = ','.join('?' * len(labels))
         cursor.execute(f'''
             SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
             FROM memories_fts f JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ? AND {scope_sql} AND m.label IN ({placeholders})
+            WHERE memories_fts MATCH ? AND {scope_sql} AND m.label IN ({placeholders}) AND {pk_sql}
             ORDER BY rank LIMIT ?
-        ''', [fts_query] + scope_params + labels + [limit])
+        ''', [fts_query] + scope_params + labels + pk_params + [limit])
     else:
         cursor.execute(f'''
             SELECT m.id, m.content, m.timestamp, m.label, bm25(memories_fts) as rank
             FROM memories_fts f JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ? AND {scope_sql}
+            WHERE memories_fts MATCH ? AND {scope_sql} AND {pk_sql}
             ORDER BY rank LIMIT ?
-        ''', [fts_query] + scope_params + [limit])
+        ''', [fts_query] + scope_params + pk_params + [limit])
     return cursor.fetchall()
 
 
-def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
+def _vector_search(query: str, scope: str, labels: list, limit: int, private_key: str = None) -> list:
     """
     Semantic search via cosine similarity on stored embeddings.
     Returns list of (id, content, timestamp, label, similarity) tuples.
@@ -734,6 +785,7 @@ def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
         # ORDER BY timestamp DESC makes the window recency-biased, which
         # matches what a user expects ("search my recent memories first").
         scope_sql, scope_params = _scope_condition(scope)
+        pk_sql, pk_params = _private_key_clause(private_key)
         provenance_sql = (
             'embedding IS NOT NULL AND embedding_provider = ? AND embedding_dim = ?'
         )
@@ -742,15 +794,15 @@ def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
             placeholders = ','.join('?' * len(labels))
             cursor.execute(
                 f'SELECT id, content, timestamp, label, embedding FROM memories '
-                f'WHERE {scope_sql} AND label IN ({placeholders}) AND {provenance_sql} '
+                f'WHERE {scope_sql} AND label IN ({placeholders}) AND {pk_sql} AND {provenance_sql} '
                 f'ORDER BY timestamp DESC LIMIT 10000',
-                scope_params + labels + provenance_params)
+                scope_params + labels + pk_params + provenance_params)
         else:
             cursor.execute(
                 f'SELECT id, content, timestamp, label, embedding FROM memories '
-                f'WHERE {scope_sql} AND {provenance_sql} '
+                f'WHERE {scope_sql} AND {pk_sql} AND {provenance_sql} '
                 f'ORDER BY timestamp DESC LIMIT 10000',
-                scope_params + provenance_params)
+                scope_params + pk_params + provenance_params)
 
         rows = cursor.fetchall()
 
@@ -778,13 +830,18 @@ def _vector_search(query: str, scope: str, labels: list, limit: int) -> list:
     return scored[:limit]
 
 
-def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 'default') -> tuple:
+def _search_memory(query: str, limit: int = 10, label: str = None,
+                   scope: str = 'default', private_key: str = None) -> tuple:
     """
     Search memories with cascading strategy:
     1. FTS5 AND (exact token match)
     2. FTS5 OR + prefix (broader token match)
     3. Vector similarity (semantic match)
     4. LIKE fallback
+
+    All four strategies honor `private_key`: rows with a non-NULL private_key
+    only surface when the caller passes the matching key. Public rows
+    (private_key IS NULL) always surface.
     """
     try:
         if not query or not query.strip():
@@ -792,6 +849,7 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
 
         labels = _parse_labels(label)
         label_note = f" with labels '{label}'" if labels else ""
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
 
         # Trigger backfill on first search (lazy, one-time)
         _backfill_embeddings()
@@ -803,7 +861,7 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
             fts_exact = _sanitize_fts_query(query)
             if fts_exact:
                 try:
-                    rows = _fts_search(cursor, fts_exact, scope, labels, limit)
+                    rows = _fts_search(cursor, fts_exact, scope, labels, limit, private_key=private_key)
                     if rows:
                         results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
                         return f"Found {len(rows)} memories:\n" + "\n".join(results), True
@@ -811,7 +869,7 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
                     # Strategy 2: FTS5 OR + prefix
                     fts_broad = _sanitize_fts_query(query, use_or=True, use_prefix=True)
                     if fts_broad != fts_exact:
-                        rows = _fts_search(cursor, fts_broad, scope, labels, limit)
+                        rows = _fts_search(cursor, fts_broad, scope, labels, limit, private_key=private_key)
                         if rows:
                             results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
                             return f"Found {len(rows)} memories:\n" + "\n".join(results), True
@@ -819,7 +877,7 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
                     logger.warning(f"FTS5 query failed: {e}")
 
         # Strategy 3: Vector similarity (semantic)
-        vec_results = _vector_search(query, scope, labels, limit)
+        vec_results = _vector_search(query, scope, labels, limit, private_key=private_key)
         if vec_results:
             results = [_format_memory(r[0], r[1], r[2], r[3]) for r in vec_results]
             return f"Found {len(vec_results)} memories:\n" + "\n".join(results), True
@@ -840,11 +898,12 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
                 else:
                     label_filter = ""
                 scope_sql, scope_params = _scope_condition(scope)
+                pk_sql, pk_params = _private_key_clause(private_key)
                 cursor.execute(f'''
                     SELECT id, content, timestamp, label FROM memories
-                    WHERE {scope_sql} AND ({conditions}){label_filter}
+                    WHERE {scope_sql} AND ({conditions}){label_filter} AND {pk_sql}
                     ORDER BY timestamp DESC LIMIT ?
-                ''', scope_params + params + [limit])
+                ''', scope_params + params + pk_params + [limit])
                 rows = cursor.fetchall()
             if rows:
                 results = [_format_memory(r[0], r[1], r[2], r[3]) for r in rows]
@@ -857,23 +916,28 @@ def _search_memory(query: str, limit: int = 10, label: str = None, scope: str = 
         return f"Search failed: {e}", False
 
 
-def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'default') -> tuple:
+def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'default',
+                         private_key: str = None) -> tuple:
     try:
         labels = _parse_labels(label)
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
         scope_sql, scope_params = _scope_condition(scope)
+        pk_sql, pk_params = _private_key_clause(private_key)
         with _get_connection() as conn:
             cursor = conn.cursor()
             if labels:
                 placeholders = ','.join('?' * len(labels))
                 cursor.execute(f'''
                     SELECT id, content, timestamp, label FROM memories
-                    WHERE {scope_sql} AND label IN ({placeholders}) ORDER BY timestamp DESC LIMIT ?
-                ''', scope_params + labels + [count])
+                    WHERE {scope_sql} AND label IN ({placeholders}) AND {pk_sql}
+                    ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + labels + pk_params + [count])
             else:
                 cursor.execute(f'''
                     SELECT id, content, timestamp, label FROM memories
-                    WHERE {scope_sql} ORDER BY timestamp DESC LIMIT ?
-                ''', scope_params + [count])
+                    WHERE {scope_sql} AND {pk_sql}
+                    ORDER BY timestamp DESC LIMIT ?
+                ''', scope_params + pk_params + [count])
             rows = cursor.fetchall()
         if not rows:
             label_note = f" with labels '{label}'" if labels else ""
@@ -885,17 +949,35 @@ def _get_recent_memories(count: int = 10, label: str = None, scope: str = 'defau
         return f"Failed to retrieve memories: {e}", False
 
 
-def _delete_memory(memory_id: int, scope: str = 'default') -> tuple:
+def _delete_memory(memory_id: int, scope: str = 'default',
+                   private_key: str = None) -> tuple:
     try:
         if not isinstance(memory_id, int) or memory_id < 1:
             return "Invalid memory ID. Use the number shown in brackets [N].", False
+        private_key = private_key.strip() if (private_key and private_key.strip()) else None
         with _get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT id, content FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
+            # First check the row exists in this scope at all (regardless of
+            # private_key) so we can give a clean "not found" vs "key required"
+            # message — but only return the row if the private_key gate passes.
+            cursor.execute(
+                'SELECT id, content, private_key FROM memories WHERE id = ? AND scope = ?',
+                (memory_id, scope),
+            )
             row = cursor.fetchone()
             if not row:
                 return f"Memory [{memory_id}] not found in current memory slot.", False
-            cursor.execute('DELETE FROM memories WHERE id = ? AND scope = ?', (memory_id, scope))
+            row_pk = row[2]
+            if row_pk is not None and row_pk != private_key:
+                # Row exists but is private and the caller didn't pass the
+                # matching key. Don't reveal content — just say it's private.
+                return f"Memory [{memory_id}] is private — pass the matching private_key to delete.", False
+            # Build DELETE matching either no private_key, or the exact key.
+            pk_sql, pk_params = _private_key_clause(private_key)
+            cursor.execute(
+                f'DELETE FROM memories WHERE id = ? AND scope = ? AND {pk_sql}',
+                [memory_id, scope] + pk_params,
+            )
             conn.commit()
         preview = row[1][:50] + ('...' if len(row[1]) > 50 else '')
         logger.info(f"Deleted memory ID {memory_id} from scope '{scope}'")
@@ -921,17 +1003,21 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             return "Cannot write to the global scope. Global is read-only for the AI — only the user can add entries there via the UI.", False
 
         if function_name == "save_memory":
-            return _save_memory(arguments.get("content", ""), arguments.get("label"), scope)
+            return _save_memory(arguments.get("content", ""), arguments.get("label"),
+                                scope, private_key=arguments.get("private_key"))
         elif function_name == "search_memory":
             return _search_memory(arguments.get("query", ""), arguments.get("limit", 10),
-                                  arguments.get("label"), scope)
+                                  arguments.get("label"), scope,
+                                  private_key=arguments.get("private_key"))
         elif function_name == "get_recent_memories":
-            return _get_recent_memories(arguments.get("count", 10), arguments.get("label"), scope)
+            return _get_recent_memories(arguments.get("count", 10), arguments.get("label"),
+                                        scope, private_key=arguments.get("private_key"))
         elif function_name == "delete_memory":
             memory_id = arguments.get("memory_id")
             if memory_id is None:
                 return "Missing memory_id parameter.", False
-            return _delete_memory(int(memory_id), scope)
+            return _delete_memory(int(memory_id), scope,
+                                  private_key=arguments.get("private_key"))
         else:
             return f"Unknown memory function: {function_name}", False
     except Exception as e:

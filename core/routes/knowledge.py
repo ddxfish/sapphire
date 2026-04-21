@@ -708,23 +708,28 @@ async def delete_chat_document(chat_name: str, filename: str, _=Depends(require_
 
 @router.get("/api/memory/list")
 async def list_memories(request: Request, _=Depends(require_login)):
-    """List memories grouped by label for the Mind view."""
+    """List memories for the Mind view. Includes private_key plaintext —
+    the Mind view is the user's own UI surface, so showing the gating word
+    is the feature, not a leak. Tools/MCP have their own filtered paths."""
     from plugins.memory.tools import memory_tools as memory
     scope = request.query_params.get('scope', 'default')
     with memory._get_connection() as conn:
         cursor = conn.cursor()
         scope_sql, scope_params = memory._scope_condition(scope)
         cursor.execute(
-            f'SELECT id, content, timestamp, label FROM memories WHERE {scope_sql} ORDER BY label, timestamp DESC',
+            f'SELECT id, content, timestamp, label, private_key FROM memories WHERE {scope_sql} ORDER BY label, timestamp DESC',
             scope_params
         )
         rows = cursor.fetchall()
     grouped = {}
-    for mid, content, ts, label in rows:
+    for mid, content, ts, label, private_key in rows:
         key = label or 'unlabeled'
         if key not in grouped:
             grouped[key] = []
-        grouped[key].append({"id": mid, "content": content, "timestamp": ts, "label": label})
+        grouped[key].append({
+            "id": mid, "content": content, "timestamp": ts,
+            "label": label, "private_key": private_key,
+        })
     return {"memories": grouped, "total": len(rows)}
 
 
