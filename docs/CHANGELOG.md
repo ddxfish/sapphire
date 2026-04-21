@@ -1,5 +1,5 @@
 # 2.5.12 - Tool token reduction
-- Reduced almost every tool description
+- Reduced almost every tool description (~27% reduction)
 - Enabled Claude cache by default
 - Moved tool to "call tool without params for help"
 - Enhanced docs tool so AI can get info like toolmaker easier
