@@ -40,12 +40,23 @@ async def create_backup(request: Request, _=Depends(require_login)):
     if backup_type not in ('daily', 'weekly', 'monthly', 'manual'):
         raise HTTPException(status_code=400, detail="Invalid backup type")
 
-    filename = backup_manager.create_backup(backup_type)
-    if filename:
-        backup_manager.rotate_backups()
-        return {"status": "success", "filename": filename}
-    else:
-        raise HTTPException(status_code=500, detail="Backup creation failed")
+    # Hold the backup lock across create + rotate so this manual trigger
+    # can't interleave with the 3am scheduled cycle. Witch-hunt 2026-04-21
+    # finding R5 — without this, overlapping runs could delete an in-flight
+    # partial via rotation mtime sort.
+    # Health gate: don't create new backups while corruption sentinels are
+    # active — the whole point is to preserve last-known-good. R1.
+    if backup_manager._active_corruption_sentinels():
+        raise HTTPException(status_code=409, detail=(
+            "Corruption sentinel active — backup creation halted to preserve "
+            "last-known-good tarballs. See user/health/CORRUPT_*.flag."
+        ))
+    with backup_manager._backup_op_lock:
+        filename = backup_manager.create_backup(backup_type)
+        if filename:
+            backup_manager.rotate_backups()
+            return {"status": "success", "filename": filename}
+    raise HTTPException(status_code=500, detail="Backup creation failed")
 
 
 @router.delete("/api/backup/delete/{filename}")

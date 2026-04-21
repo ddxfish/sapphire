@@ -815,28 +815,23 @@ async def delete_memory_api(memory_id: int, request: Request, _=Depends(require_
 async def export_memories(request: Request, _=Depends(require_login)):
     """Export all memories in a scope as JSON (no vectors).
 
-    Excludes private rows (those with `private_key` set) by default — the
-    whole point of the gate is that private content shouldn't be sitting
-    plaintext in a downloadable file. Pass `?include_private=1` to deliberately
-    include them; they'll round-trip through import correctly with their
-    private_key intact. Witch-hunt 2026-04-21 finding C1.
+    Includes private rows verbatim with their `private_key` plaintext.
+    Rationale (Krem, 2026-04-21): losing the irreplaceable intimate moments
+    is the most catastrophic thing in the app. Export means export. A
+    user-initiated export that silently drops content is the worse failure
+    mode than a user-initiated export that includes everything they own.
+    The Mind UI already shows private keys plaintext — no new exposure.
+    Import preserves the `private_key` on round-trip (see finding C3).
     """
     from plugins.memory.tools import memory_tools as memory
     scope = request.query_params.get('scope', 'default')
-    include_private = request.query_params.get('include_private') in ('1', 'true', 'yes')
     with memory._get_connection() as conn:
         cursor = conn.cursor()
         scope_sql, scope_params = memory._scope_condition(scope)
-        if include_private:
-            cursor.execute(
-                f'SELECT content, label, timestamp, private_key FROM memories WHERE {scope_sql} ORDER BY timestamp',
-                scope_params,
-            )
-        else:
-            cursor.execute(
-                f'SELECT content, label, timestamp, private_key FROM memories WHERE {scope_sql} AND private_key IS NULL ORDER BY timestamp',
-                scope_params,
-            )
+        cursor.execute(
+            f'SELECT content, label, timestamp, private_key FROM memories WHERE {scope_sql} ORDER BY timestamp',
+            scope_params,
+        )
         entries = [
             {"text": r[0], "label": r[1], "timestamp": r[2], "private_key": r[3]}
             for r in cursor.fetchall()
@@ -844,7 +839,6 @@ async def export_memories(request: Request, _=Depends(require_login)):
     return {
         "sapphire_export": True, "type": "memories", "version": 2,
         "scope": scope, "count": len(entries), "entries": entries,
-        "includes_private": include_private,
     }
 
 

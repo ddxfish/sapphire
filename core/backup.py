@@ -1,6 +1,7 @@
 import tarfile
 import sqlite3
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 import config
@@ -41,6 +42,13 @@ class Backup:
         self.user_dir = self.base_dir / "user"
         self.backup_dir = self.base_dir / "user_backups"
         self.backup_dir.mkdir(exist_ok=True)
+        # Serializes create + rotate as a single critical section. Without
+        # this, a manual backup triggered during the scheduled 3am run can
+        # race with rotation: both paths sort-by-mtime and delete oldest-
+        # past-limit, and an in-flight partial can be counted or a valid
+        # older backup deleted to make room for a still-writing new one.
+        # Witch-hunt 2026-04-21 finding R5.
+        self._backup_op_lock = threading.Lock()
         logger.info(f"Backup initialized - base_dir: {self.base_dir}, backup_dir: {self.backup_dir}")
 
     def run_scheduled(self):
@@ -49,22 +57,42 @@ class Backup:
             logger.info("Backups disabled, skipping scheduled run")
             return "Backups disabled"
 
-        now = datetime.now()
-        results = []
+        # Sapphire Health gate — if any corruption sentinel is active, HALT
+        # the backup cycle entirely. Creating new backups of a corrupt DB
+        # and rotating out good ones is exactly the waterfall class this
+        # exists to prevent. User clears the sentinel file(s) after fixing.
+        # Witch-hunt 2026-04-21 finding R1.
+        sentinels = self._active_corruption_sentinels()
+        if sentinels:
+            logger.critical(
+                f"Sapphire Health: {len(sentinels)} corruption sentinel(s) active "
+                f"— SKIPPING backup create + rotate to preserve last-known-good. "
+                f"Clear {self.base_dir/'user'/'health'}/CORRUPT_*.flag after fixing."
+            )
+            return f"HALTED: {len(sentinels)} corruption sentinel(s) active"
 
-        if getattr(config, 'BACKUPS_KEEP_DAILY', 7) > 0:
-            self.create_backup("daily")
-            results.append("daily")
+        # Serialize the create + rotate sequence so a concurrent manual
+        # backup can't interleave and cause rotation to delete a
+        # still-writing file or count partials. R5 2026-04-21.
+        with self._backup_op_lock:
+            now = datetime.now()
+            results = []
 
-        if now.weekday() == 6 and getattr(config, 'BACKUPS_KEEP_WEEKLY', 4) > 0:
-            self.create_backup("weekly")
-            results.append("weekly")
+            if getattr(config, 'BACKUPS_KEEP_DAILY', 7) > 0:
+                self.create_backup("daily")
+                results.append("daily")
 
-        if now.day == 1 and getattr(config, 'BACKUPS_KEEP_MONTHLY', 3) > 0:
-            self.create_backup("monthly")
-            results.append("monthly")
+            if now.weekday() == 6 and getattr(config, 'BACKUPS_KEEP_WEEKLY', 4) > 0:
+                self.create_backup("weekly")
+                results.append("weekly")
 
-        self.rotate_backups()
+            if now.day == 1 and getattr(config, 'BACKUPS_KEEP_MONTHLY', 3) > 0:
+                self.create_backup("monthly")
+                results.append("monthly")
+
+            # Rotate INSIDE the lock — otherwise a manual trigger between
+            # create and rotate can race.
+            self.rotate_backups()
         return f"Scheduled backup complete: {', '.join(results)}"
 
     def create_backup(self, backup_type="manual"):
@@ -127,7 +155,16 @@ class Backup:
         deletes — without it, the file grows monotonically even as content
         shrinks. `integrity_check` catches corruption that'd otherwise stay
         invisible until the next restart.
+
+        On integrity failure: writes a sentinel file to `user/health/` and
+        publishes a `sapphire_health_alert` event. The sentinel HALTS the
+        next `run_scheduled` backup + rotation cycle so a corrupt DB doesn't
+        waterfall through daily/weekly/monthly generations, eventually
+        rotating out the last known-good backup. The user clears the
+        sentinel file manually once the underlying DB is fixed/restored.
+        Witch-hunt 2026-04-21 finding R1.
         """
+        corrupt = []
         for db_path in self.user_dir.rglob("*.db"):
             try:
                 conn = sqlite3.connect(str(db_path), timeout=15)
@@ -137,10 +174,15 @@ class Backup:
             try:
                 result = conn.execute("PRAGMA integrity_check").fetchone()
                 if result and result[0] != 'ok':
-                    logger.error(
-                        f"Housekeeping: {db_path.name} integrity_check returned "
-                        f"{result[0]!r} — backup exists if recovery is needed"
+                    logger.critical(
+                        f"Sapphire Health: {db_path.name} integrity_check "
+                        f"returned {result[0]!r} — writing corruption sentinel, "
+                        f"backup rotation will HALT to preserve last-known-good"
                     )
+                    corrupt.append((db_path.name, str(result[0])))
+                    # Skip VACUUM on a corrupt DB — VACUUM on corrupted pages
+                    # can make the corruption worse or mask it.
+                    continue
                 else:
                     logger.debug(f"Housekeeping: {db_path.name} integrity_check OK")
                 if is_weekly:
@@ -152,8 +194,25 @@ class Backup:
                     # autocommit (isolation_level=None) lets VACUUM run.
                     # Scout finding 2026-04-20 — weekly VACUUM was a no-op.
                     conn.isolation_level = None
-                    logger.info(f"Housekeeping: VACUUM {db_path.name}")
-                    conn.execute("VACUUM")
+                    # Fast-fail if any writer holds the lock — don't sit on
+                    # the DB waiting 15s and then block incoming writers
+                    # under an exclusive VACUUM lock for 30-90s on grown
+                    # DBs. 2s is enough for a transient checkpoint to
+                    # settle; beyond that, something real is writing and we
+                    # skip this week. Logs the skip so it's not silent.
+                    # Witch-hunt 2026-04-21 finding R4.
+                    conn.execute("PRAGMA busy_timeout=2000")
+                    try:
+                        logger.info(f"Housekeeping: VACUUM {db_path.name}")
+                        conn.execute("VACUUM")
+                    except sqlite3.OperationalError as ve:
+                        if 'locked' in str(ve).lower() or 'busy' in str(ve).lower():
+                            logger.info(
+                                f"Housekeeping: VACUUM {db_path.name} skipped "
+                                f"(DB busy) — will retry next Sunday"
+                            )
+                        else:
+                            raise
             except Exception as e:
                 logger.warning(f"Housekeeping failed for {db_path.name}: {e}")
             finally:
@@ -161,6 +220,55 @@ class Backup:
                     conn.close()
                 except Exception:
                     pass
+        if corrupt:
+            self._write_corruption_sentinel(corrupt)
+            try:
+                from core.event_bus import publish
+                publish('sapphire_health_alert', {
+                    'type': 'integrity_check_failure',
+                    'dbs': [name for name, _ in corrupt],
+                })
+            except Exception as e:
+                logger.debug(f"sapphire_health_alert publish failed: {e}")
+        return corrupt
+
+    def _write_corruption_sentinel(self, corrupt_list):
+        """Persist a sentinel file per corrupt DB so subsequent backup runs
+        detect the state even across process restarts. User clears manually
+        once the DB is fixed/restored. Sentinel content is human-readable for
+        forensics — no machine parsing requirement."""
+        try:
+            sentinel_dir = self.base_dir / "user" / "health"
+            sentinel_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            for db_name, integrity_result in corrupt_list:
+                sentinel = sentinel_dir / f"CORRUPT_{db_name}_{ts}.flag"
+                sentinel.write_text(
+                    f"db={db_name}\n"
+                    f"integrity_check={integrity_result}\n"
+                    f"detected_at={ts}\n"
+                    f"\n"
+                    f"# Backup create + rotate will HALT while this file exists,\n"
+                    f"# preserving last-known-good tarballs. Fix/restore the DB,\n"
+                    f"# then delete this file to resume normal backups.\n",
+                    encoding='utf-8',
+                )
+            logger.critical(
+                f"Sapphire Health: {len(corrupt_list)} corruption sentinel(s) "
+                f"written to {sentinel_dir} — backup rotation HALTED"
+            )
+        except Exception as e:
+            logger.error(f"Could not write corruption sentinel: {e}", exc_info=True)
+
+    def _active_corruption_sentinels(self) -> list:
+        """Return list of active sentinel filenames. Empty list = backup green-light."""
+        sentinel_dir = self.base_dir / "user" / "health"
+        if not sentinel_dir.exists():
+            return []
+        try:
+            return [f.name for f in sentinel_dir.glob("CORRUPT_*.flag")]
+        except Exception:
+            return []
 
     def list_backups(self):
         """List all backups grouped by type."""
@@ -263,30 +371,29 @@ class Backup:
                 logger.info(f"Backup scheduler: next run in {wait_seconds / 3600:.1f}h at {target.strftime('%Y-%m-%d %H:%M')}")
                 if self._stop_event.wait(wait_seconds):
                     break  # Stop requested during sleep
+
+                # Run DB housekeeping FIRST so integrity failures write their
+                # corruption sentinels BEFORE run_scheduled fires. This is what
+                # lets R1's sentinel-halt work: detect → sentinel → halt within
+                # the same 3am cycle. Witch-hunt 2026-04-21 R1.
+                try:
+                    self._db_housekeeping(is_weekly=(datetime.now().weekday() == 6))
+                except Exception as e:
+                    logger.warning(f"DB housekeeping failed: {e}")
+
                 try:
                     result = self.run_scheduled()
                     logger.info(f"Backup scheduler: {result}")
                 except Exception as e:
                     logger.error(f"Backup scheduler failed: {e}")
-                # Piggyback the daily backup run with metrics retention —
-                # both are low-priority "housekeep at 3am" tasks and there's
-                # no reason to spin up a separate scheduler just for this.
-                # Scout 1 longevity finding (2026-04-19).
+
+                # Metrics retention piggybacks — low-priority "housekeep at 3am"
+                # task, no reason for a separate scheduler.
                 try:
                     from core.metrics import metrics
                     metrics.prune(keep_days=90)
                 except Exception as e:
                     logger.warning(f"Metrics prune during backup cycle failed: {e}")
-
-                # DB housekeeping. integrity_check daily (cheap), VACUUM
-                # weekly (Sunday; exclusive-lock, takes longer). Runs at
-                # 3am when nobody's using Sapphire. Scout longevity finding
-                # #18 — without this, BLOB-heavy DBs grow monotonically
-                # and silent corruption goes undetected until restart.
-                try:
-                    self._db_housekeeping(is_weekly=(datetime.now().weekday() == 6))
-                except Exception as e:
-                    logger.warning(f"DB housekeeping failed: {e}")
 
         thread = threading.Thread(target=_backup_loop, daemon=True, name="backup-scheduler")
         thread.start()

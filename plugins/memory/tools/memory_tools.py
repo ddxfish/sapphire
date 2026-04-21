@@ -38,7 +38,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "save_memory",
-            "description": f"Save information to long-term memory. Keep under 450 characters — be concise. Assign a label to categorize. Suggested labels: {SUGGESTED_LABELS}. You can create new labels too. Use 'self' for your own self-knowledge. If the user asked for this memory to be private with a shared word (a \"private key\"), pass it as `private_key` — the row will only be returned by searches that include the same key.",
+            "description": f"Save information to long-term memory. Keep under 450 chars. Suggested labels: {SUGGESTED_LABELS}. New labels OK. Use 'self' for self-knowledge.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -48,11 +48,11 @@ TOOLS = [
                     },
                     "label": {
                         "type": "string",
-                        "description": f"Category label (e.g. {SUGGESTED_LABELS})"
+                        "description": "Category label"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Optional plaintext shared word that gates this memory. Only set when the user explicitly asks for a private memory using a word they told you. Leave unset otherwise."
+                        "description": "Optional gating word. Set only if user asked to make this memory private with a specific word."
                     }
                 },
                 "required": ["content"]
@@ -64,7 +64,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "search_memory",
-            "description": "Search stored memories using semantic similarity and full-text search. Understands meaning, not just keywords. Optionally filter by label. Private memories (those saved with a private_key) only appear when the caller passes the matching `private_key`.",
+            "description": "Semantic + full-text search over memories. Optionally filter by label.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -74,16 +74,16 @@ TOOLS = [
                     },
                     "label": {
                         "type": "string",
-                        "description": "Filter by label(s), comma-separated for multiple (e.g. 'family,people')"
+                        "description": "Filter by label(s), comma-separated"
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum results to return",
+                        "description": "Max results",
                         "default": 10
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "If the user gave you a private word to access their gated memories, pass it here to include matching private rows in results."
+                        "description": "Gating word — pass to include private rows saved with this word."
                     }
                 },
                 "required": ["query"]
@@ -95,22 +95,22 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "get_recent_memories",
-            "description": "Get the most recent memories, optionally filtered by label. Private memories require the matching `private_key` to surface.",
+            "description": "Get most recent memories, optionally filtered by label.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "count": {
                         "type": "integer",
-                        "description": "Number of recent memories to retrieve",
+                        "description": "How many",
                         "default": 10
                     },
                     "label": {
                         "type": "string",
-                        "description": "Filter by label(s), comma-separated for multiple (e.g. 'family,people')"
+                        "description": "Filter by label(s), comma-separated"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "If the user gave you a private word to access their gated memories, pass it here to include matching private rows."
+                        "description": "Gating word — pass to include private rows saved with this word."
                     }
                 }
             }
@@ -121,17 +121,17 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "delete_memory",
-            "description": "Delete a memory by its ID number. Private memories require the matching `private_key` to delete.",
+            "description": "Delete a memory by ID.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_id": {
                         "type": "integer",
-                        "description": "The ID number of the memory to delete (shown in brackets like [42])"
+                        "description": "Memory ID (shown in brackets like [42])"
                     },
                     "private_key": {
                         "type": "string",
-                        "description": "Required to delete a private (gated) memory. Must match what was set on save."
+                        "description": "Required to delete a private row. Must match save-time word."
                     }
                 },
                 "required": ["memory_id"]

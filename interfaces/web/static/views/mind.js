@@ -30,6 +30,15 @@ let _memShowAll = false;             // false = cap at MEM_INITIAL_LIMIT cards
 const MEM_INITIAL_LIMIT = 200;
 const MEM_TOP_LABELS = 8;
 
+// Fetched-data cache. Populated on first render for a scope; re-rendered
+// in-place on every filter change WITHOUT a new fetch. Invalidated on scope
+// change, MIND_CHANGED event for this domain/scope, or manual invalidate().
+// Witch-hunt 2026-04-21 R2 — without this, every keystroke fired a new
+// `/api/memory/list` HTTP round-trip; rapid typing also caused response
+// reorder (fetch-ab lands after fetch-abc) showing stale results.
+let _memCache = { scope: null, rows: null };
+function _invalidateMemCache() { _memCache = { scope: null, rows: null }; }
+
 export default {
     init(el) {
         container = el;
@@ -97,6 +106,9 @@ function subscribeMindSse() {
         if (!domain || !scope) return;
         if (scope !== currentScope) return;
         if (_DOMAIN_FOR_TAB[activeTab] !== domain) return;
+        // SSE says backing data for this domain/scope changed — invalidate
+        // any domain-specific caches so the next render re-fetches.
+        if (domain === 'memory') _invalidateMemCache();
         renderContent();
     });
 }
@@ -503,12 +515,33 @@ const MEM_CARD_STYLES = `
 `;
 
 async function renderMemories(el) {
+    // Cache-first: if we already have rows for currentScope, skip the fetch
+    // and render in-place. Filter/search/sort handlers below call this same
+    // function; they hit the warm cache, nothing goes to the network. Cache
+    // populates on cold scope and invalidates on scope change / MIND_CHANGED
+    // event / explicit invalidate. Witch-hunt 2026-04-21 R2.
+    if (_memCache.scope !== currentScope || _memCache.rows === null) {
+        try {
+            const resp = await fetch(`/api/memory/list?scope=${encodeURIComponent(currentScope)}`);
+            if (!resp.ok) { el.innerHTML = '<div class="mind-empty">Failed to load memories</div>'; return; }
+            const data = await resp.json();
+            const groups = data.memories || {};
+            // Flatten to one array — server returns grouped by label, we want
+            // a single sortable/filterable list.
+            const rows = [];
+            for (const arr of Object.values(groups)) for (const m of arr) rows.push(m);
+            _memCache = { scope: currentScope, rows };
+        } catch (e) {
+            el.innerHTML = `<div class="mind-empty">Failed to load memories: ${e.message}</div>`;
+            return;
+        }
+    }
+    _renderMemoriesFromCache(el);
+}
+
+function _renderMemoriesFromCache(el) {
     // Preserve focus across the el.innerHTML rewrite below — without this,
-    // typing in the search input kills focus after the first keystroke (the
-    // input gets destroyed and re-created, browser drops focus). Capture id
-    // + cursor position scoped to THIS view's element only, restore after
-    // render. Same pattern protects the sort dropdown if user is keyboard-
-    // navigating it. TODO L138 follow-up — 2026-04-21.
+    // typing in the search input kills focus after the first keystroke.
     const focusedEl = document.activeElement;
     const refocus = focusedEl && el.contains(focusedEl) && focusedEl.id
         ? {
@@ -518,16 +551,7 @@ async function renderMemories(el) {
         }
         : null;
 
-    const resp = await fetch(`/api/memory/list?scope=${encodeURIComponent(currentScope)}`);
-    if (!resp.ok) { el.innerHTML = '<div class="mind-empty">Failed to load memories</div>'; return; }
-    const data = await resp.json();
-    const groups = data.memories || {};
-
-    // Flatten the grouped-by-label payload into one array, sorted newest first
-    // (server already returns rows sorted by label, then ts DESC — flatten and
-    // re-sort here so all view sorts work uniformly).
-    const all = [];
-    for (const arr of Object.values(groups)) for (const m of arr) all.push(m);
+    const all = _memCache.rows || [];
 
     // Top-N label chips (option B): most-frequent labels in this scope.
     const labelCounts = {};
@@ -690,6 +714,7 @@ async function renderMemories(el) {
                 const resp = await fetch(url, { method: 'DELETE', headers: csrfHeaders() });
                 if (resp.ok) {
                     ui.showToast('Deleted', 'success');
+                    _invalidateMemCache();
                     await renderMemories(el);
                 }
             } catch (e) { ui.showToast('Failed', 'error'); }
@@ -764,7 +789,7 @@ function _bindMemoryIO(el) {
                 const result = await resp.json();
                 ui.showToast(`Imported ${result.imported} memories, ${result.skipped} duplicates skipped`, 'success');
             },
-            onDone: async () => { await renderMemories(el); },
+            onDone: async () => { _invalidateMemCache(); await renderMemories(el); },
         });
     });
 }
@@ -783,6 +808,7 @@ function _showDuplicatesModal(el, pairs) {
         if (currentIdx >= pairs.length) {
             overlay.remove();
             ui.showToast('All duplicates reviewed', 'success');
+            _invalidateMemCache();
             renderMemories(el);
             return;
         }
@@ -819,6 +845,7 @@ function _showDuplicatesModal(el, pairs) {
 
         overlay.querySelector('.mind-modal-close').addEventListener('click', () => {
             overlay.remove();
+            _invalidateMemCache();
             renderMemories(el);
         });
 
@@ -852,6 +879,7 @@ function _showDuplicatesModal(el, pairs) {
 
         overlay.querySelector('#dup-skip-all').addEventListener('click', () => {
             overlay.remove();
+            _invalidateMemCache();
             renderMemories(el);
         });
     }
@@ -908,6 +936,7 @@ function showMemoryEditModal(el, memoryId, content) {
             if (resp.ok) {
                 close();
                 ui.showToast('Memory updated', 'success');
+                _invalidateMemCache();
                 await renderMemories(el);
             } else {
                 const err = await resp.json();
