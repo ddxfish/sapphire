@@ -357,6 +357,48 @@ class ExecutionContext:
                 logger.warning("[ExecCtx] Empty response from LLM")
                 break
 
+        # Before synthesizing a final placeholder, inject tool-result placeholders
+        # for any dangling assistant(tool_calls) that never got their responses
+        # (loop exhausted mid-round, worker cancelled, tools_executed==0 break).
+        # Without this, the persisted sequence becomes asst(tc) → asst(text) with
+        # no tool-role messages in between — OpenAI/Claude reject that structure
+        # on the NEXT user turn and the chat is wedged. Placeholder content is
+        # provider-agnostic (plain string, no special formatting). Scout chaos #12.
+        def _patch_dangling_tool_calls():
+            # Walk from end backward to find asst messages with tool_calls and
+            # check whether their tool responses are present below them.
+            for idx in range(len(messages) - 1, -1, -1):
+                m = messages[idx]
+                if m.get("role") != "assistant":
+                    continue
+                tcs = m.get("tool_calls") or []
+                if not tcs:
+                    break  # most-recent asst has no tool_calls — we're clean
+                expected = {tc.get("id") for tc in tcs if isinstance(tc, dict) and tc.get("id")}
+                got = set()
+                insert_after = idx
+                for j in range(idx + 1, len(messages)):
+                    nxt = messages[j]
+                    if nxt.get("role") == "tool" and nxt.get("tool_call_id") in expected:
+                        got.add(nxt["tool_call_id"])
+                        insert_after = j
+                    elif nxt.get("role") == "assistant":
+                        break  # new assistant turn — stop scanning
+                missing = expected - got
+                if missing:
+                    # Insert placeholders right after the last real tool response
+                    # (or right after the asst if there are none), preserving order.
+                    pos = insert_after + 1
+                    for tc_id in missing:
+                        messages.insert(pos, {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "content": "(Tool did not execute — loop exhausted before resolution.)",
+                        })
+                        pos += 1
+                break  # only patch the most recent asst(tc) — older ones already closed
+        _patch_dangling_tool_calls()
+
         # If we exhausted iterations, try to extract last content
         if final_content is None and messages:
             last = messages[-1]

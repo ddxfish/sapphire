@@ -214,6 +214,14 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     deferred_actions = []
     deferred_keys = set()
     persisted_keys = {}  # Collect keys for single disk write
+    # Provider-switch keys that must only persist AFTER their deferred switch
+    # succeeds. Previously all keys persisted eagerly and the switch ran
+    # afterward — if the switch raised (e.g. re-embed running blocked the
+    # swap), settings.json had the new provider but `_embedder` singleton was
+    # still old. Next process restart would boot with the wrong provider
+    # silently. These get added to persisted_keys in the deferred-action loop
+    # only on successful switch. Scout race #4 — 2026-04-21.
+    _PROVIDER_SWITCH_KEYS = {'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER'}
     # Service API keys that should route to credentials manager
     _SERVICE_CRED_MAP = {
         'STT_FIREWORKS_API_KEY': 'stt_fireworks',
@@ -230,7 +238,8 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                 continue
             tier = settings.validate_tier(key)
             settings.set(key, value, persist=False)
-            if persist:
+            # Provider-switch keys defer their persist until post-switch success.
+            if persist and key not in _PROVIDER_SWITCH_KEYS:
                 persisted_keys[key] = value
             results.append({"key": key, "status": "success", "tier": tier})
             if key == 'WAKE_WORD_ENABLED':
@@ -267,24 +276,46 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                 publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
         except Exception as e:
             results.append({"key": key, "status": "error", "error": str(e)})
-    # Persist all settings in one disk write (instead of N individual saves)
-    if persist and persisted_keys:
-        with settings._lock:
-            settings._user.update(persisted_keys)
-            for key in persisted_keys:
-                settings._runtime.pop(key, None)
-            settings.save()
-    # Execute deferred provider switches (config values are now set)
+    # Execute deferred provider switches (runtime values are already set via
+    # settings.set above; persistence for provider-switch keys is held until
+    # we confirm the switch succeeded, then written to persisted_keys below.
+    # Scout race #4 — persist-before-switch caused settings.json / singleton
+    # divergence on switch failure).
     system = get_system()
     for action, value, key, tier in deferred_actions:
+        switch_ok = False
         try:
             if action == 'switch_embedding':
                 from core.embeddings import switch_embedding_provider
                 switch_embedding_provider(value)
             else:
                 await asyncio.to_thread(getattr(system, action), value)
+            switch_ok = True
         except Exception as e:
             logger.error(f"Deferred action {action} failed: {e}")
+            # Switch failed — undo the runtime set so the runtime layer stays
+            # aligned with what's actually persisted (the old value).
+            if key in _PROVIDER_SWITCH_KEYS:
+                try:
+                    # settings.get falls back to _persisted / _defaults when
+                    # runtime isn't populated — we did NOT persist, so this
+                    # returns the pre-swap value.
+                    settings._runtime.pop(key, None)
+                except Exception as rollback_err:
+                    logger.warning(f"Runtime rollback for {key} failed: {rollback_err}")
+            # Record the failure in results so the UI can surface it.
+            results.append({"key": key, "status": "error", "error": f"{action}: {e}"})
+        if switch_ok and persist and key in _PROVIDER_SWITCH_KEYS:
+            # Only now does this provider key earn its seat in persisted_keys.
+            persisted_keys[key] = value
+    # Persist all settings in ONE disk write, now that provider switches have
+    # had a chance to succeed/fail and update persisted_keys accordingly.
+    if persist and persisted_keys:
+        with settings._lock:
+            settings._user.update(persisted_keys)
+            for key in persisted_keys:
+                settings._runtime.pop(key, None)
+            settings.save()
     # Re-apply chat settings so voice gets validated for new provider
     if any(a[0].startswith('switch_tts') or a[0] == 'toggle_tts' for a in deferred_actions):
         try:

@@ -656,36 +656,60 @@ class ContinuityExecutor:
         return validate_voice(voice)
 
     def _restore_voice(self, snapshot: Dict[str, Any]) -> None:
-        """Restore TTS voice/pitch/speed from snapshot."""
+        """Restore TTS voice/pitch/speed from snapshot. Each setter gets its own
+        try — a single failure can't short-circuit the others, and we log which
+        one failed rather than swallowing the whole restore. Scout chaos #1/#2/#14."""
         if not snapshot:
             return
         tts = getattr(self.system, 'tts', None)
         if not tts:
             return
-        try:
-            if snapshot.get("voice") is not None:
-                tts.set_voice(self._validate_voice(snapshot["voice"]))
-            if snapshot.get("pitch") is not None:
-                tts.set_pitch(snapshot["pitch"])
-            if snapshot.get("speed") is not None:
-                tts.set_speed(snapshot["speed"])
-            logger.debug(f"[Continuity] Restored voice settings: {snapshot}")
-        except Exception as e:
-            logger.warning(f"[Continuity] Failed to restore voice settings: {e}")
+        for field, setter_name in (("voice", "set_voice"), ("pitch", "set_pitch"), ("speed", "set_speed")):
+            val = snapshot.get(field)
+            if val is None:
+                continue
+            try:
+                setter = getattr(tts, setter_name)
+                if field == "voice":
+                    setter(self._validate_voice(val))
+                else:
+                    setter(val)
+            except Exception as e:
+                logger.warning(f"[Continuity] Failed to restore TTS {field}={val!r}: {e}")
+        logger.debug(f"[Continuity] Restored voice settings: {snapshot}")
 
     def _apply_voice(self, task: Dict[str, Any]) -> None:
-        """Apply voice/pitch/speed settings to TTS if available."""
+        """Apply voice/pitch/speed settings to TTS. Per-setter try so a
+        mid-apply failure doesn't silently leave TTS half-configured — we
+        RAISE on any failure so the caller (_run_foreground / _run_background)
+        can restore from snapshot and mark the task errored, rather than
+        continuing with a mixed voice that then persists across tasks.
+        Scout chaos #1/#2/#14 — 2026-04-21."""
         tts = getattr(self.system, 'tts', None)
         if not tts:
             return
-        try:
-            if task.get("voice"):
-                tts.set_voice(self._validate_voice(task["voice"]))
-            if task.get("pitch") is not None:
-                tts.set_pitch(task["pitch"])
-            if task.get("speed") is not None:
-                tts.set_speed(task["speed"])
-        except Exception as e:
-            logger.warning(f"[Continuity] Failed to apply voice settings: {e}")
+        for field, setter_name in (("voice", "set_voice"), ("pitch", "set_pitch"), ("speed", "set_speed")):
+            val = task.get(field)
+            # "voice" uses truthy check (empty string = unset); numeric fields
+            # use is-not-None (0.0 is a legit speed-multiplier on some setups,
+            # although unusual).
+            if field == "voice":
+                if not val:
+                    continue
+            else:
+                if val is None:
+                    continue
+            try:
+                setter = getattr(tts, setter_name)
+                if field == "voice":
+                    setter(self._validate_voice(val))
+                else:
+                    setter(val)
+            except Exception as e:
+                # Re-raise so the caller rolls back to snapshot. Logging here
+                # identifies WHICH setter failed — restore path will log its
+                # own recovery attempt.
+                logger.error(f"[Continuity] TTS apply failed at {field}={val!r}: {e}")
+                raise
 
     # _apply_task_settings removed — ExecutionContext handles all isolation now
