@@ -44,7 +44,18 @@ def _enforce_locked(result):
 
 
 def _get_merged_plugins():
-    """Merge static and user plugins.json."""
+    """Merge static and user plugins.json into the shape the UI consumes.
+
+    The `enabled` list reflects what's ACTUALLY RUNNING, not just what's in
+    the user file. Backends with `default_enabled: true` + no explicit user
+    toggle are live via scan() semantics but won't appear in the user file
+    until the user clicks the toggle — previously this meant /api/init's
+    `plugins_config.enabled` missed them, and the frontend's
+    `enabledPlugins` Set (which drives scope-dropdown visibility in
+    scope-dropdowns.js:64) hid their scopes. Tools worked via SCOPE_REGISTRY
+    but the Mind dropdowns ghosted. Toggle-off-then-on wrote the plugin to
+    disk and the mismatch resolved. TODO L132 — 2026-04-21.
+    """
     static_plugins_json = STATIC_DIR / 'core-ui' / 'plugins.json'
     try:
         with open(static_plugins_json, encoding='utf-8') as f:
@@ -52,21 +63,42 @@ def _get_merged_plugins():
     except Exception:
         static = {"enabled": [], "plugins": {}}
 
-    if not USER_PLUGINS_JSON.exists():
-        return _enforce_locked(static)
+    if USER_PLUGINS_JSON.exists():
+        try:
+            with open(USER_PLUGINS_JSON, encoding='utf-8') as f:
+                user = json.load(f)
+        except Exception:
+            user = None
+    else:
+        user = None
 
+    if user is None:
+        merged = {
+            "enabled": list(static.get("enabled", [])),
+            "plugins": dict(static.get("plugins", {}))
+        }
+    else:
+        merged = {
+            "enabled": list(user.get("enabled", static.get("enabled", []))),
+            "plugins": dict(static.get("plugins", {})),
+        }
+        if "plugins" in user:
+            merged["plugins"].update(user["plugins"])
+
+    # Augment with runtime-enabled plugins the user file doesn't yet list
+    # (default_enabled semantics). The plugin_loader is the source of truth
+    # for what's actually active; merge its view into the returned dict so
+    # frontend and backend agree.
     try:
-        with open(USER_PLUGINS_JSON, encoding='utf-8') as f:
-            user = json.load(f)
+        from core.plugin_loader import plugin_loader
+        disk = set(merged["enabled"])
+        for name, info in plugin_loader._plugins.items():
+            if info.get("loaded") and info.get("enabled") and name not in disk:
+                merged["enabled"].append(name)
     except Exception:
-        return _enforce_locked(static)
-
-    merged = {
-        "enabled": user.get("enabled", static.get("enabled", [])),
-        "plugins": dict(static.get("plugins", {}))
-    }
-    if "plugins" in user:
-        merged["plugins"].update(user["plugins"])
+        # plugin_loader may not be initialized during very early boot — in
+        # that case the disk state is what we've got; ship it.
+        pass
 
     return _enforce_locked(merged)
 
@@ -168,20 +200,13 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         if plugin_name not in known:
             raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
 
-        enabled = list(merged.get("enabled", []))
-
-        # Determine current state from plugin_loader (handles default_enabled plugins
-        # that aren't in the persisted enabled list)
-        currently_enabled = plugin_name in enabled
-        try:
-            from core.plugin_loader import plugin_loader as _pl
-            info = _pl.get_plugin_info(plugin_name)
-            if info:
-                currently_enabled = info["enabled"]
-        except Exception:
-            pass
-
         # Load existing user_data up-front so we can maintain the disabled list
+        # AND use its `enabled` list (NOT merged.enabled) as the write-back source.
+        # merged.enabled now includes runtime-active default_enabled plugins (for
+        # UI parity with the backend), so using it here would silently promote
+        # those plugins into the disk enabled list on any unrelated toggle.
+        # The user's disk state should only change for the plugin being toggled.
+        # TODO L132 — 2026-04-21.
         USER_WEBUI_DIR.mkdir(parents=True, exist_ok=True)
         user_data = {}
         if USER_PLUGINS_JSON.exists():
@@ -190,7 +215,19 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                     user_data = json.load(f)
             except Exception:
                 pass
+        enabled = list(user_data.get("enabled", []))
         disabled = list(user_data.get("disabled", []))
+
+        # Determine current state from plugin_loader (handles default_enabled
+        # plugins that aren't in the persisted enabled list).
+        currently_enabled = plugin_name in enabled
+        try:
+            from core.plugin_loader import plugin_loader as _pl
+            info = _pl.get_plugin_info(plugin_name)
+            if info:
+                currently_enabled = info["enabled"]
+        except Exception:
+            pass
 
         if currently_enabled:
             if plugin_name in enabled:
