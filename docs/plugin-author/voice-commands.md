@@ -71,8 +71,8 @@ def pre_chat(event):
     if system:
         if hasattr(system, "tts") and system.tts:
             system.tts.stop()
-        if hasattr(system, "llm_chat") and system.llm_chat:
-            system.llm_chat.streaming_chat.cancel_flag = True
+        if hasattr(system, "cancel_generation"):
+            system.cancel_generation()
     event.skip_llm = True
     event.ephemeral = True
     event.response = "Stopped."

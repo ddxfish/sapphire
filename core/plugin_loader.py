@@ -976,6 +976,10 @@ class PluginLoader:
                     if isinstance(current, NullTTSProvider) or current is None:
                         logger.info(f"[PLUGINS] Re-activating TTS provider '{tts_key}' (was null at boot)")
                         system.switch_tts_provider(tts_key)
+                        # switch_tts_provider now re-applies chat settings
+                        # internally (Wolf-Claude finding 2026-04-21), so the
+                        # persona voice survives plugin-driven late activation
+                        # without a second call here.
                         # Notify frontend so voice dropdown and speed range refresh
                         try:
                             from core.event_bus import publish, Events

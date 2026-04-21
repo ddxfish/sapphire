@@ -25,11 +25,9 @@ def pre_chat(event):
         # Broadcast to web UI clients to stop browser TTS
         publish(Events.TTS_STOPPED)
 
-        # Cancel streaming generation
-        if hasattr(system, "llm_chat") and system.llm_chat:
-            streaming = getattr(system.llm_chat, "streaming_chat", None)
-            if streaming:
-                streaming.cancel_flag = True
+        # Cancel streaming generation via public API
+        if hasattr(system, "cancel_generation"):
+            if system.cancel_generation():
                 logger.info("[STOP] Generation cancelled")
 
     event.skip_llm = True

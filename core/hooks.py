@@ -20,16 +20,17 @@ class HookEvent:
     Handlers can mutate any field. Changes are visible to subsequent handlers.
 
     Hook points (in pipeline order):
-        post_stt:      After voice transcription — mutate `input` to correct STT
-        on_wake:       Wakeword detected — notification only (must return fast)
-        pre_chat:      Before LLM — mutate `input`, set `skip_llm`/`response` to bypass
-        prompt_inject: During prompt build — append to `context_parts`
-        post_llm:      After LLM response, before save — mutate `response` to filter/translate
-        post_chat:     After response saved — observational (`input`, `response`)
-        pre_execute:   Before tool call — mutate `arguments`, block with `skip_llm`
-        post_execute:  After tool call — observational (`function_name`, `result`)
-        pre_tts:       Before speech — mutate `tts_text`, cancel with `skip_tts`
-        post_tts:      After playback — observational (`tts_text`, metadata has `duration`)
+        post_stt:          After voice transcription — mutate `input` to correct STT
+        on_wake:           Wakeword detected — notification only (must return fast)
+        pre_chat:          Before LLM — mutate `input`, set `skip_llm`/`response` to bypass
+        prompt_inject:     During prompt build — append to `context_parts`
+        post_llm:          After LLM response, before save — mutate `response` to filter/translate
+        post_chat:         After response saved — observational (`input`, `response`)
+        pre_execute:       Before tool call — mutate `arguments`, block with `skip_llm`
+        post_execute:      After tool call — observational (`function_name`, `result`)
+        pre_tts:           Before speech — mutate `tts_text`, cancel with `skip_tts`. metadata['tts_client'] = calling TTSClient
+        post_tts:          After playback — observational (`tts_text`, metadata has `duration`)
+        provider_switched: After TTS/STT/embed provider hot-swap. metadata: `kind` (tts|stt|embed), `provider` (new key). Observational — plugins warm caches / reset state.
 
     Fields:
         input: User's message / STT transcription (mutable in post_stt, pre_chat)

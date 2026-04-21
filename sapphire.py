@@ -366,6 +366,14 @@ class VoiceChatSystem:
                     logger.warning(f"No mic available — STT will work via web UI only: {mic_err}")
                     self.whisper_recorder = NullAudioRecorder()
             logger.info(f"STT provider switched to {provider_name}")
+            try:
+                from core.hooks import hook_runner, HookEvent
+                if hook_runner.has_handlers("provider_switched"):
+                    hook_runner.fire("provider_switched", HookEvent(
+                        metadata={'kind': 'stt', 'provider': provider_name}
+                    ))
+            except Exception as e:
+                logger.debug(f"provider_switched hook fire failed: {e}")
             return True
         except Exception as e:
             logger.error(f"STT provider switch failed: {e}")
@@ -461,16 +469,68 @@ class VoiceChatSystem:
             self.tts_server_manager = None
             logger.info("Kokoro TTS server stopped")
 
+    def cancel_generation(self) -> bool:
+        """Public cancel for in-progress LLM streaming.
+
+        Replaces the `system.llm_chat.streaming_chat.cancel_flag = True`
+        reach-in that plugin docs previously advertised (voice-commands
+        stop hook, etc.). Plugin code should call this instead — keeps
+        the cancel surface owned by core, not by private-attribute
+        mutation on a sub-object. Returns True if the flag was set,
+        False if there's no streaming client to cancel.
+        Wolf-Claude finding 2026-04-21.
+        """
+        try:
+            streaming = getattr(getattr(self, 'llm_chat', None), 'streaming_chat', None)
+            if streaming is None:
+                return False
+            streaming.cancel_flag = True
+            logger.info("cancel_generation: flag set via public API")
+            return True
+        except Exception as e:
+            logger.warning(f"cancel_generation failed: {e}")
+            return False
+
     def switch_embedding_provider(self, provider_name):
         """Hot-swap embedding provider at runtime."""
         from core.embeddings import switch_embedding_provider as _switch
         _switch(provider_name)
+        try:
+            from core.hooks import hook_runner, HookEvent
+            if hook_runner.has_handlers("provider_switched"):
+                hook_runner.fire("provider_switched", HookEvent(
+                    metadata={'kind': 'embed', 'provider': provider_name}
+                ))
+        except Exception as e:
+            logger.debug(f"provider_switched hook fire failed: {e}")
 
     def switch_tts_provider(self, provider_name):
-        """Hot-swap TTS provider at runtime."""
+        """Hot-swap TTS provider at runtime.
+
+        After the new TTSClient is wired, re-apply the active chat's voice /
+        pitch / speed. Without this, `_init_tts_provider` leaves the fresh
+        client on its hardcoded defaults (af_heart / 1.3 / 0.98) and the
+        persona's voice gets silently clobbered on every provider swap —
+        Wolf's-Claude finding 2026-04-21.
+        """
         logger.info(f"Switching TTS provider to: {provider_name}")
         base_dir = Path(__file__).parent.resolve()
-        return self._init_tts_provider(provider_name, base_dir)
+        ok = self._init_tts_provider(provider_name, base_dir)
+        if ok and provider_name and provider_name != 'none':
+            try:
+                self._apply_initial_chat_settings()
+            except Exception as e:
+                logger.warning(f"Post-swap settings reapply failed: {e}")
+        if ok:
+            try:
+                from core.hooks import hook_runner, HookEvent
+                if hook_runner.has_handlers("provider_switched"):
+                    hook_runner.fire("provider_switched", HookEvent(
+                        metadata={'kind': 'tts', 'provider': provider_name}
+                    ))
+            except Exception as e:
+                logger.debug(f"provider_switched hook fire failed: {e}")
+        return ok
 
     def toggle_tts(self, enabled: bool):
         """Legacy compat — maps to switch_tts_provider. Persists TTS_PROVIDER."""

@@ -241,7 +241,8 @@ class TTSClient:
         # pre_tts hook — plugins can alter or cancel TTS
         from core.hooks import hook_runner, HookEvent
         if hook_runner.has_handlers("pre_tts"):
-            tts_event = HookEvent(tts_text=processed_text, config=config)
+            tts_event = HookEvent(tts_text=processed_text, config=config,
+                                  metadata={'tts_client': self})
             hook_runner.fire("pre_tts", tts_event)
             if tts_event.skip_tts:
                 return False
@@ -274,7 +275,8 @@ class TTSClient:
         # pre_tts hook — plugins can alter or cancel TTS
         from core.hooks import hook_runner, HookEvent
         if hook_runner.has_handlers("pre_tts"):
-            tts_event = HookEvent(tts_text=processed_text, config=config)
+            tts_event = HookEvent(tts_text=processed_text, config=config,
+                                  metadata={'tts_client': self})
             hook_runner.fire("pre_tts", tts_event)
             if tts_event.skip_tts:
                 return False

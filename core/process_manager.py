@@ -103,7 +103,8 @@ def kill_process_on_port(port: int) -> bool:
 class ProcessManager:
     """A generic class to manage the lifecycle of an external script process."""
     
-    def __init__(self, script_path: Path, log_name: str, base_dir: Path, command_args: list = None):
+    def __init__(self, script_path: Path, log_name: str, base_dir: Path, command_args: list = None,
+                 env_callback=None):
         """
         Initializes the ProcessManager.
         Args:
@@ -111,6 +112,14 @@ class ProcessManager:
             log_name (str): The name for the log file.
             base_dir (Path): The project's base directory, for log file placement.
             command_args (list, optional): A list of command and arguments. If None, script_path is used.
+            env_callback (callable, optional): Zero-arg callable returning a dict to
+                pass as subprocess.Popen(env=...). Called fresh on every start()
+                including monitor_and_restart-driven restarts, so plugins can
+                inject settings-derived env vars that may have changed since the
+                last spawn. If None, Popen inherits the parent process env
+                (current default — unchanged behavior). Added 2026-04-21 to
+                replace the ProcessManager.start() monkey-patch pattern used by
+                qwen3-tts / f5-tts plugins.
         """
         self.process = None
         self.script_path = script_path
@@ -118,6 +127,7 @@ class ProcessManager:
         self.command = command_args or [str(self.script_path)]
         self._monitor_thread = None
         self._monitor_running = False
+        self._env_callback = env_callback
 
     def start(self):
         """Starts the external script."""
@@ -141,6 +151,17 @@ class ProcessManager:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
         try:
+            # Fresh env each spawn if a callback is registered. Lets plugins
+            # (qwen3-tts, f5-tts) pass current settings-derived env vars on
+            # every restart without monkey-patching start().
+            spawn_env = None
+            if self._env_callback is not None:
+                try:
+                    spawn_env = self._env_callback()
+                except Exception as e:
+                    logger.warning(f"env_callback raised for {self.script_path.name}: {e} — spawning with parent env")
+                    spawn_env = None
+
             # Truncate on restart rather than append forever. The process gets
             # restarted at each Sapphire boot — there's no long-lived log needed,
             # and the append path was growing the file unboundedly (Scout 1
@@ -151,7 +172,8 @@ class ProcessManager:
                     self.process = subprocess.Popen(
                         self.command,
                         stdout=log,
-                        stderr=log
+                        stderr=log,
+                        env=spawn_env
                     )
                 else:
                     # Unix: new session + die-with-parent for clean orphan handling
@@ -159,7 +181,8 @@ class ProcessManager:
                         self.command,
                         stdout=log,
                         stderr=log,
-                        preexec_fn=_make_child_die_with_parent
+                        preexec_fn=_make_child_die_with_parent,
+                        env=spawn_env
                     )
             
             logger.info(f"Process for '{self.script_path.name}' started with PID: {self.process.pid}")

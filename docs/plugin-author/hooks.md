@@ -95,7 +95,7 @@ Through `system = event.metadata.get("system")`, plugins can control:
 | **Chat History** | `system.llm_chat.session_manager` | `get_messages()`, `list_chats()`, `create_chat(name)`, `set_active_chat(name)`, `delete_chat(name)` |
 | **Tool Manager** | `system.llm_chat.function_manager` | `update_enabled_functions([toolset])`, `execute_function(name, args)`, `get_enabled_function_names()` |
 | **Scopes** | `system.llm_chat.function_manager` | `set_knowledge_scope(s)`, `set_email_scope(s)`, `set_bitcoin_scope(s)`, `set_memory_scope(s)` |
-| **Generation** | `system.llm_chat.streaming_chat` | `cancel_flag = True` — cancel in-progress LLM streaming |
+| **Generation** | `system` | `cancel_generation()` — cancel in-progress LLM streaming |
 | **Event Bus** | `from core.event_bus import publish, Events` | Broadcast events system-wide |
 
 Always guard access with `hasattr()` checks — subsystems may be None if disabled:
