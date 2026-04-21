@@ -875,3 +875,20 @@ async def get_stt_providers(request: Request, _=Depends(require_login)):
     for p in providers:
         p['is_active'] = p['key'] == active
     return {"providers": providers, "active": active}
+
+
+@router.get("/api/embedding/providers")
+async def get_embedding_providers(request: Request, _=Depends(require_login)):
+    """List available embedding providers (core + plugin). Mirrors the TTS/STT
+    endpoints so the Settings UI's `mergeRegistryProviders` helper can surface
+    plugin-registered providers in the dropdown. Without this, a plugin
+    provider (e.g. minilm) doesn't appear in the EMBEDDING_PROVIDER selector —
+    the backend swap works via API but the UI dropdown renders the setting as
+    'Disabled' because the current value doesn't match any hardcoded option.
+    2026-04-21."""
+    from core.embeddings import embedding_registry
+    active = embedding_registry.get_active_key()
+    providers = embedding_registry.get_all()
+    for p in providers:
+        p['is_active'] = p['key'] == active
+    return {"providers": providers, "active": active}

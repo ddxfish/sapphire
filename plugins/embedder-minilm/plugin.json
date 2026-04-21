@@ -1,0 +1,20 @@
+{
+  "name": "embedder-minilm",
+  "short_name": "MiniLM Embedder",
+  "version": "0.1.0",
+  "description": "all-MiniLM-L6-v2 — small, fast, 384-dim CPU embedder. Alternative embedding provider for testing provider swaps and dimension transfer. Good reference for plugin authors writing new embedding providers.",
+  "author": "sapphire",
+  "icon": "\ud83e\ude90",
+  "priority": 50,
+  "default_enabled": true,
+  "capabilities": {
+    "providers": {
+      "embedding": {
+        "entry": "provider.py",
+        "class_name": "MiniLMEmbedder",
+        "key": "minilm",
+        "display_name": "MiniLM (all-MiniLM-L6-v2, 384-dim)"
+      }
+    }
+  }
+}

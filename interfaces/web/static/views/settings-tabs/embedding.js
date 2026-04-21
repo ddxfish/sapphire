@@ -1,6 +1,13 @@
 // settings-tabs/embedding.js - Embedding provider settings
-import { renderProviderTab, attachProviderListeners } from '../../shared/provider-selector.js';
+import { renderProviderTab, attachProviderListeners, mergeRegistryProviders } from '../../shared/provider-selector.js';
 import { on as onBusEvent, Events as BusEvents } from '../../core/event-bus.js';
+
+// Merged config cache — populated by attachListeners on first render so the
+// dropdown includes plugin-registered embedders (e.g. embedder-minilm). Mirrors
+// the tts.js / stt.js pattern. Without this, a plugin-registered EMBEDDING_PROVIDER
+// value doesn't map to any hardcoded entry and the dropdown falsely shows
+// "Disabled" even though the backend has the plugin active. 2026-04-21.
+let _mergedConfig = null;
 
 async function loadIntegrityStatus(el) {
     // Passive status: fetch how stored vectors are stamped vs the active
@@ -175,7 +182,8 @@ export default {
     description: 'Vector embedding engine for memory and knowledge search',
 
     render(ctx) {
-        let html = renderProviderTab(tabConfig, ctx);
+        const cfg = _mergedConfig || tabConfig;
+        let html = renderProviderTab(cfg, ctx);
         // Test button — shown for all providers except disabled
         html += `
             <div class="settings-grid" style="margin-top: 1rem;">
@@ -219,8 +227,18 @@ export default {
         return html;
     },
 
-    attachListeners(ctx, el) {
-        attachProviderListeners(tabConfig, ctx, el, this);
+    async attachListeners(ctx, el) {
+        // Re-fetch plugin providers each time (plugins may have been toggled
+        // since last visit). If the merge pulls in new keys, re-render so the
+        // dropdown reflects them before we attach any listeners.
+        _mergedConfig = await mergeRegistryProviders(tabConfig);
+        if (Object.keys(_mergedConfig.providers).length > Object.keys(tabConfig.providers).length) {
+            const body = el.querySelector('.settings-tab-body') || el;
+            body.innerHTML = this.render(ctx);
+            if (ctx.attachAccordionListeners) ctx.attachAccordionListeners(el);
+        }
+        const cfg = _mergedConfig || tabConfig;
+        attachProviderListeners(cfg, ctx, el, this);
         loadIntegrityStatus(el);
         wireReembedControls(el);
 

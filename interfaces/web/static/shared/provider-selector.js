@@ -14,7 +14,11 @@
  * Call this before renderProviderTab() to include dynamically registered providers.
  */
 export async function mergeRegistryProviders(tabConfig) {
-    const apiMap = { 'TTS_PROVIDER': '/api/tts/providers', 'STT_PROVIDER': '/api/stt/providers' };
+    const apiMap = {
+        'TTS_PROVIDER': '/api/tts/providers',
+        'STT_PROVIDER': '/api/stt/providers',
+        'EMBEDDING_PROVIDER': '/api/embedding/providers',
+    };
     const url = apiMap[tabConfig.providerKey];
     if (!url) return tabConfig;
     try {
