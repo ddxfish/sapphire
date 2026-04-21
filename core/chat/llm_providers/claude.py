@@ -143,10 +143,11 @@ class ClaudeProvider(BaseProvider):
         at request time to support hot-reload of cache settings.
         
         System prompt caching is skipped when dynamic content is detected:
-        - Spice: randomizes injections each request
+        - Spice: randomizes persona lines each request
         - Datetime injection: changes every minute
-        - State-in-prompt: includes turn count that changes each message
-        
+        - prompt_inject hook registered: plugin-injected content may
+          vary per turn (conservative — caught at hook-count level)
+
         Tools are always cached (they don't change with these features).
         Skipping avoids 25% write penalty on guaranteed cache misses.
         
@@ -163,12 +164,23 @@ class ClaudeProvider(BaseProvider):
         cache_enabled = claude_config.get('cache_enabled', True)
         cache_ttl = claude_config.get('cache_ttl', '5m')
         
-        # Check if spice, datetime, or state injection is enabled for active chat
-        # All cause guaranteed cache misses on system prompt (25% penalty)
+        # Skip system-prompt caching when we know the prompt text changes
+        # between turns. All these cause guaranteed cache misses plus a
+        # 25% write penalty, so the net is worse than no cache.
+        #
+        # What we catch:
+        #   - spice_enabled: randomized persona lines each turn
+        #   - inject_datetime: "Current time is X" — changes per minute
+        #   - prompt_inject hooks: ANY registered plugin hook can append
+        #     per-turn content to the system prompt (see chat.py:258).
+        #     We don't know what the hook produces, so we assume dynamic.
+        #     Conservative — if a plugin only injects static strings, the
+        #     plugin author can opt its hook out of this by not registering
+        #     when idle, or we can add a per-hook "dynamic" flag later.
+        # Tools still cache separately (they're stable across turns).
         cache_system_prompt = True
         if cache_enabled:
             try:
-                # Import here to avoid circular dependency
                 from core import system as sys_module
                 if hasattr(sys_module, 'system_instance') and sys_module.system_instance:
                     chat_settings = sys_module.system_instance.llm_chat.session_manager.get_chat_settings()
@@ -178,9 +190,17 @@ class ClaudeProvider(BaseProvider):
                     elif chat_settings.get('inject_datetime', False):
                         cache_system_prompt = False
                         logger.debug("[CACHE] Datetime injection enabled - skipping system prompt cache")
+                # prompt_inject hook registered by any plugin → assume dynamic.
+                # Checked even when sys_module isn't available since hook_runner
+                # is a module-level singleton.
+                if cache_system_prompt:
+                    from core.hooks import hook_runner
+                    if hook_runner.has_handlers("prompt_inject"):
+                        cache_system_prompt = False
+                        logger.debug("[CACHE] prompt_inject hook registered - skipping system prompt cache")
             except Exception as e:
                 logger.debug(f"[CACHE] Could not check chat settings: {e}")
-        
+
         return cache_enabled, cache_ttl, cache_system_prompt
     
     def chat_completion(

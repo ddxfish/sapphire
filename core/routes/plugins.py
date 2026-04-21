@@ -701,8 +701,10 @@ async def install_plugin(
                 with plugin_loader._lock:
                     plugin_loader._plugins.pop(name, None)
 
-                # Delete old plugin dir (state preserved separately)
-                shutil.rmtree(dest)
+                # Delete old plugin dir (state preserved separately).
+                # Uses the plugin_loader helper for Windows read-only tolerance.
+                from core.plugin_loader import _rmtree_robust
+                _rmtree_robust(dest)
 
             # ── Install ──
             USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)

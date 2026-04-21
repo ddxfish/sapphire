@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Callable, Tuple
@@ -16,6 +17,24 @@ from core.hooks import hook_runner
 from core.plugin_verify import verify_plugin
 
 logger = logging.getLogger(__name__)
+
+
+def _rmtree_robust(path):
+    """shutil.rmtree that survives Windows read-only files.
+
+    Plain `shutil.rmtree` crashes on Windows the first time it hits a
+    read-only file (.pyc, git-set permissions, AV-locked caches). The
+    onerror handler clears the read-only bit and retries the single
+    delete — if that still fails, we swallow the exception so a broken
+    file doesn't abort the whole uninstall and leave a half-deleted tree.
+    """
+    def _on_error(func, p, exc_info):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+            func(p)
+        except Exception as e:
+            logger.warning(f"[PLUGINS] rmtree could not remove {p}: {e}")
+    shutil.rmtree(path, onerror=_on_error)
 
 # Plugin search paths (relative to project root)
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -839,7 +858,7 @@ class PluginLoader:
         # Delete plugin directory (use actual path, not name — they may differ)
         plugin_dir = info["path"] if info else USER_PLUGINS_DIR / name
         if plugin_dir.exists():
-            shutil.rmtree(plugin_dir)
+            _rmtree_robust(plugin_dir)
 
         # Delete settings
         settings_file = PROJECT_ROOT / "user" / "webui" / "plugins" / f"{name}.json"
@@ -859,7 +878,7 @@ class PluginLoader:
                 for extra in PLUGIN_STATE_DIR.glob(f"{prefix}*"):
                     try:
                         if extra.is_dir():
-                            shutil.rmtree(extra)
+                            _rmtree_robust(extra)
                         else:
                             extra.unlink()
                         logger.info(f"[PLUGINS] Uninstall: removed sibling {extra.name}")
@@ -889,7 +908,7 @@ class PluginLoader:
                 if candidate.exists():
                     try:
                         if candidate.is_dir():
-                            shutil.rmtree(candidate)
+                            _rmtree_robust(candidate)
                         else:
                             candidate.unlink()
                         logger.info(f"[PLUGINS] Uninstall: removed declared {rel}")
