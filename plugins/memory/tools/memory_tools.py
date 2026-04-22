@@ -179,44 +179,98 @@ def _get_connection():
         conn.close()
 
 
-def _repair_db(db_path):
-    """Attempt to salvage memories from a corrupted database into a fresh one."""
-    backup_path = db_path.with_suffix('.db.corrupted')
+def _safe_rename_corrupted(db_path):
+    """Rename db_path → .db.corrupted, timestamp-suffixed if a prior backup
+    already exists. Prevents silent clobber of an earlier corruption's
+    salvage source. 2026-04-22 sapphire-killer fix A (claim 1f)."""
+    base_backup = db_path.with_suffix('.db.corrupted')
+    if not base_backup.exists():
+        target = base_backup
+    else:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        target = db_path.with_name(db_path.name + f'.corrupted.{ts}')
     try:
-        # Try to read memories from corrupted db
+        db_path.rename(target)
+        logger.info(f"[REPAIR] Original preserved at {target}")
+    except Exception as e:
+        logger.error(f"[REPAIR] Could not preserve corrupted DB at {target}: {e}")
+
+
+def _repair_db(db_path):
+    """Attempt to salvage memories from a corrupted database into a fresh one.
+
+    2026-04-22 REWRITE (sapphire-killer fix A+B):
+    - Builds fresh DB at .db.new TEMP path FIRST, verifies integrity, THEN swaps.
+      Pre-rewrite, the original was renamed .corrupted BEFORE salvage succeeded,
+      so a failed salvage left users with either (a) an empty DB where their
+      memories used to be, visible only as a .corrupted sibling with no UI
+      surface, or (b) a fresh empty DB if power cut between rename and commit.
+    - SELECT tiers now include embedding, embedding_provider, embedding_dim,
+      private_key. Pre-rewrite salvage dropped these columns, which meant
+      private memories became public after recovery (cross-persona leak) and
+      all semantic-search reachability was destroyed until re-embed.
+    - Prior .corrupted backups get timestamp-suffixed rather than silently
+      clobbered on repeated corruption events.
+
+    Behavioral invariant: if anything goes wrong, the original DB is left
+    untouched on disk. User can manually inspect/recover without Sapphire
+    having already moved it.
+    """
+    # Progressively-narrower SELECTs, widest first (2.6 full schema).
+    # Pad to 12 columns: id, content, timestamp, importance, keywords, context,
+    # scope, label, embedding, embedding_provider, embedding_dim, private_key.
+    salvage_queries = [
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label, '
+         'embedding, embedding_provider, embedding_dim, private_key FROM memories', 12),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label, '
+         'embedding, embedding_provider, embedding_dim FROM memories', 11),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label, '
+         'embedding FROM memories', 9),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope, label FROM memories', 8),
+        ('SELECT id, content, timestamp, importance, keywords, context, scope FROM memories', 7),
+        ('SELECT id, content, timestamp, importance, keywords, context FROM memories', 6),
+    ]
+
+    rows = None
+    chosen_cols = 0
+    try:
         conn = sqlite3.connect(db_path, timeout=10)
         cursor = conn.cursor()
-        # Grab whatever we can - ignore columns that may not exist
-        try:
-            cursor.execute('SELECT id, content, timestamp, importance, keywords, context, scope, label FROM memories')
-        except sqlite3.DatabaseError:
+        for query, n_cols in salvage_queries:
             try:
-                cursor.execute('SELECT id, content, timestamp, importance, keywords, context, scope FROM memories')
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                chosen_cols = n_cols
+                logger.info(f"[REPAIR] Salvaged via {n_cols}-column SELECT ({len(rows)} rows)")
+                break
             except sqlite3.DatabaseError:
-                try:
-                    cursor.execute('SELECT id, content, timestamp, importance, keywords, context FROM memories')
-                except sqlite3.DatabaseError:
-                    conn.close()
-                    logger.error("Cannot read any data from corrupted database")
-                    db_path.rename(backup_path)
-                    logger.info(f"Corrupted database moved to {backup_path}")
-                    return
-
-        rows = cursor.fetchall()
-        col_count = len(rows[0]) if rows else 0
+                continue
         conn.close()
+    except Exception as e:
+        logger.error(f"[REPAIR] Cannot open corrupted DB for salvage: {e}")
+        rows = None
 
-        # Rename corrupted file
-        db_path.rename(backup_path)
-        logger.info(f"Corrupted database backed up to {backup_path}")
+    if rows is None:
+        # All SELECT tiers failed. Original unreadable. Preserve it (timestamped)
+        # so fresh empty DB can be created by _ensure_db.
+        logger.error("[REPAIR] Every SELECT tier failed — memories table unreadable")
+        _safe_rename_corrupted(db_path)
+        return
 
-        if not rows:
+    # Build fresh DB at TMP path. Do NOT touch the original yet.
+    tmp_path = db_path.with_suffix('.db.new')
+    if tmp_path.exists():
+        try:
+            tmp_path.unlink()
+        except Exception as e:
+            logger.error(f"[REPAIR] Could not clear stale tmp {tmp_path}: {e}")
             return
 
-        # Create fresh db and insert salvaged rows
-        conn = sqlite3.connect(db_path, timeout=10)
+    try:
+        conn = sqlite3.connect(tmp_path, timeout=10)
         cursor = conn.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
+        # Full 2.6 schema. Missing columns from salvage get padded to NULL.
         cursor.execute('''
             CREATE TABLE memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,26 +281,64 @@ def _repair_db(db_path):
                 context TEXT,
                 scope TEXT NOT NULL DEFAULT 'default',
                 label TEXT,
-                embedding BLOB
+                embedding BLOB,
+                embedding_provider TEXT,
+                embedding_dim INTEGER,
+                private_key TEXT
             )
         ''')
+
         for row in rows:
-            # Pad missing columns with defaults
-            r = list(row) + [None] * (8 - len(row))
+            # Pad to 12-column shape. Column order matches the SELECT above.
+            r = list(row) + [None] * (12 - len(row))
+            # scope (index 6) is NOT NULL — default to 'default' if salvage
+            # didn't carry it (shorter-tier SELECTs) or it was NULL in source.
+            if r[6] is None:
+                r[6] = 'default'
             cursor.execute(
-                'INSERT INTO memories (id, content, timestamp, importance, keywords, context, scope, label) VALUES (?,?,?,?,?,?,?,?)',
-                r[:8]
+                'INSERT INTO memories (id, content, timestamp, importance, keywords, '
+                'context, scope, label, embedding, embedding_provider, embedding_dim, '
+                'private_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                r[:12]
             )
         conn.commit()
+
+        # Verify row count + integrity of the fresh DB before we touch the original.
+        cursor.execute('SELECT COUNT(*) FROM memories')
+        actual = cursor.fetchone()[0]
+        if actual != len(rows):
+            logger.error(f"[REPAIR] Row count mismatch — expected {len(rows)}, got {actual}")
+            conn.close()
+            tmp_path.unlink(missing_ok=True)
+            return
+
+        integ = cursor.execute("PRAGMA integrity_check").fetchone()
         conn.close()
-        logger.info(f"Salvaged {len(rows)} memories into fresh database")
+        if integ and integ[0] != 'ok':
+            logger.error(f"[REPAIR] Fresh DB failed integrity check: {integ[0]}")
+            tmp_path.unlink(missing_ok=True)
+            return
+
+        logger.info(f"[REPAIR] Fresh DB verified at {tmp_path} — {actual} rows, "
+                    f"salvage schema {chosen_cols} cols")
+
+        # Swap: rename original → .corrupted (timestamped if needed), then
+        # rename tmp → original. Narrow window between these two renames where
+        # db_path doesn't exist — _ensure_db would create a fresh empty DB on
+        # next boot if we crashed here, but the .corrupted sibling holds the
+        # verified salvage + original user data.
+        _safe_rename_corrupted(db_path)
+        tmp_path.rename(db_path)
+        logger.info(f"[REPAIR] Swap complete — fresh DB active at {db_path}")
 
     except Exception as e:
-        logger.error(f"Repair failed: {e}")
-        # Last resort - move corrupted file so fresh db can be created
-        if db_path.exists() and not backup_path.exists():
-            db_path.rename(backup_path)
-            logger.info(f"Corrupted database moved to {backup_path}")
+        logger.error(f"[REPAIR] Fresh DB build failed: {e}")
+        # Clean up tmp. Original is UNTOUCHED.
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
 
 
 def _setup_fts(cursor):

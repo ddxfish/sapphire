@@ -205,9 +205,28 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             except HTTPException:
                 raise
             except Exception as e:
-                logger.warning(f"Embedding swap gate: integrity check failed: {e}")
-                # If integrity check fails, fall through — we don't want to break
-                # legitimate swaps just because the report errored.
+                # 2026-04-22 fix C — fail CLOSED, not open. Pre-fix, a transient
+                # integrity_report failure (DB busy >10s during re-embed/VACUUM/
+                # heavy-search) caused the gate to silently pass, proceeding with
+                # a destructive swap the user would have refused if the warning
+                # had rendered. The only cases where that's acceptable are ones
+                # the caller explicitly opts into via `confirm_embedding_swap`.
+                logger.error(f"Embedding swap gate: integrity check failed: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "embedding_swap_gate_unavailable",
+                        "reason": str(e),
+                        "message": (
+                            "Cannot verify swap safety — integrity check failed "
+                            "(DB may be busy with re-embed, VACUUM, or heavy "
+                            "search). Wait for the busy operation to finish, or "
+                            "resubmit with `confirm_embedding_swap: true` to "
+                            "bypass the gate if you accept the risk of "
+                            "invalidating stored vectors."
+                        ),
+                    },
+                )
     results = []
     # Defer provider switches until after all settings are applied
     # (e.g. API key must be in config before provider init reads it)

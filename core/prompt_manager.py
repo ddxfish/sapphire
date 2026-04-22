@@ -28,6 +28,18 @@ class PromptManager:
         self._watcher_running = False
         self._last_mtimes = {}
         self._active_preset_name = 'unknown'
+
+        # 2026-04-22 fix E — load-failure tracking. If a load function fails
+        # (corrupt JSON, mid-write read, etc.), the corresponding flag is set
+        # True; the in-memory dict is preserved at its last-known-good state
+        # rather than wiped to {}. save_* functions then refuse to persist
+        # when the flag is True — prevents the wipe-then-write cascade where
+        # a transient read failure became permanent disk state on next save.
+        self._load_failed = {
+            'pieces': False,
+            'monoliths': False,
+            'spices': False,
+        }
         
         # Ensure user directory exists (bootstrap should have run, but be safe)
         self.USER_DIR.mkdir(parents=True, exist_ok=True)
@@ -53,15 +65,23 @@ class PromptManager:
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
+
             self._components = data.get("components", {})
             self._scenario_presets = data.get("scenario_presets", {})
-            
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['pieces'] = False
             logger.info(f"Loaded prompt pieces: {len(self._components)} component types")
         except Exception as e:
-            logger.error(f"Failed to load prompt pieces: {e}")
-            self._components = {}
-            self._scenario_presets = {}
+            # 2026-04-22 fix E1 — preserve in-memory state. Pre-fix we set
+            # _components = {} here; next save_components() persisted empty
+            # dict over the file, permanently wiping the user's pieces. Now:
+            # leave the in-memory state alone, flag the load as failed, let
+            # save_components() refuse until a successful reload.
+            logger.error(f"[PROMPTS] Failed to load prompt pieces — preserving last-known state: {e}")
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['pieces'] = True
     
     def _load_monoliths(self):
         """Load monolith prompts from user/prompts/."""
@@ -76,24 +96,31 @@ class PromptManager:
             with open(path, 'r', encoding='utf-8') as f:
                 raw_data = json.load(f)
 
-            # Normalize format: support both old (string) and new (object) formats
-            self._monoliths = {}
+            # Normalize format: support both old (string) and new (object) formats.
+            # Build into a local dict first so a mid-iteration failure doesn't
+            # leave self._monoliths half-populated.
+            new_monoliths = {}
             for k, v in raw_data.items():
                 if k.startswith('_'):
                     continue
                 if isinstance(v, str):
-                    # Old format: {name: "content"} -> convert to new format
-                    self._monoliths[k] = {'content': v, 'privacy_required': False}
+                    new_monoliths[k] = {'content': v, 'privacy_required': False}
                 elif isinstance(v, dict):
-                    # New format: {name: {content: "...", privacy_required: bool}}
-                    self._monoliths[k] = v
+                    new_monoliths[k] = v
                 else:
                     logger.warning(f"Skipping monolith '{k}' with unexpected type: {type(v)}")
 
+            self._monoliths = new_monoliths
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['monoliths'] = False
             logger.info(f"Loaded {len(self._monoliths)} monolith prompts")
         except Exception as e:
-            logger.error(f"Failed to load monoliths: {e}")
-            self._monoliths = {}
+            # 2026-04-22 fix E1 — preserve state; flag failure. See _load_pieces comment.
+            logger.error(f"[PROMPTS] Failed to load monoliths — preserving last-known state: {e}")
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['monoliths'] = True
     
     def _load_spices(self):
         """Load spice pool from user/prompts/."""
@@ -110,19 +137,19 @@ class PromptManager:
             with open(path, 'r', encoding='utf-8') as f:
                 raw_data = json.load(f)
 
-            # Extract metadata
             self._disabled_categories = set(raw_data.get('_disabled_categories', []))
             self._spice_meta = raw_data.get('_meta', {})
-
-            # Remove metadata keys for spices dict (categories are non-_ keys with list values)
             self._spices = {k: v for k, v in raw_data.items() if not k.startswith('_') and isinstance(v, list)}
-
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['spices'] = False
             logger.info(f"Loaded spice pool: {len(self._spices)} categories, {len(self._disabled_categories)} disabled")
         except Exception as e:
-            logger.error(f"Failed to load spices: {e}")
-            self._spices = {}
-            self._spice_meta = {}
-            self._disabled_categories = set()
+            # 2026-04-22 fix E1 — preserve state; flag failure.
+            logger.error(f"[PROMPTS] Failed to load spices — preserving last-known state: {e}")
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['spices'] = True
     
     def _replace_templates(self, text: str) -> str:
         """Replace {ai_name} and {user_name} with values from settings."""
@@ -259,6 +286,15 @@ class PromptManager:
     def save_scenario_presets(self):
         """Save scenario presets to user/prompts/prompt_pieces.json"""
         with self._lock:
+            # Scenario presets live in prompt_pieces.json. If its load failed
+            # we gate on the 'pieces' flag. Fix E2 2026-04-22.
+            if getattr(self, '_load_failed', {}).get('pieces'):
+                logger.error(
+                    "[PROMPTS] REFUSING to save scenario presets — last load "
+                    "of prompt_pieces.json failed. Persisting would overwrite "
+                    "a potentially recoverable disk file."
+                )
+                return
             target_path = self.USER_DIR / "prompt_pieces.json"
 
             # Load existing data
@@ -281,6 +317,20 @@ class PromptManager:
     def save_monoliths(self):
         """Save monoliths to user/prompts/prompt_monoliths.json"""
         with self._lock:
+            # 2026-04-22 fix E2 — refuse to save if the last load failed.
+            # Pre-fix, a failed load left self._monoliths = {} and the next
+            # save_monoliths() call persisted the empty dict over the
+            # (possibly still-intact) disk file — permanent wipe from a
+            # transient read failure.
+            if getattr(self, '_load_failed', {}).get('monoliths'):
+                logger.error(
+                    "[PROMPTS] REFUSING to save monoliths — last load failed. "
+                    "In-memory state may be stale; persisting it would overwrite "
+                    "a potentially recoverable disk file. Inspect "
+                    "user/prompts/prompt_monoliths.json and call reload() "
+                    "after the file is valid JSON again."
+                )
+                return
             target_path = self.USER_DIR / "prompt_monoliths.json"
 
             # Load existing to preserve _comment
@@ -313,6 +363,14 @@ class PromptManager:
     def save_components(self):
         """Save components to user/prompts/prompt_pieces.json"""
         with self._lock:
+            if getattr(self, '_load_failed', {}).get('pieces'):
+                logger.error(
+                    "[PROMPTS] REFUSING to save components — last load of "
+                    "prompt_pieces.json failed. Persisting would overwrite a "
+                    "potentially recoverable disk file. Fix the JSON and "
+                    "reload() before saving."
+                )
+                return
             target_path = self.USER_DIR / "prompt_pieces.json"
 
             # Load existing data
@@ -335,6 +393,14 @@ class PromptManager:
     def save_spices(self):
         """Save spices to user/prompts/prompt_spices.json"""
         with self._lock:
+            if getattr(self, '_load_failed', {}).get('spices'):
+                logger.error(
+                    "[PROMPTS] REFUSING to save spices — last load of "
+                    "prompt_spices.json failed. Persisting would overwrite a "
+                    "potentially recoverable disk file. Fix the JSON and "
+                    "reload() before saving."
+                )
+                return
             target_path = self.USER_DIR / "prompt_spices.json"
 
             # Build data with metadata

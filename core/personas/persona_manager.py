@@ -82,11 +82,38 @@ class PersonaManager:
                 with open(user_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 self._personas = {k: v for k, v in data.items() if not k.startswith('_')}
+                logger.info(f"Loaded {len(self._personas)} personas")
+                return
             except Exception as e:
-                logger.error(f"Failed to load user personas: {e}")
-                self._personas = {}
-            logger.info(f"Loaded {len(self._personas)} personas")
-            return
+                # 2026-04-22 fix D1 — pre-fix, `self._personas = {}` ran here
+                # and the next persona create/update/delete saved the empty
+                # dict OVER the corrupt file, permanently destroying whatever
+                # salvageable content it had. Now: preserve the corrupt file
+                # (timestamped) so manual recovery is possible, and fall
+                # through to first-run seed from core defaults. User gets a
+                # working Sapphire + their corrupt file on disk for forensics.
+                logger.error(f"[PERSONA] Failed to load user personas: {e}")
+                try:
+                    from datetime import datetime as _dt
+                    ts = _dt.now().strftime('%Y%m%d_%H%M%S')
+                    preserved = user_path.with_name(user_path.name + f'.corrupt-{ts}')
+                    user_path.rename(preserved)
+                    logger.warning(f"[PERSONA] Corrupt personas.json preserved at {preserved}")
+                except Exception as rename_err:
+                    logger.error(f"[PERSONA] Could not preserve corrupt file: {rename_err}")
+                try:
+                    from core.event_bus import publish, Events
+                    publish(Events.CONTINUITY_TASK_ERROR, {
+                        "task": "Personas",
+                        "error": f"personas.json was corrupt — preserved as backup, "
+                                 f"seeded from core defaults. Check user/personas/ "
+                                 f"for the corrupt-* backup to recover custom "
+                                 f"personas manually.",
+                    })
+                except Exception:
+                    pass
+                # Fall through to first-run seed path below — safer than
+                # leaving _personas = {} where the next save wipes the file.
 
         # First run — seed from core defaults
         core_path = self.BASE_DIR / "personas.json"
@@ -210,7 +237,15 @@ class PersonaManager:
             return self._save_to_user()
 
     def delete(self, name: str) -> bool:
-        """Delete a persona."""
+        """Delete a persona.
+
+        2026-04-22 fix D3 — detect chats that have this persona set as their
+        active persona, rewrite them to 'default' BEFORE we delete, and log
+        a WARN + publish SETTINGS_CHANGED event. Pre-fix: chats silently
+        pointed at a now-missing persona; next load fell through to whatever
+        default behavior the resolver chose — the silent-default class we've
+        been closing all week.
+        """
         if name not in self._personas:
             return False
 
@@ -225,6 +260,44 @@ class PersonaManager:
                         avatar_path.unlink()
                     except Exception as e:
                         logger.warning(f"Failed to delete avatar {avatar}: {e}")
+
+            # Active-persona handoff. Rewrite any chat that points at this
+            # persona to 'default' so activation doesn't silently no-op.
+            try:
+                from core.api_fastapi import get_system
+                system = get_system()
+                sm = getattr(getattr(system, 'llm_chat', None), 'session_manager', None)
+                if sm is not None and hasattr(sm, 'list_chats'):
+                    affected_chats = []
+                    for chat_entry in sm.list_chats() or []:
+                        chat_name = chat_entry.get('name') if isinstance(chat_entry, dict) else str(chat_entry)
+                        if not chat_name:
+                            continue
+                        try:
+                            settings = sm.read_chat_settings(chat_name) or {}
+                            if settings.get('persona') == name:
+                                sm.update_chat_settings(chat_name, {'persona': 'default'})
+                                affected_chats.append(chat_name)
+                        except Exception as chat_err:
+                            logger.debug(f"[PERSONA] Could not check chat '{chat_name}': {chat_err}")
+                    if affected_chats:
+                        logger.warning(
+                            f"[PERSONA] Deleted persona '{name}' was active in "
+                            f"{len(affected_chats)} chat(s): {affected_chats}. "
+                            f"Each was reset to 'default'."
+                        )
+                        try:
+                            from core.event_bus import publish, Events
+                            publish(Events.SETTINGS_CHANGED, {
+                                "key": "chat_persona_fallback",
+                                "value": "default",
+                                "reason": f"deleted_persona:{name}",
+                                "affected_chats": affected_chats,
+                            })
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.debug(f"[PERSONA] Active-persona handoff check skipped: {e}")
 
             del self._personas[name]
             return self._save_to_user()
@@ -376,9 +449,35 @@ class PersonaManager:
 
     def _clean_settings(self, settings: dict) -> dict:
         """Only keep recognized settings keys. Calls get_persona_settings_keys()
-        so new plugin scopes are picked up without restart."""
+        so new plugin scopes are picked up without restart.
+
+        2026-04-22 fix D2 — preserve keys matching the `*_scope` pattern even
+        if not currently in the allowlist. Rationale: plugin-provided scope
+        keys enter SCOPE_REGISTRY when the plugin loads. If the plugin is
+        temporarily unloaded (boot race, user-toggled off during upgrade),
+        persona.update() strict-strips those keys from disk — silently
+        losing the user's scope binding that would have come back when the
+        plugin reloaded. Keep unknown *_scope keys in the persona; log at
+        DEBUG so it's visible but not alarming.
+        """
         allowed = set(get_persona_settings_keys())
-        return {k: v for k, v in settings.items() if k in allowed}
+        result = {}
+        preserved_scope_keys = []
+        for k, v in settings.items():
+            if k in allowed:
+                result[k] = v
+            elif k.endswith('_scope'):
+                # Looks like a plugin-provided scope key. Keep it — the plugin
+                # may come back. Better to hold a stale binding than silently
+                # wipe the user's intent.
+                result[k] = v
+                preserved_scope_keys.append(k)
+        if preserved_scope_keys:
+            logger.debug(
+                f"[PERSONA] Preserved unknown scope keys not in current "
+                f"SCOPE_REGISTRY: {preserved_scope_keys}"
+            )
+        return result
 
 
 # Singleton instance
