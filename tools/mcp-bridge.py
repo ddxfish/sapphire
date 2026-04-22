@@ -10,7 +10,7 @@ Claude Code MCP config:
       "mcpServers": {
         "sapphire-memory": {
           "command": "python3",
-          "args": ["/home/bander/sapphire/sapphire/tools/mcp-bridge.py"]
+          "args": ["/path/to/sapphire/tools/mcp-bridge.py"]
         }
       }
     }
