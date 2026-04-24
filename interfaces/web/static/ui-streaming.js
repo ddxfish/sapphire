@@ -32,10 +32,38 @@ const resetState = (para = null) => {
     pendingToolEvents = [];
 };
 
-// Update paragraph with markdown rendering
+// Update paragraph with markdown rendering.
+// Splits paraBuf on blank-line boundaries (\n\s*\n) so that \n\n in the stream
+// produces real <p> siblings in real time, matching the history render at
+// ui-parsing.js:renderContentText (which splits on /\n\s*\n/).
+// Before this fix, all streamed text accumulated into a single <p> with <br>
+// separators, so paragraph spacing only appeared after the post-stream history
+// swap in ui.js:finishStreaming.
 const updatePara = () => {
-    if (!state.curPara || !state.paraBuf) return;
-    state.curPara.innerHTML = processMarkdown(state.paraBuf);
+    if (!state.curPara) return;
+
+    // Process any paragraph boundaries that have arrived in the buffer.
+    // A boundary is \n followed by zero-or-more horizontal whitespace then \n.
+    let match;
+    while ((match = state.paraBuf.match(/\n[ \t]*\n/))) {
+        const before = state.paraBuf.slice(0, match.index);
+        const after = state.paraBuf.slice(match.index + match[0].length);
+
+        // Finalize the current paragraph with content before the break.
+        state.curPara.innerHTML = processMarkdown(before);
+
+        // Open a new paragraph for content after the break.
+        const newP = createElem('p');
+        streamMsg.el.appendChild(newP);
+        state.curPara = newP;
+        // Strip leading whitespace (including stray newlines from \n\n\n+ runs).
+        state.paraBuf = after.replace(/^\s+/, '');
+    }
+
+    // Render remaining buffer into the current paragraph.
+    if (state.paraBuf) {
+        state.curPara.innerHTML = processMarkdown(state.paraBuf);
+    }
 };
 
 // Create a tool accordion with loading state
