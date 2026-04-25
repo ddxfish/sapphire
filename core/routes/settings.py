@@ -300,6 +300,15 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # we confirm the switch succeeded, then written to persisted_keys below.
     # Scout race #4 — persist-before-switch caused settings.json / singleton
     # divergence on switch failure).
+    #
+    # Sequence wake word init LAST. 2026-04-25 user report: heap corruption
+    # SIGABRT when wake word starts during a multi-component boot batch
+    # (TTS/STT/embedding loading from worker threads in the same window).
+    # Manual single-toggle works fine because nothing else competes — proves
+    # the issue is concurrency-with-other-C-extension-init, not wake word
+    # itself. Stable sort: non-wakeword actions keep their original order;
+    # wakeword(s) drop to the end so they init on a fully-settled environment.
+    deferred_actions.sort(key=lambda a: a[0] == 'toggle_wakeword')
     system = get_system()
     for action, value, key, tier in deferred_actions:
         switch_ok = False
