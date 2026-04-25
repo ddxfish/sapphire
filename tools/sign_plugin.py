@@ -18,6 +18,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -108,6 +109,26 @@ def main():
               'print(\'Public key (hex):\', k.public_key().public_bytes(serialization.Encoding.Raw, '
               'serialization.PublicFormat.Raw).hex())"', file=sys.stderr)
         sys.exit(1)
+
+    # Defensive perms tightening on load. Leak of this key = an attacker can
+    # sign arbitrary plugins as the user; signed-valid is the only trust
+    # anchor for plugin exec() (ALLOW_UNSIGNED_PLUGINS defaults to False).
+    # Generation happens via copy-pasted one-liner that doesn't restrict
+    # perms — so tightening every time we load is the belt that keeps a
+    # forgotten umask from being the whole story. 2026-04-24.
+    if sys.platform != 'win32':
+        try:
+            cur_mode = key_path.stat().st_mode & 0o777
+            if cur_mode != 0o600:
+                os.chmod(key_path, 0o600)
+                print(f"  Tightened key perms: {oct(cur_mode)} → 0o600 on {key_path}", file=sys.stderr)
+        except (OSError, PermissionError) as e:
+            print(f"  Warning: could not chmod key file ({e})", file=sys.stderr)
+    else:
+        # Windows: NTFS ACLs aren't touched here. The key file inherits
+        # parent-dir permissions. On a single-user Windows machine this is
+        # fine; on shared machines, see docs/SIGNING.md for ACL guidance.
+        pass
 
     private_key_pem = key_path.read_bytes()
 

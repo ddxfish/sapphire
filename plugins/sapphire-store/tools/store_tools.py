@@ -263,7 +263,10 @@ def _install(slug, plugin_settings=None):
 
             if dest.exists():
                 try:
-                    existing = json.loads((dest / "plugin.json").read_text())
+                    # Explicit utf-8: plugin manifests carry emoji ("emoji": "💾"),
+                    # Windows default cp1252 raises UnicodeDecodeError here and
+                    # blocks the "already installed" branch. 2026-04-24.
+                    existing = json.loads((dest / "plugin.json").read_text(encoding='utf-8'))
                     old_v = existing.get("version", "?")
                 except Exception:
                     old_v = "?"

@@ -105,14 +105,16 @@ def _ensure_notepad():
     """Create notepad file and directory if they don't exist."""
     NOTEPAD_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not NOTEPAD_PATH.exists():
-        NOTEPAD_PATH.write_text("")
+        # Explicit utf-8: Windows defaults to cp1252 which silently corrupts
+        # any unicode the user writes to their notepad. 2026-04-24.
+        NOTEPAD_PATH.write_text("", encoding='utf-8')
     return NOTEPAD_PATH
 
 
 def _read_lines():
     """Read notepad lines, stripping trailing newlines."""
     path = _ensure_notepad()
-    content = path.read_text()
+    content = path.read_text(encoding='utf-8')
     if not content:
         return []
     return content.splitlines()
@@ -123,7 +125,7 @@ def _write_lines(lines):
     path = _ensure_notepad()
     content = '\n'.join(lines) + '\n' if lines else ''
     tmp = path.with_suffix('.tmp')
-    tmp.write_text(content)
+    tmp.write_text(content, encoding='utf-8')
     tmp.replace(path)
 
 
