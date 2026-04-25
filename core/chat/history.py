@@ -518,20 +518,40 @@ class ConversationHistory:
         return True
 
     def remove_from_user_message(self, user_content: str) -> bool:
-        """Remove all messages starting from a specific user message to the end."""
+        """Remove all messages starting from a specific user message to the end.
+
+        Matches on the message's TEXT content. For multimodal messages (image
+        paste, file attachments), `content` is a list-of-parts shape rather
+        than a string — direct equality with user_content always fails. We
+        extract the text portion before comparing so deletion/resend works
+        regardless of attachment shape. 2026-04-25 user report: pasting an
+        image and trying to delete the message produced a 404 because the
+        match couldn't find a list ≠ string.
+        """
         if not user_content:
             return False
-        
+
+        def _text_of(content):
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "\n".join(
+                    p.get("text", "") for p in content
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+            return ""
+
         user_index = -1
         for i in range(len(self.messages) - 1, -1, -1):
-            if self.messages[i]["role"] == "user" and self.messages[i]["content"] == user_content:
+            msg = self.messages[i]
+            if msg["role"] == "user" and _text_of(msg.get("content")) == user_content:
                 user_index = i
                 break
-        
+
         if user_index == -1:
             logger.warning(f"User message not found for deletion: {user_content[:50]}...")
             return False
-        
+
         messages_to_delete = len(self.messages) - user_index
         self.messages = self.messages[:user_index]
         logger.info(f"Deleted {messages_to_delete} messages from user message at index {user_index}")
