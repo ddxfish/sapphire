@@ -1,2 +1,7 @@
 # Wake Word Detection (OpenWakeWord)
 openwakeword>=0.6.0
+# Explicit onnxruntime pin — openwakeword brings it in transitively, but
+# pip's resolver can pick old versions that crash with numpy 2.x arrays
+# (malloc heap-corruption SIGABRT in the wakeword inference hot path).
+# Onnxruntime added stable numpy-2 compat around 1.20. Lock the floor.
+onnxruntime>=1.20.0

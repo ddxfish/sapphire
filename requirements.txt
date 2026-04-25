@@ -16,7 +16,11 @@ openai>=1.12.0
 anthropic>=0.39.0
 
 # Audio Processing
-numpy>=1.24.0
+# numpy<3 prepares for the eventual numpy 3 ABI break the way numpy 2
+# bit users on 2026-04-25 — numpy 2 broke ABI vs 1.x and pip's transitive
+# resolver pulled an old onnxruntime that crashed on numpy 2 arrays in the
+# wakeword hot path. Lock the upper bound now while it's free.
+numpy>=1.24.0,<3.0.0
 sounddevice>=0.4.6
 soundfile>=0.12.1
 
@@ -30,8 +34,8 @@ bcrypt>=4.0.0
 PySocks>=1.7.1
 
 # TTS (Kokoro)
-psutil
-kokoro
+psutil>=5.9.0
+kokoro>=0.9.0
 
 # STT (Faster Whisper)
 faster-whisper>=1.0.0
@@ -39,6 +43,12 @@ torch>=2.0.0
 
 # Wake Word (OpenWakeWord)
 openwakeword>=0.6.0
+# Explicit onnxruntime pin — openwakeword brings it in transitively, but
+# pip's resolver can pick old versions that crash with numpy 2.x arrays.
+# Onnxruntime added stable numpy-2 compat around 1.20. Lock the floor.
+# Crash was: malloc(): invalid size in audio→numpy→onnxruntime hot path
+# on fresh installs (2026-04-25 user report).
+onnxruntime>=1.20.0
 
 # Image resize for LLM
 Pillow>=10.0.0
