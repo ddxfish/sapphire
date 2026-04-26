@@ -180,6 +180,7 @@ function renderWidget(field, value) {
 function inferWidget(field) {
     if (field.type === 'boolean') return 'toggle';
     if (field.type === 'number') return 'number';
+    if (field.type === 'textarea') return 'textarea';
     if (field.options) return 'select';
     return 'text';
 }
