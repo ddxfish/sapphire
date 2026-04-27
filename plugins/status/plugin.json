@@ -1,18 +1,30 @@
 {
   "name": "status",
-  "display_name": "System Status",
-  "description": "System status dashboard and self-awareness tool",
-  "version": "1.0.0",
+  "display_name": "Sapphire Status",
+  "description": "Sapphire status dashboard and self-awareness tool",
+  "version": "1.1.1",
   "emoji": "📡",
   "author": "Sapphire",
   "default_enabled": true,
   "capabilities": {
     "app": {
-      "label": "System Status",
+      "label": "Sapphire Status",
       "icon": "📡",
       "description": "Live system stats, diagnostics, and service health"
     },
     "tools": ["tools/status_tool.py"],
+    "settings": [
+      {
+        "key": "custom_status_commands",
+        "type": "textarea",
+        "widget": "textarea",
+        "label": "Custom status commands",
+        "default": "",
+        "rows": 6,
+        "placeholder": "CPU temp ::: /usr/bin/sensors | grep Package\nGPU ::: nvidia-smi --query-gpu=name,temperature.gpu --format=csv,noheader\n# disabled-line-starts-with-hash\nUptime ::: uptime",
+        "help": "One per line: LABEL ::: COMMAND. Output is shown to the AI when it calls get_self_info. Pipes/redirects work (shell=True) — to FILTER lines, pipe through grep (e.g. ` | grep Package`), not just `| Package`. 5s timeout, 500-char output cap, sudo refused. Lines starting with # are skipped."
+      }
+    ],
     "routes": [
       {"method": "GET", "path": "full", "handler": "routes/status.py:get_full_status"},
       {"method": "GET", "path": "logs", "handler": "routes/status.py:get_logs"}

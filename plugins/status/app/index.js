@@ -47,6 +47,11 @@ function renderDashboard(el, d) {
     const backup = d.backup || {};
     const update = d.update || {};
     const mind = d.mind || {};
+    const hw = d.hardware || {};
+    const disk = d.disk || {};
+    const recent = d.recent_activity || {};
+    const upcoming = d.upcoming_tasks || [];
+    const custom = d.custom || [];
 
     const upMin = Math.floor((ident.uptime_seconds || 0) / 60);
     const upH = Math.floor(upMin / 60);
@@ -146,6 +151,64 @@ function renderDashboard(el, d) {
                     </div>` : ''}
                 </div>
             </div>
+
+            <!-- Row 2.5: Hardware + Disk + Activity -->
+            <div class="status-row">
+                <div class="status-card">
+                    <div class="status-card-title">Hardware</div>
+                    <div class="status-grid">
+                        ${hw.cpu_model ? field('CPU', hw.cpu_model) : ''}
+                        ${hw.cores_logical ? field('Cores', hw.cores_physical && hw.cores_physical !== hw.cores_logical ? `${hw.cores_physical}c / ${hw.cores_logical}t` : `${hw.cores_logical}`) : ''}
+                        ${hw.arch ? field('Arch', hw.arch) : ''}
+                        ${hw.ram_total_gb ? field('RAM', `${hw.ram_total_gb} GB (${hw.ram_used_pct || 0}% used)`) : ''}
+                        ${(hw.gpus || []).length
+                            ? field('GPU', hw.gpus.map(g => `#${g.index} ${g.name} (${g.backend})`).join(', '))
+                            : field('GPU', 'none / unavailable')}
+                    </div>
+                    ${(disk.disk_free_gb !== undefined || disk.db_sizes_mb) ? `
+                    <div class="status-grid" style="margin-top:10px; border-top:1px solid var(--border); padding-top:8px">
+                        <div class="status-card-title" style="font-size:var(--font-sm)">Disk</div>
+                        ${disk.disk_free_gb !== undefined
+                            ? field('Free', `${disk.disk_free_gb} / ${disk.disk_total_gb} GB (${disk.disk_used_pct || 0}% used)`)
+                            : ''}
+                        ${disk.db_sizes_mb
+                            ? field('DBs', Object.entries(disk.db_sizes_mb).map(([k,v]) => `${k}: ${v} MB`).join(', '))
+                            : ''}
+                    </div>` : ''}
+                </div>
+                <div class="status-card">
+                    <div class="status-card-title">Activity</div>
+                    <div class="status-grid">
+                        ${recent.messages_today !== undefined ? field('Today', `${recent.messages_today} message${recent.messages_today === 1 ? '' : 's'}`) : ''}
+                        ${recent.last_message_ago ? field('Last msg', recent.last_message_ago) : ''}
+                        ${recent.last_message ? field('Timestamp', recent.last_message) : ''}
+                    </div>
+                    <div class="status-grid" style="margin-top:10px; border-top:1px solid var(--border); padding-top:8px">
+                        <div class="status-card-title" style="font-size:var(--font-sm)">Upcoming (next 4h)</div>
+                        ${upcoming.length
+                            ? upcoming.map(t => `<div class="status-field"><span class="status-field-label">${esc(t.when)}</span><span class="status-field-value">${esc(t.name)}</span></div>`).join('')
+                            : '<div class="status-meta">No tasks scheduled</div>'}
+                    </div>
+                </div>
+            </div>
+
+            ${custom.length ? `
+            <!-- Row 2.6: Custom commands -->
+            <div class="status-row">
+                <div class="status-card" style="grid-column: 1 / -1">
+                    <div class="status-card-title">Custom Commands</div>
+                    <div class="status-grid">
+                        ${custom.map(c => `
+                            <div class="status-custom-row ${c.ok ? 'ok' : 'fail'}">
+                                <div class="status-custom-label">${esc(c.label)}${c.ok ? '' : ' <span style="color:#ef5350">(failed)</span>'}</div>
+                                ${(!c.ok && c.command) ? `<div class="status-custom-cmd">$ ${esc(c.command)}</div>` : ''}
+                                <pre class="status-custom-output">${esc(c.output)}</pre>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div class="status-meta" style="margin-top:8px">Configure in Settings → Plugins → System Status → Custom status commands</div>
+                </div>
+            </div>` : ''}
 
             <!-- Row 3: Providers + Metrics -->
             <div class="status-row">
@@ -328,6 +391,19 @@ function renderDashboard(el, d) {
             .log-line .log-src { color: #6a6aaa; }
             .log-line .log-lvl { font-weight: 600; }
             .log-line mark { background: rgba(255,200,0,0.3); color: inherit; border-radius: 2px; }
+            .status-custom-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+            .status-custom-row:last-child { border-bottom: none; }
+            .status-custom-label { font-size: var(--font-sm); color: var(--text); font-weight: 500; }
+            .status-custom-output {
+                margin: 0; padding: 6px 8px; background: var(--bg, #0a0a14); color: var(--text-muted);
+                border-radius: 4px; font-family: monospace; font-size: var(--font-xs); white-space: pre-wrap;
+                word-break: break-word; max-height: 200px; overflow-y: auto;
+            }
+            .status-custom-row.fail .status-custom-output { color: #ef9a9a; }
+            .status-custom-cmd {
+                font-family: monospace; font-size: var(--font-xs); color: #888;
+                margin-bottom: 2px; padding: 2px 0;
+            }
         </style>
     `;
 
@@ -379,6 +455,25 @@ function renderDashboard(el, d) {
             `Knowledge: ${mind.knowledge_total || 0} entries${Object.keys(knowledgeScopes).length ? ' (' + Object.entries(knowledgeScopes).map(([k,v]) => `${k}: ${v}`).join(', ') + ')' : ''}`,
             ``,
             metrics.total_tokens ? `=== Tokens (7d) ===\n${(metrics.total_tokens || 0).toLocaleString()} total, ${metrics.total_calls || 0} calls` : '',
+            ``,
+            `=== Hardware ===`,
+            hw.cpu_model ? `CPU: ${hw.cpu_model}` : '',
+            hw.cores_logical ? `Cores: ${hw.cores_physical && hw.cores_physical !== hw.cores_logical ? hw.cores_physical + 'c/' + hw.cores_logical + 't' : hw.cores_logical}` : '',
+            hw.arch ? `Arch: ${hw.arch}` : '',
+            hw.ram_total_gb ? `RAM: ${hw.ram_total_gb} GB (${hw.ram_used_pct || 0}% used)` : '',
+            (hw.gpus || []).length ? `GPU: ${hw.gpus.map(g => `#${g.index} ${g.name} (${g.backend})`).join(', ')}` : 'GPU: none / unavailable',
+            ``,
+            `=== Disk ===`,
+            disk.disk_free_gb !== undefined ? `${disk.disk_free_gb} / ${disk.disk_total_gb} GB free (${disk.disk_used_pct || 0}% used)` : 'unavailable',
+            disk.db_sizes_mb ? `DBs: ${Object.entries(disk.db_sizes_mb).map(([k,v]) => k + '=' + v + 'MB').join(', ')}` : '',
+            ``,
+            `=== Activity ===`,
+            recent.messages_today !== undefined ? `${recent.messages_today} messages today` : '',
+            recent.last_message_ago ? `Last message: ${recent.last_message_ago}` : '',
+            ``,
+            `=== Upcoming (next 4h) ===`,
+            upcoming.length ? upcoming.map(t => `  ${t.when}  ${t.name}`).join('\n') : '  (none)',
+            custom.length ? `\n=== Custom Commands ===\n${custom.map(c => `  ${c.label}${c.ok ? '' : ' (failed)'}: ${c.output}`).join('\n')}` : '',
         ].filter(Boolean);
 
         navigator.clipboard.writeText(lines.join('\n'));

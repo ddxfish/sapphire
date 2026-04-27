@@ -1,15 +1,252 @@
 """Status data endpoint — gathers system state for both the app page and the AI tool."""
 
+import os
 import sys
 import time
+import shutil
 import platform
+import subprocess
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 _boot_time = time.time()
+
+
+# ── Hardware / disk / activity / custom-command helpers ─────────────────
+# All wrapped in try/except so a single failure (e.g. torch missing on a
+# stripped-down install, psutil quirk on Windows, etc.) just hides that
+# section instead of breaking get_self_info wholesale.
+
+def _get_hardware_info() -> dict:
+    """Cross-platform hardware summary. Falls back gracefully — every
+    field is optional. psutil + torch are listed deps, but defensive
+    imports keep this safe on environments where they're not present.
+    """
+    info = {}
+    try:
+        info["arch"] = platform.machine()
+        info["cores_logical"] = os.cpu_count() or 0
+    except Exception:
+        pass
+    try:
+        import psutil
+        info["cores_physical"] = psutil.cpu_count(logical=False) or 0
+        vm = psutil.virtual_memory()
+        info["ram_total_gb"] = round(vm.total / (1024**3), 1)
+        info["ram_used_pct"] = int(vm.percent)
+    except Exception:
+        pass
+    # CPU model name — Linux /proc/cpuinfo gives the most useful string.
+    # platform.processor() is empty/garbage on most Linuxes. Best-effort.
+    try:
+        if sys.platform.startswith('linux'):
+            with open('/proc/cpuinfo') as f:
+                for line in f:
+                    if line.startswith('model name'):
+                        info["cpu_model"] = line.split(':', 1)[1].strip()
+                        break
+        else:
+            proc = platform.processor()
+            if proc:
+                info["cpu_model"] = proc
+    except Exception:
+        pass
+    # GPU: torch covers NVIDIA (cuda) + Apple Silicon (mps) cross-platform.
+    # Defensive: if torch isn't importable or cuda init fails on a CPU-only
+    # box, just return empty list.
+    gpus = []
+    try:
+        import torch
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                try:
+                    gpus.append({
+                        "index": i,
+                        "name": torch.cuda.get_device_name(i),
+                        "backend": "cuda",
+                    })
+                except Exception:
+                    pass
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            gpus.append({"index": 0, "name": "Apple Silicon GPU", "backend": "mps"})
+    except Exception:
+        pass
+    info["gpus"] = gpus
+    return info
+
+
+def _get_disk_info(user_dir: Path) -> dict:
+    """Free/total on the drive holding user_dir + size of the main DBs.
+    Skips a full `user/` walk — that can be slow on large installs and
+    isn't worth the cost for chat-start latency.
+    """
+    info = {}
+    try:
+        total, used, free = shutil.disk_usage(user_dir)
+        info["disk_total_gb"] = round(total / (1024**3), 1)
+        info["disk_free_gb"] = round(free / (1024**3), 1)
+        info["disk_used_pct"] = int(used / total * 100) if total else 0
+    except Exception:
+        pass
+    db_sizes = {}
+    for name in ("chats.db", "memory.db", "knowledge.db"):
+        p = user_dir / name
+        try:
+            if p.exists():
+                db_sizes[name] = round(p.stat().st_size / (1024**2), 1)
+        except Exception:
+            pass
+    if db_sizes:
+        info["db_sizes_mb"] = db_sizes
+    return info
+
+
+def _get_recent_activity(user_dir: Path, active_chat: str | None) -> dict:
+    """Messages sent today on the active chat + last activity timestamp.
+    Reads from chats.db directly to keep this independent of the rest of
+    the chat module (avoids load-order issues during early boot).
+    """
+    info = {}
+    if not active_chat:
+        return info
+    try:
+        import sqlite3
+        chats_db = user_dir / "chats.db"
+        if not chats_db.exists():
+            return info
+        conn = sqlite3.connect(str(chats_db))
+        c = conn.cursor()
+        # Discover the schema — chat tables vary across versions. Just look
+        # for any table with a 'timestamp' or 'created_at' column tied to
+        # the active chat. Best-effort, never raise.
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            c.execute(
+                "SELECT COUNT(*) FROM messages WHERE chat_name = ? AND substr(timestamp, 1, 10) = ?",
+                (active_chat, today)
+            )
+            row = c.fetchone()
+            if row:
+                info["messages_today"] = row[0]
+        except Exception:
+            pass
+        try:
+            c.execute(
+                "SELECT timestamp FROM messages WHERE chat_name = ? ORDER BY id DESC LIMIT 1",
+                (active_chat,)
+            )
+            row = c.fetchone()
+            if row and row[0]:
+                info["last_message"] = row[0]
+                # Compute relative "X ago"
+                try:
+                    last = datetime.fromisoformat(row[0].replace('Z', '+00:00').split('.')[0])
+                    delta = datetime.now() - last.replace(tzinfo=None)
+                    secs = int(delta.total_seconds())
+                    if secs < 60:
+                        info["last_message_ago"] = f"{secs}s ago"
+                    elif secs < 3600:
+                        info["last_message_ago"] = f"{secs // 60}m ago"
+                    elif secs < 86400:
+                        info["last_message_ago"] = f"{secs // 3600}h ago"
+                    else:
+                        info["last_message_ago"] = f"{secs // 86400}d ago"
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        conn.close()
+    except Exception:
+        pass
+    return info
+
+
+def _get_upcoming_tasks(scheduler, hours: int = 4) -> list:
+    """Continuity tasks due in the next `hours` hours. Cron tasks only —
+    daemons/heartbeats run on intervals and aren't 'scheduled' in the
+    same sense. croniter is a continuity dep, defensive import.
+    """
+    upcoming = []
+    if not scheduler:
+        return upcoming
+    try:
+        from croniter import croniter
+    except Exception:
+        return upcoming
+    try:
+        now = datetime.now()
+        cutoff = now + timedelta(hours=hours)
+        for t in scheduler.list_tasks():
+            if not t.get("enabled"):
+                continue
+            cron_expr = t.get("schedule") or t.get("cron")
+            if not cron_expr:
+                continue
+            try:
+                it = croniter(cron_expr, now)
+                nxt = it.get_next(datetime)
+                if nxt <= cutoff:
+                    upcoming.append({
+                        "name": t.get("name", "Unknown"),
+                        "when": nxt.strftime("%H:%M"),
+                    })
+            except Exception:
+                continue
+        upcoming.sort(key=lambda x: x["when"])
+    except Exception:
+        pass
+    return upcoming
+
+
+def _run_custom_commands(commands_text: str, max_per_output: int = 500, timeout_s: int = 5) -> list:
+    """Run user-configured shell commands and return their output.
+    Format: one per line, `LABEL ::: COMMAND`. Lines starting with #
+    are skipped. Output capped at `max_per_output` chars (label + marker
+    show truncation). Stderr merged into stdout. sudo prefix refused.
+    Pipes/redirects work via shell=True — that's the whole point.
+    """
+    results = []
+    if not commands_text or not commands_text.strip():
+        return results
+    for raw in commands_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        if '::: ' in line:
+            label, cmd = line.split('::: ', 1)
+        elif ':::' in line:
+            label, cmd = line.split(':::', 1)
+        else:
+            # No separator — use the line as both label and command
+            label, cmd = line, line
+        label = label.strip()[:40] or "(unnamed)"
+        cmd = cmd.strip()
+        if not cmd:
+            continue
+        # Refuse sudo — cheap footgun guard.
+        if cmd.startswith('sudo ') or cmd == 'sudo':
+            results.append({"label": label, "command": cmd, "output": "(sudo refused)", "ok": False})
+            continue
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True,
+                timeout=timeout_s, errors='replace',
+            )
+            out = (r.stdout or "") + (r.stderr or "")
+            out = out.strip()
+            if not out:
+                out = f"(exit {r.returncode}, no output)" if r.returncode else "(no output)"
+            if len(out) > max_per_output:
+                out = out[:max_per_output] + f"… [+{len(out) - max_per_output} chars truncated]"
+            results.append({"label": label, "command": cmd, "output": out, "ok": r.returncode == 0})
+        except subprocess.TimeoutExpired:
+            results.append({"label": label, "command": cmd, "output": f"(timed out after {timeout_s}s)", "ok": False})
+        except Exception as e:
+            results.append({"label": label, "command": cmd, "output": f"(error: {e})", "ok": False})
+    return results
 
 
 def _is_docker():
@@ -288,6 +525,24 @@ def get_full_status_sync():
         except Exception:
             pass
 
+        # Hardware / disk / activity / upcoming tasks / custom commands.
+        # Each gatherer is independently try/except'd inside — failures
+        # produce empty dicts/lists instead of breaking get_self_info.
+        hardware_info = _get_hardware_info()
+        disk_info = _get_disk_info(user_dir)
+        recent_activity = _get_recent_activity(user_dir, active_session.get("chat"))
+        upcoming = _get_upcoming_tasks(getattr(system, 'continuity_scheduler', None))
+
+        custom_results = []
+        try:
+            from core.plugin_loader import plugin_loader
+            settings_obj = plugin_loader.get_plugin_settings("status") or {}
+            cmds_text = settings_obj.get("custom_status_commands", "")
+            if cmds_text:
+                custom_results = _run_custom_commands(cmds_text)
+        except Exception as e:
+            logger.debug(f"Custom commands skipped: {e}")
+
         return {
             "identity": identity,
             "session": active_session,
@@ -301,6 +556,11 @@ def get_full_status_sync():
             "backup": backup_info,
             "update": update_info,
             "mind": mind_info,
+            "hardware": hardware_info,
+            "disk": disk_info,
+            "recent_activity": recent_activity,
+            "upcoming_tasks": upcoming,
+            "custom": custom_results,
         }
 
     except Exception as e:

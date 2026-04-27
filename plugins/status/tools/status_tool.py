@@ -116,7 +116,68 @@ def execute(function_name, arguments, config=None):
         if m.get("total_tokens"):
             lines.append(f"Token usage (7d): {m['total_tokens']:,} total | {m.get('total_calls', 0)} calls")
 
+        # Recent activity on this chat
+        ra = data.get("recent_activity", {})
+        if ra:
+            parts = []
+            if ra.get("messages_today") is not None:
+                parts.append(f"{ra['messages_today']} msgs today")
+            if ra.get("last_message_ago"):
+                parts.append(f"last {ra['last_message_ago']}")
+            if parts:
+                lines.append("Activity: " + ", ".join(parts))
+
+        # Upcoming continuity tasks (next 4h)
+        upcoming = data.get("upcoming_tasks", [])
+        if upcoming:
+            preview = ", ".join(f"{t['name']} @ {t['when']}" for t in upcoming[:3])
+            extra = f" (+{len(upcoming) - 3} more)" if len(upcoming) > 3 else ""
+            lines.append(f"Upcoming (4h): {preview}{extra}")
+
+        # Custom user commands — always shown (user explicitly opted in)
+        custom = data.get("custom", [])
+        if custom:
+            lines.append("\nCustom:")
+            for item in custom:
+                marker = "" if item.get("ok") else " (failed)"
+                lines.append(f"  {item['label']}{marker}: {item['output']}")
+
         if detail == "full":
+            # Hardware
+            hw = data.get("hardware", {})
+            if hw:
+                hw_parts = []
+                if hw.get("cpu_model"):
+                    hw_parts.append(hw["cpu_model"])
+                if hw.get("cores_logical"):
+                    phys = hw.get("cores_physical")
+                    if phys and phys != hw["cores_logical"]:
+                        hw_parts.append(f"{phys}c/{hw['cores_logical']}t")
+                    else:
+                        hw_parts.append(f"{hw['cores_logical']} cores")
+                if hw.get("arch"):
+                    hw_parts.append(hw["arch"])
+                if hw.get("ram_total_gb"):
+                    hw_parts.append(f"RAM {hw['ram_total_gb']}GB ({hw.get('ram_used_pct', 0)}% used)")
+                if hw_parts:
+                    lines.append(f"\nHardware: {' | '.join(hw_parts)}")
+                gpus = hw.get("gpus", [])
+                if gpus:
+                    gpu_strs = [f"#{g['index']} {g['name']} ({g['backend']})" for g in gpus]
+                    lines.append(f"GPU: {', '.join(gpu_strs)}")
+
+            # Disk
+            d = data.get("disk", {})
+            if d:
+                disk_parts = []
+                if d.get("disk_free_gb") is not None:
+                    disk_parts.append(f"{d['disk_free_gb']}GB free / {d.get('disk_total_gb', '?')}GB ({d.get('disk_used_pct', 0)}% used)")
+                if d.get("db_sizes_mb"):
+                    db_str = ", ".join(f"{k}={v}MB" for k, v in d["db_sizes_mb"].items())
+                    disk_parts.append(f"DBs: {db_str}")
+                if disk_parts:
+                    lines.append(f"Disk: {' | '.join(disk_parts)}")
+
             # Providers
             provs = data.get("providers", [])
             if provs:
