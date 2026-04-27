@@ -293,21 +293,90 @@ def test_check_update_without_source_url_returns_no_source_reason(
     assert body['reason'] == 'no_source'
 
 
-def test_check_update_non_github_source_returns_no_source(client, temp_user_dir, monkeypatch):
-    """Source URL that's not a GitHub URL → no_source (we only know how to
-    fetch GitHub raw files for check-update)."""
+def test_check_update_unsupported_host_returns_unsupported_source(client, temp_user_dir, monkeypatch):
+    """Source URL that's neither GitHub nor GitLab → unsupported_source.
+    2026-04-26: GitLab was added to the supported set, so this test now
+    exercises the genuinely-unknown-host case with bitbucket."""
     import core.plugin_loader as pl
     mock_pl = MagicMock()
-    mock_pl.get_plugin_info.return_value = _mock_info('gitlab_plugin')
+    mock_pl.get_plugin_info.return_value = _mock_info('bitbucket_plugin')
     fake_state = MagicMock()
-    fake_state.get.return_value = 'https://gitlab.com/user/repo'
+    fake_state.get.return_value = 'https://bitbucket.org/user/repo'
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
     c, csrf = client
+    r = c.get('/api/plugins/bitbucket_plugin/check-update')
+    assert r.status_code == 200
+    assert r.json()['reason'] == 'unsupported_source'
+
+
+def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkeypatch):
+    """GitLab source URL is now SUPPORTED — check_plugin_update should
+    attempt to fetch the manifest from gitlab.com/.../-/raw/<branch>/plugin.json
+    rather than returning unsupported_source. 2026-04-26 GitLab support."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('gitlab_plugin')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://gitlab.com/group/subgroup/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import requests
+    fetched = []
+
+    def _fake_get(url, *_, **__):
+        fetched.append(url)
+        resp = MagicMock()
+        resp.status_code = 404
+        return resp
+
+    monkeypatch.setattr(requests, 'get', _fake_get)
+
+    c, csrf = client
     r = c.get('/api/plugins/gitlab_plugin/check-update')
     assert r.status_code == 200
-    assert r.json()['reason'] == 'no_source'
+    body = r.json()
+    # When all branches 404, the route returns fetch_failed (not unsupported_source).
+    # That's the proof that the route attempted to fetch — i.e., GitLab IS supported.
+    assert body['reason'] == 'fetch_failed', f"GitLab source should attempt fetch, got: {body}"
+    # And we should have tried both main and master at the GitLab raw URL pattern.
+    assert any('gitlab.com/group/subgroup/repo/-/raw/main/plugin.json' in u for u in fetched), \
+        f"Expected GitLab raw URL with subgroup path, fetched: {fetched}"
+    assert any('gitlab.com/group/subgroup/repo/-/raw/master/plugin.json' in u for u in fetched), \
+        f"Expected fallback to master branch, fetched: {fetched}"
+
+
+def test_check_update_url_with_query_params_still_matches(client, temp_user_dir, monkeypatch):
+    """A stored installed_from URL with a query string / fragment should still
+    match the GitHub/GitLab regex. Path-only matching via urlparse. 2026-04-26."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('gh_with_qs')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo?utm_source=share#readme'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import requests
+    fetched = []
+
+    def _fake_get(url, *_, **__):
+        fetched.append(url)
+        resp = MagicMock()
+        resp.status_code = 404
+        return resp
+
+    monkeypatch.setattr(requests, 'get', _fake_get)
+
+    c, csrf = client
+    r = c.get('/api/plugins/gh_with_qs/check-update')
+    assert r.status_code == 200
+    body = r.json()
+    assert body['reason'] == 'fetch_failed', f"URL with query params should still match GitHub regex, got: {body}"
+    assert any('raw.githubusercontent.com/user/repo' in u for u in fetched), \
+        f"Expected GitHub raw URL, fetched: {fetched}"
 
 
 # ─── 1.40 Check-update: non-numeric versions handled gracefully ──────────────
