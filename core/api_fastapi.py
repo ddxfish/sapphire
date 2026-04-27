@@ -456,36 +456,43 @@ def _apply_chat_settings(system, settings: dict):
         if "prompt" in settings:
             prompt_name = settings["prompt"]
             prompt_data = prompts.get_prompt(prompt_name)
-            content = prompt_data.get('content', '') if isinstance(prompt_data, dict) else ''
-            if content:
+            # Existence is "prompt_data is a dict", NOT "content is truthy".
+            # The 'blank' prompt is an intentional empty-content prompt — it
+            # exists so users can run with NO system prompt. Treating empty
+            # content as "missing" silently kept the previous prompt loaded
+            # (Sapphire) and made `blank` a no-op. 2026-04-27 fix.
+            if isinstance(prompt_data, dict):
+                content = prompt_data.get('content', '') or ''
                 system.llm_chat.set_system_prompt(content)
                 prompts.set_active_preset_name(prompt_name)
 
                 if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
                     prompts.apply_scenario(prompt_name)
 
-                logger.info(f"Applied prompt: {prompt_name}")
+                logger.info(f"Applied prompt: {prompt_name}{' (empty content — blank mode)' if not content else ''}")
             else:
-                # Chat settings named a prompt that no longer exists (likely
-                # deleted after the chat was configured with it). Fall back to
-                # 'default' loudly AND rewrite the chat's settings so the
-                # next activation doesn't take the same wrong turn. Silent
-                # no-op here = chat sticks with whatever prompt the previous
-                # chat left loaded. H3 fix 2026-04-22.
+                # Prompt genuinely missing — fall back to 'default' if it
+                # exists, and rewrite chat settings so the next activation
+                # doesn't take the same wrong turn. H3 fix 2026-04-22.
                 logger.warning(
                     f"Chat references unknown prompt '{prompt_name}' "
                     f"— falling back to 'default' and rewriting chat settings."
                 )
                 default_data = prompts.get_prompt('default')
-                default_content = default_data.get('content', '') if isinstance(default_data, dict) else ''
-                if default_content:
+                if isinstance(default_data, dict):
+                    default_content = default_data.get('content', '') or ''
                     system.llm_chat.set_system_prompt(default_content)
                     prompts.set_active_preset_name('default')
                 try:
                     chat_name = system.llm_chat.session_manager.get_active_chat_name()
                     if chat_name:
+                        # update_chat_settings takes ONE dict arg, not two
+                        # (it operates on the active chat). Old 2-arg call
+                        # raised TypeError silently inside the try/except,
+                        # so the chat's prompt setting kept pointing at the
+                        # missing name. 2026-04-27 fix.
                         system.llm_chat.session_manager.update_chat_settings(
-                            chat_name, {"prompt": "default"}
+                            {"prompt": "default"}
                         )
                 except Exception as e:
                     logger.debug(f"Could not rewrite chat.prompt after fallback: {e}")
