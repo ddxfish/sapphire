@@ -67,12 +67,28 @@
 **Wake word not triggering**
 - Check which wakeword you are using in settings
 - Make sure you pip installed install/requirements-wakeword.txt
-- Check wakeword is enabled in settings, reboot app after
+- Wake word is enabled in settings (the model setting now hot-reloads — no restart needed)
 - Turn your mic volume up to 70-100%
 - Set system mic to the mic you want wakeword on
 - Try using Hey Mycroft as a wakeword instead of Hey Sapphire
 - Reduce sensitivity threshold to 0.5
 - Test a different mic
+
+**Switching to a different built-in wake word (`hey_mycroft`, `hey_jarvis`, `alexa`, etc.) didn't take effect**
+- Older Sapphire versions required a full app restart after changing `WAKEWORD_MODEL` — the running detector didn't reload. Fixed: the model now hot-swaps when you save the setting.
+- If you're on a build from before the fix, restart Sapphire once after the model change.
+- First time you select a new built-in, OpenWakeWord downloads the model (`hey_mycroft_v0.1.onnx` etc.) into its package directory — give it a few seconds before testing.
+
+**Adding a custom wake word**
+- Drop your `.onnx` or `.tflite` model into `user/wakeword/models/` and select it from the wakeword dropdown in settings.
+- The dropdown name is the **filename stem** — `my_word.onnx` shows up as `my_word`.
+- Built-in OpenWakeWord set: `alexa`, `hey_mycroft`, `hey_jarvis`, `hey_rhasspy`, `timer`, `weather`. Sapphire ships with `hey_sapphire`.
+
+**Training your own wake word**
+- OpenWakeWord (the engine Sapphire uses) supports custom-trained models. Project + training instructions: <https://github.com/dscripka/openWakeWord>
+- Fastest path is the official Colab notebook in that repo — generates a model from a phrase in ~1 hour, no audio recording required (it synthesizes training data with TTS).
+- Output is a `.onnx` file. Drop it into `user/wakeword/models/` and pick it from the dropdown.
+- For phrase quality tips and threshold tuning, see the `openWakeWord` docs and issues — the Sapphire side is just a thin loader.
 
 ## Prompt issues
 **If you broke your default prompts**

@@ -391,9 +391,19 @@ class WakeWordDetector:
                 # Get prediction from OWW
                 predictions = self.model.predict(audio_array)
 
-                # Check if wake word detected
-                # OWW keys predictions by model name (stem), even for custom paths
+                # Check if wake word detected. OWW keys predictions by file
+                # stem when loaded by path (e.g. 'hey_mycroft_v0.1' for the
+                # bundled v0.1.onnx files) and by bare name when loaded as a
+                # builtin. Try exact match first, then prefix match against
+                # versioned stems, finally fall back to whatever the only
+                # loaded model returned. Single-model detector — safe to
+                # inspect all keys.
                 score = predictions.get(self.model_name, 0)
+                if score < self.threshold and predictions:
+                    for k, v in predictions.items():
+                        if k.startswith(self.model_name):
+                            score = v
+                            break
                 if score >= self.threshold:
                     logger.info(f"Wake word '{self.model_name}' detected with score {score:.3f}")
                     self._on_activation()

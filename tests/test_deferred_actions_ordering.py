@@ -19,7 +19,7 @@ the sort will fail this test before reintroducing the bug.
 def _sort_invariant(deferred_actions):
     """Replicate the sort applied in core/routes/settings.py:set_settings_batch
     so we can validate the invariant directly without spinning the route."""
-    deferred_actions.sort(key=lambda a: a[0] == 'toggle_wakeword')
+    deferred_actions.sort(key=lambda a: a[0] in ('toggle_wakeword', 'reload_wakeword_model'))
     return deferred_actions
 
 
@@ -101,7 +101,7 @@ def test_sort_invariant_matches_route_implementation():
     attention to whether the regression risk has actually been preserved."""
     from pathlib import Path
     src = (Path(__file__).parent.parent / "core" / "routes" / "settings.py").read_text(encoding='utf-8')
-    expected = "deferred_actions.sort(key=lambda a: a[0] == 'toggle_wakeword')"
+    expected = "deferred_actions.sort(key=lambda a: a[0] in ('toggle_wakeword', 'reload_wakeword_model'))"
     assert expected in src, (
         f"core/routes/settings.py no longer contains the wake-word-last sort. "
         f"Expected literal: {expected!r}. If the implementation changed shape "
@@ -110,3 +110,16 @@ def test_sort_invariant_matches_route_implementation():
         f"Don't just remove the assertion — the boot-race regression it "
         f"prevents is real and reproducible."
     )
+
+
+def test_reload_wakeword_model_also_sorts_to_end():
+    """WAKEWORD_MODEL changes spawn a reload_wakeword_model action. Same
+    C-extension boot-race concern as toggle_wakeword — must also run last.
+    2026-04-27: added when WAKEWORD_MODEL stopped being a no-op at runtime."""
+    actions = [
+        ('reload_wakeword_model', 'hey_mycroft', 'WAKEWORD_MODEL', 'hot'),
+        ('switch_tts_provider', 'kokoro', 'TTS_PROVIDER', 'hot'),
+        ('switch_stt_provider', 'faster_whisper', 'STT_PROVIDER', 'hot'),
+    ]
+    sorted_actions = _sort_invariant(list(actions))
+    assert sorted_actions[-1][0] == 'reload_wakeword_model'

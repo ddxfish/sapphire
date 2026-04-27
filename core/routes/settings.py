@@ -264,6 +264,13 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             if key == 'WAKE_WORD_ENABLED':
                 deferred_actions.append(('toggle_wakeword', value, key, tier))
                 deferred_keys.add(key)
+            if key == 'WAKEWORD_MODEL':
+                # Skip if WAKE_WORD_ENABLED is in the same batch — the
+                # toggle_wakeword cold-start already reads WAKEWORD_MODEL
+                # from settings. Avoids a double-init.
+                if 'WAKE_WORD_ENABLED' not in settings_dict:
+                    deferred_actions.append(('reload_wakeword_model', value, key, tier))
+                deferred_keys.add(key)
             if key == 'STT_PROVIDER':
                 deferred_actions.append(('switch_stt_provider', value, key, tier))
                 deferred_keys.add(key)
@@ -308,7 +315,7 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # the issue is concurrency-with-other-C-extension-init, not wake word
     # itself. Stable sort: non-wakeword actions keep their original order;
     # wakeword(s) drop to the end so they init on a fully-settled environment.
-    deferred_actions.sort(key=lambda a: a[0] == 'toggle_wakeword')
+    deferred_actions.sort(key=lambda a: a[0] in ('toggle_wakeword', 'reload_wakeword_model'))
     system = get_system()
     for action, value, key, tier in deferred_actions:
         switch_ok = False

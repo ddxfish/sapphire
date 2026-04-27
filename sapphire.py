@@ -341,6 +341,49 @@ class VoiceChatSystem:
                 logger.info("Wakeword stopped")
             return True
 
+    def reload_wakeword_model(self, model_name=None):
+        """Hot-swap the wake word model on a live detector.
+
+        Settings already wrote the new value to config.WAKEWORD_MODEL by
+        the time this fires. If wakeword isn't currently listening, this
+        is a no-op — the next toggle_wakeword(True) cold-start will read
+        the new value from settings on its own.
+        """
+        from core.wakeword.wakeword_null import NullAudioRecorder, NullWakeWordDetector
+
+        # Disabled / never started — setting will apply on first enable
+        if isinstance(self.wake_detector, NullWakeWordDetector):
+            logger.info(f"Wakeword model set to '{config.WAKEWORD_MODEL}' (will apply when wakeword is enabled)")
+            return True
+
+        if not config.WAKE_WORD_ENABLED:
+            return True
+
+        try:
+            logger.info(f"Reloading wakeword detector with model: {config.WAKEWORD_MODEL}")
+            self.wake_detector.stop_listening()
+            self.wake_word_recorder.stop_recording()
+
+            from core.setup import ensure_wakeword_models
+            if not ensure_wakeword_models():
+                raise RuntimeError("Failed to download wakeword models")
+            from core.wakeword.audio_recorder import AudioRecorder as RealAudioRecorder
+            from core.wakeword.wake_detector import WakeWordDetector as RealWakeWordDetector
+
+            self.wake_word_recorder = RealAudioRecorder()
+            self.wake_detector = RealWakeWordDetector(model_name=config.WAKEWORD_MODEL)
+            self.wake_detector.set_audio_recorder(self.wake_word_recorder)
+            self.wake_detector.set_system(self)
+            self.wake_word_recorder.start_recording()
+            self.wake_detector.start_listening()
+            logger.info("Wakeword model reloaded successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Wakeword model reload failed: {e}")
+            self.wake_word_recorder = NullAudioRecorder()
+            self.wake_detector = NullWakeWordDetector(None)
+            return False
+
     def switch_stt_provider(self, provider_name: str):
         """Hot-swap STT provider at runtime."""
         if not provider_name or provider_name == 'none':
