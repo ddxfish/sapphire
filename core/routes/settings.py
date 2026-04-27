@@ -431,13 +431,21 @@ async def reset_chat_defaults(request: Request, _=Depends(require_login)):
 
 @router.get("/api/settings/wakeword-models")
 async def get_wakeword_models(request: Request, _=Depends(require_login)):
-    """Get available wakeword models."""
-    models = set()
-    for models_dir in [PROJECT_ROOT / "core" / "wakeword" / "models", PROJECT_ROOT / "user" / "wakeword_models"]:
-        if models_dir.exists():
-            for model_file in models_dir.glob("*.onnx"):
-                models.add(model_file.stem)
-    return {"all": sorted(models)}
+    """Get available wakeword models.
+
+    Delegates to core.wakeword.get_available_models() so the dropdown
+    matches what the detector can actually load: OpenWakeWord builtins
+    (alexa, hey_mycroft, hey_jarvis, hey_rhasspy, timer, weather) +
+    Sapphire-bundled core models + user .onnx/.tflite drops in
+    user/wakeword/models/. The earlier hand-rolled scan missed all
+    builtins and used the wrong user directory name. 2026-04-27.
+    """
+    try:
+        from core.wakeword import get_available_models
+        return get_available_models()
+    except Exception as e:
+        logger.warning(f"get_wakeword_models fell back: {e}")
+        return {"all": ['alexa', 'hey_mycroft', 'hey_jarvis', 'hey_rhasspy', 'timer', 'weather']}
 
 
 # Parameterized settings routes MUST come after specific ones (FastAPI matches in registration order)
