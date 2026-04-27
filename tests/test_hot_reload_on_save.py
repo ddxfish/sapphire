@@ -112,14 +112,30 @@ def test_empty_chat_settings_is_safe():
     system.llm_chat.function_manager.update_enabled_functions.assert_not_called()
 
 
-def test_prompt_with_missing_content_is_silent_noop():
-    """If prompts.get_prompt returns no content (prompt deleted or broken),
-    skip set_system_prompt rather than pushing empty string into runtime."""
+def test_prompt_with_empty_content_applies_empty_string():
+    """An existing prompt with empty content is a valid state — the user's
+    'blank' prompt is intentionally empty so they can run with NO system
+    prompt. The hot-reload must apply the empty content (clearing the live
+    prompt), NOT silently skip and leave the previous prompt loaded.
+    Pre-2026-04-27, falsy-content was treated as "missing" and the previous
+    prompt stayed active — making 'blank' a no-op. Regression test."""
+    from core.api_fastapi import reapply_if_active
+    system = _make_system({"prompt": "blank"})
+    with patch("core.api_fastapi.prompts") as mock_prompts, \
+         patch("core.api_fastapi.publish"):
+        mock_prompts.get_prompt.return_value = {"content": ""}
+        reapply_if_active(system, "prompt", "blank")
+    system.llm_chat.set_system_prompt.assert_called_once_with("")
+
+
+def test_prompt_with_none_get_result_is_silent_noop():
+    """When prompts.get_prompt returns None (truly missing prompt),
+    skip set_system_prompt rather than pushing garbage into runtime."""
     from core.api_fastapi import reapply_if_active
     system = _make_system({"prompt": "ghost"})
     with patch("core.api_fastapi.prompts") as mock_prompts, \
          patch("core.api_fastapi.publish"):
-        mock_prompts.get_prompt.return_value = {}  # no 'content' key
+        mock_prompts.get_prompt.return_value = None
         reapply_if_active(system, "prompt", "ghost")
     system.llm_chat.set_system_prompt.assert_not_called()
 

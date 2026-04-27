@@ -578,8 +578,12 @@ def reapply_if_active(system, domain: str, name: str):
             publish(Events.TOOLSET_CHANGED, {"name": name})
         elif domain == 'prompt':
             data = prompts.get_prompt(name)
-            content = data.get('content', '') if isinstance(data, dict) else ''
-            if content:
+            # Same fix as _apply_chat_settings: existence is "is dict",
+            # not "content truthy". An intentionally-empty prompt (the
+            # 'blank' prompt) must hot-reload correctly when edited.
+            # 2026-04-27 fix.
+            if isinstance(data, dict):
+                content = data.get('content', '') or ''
                 system.llm_chat.set_system_prompt(content)
                 publish(Events.PROMPT_CHANGED, {"name": name, "action": "reapplied"})
         elif domain == 'persona':
