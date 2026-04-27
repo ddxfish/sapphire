@@ -272,3 +272,48 @@ docker compose up -d
 The Docker container's config dir is ephemeral — password resets automatically when the container is recreated.
 
 You'll need to re-run setup and reconfigure settings.
+
+---
+
+## Boot crash with `malloc(): invalid size` on Linux (multi-GPU systems)
+
+**Symptom:** Sapphire crashes immediately at startup on a fresh install. Last log lines show wakeword model loading successfully, then:
+
+```
+Wakeword hot-started successfully
+malloc(): invalid size (unsorted)
+Fatal Python error: Aborted
+```
+
+The crash is in C-extension code (no Python traceback), and it's deterministic — happens every boot. Manually toggling wake word ON *after* boot works fine.
+
+**Cause:** Two separate audio libraries both default to GPU 0 and initialize at the same time:
+
+- **Kokoro** (TTS) loads as a subprocess, picks `cuda:0` by default
+- **Whisper** (STT) loads in the main process, defaults to `cuda:0`
+
+When both grab the same GPU during the boot init storm, their CUDA contexts conflict and corrupt the heap. The next allocation (often inside the wakeword model's first audio buffer) trips glibc's malloc integrity check and the process aborts.
+
+After boot, manually toggling features works because only one library initializes at a time — no concurrent grab.
+
+**Fix on multi-GPU systems:** put TTS and STT on different cards.
+
+In your settings (`user/settings.json` or via the Settings UI):
+
+```json
+{
+  "FASTER_WHISPER_CUDA_DEVICE": 0,
+  "KOKORO_CUDA_DEVICE": "1"
+}
+```
+
+`KOKORO_CUDA_DEVICE` accepts the device index as a string. It sets `CUDA_VISIBLE_DEVICES` on the Kokoro subprocess at the OS level, so Kokoro physically can't see the other GPU. Whisper uses `FASTER_WHISPER_CUDA_DEVICE` directly via PyTorch.
+
+Restart Sapphire after changing these. Verify in `user/logs/sapphire.log`:
+
+```
+Kokoro subprocess pinned to CUDA_VISIBLE_DEVICES=1
+Using CUDA device 0 (NVIDIA ...)   ← whisper
+```
+
+**Single-GPU systems:** leave both at default (empty `KOKORO_CUDA_DEVICE`, `FASTER_WHISPER_CUDA_DEVICE=0`). The race is less common with deferred-action sequencing (already in place for the boot init order), and there's no second GPU to escape to. If you still hit the crash, disable wake word at boot and toggle it on manually after Sapphire is up — that bypasses the concurrent-init window entirely.

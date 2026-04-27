@@ -453,8 +453,29 @@ class VoiceChatSystem:
         if kill_process_on_port(tts_port):
             logger.info(f"Cleaned up orphaned TTS process on port {tts_port}")
         logger.info("Starting Kokoro TTS server...")
+
+        # Multi-GPU users can pin Kokoro to a specific GPU via the
+        # KOKORO_CUDA_DEVICE setting. Without it, both Kokoro and Whisper
+        # default to cuda:0 — concurrent CUDA-context init at startup
+        # corrupts the heap (SIGABRT in malloc, observed by user "defiance"
+        # on dual-GPU Linux 2026-04-25). We set CUDA_VISIBLE_DEVICES at
+        # the OS level for the Kokoro subprocess so it physically can't
+        # see the other GPU. Whisper meanwhile uses FASTER_WHISPER_CUDA_DEVICE
+        # on the main process. Common config: KOKORO_CUDA_DEVICE=1,
+        # FASTER_WHISPER_CUDA_DEVICE=0 → no shared GPU. Single-GPU users
+        # leave this empty (default) — same behavior as before. 2026-04-26.
+        def _env_callback():
+            import os
+            env = os.environ.copy()
+            kokoro_dev = getattr(config, 'KOKORO_CUDA_DEVICE', '')
+            if kokoro_dev != '' and str(kokoro_dev).strip() != '':
+                env['CUDA_VISIBLE_DEVICES'] = str(kokoro_dev).strip()
+                logger.info(f"Kokoro subprocess pinned to CUDA_VISIBLE_DEVICES={env['CUDA_VISIBLE_DEVICES']}")
+            return env
+
         self.tts_server_manager = ProcessManager(
-            script_path=tts_script, log_name="kokoro", base_dir=base_dir
+            script_path=tts_script, log_name="kokoro", base_dir=base_dir,
+            env_callback=_env_callback,
         )
         self.tts_server_manager.start()
         self.tts_server_manager.monitor_and_restart(check_interval=10)
