@@ -1,6 +1,6 @@
 # Sapphire Store — browse and install plugins
 """
-Browse the Sapphire plugin store and install plugins from GitHub.
+Browse the Sapphire plugin store and install plugins from GitHub, GitLab, or direct .zip URLs.
 Uses the public REST API at sapphireblue.dev (no auth needed for reads).
 Install triggers the local plugin manager endpoint.
 """
@@ -49,7 +49,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "store_install",
-            "description": "Install a plugin from the Sapphire Store by its slug. Downloads from GitHub and installs locally. Requires user confirmation before proceeding.",
+            "description": "Install a plugin from the Sapphire Store by its slug. Downloads from GitHub, GitLab, or a direct .zip URL and installs locally. Requires user confirmation before proceeding.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -91,7 +91,7 @@ def _format_plugin_detail(p):
         f"Version: {p.get('version', '?')}",
         f"Trust: {trust.upper()}",
         f"Votes: +{p['votes_up']} / -{p['votes_down']} ({ratio}% positive)",
-        f"GitHub: {p.get('github_url', 'N/A')}",
+        f"Source: {p.get('github_url', 'N/A')}",
         "",
         p.get("long_description") or p.get("description", ""),
     ]
@@ -185,33 +185,95 @@ def _install(slug, plugin_settings=None):
         if plugin.get("code"):
             return f"Plugin '{slug}' not found.", False
 
-        github_url = plugin.get("github_url")
-        if not github_url:
-            return f"Plugin '{slug}' has no GitHub URL — can't install.", False
+        # The store API field is historically named "github_url" but the value
+        # may now be GitHub, GitLab, or a direct https:// .zip URL. Same
+        # supported set as core/routes/plugins.py install endpoint.
+        source_url = plugin.get("github_url")
+        if not source_url:
+            return f"Plugin '{slug}' has no source URL — can't install.", False
 
         trust = plugin.get("trust_level", "community")
         name = plugin.get("name", slug)
 
-        # Download GitHub zip, extract, install via plugin_loader directly
+        # Download zip, extract, install via plugin_loader directly
         import re
         import tempfile
         import zipfile
         import shutil
         import json
         from pathlib import Path
+        from urllib.parse import urlparse
 
-        m = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', github_url.strip())
-        if not m:
-            return f"Invalid GitHub URL: {github_url}", False
+        clean_url = source_url.strip()
+        # Path-only checks let URLs with query strings / fragments work
+        # (e.g. signed S3 .zip URLs, or GitHub URLs pasted with tracking params).
+        # Full URL is still used for the actual request so signed tokens reach
+        # the server. Mirrors core/routes/plugins.py logic.
+        _parsed = urlparse(clean_url)
+        _path_lower = (_parsed.path or '').lower()
+        _url_for_match = f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}"
 
-        owner, repo = m.group(1), m.group(2)
-        zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
-        zr = requests.get(zip_url, stream=True, timeout=30)
-        if zr.status_code == 404:
-            zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
-            zr = requests.get(zip_url, stream=True, timeout=30)
-        if zr.status_code != 200:
-            return f"Failed to download from GitHub (HTTP {zr.status_code})", False
+        zip_url = None
+        install_method = None
+        if _path_lower.endswith('.zip') and clean_url.startswith('https://'):
+            # Direct .zip URL — SSRF guards: https-only + private-IP block.
+            _lower = clean_url.lower()
+            if any(bad in _lower for bad in (
+                '://localhost', '://127.', '://0.0.0.0', '://169.254.',
+                '://[::1]', '://10.', '://192.168.', '://172.16.', '://172.17.',
+                '://172.18.', '://172.19.', '://172.20.', '://172.21.',
+                '://172.22.', '://172.23.', '://172.24.', '://172.25.',
+                '://172.26.', '://172.27.', '://172.28.', '://172.29.',
+                '://172.30.', '://172.31.',
+            )):
+                return f"Refusing to fetch from localhost / private IP range: {clean_url}", False
+            zip_url = clean_url
+            install_method = 'zip_url'
+            zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+            if zr.status_code != 200:
+                return f"Failed to download zip (HTTP {zr.status_code})", False
+        else:
+            m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _url_for_match)
+            m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _url_for_match)
+            if m_gh:
+                owner, repo = m_gh.group(1), m_gh.group(2)
+                install_method = 'github_url'
+                zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+                zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code in (301, 302, 303, 307, 308):
+                    loc = zr.headers.get('Location', '')
+                    if loc.startswith('https://codeload.github.com/'):
+                        zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code == 404:
+                    zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/master.zip"
+                    zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    if zr.status_code in (301, 302, 303, 307, 308):
+                        loc = zr.headers.get('Location', '')
+                        if loc.startswith('https://codeload.github.com/'):
+                            zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code != 200:
+                    return f"Failed to download from GitHub (HTTP {zr.status_code})", False
+            elif m_gl:
+                gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
+                full_path = f"{gl_path}/{gl_repo}"
+                install_method = 'gitlab_url'
+                zip_url = f"https://gitlab.com/{full_path}/-/archive/main/{gl_repo}-main.zip"
+                zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code in (301, 302, 303, 307, 308):
+                    loc = zr.headers.get('Location', '')
+                    if loc.startswith('https://gitlab.com/'):
+                        zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code == 404:
+                    zip_url = f"https://gitlab.com/{full_path}/-/archive/master/{gl_repo}-master.zip"
+                    zr = requests.get(zip_url, stream=True, timeout=30, allow_redirects=False)
+                    if zr.status_code in (301, 302, 303, 307, 308):
+                        loc = zr.headers.get('Location', '')
+                        if loc.startswith('https://gitlab.com/'):
+                            zr = requests.get(loc, stream=True, timeout=30, allow_redirects=False)
+                if zr.status_code != 200:
+                    return f"Failed to download from GitLab (HTTP {zr.status_code})", False
+            else:
+                return f"Invalid source URL: {source_url}. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo>, or a direct https:// .zip URL", False
 
         # Save zip to temp
         tmp_fd = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
@@ -283,8 +345,8 @@ def _install(slug, plugin_settings=None):
             # Write install metadata
             from datetime import datetime
             state = plugin_loader.get_plugin_state(plugin_name)
-            state.save("installed_from", github_url)
-            state.save("install_method", "github_url")
+            state.save("installed_from", clean_url)
+            state.save("install_method", install_method)
             state.save("installed_at", datetime.utcnow().isoformat() + "Z")
 
             # Add to enabled list so it actually loads
@@ -326,9 +388,9 @@ def _install(slug, plugin_settings=None):
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
     except requests.Timeout:
-        return "GitHub download timed out. Try again.", False
+        return "Download timed out. Try again.", False
     except requests.ConnectionError:
-        return "Could not connect to GitHub. Check network.", False
+        return "Could not connect to source. Check network.", False
     except Exception as e:
         logger.error(f"[STORE] Install error: {e}", exc_info=True)
         return f"Install failed: {e}", False
