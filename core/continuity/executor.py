@@ -321,7 +321,6 @@ class ContinuityExecutor:
                     error_msg = f"Task failed: {friendly or e}"
                     logger.error(f"[Continuity] {error_msg}", exc_info=True)
                     result["errors"].append(error_msg)
-                    from core.event_bus import publish, Events
                     publish(Events.CONTINUITY_TASK_ERROR, {
                         "task": task.get("name", "Unknown"),
                         "error": friendly or str(e),
@@ -338,7 +337,6 @@ class ContinuityExecutor:
                 error_msg = f"Background task failed: {friendly or e}"
                 logger.error(f"[Continuity] {error_msg}", exc_info=True)
                 result["errors"].append(error_msg)
-                from core.event_bus import publish, Events
                 publish(Events.CONTINUITY_TASK_ERROR, {
                     "task": task.get("name", "Unknown"),
                     "error": friendly or str(e),
@@ -481,7 +479,6 @@ class ContinuityExecutor:
                 error_msg = f"Task failed: {friendly or e}"
                 logger.error(f"[Continuity] {error_msg}", exc_info=True)
                 result["errors"].append(error_msg)
-                from core.event_bus import publish, Events
                 publish(Events.CONTINUITY_TASK_ERROR, {
                     "task": task.get("name", "Unknown"),
                     "error": friendly or str(e),
@@ -498,7 +495,6 @@ class ContinuityExecutor:
             error_msg = f"Persistent chat task failed: {friendly or e}"
             logger.error(f"[Continuity] {error_msg}", exc_info=True)
             result["errors"].append(error_msg)
-            from core.event_bus import publish, Events
             publish(Events.CONTINUITY_TASK_ERROR, {
                 "task": task.get("name", "Unknown"),
                 "error": friendly or str(e),
@@ -576,7 +572,6 @@ class ContinuityExecutor:
         except Exception as e:
             logger.error(f"[Continuity] Plugin task '{task.get('name')}' failed: {e}", exc_info=True)
             result["errors"].append(str(e))
-            from core.event_bus import publish, Events
             publish(Events.CONTINUITY_TASK_ERROR, {
                 "task": task.get("name", "Unknown"),
                 "error": str(e),

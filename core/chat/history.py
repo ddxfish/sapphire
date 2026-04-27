@@ -926,7 +926,6 @@ class ChatSessionManager:
             except Exception as e:
                 logger.error(f"Failed to save chat '{self.active_chat_name}': {e}")
                 try:
-                    from core.event_bus import publish, Events
                     publish(Events.CONTINUITY_TASK_ERROR, {
                         "task": "Chat Save",
                         "error": f"Failed to save chat: {e}. Messages may be lost on restart."

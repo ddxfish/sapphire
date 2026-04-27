@@ -490,7 +490,6 @@ def _apply_chat_settings(system, settings: dict):
                 except Exception as e:
                     logger.debug(f"Could not rewrite chat.prompt after fallback: {e}")
                 try:
-                    from core.event_bus import publish, Events
                     publish(Events.SETTINGS_CHANGED, {
                         "key": "chat_prompt_fallback",
                         "value": "default",

@@ -444,7 +444,6 @@ class WakeWordDetector:
                         # "wakeword is silently dead." Otherwise the UI toggle
                         # still reads on, but Sapphire can't hear.
                         try:
-                            from core.event_bus import publish, Events
                             publish(Events.CONTINUITY_TASK_ERROR, {
                                 "task": "Wake Word",
                                 "error": f"Wake word stream recovery failed ({type(recovery_err).__name__}: "
