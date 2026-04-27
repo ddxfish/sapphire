@@ -166,7 +166,11 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "name": info["name"],
                     "enabled": info.get("enabled", info["name"] in enabled_set),
                     "locked": False,
-                    "title": manifest.get("short_name") or manifest.get("description", info["name"]).split("—")[0].strip(),
+                    "title": (
+                        manifest.get("display_name")
+                        or manifest.get("short_name")
+                        or manifest.get("description", info["name"]).split("—")[0].strip()
+                    ),
                     "showInSidebar": False,
                     "collapsible": True,
                     "settingsUI": settings_ui,

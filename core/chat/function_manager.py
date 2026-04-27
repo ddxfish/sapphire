@@ -667,7 +667,15 @@ class FunctionManager:
             missing = set(enabled_names) - set(actual_names)
 
             if missing:
-                logger.warning(f"Toolset '{self.current_toolset_name}' missing functions: {missing}")
+                # Not a failure — the toolset still loads minus the missing
+                # functions. Most common cause: a plugin removed a tool or
+                # a plugin is currently disabled. Logging at INFO so this
+                # doesn't surface as a "Recent error" on the status page.
+                logger.info(
+                    f"Toolset '{self.current_toolset_name}' references "
+                    f"{len(missing)} unavailable function(s) (likely a "
+                    f"removed/disabled plugin tool): {missing}"
+                )
 
             logger.info(f"Toolset '{self.current_toolset_name}': {len(self._enabled_tools)}/{expected_count} functions loaded")
             logger.debug(f"Enabled: {actual_names}")
