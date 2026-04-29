@@ -619,7 +619,13 @@ class VoiceChatSystem:
             'file': "File creation error",
             'speech': "No speech heard",
             'recording': "Recording error",
-            'processing': "Processing error"
+            'processing': "Processing error",
+            # New keys mapped from recorder.last_failure_reason. These
+            # replace generic 'file' for the actual failure modes a user
+            # can do something about. 2026-04-28.
+            'mic_busy': "Microphone is busy. Please try again.",
+            'no_speech_captured': "I didn't hear anything.",
+            'save_failed': "Could not save audio file.",
         }
         self.tts.speak(error_messages.get(error_type, "Error"))
 

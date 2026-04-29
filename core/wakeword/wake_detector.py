@@ -301,8 +301,15 @@ class WakeWordDetector:
             audio_file = self.system.whisper_recorder.record_audio()
 
             if not audio_file or not os.path.exists(audio_file):
-                logger.warning("No audio file produced")
-                self.system.speak_error('file')
+                # Pick the right TTS message based on the actual failure
+                # reason set by the recorder. Saying "File creation error"
+                # when the mic was busy or no speech was captured is
+                # technically wrong and not actionable for users —
+                # particularly on Windows where mic-busy is common after
+                # wakeword closes its stream. 2026-04-28.
+                reason = getattr(self.system.whisper_recorder, 'last_failure_reason', '') or 'file'
+                logger.warning(f"No audio file produced (reason={reason})")
+                self.system.speak_error(reason)
                 return
 
             process_time = time.time()

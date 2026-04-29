@@ -39,6 +39,12 @@ class AudioRecorder:
         self._stream = None
         self._recording = False
         self.temp_dir = get_temp_dir()
+        # Set on every record_audio() failure so the caller can give the
+        # user an accurate TTS message instead of the generic "file
+        # creation error" — Windows users in particular hit the
+        # mic-device-busy race after wakeword closes its own stream and
+        # need to know it's a mic problem, not a disk problem. 2026-04-28.
+        self.last_failure_reason: str = ''
         
         # Get device configuration from unified manager
         dm = get_device_manager()
@@ -120,7 +126,25 @@ class AudioRecorder:
             return True
         except Exception as e:
             logger.warning(f"STT stream open failed: {classify_audio_error(e)}")
-            # Retry once — re-resolve device by name in case index shifted
+            # Brief sleep before retry — on Windows (WASAPI/MME) the OS
+            # often hasn't released the mic from the wakeword stream yet
+            # when STT immediately tries to open it. 200ms is enough for
+            # the typical release; harmless on Linux. 2026-04-28.
+            time.sleep(0.2)
+            try:
+                self._stream = sd.InputStream(
+                    device=self.device_index,
+                    samplerate=self.rate,
+                    channels=self.channels,
+                    dtype=np.int16,
+                    blocksize=self.blocksize
+                )
+                self._stream.start()
+                logger.info(f"STT stream opened after brief retry on device {self.device_index}")
+                return True
+            except Exception as e_quick:
+                logger.debug(f"Quick retry also failed: {classify_audio_error(e_quick)}")
+            # Final retry — re-resolve device by name in case index shifted
             if getattr(self, 'device_name', ''):
                 logger.info(f"Retrying with device re-resolution for '{self.device_name}'")
                 dm = get_device_manager()
@@ -162,7 +186,11 @@ class AudioRecorder:
         if not self._open_stream():
             system_audio.restore_system_volume()
             publish(Events.STT_ERROR, {"reason": "failed_to_open_stream"})
+            self.last_failure_reason = "mic_busy"
             return None
+        # Clear stale failure state on a successful start; cleared again
+        # on each return path below if a different failure trips.
+        self.last_failure_reason = ''
         
         self._recording = True
         publish(Events.STT_RECORDING_START)
@@ -237,24 +265,26 @@ class AudioRecorder:
         publish(Events.STT_RECORDING_END)
         
         if not has_speech:
+            self.last_failure_reason = "no_speech_captured"
             return None
-        
+
         publish(Events.STT_PROCESSING)
-        
+
         try:
             # Combine all frames into single array
             audio_data = np.concatenate(frames)
-            
+
             # Write WAV file using soundfile (always mono output)
             timestamp = int(time.time())
             temp_path = os.path.join(self.temp_dir, f"voice_assistant_{timestamp}.wav")
             sf.write(temp_path, audio_data, self.rate)
-            
+
             return temp_path
-            
+
         except Exception as e:
             logger.error(f"Error saving audio: {e}")
             publish(Events.STT_ERROR, {"reason": "save_failed"})
+            self.last_failure_reason = "save_failed"
             return None
 
     def stop(self) -> None:
