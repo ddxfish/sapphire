@@ -1882,8 +1882,14 @@ async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
         token = auth[len('Bearer '):].strip() if auth.startswith('Bearer ') else ''
         if token:
             identity = f"bearer:{hashlib.sha256(token.encode()).hexdigest()[:16]}"
-    check_endpoint_rate(request, f"plugin_route:{plugin_name}", max_calls=30,
-                        identity=identity)
+    # Verb-split rate limits — read-only GETs get more headroom for live
+    # polling UIs (Trinity pane viewer, Status dashboard, etc.) while
+    # state-changing verbs stay tight at 30/min. Originally a single bucket
+    # at 30 caught Trinity's pane-poll burst plus session-list polling and
+    # showed "rate limited — backing off" mid-watch. 2026-04-30.
+    max_calls = 60 if request.method == 'GET' else 30
+    check_endpoint_rate(request, f"plugin_route:{plugin_name}:{request.method}",
+                        max_calls=max_calls, identity=identity)
 
     result = plugin_loader.get_route_handler(plugin_name, request.method, path)
     if not result:
