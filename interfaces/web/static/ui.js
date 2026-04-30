@@ -270,11 +270,16 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
             parts.push(`${fmt(prompt)} in / ${fmt(content)} out`);
         }
 
-        // Cache indicator
+        // Cache indicator. Anthropic reports `prompt` as the NON-cached
+        // input tokens, with cached tokens reported separately. Total
+        // input = prompt + cache_read. Old formula divided cache_read
+        // by the leftover non-cached portion and gave 5000%+ readings
+        // on near-full cache hits. Fixed 2026-04-30.
         const cacheRead = tok.cache_read_tokens || 0;
         const cacheWrite = tok.cache_write_tokens || 0;
-        if (cacheRead > 0 && prompt > 0) {
-            const pct = Math.round((cacheRead / prompt) * 100);
+        if (cacheRead > 0) {
+            const totalPrompt = prompt + cacheRead;
+            const pct = totalPrompt > 0 ? Math.round((cacheRead / totalPrompt) * 100) : 0;
             parts.push(`cache ${pct}%`);
         } else if (cacheWrite > 0) {
             parts.push('cache miss');

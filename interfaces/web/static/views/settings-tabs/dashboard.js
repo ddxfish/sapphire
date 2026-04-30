@@ -496,8 +496,13 @@ function renderMetrics(el, s, models, daily) {
         return;
     }
 
-    const cacheRate = s.total_prompt > 0 && s.total_cache_read > 0
-        ? Math.round((s.total_cache_read / s.total_prompt) * 100) : null;
+    // s.total_prompt comes from Anthropic's input_tokens which excludes
+    // cached tokens. True total input = total_prompt + total_cache_read.
+    // Old formula divided cache_read by the leftover non-cached portion
+    // alone and produced 5000%+ ratios on cache-heavy days. 2026-04-30.
+    const totalInput = (s.total_prompt || 0) + (s.total_cache_read || 0);
+    const cacheRate = totalInput > 0 && s.total_cache_read > 0
+        ? Math.round((s.total_cache_read / totalInput) * 100) : null;
 
     el.innerHTML = `
         <div class="metrics-stats">
@@ -631,8 +636,9 @@ function renderModelChart(el, models) {
         const y = GAP + i * (BAR_H + GAP);
         const barW = Math.max(2, (m.total / maxTotal) * BAR_AREA);
         const label = m.model.length > 14 ? m.model.slice(0, 13) + '\u2026' : m.model;
-        const cacheInfo = m.cache_read > 0 && m.prompt > 0
-            ? ` \u00B7 cache ${Math.round((m.cache_read / m.prompt) * 100)}%` : '';
+        const totalPrompt = (m.prompt || 0) + (m.cache_read || 0);
+        const cacheInfo = m.cache_read > 0 && totalPrompt > 0
+            ? ` \u00B7 cache ${Math.round((m.cache_read / totalPrompt) * 100)}%` : '';
 
         return `
             <text x="${LABEL_W - 4}" y="${y + BAR_H / 2 + 4}" class="chart-label" text-anchor="end">${label}</text>
