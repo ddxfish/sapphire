@@ -8,7 +8,13 @@ export default {
   icon: '👤',
 
   render(settings) {
-    const userName = settings.DEFAULT_USERNAME || 'Human Protagonist';
+    // Render the input EMPTY when no name is saved — so the placeholder
+    // shows the prompt rather than the default string getting baked into
+    // value="...". Previously rendered value="Human Protagonist" as a
+    // fallback, which a blur or validate() then saved to disk if the user
+    // clicked past it without typing — silently overwriting their real
+    // saved name. 2026-04-30 fix.
+    const userName = settings.DEFAULT_USERNAME || '';
     const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
     return `
@@ -31,7 +37,11 @@ export default {
     const userInput = container.querySelector('#setup-user-name');
 
     const saveField = async (key, value) => {
-      if (!value) return;
+      // Belt-and-suspenders: refuse to save the literal default fallback
+      // string. Even if some future render path falls through to
+      // 'Human Protagonist' as a value, this stops it from reaching disk.
+      // 2026-04-30 fix.
+      if (!value || (key === 'DEFAULT_USERNAME' && value === 'Human Protagonist')) return;
       try {
         await updateSetting(key, value);
         settings[key] = value;
@@ -50,12 +60,16 @@ export default {
   },
 
   async validate(settings) {
-    // Save username
+    // Save username — refuse the literal default fallback, same guard
+    // as saveField above. Without this, clicking Next past an unedited
+    // wizard with a falsy DEFAULT_USERNAME could silently overwrite a
+    // real saved name with "Human Protagonist". 2026-04-30 fix.
     const userInput = document.querySelector('#setup-user-name');
-    if (userInput?.value.trim()) {
+    const trimmed = userInput?.value.trim();
+    if (trimmed && trimmed !== 'Human Protagonist') {
       try {
-        await updateSetting('DEFAULT_USERNAME', userInput.value.trim());
-        settings.DEFAULT_USERNAME = userInput.value.trim();
+        await updateSetting('DEFAULT_USERNAME', trimmed);
+        settings.DEFAULT_USERNAME = trimmed;
       } catch (e) {
         console.error('[Setup] Failed to save username:', e);
       }
