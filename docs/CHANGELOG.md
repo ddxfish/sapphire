@@ -1,3 +1,9 @@
+# 2.6.1 - Plugin page and fixes
+- New plugin page
+- Default wakewords load properly now
+- totally blank prompts allowed
+- self info plugin expanded, custom commands
+- Fixed cache % calculation on Claude
 # 2.6.0 - Scopes
 - Collective update from 2.5.0
 - Improved core and plugins instead of expanding

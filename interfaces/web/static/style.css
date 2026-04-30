@@ -5571,6 +5571,262 @@ a.gallery-caption:hover {
     min-height: 100px;
 }
 
+/* =============================================================================
+   PLUGIN TILES (2026-04-30 redesign)
+   Square-ish tiles, alphabetical (no resort on toggle), kebab for less-used
+   actions, gear for plugin settings, prominent unsigned-plugins banner.
+   ============================================================================= */
+
+/* Override the older .pm-grid 2-col layout with a denser auto-fill grid. */
+.pm-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+@media (min-width: 1400px) {
+    .pm-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+}
+@media (max-width: 480px) {
+    .pm-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+
+/* Tile shape — square-ish, content stacked, controls pinned at bottom. */
+.pm-card.pm-tile {
+    position: relative;
+    padding: 12px 12px 10px;
+    aspect-ratio: 1 / 1;
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: visible; /* let kebab menu escape the tile bounds */
+    border-width: 1.5px;
+    border-style: solid;
+}
+
+/* Tile content — icon, title, version, badge, all centered vertically. */
+.pm-tile-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    flex: 1;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 4px;
+    min-width: 0;
+}
+.pm-tile-icon {
+    font-size: 2.4em;
+    line-height: 1;
+    margin-bottom: 4px;
+}
+.pm-tile-title {
+    font-weight: 600;
+    font-size: 0.95em;
+    color: var(--text-light);
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+.pm-tile-version {
+    font-size: 0.72em;
+    color: var(--text-muted);
+    font-family: var(--font-mono, monospace);
+}
+.pm-tile-badge-row {
+    margin-top: 2px;
+    display: flex;
+    justify-content: center;
+}
+
+/* Bottom row — Update button (left), gear + toggle (right). */
+.pm-tile-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+}
+.pm-tile-controls-left {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+.pm-tile-controls-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.pm-tile-update-btn {
+    font-size: 0.7em !important;
+    padding: 3px 8px !important;
+}
+.pm-tile .pm-gear { font-size: 1.4em; }
+.pm-tile .pm-toggle { width: 32px; height: 18px; }
+.pm-tile .pm-toggle .pm-slider::before {
+    width: 12px; height: 12px; left: 3px; bottom: 3px;
+}
+.pm-tile .pm-toggle input:checked + .pm-slider::before {
+    transform: translateX(14px);
+}
+
+/* Trust border tints — subtle but glanceable across the grid. */
+.pm-card.pm-tile.pm-trust-official { border-color: rgba(63,185,80,0.35); }
+.pm-card.pm-tile.pm-trust-official.pm-enabled { border-color: rgba(63,185,80,0.55); }
+.pm-card.pm-tile.pm-trust-author { border-color: rgba(56,139,253,0.35); }
+.pm-card.pm-tile.pm-trust-author.pm-enabled { border-color: rgba(56,139,253,0.55); }
+.pm-card.pm-tile.pm-trust-core { border-color: rgba(56,139,253,0.45); }
+.pm-card.pm-tile.pm-trust-unsigned { border-color: var(--border-subtle); }
+.pm-card.pm-tile.pm-trust-tampered {
+    border-color: rgba(248,81,73,0.6);
+    box-shadow: 0 0 0 1px rgba(248,81,73,0.3);
+}
+
+/* Hover lift — same as before, just preserve the trust color. */
+.pm-card.pm-tile:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+}
+
+/* Kebab menu (top-right) */
+.pm-kebab {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 10;
+}
+.pm-kebab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.3em;
+    line-height: 1;
+    padding: 2px 6px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s, color 0.15s;
+}
+.pm-kebab-btn:hover {
+    background: var(--highlight-subtle);
+    color: var(--text-light);
+}
+.pm-kebab-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    min-width: 160px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    z-index: 20;
+}
+.pm-kebab-menu[hidden] { display: none; }
+.pm-kebab-item {
+    display: block;
+    background: transparent;
+    border: none;
+    color: var(--text-light);
+    font-size: 0.85em;
+    text-align: left;
+    text-decoration: none;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s;
+}
+.pm-kebab-item:hover {
+    background: var(--highlight-subtle);
+    color: var(--text-light);
+}
+.pm-kebab-item.pm-kebab-danger { color: #f85149; }
+.pm-kebab-item.pm-kebab-danger:hover { background: rgba(248,81,73,0.15); }
+
+/* Prominent unsigned-plugins banner — orange + glow when ON, muted when OFF. */
+.pm-unsigned-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    margin-bottom: 12px;
+    border: 1.5px solid;
+    transition: all 0.2s ease;
+}
+.pm-unsigned-banner.pm-unsigned-off {
+    background: var(--bg-secondary);
+    border-color: var(--border-subtle);
+    color: var(--text-muted);
+}
+.pm-unsigned-banner.pm-unsigned-on {
+    background: rgba(245,166,35,0.10);
+    border-color: rgba(245,166,35,0.55);
+    color: #f5a623;
+    box-shadow: 0 0 14px rgba(245,166,35,0.20);
+}
+.pm-unsigned-icon {
+    font-size: 1.4em;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.pm-unsigned-text { flex: 1; min-width: 0; }
+.pm-unsigned-state {
+    font-weight: 600;
+    font-size: 0.95em;
+    letter-spacing: 0.3px;
+}
+.pm-unsigned-banner.pm-unsigned-off .pm-unsigned-state { color: var(--text-light); }
+.pm-unsigned-sub {
+    font-size: 0.78em;
+    opacity: 0.85;
+    margin-top: 2px;
+}
+
+/* Bigger, more obvious toggle for the banner — distinguishable from
+   per-plugin tile toggles. Orange when on, muted gray when off. */
+.pm-unsigned-switch {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 26px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.pm-unsigned-switch input { opacity: 0; width: 0; height: 0; }
+.pm-unsigned-slider {
+    position: absolute; inset: 0;
+    background: var(--border);
+    border-radius: 26px;
+    transition: background 0.2s;
+}
+.pm-unsigned-slider::before {
+    content: '';
+    position: absolute;
+    width: 20px; height: 20px;
+    left: 3px; bottom: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+.pm-unsigned-switch input:checked + .pm-unsigned-slider {
+    background: #f5a623;
+    box-shadow: 0 0 10px rgba(245,166,35,0.6);
+}
+.pm-unsigned-switch input:checked + .pm-unsigned-slider::before {
+    transform: translateX(22px);
+}
+
 /* Plugin settings collapsible group in sidebar */
 .settings-plugin-group { margin: 0; }
 .settings-plugin-group-label {

@@ -100,21 +100,142 @@ function _esc(s) {
     return d.innerHTML;
 }
 
-function _tierSort(p) {
-    const order = { official: 0, verified_author: 1, unsigned: 2, failed: 3 };
-    return order[p.verify_tier] ?? 2;
+function _sortPlugins(plugins) {
+    // Pure alphabetical — toggling a plugin does NOT reorder the grid.
+    // 2026-04-30: previously we sorted enabled-first which caused the
+    // tile layout to shift around any time the user flipped a toggle.
+    return [...plugins].sort((a, b) =>
+        (a.title || a.name).localeCompare(b.title || b.name)
+    );
 }
 
-function _sortPlugins(plugins) {
-    return [...plugins].sort((a, b) => {
-        // Enabled first
-        if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-        // Then by trust tier
-        const ta = _tierSort(a), tb = _tierSort(b);
-        if (ta !== tb) return ta - tb;
-        // Then alphabetical
-        return (a.title || a.name).localeCompare(b.title || b.name);
+function _trustClass(p, locked) {
+    if (locked) return 'pm-trust-core';
+    const tier = p.verify_tier;
+    if (tier === 'official' || (!tier && p.verified === true)) return 'pm-trust-official';
+    if (tier === 'verified_author') return 'pm-trust-author';
+    if (tier === 'failed' || (!tier && p.verified === false && p.verify_msg && p.verify_msg !== 'unsigned'))
+        return 'pm-trust-tampered';
+    return 'pm-trust-unsigned';
+}
+
+// ── In-place tile update — avoids the full grid re-render (and the
+// staggered fade-in animation flash) on every toggle. The toggle handler
+// at the bottom of attachListeners calls these instead of refreshTab().
+// 2026-04-30.
+
+function _bindGearClick(el, gearBtn, name) {
+    gearBtn.addEventListener('click', () => {
+        const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
+        if (settingsView) {
+            settingsView.dispatchEvent(new CustomEvent('settings-navigate',
+                { detail: { tab: name }, bubbles: true }));
+        }
     });
+}
+
+function _bindReloadClick(el, ctx, reloadBtn, name) {
+    reloadBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        reloadBtn.disabled = true;
+        const orig = reloadBtn.textContent;
+        reloadBtn.textContent = 'Reloading...';
+        try {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            const res = await fetch(`/api/plugins/${name}/reload`,
+                { method: 'POST', headers: { 'X-CSRF-Token': csrf } });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.detail || `HTTP ${res.status}`);
+            }
+            ui.showToast(`Reloaded ${name}`, 'success');
+            await ctx.refreshTab();
+        } catch (err) {
+            ui.showToast(`Reload failed: ${err.message}`, 'error');
+            reloadBtn.disabled = false;
+            reloadBtn.textContent = orig;
+        }
+    });
+}
+
+function _updateTileInPlace(el, ctx, name, locked) {
+    const cached = (ctx.pluginList || []).find(p => p.name === name);
+    if (!cached) return;
+    const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
+    if (!card) return;
+
+    // Visual state — opacity, border tint via .pm-enabled.
+    card.classList.toggle('pm-enabled', !!cached.enabled);
+    // Sync the toggle input in case it drifted.
+    const toggleInput = card.querySelector('input[data-plugin-toggle]');
+    if (toggleInput) toggleInput.checked = !!cached.enabled;
+
+    // Gear button (visible only when enabled + has settingsUI).
+    const controlsRight = card.querySelector('.pm-tile-controls-right');
+    if (controlsRight) {
+        const existingGear = controlsRight.querySelector('.pm-gear');
+        const wantGear = cached.enabled && cached.settingsUI;
+        if (wantGear && !existingGear) {
+            const tmpl = document.createElement('div');
+            tmpl.innerHTML = `<button class="pm-gear" data-settings-tab="${_esc(name)}" title="Plugin settings" type="button">⚙️</button>`;
+            const newGear = tmpl.firstElementChild;
+            controlsRight.insertBefore(newGear, controlsRight.firstChild);
+            _bindGearClick(el, newGear, name);
+        } else if (!wantGear && existingGear) {
+            existingGear.remove();
+        }
+    }
+
+    // Kebab Reload item (visible only when enabled and not locked).
+    const kebabMenu = card.querySelector('.pm-kebab-menu');
+    if (kebabMenu) {
+        const existingReload = kebabMenu.querySelector('.pm-kebab-reload');
+        const wantReload = cached.enabled && !locked;
+        if (wantReload && !existingReload) {
+            const tmpl = document.createElement('div');
+            tmpl.innerHTML = `<button class="pm-kebab-item pm-kebab-reload" data-plugin="${_esc(name)}">Reload</button>`;
+            const newReload = tmpl.firstElementChild;
+            const uninstall = kebabMenu.querySelector('.plugin-uninstall-btn');
+            if (uninstall) kebabMenu.insertBefore(newReload, uninstall);
+            else kebabMenu.appendChild(newReload);
+            _bindReloadClick(el, ctx, newReload, name);
+        } else if (!wantReload && existingReload) {
+            existingReload.remove();
+        }
+    }
+
+    // Missing-deps warning strip — sync against cached.missing_deps.
+    const existingWarn = card.querySelector('.pm-deps-warning');
+    const deps = cached.missing_deps || [];
+    if (deps.length && !existingWarn) {
+        const tmpl = document.createElement('div');
+        tmpl.innerHTML = `<div class="pm-deps-warning" data-plugin-deps="${_esc(name)}">
+            <span class="pm-deps-icon">&#x26A0;</span>
+            <span class="pm-deps-text">Missing: ${_esc(deps.join(', '))}</span>
+            <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(name)}">Install</button>
+        </div>`.trim();
+        card.appendChild(tmpl.firstElementChild);
+        // .pm-deps-fix-btn is delegated, no manual bind needed.
+    } else if (!deps.length && existingWarn) {
+        existingWarn.remove();
+    }
+}
+
+function _updateFilterCountsInPlace(el, plugins) {
+    const counts = _counts(plugins);
+    ['all', 'enabled', 'disabled', 'official', 'user'].forEach(key => {
+        const countEl = el.querySelector(`.pm-filter[data-filter="${key}"] .pm-filter-count`);
+        if (countEl) countEl.textContent = counts[key];
+    });
+    const summary = el.querySelector('.pm-count-total');
+    if (summary) summary.textContent = `${counts.all} total · ${counts.enabled} enabled`;
+}
+
+function _fadeOutAndRemove(card) {
+    card.style.transition = 'opacity 0.25s ease, transform 0.25s ease';
+    card.style.opacity = '0';
+    card.style.transform = 'scale(0.94)';
+    setTimeout(() => card.remove(), 260);
 }
 
 function _filterPlugins(plugins, filter) {
@@ -151,43 +272,80 @@ function _badgeHTML(p, locked) {
 }
 
 function _renderCard(p, locked) {
+    // 2026-04-30 redesign: square-ish tiles, kebab menu for less-frequent
+    // actions, gear stays prominent for plugin settings, trust signaled
+    // by tile border color + a chip near the bottom.
     const hasSettings = p.settingsUI && p.enabled;
     const isUser = p.band === 'user';
-    const icon = p.icon || '🔌';
-    const meta = [];
-    if (p.version) meta.push(`v${p.version}`);
-    if (p.author) meta.push(p.author);
+    const icon = p.icon || '\uD83D\uDD0C';
+    const trustClass = _trustClass(p, locked);
+
+    // Kebab items — less-frequent actions tucked away. Update + gear stay
+    // on the tile face. Uninstall is destructive so it's red, in the menu.
+    // Existing handlers keyed by .plugin-uninstall-btn / .plugin-update-btn
+    // pick up these items unchanged — we just style them as menu rows here.
+    const kebabItems = [];
+    if (p.url) {
+        kebabItems.push(
+            `<a href="${_esc(p.url)}" target="_blank" rel="noopener" class="pm-kebab-item">Open website</a>`
+        );
+    }
+    if (isUser) {
+        kebabItems.push(
+            `<button class="pm-kebab-item plugin-update-btn" data-plugin="${_esc(p.name)}">Check for updates</button>`
+        );
+    }
+    if (p.enabled && !locked) {
+        kebabItems.push(
+            `<button class="pm-kebab-item pm-kebab-reload" data-plugin="${_esc(p.name)}">Reload</button>`
+        );
+    }
+    if (isUser) {
+        kebabItems.push(
+            `<button class="pm-kebab-item pm-kebab-danger plugin-uninstall-btn" data-plugin="${_esc(p.name)}">Uninstall</button>`
+        );
+    }
+    const kebab = kebabItems.length ? `
+        <div class="pm-kebab" data-plugin="${_esc(p.name)}">
+            <button class="pm-kebab-btn" type="button" aria-label="More actions">\u22EE</button>
+            <div class="pm-kebab-menu" hidden>
+                ${kebabItems.join('')}
+            </div>
+        </div>
+    ` : '';
 
     const gearBtn = hasSettings
-        ? `<button class="pm-gear" data-settings-tab="${p.name}" title="Settings">\u2699\uFE0F</button>`
-        : `<span class="pm-gear-spacer"></span>`;
+        ? `<button class="pm-gear" data-settings-tab="${p.name}" title="Plugin settings" type="button">\u2699\uFE0F</button>`
+        : '';
 
-    const actions = [];
-    if (isUser) {
-        actions.push(`<button class="btn btn-sm plugin-update-btn" data-plugin="${_esc(p.name)}">Update</button>`);
-        actions.push(`<button class="btn btn-sm btn-danger plugin-uninstall-btn" data-plugin="${_esc(p.name)}">Uninstall</button>`);
-    }
+    // Update button stays on the tile for user plugins as a primary
+    // visible affordance. The existing handler transitions it to
+    // "Update to vX.Y" when an update is found.
+    const updateBtn = isUser
+        ? `<button class="btn btn-sm plugin-update-btn pm-tile-update-btn" data-plugin="${_esc(p.name)}">Update</button>`
+        : '';
+
+    const titleText = _esc(p.title || p.name);
+    const verLine = p.version ? `<div class="pm-tile-version">v${_esc(p.version)}</div>` : '';
 
     return `
-        <div class="pm-card${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
-            <div class="pm-card-body">
-                ${gearBtn}
-                <div class="pm-card-right">
-                    <div class="pm-card-top">
-                        <span class="pm-icon">${icon}</span>
-                        <span class="pm-title">${_esc(p.title || p.name)}</span>
-                        <label class="pm-toggle">
-                            <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
-                                   ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
-                            <span class="pm-slider"></span>
-                        </label>
-                    </div>
-                    <div class="pm-card-meta">
-                        ${_badgeHTML(p, locked)}
-                        ${meta.length ? `<span class="pm-version">${_esc(meta.join(' \u00b7 '))}</span>` : ''}
-                        ${p.url ? `<a href="${_esc(p.url)}" target="_blank" rel="noopener" class="pm-web-link">web</a>` : ''}
-                    </div>
-                    ${actions.length ? `<div class="pm-card-actions">${actions.join('')}</div>` : ''}
+        <div class="pm-card pm-tile ${trustClass}${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
+            ${kebab}
+            <div class="pm-tile-content">
+                <div class="pm-tile-icon">${icon}</div>
+                <div class="pm-tile-title" title="${titleText}">${titleText}</div>
+                ${verLine}
+                <div class="pm-tile-badge-row">${_badgeHTML(p, locked)}</div>
+            </div>
+            <div class="pm-tile-controls">
+                <div class="pm-tile-controls-left">${updateBtn}</div>
+                <div class="pm-tile-controls-right">
+                    ${gearBtn}
+                    <label class="pm-toggle">
+                        <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
+                               ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+                        <span class="pm-slider"></span>
+                    </label>
                 </div>
             </div>
             ${p.missing_deps?.length ? `
@@ -225,10 +383,15 @@ export default {
                         <button class="btn btn-sm btn-primary pm-action-btn" id="pm-install-toggle">+ Install Plugin</button>
                     </div>
                 </div>
-                ${!managedLocked ? `<div class="pm-unsigned-row">
-                    <label class="pm-unsigned-toggle">
+                ${!managedLocked ? `<div class="pm-unsigned-banner ${allowUnsigned ? 'pm-unsigned-on' : 'pm-unsigned-off'}">
+                    <span class="pm-unsigned-icon">${allowUnsigned ? '⚠' : '🔒'}</span>
+                    <div class="pm-unsigned-text">
+                        <div class="pm-unsigned-state">${allowUnsigned ? 'Unsigned plugins ALLOWED' : 'Unsigned plugins blocked'}</div>
+                        <div class="pm-unsigned-sub">${allowUnsigned ? 'Plugins without a verified signature can be enabled. Be careful what you install.' : 'Only signed plugins will load. Recommended for safety.'}</div>
+                    </div>
+                    <label class="pm-unsigned-switch">
                         <input type="checkbox" id="allow-unsigned-toggle" ${allowUnsigned ? 'checked' : ''}>
-                        <span>Allow unsigned plugins</span>
+                        <span class="pm-unsigned-slider"></span>
                     </label>
                 </div>` : ''}
                 <div class="pm-filters">
@@ -399,6 +562,62 @@ export default {
                 const settingsView = el.closest('.settings-view') || el.closest('[data-view="settings"]');
                 if (settingsView) {
                     settingsView.dispatchEvent(new CustomEvent('settings-navigate', { detail: { tab: tabName }, bubbles: true }));
+                }
+            });
+        });
+
+        // Kebab open/close. Click the dots → toggle the menu. Click anywhere
+        // else → close all open menus. ESC also closes. The kebab items
+        // themselves carry .plugin-update-btn / .plugin-uninstall-btn /
+        // .pm-kebab-reload classes — those handlers fire normally; we just
+        // close the menu after the click bubbles. 2026-04-30.
+        el.querySelectorAll('.pm-kebab-btn').forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.stopPropagation();
+                const menu = btn.parentElement.querySelector('.pm-kebab-menu');
+                if (!menu) return;
+                // Close all other open kebabs first
+                el.querySelectorAll('.pm-kebab-menu').forEach(m => {
+                    if (m !== menu) m.hidden = true;
+                });
+                menu.hidden = !menu.hidden;
+            });
+        });
+        // Close any open kebab on outside click / ESC. Bind once per render.
+        if (!el._kebabOutsideBound) {
+            el._kebabOutsideBound = true;
+            const closeAll = () => el.querySelectorAll('.pm-kebab-menu').forEach(m => m.hidden = true);
+            document.addEventListener('click', e => {
+                if (!e.target.closest('.pm-kebab')) closeAll();
+            });
+            document.addEventListener('keydown', e => {
+                if (e.key === 'Escape') closeAll();
+            });
+        }
+
+        // Reload plugin (kebab item) — fresh handler since this is a new
+        // affordance. POST /api/plugins/{name}/reload, then refreshTab.
+        el.querySelectorAll('.pm-kebab-reload').forEach(btn => {
+            btn.addEventListener('click', async e => {
+                e.stopPropagation();
+                const name = btn.dataset.plugin;
+                btn.disabled = true;
+                btn.textContent = 'Reloading...';
+                try {
+                    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+                    const res = await fetch(`/api/plugins/${name}/reload`, {
+                        method: 'POST', headers: { 'X-CSRF-Token': csrf },
+                    });
+                    if (!res.ok) {
+                        const body = await res.json().catch(() => ({}));
+                        throw new Error(body.detail || `HTTP ${res.status}`);
+                    }
+                    ui.showToast(`Reloaded ${name}`, 'success');
+                    await ctx.refreshTab();
+                } catch (err) {
+                    ui.showToast(`Reload failed: ${err.message}`, 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Reload';
                 }
             });
         });
@@ -724,21 +943,41 @@ export default {
                     if (navBtn) navBtn.style.display = data.enabled ? '' : 'none';
                 }
 
-                // Re-render to update card state, gear visibility, counts
+                // Sync sidebar (settings tab list) — cheap, no grid rerender.
                 if (cached?.settingsUI) ctx.refreshSidebar();
-                await ctx.refreshTab();
+
+                // Update missing_deps on cached so the in-place tile sync
+                // shows/removes the warning strip correctly.
+                if (cached) {
+                    cached.missing_deps = (data.enabled && data.missing_deps?.length)
+                        ? data.missing_deps
+                        : [];
+                }
+
+                // In-place tile + counts update — avoids the full grid
+                // re-render (and the staggered fade-in animation flash)
+                // that ctx.refreshTab() previously triggered. 2026-04-30.
+                const visible = (ctx.pluginList || []).filter(p => !HIDDEN.has(p.name));
+                _updateTileInPlace(el, ctx, name, ctx.lockedPlugins.includes(name));
+                _updateFilterCountsInPlace(el, visible);
+
+                // If the active filter would now hide this plugin (e.g.
+                // user is on "Enabled" and just disabled it), fade the
+                // tile out and remove it. Otherwise leave it in place.
+                const stillMatchesFilter = _filterPlugins([cached], activeFilter).length > 0;
+                if (!stillMatchesFilter) {
+                    const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
+                    if (card) _fadeOutAndRemove(card);
+                }
 
                 window.dispatchEvent(new CustomEvent('functions-changed'));
                 document.dispatchEvent(new CustomEvent('sapphire:plugin_toggled', { detail: data }));
                 // Show sticky toast if plugin enabled but has missing deps
                 if (data.enabled && data.missing_deps?.length) {
-                    if (cached) cached.missing_deps = data.missing_deps;
                     ui.showToast(
                         `${cached?.title || name} needs: ${data.missing_deps.join(', ')} — go to Plugins to install`,
                         'warning', 0
                     );
-                } else {
-                    if (cached) cached.missing_deps = [];
                 }
 
                 ui.showToast(`${cached?.title || name} ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
