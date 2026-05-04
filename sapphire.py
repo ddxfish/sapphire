@@ -643,6 +643,7 @@ class VoiceChatSystem:
 
         from core.plugin_loader import plugin_loader as _pl
         stop_actions = [
+            ("plugin daemons", _pl.stop_all_daemons),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
             ("voice components", self.stop_components),
             ("continuity scheduler", lambda: hasattr(self, 'continuity_scheduler') and self.continuity_scheduler and self.continuity_scheduler.stop()),
