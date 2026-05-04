@@ -1420,6 +1420,23 @@ class PluginLoader:
         self._watcher_thread.start()
         logger.info("[PLUGINS] File watcher started (dev mode)")
 
+    def stop_all_daemons(self):
+        """Stop all loaded plugin daemons. Must be called before audio/system teardown."""
+        with self._lock:
+            daemon_items = [
+                (name, info.get("daemon_module"))
+                for name, info in self._plugins.items()
+                if info.get("loaded") and info.get("daemon_module")
+            ]
+
+        for name, daemon_mod in daemon_items:
+            if daemon_mod and hasattr(daemon_mod, "stop"):
+                try:
+                    daemon_mod.stop()
+                    logger.info(f"[PLUGINS] Stopped daemon for {name}")
+                except Exception as e:
+                    logger.warning(f"[PLUGINS] Failed to stop daemon for {name}: {e}")
+
     def stop_watcher(self):
         """Stop the file watcher."""
         self._watcher_running = False
