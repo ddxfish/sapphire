@@ -1784,6 +1784,7 @@ class ChatSessionManager:
                         "modified": row["updated_at"],
                         "created": row["created_at"],
                         "private_chat": bool(settings.get("private_chat")),
+                        "archived": bool(settings.get("archived")),
                         "settings": settings
                     }
                     if stats:

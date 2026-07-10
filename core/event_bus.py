@@ -194,6 +194,7 @@ class Events:
     CHAT_RENAMED = "chat_renamed"
     CHAT_TRIMMED = "chat_trimmed"
     CHAT_COMPRESSED = "chat_compressed"
+    CHAT_ARCHIVED = "chat_archived"
     
     # TTS events
     TTS_PLAYING = "tts_playing"

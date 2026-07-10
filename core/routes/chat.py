@@ -947,6 +947,21 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
     return {"status": "success", "old": chat_name, "new": result}
 
 
+@router.post("/api/chats/{chat_name}/archive")
+async def archive_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Toggle a chat's archived flag. Archive is a UI shade, not a freeze:
+    the chat vanishes from the sidebar dropdown but daemons/cron/heartbeat
+    still reach it, and the Manager always shows it. Fully reversible."""
+    data = await request.json()
+    archived = bool((data or {}).get('archived', True))
+    sm = system.llm_chat.session_manager
+    if not sm.set_named_chat_settings(chat_name, {"archived": archived}):
+        raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+    origin = request.headers.get('X-Session-ID')
+    publish(Events.CHAT_ARCHIVED, {"chat_name": chat_name, "archived": archived, "origin": origin})
+    return {"status": "success", "chat": chat_name, "archived": archived}
+
+
 @router.get("/api/chats/compress/status")
 async def compress_status(_=Depends(require_login)):
     """Status of the one-at-a-time compress job (the UI polls this)."""

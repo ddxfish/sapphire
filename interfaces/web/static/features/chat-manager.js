@@ -11,8 +11,12 @@ export async function populateChatDropdown() {
     const { chatSelect } = getElements();
     try {
         const data = await api.fetchChatList();
-        const regularChats = data.chats.filter(c => !c.private_chat);
-        const privateChats = data.chats.filter(c => c.private_chat);
+        // Archived chats are hidden from the dropdown — a UI shade, not a
+        // freeze. The ACTIVE chat always shows even if archived, so the
+        // select never loses its selection; it drops out after switching away.
+        const visible = data.chats.filter(c => !c.archived || c.name === data.active_chat);
+        const regularChats = visible.filter(c => !c.private_chat);
+        const privateChats = visible.filter(c => c.private_chat);
         ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats);
     } catch (e) {
         console.error('Failed to load chat list:', e);

@@ -109,13 +109,14 @@ function render() {
         const checked = selected.has(c.name) ? 'checked' : '';
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name">${esc(c.display_name)}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}</td>
+            <td class="cm-name">${esc(c.display_name)}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${c.archived ? ' <span class="cm-badge cm-badge-arch">archived</span>' : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>
             <td>${fmtDate(c.modified)}</td>
             <td>${fmtDate(c.created)}</td>
             <td class="cm-actions">
+                <button class="cm-act" data-act="archive" title="${c.archived ? 'Unarchive (show in sidebar again)' : 'Archive (hide from sidebar dropdown)'}">${c.archived ? '\u{1F4C2}' : '\u{1F4E6}'}</button>
                 <button class="cm-act" data-act="rename" title="Rename">✏️</button>
                 <button class="cm-act" data-act="export" title="Export JSON">⬇️</button>
                 <button class="cm-act" data-act="trim" title="Trim (keep first/last turns)">✂️</button>
@@ -208,6 +209,20 @@ async function doRowAction(act, name) {
         } catch (e) {
             ui.showToast(`Export failed: ${e.message}`, 'error');
         }
+    } else if (act === 'archive') {
+        const chat = chats.find(c => c.name === name);
+        const toArchived = !chat?.archived;
+        try {
+            await api.setChatArchived(name, toArchived);
+            ui.showToast(toArchived
+                ? `Archived ${name} — hidden from the sidebar dropdown`
+                : `Unarchived ${name} — back in the sidebar`, 'success');
+            // Local dispatch: the dropdown refreshes without the SSE echo
+            eventBus.dispatch('chat_archived', { chat_name: name, archived: toArchived });
+        } catch (e) {
+            ui.showToast(`Archive failed: ${e.message}`, 'error');
+        }
+        await refresh();
     } else if (act === 'trim') {
         openTrimModal(name);
     } else if (act === 'compress') {
@@ -462,6 +477,7 @@ export default {
             .cm-num { text-align: right; font-variant-numeric: tabular-nums; }
             .cm-badge { font-size: 0.72em; padding: 1px 7px; border-radius: 9px;
                         background: var(--accent, #4a9eff); color: #fff; vertical-align: 1px; }
+            .cm-badge-arch { background: var(--text-muted, #777); }
             .cm-act { background: none; border: none; cursor: pointer; font-size: 1em;
                       opacity: 0.55; padding: 2px 4px; }
             .cm-act:hover { opacity: 1; }

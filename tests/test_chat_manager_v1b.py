@@ -222,6 +222,22 @@ class TestTrimChat:
         assert ids == ["alive"]
 
 
+class TestArchiveFlag:
+    def test_archive_flag_round_trip(self, chat_env):
+        mgr = chat_env()
+        mgr.create_chat("attic")
+        assert mgr.set_named_chat_settings("attic", {"archived": True})
+        listed = {c["name"]: c for c in mgr.list_chat_files()}
+        assert listed["attic"]["archived"] is True
+        assert listed["default"]["archived"] is False  # unset = not archived
+        # Reversible, and stats path carries it too
+        assert mgr.set_named_chat_settings("attic", {"archived": False})
+        listed = {c["name"]: c for c in mgr.list_chat_files(stats=True)}
+        assert listed["attic"]["archived"] is False
+        # Missing chat refuses (the endpoint's 404 path)
+        assert not mgr.set_named_chat_settings("ghost", {"archived": True})
+
+
 class TestListStatsTurnCount:
     def test_turn_count_rows_and_blob(self, chat_env, tmp_path):
         mgr = chat_env()

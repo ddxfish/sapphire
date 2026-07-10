@@ -128,6 +128,11 @@ export const compressChat = (name, opts) => fetchWithTimeout(`/api/chats/${encod
     body: JSON.stringify(opts)
 }, 15000);
 export const compressStatus = () => fetchWithTimeout('/api/chats/compress/status', {}, 10000);
+export const setChatArchived = (name, archived) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived })
+}, 10000);
 
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
