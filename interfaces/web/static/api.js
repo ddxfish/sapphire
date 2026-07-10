@@ -117,6 +117,17 @@ export const renameChat = (name, newName) => fetchWithTimeout(`/api/chats/${enco
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ new_name: newName })
 }, 10000);
+export const trimChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/trim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts)
+}, 60000);
+export const compressChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/compress`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts)
+}, 15000);
+export const compressStatus = () => fetchWithTimeout('/api/chats/compress/status', {}, 10000);
 
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {

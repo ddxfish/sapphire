@@ -168,6 +168,25 @@ def count_message_tokens(content, include_images: bool = False) -> int:
     return count_tokens(str(content))
 
 
+def turn_spans(messages: List[Dict[str, Any]]) -> List[tuple]:
+    """Split a message list into turn spans: (start, end) index pairs.
+
+    A turn starts at each user message and runs until the next one, so
+    tool_call/tool-result chains never split across a span (providers 400
+    on orphaned tool messages). Any leading non-user prefix (assistant
+    greeting) glues to the first turn. No user messages at all → one span
+    covering everything.
+    """
+    if not messages:
+        return []
+    starts = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    if not starts:
+        return [(0, len(messages))]
+    starts[0] = 0
+    return [(s, starts[k + 1] if k + 1 < len(starts) else len(messages))
+            for k, s in enumerate(starts)]
+
+
 def _extract_thinking_from_content(content: str) -> tuple:
     """
     Extract thinking from content that uses <think> tags.
@@ -1593,6 +1612,124 @@ class ChatSessionManager:
             logger.error(f"revert_chat_to_blob('{chat_name}') failed: {e}")
             return False
 
+    def _store_message_count(self, conn, chat_name: str):
+        """Store-truth message count, format-aware. None if chat missing."""
+        row = conn.execute(
+            """SELECT CASE WHEN storage_format = 'rows'
+                      THEN (SELECT COUNT(*) FROM chat_messages cm
+                            WHERE cm.chat_name = chats.name)
+                      ELSE json_array_length(messages)
+                 END AS n FROM chats WHERE name = ?""", (chat_name,)).fetchone()
+        return None if row is None else (row["n"] or 0)
+
+    def replace_messages(self, chat_name: str, new_msgs: List[Dict[str, Any]],
+                         expected_count: Optional[int] = None):
+        """Replace a chat's ENTIRE message list (the trim/compress writer).
+
+        Returns (ok, error_str). Format-preserving: a rows chat gets a full
+        row rewrite (blob stays nulled), a blob chat gets a blob dump — the
+        lazy-conversion machinery keeps its own schedule, and a latched
+        (conversion_failed) chat still works. The active chat routes through
+        the in-memory list + _save_current_chat (the clear() pattern) so
+        memory and store can't diverge.
+
+        expected_count = optimistic concurrency: the caller read the chat at
+        N messages; if the store no longer holds exactly N, someone wrote in
+        between (a heartbeat turn during a minutes-long compress) — abort
+        rather than clobber their words. Checked under the same lock as the
+        write."""
+        if self._is_streaming and chat_name == self.active_chat_name:
+            return False, "Chat is streaming — try again in a moment"
+        new_msgs = [dict(m) for m in new_msgs]
+        try:
+            with self._lock:
+                if expected_count is not None:
+                    with self._get_connection() as conn:
+                        current = self._store_message_count(conn, chat_name)
+                    if current is None:
+                        return False, f"Chat '{chat_name}' not found"
+                    if current != expected_count:
+                        return False, (f"Chat changed during the operation "
+                                       f"({expected_count} → {current} messages) "
+                                       f"— aborted, nothing was written")
+                if chat_name == self.active_chat_name:
+                    self.current_chat.messages = new_msgs  # setter flags full resync
+                    # Total replacement: the resync must delete from seq 0,
+                    # including rows below a capped-load offset (same
+                    # rationale as clear()).
+                    self._rows_state[chat_name] = {"offset": 0, "count": 0}
+                    self._save_current_chat()
+                    return True, ""
+                with self._get_connection() as conn:
+                    row = conn.execute(
+                        "SELECT storage_format FROM chats WHERE name = ?",
+                        (chat_name,)).fetchone()
+                    if not row:
+                        return False, f"Chat '{chat_name}' not found"
+                    now = datetime.now().isoformat()
+                    if row["storage_format"] == "rows":
+                        conn.execute("DELETE FROM chat_messages WHERE chat_name = ?",
+                                     (chat_name,))
+                        conn.executemany(
+                            "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
+                            "VALUES (?, ?, ?, ?)",
+                            [(chat_name, i, m.get("role"), self._row_json(m))
+                             for i, m in enumerate(new_msgs)])
+                        conn.execute(
+                            "UPDATE chats SET messages = '[]', updated_at = ? WHERE name = ?",
+                            (now, chat_name))
+                    else:
+                        conn.execute(
+                            "UPDATE chats SET messages = ?, updated_at = ? WHERE name = ?",
+                            (json.dumps(new_msgs), now, chat_name))
+                    conn.commit()
+                    # Stale watermark would corrupt a later windowed save;
+                    # drop it — next activation re-derives from the store.
+                    self._rows_state.pop(chat_name, None)
+            return True, ""
+        except Exception as e:
+            logger.error(f"replace_messages('{chat_name}') failed: {e}")
+            return False, str(e)
+
+    def trim_chat(self, chat_name: str, keep_first_turns: int, keep_last_turns: int,
+                  preview: bool = False):
+        """Turn-snapped middle trim: keep the first A and last B turns, delete
+        the span between. Returns (ok, result) — result is a report dict on
+        success, an error string on failure. preview=True computes the same
+        report without writing. keep_last is floored at 1: deleting the
+        recent end is turn surgery, which lives in the chat view, not here."""
+        keep_first = max(0, int(keep_first_turns))
+        keep_last = max(1, int(keep_last_turns))
+        exported = self.export_chat(chat_name)  # full store read, uncapped
+        if exported is None:
+            return False, f"Chat '{chat_name}' not found"
+        msgs = exported["messages"]
+        spans = turn_spans(msgs)
+        report = {"turns_total": len(spans), "messages_total": len(msgs),
+                  "kept_first_turns": keep_first, "kept_last_turns": keep_last}
+        if len(spans) <= keep_first + keep_last:
+            report.update({"deleted_messages": 0, "deleted_tokens_est": 0,
+                           "messages_after": len(msgs), "no_op": True})
+            return True, report
+        cut_start = spans[keep_first][0]             # first deleted message
+        cut_end = spans[len(spans) - keep_last][0]   # first kept-tail message
+        deleted = msgs[cut_start:cut_end]
+        kept = msgs[:cut_start] + msgs[cut_end:]
+        report.update({
+            "deleted_messages": len(deleted),
+            "deleted_tokens_est": sum(count_message_tokens(m.get("content"))
+                                      for m in deleted),
+            "messages_after": len(kept), "no_op": False,
+        })
+        if preview:
+            return True, report
+        ok, err = self.replace_messages(chat_name, kept,
+                                        expected_count=len(msgs))
+        if not ok:
+            return False, err
+        self._prune_orphaned_tool_images(chat_name)
+        return True, report
+
     def list_chat_files(self, stats: bool = False) -> List[Dict[str, Any]]:
         """List all available chats with metadata.
 
@@ -1602,6 +1739,9 @@ class ChatSessionManager:
 
         size_cols = ""
         if stats:
+            # turn_count = user-message count (the trim/compress unit). Same
+            # cheap-SQL rule as msg_count: role sidecar for rows chats,
+            # json_each for blobs — never parse in Python on the list path.
             size_cols = """,
                               CASE WHEN storage_format = 'rows'
                                    THEN (SELECT COALESCE(SUM(LENGTH(message_json)), 0)
@@ -1609,7 +1749,13 @@ class ChatSessionManager:
                                    ELSE LENGTH(messages)
                               END AS msg_bytes,
                               (SELECT COALESCE(SUM(LENGTH(data)), 0)
-                               FROM tool_images ti WHERE ti.chat_name = chats.name) AS img_bytes"""
+                               FROM tool_images ti WHERE ti.chat_name = chats.name) AS img_bytes,
+                              CASE WHEN storage_format = 'rows'
+                                   THEN (SELECT COUNT(*) FROM chat_messages cm
+                                         WHERE cm.chat_name = chats.name AND cm.role = 'user')
+                                   ELSE (SELECT COUNT(*) FROM json_each(chats.messages)
+                                         WHERE json_extract(json_each.value, '$.role') = 'user')
+                              END AS turn_count"""
 
         chats = []
         try:
@@ -1642,6 +1788,7 @@ class ChatSessionManager:
                     }
                     if stats:
                         entry["size_bytes"] = (row["msg_bytes"] or 0) + (row["img_bytes"] or 0)
+                        entry["turn_count"] = row["turn_count"] or 0
                     chats.append(entry)
         except Exception as e:
             logger.error(f"Error listing chats: {e}")

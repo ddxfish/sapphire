@@ -9,6 +9,7 @@
  */
 import * as api from '../api.js';
 import * as ui from '../ui.js';
+import * as eventBus from '../core/event-bus.js';
 
 let container = null;
 let chats = [];
@@ -110,12 +111,15 @@ function render() {
             <td><input type="checkbox" class="cm-check" ${checked}></td>
             <td class="cm-name">${esc(c.display_name)}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}</td>
             <td class="cm-num">${c.message_count}</td>
+            <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>
             <td>${fmtDate(c.modified)}</td>
             <td>${fmtDate(c.created)}</td>
             <td class="cm-actions">
                 <button class="cm-act" data-act="rename" title="Rename">✏️</button>
                 <button class="cm-act" data-act="export" title="Export JSON">⬇️</button>
+                <button class="cm-act" data-act="trim" title="Trim (keep first/last turns)">✂️</button>
+                <button class="cm-act" data-act="compress" title="Compress (summarize history)">\u{1F5DC}️</button>
                 <button class="cm-act" data-act="delete" title="Delete">\u{1F5D1}️</button>
             </td>
         </tr>`;
@@ -204,6 +208,10 @@ async function doRowAction(act, name) {
         } catch (e) {
             ui.showToast(`Export failed: ${e.message}`, 'error');
         }
+    } else if (act === 'trim') {
+        openTrimModal(name);
+    } else if (act === 'compress') {
+        openCompressModal(name);
     } else if (act === 'delete') {
         if (!confirmList('Delete', [name])) return;
         try {
@@ -215,6 +223,216 @@ async function doRowAction(act, name) {
         selected.delete(name);
         await refresh();
     }
+}
+
+/* ── trim + compress modals (v1b) ────────────────────────────────────── */
+
+function openModal(html) {
+    const overlay = container.querySelector('#cm-modal');
+    overlay.querySelector('#cm-modal-box').innerHTML = html;
+    overlay.style.display = '';
+    return overlay;
+}
+
+function closeModal() {
+    const overlay = container.querySelector('#cm-modal');
+    overlay.style.display = 'none';
+    overlay.querySelector('#cm-modal-box').innerHTML = '';
+}
+
+function openTrimModal(name) {
+    const chat = chats.find(c => c.name === name);
+    const overlay = openModal(`
+        <h3>✂️ Trim "${esc(chat?.display_name || name)}"</h3>
+        <p class="cm-hint">A turn = your message + everything until your next one.
+        Tool chains never split. The middle gets deleted.</p>
+        <div id="cm-trim-shape" class="cm-hint" style="font-weight:600"></div>
+        <div class="cm-form-row">
+            Keep first <input type="number" id="cm-trim-first" value="0" min="0" style="width:4.5em">
+            and last <input type="number" id="cm-trim-last" value="40" min="1" style="width:4.5em"> turns
+        </div>
+        <div id="cm-trim-preview" class="cm-hint"></div>
+        <div class="cm-modal-btns">
+            <button class="cm-btn" id="cm-trim-cancel">Cancel</button>
+            <button class="cm-btn cm-danger" id="cm-trim-go">Trim</button>
+        </div>`);
+    const vals = () => ({
+        keep_first_turns: parseInt(overlay.querySelector('#cm-trim-first').value, 10) || 0,
+        keep_last_turns: parseInt(overlay.querySelector('#cm-trim-last').value, 10) || 1,
+    });
+    const preview = async () => {
+        const out = overlay.querySelector('#cm-trim-preview');
+        try {
+            const r = await api.trimChat(name, { ...vals(), preview: true });
+            overlay.querySelector('#cm-trim-shape').textContent =
+                `This chat: ${r.messages_total} messages · ${r.turns_total} turns`;
+            const asked = r.kept_first_turns + r.kept_last_turns;
+            out.textContent = r.no_op
+                ? `Keep ${r.kept_first_turns} + ${r.kept_last_turns} = ${asked} turns, `
+                  + `but this chat only has ${r.turns_total} — nothing would be deleted.`
+                : `Deletes ${r.deleted_messages} of ${r.messages_total} messages `
+                  + `(~${(r.deleted_tokens_est / 1000).toFixed(1)}k tokens). `
+                  + `${r.messages_after} messages remain.`;
+            return r;
+        } catch (e) {
+            out.textContent = `Preview failed: ${e.message}`;
+            return null;
+        }
+    };
+    // Live preview: numbers on open, fresh numbers as you type
+    let previewTimer = null;
+    const debouncedPreview = () => {
+        clearTimeout(previewTimer);
+        previewTimer = setTimeout(preview, 350);
+    };
+    overlay.querySelector('#cm-trim-first').addEventListener('input', debouncedPreview);
+    overlay.querySelector('#cm-trim-last').addEventListener('input', debouncedPreview);
+    preview();
+    overlay.querySelector('#cm-trim-cancel').addEventListener('click', closeModal);
+    overlay.querySelector('#cm-trim-go').addEventListener('click', async () => {
+        const p = await preview();          // fresh numbers, never stale
+        if (!p) return;
+        if (p.no_op) { ui.showToast('Nothing to trim', 'warning'); return; }
+        if (!confirm(`Delete ${p.deleted_messages} messages from "${name}"?`)) return;
+        try {
+            const r = await api.trimChat(name, { ...vals(), preview: false });
+            ui.showToast(`Trimmed ${name}: ${r.deleted_messages} messages removed`, 'success');
+            closeModal();
+            // Local dispatch too — the open-chat transcript must refresh even
+            // if the SSE echo of this event is missed (reconnect gap etc.)
+            eventBus.dispatch('chat_trimmed', { chat_name: name });
+            await refresh();
+        } catch (e) {
+            ui.showToast(`Trim failed: ${e.message}`, 'error');
+        }
+    });
+}
+
+let _llmCache = null;   // {providers, metadata} from /api/llm/providers
+
+async function openCompressModal(name) {
+    const chat = chats.find(c => c.name === name);
+    let chatLLM = { primary: '', model: '' };
+    try {
+        if (!_llmCache) {
+            _llmCache = await fetch('/api/llm/providers').then(r => r.ok ? r.json() : null);
+        }
+        const s = await api.getChatSettings(name);
+        chatLLM = { primary: s?.settings?.llm_primary || '', model: s?.settings?.llm_model || '' };
+    } catch (e) { /* pickers fall back to first enabled provider */ }
+    const provs = (_llmCache?.providers || []).filter(p => p.enabled);
+    if (!provs.length) {
+        ui.showToast('No enabled LLM providers — configure one in Settings first', 'error');
+        return;
+    }
+    const defaultProv = provs.some(p => p.key === chatLLM.primary) ? chatLLM.primary : provs[0].key;
+
+    const overlay = openModal(`
+        <h3>\u{1F5DC}️ Compress "${esc(chat?.display_name || name)}"</h3>
+        <p class="cm-hint">Older history becomes AI-written summaries; the recent
+        tail stays verbatim. Runs in the background — minutes on a local model.</p>
+        <div class="cm-hint" style="font-weight:600">This chat: ${chat?.message_count ?? '?'} messages · ${chat?.turn_count ?? '?'} turns</div>
+        <div class="cm-form-row">
+            <label><input type="radio" name="cm-cmode" value="whole" checked> One summary</label>
+            <label><input type="radio" name="cm-cmode" value="chunked"> Timeline chunks (one summary pair per ~6k tokens)</label>
+        </div>
+        <div class="cm-form-row">
+            Model: <select id="cm-c-prov">${provs.map(p =>
+                `<option value="${esc(p.key)}"${p.key === defaultProv ? ' selected' : ''}>${esc(p.display_name)}${p.is_local ? ' 🏠' : ' ☁️'}</option>`).join('')}
+            </select>
+            <select id="cm-c-model"></select>
+        </div>
+        <div class="cm-form-row">
+            Target size: <select id="cm-c-target">
+                <option value="2000">~2k tokens</option>
+                <option value="5000" selected>~5k tokens</option>
+                <option value="10000">~10k tokens</option>
+            </select>
+            · keep last <input type="number" id="cm-c-keep" value="10" min="1" style="width:4.5em"> turns verbatim
+        </div>
+        <div class="cm-form-row">
+            <label><input type="checkbox" id="cm-c-backup" checked> Back up full JSON to user/history/exports/ first</label>
+        </div>
+        <div class="cm-modal-btns">
+            <button class="cm-btn" id="cm-c-cancel">Cancel</button>
+            <button class="cm-btn cm-danger" id="cm-c-go">Compress</button>
+        </div>`);
+
+    // Buttons bind BEFORE any data-dependent population — a populate failure
+    // must never leave the modal with dead buttons (learned 2026-07-10:
+    // model_options is a DICT {id: label}; the old list-shaped .map() threw
+    // in fillModels and killed the cancel/go bindings queued after it).
+    const modelSel = overlay.querySelector('#cm-c-model');
+    overlay.querySelector('#cm-c-cancel').addEventListener('click', closeModal);
+    overlay.querySelector('#cm-c-go').addEventListener('click', async () => {
+        const opts = {
+            mode: overlay.querySelector('input[name="cm-cmode"]:checked').value,
+            provider: overlay.querySelector('#cm-c-prov').value,
+            model: modelSel.value,
+            target_tokens: parseInt(overlay.querySelector('#cm-c-target').value, 10),
+            keep_last_turns: parseInt(overlay.querySelector('#cm-c-keep').value, 10) || 10,
+            backup: overlay.querySelector('#cm-c-backup').checked,
+        };
+        try {
+            await api.compressChat(name, opts);
+            ui.showToast(`Compress started on ${name} — running in background`, 'success');
+            closeModal();
+            startCompressPoll();
+        } catch (e) {
+            ui.showToast(`Compress failed to start: ${e.message}`, 'error');
+        }
+    });
+
+    const fillModels = (provKey) => {
+        // model_options is a dict {model_id: label} for core providers,
+        // null for custom ones (same consumer shape as chat.js sidebar)
+        const opts = Object.entries(_llmCache?.metadata?.[provKey]?.model_options || {});
+        const prov = provs.find(p => p.key === provKey);
+        const def = prov?.model ? ` (${prov.model.split('/').pop()})` : '';
+        modelSel.innerHTML = `<option value="">Provider default${def}</option>`
+            + opts.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join('');
+        if (provKey === chatLLM.primary && chatLLM.model
+            && opts.some(([id]) => id === chatLLM.model)) modelSel.value = chatLLM.model;
+    };
+    fillModels(defaultProv);
+    overlay.querySelector('#cm-c-prov').addEventListener('change', e => fillModels(e.target.value));
+}
+
+let _compressPoll = null;
+
+function startCompressPoll() {
+    if (_compressPoll) return;
+    _compressPoll = setInterval(async () => {
+        let s;
+        try { s = await api.compressStatus(); } catch (e) { return; }
+        const summary = container?.querySelector('#cm-summary');
+        if (s.running) {
+            if (summary) summary.textContent =
+                `\u{1F5DC}️ compressing ${s.chat}${s.progress ? ` — ${s.progress}` : ''}…`;
+            return;
+        }
+        clearInterval(_compressPoll);
+        _compressPoll = null;
+        if (!s.done) return;
+        if (s.ok) {
+            const r = s.result || {};
+            ui.showToast(`Compressed ${r.chat}: ${r.messages_before} → ${r.messages_after} messages `
+                + `(${r.summary_pairs} summary pair${r.summary_pairs === 1 ? '' : 's'})`, 'success', 8000);
+            // Local dispatch — refresh the open-chat transcript without
+            // depending on the SSE echo arriving
+            eventBus.dispatch('chat_compressed', { chat_name: s.chat });
+        } else {
+            ui.showToast(`Compress failed: ${s.error}`, 'error', 10000);
+        }
+        refresh();
+    }, 2500);
+}
+
+async function resumeCompressPollIfRunning() {
+    try {
+        const s = await api.compressStatus();
+        if (s.running) startCompressPoll();
+    } catch (e) { /* status is best-effort */ }
 }
 
 /* ── view module ─────────────────────────────────────────────────────── */
@@ -252,6 +470,18 @@ export default {
                       background: transparent; color: var(--text-primary, #ddd); cursor: pointer; }
             .cm-btn:hover { border-color: var(--accent, #4a9eff); }
             .cm-btn.cm-danger:hover { border-color: #e5534b; color: #e5534b; }
+            #cm-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+                        display: flex; align-items: center; justify-content: center; z-index: 1000; }
+            #cm-modal-box { background: var(--bg-primary, #1c1c22); border: 1px solid var(--border-color, #444);
+                            border-radius: 10px; padding: 18px 22px; max-width: 520px; width: 92%;
+                            max-height: 85vh; overflow-y: auto; }
+            #cm-modal-box h3 { margin: 0 0 8px; }
+            .cm-hint { color: var(--text-muted); font-size: var(--font-sm); margin: 6px 0; min-height: 1em; }
+            .cm-form-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+            .cm-form-row input[type="number"], .cm-form-row select {
+                background: var(--bg-secondary, #26262e); color: var(--text-primary, #ddd);
+                border: 1px solid var(--border-color, #444); border-radius: 5px; padding: 3px 6px; }
+            .cm-modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
         </style>
         <div id="cm-wrap">
             <div id="cm-toolbar">
@@ -277,7 +507,8 @@ export default {
                 <thead><tr>
                     <th style="width:28px"></th>
                     <th data-sort="display_name" data-label="Name">Name</th>
-                    <th data-sort="message_count" data-label="Msgs" class="cm-num">Msgs</th>
+                    <th data-sort="message_count" data-label="Msgs" class="cm-num" title="Stored messages — yours, hers, and every tool result. What Size tracks.">Msgs</th>
+                    <th data-sort="turn_count" data-label="Turns" class="cm-num" title="Your message + her full reply (tool work included). The unit Trim and Compress use.">Turns</th>
                     <th data-sort="size_bytes" data-label="Size" class="cm-num">Size</th>
                     <th data-sort="modified" data-label="Last active">Last active</th>
                     <th data-sort="created" data-label="Created">Created</th>
@@ -285,7 +516,13 @@ export default {
                 </tr></thead>
                 <tbody id="cm-body"></tbody>
             </table>
-        </div>`;
+        </div>
+        <div id="cm-modal" style="display:none"><div id="cm-modal-box"></div></div>`;
+
+        // Backdrop click closes the modal (box clicks don't bubble past it)
+        el.querySelector('#cm-modal').addEventListener('click', e => {
+            if (e.target.id === 'cm-modal') closeModal();
+        });
 
         // ALL handlers bound ONCE here via delegation (never per-render —
         // the stacked-handler class bug).
@@ -336,6 +573,8 @@ export default {
 
     show() {
         refresh();
+        // A compress started last visit may still be running — reattach
+        resumeCompressPollIfRunning();
     },
 
     hide() {}

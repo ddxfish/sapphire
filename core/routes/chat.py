@@ -947,6 +947,83 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
     return {"status": "success", "old": chat_name, "new": result}
 
 
+@router.get("/api/chats/compress/status")
+async def compress_status(_=Depends(require_login)):
+    """Status of the one-at-a-time compress job (the UI polls this)."""
+    from core.chat import compress
+    return compress.get_job_status()
+
+
+@router.post("/api/chats/{chat_name}/trim")
+async def trim_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Turn-snapped middle trim: keep the first A and last B turns, delete
+    the span between. preview:true computes the report without writing."""
+    data = await request.json()
+    data = data or {}
+    try:
+        keep_first = int(data.get('keep_first_turns', 0))
+        keep_last = int(data.get('keep_last_turns', 1))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="keep_first_turns/keep_last_turns must be integers")
+    preview = bool(data.get('preview', False))
+    if keep_last < 1:
+        raise HTTPException(status_code=400,
+                            detail="keep_last_turns must be at least 1 — deleting the recent end is turn surgery, use the chat view.")
+    if not preview and chat_name in _live_call_chats(system):
+        raise HTTPException(status_code=409,
+                            detail=f"'{chat_name}' has a live phone call — hang up before trimming.")
+    ok, result = system.llm_chat.session_manager.trim_chat(
+        chat_name, keep_first, keep_last, preview=preview)
+    if not ok:
+        raise HTTPException(status_code=404 if 'not found' in str(result) else 400, detail=result)
+    if not preview and not result.get('no_op'):
+        origin = request.headers.get('X-Session-ID')
+        publish(Events.CHAT_TRIMMED, {"chat_name": chat_name, "report": result, "origin": origin})
+    return {"status": "success", "preview": preview, **result}
+
+
+@router.post("/api/chats/{chat_name}/compress")
+async def compress_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Start the background compress job (whole = one summary pair,
+    chunked = one pair per ~6k-token span). One job at a time — 409 if busy."""
+    from core.chat import compress
+    data = await request.json()
+    data = data or {}
+    mode = data.get('mode', 'whole')
+    if mode not in ('whole', 'chunked'):
+        raise HTTPException(status_code=400, detail="mode must be 'whole' or 'chunked'")
+    provider_key = (data.get('provider') or '').strip()
+    if not provider_key or provider_key in ('auto', 'none'):
+        raise HTTPException(status_code=400, detail="A concrete provider is required")
+    try:
+        target_tokens = int(data.get('target_tokens', 5000))
+        keep_last = int(data.get('keep_last_turns', 10))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="target_tokens/keep_last_turns must be integers")
+    target_tokens = max(500, min(20000, target_tokens))
+    if keep_last < 1:
+        raise HTTPException(status_code=400, detail="keep_last_turns must be at least 1")
+    # If the kept tail fills the LLM history window, the summary at position 0
+    # is never sent to the model — compressed but invisible.
+    max_history = getattr(config, 'LLM_MAX_HISTORY', 30)
+    if max_history and keep_last >= max_history:
+        raise HTTPException(status_code=400,
+                            detail=f"keep_last_turns must be under the LLM history window ({max_history} turns) or the summary never reaches the model.")
+    if chat_name in _live_call_chats(system):
+        raise HTTPException(status_code=409,
+                            detail=f"'{chat_name}' has a live phone call — hang up before compressing.")
+    sm = system.llm_chat.session_manager
+    if sm.read_chat_settings(chat_name) is None:
+        raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+    ok, err = compress.start_compress_job(
+        sm, chat_name, mode=mode, provider_key=provider_key,
+        model=(data.get('model') or '').strip(), target_tokens=target_tokens,
+        keep_last_turns=keep_last, backup=bool(data.get('backup', True)))
+    if not ok:
+        raise HTTPException(status_code=409, detail=err)
+    return {"status": "started", "chat": chat_name, "mode": mode}
+
+
 @router.post("/api/chats/{chat_name}/activate")
 async def activate_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Activate/switch to a chat."""

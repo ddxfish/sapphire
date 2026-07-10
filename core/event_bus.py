@@ -192,6 +192,8 @@ class Events:
     CHAT_CLEARED = "chat_cleared"
     CHAT_DELETED = "chat_deleted"
     CHAT_RENAMED = "chat_renamed"
+    CHAT_TRIMMED = "chat_trimmed"
+    CHAT_COMPRESSED = "chat_compressed"
     
     # TTS events
     TTS_PLAYING = "tts_playing"

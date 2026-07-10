@@ -518,6 +518,10 @@ function initEventBus() {
     eventBus.on(eventBus.Events.MESSAGE_ADDED, () => { if (_voiceTurnActive) return; debouncedRefresh(); });
     eventBus.on(eventBus.Events.MESSAGE_REMOVED, () => debouncedRefresh());
     eventBus.on(eventBus.Events.CHAT_CLEARED, () => debouncedRefresh());
+    // Trim/compress rewrite a chat's history wholesale — if it's the open
+    // chat, the transcript on screen is stale until refreshed.
+    eventBus.on(eventBus.Events.CHAT_TRIMMED, () => debouncedRefresh());
+    eventBus.on(eventBus.Events.CHAT_COMPRESSED, () => debouncedRefresh());
 
     // Debounced updateScene
     let sceneTimer = null;

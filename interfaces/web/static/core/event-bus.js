@@ -197,7 +197,9 @@ export const Events = {
     CHAT_SWITCHED: 'chat_switched',
     CHAT_CREATED: 'chat_created',
     CHAT_CLEARED: 'chat_cleared',
-    
+    CHAT_TRIMMED: 'chat_trimmed',
+    CHAT_COMPRESSED: 'chat_compressed',
+
     // TTS events
     TTS_PLAYING: 'tts_playing',
     TTS_STOPPED: 'tts_stopped',
