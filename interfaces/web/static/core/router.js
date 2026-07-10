@@ -6,6 +6,7 @@ let currentView = null;
 
 // View groups: views that share a nav parent
 const VIEW_GROUPS = {
+    chat: ['chat', 'chat-manage'],
     personas: ['personas', 'prompts', 'toolsets', 'spices'],
     triggers: ['heartbeat', 'scheduled', 'daemons', 'realtime', 'webhooks'],
     mind: ['self', 'memories', 'people', 'knowledge', 'ai-knowledge', 'goals'],

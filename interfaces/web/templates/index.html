@@ -95,10 +95,14 @@
     <nav id="nav-rail">
         <div class="nav-logo" title="Sapphire">S</div>
 
-        <button class="nav-item active" data-view="chat">
+        <div class="nav-item active nav-group-parent" data-view="chat" role="button" tabindex="0">
             <span class="nav-icon">&#x1F4AC;</span>
             <span class="nav-label">Chat</span>
-        </button>
+            <div class="nav-flyout">
+                <div class="nav-flyout-item" data-view="chat" role="button" tabindex="0">&#x1F4AC; Chat</div>
+                <div class="nav-flyout-item" data-view="chat-manage" role="button" tabindex="0">&#x1F5C2;&#xFE0F; Manage</div>
+            </div>
+        </div>
         <div class="nav-item nav-group-parent" data-view="personas" role="button" tabindex="0">
             <span class="nav-icon">&#x1F3AD;</span>
             <span class="nav-label">Persona</span>
@@ -405,6 +409,7 @@
         <!-- ============================================================
              PLACEHOLDER VIEWS (content in later steps)
              ============================================================ -->
+        <div id="view-chat-manage" class="view" style="display:none"><div class="view-placeholder"><h2>Chat Manager</h2><p>Loading...</p></div></div>
         <div id="view-personas" class="view" style="display:none">
             <div class="view-placeholder">
                 <h2>Personas</h2>

@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 
 import config
 from core.auth import require_login, check_endpoint_rate
@@ -686,10 +686,11 @@ async def import_history(request: Request, _=Depends(require_login), system=Depe
 # =============================================================================
 
 @router.get("/api/chats")
-async def list_chats(request: Request, type: str = None, _=Depends(require_login), system=Depends(get_system)):
-    """List chats."""
+async def list_chats(request: Request, type: str = None, stats: int = 0,
+                     _=Depends(require_login), system=Depends(get_system)):
+    """List chats. stats=1 adds size_bytes per chat (Chat Manager view)."""
     try:
-        chats = system.llm_chat.list_chats()
+        chats = system.llm_chat.session_manager.list_chat_files(stats=bool(stats))
         active_chat = system.llm_chat.get_active_chat()
         return {"chats": chats, "active_chat": active_chat}
     except Exception as e:
@@ -760,47 +761,190 @@ async def create_private_chat(request: Request, _=Depends(require_login), system
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _live_call_chats(system) -> set:
+    """Chats currently owned by a live phone call — bulk/manage ops refuse them."""
+    try:
+        _mgr = getattr(system, "_conversation_manager", None)
+        return _mgr.external_chats() if _mgr else set()
+    except Exception:
+        return set()
+
+
+def _delete_one_chat(system, chat_name: str, origin=None):
+    """Single-chat delete with the FULL cleanup chain — the one true path,
+    shared by the single route and bulk-delete. Returns (ok, message).
+
+    Surface isolation (2026-07-06): deleting a chat that hosts a LIVE phone
+    call silently drops the call's brain override on its next turn — the
+    caller's turns would land in the operator's active chat with the
+    operator's persona/tools/scopes. Refuse until the call ends."""
+    if chat_name in _live_call_chats(system):
+        return False, f"'{chat_name}' has a live phone call — hang up before deleting."
+    was_active = (chat_name == system.llm_chat.get_active_chat())
+    if not system.llm_chat.delete_chat(chat_name):
+        return False, f"Cannot delete '{chat_name}'"
+    if was_active:
+        settings = system.llm_chat.session_manager.get_chat_settings()
+        _apply_chat_settings(system, settings)
+    # Cleanup per-chat RAG documents
+    try:
+        from plugins.memory.tools import knowledge_tools as knowledge
+        knowledge.delete_scope(f"__rag__:{chat_name}")
+    except Exception:
+        pass
+    # Dismiss any agents spawned for this chat
+    try:
+        if hasattr(system, 'agent_manager') and system.agent_manager:
+            for agent in system.agent_manager.check_all(chat_name=chat_name):
+                system.agent_manager.dismiss(agent['id'])
+    except Exception:
+        pass
+    publish(Events.CHAT_DELETED, {"name": chat_name, "origin": origin})
+    return True, f"Deleted: {chat_name}"
+
+
 @router.delete("/api/chats/{chat_name}")
 async def delete_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Delete a chat."""
-    # Surface isolation (2026-07-06): deleting a chat that hosts a LIVE phone
-    # call silently drops the call's brain override on its next turn — the
-    # caller's turns would land in the operator's active chat with the
-    # operator's persona/tools/scopes. Refuse until the call ends.
     try:
-        _mgr = getattr(system, "_conversation_manager", None)
-        _ext = _mgr.external_chats() if _mgr else set()
-    except Exception:
-        _ext = set()
-    if chat_name in _ext:
-        raise HTTPException(status_code=409,
-                            detail=f"'{chat_name}' has a live phone call — hang up before deleting.")
-    try:
-        was_active = (chat_name == system.llm_chat.get_active_chat())
-        if system.llm_chat.delete_chat(chat_name):
-            if was_active:
-                settings = system.llm_chat.session_manager.get_chat_settings()
-                _apply_chat_settings(system, settings)
-            # Cleanup per-chat RAG documents
-            try:
-                from plugins.memory.tools import knowledge_tools as knowledge
-                knowledge.delete_scope(f"__rag__:{chat_name}")
-            except Exception:
-                pass
-            # Dismiss any agents spawned for this chat
-            try:
-                if hasattr(system, 'agent_manager') and system.agent_manager:
-                    for agent in system.agent_manager.check_all(chat_name=chat_name):
-                        system.agent_manager.dismiss(agent['id'])
-            except Exception:
-                pass
-            return {"status": "success", "message": f"Deleted: {chat_name}"}
-        else:
-            raise HTTPException(status_code=400, detail=f"Cannot delete '{chat_name}'")
+        origin = request.headers.get('X-Session-ID')
+        ok, message = _delete_one_chat(system, chat_name, origin)
+        if not ok:
+            code = 409 if "live phone call" in message else 400
+            raise HTTPException(status_code=code, detail=message)
+        return {"status": "success", "message": message}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to delete")
+
+
+@router.post("/api/chats/bulk-delete")
+async def bulk_delete_chats(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Delete many chats in one call. Per-chat results — a refused chat
+    (live call, protected) doesn't stop the rest."""
+    data = await request.json()
+    names = data.get('names') if data else None
+    if not names or not isinstance(names, list):
+        raise HTTPException(status_code=400, detail="names list required")
+    origin = request.headers.get('X-Session-ID')
+    results = {}
+    for name in names:
+        ok, message = _delete_one_chat(system, str(name), origin)
+        results[str(name)] = {"ok": ok, "message": message}
+    deleted = sum(1 for r in results.values() if r["ok"])
+    return {"status": "success", "deleted": deleted, "results": results}
+
+
+@router.post("/api/chats/bulk-clear")
+async def bulk_clear_chats(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Clear messages in many chats (chats survive, histories wiped)."""
+    data = await request.json()
+    names = data.get('names') if data else None
+    if not names or not isinstance(names, list):
+        raise HTTPException(status_code=400, detail="names list required")
+    live = _live_call_chats(system)
+    results = {}
+    for name in names:
+        name = str(name)
+        if name in live:
+            results[name] = {"ok": False, "message": "live phone call — hang up first"}
+            continue
+        ok = system.llm_chat.session_manager.clear_chat(name)
+        results[name] = {"ok": ok, "message": "Cleared" if ok else "Not found or failed"}
+    cleared = sum(1 for r in results.values() if r["ok"])
+    return {"status": "success", "cleared": cleared, "results": results}
+
+
+@router.get("/api/chats/{chat_name}/export")
+async def export_single_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Full raw export of one chat: {name, settings, messages} — untrimmed."""
+    data = system.llm_chat.session_manager.export_chat(chat_name)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+    return {"name": chat_name, **data}
+
+
+@router.post("/api/chats/bulk-export")
+async def bulk_export_chats(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Export many chats as one JSON document (safety valve before bulk ops).
+    Each chat's messages array stays import-compatible with /api/history/import."""
+    data = await request.json()
+    names = data.get('names') if data else None
+    if not names or not isinstance(names, list):
+        raise HTTPException(status_code=400, detail="names list required")
+    sm = system.llm_chat.session_manager
+    chats, missing = {}, []
+    for name in names:
+        d = sm.export_chat(str(name))
+        if d is None:
+            missing.append(str(name))
+        else:
+            chats[str(name)] = d
+    return {"chats": chats, "missing": missing}
+
+
+@router.post("/api/chats/bulk-export-zip")
+async def bulk_export_chats_zip(request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Export many chats as a zip — one {name}.json per chat (each file
+    import-compatible with /api/history/import). Names are create_chat-
+    sanitized (alnum/_/-) so entry paths are traversal-safe by construction."""
+    import io
+    import zipfile
+    data = await request.json()
+    names = data.get('names') if data else None
+    if not names or not isinstance(names, list):
+        raise HTTPException(status_code=400, detail="names list required")
+    sm = system.llm_chat.session_manager
+    buf = io.BytesIO()
+    exported = 0
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for name in names:
+            d = sm.export_chat(str(name))
+            if d is None:
+                continue
+            zf.writestr(f"{name}.json", json.dumps({"name": str(name), **d}, indent=2))
+            exported += 1
+    if not exported:
+        raise HTTPException(status_code=404, detail="No exportable chats in list")
+    stamp = time.strftime("%Y-%m-%d_%H%M")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="sapphire_chats_{stamp}.zip"'})
+
+
+@router.post("/api/chats/{chat_name}/rename")
+async def rename_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Rename a chat. Carries tool images, rows, RAG scope, and the
+    active-chat pointer along. Refuses live-call chats and chats with
+    attached agents (they key on the chat name)."""
+    data = await request.json()
+    new_name = (data or {}).get('new_name', '')
+    if chat_name in _live_call_chats(system):
+        raise HTTPException(status_code=409,
+                            detail=f"'{chat_name}' has a live phone call — hang up before renaming.")
+    try:
+        if hasattr(system, 'agent_manager') and system.agent_manager:
+            if system.agent_manager.check_all(chat_name=chat_name):
+                raise HTTPException(status_code=409,
+                                    detail="Chat has agents attached — dismiss them first (they key on the chat name).")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+    ok, result = system.llm_chat.session_manager.rename_chat(chat_name, new_name)
+    if not ok:
+        raise HTTPException(status_code=400, detail=result)
+    # Carry the per-chat RAG scope along
+    try:
+        from plugins.memory.tools import knowledge_tools as knowledge
+        knowledge.rename_scope(f"__rag__:{chat_name}", f"__rag__:{result}")
+    except Exception:
+        pass
+    origin = request.headers.get('X-Session-ID')
+    publish(Events.CHAT_RENAMED, {"old": chat_name, "new": result, "origin": origin})
+    return {"status": "success", "old": chat_name, "new": result}
 
 
 @router.post("/api/chats/{chat_name}/activate")

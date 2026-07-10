@@ -190,6 +190,8 @@ class Events:
     CHAT_SWITCHED = "chat_switched"
     CHAT_CREATED = "chat_created"
     CHAT_CLEARED = "chat_cleared"
+    CHAT_DELETED = "chat_deleted"
+    CHAT_RENAMED = "chat_renamed"
     
     # TTS events
     TTS_PLAYING = "tts_playing"

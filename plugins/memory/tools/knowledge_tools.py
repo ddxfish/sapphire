@@ -446,6 +446,36 @@ def create_scope(name: str) -> bool:
         return False
 
 
+def rename_scope(old_name: str, new_name: str) -> bool:
+    """Rename a knowledge scope in place (tabs follow; entries key on tab_id).
+
+    Used by chat rename to carry a chat's `__rag__:{name}` scope along.
+    No-op (True) if the old scope doesn't exist — a chat without RAG docs
+    has no scope to move. False only on a real failure or collision."""
+    if old_name == 'default':
+        return False
+    try:
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            if not cursor.execute('SELECT 1 FROM knowledge_scopes WHERE name = ?',
+                                  (old_name,)).fetchone():
+                return True  # nothing to rename
+            if cursor.execute('SELECT 1 FROM knowledge_scopes WHERE name = ?',
+                              (new_name,)).fetchone():
+                logger.warning(f"rename_scope: target '{new_name}' already exists")
+                return False
+            cursor.execute('UPDATE knowledge_scopes SET name = ? WHERE name = ?',
+                           (new_name, old_name))
+            cursor.execute('UPDATE knowledge_tabs SET scope = ? WHERE scope = ?',
+                           (new_name, old_name))
+            conn.commit()
+        logger.info(f"Renamed knowledge scope '{old_name}' -> '{new_name}'")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to rename scope '{old_name}' -> '{new_name}': {e}")
+        return False
+
+
 def delete_scope(name: str) -> dict:
     """Delete a knowledge scope, ALL its tabs, and ALL entries within those tabs."""
     if name == 'default':

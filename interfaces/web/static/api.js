@@ -94,6 +94,30 @@ export const importChat = (messages) => fetchWithTimeout('/api/history/import', 
     body: JSON.stringify({ messages })
 }, 30000);
 
+// Chat Manager (views/chat-manage.js)
+export const fetchChatListStats = () => fetchWithTimeout('/api/chats?stats=1', {}, 15000);
+export const bulkDeleteChats = (names) => fetchWithTimeout('/api/chats/bulk-delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+}, 30000);
+export const bulkClearChats = (names) => fetchWithTimeout('/api/chats/bulk-clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+}, 30000);
+export const bulkExportChats = (names) => fetchWithTimeout('/api/chats/bulk-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names })
+}, 60000);
+export const exportChatByName = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/export`, {}, 30000);
+export const renameChat = (name, newName) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName })
+}, 10000);
+
 // Shared SSE event processor
 const processSSEData = (data, handlers) => {
     const { onChunk, onToolStart, onToolEnd, onReload, onDone, onLegacyChunk, onStreamStarted, onIterationStart } = handlers;

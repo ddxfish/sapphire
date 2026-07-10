@@ -1464,6 +1464,102 @@ class ChatSessionManager:
         except Exception as e:
             logger.warning(f"convert-on-write check skipped: {e}")
 
+    # ── Chat Manager v1a (tmp/chat-manager.md) — by-name operations ──
+
+    def clear_chat(self, chat_name: str) -> bool:
+        """Clear a chat's messages BY NAME without switching active chats.
+
+        The active chat routes through clear() so the in-memory list resets
+        too. Total wipe regardless of storage format: blob nulled, rows
+        deleted, tool images swept. Route layer refuses live-call chats."""
+        if chat_name == self.active_chat_name:
+            self.clear()
+            return True
+        try:
+            with self._lock, self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM chats WHERE name = ?", (chat_name,)).fetchone()
+                if not row:
+                    return False
+                conn.execute(
+                    "UPDATE chats SET messages = '[]', updated_at = ? WHERE name = ?",
+                    (datetime.now().isoformat(), chat_name))
+                conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (chat_name,))
+                conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (chat_name,))
+                conn.commit()
+                self._rows_state.pop(chat_name, None)
+            publish(Events.CHAT_CLEARED, {"chat_name": chat_name})
+            return True
+        except Exception as e:
+            logger.error(f"clear_chat('{chat_name}') failed: {e}")
+            return False
+
+    def export_chat(self, chat_name: str) -> Optional[Dict[str, Any]]:
+        """Full raw export: {settings, messages} — UNCAPPED, no LLM trimming.
+
+        Reads from the store (complete even when the in-memory load was
+        capped); outside a live stream the store always matches memory."""
+        self._ensure_db()
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT settings, messages, storage_format FROM chats WHERE name = ?",
+                    (chat_name,)).fetchone()
+                if not row:
+                    return None
+                if row["storage_format"] == "rows":
+                    messages = [json.loads(r["message_json"]) for r in conn.execute(
+                        "SELECT message_json FROM chat_messages WHERE chat_name = ? ORDER BY seq",
+                        (chat_name,))]
+                else:
+                    messages = json.loads(row["messages"])
+                return {"settings": json.loads(row["settings"]), "messages": messages}
+        except Exception as e:
+            logger.error(f"export_chat('{chat_name}') failed: {e}")
+            return None
+
+    def rename_chat(self, old_name: str, new_name: str):
+        """Rename a chat across every store that keys on the name.
+
+        Returns (ok, result) — result is the sanitized new name on success,
+        an error string on failure. Route layer owns the RAG-scope rename,
+        agent refusal, and live-call refusal; this owns chats +
+        chat_messages + tool_images + active-name/marker, one transaction."""
+        if old_name == "default":
+            return False, "Cannot rename the default chat"
+        safe_name = "".join(c for c in (new_name or "") if c.isalnum() or c in (' ', '-', '_')).strip()
+        safe_name = safe_name.replace(' ', '_').lower()
+        if not safe_name:
+            return False, "Invalid new name"
+        if safe_name == old_name:
+            return False, "Name unchanged"
+        if self._is_streaming and old_name == self.active_chat_name:
+            return False, "Chat is streaming — try again in a moment"
+        try:
+            with self._lock, self._get_connection() as conn:
+                if not conn.execute("SELECT 1 FROM chats WHERE name = ?", (old_name,)).fetchone():
+                    return False, f"Chat '{old_name}' not found"
+                if conn.execute("SELECT 1 FROM chats WHERE name = ?", (safe_name,)).fetchone():
+                    return False, f"Chat '{safe_name}' already exists"
+                now = datetime.now().isoformat()
+                conn.execute("UPDATE chats SET name = ?, updated_at = ? WHERE name = ?",
+                             (safe_name, now, old_name))
+                conn.execute("UPDATE chat_messages SET chat_name = ? WHERE chat_name = ?",
+                             (safe_name, old_name))
+                conn.execute("UPDATE tool_images SET chat_name = ? WHERE chat_name = ?",
+                             (safe_name, old_name))
+                conn.commit()
+                if old_name in self._rows_state:
+                    self._rows_state[safe_name] = self._rows_state.pop(old_name)
+                if old_name == self.active_chat_name:
+                    self.active_chat_name = safe_name
+                    self._save_last_active(safe_name)
+            logger.info(f"Renamed chat '{old_name}' -> '{safe_name}'")
+            return True, safe_name
+        except Exception as e:
+            logger.error(f"rename_chat('{old_name}' -> '{new_name}') failed: {e}")
+            return False, str(e)
+
     def revert_chat_to_blob(self, chat_name: str) -> bool:
         """Down-migrate a rows chat back to blob storage (safety net #2).
 
@@ -1497,9 +1593,23 @@ class ChatSessionManager:
             logger.error(f"revert_chat_to_blob('{chat_name}') failed: {e}")
             return False
 
-    def list_chat_files(self) -> List[Dict[str, Any]]:
-        """List all available chats with metadata."""
+    def list_chat_files(self, stats: bool = False) -> List[Dict[str, Any]]:
+        """List all available chats with metadata.
+
+        stats=True adds size_bytes (message store + tool images) per chat —
+        Chat Manager only; the hot dropdown path skips the size subqueries."""
         self._ensure_db()
+
+        size_cols = ""
+        if stats:
+            size_cols = """,
+                              CASE WHEN storage_format = 'rows'
+                                   THEN (SELECT COALESCE(SUM(LENGTH(message_json)), 0)
+                                         FROM chat_messages cm WHERE cm.chat_name = chats.name)
+                                   ELSE LENGTH(messages)
+                              END AS msg_bytes,
+                              (SELECT COALESCE(SUM(LENGTH(data)), 0)
+                               FROM tool_images ti WHERE ti.chat_name = chats.name) AS img_bytes"""
 
         chats = []
         try:
@@ -1508,19 +1618,19 @@ class ChatSessionManager:
                 # rows chats (a converted chat's frozen blob would give a
                 # stale json_array_length — rowify plan, land in step 1).
                 cursor = conn.execute(
-                    """SELECT name, settings, updated_at, created_at,
+                    f"""SELECT name, settings, updated_at, created_at,
                               CASE WHEN storage_format = 'rows'
                                    THEN (SELECT COUNT(*) FROM chat_messages cm
                                          WHERE cm.chat_name = chats.name)
                                    ELSE json_array_length(messages)
-                              END AS msg_count
+                              END AS msg_count{size_cols}
                        FROM chats
                        ORDER BY updated_at DESC"""
                 )
                 for row in cursor:
                     settings = json.loads(row["settings"])
 
-                    chats.append({
+                    entry = {
                         "name": row["name"],
                         "display_name": settings.get("private_display_name") or row["name"].replace('_', ' ').title(),
                         "message_count": row["msg_count"] or 0,
@@ -1529,7 +1639,10 @@ class ChatSessionManager:
                         "created": row["created_at"],
                         "private_chat": bool(settings.get("private_chat")),
                         "settings": settings
-                    })
+                    }
+                    if stats:
+                        entry["size_bytes"] = (row["msg_bytes"] or 0) + (row["img_bytes"] or 0)
+                    chats.append(entry)
         except Exception as e:
             logger.error(f"Error listing chats: {e}")
         
