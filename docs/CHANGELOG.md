@@ -1,3 +1,6 @@
+# 2.8.3 - Chat refactor
+- Changed giant json blobs to rows in db
+- Added Chat Manager to bulk delete, export
 # 2.8.2 - Isolation
 - Might higher isolation between tasks, call + web ui same time
 - Coding harness update
