@@ -147,7 +147,7 @@ function renderEditor() {
         <div class="pr-body">
             ${isMonolith ? renderMonolith(p) : renderAssembled(p)}
             <div class="pr-privacy">
-                <label><input type="checkbox" id="pr-privacy" ${p.privacy_required ? 'checked' : ''}> Private only (requires Privacy Mode)</label>
+                <label><input type="checkbox" id="pr-privacy" ${p.privacy_required ? 'checked' : ''}> Private only (chat must be private &mdash; the &#x1F441;&#xFE0E; eyeball)</label>
             </div>
         </div>
     `;
@@ -670,7 +670,7 @@ async function activateCurrentPrompt() {
         updateScene();
         render();
     } catch (e) {
-        ui.showToast(e.privacyRequired ? 'Privacy Mode required' : (e.message || 'Failed'), 'error');
+        ui.showToast(e.message || 'Failed', 'error');
     }
 }
 

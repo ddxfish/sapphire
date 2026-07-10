@@ -2,7 +2,7 @@
 
 Covers what P0 didn't:
   - Toolset key handling (`toolset` vs legacy `ability`, 'none' clears)
-  - Private chat creation (managed-mode gate, name sanitization, private_chat flag)
+  - Private chat toggle via settings (managed-mode gate, scope round-trip)
   - Chat deletion side effects (fallback settings re-apply, rag scope cleanup,
     per-chat agent dismissal)
   - History message deletion (count=-1 fires CHAT_CLEARED, count=0 rejected,
@@ -138,75 +138,117 @@ def test_put_settings_idempotent(chat_client):
     assert captured.get('memory') == 'idempotent_test'
 
 
-# ─── 2.19 Private chat blocked in managed mode ───────────────────────────────
+# ─── 2.19 Private toggle blocked in managed mode ─────────────────────────────
 
-def test_create_private_chat_blocked_in_managed_mode(chat_client, monkeypatch):
-    """[PROACTIVE] Managed deployments can't spawn permanent private chats."""
+def test_private_toggle_blocked_in_managed_mode(chat_client, monkeypatch):
+    """[PROACTIVE] Managed deployments can't flip a chat private via the
+    settings route (eyeball parity with the old create-private gate)."""
     from core import settings_manager as sm_mod
     c, csrf, mock_system, fm, captured = chat_client
     monkeypatch.setattr(sm_mod.settings, 'is_managed', lambda: True)
 
-    r = c.post('/api/chats/private', headers={'X-CSRF-Token': csrf}, json={'name': 'secret'})
+    r = c.put('/api/chats/trinity/settings', headers={'X-CSRF-Token': csrf},
+              json={'settings': {'private_chat': True}})
     assert r.status_code == 403
-    # create_chat was never called (guard short-circuited)
-    assert mock_system.llm_chat.create_chat.call_count == 0
+    # Settings were never written (guard short-circuited)
+    assert mock_system.llm_chat.session_manager.update_chat_settings.call_count == 0
 
 
-# ─── 2.20 Private chat name sanitized + unique suffix ────────────────────────
+# ─── 2.20/2.21 Private toggle round-trip via settings (the eyeball flow) ─────
 
-def test_create_private_chat_name_sanitized_and_unique(chat_client, monkeypatch):
-    """[PROACTIVE] Malicious name → sanitized to alphanumeric+_. If the target
-    name already exists, `_2`/`_3` suffix picked to avoid collision."""
+def test_private_toggle_roundtrip_applies_scope(chat_client, monkeypatch):
+    """[PROACTIVE] private_chat=True through PUT settings must land in
+    scope_private (network tools refuse); False must clear it. This is the
+    whole eyeball contract — the flag toggles both ways, live."""
     from core import settings_manager as sm_mod
     c, csrf, mock_system, fm, captured = chat_client
     monkeypatch.setattr(sm_mod.settings, 'is_managed', lambda: False)
+    sm = mock_system.llm_chat.session_manager
 
-    # Seed list_chats so the sanitized base collides, forcing a suffix
-    mock_system.llm_chat.list_chats.return_value = [{'name': 'private_evil_name'}]
+    on = {'private_chat': True}
+    sm.get_chat_settings.return_value = on
+    r = c.put('/api/chats/trinity/settings', headers={'X-CSRF-Token': csrf},
+              json={'settings': on})
+    assert r.status_code == 200
+    assert sm.update_chat_settings.call_args_list[-1].args[0].get('private_chat') is True
+    assert captured.get('private') is True
 
-    r = c.post(
-        '/api/chats/private',
-        headers={'X-CSRF-Token': csrf},
-        json={'name': 'Evil 💀 Name<script>'},
-    )
+    off = {'private_chat': False}
+    sm.get_chat_settings.return_value = off
+    r = c.put('/api/chats/trinity/settings', headers={'X-CSRF-Token': csrf},
+              json={'settings': off})
+    assert r.status_code == 200
+    assert captured.get('private') is False
+
+
+def test_managed_mode_allows_toggling_private_off(chat_client, monkeypatch):
+    """Managed guard only blocks turning private ON — a pre-existing private
+    chat can still be switched off (and other settings keep working)."""
+    from core import settings_manager as sm_mod
+    c, csrf, mock_system, fm, captured = chat_client
+    monkeypatch.setattr(sm_mod.settings, 'is_managed', lambda: True)
+    sm = mock_system.llm_chat.session_manager
+    sm.get_chat_settings.return_value = {'private_chat': False}
+
+    r = c.put('/api/chats/trinity/settings', headers={'X-CSRF-Token': csrf},
+              json={'settings': {'private_chat': False}})
+    assert r.status_code == 200
+
+
+# ─── Private chat: compress provider gate ────────────────────────────────────
+
+def test_compress_refuses_cloud_provider_for_private_chat(chat_client):
+    """[PROACTIVE] A private chat's words must not reach a cloud summarizer —
+    the compress route 400s on a cloud provider before any job starts."""
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    sm.read_chat_settings.return_value = {'private_chat': True}
+
+    r = c.post('/api/chats/trinity/compress', headers={'X-CSRF-Token': csrf},
+               json={'mode': 'whole', 'provider': 'claude', 'keep_last_turns': 1})
+    assert r.status_code == 400
+    assert 'private' in r.json()['detail'].lower()
+
+
+def test_compress_allows_local_provider_for_private_chat(chat_client, monkeypatch):
+    """A provider with the is_local checkbox ticked passes the private gate
+    and the job starts. (Provider injected — the gate reads config, not the
+    box's real settings.)"""
+    import config
+    from core.chat import compress
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    sm.read_chat_settings.return_value = {'private_chat': True}
+    monkeypatch.setattr(config, 'LLM_CUSTOM_PROVIDERS',
+                        {'localbox': {'enabled': True, 'is_local': True,
+                                      'base_url': 'http://127.0.0.1:1234/v1'}},
+                        raising=False)
+    monkeypatch.setattr(compress, 'start_compress_job', lambda *a, **k: (True, None))
+
+    r = c.post('/api/chats/trinity/compress', headers={'X-CSRF-Token': csrf},
+               json={'mode': 'whole', 'provider': 'localbox', 'keep_last_turns': 1})
     assert r.status_code == 200, r.text
-    body = r.json()
-    # Sanitized: only alphanum/_ after private_ prefix; no <script>, no emoji
-    assert body['chat_name'].startswith('private_')
-    assert '<' not in body['chat_name']
-    assert '>' not in body['chat_name']
-    assert '💀' not in body['chat_name']
-    # Collision suffix applied
-    assert body['chat_name'] != 'private_evil_name'
 
 
-def test_create_private_chat_empty_name_defaults_to_private(chat_client, monkeypatch):
-    """Empty or whitespace name → defaults to 'private_private' base."""
-    from core import settings_manager as sm_mod
+# ─── Private chat: persona load preserves the flag ───────────────────────────
+
+def test_persona_load_preserves_private_chat(chat_client, monkeypatch):
+    """[REGRESSION_GUARD] Loading a persona must NOT flip the chat's
+    private_chat — privacy belongs to the chat. (Old footgun: persona apply
+    stamped private_chat=False and silently un-privated chats.)"""
+    from core.personas import persona_manager
     c, csrf, mock_system, fm, captured = chat_client
-    monkeypatch.setattr(sm_mod.settings, 'is_managed', lambda: False)
+    sm = mock_system.llm_chat.session_manager
+    sm.get_chat_settings.return_value = {'private_chat': True}
+    monkeypatch.setattr(persona_manager, 'get',
+                        lambda n: {'settings': {'prompt': 'sapphire', 'private_chat': False}})
 
-    r = c.post('/api/chats/private', headers={'X-CSRF-Token': csrf}, json={'name': '   '})
-    assert r.status_code == 200
-    assert r.json()['chat_name'].startswith('private_')
-
-
-# ─── 2.21 Private chat sets private_chat=True ────────────────────────────────
-
-def test_create_private_chat_sets_private_flag_true(chat_client, monkeypatch):
-    """[PROACTIVE] Private chat must be marked private_chat=True so
-    scope_private apply resolves to True downstream."""
-    from core import settings_manager as sm_mod
-    c, csrf, mock_system, fm, captured = chat_client
-    monkeypatch.setattr(sm_mod.settings, 'is_managed', lambda: False)
-
-    r = c.post('/api/chats/private', headers={'X-CSRF-Token': csrf}, json={'name': 'journal'})
-    assert r.status_code == 200
-    update_calls = mock_system.llm_chat.session_manager.update_chat_settings.call_args_list
-    assert update_calls, "update_chat_settings never called"
-    flag_args = update_calls[-1].args[0]
-    assert flag_args.get('private_chat') is True
-    assert 'private_display_name' in flag_args
+    r = c.post('/api/personas/nova/load', headers={'X-CSRF-Token': csrf}, json={})
+    assert r.status_code == 200, r.text
+    stamped = sm.update_chat_settings.call_args_list[-1].args[0]
+    # Chat's flag wins over the persona's stored False
+    assert stamped['private_chat'] is True
+    assert r.json()['settings']['private_chat'] is True
 
 
 # ─── 2.22 Delete active chat re-applies fallback chat settings ───────────────

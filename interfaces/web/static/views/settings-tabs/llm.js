@@ -406,6 +406,9 @@ async function _showAddWizard(el, ctx) {
                     <input type="text" id="wizard-model" placeholder="model-name" style="width:100%">
                     <div id="wizard-suggested" style="margin-top:4px"></div>
                 </div>
+                <div class="field-row" style="margin-bottom:8px">
+                    <label class="checkbox-inline"><input type="checkbox" id="wizard-local"> Local / private server (allowed in private chats)</label>
+                </div>
                 ${_advancedFieldsHtml('wizard')}
                 <div style="display:flex;gap:8px">
                     <button class="btn btn-primary btn-sm" id="wizard-save">Add</button>
@@ -433,6 +436,7 @@ async function _showAddWizard(el, ctx) {
             wizard.querySelector('#wizard-url').value = '';
             wizard.querySelector('#wizard-model').value = '';
             wizard.querySelector('#wizard-suggested').innerHTML = '';
+            wizard.querySelector('#wizard-local').checked = false;
         } else {
             const preset = presets[val];
             if (!preset) return;
@@ -443,6 +447,9 @@ async function _showAddWizard(el, ctx) {
             wizard.querySelector('#wizard-name').value = preset.display_name || val;
             wizard.querySelector('#wizard-url').value = preset.base_url || '';
             wizard.querySelector('#wizard-model').value = '';
+            // Visible pre-fill for loopback presets (LM Studio, Ollama) — the
+            // checkbox is the source of truth, user can untick before saving
+            wizard.querySelector('#wizard-local').checked = /127\.0\.0\.1|localhost/.test(preset.base_url || '');
             // Suggested models
             const suggested = preset.suggested_models || [];
             if (suggested.length) {
@@ -482,7 +489,7 @@ async function _showAddWizard(el, ctx) {
         const body = {
             name, template: selectedTemplate, base_url: url, model: model || '',
             display_name: name,   // the name you type IS the friendly name (key is derived from it)
-            is_local: url?.includes('127.0.0.1') || url?.includes('localhost') || false,
+            is_local: wizard.querySelector('#wizard-local')?.checked || false,
         };
         if (key) body.api_key = key;
 
@@ -550,6 +557,9 @@ function _showEditWizard(el, key, config, ctx) {
             <div class="field-row" style="margin-bottom:8px">
                 <label>Model</label>
                 <input type="text" id="edit-model" value="${_esc(config.model || '')}" style="width:100%">
+            </div>
+            <div class="field-row" style="margin-bottom:8px">
+                <label class="checkbox-inline"><input type="checkbox" id="edit-local" ${config.is_local ? 'checked' : ''}> Local / private server (allowed in private chats)</label>
             </div>
             ${_advancedFieldsHtml('edit', {
                 temperature: config.generation_params?.temperature,
@@ -630,6 +640,7 @@ function _showEditWizard(el, key, config, ctx) {
         const updates = {
             base_url: wizard.querySelector('#edit-url')?.value?.trim(),
             model: wizard.querySelector('#edit-model')?.value?.trim(),
+            is_local: wizard.querySelector('#edit-local')?.checked || false,
         };
         const apiKey = wizard.querySelector('#edit-key')?.value?.trim();
         if (apiKey) updates.api_key = apiKey;

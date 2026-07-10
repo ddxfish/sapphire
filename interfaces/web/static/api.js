@@ -278,8 +278,11 @@ export const streamChatContinue = async (text, prefill, onChunk, onComplete, onE
                 if (line.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(line.slice(6));
-                        if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
-                        
+                        // Same two-shape normalization as streamChat below
+                        if (data.type === 'error' || (data.error && !data.type)) {
+                            return (await reader.cancel(), onError(new Error(data.error || data.text || 'Stream error')));
+                        }
+
                         const result = processSSEData(data, handlers);
                         if (result.gotContent) gotContent = true;
                         if (result.shouldReturn) {
@@ -442,8 +445,17 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
                 if (line.startsWith('data: ')) {
                     try {
                         const data = JSON.parse(line.slice(6));
-                        if (data.error) return (await reader.cancel(), onError(new Error(data.error)));
-                        
+                        // Two error shapes on the wire: {"error": msg} (route
+                        // except-handlers, no type field) and {"type":"error",
+                        // "text":...} (in-stream refusals like the private-
+                        // prompt gate). Both must reach onError or the refusal
+                        // is silently swallowed and the caller takes the
+                        // success path. The !data.type guard keeps tool_end
+                        // (which carries an error:bool flag) off this path.
+                        if (data.type === 'error' || (data.error && !data.type)) {
+                            return (await reader.cancel(), onError(new Error(data.error || data.text || 'Stream error')));
+                        }
+
                         const result = processSSEData(data, handlers);
                         if (result.gotContent) gotContent = true;
                         if (result.shouldReturn) {

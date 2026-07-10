@@ -26,11 +26,6 @@
     "short": "SOCKS proxy connection timeout (seconds)",
     "long": "How long to wait for the SOCKS proxy to respond before timing out. Default is 10 seconds. Increase if your proxy is slow or on a high-latency connection."
   },
-  "PRIVACY_NETWORK_WHITELIST": {
-    "short": "Allowed network destinations when Privacy Mode is enabled",
-    "long": "List of IP addresses, hostnames, and CIDR ranges that are allowed when Privacy Mode is active. All other network connections are blocked. Supports single IPs (192.168.1.50), hostnames (localhost, myserver.local), and CIDR notation for ranges (192.168.0.0/16, 10.0.0.0/8). Default includes RFC1918 private address ranges for LAN-only operation."
-  },
-  
   "BACKUPS_ENABLED": {
     "short": "Enable automatic backup system",
     "long": "When enabled, the system will automatically create backups of the user/ directory on a schedule. Runs at BACKUPS_HOUR daily, weekly on Sundays, monthly on the 1st. Manual backups can be triggered from the UI."

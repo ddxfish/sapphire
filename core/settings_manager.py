@@ -265,15 +265,10 @@ class SettingsManager:
         if 'MODEL_GENERATION_PROFILES' in self._defaults and 'MODEL_GENERATION_PROFILES' in self._user:
             self._config['MODEL_GENERATION_PROFILES'] = {**self._defaults['MODEL_GENERATION_PROFILES'], **self._user['MODEL_GENERATION_PROFILES']}
 
-        # Initialize PRIVACY_MODE from persistent START_IN_PRIVACY_MODE on first load
-        if 'PRIVACY_MODE' not in self._config and 'PRIVACY_MODE' not in self._runtime:
-            self._config['PRIVACY_MODE'] = self._config.get('START_IN_PRIVACY_MODE', False)
-
         # Managed mode: lock down for Docker resale
         if os.environ.get('SAPPHIRE_MANAGED'):
             providers = self._config.get('LLM_PROVIDERS', {})
             providers.pop('lmstudio', None)
-            self._config['PRIVACY_MODE'] = False
             self._config['WAKE_WORD_ENABLED'] = False
             if not os.environ.get('SAPPHIRE_UNRESTRICTED'):
                 self._config['ALLOW_UNSIGNED_PLUGINS'] = False
@@ -349,7 +344,7 @@ class SettingsManager:
         'SAPPHIRE_ROUTER_URL', 'SAPPHIRE_ROUTER_TENANT_ID',
         'WEB_UI_HOST', 'WEB_UI_PORT', 'WEB_UI_SSL_ADHOC',
         'WAKE_WORD_ENABLED', 'AUDIO_INPUT_DEVICE', 'AUDIO_OUTPUT_DEVICE',
-        'ALLOW_UNSIGNED_PLUGINS', 'PRIVACY_MODE', 'START_IN_PRIVACY_MODE',
+        'ALLOW_UNSIGNED_PLUGINS',
     }
 
     def is_managed(self):
@@ -683,8 +678,6 @@ class SettingsManager:
             'LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
             # SOCKS can be hot-reloaded - session cache is cleared on change
             'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT',
-            # Privacy mode is runtime-only, always hot
-            'PRIVACY_MODE', 'PRIVACY_NETWORK_WHITELIST', 'START_IN_PRIVACY_MODE',
             # Providers hot-swap at runtime via switch_*_provider() methods
             'STT_PROVIDER', 'TTS_PROVIDER', 'EMBEDDING_PROVIDER', 'STT_LANGUAGE',
             # Tool settings - read per-request

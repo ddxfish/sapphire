@@ -1076,19 +1076,14 @@ class LLMChat:
             
             # If chat has specific provider set (not "auto"), use ONLY that provider - no fallback
             if chat_primary and chat_primary != 'auto':
-                # Privacy mode check for explicitly selected provider
+                # Private chat: provider must be marked local/private-safe
                 try:
-                    from core.privacy import is_privacy_mode, is_allowed_endpoint
                     from core.chat.llm_providers import PROVIDER_METADATA
-                    is_private = is_privacy_mode() or chat_settings.get('private_chat', False)
-                    if is_private:
-                        metadata = PROVIDER_METADATA.get(chat_primary, {})
-                        if metadata.get('privacy_check_whitelist'):
-                            base_url = providers_config.get(chat_primary, {}).get('base_url', '')
-                            if not is_allowed_endpoint(base_url):
-                                raise ConnectionError(f"Provider '{chat_primary}' base URL is not in the privacy whitelist. Update whitelist or disable privacy mode.")
-                        elif not metadata.get('is_local', False):
-                            raise ConnectionError(f"Provider '{chat_primary}' is a cloud provider and blocked in privacy mode. Use a local LLM or disable privacy mode.")
+                    if chat_settings.get('private_chat', False):
+                        pconf = providers_config.get(chat_primary, {})
+                        meta = PROVIDER_METADATA.get(chat_primary, {})
+                        if not pconf.get('is_local', meta.get('is_local', False)):
+                            raise ConnectionError(f"Provider '{chat_primary}' is not marked local/private-safe and is blocked in this private chat. Tick 'Local / private server' on the model or turn off private chat.")
                 except ConnectionError:
                     raise
                 except Exception as e:

@@ -4,7 +4,6 @@ import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
 import * as Images from '../ui-images.js';
-import { isPrivacyMode } from '../features/privacy.js';
 import { dispatch, Events } from '../core/event-bus.js';
 import {
     getElements,
@@ -25,9 +24,10 @@ export async function handleSend() {
     const txt = input.value.trim();
     if (!txt && !Images.hasPendingUploadImages() && !Images.hasPendingFiles()) return;
 
-    // Block send if current prompt requires privacy but privacy mode is off
-    if (getPromptPrivacyRequired() && !isPrivacyMode()) {
-        ui.showToast('This prompt requires Privacy Mode to be enabled', 'error');
+    // Block send if the prompt is private but this chat isn't
+    // (status already computes: prompt private AND chat not private)
+    if (getPromptPrivacyRequired()) {
+        ui.showToast('This prompt is marked private — toggle the eyeball to make this chat private', 'error');
         return;
     }
 

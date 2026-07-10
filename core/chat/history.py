@@ -1193,15 +1193,6 @@ class ChatSessionManager:
 
     def _save_current_chat(self):
         """Save current chat to SQLite atomically."""
-        # Privacy mode: keep messages in memory only, don't persist to disk
-        try:
-            from core.privacy import is_privacy_mode
-            if is_privacy_mode():
-                logger.debug("Privacy mode active - skipping chat persistence")
-                return
-        except ImportError:
-            pass
-
         self._ensure_db()
 
         # A1: save to the EFFECTIVE chat (a per-stream override's chat, else the
@@ -1460,12 +1451,6 @@ class ChatSessionManager:
         converts NEVER — foreground saves all run mid-stream. Caller
         (end_streaming) holds self._lock. Never raises."""
         try:
-            try:
-                from core.privacy import is_privacy_mode
-                if is_privacy_mode():
-                    return
-            except ImportError:
-                pass
             chat_name = self.active_chat_name
             chat_obj = self.current_chat
             if not chat_name or chat_obj is None:
@@ -1947,12 +1932,6 @@ class ChatSessionManager:
 
     def _save_last_active(self, chat_name):
         """Persist active chat name for restart recovery."""
-        try:
-            from core.privacy import is_privacy_mode
-            if is_privacy_mode():
-                return  # Don't leak chat name to disk during privacy mode
-        except ImportError:
-            pass
         marker = self.history_dir / ".active_chat"
         try:
             marker.write_text(chat_name, encoding='utf-8')
@@ -2243,21 +2222,15 @@ class ChatSessionManager:
                 # Rowify step 3: non-active blob chats lazily convert on THIS
                 # write path (the active chat converts at end_streaming, but
                 # converting here too is safe — we're past the stream wait,
-                # under the lock). Latched or privacy-mode chats stay blob.
+                # under the lock). Latched chats stay blob.
                 if storage_format == "blob" and not row["conversion_failed"]:
                     try:
-                        from core.privacy import is_privacy_mode
-                        _privacy = is_privacy_mode()
-                    except ImportError:
-                        _privacy = False
-                    if not _privacy:
-                        try:
-                            self._ensure_pre_rowify_snapshot()
-                            if self._convert_chat_to_rows(
-                                    conn, chat_name, json.loads(row["messages"])):
-                                storage_format = "rows"
-                        except Exception as e:
-                            logger.warning(f"append-path conversion of '{chat_name}' skipped: {e}")
+                        self._ensure_pre_rowify_snapshot()
+                        if self._convert_chat_to_rows(
+                                conn, chat_name, json.loads(row["messages"])):
+                            storage_format = "rows"
+                    except Exception as e:
+                        logger.warning(f"append-path conversion of '{chat_name}' skipped: {e}")
 
                 if storage_format == "rows":
                     # Stateless O(1) append: next seq straight from the store

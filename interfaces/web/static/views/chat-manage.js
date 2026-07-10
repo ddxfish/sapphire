@@ -335,9 +335,12 @@ async function openCompressModal(name) {
         const s = await api.getChatSettings(name);
         chatLLM = { primary: s?.settings?.llm_primary || '', model: s?.settings?.llm_model || '' };
     } catch (e) { /* pickers fall back to first enabled provider */ }
-    const provs = (_llmCache?.providers || []).filter(p => p.enabled);
+    // Private chats only compress through local providers (backend enforces too)
+    const provs = (_llmCache?.providers || []).filter(p => p.enabled && (!chat?.private_chat || p.is_local));
     if (!provs.length) {
-        ui.showToast('No enabled LLM providers — configure one in Settings first', 'error');
+        ui.showToast(chat?.private_chat
+            ? 'This chat is private — enable a local provider to compress it'
+            : 'No enabled LLM providers — configure one in Settings first', 'error');
         return;
     }
     const defaultProv = provs.some(p => p.key === chatLLM.primary) ? chatLLM.primary : provs[0].key;

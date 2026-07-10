@@ -715,52 +715,6 @@ async def create_chat(request: Request, _=Depends(require_login), system=Depends
         raise HTTPException(status_code=500, detail="Failed to create chat")
 
 
-@router.post("/api/chats/private")
-async def create_private_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Create a permanently private chat (privacy enforced, no toggle)."""
-    from core.settings_manager import settings as sm
-    if sm.is_managed():
-        raise HTTPException(status_code=403, detail="Private chats are disabled in managed mode")
-    try:
-        data = await request.json() or {}
-        raw_name = data.get("name", "").strip()
-        if not raw_name:
-            raw_name = "private"
-        chat_name = "private_" + "".join(c for c in raw_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_').lower()
-
-        # Unique name
-        base_name = chat_name
-        counter = 1
-        existing = {c["name"] for c in system.llm_chat.list_chats()}
-        while chat_name in existing:
-            counter += 1
-            chat_name = f"{base_name}_{counter}"
-
-        if not system.llm_chat.create_chat(chat_name):
-            raise HTTPException(status_code=500, detail="Failed to create private chat")
-        if not system.llm_chat.switch_chat(chat_name):
-            raise HTTPException(status_code=500, detail="Failed to switch to private chat")
-
-        display = raw_name.replace('_', ' ').title()
-        system.llm_chat.session_manager.update_chat_settings({
-            "private_chat": True,
-            "private_display_name": f"[PRIVATE] {display}",
-        })
-
-        settings = system.llm_chat.session_manager.get_chat_settings()
-        _apply_chat_settings(system, settings)
-
-        origin = request.headers.get('X-Session-ID')
-        publish(Events.CHAT_SWITCHED, {"name": chat_name, "origin": origin})
-
-        return {"status": "success", "chat_name": chat_name, "display_name": f"[PRIVATE] {display}"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to create private chat: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 def _live_call_chats(system) -> set:
     """Chats currently owned by a live phone call — bulk/manage ops refuse them."""
     try:
@@ -1028,8 +982,20 @@ async def compress_chat(chat_name: str, request: Request, _=Depends(require_logi
         raise HTTPException(status_code=409,
                             detail=f"'{chat_name}' has a live phone call — hang up before compressing.")
     sm = system.llm_chat.session_manager
-    if sm.read_chat_settings(chat_name) is None:
+    chat_settings = sm.read_chat_settings(chat_name)
+    if chat_settings is None:
         raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+    if chat_settings.get('private_chat'):
+        # Private chat: the summarizing provider must be marked local/private-safe,
+        # same rule as the chat's own turns.
+        from core.chat.llm_providers import PROVIDER_METADATA
+        providers_config = {**dict(getattr(config, "LLM_PROVIDERS", {})),
+                            **dict(getattr(config, "LLM_CUSTOM_PROVIDERS", {}))}
+        pconf = providers_config.get(provider_key, {})
+        meta = PROVIDER_METADATA.get(provider_key, {})
+        if not pconf.get('is_local', meta.get('is_local', False)):
+            raise HTTPException(status_code=400,
+                                detail=f"'{chat_name}' is a private chat — compression needs a provider marked local/private-safe.")
     ok, err = compress.start_compress_job(
         sm, chat_name, mode=mode, provider_key=provider_key,
         model=(data.get('model') or '').strip(), target_tokens=target_tokens,
@@ -1126,6 +1092,11 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
 
         if chat_name != session_manager.get_active_chat_name():
             raise HTTPException(status_code=400, detail="Can only update settings for active chat")
+
+        if new_settings.get('private_chat'):
+            from core.settings_manager import settings as sm_settings
+            if sm_settings.is_managed():
+                raise HTTPException(status_code=403, detail="Private chats are disabled in managed mode")
 
         if not session_manager.update_chat_settings(new_settings):
             raise HTTPException(status_code=500, detail="Failed to update settings")

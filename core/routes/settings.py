@@ -727,44 +727,6 @@ async def test_socks_connection(request: Request, _=Depends(require_login)):
 
 
 # =============================================================================
-# PRIVACY ROUTES
-# =============================================================================
-
-@router.get("/api/privacy")
-async def get_privacy_status(request: Request, _=Depends(require_login)):
-    """Get privacy mode status."""
-    from core.settings_manager import settings
-    return {
-        "privacy_mode": settings.get('PRIVACY_MODE', False),
-        "start_in_privacy": settings.get('START_IN_PRIVACY_MODE', False)
-    }
-
-
-@router.put("/api/privacy")
-async def set_privacy_status(request: Request, _=Depends(require_login)):
-    """Set privacy mode."""
-    from core.settings_manager import settings
-    data = await request.json()
-    enabled = data.get('enabled', False)
-    settings.set('PRIVACY_MODE', enabled, persist=False)
-    publish(Events.SETTINGS_CHANGED, {"key": "PRIVACY_MODE", "value": enabled})
-    label = "Privacy mode enabled" if enabled else "Privacy mode disabled"
-    return {"privacy_mode": enabled, "message": label}
-
-
-@router.put("/api/privacy/start-mode")
-async def set_start_in_privacy(request: Request, _=Depends(require_login)):
-    """Set start in privacy mode."""
-    from core.settings_manager import settings
-    if settings.is_locked('START_IN_PRIVACY_MODE'):
-        raise HTTPException(status_code=403, detail="Setting is locked in managed mode")
-    data = await request.json()
-    enabled = data.get('enabled', False)
-    settings.set('START_IN_PRIVACY_MODE', enabled, persist=True)
-    return {"status": "success", "enabled": enabled}
-
-
-# =============================================================================
 # LLM PROVIDER ROUTES
 # =============================================================================
 

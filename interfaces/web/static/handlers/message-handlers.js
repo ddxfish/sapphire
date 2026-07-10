@@ -3,11 +3,12 @@ import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as audio from '../audio.js';
 import * as chat from '../chat.js';
-import { 
-    getIsProc, 
+import {
+    getIsProc,
     getTtsEnabled,
-    setProc, 
-    setAbortController, 
+    getPromptPrivacyRequired,
+    setProc,
+    setAbortController,
     setIsCancelling,
     getIsCancelling,
     refresh,
@@ -24,6 +25,13 @@ export async function handleTrash(idx) {
 export async function handleRegen(idx) {
     if (getIsProc()) {
         console.log('Regenerate blocked: isProc is true');
+        return;
+    }
+    // Same guard as handleSend — and it must run BEFORE chat.handleRegen,
+    // which deletes the old reply before streaming (a backend refusal after
+    // that point loses the message).
+    if (getPromptPrivacyRequired()) {
+        ui.showToast('This prompt is marked private — toggle the eyeball to make this chat private', 'error');
         return;
     }
     console.log(`Regenerating message ${idx}`);

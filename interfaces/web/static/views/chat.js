@@ -162,28 +162,6 @@ export default {
             const sbDropdown = container.querySelector('#sb-chat-picker-dropdown');
             if (sbDropdown) {
                 sbDropdown.addEventListener('click', async e => {
-                    // "New Private" button creates a private chat
-                    const privBtn = e.target.closest('[data-action="new-private"]');
-                    if (privBtn) {
-                        sbPicker.classList.remove('open');
-                        const name = prompt('Private chat name:');
-                        if (!name?.trim()) return;
-                        try {
-                            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-                            const res = await fetch('/api/chats/private', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-                                body: JSON.stringify({ name: name.trim() })
-                            });
-                            if (res.ok) {
-                                const { populateChatDropdown, handleChatChange } = await import('../features/chat-manager.js');
-                                await populateChatDropdown();
-                                await handleChatChange();
-                            }
-                        } catch (err) { console.error('Failed to create private chat:', err); }
-                        return;
-                    }
-
                     const item = e.target.closest('.chat-picker-item');
                     if (!item) return;
                     const chatName = item.dataset.chat;
@@ -227,6 +205,37 @@ export default {
         container.querySelector('#sb-delete-chat')?.addEventListener('click', async () => {
             await handleDeleteChat();
             await loadSidebar();
+        });
+
+        // Private-chat eyeball — toggles the active chat's private_chat flag
+        const eyeBtn = container.querySelector('#sb-privacy-eye');
+        if (eyeBtn && window.__managed) eyeBtn.style.display = 'none';
+        eyeBtn?.addEventListener('click', async () => {
+            const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
+            if (!chatName) return;
+            const goingPrivate = !eyeBtn.classList.contains('private-on');
+            try {
+                await api.updateChatSettings(chatName, { private_chat: goingPrivate });
+                eyeBtn.classList.toggle('private-on', goingPrivate);
+                if (goingPrivate) {
+                    // Warn (don't silently switch) if this chat's model is cloud
+                    const provider = getVal(container, '#sb-llm-primary') || 'auto';
+                    const meta = llmProviders.find(p => p.key === provider);
+                    const isCloud = meta && !meta.is_local;
+                    ui.showToast(isCloud
+                        ? `Private chat ON — but '${provider}' is a cloud model and will refuse. Pick a local model.`
+                        : 'Private chat ON — local models and tools only',
+                        isCloud ? 'error' : 'success');
+                } else {
+                    ui.showToast('Private chat off', 'success');
+                }
+                const { populateChatDropdown } = await import('../features/chat-manager.js');
+                await populateChatDropdown();
+                await updateScene();
+            } catch (err) {
+                console.error('Failed to toggle private chat:', err);
+                ui.showToast(err?.message || 'Failed to toggle private chat', 'error');
+            }
         });
 
         // Close sidebar picker on outside click (added/removed in show/hide)
@@ -701,6 +710,10 @@ async function loadSidebar() {
         const selectedOpt = chatSelect?.options?.[chatSelect.selectedIndex];
         const sbName = container.querySelector('#sb-chat-name');
         if (sbName && selectedOpt) sbName.textContent = selectedOpt.text;
+
+        // Private-chat eyeball reflects this chat's flag (status poll keeps it synced)
+        const eyeGlow = container.querySelector('#sb-privacy-eye');
+        if (eyeGlow) eyeGlow.classList.toggle('private-on', !!settings.private_chat);
 
         // Populate prompt dropdown
         const promptSel = container.querySelector('#sb-prompt');

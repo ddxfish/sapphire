@@ -40,12 +40,8 @@ def chat_env(tmp_path, monkeypatch):
     """Yield a factory for ChatSessionManager instances on a shared temp DB.
 
     Hermetic: defaults functions patched (per the history.py __getattr__
-    docstring: patch get_system_defaults, not the SYSTEM_DEFAULTS shim),
-    privacy mode forced off so _save_current_chat never silently skips.
+    docstring: patch get_system_defaults, not the SYSTEM_DEFAULTS shim).
     """
-    import core.privacy as privacy
-    monkeypatch.setattr(privacy, "is_privacy_mode", lambda: False, raising=False)
-
     with patch("core.chat.history.get_system_defaults",
                side_effect=lambda: dict(TEST_DEFAULTS)), \
          patch("core.chat.history.get_user_defaults",

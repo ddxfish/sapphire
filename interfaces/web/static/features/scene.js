@@ -81,6 +81,18 @@ export async function updateScene() {
 
         setPromptPrivacyRequired(status?.prompt_privacy_required || false);
 
+        // Private-chat eyeball + toolset cloud warning (status is the sync
+        // source — covers chat switches, persona loads, and other tabs)
+        const priv = !!status?.chat_settings?.private_chat;
+        const eye = document.getElementById('sb-privacy-eye');
+        if (eye) eye.classList.toggle('private-on', priv);
+        const toolsetSel = document.getElementById('sb-toolset');
+        if (toolsetSel) {
+            const warn = priv && !!status?.has_cloud_tools;
+            toolsetSel.classList.toggle('toolset-cloud-warn', warn);
+            toolsetSel.title = warn ? 'This toolset contains web tools — they will refuse in a private chat' : '';
+        }
+
         return status;
     } catch {
         return null;

@@ -591,12 +591,6 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
         `).join('');
     }
 
-    // Action buttons at the bottom
-    itemsHtml += '<div class="chat-picker-divider"></div>';
-    if (!window.__managed) {
-        itemsHtml += '<button class="chat-picker-story-btn" data-action="new-private">&#x1F512; New Private...</button>';
-    }
-
     // Update sidebar chat picker dropdown
     const sbDropdown = document.getElementById('sb-chat-picker-dropdown');
     if (sbDropdown) sbDropdown.innerHTML = itemsHtml;

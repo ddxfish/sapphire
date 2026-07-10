@@ -27,9 +27,6 @@ BLOB_MSGS = [
 
 @pytest.fixture
 def chat_env(tmp_path, monkeypatch):
-    import core.privacy as privacy
-    monkeypatch.setattr(privacy, "is_privacy_mode", lambda: False, raising=False)
-
     with patch("core.chat.history.get_system_defaults",
                side_effect=lambda: dict(TEST_DEFAULTS)), \
          patch("core.chat.history.get_user_defaults",
@@ -211,21 +208,6 @@ class TestFailureDiscipline:
         # Next write retries and succeeds.
         mgr.append_messages_to_chat("busy", [{"role": "user", "content": "retry"}])
         assert chat_row(tmp_path, "busy")["storage_format"] == "rows"
-
-    def test_privacy_mode_blocks_conversion(self, chat_env, tmp_path, monkeypatch):
-        import core.privacy as privacy
-        mgr = chat_env()
-        seed_blob_chat(tmp_path, "private_era")
-        mgr.set_active_chat("private_era")
-
-        monkeypatch.setattr(privacy, "is_privacy_mode", lambda: True, raising=False)
-        mgr.begin_streaming(); mgr.end_streaming()
-        assert chat_row(tmp_path, "private_era")["storage_format"] == "blob"
-
-        monkeypatch.setattr(privacy, "is_privacy_mode", lambda: False, raising=False)
-        mgr.begin_streaming(); mgr.end_streaming()
-        assert chat_row(tmp_path, "private_era")["storage_format"] == "rows"
-
 
 class TestRevert:
     def test_manager_revert_round_trip(self, chat_env, tmp_path):

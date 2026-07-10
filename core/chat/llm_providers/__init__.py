@@ -330,23 +330,12 @@ class ProviderRegistry(_BaseRegistry):
                 logger.debug(f"Provider '{provider_key}' excluded from Auto mode (use_as_fallback=False)")
                 continue
 
-            # Privacy mode
-            try:
-                from core.privacy import is_privacy_mode, is_allowed_endpoint
-                if is_privacy_mode() or force_privacy:
-                    is_local = config.get('is_local', self._core_providers.get(provider_key, {}).get('is_local', False))
-                    if is_local:
-                        pass  # local is always OK
-                    elif config.get('privacy_check_whitelist', self._core_providers.get(provider_key, {}).get('privacy_check_whitelist')):
-                        base_url = config.get('base_url', '')
-                        if not is_allowed_endpoint(base_url):
-                            logger.debug(f"Provider '{provider_key}' excluded in privacy mode (base_url not in whitelist)")
-                            continue
-                    else:
-                        logger.debug(f"Provider '{provider_key}' excluded in privacy mode (cloud provider)")
-                        continue
-            except ImportError:
-                pass
+            # Private chat (auto mode passes force_privacy from private_chat)
+            if force_privacy:
+                is_local = config.get('is_local', self._core_providers.get(provider_key, {}).get('is_local', False))
+                if not is_local:
+                    logger.debug(f"Provider '{provider_key}' excluded in private chat (not marked local)")
+                    continue
 
             provider = self.get_provider_by_key(provider_key, providers_config, request_timeout)
             if provider:
@@ -570,7 +559,6 @@ def _build_legacy_metadata():
                 'default_timeout': config.get('timeout', 5.0),
                 'api_key_env': config.get('api_key_env', ''),
                 'model_options': None,
-                'privacy_check_whitelist': config.get('is_local', False),
             }
     except ImportError:
         pass

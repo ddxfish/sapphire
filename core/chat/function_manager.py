@@ -1189,50 +1189,27 @@ class FunctionManager:
 
     def _check_privacy_allowed(self, function_name: str) -> tuple:
         """
-        Check if function is allowed under current privacy mode.
+        Check if function is allowed in the current private chat.
 
         Returns:
             (allowed: bool, error_message: str or None)
         """
-        from core.privacy import is_privacy_mode, is_allowed_endpoint
-
-        if not is_privacy_mode() and not scope_private.get():
+        if not scope_private.get():
             return True, None
 
         is_local = self._is_local_map.get(function_name)
-
-        # No is_local flag = assume non-local for safety
-        if is_local is None:
-            logger.warning(f"Tool '{function_name}' has no is_local flag, blocking in privacy mode")
-            return False, f"Tool '{function_name}' is blocked in privacy mode (no locality flag)."
 
         # Explicitly local tools are always allowed
         if is_local is True:
             return True, None
 
-        # Explicitly non-local tools are blocked
-        if is_local is False:
-            return False, f"Tool '{function_name}' requires external network access and is blocked in privacy mode. Inform the user that privacy mode is active."
+        # No flag = assume non-local for safety
+        if is_local is None:
+            logger.warning(f"Tool '{function_name}' has no is_local flag, blocking in private chat")
+            return False, f"Tool '{function_name}' is blocked in this private chat (no locality flag)."
 
-        # Conditional tools ("endpoint") - check their configured endpoint
-        if is_local == "endpoint":
-            endpoint = self._get_tool_endpoint(function_name)
-            if not endpoint:
-                logger.warning(f"Tool '{function_name}' has no configured endpoint")
-                return False, f"Tool '{function_name}' has no configured endpoint."
-
-            if is_allowed_endpoint(endpoint):
-                logger.info(f"Tool '{function_name}' endpoint '{endpoint}' allowed in privacy mode")
-                return True, None
-            else:
-                return False, f"Tool '{function_name}' endpoint '{endpoint}' is not in privacy whitelist. Inform the user."
-
-        # Unknown is_local value - block for safety
-        return False, f"Tool '{function_name}' has unknown locality setting."
-
-    def _get_tool_endpoint(self, function_name: str) -> str:
-        """Get the configured endpoint URL for conditional tools."""
-        return ''
+        # False, "endpoint", or anything else — network access, blocked
+        return False, f"Tool '{function_name}' requires network access and is blocked in this private chat. Inform the user."
 
     def _get_plugin_settings_for(self, function_name: str):
         """Get plugin settings for a function, or None if it's not a plugin tool."""

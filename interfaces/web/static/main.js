@@ -9,7 +9,6 @@ import { populateChatDropdown } from './features/chat-manager.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
 import { refreshInitData } from './shared/init-data.js';
-import { initPrivacy } from './features/privacy.js';
 import { initUserProfile } from './features/user-profile.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
 import { setupImageHandlers } from './handlers/send-handlers.js';
@@ -288,7 +287,6 @@ async function init() {
         bindAllEvents();
         setupImageHandlers();
         setupImageModal();
-        initPrivacy();
         initUserProfile();
 
         initEventBus();
@@ -351,7 +349,6 @@ async function init() {
             bindAllEvents();
             setupImageHandlers();
             setupImageModal();
-            initPrivacy();
             initUserProfile();
             initEventBus();
         } catch (e2) {

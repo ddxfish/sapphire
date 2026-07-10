@@ -16,9 +16,6 @@ TEST_DEFAULTS = {"prompt": "default"}
 
 @pytest.fixture
 def chat_env(tmp_path, monkeypatch):
-    import core.privacy as privacy
-    monkeypatch.setattr(privacy, "is_privacy_mode", lambda: False, raising=False)
-
     with patch("core.chat.history.get_system_defaults",
                side_effect=lambda: dict(TEST_DEFAULTS)), \
          patch("core.chat.history.get_user_defaults",

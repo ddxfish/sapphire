@@ -65,12 +65,6 @@ export async function loadPrompt(name) {
   const data = await resp.json();
 
   if (!resp.ok) {
-    // Handle privacy requirement case with specific error
-    if (data.privacy_required) {
-      const err = new Error(data.error || `Prompt '${name}' requires Privacy Mode`);
-      err.privacyRequired = true;
-      throw err;
-    }
     throw new Error(data.error || `Failed to load prompt '${name}'`);
   }
 

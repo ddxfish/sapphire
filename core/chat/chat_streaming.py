@@ -123,14 +123,13 @@ class StreamingChat:
         )
         self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 
-        # Check if current prompt requires privacy mode
+        # Check if current prompt requires a private chat
         try:
             from core.prompt_state import is_current_prompt_private
-            from core.privacy import is_privacy_mode
-            if is_current_prompt_private() and not is_privacy_mode():
+            if is_current_prompt_private():
                 chat_settings = self.main_chat.session_manager.get_chat_settings()
                 if not chat_settings.get('private_chat', False):
-                    yield {"type": "error", "text": "This prompt requires Privacy Mode to be enabled."}
+                    yield {"type": "error", "text": "This prompt is marked private — toggle the eyeball (private chat) to use it."}
                     return
         except ImportError:
             pass
