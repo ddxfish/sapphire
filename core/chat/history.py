@@ -236,7 +236,23 @@ class ConversationHistory:
 
     def __init__(self, max_history: int = 30):
         self.max_history = max_history
-        self.messages = []
+        self._messages = []
+        # Rowify: True means the persisted rows may not match this list below
+        # the watermark — the next save must full-resync instead of appending.
+        # Set STRUCTURALLY by the `messages` setter (catches every raw
+        # assignment: import, load, slice-removals) and explicitly by the
+        # in-place mutators (remove_tool_call, edit_message_by_content).
+        # Append-only growth (the add_* hot path) never sets it.
+        self._needs_full_resync = False
+
+    @property
+    def messages(self):
+        return self._messages
+
+    @messages.setter
+    def messages(self, value):
+        self._messages = value
+        self._needs_full_resync = True
 
     def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
         """Add user message - accepts string or content list with images."""
@@ -565,6 +581,11 @@ class ConversationHistory:
         """
         Clear thinking_raw from all messages.
         Called after tool cycle completes - we don't need raw blocks anymore.
+
+        Deliberately does NOT set _needs_full_resync: thinking_raw is never
+        persisted to rows (stripped in _row_json), so clearing it in memory
+        creates no drift vs the rows store. Flagging here would force an
+        O(N) resync EVERY tool turn — the exact O(N^2) rowify exists to kill.
         """
         for msg in self.messages:
             if "thinking_raw" in msg:
@@ -661,6 +682,7 @@ class ConversationHistory:
         
         if tool_result_idx != -1:
             self.messages.pop(tool_result_idx)
+            self._needs_full_resync = True  # in-place pop bypasses the setter
             logger.info(f"Removed tool result for {tool_call_id}")
         
         # Find assistant message with this tool call
@@ -671,6 +693,7 @@ class ConversationHistory:
                     if tc.get("id") == tool_call_id:
                         # Found it - remove this specific call
                         tool_calls.pop(j)
+                        self._needs_full_resync = True  # in-place mutation
                         logger.info(f"Removed tool call {tool_call_id} from assistant message")
                         
                         # If no tool calls remain and no content, remove the whole message
@@ -695,6 +718,7 @@ class ConversationHistory:
         for msg in self.messages:
             if msg.get("role") == role and msg.get("content") == original_content:
                 msg["content"] = new_content
+                self._needs_full_resync = True  # in-place edit bypasses the setter
                 return True
         return False
     
@@ -724,6 +748,15 @@ class ChatSessionManager:
         self.active_chat_name = "default"
         self.current_settings = get_system_defaults()
         
+        # Rowify watermark state, keyed by CHAT NAME (not "the active one" —
+        # per-stream overrides save non-active chats through the same path).
+        # offset = seq of the first in-memory message (non-zero after a
+        # capped load of a huge chat); count = how many in-memory messages
+        # are already persisted as rows. Incremental save INSERTs message i
+        # at seq offset+i for i in [count, len). Missing entry or a set
+        # _needs_full_resync flag → full window resync.
+        self._rows_state = {}
+
         # Track if we're in an active tool cycle (for Claude thinking_raw)
         self._in_tool_cycle = False
         # Prevent chat switching during active streaming (would corrupt both chats).
@@ -762,6 +795,22 @@ class ChatSessionManager:
                 self._load_chat("default")
         else:
             self._load_chat("default")
+
+        # Rowify: pre-warm the one-shot snapshot at BOOT when legacy blob
+        # chats exist — the lazy trigger would otherwise run VACUUM INTO
+        # under self._lock mid-traffic and stall every chat op for the copy
+        # duration (race scout + day-ruiner 2026-07-09, same finding). Here
+        # nothing else is running yet. Lazy call sites remain as backstops.
+        try:
+            if not (self.history_dir / ".pre_rowify_snapshot_done").exists():
+                with self._get_connection() as conn:
+                    has_blob = conn.execute(
+                        "SELECT 1 FROM chats WHERE storage_format = 'blob' LIMIT 1"
+                    ).fetchone()
+                if has_blob:
+                    self._ensure_pre_rowify_snapshot()
+        except Exception as e:
+            logger.warning(f"Boot snapshot pre-warm skipped: {e}")
 
         logger.info(f"ChatSessionManager initialized with SQLite storage")
 
@@ -826,6 +875,12 @@ class ChatSessionManager:
                 evt = getattr(self, '_no_streams_event', None)
                 if evt is not None:
                     evt.set()
+                # Rowify step 3: the 1→0 transition is THE conversion point
+                # for the active chat (see _maybe_convert_active_chat).
+                # Guarded getattr: some fixtures build this object without
+                # __init__. Never raises — this runs inside request finallys.
+                if getattr(self, '_rows_state', None) is not None:
+                    self._maybe_convert_active_chat()
 
     @contextmanager
     def _get_connection(self):
@@ -875,7 +930,10 @@ class ChatSessionManager:
                         name TEXT PRIMARY KEY,
                         settings TEXT NOT NULL,
                         messages TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+                        updated_at TEXT NOT NULL,
+                        storage_format TEXT NOT NULL DEFAULT 'blob',
+                        conversion_failed INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT
                     )
                 """)
 
@@ -888,6 +946,36 @@ class ChatSessionManager:
                         created_at TEXT NOT NULL
                     )
                 """)
+
+                # Rowify (tmp/chat-storage-rowify-plan.md): one row = one message
+                # dict stored verbatim as JSON. message_json is authoritative;
+                # role is a denormalized sidecar for role-only queries. The
+                # composite PRIMARY KEY doubles as the (chat_name, seq) index —
+                # no separate CREATE INDEX needed.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS chat_messages (
+                        chat_name    TEXT NOT NULL,
+                        seq          INTEGER NOT NULL,
+                        role         TEXT,
+                        message_json TEXT NOT NULL,
+                        PRIMARY KEY (chat_name, seq)
+                    )
+                """)
+
+                # Guarded ALTERs for pre-rowify databases (the CREATE above only
+                # shapes FRESH installs; ALTER isn't idempotent, hence the
+                # PRAGMA check). storage_format: 'blob' | 'rows'.
+                # conversion_failed: latch — a chat whose blob→rows conversion
+                # hit a data-shape error stays on blob forever (transient
+                # errors do NOT latch). created_at: chat-manager rider
+                # (2026-07-09) — NULL for chats that predate the column.
+                existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(chats)")}
+                if "storage_format" not in existing_cols:
+                    conn.execute("ALTER TABLE chats ADD COLUMN storage_format TEXT NOT NULL DEFAULT 'blob'")
+                if "conversion_failed" not in existing_cols:
+                    conn.execute("ALTER TABLE chats ADD COLUMN conversion_failed INTEGER NOT NULL DEFAULT 0")
+                if "created_at" not in existing_cols:
+                    conn.execute("ALTER TABLE chats ADD COLUMN created_at TEXT")
 
                 conn.commit()
             logger.debug(f"Database initialized at {self._db_path}")
@@ -969,30 +1057,77 @@ class ChatSessionManager:
         if migrated:
             logger.info(f"Migration complete: {migrated} chats migrated to SQLite")
 
+    # Rows chats cap the load at the last N messages — the rows analogue of
+    # the blob path's 50MB OOM guard, and the seed of future pagination.
+    _ROWS_LOAD_CAP = 5000
+
+    @staticmethod
+    def _row_json(msg: Dict[str, Any]) -> str:
+        """Serialize one message dict for a chat_messages row.
+
+        thinking_raw is NEVER persisted to rows (rowify correction #3): it's
+        only needed in-memory mid-tool-cycle, and persisting it would turn
+        clear_thinking_raw into a below-watermark mutation forcing an O(N)
+        resync every tool turn.
+        """
+        if "thinking_raw" in msg:
+            msg = {k: v for k, v in msg.items() if k != "thinking_raw"}
+        return json.dumps(msg)
+
+    def _read_rows_messages(self, conn, chat_name: str) -> List[Dict[str, Any]]:
+        """Read a rows-format chat's messages from chat_messages, oldest first.
+
+        Caps at the newest _ROWS_LOAD_CAP messages (DESC + reverse) so a huge
+        chat can't OOM the load — same invariant as the blob path's 50MB guard.
+        """
+        rows = conn.execute(
+            "SELECT message_json FROM chat_messages WHERE chat_name = ? "
+            "ORDER BY seq DESC LIMIT ?",
+            (chat_name, self._ROWS_LOAD_CAP)
+        ).fetchall()
+        return [json.loads(r["message_json"]) for r in reversed(rows)]
+
     def _load_chat(self, chat_name: str) -> bool:
-        """Load chat from SQLite database."""
+        """Load chat from SQLite database (format-aware: blob or rows)."""
         self._ensure_db()
-        
+
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT settings, messages FROM chats WHERE name = ?",
+                    "SELECT settings, messages, storage_format FROM chats WHERE name = ?",
                     (chat_name,)
                 )
                 row = cursor.fetchone()
-                
+
                 if not row:
                     logger.warning(f"Chat not found in database: {chat_name}")
                     return False
-                
-                raw_messages = row["messages"]
-                # Guard against OOM on massive chat blobs (>50MB)
-                if len(raw_messages) > 50 * 1024 * 1024:
-                    logger.warning(f"Chat '{chat_name}' messages blob too large ({len(raw_messages) // 1024 // 1024}MB), truncating to last 5000 messages")
-                    all_msgs = json.loads(raw_messages)
-                    self.current_chat.messages = all_msgs[-5000:]
+
+                if row["storage_format"] == "rows":
+                    self.current_chat.messages = self._read_rows_messages(conn, chat_name)
+                    # Watermark: memory now mirrors the store exactly. offset
+                    # is non-zero when the load was capped (we hold only the
+                    # newest window; older rows stay untouched on disk).
+                    total = conn.execute(
+                        "SELECT COALESCE(MAX(seq) + 1, 0) FROM chat_messages "
+                        "WHERE chat_name = ?", (chat_name,)
+                    ).fetchone()[0]
+                    loaded = len(self.current_chat.messages)
+                    self._rows_state[chat_name] = {"offset": total - loaded,
+                                                   "count": loaded}
                 else:
-                    self.current_chat.messages = json.loads(raw_messages)
+                    raw_messages = row["messages"]
+                    # Guard against OOM on massive chat blobs (>50MB)
+                    if len(raw_messages) > 50 * 1024 * 1024:
+                        logger.warning(f"Chat '{chat_name}' messages blob too large ({len(raw_messages) // 1024 // 1024}MB), truncating to last 5000 messages")
+                        all_msgs = json.loads(raw_messages)
+                        self.current_chat.messages = all_msgs[-5000:]
+                    else:
+                        self.current_chat.messages = json.loads(raw_messages)
+                    self._rows_state.pop(chat_name, None)
+                # The assignments above tripped the setter's resync flag —
+                # memory matches the store right now, so clear it.
+                self.current_chat._needs_full_resync = False
                 file_settings = json.loads(row["settings"])
                 self.current_settings = get_system_defaults()
                 self.current_settings.update(file_settings)
@@ -1061,15 +1196,37 @@ class ChatSessionManager:
         with self._lock:
             try:
                 with self._get_connection() as conn:
-                    # UPDATE (not INSERT OR REPLACE) + rowcount check so a late
-                    # writer — agent completion, post_chat hook, etc. — can't
-                    # resurrect a chat that was just deleted. create_chat is
-                    # the sole path that creates rows.
-                    if is_override:
+                    # Format probe under the SAME lock+connection as the write
+                    # (delete_chat also holds self._lock, so no TOCTOU here).
+                    # Missing row = chat deleted → drop the save; UPDATE (not
+                    # INSERT OR REPLACE) downstream keeps that guarantee —
+                    # create_chat is the sole path that creates rows.
+                    fmt_row = conn.execute(
+                        "SELECT storage_format FROM chats WHERE name = ?",
+                        (eff_name,)
+                    ).fetchone()
+                    if not fmt_row:
+                        logger.warning(
+                            f"Save to chat '{eff_name}' — chat was deleted. "
+                            f"Dropping save to avoid resurrecting it."
+                        )
+                        return
+
+                    if fmt_row["storage_format"] == "rows":
+                        if not self._save_rows_chat(conn, eff_chat, eff_name, is_override):
+                            return
+                    elif is_override:
                         cur = conn.execute(
                             """UPDATE chats SET messages = ?, updated_at = ? WHERE name = ?""",
                             (json.dumps(eff_chat.messages), datetime.now().isoformat(), eff_name)
                         )
+                        conn.commit()
+                        if cur.rowcount == 0:
+                            logger.warning(
+                                f"Save to chat '{eff_name}' affected 0 rows — "
+                                f"chat was deleted. Dropping save to avoid resurrecting it."
+                            )
+                            return
                     else:
                         cur = conn.execute(
                             """UPDATE chats SET settings = ?, messages = ?, updated_at = ?
@@ -1081,13 +1238,13 @@ class ChatSessionManager:
                                 eff_name,
                             )
                         )
-                    conn.commit()
-                    if cur.rowcount == 0:
-                        logger.warning(
-                            f"Save to chat '{eff_name}' affected 0 rows — "
-                            f"chat was deleted. Dropping save to avoid resurrecting it."
-                        )
-                        return
+                        conn.commit()
+                        if cur.rowcount == 0:
+                            logger.warning(
+                                f"Save to chat '{eff_name}' affected 0 rows — "
+                                f"chat was deleted. Dropping save to avoid resurrecting it."
+                            )
+                            return
                 # Write-through (2026-07-05): the operator may be VIEWING the
                 # override's chat (watching a live call). Keep the in-memory
                 # singleton in sync so /api/history serves fresh turns and a
@@ -1107,6 +1264,239 @@ class ChatSessionManager:
                 except Exception:
                     pass
 
+    def _save_rows_chat(self, conn, eff_chat, eff_name: str, is_override: bool) -> bool:
+        """Persist a rows-format chat. Returns False if the chat was deleted.
+
+        Hot path (append-only growth): INSERT only messages beyond the
+        watermark — O(1) per turn, the point of rowify. After any mutation
+        (setter/_needs_full_resync flag, or a shrunk list) or with no
+        watermark state (first override save): full WINDOW resync — DELETE
+        seq >= offset + re-INSERT the in-memory list, one transaction.
+        Rows below offset (older history outside a capped load) survive.
+
+        The chats-row UPDATE runs FIRST as the deleted-chat guard. On resync
+        it also nulls the messages blob: privacy correction #4 for converted
+        chats (the frozen pre-conversion blob must not outlive the first
+        mutation); a no-op '[]' for born-rows chats.
+        """
+        msgs = eff_chat.messages
+        state = self._rows_state.get(eff_name)
+        now = datetime.now().isoformat()
+
+        resync = (state is None
+                  or getattr(eff_chat, "_needs_full_resync", False)
+                  or len(msgs) < state["count"])
+
+        if is_override:
+            if resync:
+                cur = conn.execute(
+                    "UPDATE chats SET messages = '[]', updated_at = ? WHERE name = ?",
+                    (now, eff_name))
+            else:
+                cur = conn.execute(
+                    "UPDATE chats SET updated_at = ? WHERE name = ?",
+                    (now, eff_name))
+        else:
+            if resync:
+                cur = conn.execute(
+                    "UPDATE chats SET settings = ?, messages = '[]', updated_at = ? WHERE name = ?",
+                    (json.dumps(self.current_settings), now, eff_name))
+            else:
+                cur = conn.execute(
+                    "UPDATE chats SET settings = ?, updated_at = ? WHERE name = ?",
+                    (json.dumps(self.current_settings), now, eff_name))
+        if cur.rowcount == 0:
+            logger.warning(
+                f"Save to chat '{eff_name}' affected 0 rows — "
+                f"chat was deleted. Dropping save to avoid resurrecting it."
+            )
+            return False
+
+        if resync:
+            offset = state["offset"] if state else 0
+            conn.execute(
+                "DELETE FROM chat_messages WHERE chat_name = ? AND seq >= ?",
+                (eff_name, offset))
+            conn.executemany(
+                "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
+                "VALUES (?, ?, ?, ?)",
+                [(eff_name, offset + i, m.get("role"), self._row_json(m))
+                 for i, m in enumerate(msgs)])
+            self._rows_state[eff_name] = {"offset": offset, "count": len(msgs)}
+            eff_chat._needs_full_resync = False
+        elif len(msgs) > state["count"]:
+            conn.executemany(
+                "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
+                "VALUES (?, ?, ?, ?)",
+                [(eff_name, state["offset"] + i, msgs[i].get("role"), self._row_json(msgs[i]))
+                 for i in range(state["count"], len(msgs))])
+            state["count"] = len(msgs)
+        conn.commit()
+        return True
+
+    # ── Rowify step 3: lazy blob→rows conversion (tmp/chat-storage-rowify-plan.md) ──
+
+    def _ensure_pre_rowify_snapshot(self):
+        """One-shot whole-DB snapshot before the FIRST conversion on this
+        install (migration safety net #1). VACUUM INTO gives a consistent
+        copy under WAL — a naive file copy would tear. Marker latches only
+        on SUCCESS; failure logs and lets conversion proceed (nightly
+        backups still cover the catastrophic case)."""
+        marker = self.history_dir / ".pre_rowify_snapshot_done"
+        if marker.exists():
+            return
+        try:
+            import shutil
+            db_size = self._db_path.stat().st_size
+            free = shutil.disk_usage(str(self.history_dir)).free
+            if free < db_size * 2 + 100 * 1024 * 1024:
+                logger.warning("Pre-rowify snapshot skipped: low disk space (will retry next conversion)")
+                return
+            dest = self.history_dir / f"pre_rowify_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            if dest.exists():
+                dest.unlink()
+            with self._get_connection() as conn:
+                conn.execute("VACUUM INTO ?", (str(dest),))
+            marker.write_text(datetime.now().isoformat(), encoding='utf-8')
+            logger.info(f"Pre-rowify snapshot written: {dest.name} "
+                        f"({max(1, dest.stat().st_size // (1024*1024))}MB)")
+        except Exception as e:
+            logger.warning(f"Pre-rowify snapshot failed (conversion proceeds; nightly backups cover): {e}")
+
+    def _convert_chat_to_rows(self, conn, chat_name: str, source: list) -> bool:
+        """Convert one blob chat to rows storage. Caller holds self._lock.
+
+        ONE transaction: INSERT all rows (thinking_raw-stripped), STRICT
+        verify (count + exact parsed equality vs the stripped source), flip
+        storage_format — commit is atomic, so a reader ever sees only
+        blob+no-rows or rows+flipped. The blob column is left FROZEN as the
+        per-chat recovery point (nulled later, on first mutation, by
+        _save_rows_chat — privacy correction #4).
+
+        Failure discipline: transient errors (SQLITE_BUSY, disk) roll back
+        WITHOUT latching so the next write retries; genuine data-shape
+        errors latch conversion_failed=1 → the chat stays blob forever and
+        the caller falls back to the blob write path (message still saves).
+        """
+        row = conn.execute(
+            "SELECT storage_format, conversion_failed FROM chats WHERE name = ?",
+            (chat_name,)
+        ).fetchone()
+        if not row or row["storage_format"] != "blob" or row["conversion_failed"]:
+            return False
+        try:
+            if not isinstance(source, list):
+                raise ValueError(f"blob source is {type(source).__name__}, not a list")
+            rows_json = [self._row_json(m) for m in source]
+            stripped = [json.loads(s) for s in rows_json]
+
+            # Heal any orphan rows from a pre-existing inconsistency, then
+            # insert + verify + flip inside the same txn.
+            conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (chat_name,))
+            conn.executemany(
+                "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
+                "VALUES (?, ?, ?, ?)",
+                [(chat_name, i, m.get("role"), s)
+                 for i, (m, s) in enumerate(zip(stripped, rows_json))])
+            back = [json.loads(r["message_json"]) for r in conn.execute(
+                "SELECT message_json FROM chat_messages WHERE chat_name = ? ORDER BY seq",
+                (chat_name,))]
+            if back != stripped:
+                raise ValueError(f"verify mismatch: {len(back)} rows vs {len(stripped)} source")
+            conn.execute(
+                "UPDATE chats SET storage_format = 'rows' WHERE name = ?", (chat_name,))
+            conn.commit()
+            self._rows_state[chat_name] = {"offset": 0, "count": len(source)}
+            logger.info(f"Converted chat '{chat_name}' to rows storage ({len(source)} messages)")
+            return True
+        except sqlite3.OperationalError as e:
+            # Transient (BUSY / disk) — do NOT latch; next write retries.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            logger.warning(f"Conversion of '{chat_name}' hit transient error (will retry): {e}")
+            return False
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            try:
+                conn.execute(
+                    "UPDATE chats SET conversion_failed = 1 "
+                    "WHERE name = ? AND storage_format = 'blob'", (chat_name,))
+                conn.commit()
+            except Exception:
+                pass
+            logger.error(f"Conversion of '{chat_name}' failed on data shape — latched to blob: {e}")
+            return False
+
+    def _maybe_convert_active_chat(self):
+        """Step-3 trigger for the ACTIVE chat: runs at the end_streaming 1→0
+        boundary — the only point where the active chat is reliably
+        non-streaming AND tool-cycle-consistent (cancel-cleanup has already
+        patched any dangling cycle). Gating conversion behind `not
+        _is_streaming` inside _save_current_chat would mean the active chat
+        converts NEVER — foreground saves all run mid-stream. Caller
+        (end_streaming) holds self._lock. Never raises."""
+        try:
+            try:
+                from core.privacy import is_privacy_mode
+                if is_privacy_mode():
+                    return
+            except ImportError:
+                pass
+            chat_name = self.active_chat_name
+            chat_obj = self.current_chat
+            if not chat_name or chat_obj is None:
+                return
+            with self._get_connection() as conn:
+                probe = conn.execute(
+                    "SELECT storage_format, conversion_failed FROM chats WHERE name = ?",
+                    (chat_name,)
+                ).fetchone()
+                if not probe or probe["storage_format"] != "blob" or probe["conversion_failed"]:
+                    return
+                self._ensure_pre_rowify_snapshot()
+                if self._convert_chat_to_rows(conn, chat_name, chat_obj.messages):
+                    chat_obj._needs_full_resync = False
+        except Exception as e:
+            logger.warning(f"convert-on-write check skipped: {e}")
+
+    def revert_chat_to_blob(self, chat_name: str) -> bool:
+        """Down-migrate a rows chat back to blob storage (safety net #2).
+
+        Serializes the LIVE rows — not the frozen blob — so it loses nothing
+        and works even after the frozen blob was privacy-nulled. Refuses
+        while the chat could be mid-write. One transaction."""
+        if self._is_streaming and chat_name == self.active_chat_name:
+            logger.warning(f"revert_chat_to_blob('{chat_name}') refused — streaming in progress")
+            return False
+        try:
+            with self._lock, self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT storage_format FROM chats WHERE name = ?", (chat_name,)
+                ).fetchone()
+                if not row or row["storage_format"] != "rows":
+                    logger.warning(f"revert_chat_to_blob('{chat_name}') — not a rows chat")
+                    return False
+                msgs = [json.loads(r["message_json"]) for r in conn.execute(
+                    "SELECT message_json FROM chat_messages WHERE chat_name = ? ORDER BY seq",
+                    (chat_name,))]
+                conn.execute(
+                    "UPDATE chats SET messages = ?, storage_format = 'blob', updated_at = ? "
+                    "WHERE name = ?",
+                    (json.dumps(msgs), datetime.now().isoformat(), chat_name))
+                conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (chat_name,))
+                conn.commit()
+                self._rows_state.pop(chat_name, None)
+                logger.info(f"Reverted chat '{chat_name}' to blob storage ({len(msgs)} messages)")
+                return True
+        except Exception as e:
+            logger.error(f"revert_chat_to_blob('{chat_name}') failed: {e}")
+            return False
+
     def list_chat_files(self) -> List[Dict[str, Any]]:
         """List all available chats with metadata."""
         self._ensure_db()
@@ -1114,19 +1504,29 @@ class ChatSessionManager:
         chats = []
         try:
             with self._lock, self._get_connection() as conn:
+                # msg_count is format-aware: COUNT(*) over chat_messages for
+                # rows chats (a converted chat's frozen blob would give a
+                # stale json_array_length — rowify plan, land in step 1).
                 cursor = conn.execute(
-                    """SELECT name, settings, json_array_length(messages) as msg_count, updated_at FROM chats
+                    """SELECT name, settings, updated_at, created_at,
+                              CASE WHEN storage_format = 'rows'
+                                   THEN (SELECT COUNT(*) FROM chat_messages cm
+                                         WHERE cm.chat_name = chats.name)
+                                   ELSE json_array_length(messages)
+                              END AS msg_count
+                       FROM chats
                        ORDER BY updated_at DESC"""
                 )
                 for row in cursor:
                     settings = json.loads(row["settings"])
-                    
+
                     chats.append({
                         "name": row["name"],
                         "display_name": settings.get("private_display_name") or row["name"].replace('_', ' ').title(),
                         "message_count": row["msg_count"] or 0,
                         "is_active": row["name"] == self.active_chat_name,
                         "modified": row["updated_at"],
+                        "created": row["created_at"],
                         "private_chat": bool(settings.get("private_chat")),
                         "settings": settings
                     })
@@ -1158,15 +1558,20 @@ class ChatSessionManager:
                     logger.warning(f"Chat already exists: {safe_name}")
                     return False
                 
-                # Create new chat
+                # Create new chat (created_at stamped from birth; chats that
+                # predate the column stay NULL — UI shows "—"). Born as
+                # 'rows' (rowify step 2): messages persist to chat_messages
+                # from the first write; the blob column stays '[]' forever.
+                now = datetime.now().isoformat()
                 conn.execute(
-                    """INSERT INTO chats (name, settings, messages, updated_at)
-                       VALUES (?, ?, ?, ?)""",
+                    """INSERT INTO chats (name, settings, messages, updated_at, created_at, storage_format)
+                       VALUES (?, ?, ?, ?, ?, 'rows')""",
                     (
                         safe_name,
                         json.dumps(get_user_defaults()),
                         json.dumps([]),
-                        datetime.now().isoformat()
+                        now,
+                        now
                     )
                 )
                 conn.commit()
@@ -1205,6 +1610,7 @@ class ChatSessionManager:
                 
                 # Delete chat and any associated data
                 conn.execute("DELETE FROM chats WHERE name = ?", (chat_name,))
+                conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (chat_name,))
                 try:
                     conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (chat_name,))
                 except Exception:
@@ -1223,7 +1629,8 @@ class ChatSessionManager:
                 except Exception:
                     pass
                 logger.info(f"Deleted chat: {chat_name}")
-                
+                self._rows_state.pop(chat_name, None)
+
                 # Ensure default exists
                 self._ensure_default_exists()
                 
@@ -1249,14 +1656,16 @@ class ChatSessionManager:
                     "SELECT 1 FROM chats WHERE name = 'default'"
                 )
                 if not cursor.fetchone():
+                    now = datetime.now().isoformat()
                     conn.execute(
-                        """INSERT INTO chats (name, settings, messages, updated_at)
-                           VALUES (?, ?, ?, ?)""",
+                        """INSERT INTO chats (name, settings, messages, updated_at, created_at, storage_format)
+                           VALUES (?, ?, ?, ?, ?, 'rows')""",
                         (
                             "default",
                             json.dumps(get_user_defaults()),
                             json.dumps([]),
-                            datetime.now().isoformat()
+                            now,
+                            now
                         )
                     )
                     conn.commit()
@@ -1475,12 +1884,15 @@ class ChatSessionManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT messages FROM chats WHERE name = ?", (chat_name,)
+                    "SELECT messages, storage_format FROM chats WHERE name = ?", (chat_name,)
                 )
                 row = cursor.fetchone()
                 if not row:
                     return []
-                messages = json.loads(row["messages"])
+                if row["storage_format"] == "rows":
+                    messages = self._read_rows_messages(conn, chat_name)
+                else:
+                    messages = json.loads(row["messages"])
                 # Apply same trimming as get_messages_for_llm
                 chat = ConversationHistory()
                 chat.messages = messages
@@ -1554,32 +1966,84 @@ class ChatSessionManager:
         try:
             with self._lock, self._get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT messages FROM chats WHERE name = ?", (chat_name,)
+                    "SELECT messages, storage_format, conversion_failed FROM chats WHERE name = ?",
+                    (chat_name,)
                 )
                 row = cursor.fetchone()
                 if not row:
                     logger.warning(f"Chat '{chat_name}' not found — skipping append (may have been deleted)")
                     return False
-                messages = json.loads(row["messages"])
 
                 for msg in new_messages:
                     if 'timestamp' not in msg:
                         msg['timestamp'] = timestamp
-                    messages.append(msg)
 
-                result = conn.execute(
-                    """UPDATE chats SET messages = ?, updated_at = ? WHERE name = ?""",
-                    (json.dumps(messages), timestamp, chat_name)
-                )
-                conn.commit()
-                if result.rowcount == 0:
-                    logger.warning(f"Chat '{chat_name}' was deleted during append — messages lost")
+                storage_format = row["storage_format"]
+                # Rowify step 3: non-active blob chats lazily convert on THIS
+                # write path (the active chat converts at end_streaming, but
+                # converting here too is safe — we're past the stream wait,
+                # under the lock). Latched or privacy-mode chats stay blob.
+                if storage_format == "blob" and not row["conversion_failed"]:
+                    try:
+                        from core.privacy import is_privacy_mode
+                        _privacy = is_privacy_mode()
+                    except ImportError:
+                        _privacy = False
+                    if not _privacy:
+                        try:
+                            self._ensure_pre_rowify_snapshot()
+                            if self._convert_chat_to_rows(
+                                    conn, chat_name, json.loads(row["messages"])):
+                                storage_format = "rows"
+                        except Exception as e:
+                            logger.warning(f"append-path conversion of '{chat_name}' skipped: {e}")
+
+                if storage_format == "rows":
+                    # Stateless O(1) append: next seq straight from the store
+                    # (no watermark needed for non-active chats).
+                    base = conn.execute(
+                        "SELECT COALESCE(MAX(seq) + 1, 0) FROM chat_messages "
+                        "WHERE chat_name = ?", (chat_name,)
+                    ).fetchone()[0]
+                    conn.executemany(
+                        "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
+                        "VALUES (?, ?, ?, ?)",
+                        [(chat_name, base + i, m.get("role"), self._row_json(m))
+                         for i, m in enumerate(new_messages)])
+                    conn.execute(
+                        "UPDATE chats SET updated_at = ? WHERE name = ?",
+                        (timestamp, chat_name))
+                    conn.commit()
+                else:
+                    messages = json.loads(row["messages"])
+                    messages.extend(new_messages)
+                    result = conn.execute(
+                        """UPDATE chats SET messages = ?, updated_at = ? WHERE name = ?""",
+                        (json.dumps(messages), timestamp, chat_name)
+                    )
+                    conn.commit()
+                    if result.rowcount == 0:
+                        logger.warning(f"Chat '{chat_name}' was deleted during append — messages lost")
                 logger.debug(f"Appended {len(new_messages)} messages to chat '{chat_name}'")
 
-                # If this is the active chat, sync in-memory list
+                # If this is the active chat, sync in-memory list AND the
+                # rows watermark (these rows are already persisted — without
+                # the count bump the next foreground save would re-INSERT
+                # them at colliding seqs).
                 if chat_name == self.active_chat_name:
                     for msg in new_messages:
                         self.current_chat.messages.append(msg)
+                    if storage_format == "rows":
+                        state = self._rows_state.get(chat_name)
+                        if state is not None and state["offset"] + state["count"] == base:
+                            state["count"] += len(new_messages)
+                        else:
+                            # Drift between watermark and store — heal via
+                            # full resync on the next save instead of guessing.
+                            logger.warning(
+                                f"Rows watermark drift on '{chat_name}' "
+                                f"(state={state}, base={base}) — flagging resync")
+                            self.current_chat._needs_full_resync = True
 
                 publish(Events.MESSAGE_ADDED, {"role": "pair", "chat_name": chat_name})
                 return True
@@ -1631,13 +2095,25 @@ class ChatSessionManager:
         try:
             with self._lock, self._get_connection() as conn:
                 row = conn.execute(
-                    "SELECT messages FROM chats WHERE name = ?", (chat_name,)
+                    "SELECT messages, storage_format FROM chats WHERE name = ?", (chat_name,)
                 ).fetchone()
                 if not row:
                     return 0
-                msgs_blob = row["messages"] or "[]"
-                # Extract all live IMG IDs from message content
-                live_ids = set(re.findall(r'<<IMG::tool:([^>]+)>>', msgs_blob))
+                # Live IDs come from the AUTHORITATIVE store (rowify
+                # correction #5): for a rows chat the blob is '[]'/frozen —
+                # scanning it would report zero live markers and delete
+                # images that are still referenced (silent data loss; golden
+                # master T3 guards this exact regression).
+                if row["storage_format"] == "rows":
+                    live_ids = set()
+                    for r in conn.execute(
+                            "SELECT message_json FROM chat_messages WHERE chat_name = ?",
+                            (chat_name,)):
+                        live_ids.update(re.findall(r'<<IMG::tool:([^>]+)>>', r["message_json"]))
+                else:
+                    msgs_blob = row["messages"] or "[]"
+                    # Extract all live IMG IDs from message content
+                    live_ids = set(re.findall(r'<<IMG::tool:([^>]+)>>', msgs_blob))
                 # Find stored image IDs for this chat that aren't in live_ids
                 stored = conn.execute(
                     "SELECT id FROM tool_images WHERE chat_name = ?", (chat_name,)
@@ -1669,19 +2145,27 @@ class ChatSessionManager:
         # A1: clear the EFFECTIVE chat (a per-stream override's chat, else the
         # active one). Without this, reset_chat from a phone call or a background
         # conversation wiped the operator's active WEB chat instead of the call's.
-        eff_chat = self._effective_chat()
-        eff_name = self._effective_chat_name()
-        eff_chat.clear()
-        eff_chat._in_tool_cycle = False
-        self._save_current_chat()  # already routes to the effective chat
+        # ONE lock hold for the whole wipe (race scout 2026-07-09 #1: the
+        # unlocked gap let a concurrent continuity append survive a privacy
+        # clear). RLock — the nested _save_current_chat lock re-enters fine.
+        with self._lock:
+            eff_chat = self._effective_chat()
+            eff_name = self._effective_chat_name()
+            eff_chat.clear()
+            eff_chat._in_tool_cycle = False
+            # Clear means WIPE, not window-resync: reset the watermark offset to 0
+            # so the resync deletes every row — including rows below a capped-load
+            # offset that aren't in memory. Privacy lever must be total.
+            self._rows_state[eff_name] = {"offset": 0, "count": 0}
+            self._save_current_chat()  # already routes to the effective chat
 
-        # Clear tool images for the effective chat
-        try:
-            with self._get_connection() as conn:
-                conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (eff_name,))
-                conn.commit()
-        except Exception:
-            pass  # Table may not exist yet
+            # Clear tool images for the effective chat
+            try:
+                with self._get_connection() as conn:
+                    conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (eff_name,))
+                    conn.commit()
+            except Exception:
+                pass  # Table may not exist yet
 
         publish(Events.CHAT_CLEARED, {"chat_name": eff_name})
 
@@ -1968,6 +2452,7 @@ class ChatSessionManager:
             for msg in self.current_chat.messages:
                 if msg.get('role') == 'user' and msg.get('timestamp') == timestamp:
                     msg['content'] = new_content
+                    self.current_chat._needs_full_resync = True  # in-place edit
                     self._save_current_chat()
                     logger.info(f"Edited user message at {timestamp}")
                     return True
@@ -1992,6 +2477,7 @@ class ChatSessionManager:
                     last_assistant_idx = i
             
             self.current_chat.messages[last_assistant_idx]['content'] = new_content
+            self.current_chat._needs_full_resync = True  # in-place edit
             self._save_current_chat()
             logger.info(f"Edited assistant message at index {last_assistant_idx} (turn started at {start_idx})")
             return True

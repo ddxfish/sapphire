@@ -52,8 +52,13 @@ def session_manager_with_images(tmp_path):
             {'role': 'tool', 'content': 'text without image here'},
             {'role': 'tool', 'content': '<<IMG::tool:live2.png>>\nsecond result'},
         ])
+        # Pin to BLOB format: this fixture hand-writes the messages blob, and
+        # post rowify step 2 create_chat births 'rows' chats (which ignore the
+        # blob). Keeping these tests on blob preserves prune coverage for the
+        # legacy path (dual-reader anti-cold-rot); rows prune is covered by
+        # test_rowify_step2.py + golden master T3.
         conn.execute(
-            "UPDATE chats SET messages = ? WHERE name = 'imagechat'", (msgs,)
+            "UPDATE chats SET messages = ?, storage_format = 'blob' WHERE name = 'imagechat'", (msgs,)
         )
     return sm
 
@@ -126,7 +131,9 @@ def test_remove_tool_call_prunes_images(tmp_path):
             {'role': 'tool', 'tool_call_id': 'call_1', 'name': 'snap',
              'content': f'<<IMG::tool:{img_id}>>\npic result'},
         ])
-        conn.execute("UPDATE chats SET messages = ? WHERE name='trinity'", (msgs,))
+        # Pin to blob — hand-written blob seed (see session_manager_with_images
+        # note); keeps this as legacy-path coverage post rowify step 2.
+        conn.execute("UPDATE chats SET messages = ?, storage_format = 'blob' WHERE name='trinity'", (msgs,))
     # Reload in-memory
     sm._load_chat('trinity')
 

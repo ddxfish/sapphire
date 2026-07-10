@@ -114,18 +114,20 @@ def _get_recent_activity(user_dir: Path, active_chat: str | None) -> dict:
         return info
     try:
         import sqlite3
-        chats_db = user_dir / "chats.db"
+        chats_db = user_dir / "history" / "sapphire_history.db"
         if not chats_db.exists():
             return info
-        conn = sqlite3.connect(str(chats_db))
+        # Read-only: a status poll must never contend for the chat DB's
+        # write lock. Rows-format chats (rowify 2026-07-09) keep one row per
+        # message in chat_messages with the dict as JSON; blob chats return
+        # no rows here and these fields stay absent (pre-rowify behavior).
+        conn = sqlite3.connect(f"file:{chats_db}?mode=ro", uri=True)
         c = conn.cursor()
-        # Discover the schema — chat tables vary across versions. Just look
-        # for any table with a 'timestamp' or 'created_at' column tied to
-        # the active chat. Best-effort, never raise.
         try:
             today = datetime.now().strftime("%Y-%m-%d")
             c.execute(
-                "SELECT COUNT(*) FROM messages WHERE chat_name = ? AND substr(timestamp, 1, 10) = ?",
+                "SELECT COUNT(*) FROM chat_messages WHERE chat_name = ? "
+                "AND substr(json_extract(message_json, '$.timestamp'), 1, 10) = ?",
                 (active_chat, today)
             )
             row = c.fetchone()
@@ -135,7 +137,8 @@ def _get_recent_activity(user_dir: Path, active_chat: str | None) -> dict:
             pass
         try:
             c.execute(
-                "SELECT timestamp FROM messages WHERE chat_name = ? ORDER BY id DESC LIMIT 1",
+                "SELECT json_extract(message_json, '$.timestamp') FROM chat_messages "
+                "WHERE chat_name = ? ORDER BY seq DESC LIMIT 1",
                 (active_chat,)
             )
             row = c.fetchone()
