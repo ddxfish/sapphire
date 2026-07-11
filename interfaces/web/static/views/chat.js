@@ -395,12 +395,14 @@ export default {
         // via the onNavigate callback in loadSidebar(). Don't bind here at init() time —
         // the buttons don't exist in the DOM yet (rendered dynamically with each loadSidebar).
 
-        // "Go to view" buttons — navigate to Prompts/Toolsets with selection
+        // "Go to view" buttons — navigate to Prompts/Toolsets with selection.
+        // data-tab targets a specific Settings tab (e.g. provider → Settings > LLM).
         container.querySelectorAll('.sb-goto-view').forEach(btn => {
             btn.addEventListener('click', () => {
                 const selectId = btn.dataset.select;
                 const val = selectId && container.querySelector(`#${selectId}`)?.value;
                 if (val) window._viewSelect = val;
+                if (btn.dataset.tab) window._settingsTab = btn.dataset.tab;
                 switchView(btn.dataset.view);
             });
         });

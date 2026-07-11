@@ -25,58 +25,26 @@ export default {
         const allProviders = {...coreProviders, ...customProviders};
         const fallbackOrder = ctx.getValue('LLM_FALLBACK_ORDER') || Object.keys(allProviders);
         generationProfiles = ctx.getValue('MODEL_GENERATION_PROFILES') || {};
-
-        // Core provider cards (in fallback order)
-        const coreKeys = Object.keys(coreProviders);
         const meta = ctx.providerMeta || providerMetadata;
-        const coreOrdered = fallbackOrder.filter(k => coreKeys.includes(k));
-        coreKeys.forEach(k => { if (!coreOrdered.includes(k)) coreOrdered.push(k); });
-        const coreCards = coreOrdered.filter(k => coreProviders[k]).map((k, i) => {
-            return renderProviderCard(k, coreProviders[k], meta[k] || {}, i, generationProfiles);
-        }).join('');
 
-        // Custom provider rows
-        const customKeys = Object.keys(customProviders);
-        const customOrdered = fallbackOrder.filter(k => customKeys.includes(k));
-        customKeys.forEach(k => { if (!customOrdered.includes(k)) customOrdered.push(k); });
-        const customRows = customOrdered.filter(k => customProviders[k]).map(k => {
-            const c = customProviders[k];
-            const enabled = c.enabled || false;
-            const statusIcon = enabled ? '\uD83D\uDFE2' : '\u26AB';
-            const template = c.template || c.provider || 'openai';
-            const model = c.model || '';
-            return `
-                <div class="custom-provider-row ${enabled ? '' : 'disabled'}" data-provider="${k}">
-                    <div class="custom-provider-info">
-                        <span class="custom-provider-status">${statusIcon}</span>
-                        <span class="custom-provider-name">${_esc(c.display_name || k)}</span>
-                        <span class="custom-provider-detail">${_esc(model)} \u00B7 ${template}</span>
-                    </div>
-                    <div class="custom-provider-actions">
-                        <label title="Vision \u2014 this model can see images. Turn on for VLMs whose name doesn't include a vision token (e.g. Qwen3 27B without 'VL')." onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:3px;font-size:var(--font-sm);color:var(--text-muted);margin-right:8px;cursor:pointer">\ud83d\udc41<input type="checkbox" class="custom-provider-vision" data-provider="${k}" ${c.supports_images ? 'checked' : ''}></label>
-                        <label class="toggle-switch toggle-sm" onclick="event.stopPropagation()">
-                            <input type="checkbox" class="custom-provider-enabled" data-provider="${k}" ${enabled ? 'checked' : ''}>
-                            <span class="toggle-slider"></span>
-                        </label>
-                        <button class="btn btn-sm btn-danger custom-provider-delete" data-provider="${k}" title="Remove">\u2715</button>
-                    </div>
-                </div>
-            `;
-        }).join('');
+        // One unified list in fallback order \u2014 core and custom mixed, stragglers appended
+        const ordered = fallbackOrder.filter(k => allProviders[k]);
+        Object.keys(allProviders).forEach(k => { if (!ordered.includes(k)) ordered.push(k); });
+
+        const rows = ordered.map((k, i) =>
+            coreProviders[k]
+                ? renderProviderCard(k, coreProviders[k], meta[k] || {}, i, generationProfiles)
+                : _renderCustomRow(k, customProviders[k], i)
+        ).join('');
 
         return `
-            <h4 style="margin:0 0 4px">Core Providers</h4>
-            <p class="text-muted" style="margin:0 0 12px;font-size:var(--font-sm)">Drag to reorder fallback priority. Test to verify connectivity.</p>
-            <div id="providers-list">${coreCards}</div>
+            <h4 style="margin:0 0 4px">Providers</h4>
+            <p class="text-muted" style="margin:0 0 12px;font-size:var(--font-sm)">Drag to reorder \u2014 Auto tries top to bottom. Core providers toggle off but can't be removed.</p>
+            <div id="providers-list">${rows}</div>
 
-            <div style="margin-top:24px">
-                <h4 style="margin:0 0 12px">Custom Providers</h4>
-                <button class="btn btn-primary" id="add-custom-provider" style="width:100%;padding:10px 16px;font-size:var(--font-md);margin-bottom:14px">+ Add Provider</button>
-                <div id="custom-providers-list">
-                    ${customRows || '<p class="text-muted" style="font-size:var(--font-sm)">No custom providers. Click + Add Provider to connect Fireworks, OpenRouter, LM Studio, and more.</p>'}
-                </div>
-                <div id="add-provider-wizard" style="display:none"></div>
-            </div>
+            <button class="btn btn-primary" id="add-custom-provider" style="width:100%;padding:10px 16px;font-size:var(--font-md);margin:2px 0 8px">+ Add Provider</button>
+            ${Object.keys(customProviders).length ? '' : '<p class="text-muted" style="font-size:var(--font-sm)">Connect Fireworks, OpenRouter, LM Studio, and more \u2014 added providers join this list and reorder like the rest.</p>'}
+            <div id="add-provider-wizard" style="display:none"></div>
 
             <div style="margin-top:24px">
                 <h4 style="margin:0 0 12px">General</h4>
@@ -93,10 +61,11 @@ export default {
 
         refreshProviderKeyStatus(el);
 
-        // Collapse toggle
+        // Collapse toggle (core cards + custom edit accordions). Ignore clicks
+        // on the drag handle and on the custom rows' inline controls.
         el.querySelectorAll('.provider-header').forEach(h => {
             h.addEventListener('click', e => {
-                if (e.target.closest('.provider-drag-handle')) return;
+                if (e.target.closest('.provider-drag-handle') || e.target.closest('.custom-provider-actions')) return;
                 toggleProviderCollapse(h.closest('.provider-card'));
             });
         });
@@ -212,12 +181,9 @@ export default {
             });
         });
 
-        // Drag-drop reorder
+        // Drag-drop reorder — the list IS the full fallback order (core + custom)
         initProviderDragDrop(el.querySelector('#providers-list'), order => {
-            // Merge core order with existing custom order
-            const customKeys = Object.keys(ctx.getValue('LLM_CUSTOM_PROVIDERS') || {});
-            const fullOrder = [...order, ...customKeys.filter(k => !order.includes(k))];
-            updateFallbackOrder(fullOrder);
+            updateFallbackOrder(order);
         });
 
         // Custom provider enable toggle
@@ -225,9 +191,12 @@ export default {
             t.addEventListener('change', async e => {
                 try {
                     await updateProvider(e.target.dataset.provider, { enabled: e.target.checked });
-                    const row = e.target.closest('.custom-provider-row');
-                    if (row) row.classList.toggle('disabled', !e.target.checked);
-                    const status = row?.querySelector('.custom-provider-status');
+                    const card = e.target.closest('.provider-card');
+                    if (card) {
+                        card.classList.toggle('disabled', !e.target.checked);
+                        card.classList.toggle('enabled', e.target.checked);
+                    }
+                    const status = card?.querySelector('.custom-provider-status');
                     if (status) status.textContent = e.target.checked ? '\uD83D\uDFE2' : '\u26AB';
                 } catch (err) {
                     showToast('Failed to update provider', 'error');
@@ -270,15 +239,10 @@ export default {
             });
         });
 
-        // Custom provider row click to expand (edit inline)
-        el.querySelectorAll('.custom-provider-row .custom-provider-info').forEach(info => {
-            info.style.cursor = 'pointer';
-            info.addEventListener('click', () => {
-                const key = info.closest('.custom-provider-row').dataset.provider;
-                const custom = ctx.getValue('LLM_CUSTOM_PROVIDERS') || {};
-                const config = custom[key] || {};
-                _showEditWizard(el, key, config, ctx);
-            });
+        // Bind each custom card's pre-rendered edit form (accordion body)
+        Object.keys(ctx.getValue('LLM_CUSTOM_PROVIDERS') || {}).forEach(k => {
+            const host = el.querySelector(`.provider-card[data-provider="${k}"] .provider-fields`);
+            if (host) _bindProviderForm(host, 'pf-' + k, ctx, k);
         });
 
         // Add provider button
@@ -289,6 +253,40 @@ export default {
 };
 
 function _esc(s) { return s ? s.replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''; }
+
+// Custom provider card — same structure as core cards (header + accordion body)
+// so the shared collapse/drag machinery treats both identically. The body holds
+// the edit form, pre-rendered at build time (instant open, no fetch).
+function _renderCustomRow(k, c, i) {
+    const enabled = c.enabled || false;
+    const statusIcon = enabled ? '🟢' : '⚫';
+    const template = c.template || c.provider || 'openai';
+    const model = c.model || '';
+    return `
+        <div class="provider-card custom-card ${enabled ? 'enabled' : 'disabled'}" data-provider="${k}">
+            <div class="provider-header" data-provider="${k}">
+                <div class="provider-title">
+                    <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
+                    <span class="provider-order">${i + 1}</span>
+                    <span class="custom-provider-status">${statusIcon}</span>
+                    <span class="provider-name">${_esc(c.display_name || k)}</span>
+                    <span class="custom-provider-detail">${_esc(model)} · ${template}</span>
+                </div>
+                <div class="custom-provider-actions">
+                    <label title="Vision — this model can see images. Turn on for VLMs whose name doesn't include a vision token (e.g. Qwen3 27B without 'VL')." onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:3px;font-size:var(--font-sm);color:var(--text-muted);margin-right:8px;cursor:pointer">👁<input type="checkbox" class="custom-provider-vision" data-provider="${k}" ${c.supports_images ? 'checked' : ''}></label>
+                    <label class="toggle-switch toggle-sm" onclick="event.stopPropagation()">
+                        <input type="checkbox" class="custom-provider-enabled" data-provider="${k}" ${enabled ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <button class="btn btn-sm btn-danger custom-provider-delete" data-provider="${k}" title="Remove">✕</button>
+                </div>
+            </div>
+            <div class="provider-fields collapsed">
+                ${_providerFormHtml('pf-' + k, c, { mode: 'edit' })}
+            </div>
+        </div>
+    `;
+}
 
 // ── Shared "Advanced" fields (single source of truth for Add + Edit wizards) ──
 // Renders temp/max-tokens/top-p + the universal disable-thinking toggle + raw
@@ -357,86 +355,102 @@ function _readAdvancedFields(root, prefix) {
     return { ok: true, generation_params, disable_thinking, extra_body };
 }
 
-async function _showAddWizard(el, ctx) {
-    const wizard = el.querySelector('#add-provider-wizard');
-    if (!wizard) return;
-    wizard.style.display = 'block';
+// ── Unified Add/Edit provider form ───────────────────────────────────────────
+// ONE builder + ONE binder for both flows (they used to be two hand-written
+// wizards that kept diverging). Edit forms live in each custom card's accordion
+// (prefix pf-<key>); the Add form lives under + Add Provider (prefix pf-new).
+// The only true divergence left is the save call: POST create vs PUT update.
 
-    // Fetch presets
-    let presets = {}, templates = [];
-    try {
-        const res = await fetch('/api/llm/presets');
-        const data = await res.json();
-        presets = data.presets || {};
-        templates = data.templates || [];
-    } catch (e) { console.warn('Failed to fetch presets:', e); }
+function _providerFormHtml(prefix, config = {}, opts = {}) {
+    const isAdd = opts.mode === 'add';
+    const gen = config.generation_params || {};
+    const shared = `
+        <div class="field-row" style="margin-bottom:8px">
+            <label>Base URL</label>
+            <input type="text" id="${prefix}-url" value="${_esc(config.base_url || '')}" placeholder="https://api.example.com/v1" style="width:100%">
+        </div>
+        <div class="field-row" style="margin-bottom:8px">
+            <label>API Key</label>
+            <input type="password" id="${prefix}-key" value="" placeholder="${isAdd ? 'Optional' : 'Enter to change'}" style="width:100%">
+        </div>
+        <div class="field-row" style="margin-bottom:8px">
+            <label>Model</label>
+            <input type="text" id="${prefix}-model" value="${_esc(config.model || '')}" placeholder="model-name" style="width:100%">
+            <div id="${prefix}-suggested" style="margin-top:4px"></div>
+        </div>
+        <div class="field-row" style="margin-bottom:8px">
+            <label class="checkbox-inline"><input type="checkbox" id="${prefix}-local" ${config.is_local ? 'checked' : ''}> Local / private server (allowed in private chats)</label>
+        </div>
+        <div class="field-row" style="margin-bottom:8px">
+            <label class="checkbox-inline"><input type="checkbox" id="${prefix}-fallback" ${config.use_as_fallback !== false ? 'checked' : ''}> Include in Auto fallback</label>
+        </div>
+        ${_advancedFieldsHtml(prefix, {
+            temperature: gen.temperature,
+            max_tokens: gen.max_tokens,
+            top_p: gen.top_p,
+            disable_thinking: (config.disable_thinking ?? config.disable_thinking_qwen),
+            extra_body: config.extra_body,
+        })}
+        <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-primary btn-sm" id="${prefix}-save">${isAdd ? 'Add' : 'Save'}</button>
+            ${isAdd
+                ? `<button class="btn btn-sm" id="${prefix}-cancel">Cancel</button>`
+                : `<button class="btn btn-sm" id="${prefix}-test">Test</button>
+                   <button class="btn btn-sm" id="${prefix}-test-think" title="Provoke reasoning, then check whether 'Disable thinking' actually suppresses it (2 quick calls)">🧠 Thinking</button>`}
+        </div>
+        <div id="${prefix}-status" class="text-muted" style="margin-top:8px;font-size:0.85em"></div>
+    `;
 
-    const presetOptions = Object.entries(presets).map(([k, p]) =>
-        `<option value="${k}">${_esc(p.display_name)}</option>`
-    ).join('');
+    if (!isAdd) return `<div class="provider-form">${shared}</div>`;
 
-    wizard.innerHTML = `
-        <div style="padding:14px;background:var(--bg-secondary);border-radius:var(--radius-sm);border:1px solid var(--border);margin-top:12px">
-            <h5 style="margin:0 0 12px">Add Provider</h5>
+    return `
+        <div class="provider-form">
             <div class="field-row" style="margin-bottom:8px">
                 <label>From Preset</label>
-                <select id="wizard-preset" style="width:100%">
+                <select id="${prefix}-preset" style="width:100%">
                     <option value="">-- Select a preset or choose manual --</option>
-                    ${presetOptions}
+                    ${opts.presetOptions || ''}
                     <option value="__manual_openai__">Manual: OpenAI Compatible</option>
                     <option value="__manual_anthropic__">Manual: Anthropic Compatible</option>
                     <option value="__manual_responses__">Manual: Responses API</option>
                 </select>
             </div>
-            <div id="wizard-form" style="display:none">
+            <div id="${prefix}-body" style="display:none">
                 <div class="field-row" style="margin-bottom:8px">
                     <label>Name</label>
-                    <input type="text" id="wizard-name" placeholder="my-provider" style="width:100%">
+                    <input type="text" id="${prefix}-name" placeholder="my-provider" style="width:100%">
                 </div>
-                <div class="field-row" style="margin-bottom:8px">
-                    <label>Base URL</label>
-                    <input type="text" id="wizard-url" placeholder="https://api.example.com/v1" style="width:100%">
-                </div>
-                <div class="field-row" style="margin-bottom:8px">
-                    <label>API Key</label>
-                    <input type="password" id="wizard-key" placeholder="Optional" style="width:100%">
-                </div>
-                <div class="field-row" style="margin-bottom:8px">
-                    <label>Model</label>
-                    <input type="text" id="wizard-model" placeholder="model-name" style="width:100%">
-                    <div id="wizard-suggested" style="margin-top:4px"></div>
-                </div>
-                <div class="field-row" style="margin-bottom:8px">
-                    <label class="checkbox-inline"><input type="checkbox" id="wizard-local"> Local / private server (allowed in private chats)</label>
-                </div>
-                ${_advancedFieldsHtml('wizard')}
-                <div style="display:flex;gap:8px">
-                    <button class="btn btn-primary btn-sm" id="wizard-save">Add</button>
-                    <button class="btn btn-sm" id="wizard-cancel">Cancel</button>
-                </div>
-                <div id="wizard-status" class="text-muted" style="margin-top:8px;font-size:0.85em"></div>
+                ${shared}
             </div>
         </div>
     `;
+}
 
+function _bindProviderForm(root, prefix, ctx, key = null, presets = {}) {
+    const g = id => root.querySelector(`#${prefix}-${id}`);
+    const status = g('status');
+    const setStatus = (msg, color = 'var(--text-muted)') => {
+        if (status) { status.textContent = msg; status.style.color = color; }
+    };
+
+    // ── Add mode: preset picker drives template + prefills ──
     let selectedTemplate = 'openai';
     let selectedPreset = null;
 
-    // Preset selection
-    wizard.querySelector('#wizard-preset')?.addEventListener('change', e => {
+    g('preset')?.addEventListener('change', e => {
         const val = e.target.value;
-        const form = wizard.querySelector('#wizard-form');
-        if (!val) { form.style.display = 'none'; return; }
-        form.style.display = 'block';
+        const body = g('body');
+        if (!val) { body.style.display = 'none'; return; }
+        body.style.display = 'block';
 
         if (val.startsWith('__manual_')) {
             selectedTemplate = val.replace('__manual_', '').replace('__', '');
             selectedPreset = null;
-            wizard.querySelector('#wizard-name').value = '';
-            wizard.querySelector('#wizard-url').value = '';
-            wizard.querySelector('#wizard-model').value = '';
-            wizard.querySelector('#wizard-suggested').innerHTML = '';
-            wizard.querySelector('#wizard-local').checked = false;
+            g('name').value = '';
+            g('url').value = '';
+            g('model').value = '';
+            g('suggested').innerHTML = '';
+            g('local').checked = false;
         } else {
             const preset = presets[val];
             if (!preset) return;
@@ -444,79 +458,120 @@ async function _showAddWizard(el, ctx) {
             selectedPreset = val;
             // Pre-fill Name with the friendly display_name (editable) — this IS the
             // friendly name; the backend derives the key by sanitizing it.
-            wizard.querySelector('#wizard-name').value = preset.display_name || val;
-            wizard.querySelector('#wizard-url').value = preset.base_url || '';
-            wizard.querySelector('#wizard-model').value = '';
+            g('name').value = preset.display_name || val;
+            g('url').value = preset.base_url || '';
+            g('model').value = '';
             // Visible pre-fill for loopback presets (LM Studio, Ollama) — the
             // checkbox is the source of truth, user can untick before saving
-            wizard.querySelector('#wizard-local').checked = /127\.0\.0\.1|localhost/.test(preset.base_url || '');
-            // Suggested models
+            g('local').checked = /127\.0\.0\.1|localhost/.test(preset.base_url || '');
             const suggested = preset.suggested_models || [];
             if (suggested.length) {
-                wizard.querySelector('#wizard-suggested').innerHTML = '<small class="text-muted">Suggested: ' +
+                g('suggested').innerHTML = '<small class="text-muted">Suggested: ' +
                     suggested.map(m => `<a href="#" class="wizard-model-pick" data-model="${_esc(m.id)}" style="margin-right:6px">${_esc(m.name)}</a>`).join('') + '</small>';
-                wizard.querySelectorAll('.wizard-model-pick').forEach(a => {
-                    a.addEventListener('click', ev => { ev.preventDefault(); wizard.querySelector('#wizard-model').value = a.dataset.model; });
+                g('suggested').querySelectorAll('.wizard-model-pick').forEach(a => {
+                    a.addEventListener('click', ev => { ev.preventDefault(); g('model').value = a.dataset.model; });
                 });
             } else {
-                wizard.querySelector('#wizard-suggested').innerHTML = '';
+                g('suggested').innerHTML = '';
             }
-            // Gen defaults from preset
-            const gen = preset.generation_defaults || {};
-            if (gen.temperature !== undefined) wizard.querySelector('#wizard-temp').value = gen.temperature;
-            if (gen.max_tokens !== undefined) wizard.querySelector('#wizard-maxtok').value = gen.max_tokens;
-            if (gen.top_p !== undefined) wizard.querySelector('#wizard-topp').value = gen.top_p;
+            const genDefaults = preset.generation_defaults || {};
+            if (genDefaults.temperature !== undefined) g('temp').value = genDefaults.temperature;
+            if (genDefaults.max_tokens !== undefined) g('maxtok').value = genDefaults.max_tokens;
+            if (genDefaults.top_p !== undefined) g('topp').value = genDefaults.top_p;
         }
     });
 
-    // Cancel
-    wizard.querySelector('#wizard-cancel')?.addEventListener('click', () => {
-        wizard.style.display = 'none';
-        wizard.innerHTML = '';
+    g('cancel')?.addEventListener('click', () => {
+        const wizard = root.closest('#add-provider-wizard') || root.querySelector('#add-provider-wizard');
+        const host = wizard || root;
+        host.style.display = 'none';
+        host.innerHTML = '';
     });
 
-    // Save
-    wizard.querySelector('#wizard-save')?.addEventListener('click', async () => {
-        const name = wizard.querySelector('#wizard-name')?.value?.trim();
-        const url = wizard.querySelector('#wizard-url')?.value?.trim();
-        const key = wizard.querySelector('#wizard-key')?.value?.trim();
-        const model = wizard.querySelector('#wizard-model')?.value?.trim();
-        const status = wizard.querySelector('#wizard-status');
+    // ── Edit mode: connection + thinking probes (need an existing key) ──
+    g('test')?.addEventListener('click', async () => {
+        setStatus('Testing...');
+        try {
+            const formData = { base_url: g('url')?.value, model: g('model')?.value };
+            const apiKey = g('key')?.value?.trim();
+            if (apiKey) formData.api_key = apiKey;
+            const res = await fetch(`/api/llm/test/${key}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
+            const data = await res.json();
+            if (data.status === 'success') setStatus('✓ ' + (data.response?.substring(0, 50) || 'Connected!'), 'var(--success)');
+            else setStatus('✗ ' + (data.error || 'Failed'), 'var(--error)');
+        } catch (e) { setStatus('✗ ' + e.message, 'var(--error)'); }
+    });
 
-        if (!name) { status.textContent = 'Name required'; status.style.color = 'var(--error)'; return; }
-        if (!url && selectedTemplate !== 'anthropic') { status.textContent = 'URL required'; status.style.color = 'var(--error)'; return; }
+    g('test-think')?.addEventListener('click', async () => {
+        setStatus('Probing reasoning… (2 quick calls)');
+        try {
+            const adv = _readAdvancedFields(root, prefix);
+            const payload = {
+                base_url: g('url')?.value,
+                model: g('model')?.value,
+                disable_thinking: adv.ok ? adv.disable_thinking : false,
+                extra_body: adv.ok ? adv.extra_body : '',
+            };
+            const apiKey = g('key')?.value?.trim();
+            if (apiKey) payload.api_key = apiKey;
+            const res = await fetch(`/api/llm/test-thinking/${key}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            const data = await res.json();
+            if (data.status === 'success') {
+                const b = data.baseline, d = data.disabled;
+                const counts = `baseline: ${b.reasoning_chars} think / ${b.prose_chars} prose`
+                    + (data.suppress_active ? ` · disabled: ${d.reasoning_chars} think / ${d.prose_chars} prose` : '');
+                status.innerHTML = `${_esc(data.verdict)}<br><small class="text-muted">${counts}</small>`;
+                status.style.color = data.ok === true ? 'var(--success)' : (data.ok === false ? 'var(--error)' : 'var(--text-muted)');
+            } else {
+                let msg = '✗ ' + (data.error || 'Failed');
+                if (data.baseline) msg += ` — baseline reasoned ${data.baseline.reasoning_chars} chars`;
+                setStatus(msg, 'var(--error)');
+            }
+        } catch (e) { setStatus('✗ ' + e.message, 'var(--error)'); }
+    });
 
-        const body = {
-            name, template: selectedTemplate, base_url: url, model: model || '',
-            display_name: name,   // the name you type IS the friendly name (key is derived from it)
-            is_local: wizard.querySelector('#wizard-local')?.checked || false,
+    // ── Save: the one real Add/Edit divergence — POST create vs PUT update ──
+    g('save')?.addEventListener('click', async () => {
+        const adv = _readAdvancedFields(root, prefix);
+        if (!adv.ok) { setStatus(adv.error, 'var(--error)'); return; }
+
+        const common = {
+            base_url: g('url')?.value?.trim(),
+            model: g('model')?.value?.trim() || '',
+            is_local: g('local')?.checked || false,
+            use_as_fallback: g('fallback')?.checked ?? true,
+            disable_thinking: adv.disable_thinking,
+            extra_body: adv.extra_body,
         };
-        if (key) body.api_key = key;
+        const apiKey = g('key')?.value?.trim();
+        if (apiKey) common.api_key = apiKey;
 
-        // Gen params + thinking-control (shared Advanced fields)
-        const adv = _readAdvancedFields(wizard, 'wizard');
-        if (!adv.ok) { status.textContent = adv.error; status.style.color = 'var(--error)'; return; }
+        if (key) {
+            // Edit → PUT
+            common.generation_params = adv.generation_params;
+            try {
+                await updateProvider(key, common);
+                showToast('Provider updated', 'success');
+                ctx.refreshTab();
+            } catch (e) { showToast('Failed to save', 'error'); }
+            return;
+        }
+
+        // Add → POST
+        const name = g('name')?.value?.trim();
+        if (!name) { setStatus('Name required', 'var(--error)'); return; }
+        if (!common.base_url && selectedTemplate !== 'anthropic') { setStatus('URL required', 'var(--error)'); return; }
+
+        const body = { ...common, name, display_name: name, template: selectedTemplate };
         if (Object.keys(adv.generation_params).length) body.generation_params = adv.generation_params;
-        body.disable_thinking = adv.disable_thinking;
-        if (adv.extra_body) body.extra_body = adv.extra_body;
+        if (selectedPreset && presets[selectedPreset]?.config_hints) Object.assign(body, presets[selectedPreset].config_hints);
+        if (selectedPreset && presets[selectedPreset]?.api_key_env) body.api_key_env = presets[selectedPreset].api_key_env;
+        if (selectedPreset && presets[selectedPreset]?.auto_discover_models) body.auto_discover_models = true;
 
-        // Config hints from preset
-        if (selectedPreset && presets[selectedPreset]?.config_hints) {
-            Object.assign(body, presets[selectedPreset].config_hints);
-        }
-        if (selectedPreset && presets[selectedPreset]?.api_key_env) {
-            body.api_key_env = presets[selectedPreset].api_key_env;
-        }
-        if (selectedPreset && presets[selectedPreset]?.auto_discover_models) {
-            body.auto_discover_models = true;
-        }
-
-        const btn = wizard.querySelector('#wizard-save');
+        const btn = g('save');
         btn.disabled = true;
         btn.textContent = 'Adding...';
-        status.textContent = 'Creating provider...';
-        status.style.color = 'var(--text-muted)';
-
+        setStatus('Creating provider...');
         try {
             const res = await fetch('/api/llm/custom-providers', {
                 method: 'POST',
@@ -526,137 +581,39 @@ async function _showAddWizard(el, ctx) {
             const data = await res.json();
             if (data.status === 'error' || data.detail) throw new Error(data.error || data.detail || 'Failed');
             showToast(`Added: ${data.name}`, 'success');
+            const wizard = root.closest('#add-provider-wizard') || root;
             wizard.style.display = 'none';
             wizard.innerHTML = '';
             ctx.refreshTab();
         } catch (e) {
-            status.textContent = e.message;
-            status.style.color = 'var(--error)';
+            setStatus(e.message, 'var(--error)');
             btn.disabled = false;
             btn.textContent = 'Add';
         }
     });
 }
 
-function _showEditWizard(el, key, config, ctx) {
+async function _showAddWizard(el, ctx) {
     const wizard = el.querySelector('#add-provider-wizard');
     if (!wizard) return;
     wizard.style.display = 'block';
 
+    let presets = {};
+    try {
+        const res = await fetch('/api/llm/presets');
+        const data = await res.json();
+        presets = data.presets || {};
+    } catch (e) { console.warn('Failed to fetch presets:', e); }
+
+    const presetOptions = Object.entries(presets).map(([k, p]) =>
+        `<option value="${k}">${_esc(p.display_name)}</option>`
+    ).join('');
+
     wizard.innerHTML = `
         <div style="padding:14px;background:var(--bg-secondary);border-radius:var(--radius-sm);border:1px solid var(--border);margin-top:12px">
-            <h5 style="margin:0 0 12px">Edit: ${_esc(config.display_name || key)}</h5>
-            <div class="field-row" style="margin-bottom:8px">
-                <label>Base URL</label>
-                <input type="text" id="edit-url" value="${_esc(config.base_url || '')}" style="width:100%">
-            </div>
-            <div class="field-row" style="margin-bottom:8px">
-                <label>API Key</label>
-                <input type="password" id="edit-key" value="" placeholder="Enter to change" style="width:100%">
-            </div>
-            <div class="field-row" style="margin-bottom:8px">
-                <label>Model</label>
-                <input type="text" id="edit-model" value="${_esc(config.model || '')}" style="width:100%">
-            </div>
-            <div class="field-row" style="margin-bottom:8px">
-                <label class="checkbox-inline"><input type="checkbox" id="edit-local" ${config.is_local ? 'checked' : ''}> Local / private server (allowed in private chats)</label>
-            </div>
-            ${_advancedFieldsHtml('edit', {
-                temperature: config.generation_params?.temperature,
-                max_tokens: config.generation_params?.max_tokens,
-                top_p: config.generation_params?.top_p,
-                disable_thinking: (config.disable_thinking ?? config.disable_thinking_qwen),
-                extra_body: config.extra_body,
-            })}
-            <div style="display:flex;gap:8px">
-                <button class="btn btn-primary btn-sm" id="edit-save">Save</button>
-                <button class="btn btn-sm" id="edit-test">Test</button>
-                <button class="btn btn-sm" id="edit-test-think" title="Provoke reasoning, then check whether 'Disable thinking' actually suppresses it (2 quick calls)">🧠 Thinking</button>
-                <button class="btn btn-sm" id="edit-cancel">Cancel</button>
-            </div>
-            <span id="edit-status" class="text-muted" style="margin-left:8px;font-size:0.85em"></span>
+            <h5 style="margin:0 0 12px">Add Provider</h5>
+            ${_providerFormHtml('pf-new', {}, { mode: 'add', presetOptions })}
         </div>
     `;
-
-    wizard.querySelector('#edit-cancel')?.addEventListener('click', () => {
-        wizard.style.display = 'none'; wizard.innerHTML = '';
-    });
-
-    wizard.querySelector('#edit-test')?.addEventListener('click', async () => {
-        const status = wizard.querySelector('#edit-status');
-        status.textContent = 'Testing...';
-        status.style.color = 'var(--text-muted)';
-        try {
-            const formData = {
-                base_url: wizard.querySelector('#edit-url')?.value,
-                model: wizard.querySelector('#edit-model')?.value,
-            };
-            const apiKey = wizard.querySelector('#edit-key')?.value?.trim();
-            if (apiKey) formData.api_key = apiKey;
-            const res = await fetch(`/api/llm/test/${key}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
-            const data = await res.json();
-            if (data.status === 'success') {
-                status.textContent = '\u2713 ' + (data.response?.substring(0, 50) || 'Connected!');
-                status.style.color = 'var(--success)';
-            } else {
-                status.textContent = '\u2717 ' + (data.error || 'Failed');
-                status.style.color = 'var(--error)';
-            }
-        } catch (e) { status.textContent = '\u2717 ' + e.message; status.style.color = 'var(--error)'; }
-    });
-
-    wizard.querySelector('#edit-test-think')?.addEventListener('click', async () => {
-        const status = wizard.querySelector('#edit-status');
-        status.textContent = 'Probing reasoning\u2026 (2 quick calls)';
-        status.style.color = 'var(--text-muted)';
-        try {
-            const adv = _readAdvancedFields(wizard, 'edit');
-            const payload = {
-                base_url: wizard.querySelector('#edit-url')?.value,
-                model: wizard.querySelector('#edit-model')?.value,
-                disable_thinking: adv.ok ? adv.disable_thinking : false,
-                extra_body: adv.ok ? adv.extra_body : '',
-            };
-            const apiKey = wizard.querySelector('#edit-key')?.value?.trim();
-            if (apiKey) payload.api_key = apiKey;
-            const res = await fetch(`/api/llm/test-thinking/${key}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-            const data = await res.json();
-            if (data.status === 'success') {
-                const b = data.baseline, d = data.disabled;
-                const counts = `baseline: ${b.reasoning_chars} think / ${b.prose_chars} prose`
-                    + (data.suppress_active ? ` \u00b7 disabled: ${d.reasoning_chars} think / ${d.prose_chars} prose` : '');
-                status.innerHTML = `${_esc(data.verdict)}<br><small class="text-muted">${counts}</small>`;
-                status.style.color = data.ok === true ? 'var(--success)' : (data.ok === false ? 'var(--error)' : 'var(--text-muted)');
-            } else {
-                let msg = '\u2717 ' + (data.error || 'Failed');
-                if (data.baseline) msg += ` \u2014 baseline reasoned ${data.baseline.reasoning_chars} chars`;
-                status.textContent = msg;
-                status.style.color = 'var(--error)';
-            }
-        } catch (e) { status.textContent = '\u2717 ' + e.message; status.style.color = 'var(--error)'; }
-    });
-
-    wizard.querySelector('#edit-save')?.addEventListener('click', async () => {
-        const updates = {
-            base_url: wizard.querySelector('#edit-url')?.value?.trim(),
-            model: wizard.querySelector('#edit-model')?.value?.trim(),
-            is_local: wizard.querySelector('#edit-local')?.checked || false,
-        };
-        const apiKey = wizard.querySelector('#edit-key')?.value?.trim();
-        if (apiKey) updates.api_key = apiKey;
-
-        // Gen params + thinking-control (shared Advanced fields)
-        const adv = _readAdvancedFields(wizard, 'edit');
-        if (!adv.ok) { showToast(adv.error + ' — not saved', 'error'); return; }
-        updates.generation_params = adv.generation_params;
-        updates.disable_thinking = adv.disable_thinking;
-        updates.extra_body = adv.extra_body;
-
-        try {
-            await updateProvider(key, updates);
-            showToast('Provider updated', 'success');
-            wizard.style.display = 'none'; wizard.innerHTML = '';
-            ctx.refreshTab();
-        } catch (e) { showToast('Failed to save', 'error'); }
-    });
+    _bindProviderForm(wizard, 'pf-new', ctx, null, presets);
 }

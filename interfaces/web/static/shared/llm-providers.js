@@ -106,7 +106,7 @@ export function renderProviderCard(key, config, meta, idx, genProfiles = {}) {
   const useAsFallback = config.use_as_fallback !== false;
 
   return `
-    <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}" draggable="true">
+    <div class="provider-card ${isEnabled ? 'enabled' : 'disabled'}" data-provider="${key}">
       <div class="provider-header" data-provider="${key}">
         <div class="provider-title">
           <span class="provider-drag-handle" title="Drag to reorder">⋮⋮</span>
@@ -492,6 +492,10 @@ export function initProviderDragDrop(listContainer, onReorder) {
     }, { offset: Number.NEGATIVE_INFINITY }).element;
   };
 
+  // Cards are NOT draggable by default — draggable arms only on handle
+  // mousedown and disarms after. A permanently-draggable card makes the
+  // browser treat tiny mouse wobbles as drag attempts, which swallows clicks
+  // (janky expand/collapse on the cards).
   listContainer.querySelectorAll('.provider-card').forEach(card => {
     const handle = card.querySelector('.provider-drag-handle');
 
@@ -500,10 +504,6 @@ export function initProviderDragDrop(listContainer, onReorder) {
     });
 
     card.addEventListener('dragstart', (e) => {
-      if (!e.target.closest('.provider-drag-handle') && e.target !== card) {
-        e.preventDefault();
-        return;
-      }
       dragCard = card;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -511,11 +511,12 @@ export function initProviderDragDrop(listContainer, onReorder) {
 
     card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
-      
+      card.setAttribute('draggable', 'false');
+
       // Collect new order and update numbers
       const cards = [...listContainer.querySelectorAll('.provider-card')];
       const order = cards.map(c => c.dataset.provider);
-      
+
       cards.forEach((c, idx) => {
         const orderEl = c.querySelector('.provider-order');
         if (orderEl) orderEl.textContent = idx + 1;
@@ -538,10 +539,10 @@ export function initProviderDragDrop(listContainer, onReorder) {
 
   });
 
-  // Single mouseup handler on container (not document) — no stacking
+  // Disarm after any mouse release in the list (handle grabbed but not dragged)
   listContainer.addEventListener('mouseup', () => {
     listContainer.querySelectorAll('.provider-card').forEach(c =>
-      c.setAttribute('draggable', 'true')
+      c.setAttribute('draggable', 'false')
     );
   });
 }

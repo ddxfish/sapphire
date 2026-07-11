@@ -5542,21 +5542,31 @@ a.gallery-caption:hover {
     }
 }
 
-/* Custom provider rows */
-.custom-provider-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-}
-.custom-provider-row:hover { background: var(--bg-secondary); }
-.custom-provider-row.disabled { opacity: 0.6; }
-.custom-provider-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-.custom-provider-name { font-weight: 500; }
+/* Custom provider cards — same card/header/accordion structure as core,
+   slimmer header + inline controls (vision, toggle, delete) */
+.custom-card .provider-header { padding: 10px 12px; }
+.custom-card.disabled .provider-title { opacity: 0.6; }
 .custom-provider-detail { color: var(--text-muted); font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .custom-provider-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* Add/Edit provider form (accordion body + Add wizard share .provider-form) */
+.provider-form input:not([type="checkbox"]),
+.provider-form select,
+.provider-form textarea {
+    padding: 6px 10px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--font-md);
+}
+.provider-form input:focus,
+.provider-form select:focus,
+.provider-form textarea:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
 .toggle-sm { width: 32px; height: 18px; }
 .toggle-sm .toggle-slider::before { width: 14px; height: 14px; }
 

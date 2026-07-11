@@ -50,6 +50,11 @@ let unrestricted = false;
 export default {
     init(el) { container = el; },
     async show() {
+        // One-shot deep-link from other views (e.g. sidebar provider ↗ → LLM tab)
+        if (window._settingsTab) {
+            activeTab = window._settingsTab;
+            window._settingsTab = null;
+        }
         await loadData();
         render();
     },
