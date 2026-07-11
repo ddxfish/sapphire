@@ -613,6 +613,16 @@ class PluginLoader:
                 except Exception as e:
                     logger.error(f"[PLUGINS] Failed to load daemon for {name}: {e}", exc_info=True)
 
+        # Subprocess services (capabilities.services) — spawned via
+        # ProcessManager with the plugin's own conda env python when the
+        # manifest declares an environment (core/plugin_envs.py). Deferred
+        # until boot completes, same as daemons.
+        if capabilities.get("services"):
+            if self._scheduler:
+                self._start_services(name)
+            else:
+                logger.info(f"[PLUGINS] Services for {name} deferred until boot completes")
+
         info["loaded"] = True
 
         # Seed default settings if manifest declares schema and no settings file exists
@@ -807,6 +817,9 @@ class PluginLoader:
             if pkg:
                 import sys
                 sys.modules.pop(pkg, None)
+
+        # Stop subprocess services (no core locks held by these)
+        self._stop_services(name)
 
         # Evict plugin's lib/ modules from sys.modules so the next load picks
         # up edited code instead of stale cache. Without this, hook files
@@ -1077,6 +1090,7 @@ class PluginLoader:
         self._scheduler = scheduler
         self._register_pending_schedules()
         self._start_pending_daemons()
+        self._start_pending_services()
         self._reactivate_plugin_providers()
 
     def _register_pending_schedules(self):
@@ -1182,6 +1196,174 @@ class PluginLoader:
                 logger.info(f"[PLUGINS] Started deferred daemon for {name}")
             except Exception as e:
                 logger.error(f"[PLUGINS] Failed to start deferred daemon for {name}: {e}", exc_info=True)
+
+    # ── Plugin services (subprocess servers, optional per-plugin conda env) ──
+
+    def _start_services(self, name: str):
+        """Start declared subprocess services for a loaded plugin.
+
+        If the manifest declares an environment, services only start when
+        that env is built and matches the spec — otherwise they stay dormant
+        and the UI offers a Build button (info['services_blocked'] carries why).
+        """
+        import sys
+        info = self._plugins.get(name)
+        if not info or info.get("service_managers"):
+            return
+        manifest = info["manifest"]
+        services = manifest.get("capabilities", {}).get("services", [])
+        if not services:
+            return
+        plugin_dir = info["path"]
+        env_spec = manifest.get("environment")
+
+        from core.process_manager import ProcessManager, kill_process_on_port
+        python = sys.executable
+        if env_spec:
+            from core import plugin_envs
+            status = plugin_envs.env_status(name, env_spec)
+            if status != "ready":
+                info["services_blocked"] = status
+                logger.warning(f"[PLUGINS] {name}: services not started — env {status}")
+                return
+            python = str(plugin_envs.env_python(name))
+
+        managers = {}
+        settings = self.get_plugin_settings(name)
+        for svc in services:
+            svc_name = svc.get("name", "service")
+            if not svc.get("autostart", True):
+                continue
+            entry = svc.get("entry")
+            if not entry:
+                logger.warning(f"[PLUGINS] Service '{svc_name}' for {name} has no entry")
+                continue
+            full_path = plugin_dir / entry
+            try:
+                full_path.resolve().relative_to(plugin_dir.resolve())
+            except ValueError:
+                logger.error(f"[PLUGINS] Path traversal blocked in service entry: {entry}")
+                continue
+            if not full_path.exists():
+                logger.warning(f"[PLUGINS] Service entry not found: {full_path}")
+                continue
+
+            port = None
+            port_setting = svc.get("port_setting")
+            if port_setting:
+                port = settings.get(port_setting)
+            port = port or svc.get("port")
+            if port:
+                try:
+                    kill_process_on_port(int(port))
+                except Exception:
+                    pass
+
+            def _make_env(plugin=name, service_port=port):
+                env = dict(os.environ)
+                env["SAPPHIRE_PLUGIN"] = plugin
+                env["SAPPHIRE_ROOT"] = str(PROJECT_ROOT)
+                if service_port:
+                    env["SAPPHIRE_SERVICE_PORT"] = str(service_port)
+                try:
+                    env["SAPPHIRE_PLUGIN_SETTINGS"] = json.dumps(self.get_plugin_settings(plugin))
+                except Exception:
+                    pass
+                return env
+
+            pm = ProcessManager(
+                script_path=full_path,
+                log_name=f"{name}-{svc_name}",
+                base_dir=PROJECT_ROOT,
+                env_callback=_make_env,
+                python_exe=python,
+            )
+            if pm.start():
+                if svc.get("restart", True):
+                    pm.monitor_and_restart(check_interval=10)
+                managers[svc_name] = pm
+                port_note = f" (port {port})" if port else ""
+                logger.info(f"[PLUGINS] Started service '{svc_name}' for {name}{port_note}")
+
+        if managers:
+            info["service_managers"] = managers
+            info.pop("services_blocked", None)
+
+    def _stop_services(self, name: str):
+        """Stop all subprocess services for a plugin."""
+        info = self._plugins.get(name)
+        if not info:
+            return
+        managers = info.pop("service_managers", None) or {}
+        for svc_name, pm in managers.items():
+            try:
+                pm.stop()
+                logger.info(f"[PLUGINS] Stopped service '{svc_name}' for {name}")
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Failed to stop service '{svc_name}' for {name}: {e}")
+
+    def _start_pending_services(self):
+        """Start services for plugins loaded before boot completed (mirrors daemons)."""
+        with self._lock:
+            snapshot = list(self._plugins.keys())
+        for name in snapshot:
+            info = self._plugins.get(name)
+            if not info or not info.get("loaded") or info.get("service_managers"):
+                continue
+            if not info["manifest"].get("capabilities", {}).get("services"):
+                continue
+            try:
+                self._start_services(name)
+            except Exception as e:
+                logger.error(f"[PLUGINS] Failed to start deferred services for {name}: {e}", exc_info=True)
+
+    def stop_all_services(self):
+        """Stop all plugin service subprocesses. Called at shutdown alongside daemons."""
+        with self._lock:
+            names = [n for n, info in self._plugins.items() if info.get("service_managers")]
+        for n in names:
+            self._stop_services(n)
+
+    def get_env_status(self, name: str) -> dict:
+        """Env + services summary for the UI. required=False when the manifest
+        declares no environment section."""
+        info = self._plugins.get(name)
+        if not info:
+            return {"required": False}
+        manifest = info.get("manifest", {})
+        env_spec = manifest.get("environment")
+        services = manifest.get("capabilities", {}).get("services", [])
+        result = {"required": bool(env_spec), "has_services": bool(services)}
+        if env_spec:
+            from core import plugin_envs
+            result["state"] = plugin_envs.env_status(name, env_spec)
+            result["env_name"] = plugin_envs.env_name(name)
+            b = plugin_envs.build_state(name)
+            if b:
+                result["build"] = {"state": b.get("state"), "step": b.get("step"),
+                                   "error": b.get("error")}
+        if services:
+            managers = info.get("service_managers") or {}
+            result["services"] = [{
+                "name": s.get("name", "service"),
+                "running": bool(managers.get(s.get("name", "service"))
+                                and managers[s.get("name", "service")].is_running()),
+            } for s in services]
+            if info.get("services_blocked"):
+                result["services_blocked"] = info["services_blocked"]
+        return result
+
+    def get_env_python(self, name: str) -> str:
+        """Interpreter for a plugin: its own env python if declared and built,
+        else Sapphire's. Convenience for plugins running one-shot scripts."""
+        import sys
+        info = self._plugins.get(name)
+        if info and info.get("manifest", {}).get("environment"):
+            from core import plugin_envs
+            p = plugin_envs.env_python(name)
+            if p:
+                return str(p)
+        return sys.executable
 
     def rescan(self):
         """Scan for new plugins and clean up removed ones.
@@ -1523,6 +1705,7 @@ class PluginLoader:
             "verify_tier": info.get("verify_tier", "unsigned"),
             "verified_author": info.get("verified_author"),
             "missing_deps": info.get("missing_deps", []),
+            "env": self.get_env_status(name),
         }
 
     def get_all_plugin_info(self) -> List[dict]:

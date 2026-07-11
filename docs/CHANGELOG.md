@@ -1,3 +1,6 @@
+# 2.8.6 - Plugins and daemons
+- Daemon > Filters changed to dropdowns instead of JSON
+- Plugins now have subprocess officially, and plugins can make their own conda
 # 2.8.5 - Settings > LLM
 - Unified main and secondary models in settings with 1 drag and drop
 - Unified handler and CSS for add/edit, vision checkmark

@@ -952,6 +952,7 @@ class VoiceChatSystem:
             # can block, or it resurrects a child systemd already SIGTERMed
             # (KillMode=control-group) and the unit hangs in stop-sigterm.
             ("TTS server", lambda: self.tts_server_manager and self.tts_server_manager.stop()),
+            ("plugin services", _pl.stop_all_services),
             ("plugin daemons", _pl.stop_all_daemons),
             ("agents", lambda: hasattr(self, 'agent_manager') and self.agent_manager and self.agent_manager.shutdown()),
             ("voice components", self.stop_components),

@@ -270,6 +270,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "sidebar_accordion": manifest.get("capabilities", {}).get("sidebar_accordion"),
                     "missing_deps": info.get("missing_deps", []),
                     "essential": manifest.get("essential", False),
+                    "env": info.get("env"),
                 })
     except Exception:
         pass
@@ -420,19 +421,22 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         except Exception as e:
             logger.warning(f"Live plugin toggle failed for {plugin_name}: {e}")
 
-        # Check for missing deps after toggle-on
+        # Check for missing deps + env status after toggle-on
         missing_deps = []
+        env_info = None
         if new_state:
             try:
                 from core.plugin_loader import plugin_loader
                 p_info = plugin_loader.get_plugin_info(plugin_name)
                 if p_info:
                     missing_deps = p_info.get("missing_deps", [])
+                    env_info = p_info.get("env")
             except Exception:
                 pass
 
         return {"status": "success", "plugin": plugin_name, "enabled": new_state,
-                "reload_required": reload_required, "missing_deps": missing_deps}
+                "reload_required": reload_required, "missing_deps": missing_deps,
+                "env": env_info}
     finally:
         lock.release()
 
@@ -1122,6 +1126,65 @@ async def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
         "output": result.stdout,
         "env": env_label,
     }
+
+
+# ── Per-plugin conda environments (core/plugin_envs.py) ──
+
+@router.post("/api/plugins/{plugin_name}/build-env")
+async def build_plugin_env(plugin_name: str, _=Depends(require_login)):
+    """Build (or rebuild) a plugin's dedicated conda env in the background."""
+    from core.plugin_loader import plugin_loader
+    from core import plugin_envs
+
+    info = plugin_loader.get_plugin_info(plugin_name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    env_spec = info.get("manifest", {}).get("environment")
+    if not env_spec:
+        raise HTTPException(status_code=400, detail=f"{plugin_name} declares no environment")
+    if not plugin_envs.find_conda():
+        raise HTTPException(status_code=400, detail=(
+            "conda not found — install Miniconda to build plugin environments"))
+
+    def _on_done(ok: bool):
+        if ok:
+            try:
+                plugin_loader.reload_plugin(plugin_name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Env built but reload failed for {plugin_name}: {e}")
+
+    if not plugin_envs.start_build(plugin_name, env_spec, on_done=_on_done):
+        raise HTTPException(status_code=409, detail="Build already in progress")
+    return {"status": "building", "env_name": plugin_envs.env_name(plugin_name)}
+
+
+@router.get("/api/plugins/{plugin_name}/env-status")
+async def plugin_env_status(plugin_name: str, _=Depends(require_login)):
+    """Env build/readiness status + build log tail (polled by the UI)."""
+    from core.plugin_loader import plugin_loader
+    from core import plugin_envs
+
+    if not plugin_loader.get_plugin_info(plugin_name):
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    status = plugin_loader.get_env_status(plugin_name)
+    status["log_tail"] = plugin_envs.tail_log(plugin_name, lines=15)
+    return status
+
+
+@router.delete("/api/plugins/{plugin_name}/env")
+async def remove_plugin_env(plugin_name: str, _=Depends(require_login)):
+    """Remove a plugin's conda env (its services stop; rebuild any time)."""
+    from core.plugin_loader import plugin_loader
+    from core import plugin_envs
+
+    if not plugin_loader.get_plugin_info(plugin_name):
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    if plugin_envs.build_state(plugin_name).get("state") == "building":
+        raise HTTPException(status_code=409, detail="Build in progress")
+    plugin_loader._stop_services(plugin_name)
+    if not plugin_envs.remove_env(plugin_name):
+        raise HTTPException(status_code=500, detail="conda env remove failed")
+    return {"status": "ok"}
 
 
 def _require_known_plugin(plugin_name: str):

@@ -21,6 +21,7 @@ Every plugin needs a `plugin.json` in its root folder.
 | `managed_hide` | bool | No | false | Hide plugin entirely in managed/resale mode |
 | `settingsUI` | string\|null | No | `"auto"` | Controls settings panel: `"auto"` (from manifest schema), `"plugin"` (custom JS), `"core"` (hardcoded), or `null` (none) |
 | `pip_dependencies` | string[] | No | `[]` | Python packages required (pip specifiers, e.g. `["telethon>=1.34", "requests"]`). Checked before loading; missing deps shown in UI with install option |
+| `environment` | object | No | — | Dedicated conda env for heavy deps that can't live in Sapphire's env: `{python, pip, conda, channels}`. Built on user consent as `sapphire-plugin-<name>`; pairs with `capabilities.services`. See [Subprocesses](subprocesses.md) |
 | `capabilities` | object | No | — | What the plugin provides (see below) |
 
 ### Plugin display title — set `short_display_name`, don't dump prose
@@ -47,6 +48,7 @@ The `capabilities` object declares what the plugin provides:
     "providers": { ... },
     "web": { ... },
     "daemon": { ... },
+    "services": [ ... ],
     "app": { ... },
     "themes": [ ... ],
     "widgets": [ ... ],
@@ -67,6 +69,7 @@ Each capability is documented in its own guide:
 - [Themes](THEMES.md)
 - [Widgets](widgets.md) — dashboard action-panel cards (rendered in Settings → Dashboard)
 - [Daemons](daemons.md) — long-running background threads with event sources (e.g. Telegram, Discord listeners)
+- [Services & Subprocesses](subprocesses.md) — declared subprocess servers, run by core (optionally in the plugin's own conda env)
 - Sidebar Accordion — inject custom HTML panels into the chat sidebar
 
 ### Scopes

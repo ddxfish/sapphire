@@ -107,7 +107,7 @@ class ProcessManager:
     """A generic class to manage the lifecycle of an external script process."""
     
     def __init__(self, script_path: Path, log_name: str, base_dir: Path, command_args: list = None,
-                 env_callback=None):
+                 env_callback=None, python_exe=None):
         """
         Initializes the ProcessManager.
         Args:
@@ -123,20 +123,27 @@ class ProcessManager:
                 (current default — unchanged behavior). Added 2026-04-21 to
                 replace the ProcessManager.start() monkey-patch pattern used by
                 qwen3-tts / f5-tts plugins.
+            python_exe (str|Path, optional): Interpreter used for .py scripts.
+                Defaults to sys.executable (the main Sapphire env). Plugin
+                services with their own conda env pass that env's python here.
         """
         self.process = None
         self.script_path = script_path
         self.log_file = base_dir / "user" / "logs" / f"{log_name}.log"
         self.command = command_args or [str(self.script_path)]
+        self._explicit_command = command_args is not None
+        self._python_exe = str(python_exe) if python_exe else None
         self._monitor_thread = None
         self._monitor_running = False
         self._env_callback = env_callback
 
     def start(self):
         """Starts the external script."""
-        # Prepend python interpreter for .py files
-        if self.script_path.suffix == '.py':
-            self.command = [sys.executable, str(self.script_path)]
+        # Prepend python interpreter for .py files (unless the caller gave an
+        # explicit command — historically this branch silently clobbered
+        # command_args for .py scripts).
+        if self.script_path.suffix == '.py' and not self._explicit_command:
+            self.command = [self._python_exe or sys.executable, str(self.script_path)]
         elif not self.script_path.exists():
             logger.error(f"Manager Error: Script not found at {self.script_path}")
             return False

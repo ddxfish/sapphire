@@ -1,6 +1,7 @@
 // settings-tabs/plugins.js - Plugin Manager
 import * as ui from '../../ui.js';
 import { showDangerConfirm } from '../../shared/danger-confirm.js';
+import { setupModalClose } from '../../shared/modal.js';
 import pluginsAPI from '../../shared/plugins-api.js';
 
 // Infrastructure plugins hidden from toggle list.
@@ -219,6 +220,9 @@ function _updateTileInPlace(el, ctx, name, locked) {
     } else if (!deps.length && existingWarn) {
         existingWarn.remove();
     }
+
+    // Env strip — sync against cached.env.
+    _syncEnvStrip(el, cached);
 }
 
 function _updateFilterCountsInPlace(el, plugins) {
@@ -357,8 +361,154 @@ function _renderCard(p, locked) {
                 <span class="pm-deps-text">Missing: ${_esc(p.missing_deps.join(', '))}</span>
                 <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(p.name)}">Install</button>
             </div>` : ''}
+            ${_envStripHTML(p)}
         </div>
     `;
+}
+
+// ── Per-plugin conda environments ────────────────────────────────────────────
+// Plugins with an "environment" manifest section run their services in a
+// dedicated conda env (sapphire-plugin-<name>). Backend: core/plugin_envs.py.
+
+function _envStripHTML(p) {
+    const env = p.env;
+    if (!env?.required || env.state === 'ready') return '';
+    let text, btn = '';
+    if (env.state === 'building') {
+        text = 'Building environment...';
+    } else if (env.state === 'stale') {
+        text = 'Environment outdated';
+        btn = 'Rebuild';
+    } else if (env.state === 'error') {
+        text = 'Environment build failed';
+        btn = 'Retry';
+    } else if (env.state === 'no-conda') {
+        text = 'Conda not found — needed for this plugin';
+    } else {
+        text = 'Needs its own Python environment';
+        btn = 'Build';
+    }
+    return `
+        <div class="pm-deps-warning pm-env-strip" data-plugin-env="${_esc(p.name)}">
+            <span class="pm-deps-icon">&#x1F4E6;</span>
+            <span class="pm-deps-text">${_esc(text)}</span>
+            ${btn ? `<button class="btn btn-sm pm-env-build-btn" data-env-plugin="${_esc(p.name)}">${btn}</button>` : ''}
+        </div>`;
+}
+
+function _syncEnvStrip(el, p) {
+    if (!p) return;
+    const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(p.name)}"]`);
+    if (!card) return;
+    card.querySelector('.pm-env-strip')?.remove();
+    const html = _envStripHTML(p);
+    if (html) {
+        const tmpl = document.createElement('div');
+        tmpl.innerHTML = html.trim();
+        card.appendChild(tmpl.firstElementChild);
+    }
+}
+
+// Simple Yes/No — deliberately lighter than the typed I-UNDERSTAND gate,
+// which the user has already cleared by this point if the plugin needed it.
+function _confirmEnvBuild(title, env) {
+    return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+            <div class="modal-base" style="max-width:420px">
+                <div class="modal-header">
+                    <h3>Build environment?</h3>
+                    <button class="close-btn modal-x">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p style="margin:0;color:var(--text-secondary);line-height:1.5">
+                        ${_esc(title)} needs its own Python environment
+                        (<code>${_esc(env.env_name || '')}</code>).
+                        Building can download packages — possibly gigabytes — and take a while.
+                        You can also build later from the plugin card.
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary env-no">Not now</button>
+                    <button class="btn btn-primary env-yes">Build now</button>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        requestAnimationFrame(() => overlay.classList.add('active'));
+        let done = false;
+        const close = val => {
+            if (done) return;
+            done = true;
+            overlay.classList.remove('active');
+            setTimeout(() => overlay.remove(), 300);
+            resolve(val);
+        };
+        setupModalClose(overlay, () => close(false));
+        overlay.querySelector('.modal-x').addEventListener('click', () => close(false));
+        overlay.querySelector('.env-no').addEventListener('click', () => close(false));
+        overlay.querySelector('.env-yes').addEventListener('click', () => close(true));
+    });
+}
+
+async function _startEnvBuild(el, ctx, name) {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    try {
+        const res = await fetch(`/api/plugins/${name}/build-env`, {
+            method: 'POST', headers: { 'X-CSRF-Token': csrf },
+        });
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.detail || res.status);
+        }
+        const cached = ctx.pluginList?.find(p => p.name === name);
+        if (cached?.env) cached.env.state = 'building';
+        _syncEnvStrip(el, cached);
+        ui.showToast('Environment build started — watch the plugin card for progress', 'info');
+        _pollEnvBuild(el, ctx, name);
+    } catch (err) {
+        ui.showToast(`Env build failed to start: ${err.message}`, 'error', 5000);
+    }
+}
+
+const envPolling = new Set();
+
+async function _pollEnvBuild(el, ctx, name) {
+    if (envPolling.has(name)) return;
+    envPolling.add(name);
+    try {
+        for (let i = 0; i < 1800; i++) {   // 2s interval, ~1h cap
+            await new Promise(r => setTimeout(r, 2000));
+            let status;
+            try {
+                const res = await fetch(`/api/plugins/${name}/env-status`);
+                if (!res.ok) continue;
+                status = await res.json();
+            } catch { continue; }
+
+            const cached = ctx.pluginList?.find(p => p.name === name);
+            if (cached) cached.env = status;
+
+            if (status.state === 'building') {
+                const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
+                const text = card?.querySelector('.pm-env-strip .pm-deps-text');
+                if (text) text.textContent = `Building environment - ${status.build?.step || 'working'}...`;
+                continue;
+            }
+
+            _syncEnvStrip(el, cached);
+            if (status.state === 'ready') {
+                ui.showToast(`Environment ready for ${name} — plugin reloaded`, 'success');
+                await ctx.refreshTab();
+            } else {
+                const lastLine = (status.log_tail || []).filter(Boolean).pop() || 'see user/logs';
+                ui.showToast(`Environment build failed for ${name}: ${lastLine}`, 'error', 0);
+            }
+            return;
+        }
+    } finally {
+        envPolling.delete(name);
+    }
 }
 
 export default {
@@ -705,6 +855,13 @@ export default {
 
         // Store ctx for delegated handlers
         el._pluginCtx = ctx;
+
+        // Resume progress polling for any env build already in flight
+        // (envPolling guards against duplicates across re-renders).
+        (ctx.pluginList || []).forEach(p => {
+            if (p.env?.state === 'building') _pollEnvBuild(el, ctx, p.name);
+        });
+
         if (el._pluginsBound) return;
         el._pluginsBound = true;
 
@@ -871,6 +1028,15 @@ export default {
             }
         });
 
+        // ── Build plugin env (delegated) ──
+        el.addEventListener('click', async e => {
+            const btn = e.target.closest('.pm-env-build-btn');
+            if (!btn) return;
+            btn.disabled = true;
+            await _startEnvBuild(el, el._pluginCtx, btn.dataset.envPlugin);
+            btn.disabled = false;
+        });
+
         // ── Toggle (delegated) ──
         el.addEventListener('change', async e => {
             const name = e.target.dataset.pluginToggle;
@@ -984,6 +1150,16 @@ export default {
                 }
 
                 ui.showToast(`${cached?.title || name} ${data.enabled ? 'enabled' : 'disabled'}`, 'success');
+
+                // Env-needing plugin just enabled — offer to build (simple
+                // Yes/No; the heavy typed gates have already run above).
+                if (data.enabled && data.env?.required
+                    && ['missing', 'stale', 'error'].includes(data.env.state)) {
+                    if (cached) cached.env = data.env;
+                    _syncEnvStrip(el, cached);
+                    const wantBuild = await _confirmEnvBuild(cached?.title || name, data.env);
+                    if (wantBuild) await _startEnvBuild(el, ctx, name);
+                }
             } catch (err) {
                 e.target.checked = !e.target.checked;
                 const msg = (err.message || 'Unknown error').replace(/^Plugin blocked:\s*/, '');
