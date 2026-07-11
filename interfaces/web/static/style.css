@@ -2383,6 +2383,43 @@ div.hb-response-summary {
 .sched-acc-inner { overflow: hidden; padding: 0 14px; }
 .sched-accordion[open] .sched-acc-inner { padding: 10px 14px 14px; overflow: visible; }
 
+/* Event filter rows (daemon/webhook editor) — key dropdown + value + ✕.
+   .custom wraps the free-text key/value pair onto a second line via flex order. */
+.filter-rows { display: flex; flex-direction: column; gap: 6px; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.filter-row input, .filter-row select {
+    padding: 6px 10px;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--font-sm);
+    min-width: 0;
+}
+.filter-row input:focus, .filter-row select:focus {
+    outline: none;
+    border-color: var(--input-focus-border);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.filter-row .filter-key { order: 1; flex: 1 1 40%; }
+.filter-row .filter-custom-key { display: none; }
+.filter-row .filter-val { order: 2; flex: 1 1 40%; }
+.filter-row .filter-del {
+    order: 3;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 6px;
+}
+.filter-row .filter-del:hover { color: var(--error); }
+.filter-row.custom .filter-key { flex: 1 1 calc(100% - 40px); }
+.filter-row.custom .filter-del { order: 2; }
+.filter-row.custom .filter-custom-key { display: block; order: 3; flex: 1 1 40%; }
+.filter-row.custom .filter-val { order: 4; }
+.filter-row.nokeys .filter-custom-key { display: block; order: 1; flex: 1 1 40%; }
+
 /* Schedule picker (Daily/Weekly/Interval/Cron) */
 .sched-picker-tabs {
     display: flex;

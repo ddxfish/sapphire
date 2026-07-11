@@ -19,7 +19,6 @@ export function renderEventTrigger(t, opts = {}) {
         const path = triggerConfig.path || '';
         const method = triggerConfig.method || 'POST';
         const secret = triggerConfig.secret || '';
-        const eventFilter = triggerConfig.filter ? JSON.stringify(triggerConfig.filter) : '';
         return `
             <div class="sched-section-title" style="margin-top:16px">\uD83D\uDD17 Webhook</div>
             <div class="sched-field">
@@ -48,22 +47,19 @@ export function renderEventTrigger(t, opts = {}) {
                 <label><input type="checkbox" id="ed-wh-from-payload" ${triggerConfig.chat_from_payload ? 'checked' : ''}> Webhook specifies chat name <span class="help-tip" data-tip="The POST body names the chat to reply in (JSON field chat_target), and THAT chat answers with its own persona, tools, and memory. The AI and Chat settings below are then ignored. Use for round-trips where the caller picks the chat (e.g. Nova).">?</span></label>
             </div>
             <details class="sched-accordion" style="margin-top:8px">
-                <summary class="sched-acc-header">Filter <span class="sched-preview" id="ed-wh-filter-preview">${eventFilter ? 'active' : ''}</span></summary>
+                <summary class="sched-acc-header">Filter <span class="sched-preview" id="ed-wh-filter-preview"></span></summary>
                 <div class="sched-acc-body"><div class="sched-acc-inner">
                     <div class="text-muted" style="font-size:var(--font-xs);margin-bottom:8px">
-                        Only fire when incoming JSON payload matches these fields. Supports _not and _contains suffixes.
+                        Payload must match every row &middot; comma = any &middot; keys take <code>_not</code> / <code>_contains</code>
                     </div>
-                    <div class="sched-field">
-                        <label>Filter JSON <span class="help-tip" data-tip="Only webhook payloads matching these fields will trigger this task. Leave empty to accept all payloads.">?</span></label>
-                        <input type="text" id="ed-webhook-filter" value="${_esc(eventFilter)}" placeholder='{"event": "push"}'>
-                    </div>
+                    <div id="ed-wh-filter-rows" class="filter-rows"></div>
+                    <button type="button" class="btn-sm" id="ed-wh-filter-add" style="margin-top:6px">+ Add filter</button>
                 </div></div>
             </details>`;
     }
 
     // Daemon type — event source from plugins
     const eventSource = triggerConfig.source || '';
-    const eventFilter = triggerConfig.filter ? JSON.stringify(triggerConfig.filter) : '';
     return `
         <div class="sched-field" style="margin-top:16px">
             <label>Daemon Source <span class="help-tip" data-tip="The event type to listen for. Available sources come from loaded daemon plugins.">?</span></label>
@@ -77,15 +73,13 @@ export function renderEventTrigger(t, opts = {}) {
         </div>
         <div id="ed-task-fields"></div>
         <details class="sched-accordion" style="margin-top:8px">
-            <summary class="sched-acc-header">Filter <span class="sched-preview" id="ed-filter-preview">${eventFilter ? 'active' : ''}</span></summary>
+            <summary class="sched-acc-header">Filter <span class="sched-preview" id="ed-filter-preview"></span></summary>
             <div class="sched-acc-body"><div class="sched-acc-inner">
-                <div id="ed-filter-hints" class="text-muted" style="font-size:var(--font-xs);margin-bottom:8px">
-                    Select a daemon source to see available filter keys.
+                <div class="text-muted" style="font-size:var(--font-xs);margin-bottom:8px">
+                    Event must match every row &middot; comma = any &middot; keys take <code>_not</code> / <code>_contains</code>
                 </div>
-                <div class="sched-field">
-                    <label>Filter JSON <span class="help-tip" data-tip="Only events matching these fields will trigger this task. Leave empty to receive all events from this source.">?</span></label>
-                    <input type="text" id="ed-event-filter" value="${_esc(eventFilter)}" placeholder='{"channel": "general"}'>
-                </div>
+                <div id="ed-filter-rows" class="filter-rows"></div>
+                <button type="button" class="btn-sm" id="ed-filter-add" style="margin-top:6px">+ Add filter</button>
             </div></div>
         </details>`;
 }
@@ -99,12 +93,9 @@ export function wireEventTrigger(modal, opts = {}) {
     const { type, triggerConfig } = opts;
 
     if (type === 'webhook') {
-        // Update webhook filter preview chip
-        modal.querySelector('#ed-webhook-filter')?.addEventListener('input', () => {
-            const preview = modal.querySelector('#ed-wh-filter-preview');
-            const val = modal.querySelector('#ed-webhook-filter')?.value?.trim();
-            if (preview) preview.textContent = val ? 'active' : '';
-        });
+        // Filter rows — webhook payloads are arbitrary, so keys are free text (no dropdown)
+        _wireFilterRows(modal, '#ed-wh-filter-rows', '#ed-wh-filter-add', '#ed-wh-filter-preview');
+        _buildFilterRows(modal, '#ed-wh-filter-rows', triggerConfig?.filter, null);
 
         // Generate a random 32-char alphanumeric secret on demand.
         modal.querySelector('#ed-wh-gen-secret')?.addEventListener('click', () => {
@@ -142,22 +133,17 @@ export function wireEventTrigger(modal, opts = {}) {
         if (tfContainer && triggerConfig) {
             tfContainer.dataset.triggerConfig = JSON.stringify(triggerConfig);
         }
-        _loadEventSources(modal);
+        _loadEventSources(modal, triggerConfig?.filter);
+        _wireFilterRows(modal, '#ed-filter-rows', '#ed-filter-add', '#ed-filter-preview');
 
-        // Update filter hints + task fields when source changes
-        modal.querySelector('#ed-event-source')?.addEventListener('change', () => {
-            _updateFilterHints(modal);
+        // Rebuild filter key dropdowns + task fields when source changes
+        modal.querySelector('#ed-event-source')?.addEventListener('change', e => {
+            const current = _readFilterRows(modal, '#ed-filter-rows');
+            _buildFilterRows(modal, '#ed-filter-rows', current, _fieldsFor(e.target.value));
             _renderTaskFields(modal);
             _updateRealtimeNote(modal);
         });
         _updateRealtimeNote(modal);   // reflect on open (edit case)
-
-        // Update filter preview chip
-        modal.querySelector('#ed-event-filter')?.addEventListener('input', () => {
-            const preview = modal.querySelector('#ed-filter-preview');
-            const val = modal.querySelector('#ed-event-filter')?.value?.trim();
-            if (preview) preview.textContent = val ? 'active' : '';
-        });
     }
 }
 
@@ -170,19 +156,14 @@ export function readEventTrigger(modal) {
     const webhookPath = modal.querySelector('#ed-webhook-path');
 
     if (webhookPath) {
-        const whFilterStr = modal.querySelector('#ed-webhook-filter')?.value?.trim();
-        let whFilter = null;
-        if (whFilterStr) {
-            try { whFilter = JSON.parse(whFilterStr); }
-            catch { alert('Invalid JSON in webhook filter field'); return null; }
-        }
+        const whFilter = _readFilterRows(modal, '#ed-wh-filter-rows');
         const secret = modal.querySelector('#ed-webhook-secret')?.value?.trim() || undefined;
         return {
             trigger_config: {
                 path: webhookPath.value.trim(),
                 method: modal.querySelector('#ed-webhook-method')?.value || 'POST',
                 ...(secret && { secret }),
-                ...(whFilter && { filter: whFilter }),
+                ...(Object.keys(whFilter).length && { filter: whFilter }),
                 ...(modal.querySelector('#ed-wh-from-payload')?.checked && { chat_from_payload: true }),
             },
             schedule: '0 0 31 2 *', // never fires via cron (Feb 31)
@@ -193,12 +174,8 @@ export function readEventTrigger(modal) {
     }
 
     // Daemon type
-    const filterStr = modal.querySelector('#ed-event-filter')?.value?.trim();
-    let filter = null;
-    if (filterStr) {
-        try { filter = JSON.parse(filterStr); }
-        catch { alert('Invalid JSON in filter field'); return null; }
-    }
+    const rows = _readFilterRows(modal, '#ed-filter-rows');
+    const filter = Object.keys(rows).length ? rows : null;
 
     // Collect task_fields values
     const taskFieldValues = {};
@@ -224,7 +201,7 @@ export function readEventTrigger(modal) {
 
 // ── Private helpers ──
 
-async function _loadEventSources(modal) {
+async function _loadEventSources(modal, initialFilter) {
     const select = modal.querySelector('#ed-event-source');
     if (!select) return;
 
@@ -238,6 +215,7 @@ async function _loadEventSources(modal) {
 
         if (_sourcesCache.length === 0) {
             select.innerHTML += '<option value="" disabled>No daemon plugins loaded</option>';
+            _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
             return;
         }
 
@@ -264,35 +242,107 @@ async function _loadEventSources(modal) {
         const current = select.dataset.currentValue;
         if (current) select.value = current;
 
-        // Show hints + task fields for pre-selected source
-        _updateFilterHints(modal);
+        // Build filter rows + task fields for pre-selected source
+        _buildFilterRows(modal, '#ed-filter-rows', initialFilter, _fieldsFor(select.value));
         _renderTaskFields(modal);
     } catch {
         select.innerHTML = '<option value="">Select event source...</option><option value="" disabled>Could not load sources</option>';
+        // Still show the saved filter so an edit+save can't silently wipe it
+        _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
     }
 }
 
-function _updateFilterHints(modal) {
-    const hintsEl = modal.querySelector('#ed-filter-hints');
-    if (!hintsEl) return;
+// ── Filter rows (shared by daemon + webhook) ──
+// The backend matcher (scheduler.filter_matches) is a flat {key: value} dict —
+// string-compared, comma = OR-allowlist, `_not`/`_contains` key suffixes.
+// Rows express all of it; no JSON needed.
 
-    const sourceName = modal.querySelector('#ed-event-source')?.value;
-    if (!sourceName) {
-        hintsEl.textContent = 'Select a daemon source to see available filter keys.';
-        return;
+function _fieldsFor(sourceName) {
+    const fields = _sourcesCache.find(s => s.name === sourceName)?.filter_fields;
+    return fields && fields.length ? fields : null;
+}
+
+function _filterRowEl(key, val, fields) {
+    const row = document.createElement('div');
+    row.className = 'filter-row';
+    const valInput = `<input type="text" class="filter-val" placeholder="value" value="${_esc(String(val ?? ''))}">`;
+    const delBtn = `<button type="button" class="filter-del" title="Remove">✕</button>`;
+
+    if (!fields) {
+        // No declared keys (webhooks, undeclared sources): free-text key
+        row.classList.add('nokeys');
+        row.innerHTML = `<input type="text" class="filter-custom-key" placeholder="key" value="${_esc(key)}">${valInput}${delBtn}`;
+        return row;
     }
 
-    const source = _sourcesCache.find(s => s.name === sourceName);
-    const fields = source?.filter_fields;
+    const isCustom = key !== '' && !fields.some(f => f.key === key);
+    const opts = fields.map(f =>
+        `<option value="${_esc(f.key)}" ${f.key === key ? 'selected' : ''}>${_esc(f.label || f.key)}</option>`).join('');
+    row.innerHTML = `
+        <select class="filter-key">
+            <option value="">Field…</option>
+            ${opts}
+            <option value="__custom__" ${isCustom ? 'selected' : ''}>Custom…</option>
+        </select>
+        ${delBtn}
+        <input type="text" class="filter-custom-key" placeholder="key" value="${isCustom ? _esc(key) : ''}">
+        ${valInput}`;
+    if (isCustom) row.classList.add('custom');
+    return row;
+}
 
-    if (!fields || fields.length === 0) {
-        hintsEl.textContent = 'This source does not declare filter keys. Check the plugin docs for available fields.';
-        return;
-    }
+function _buildFilterRows(modal, containerSel, filter, fields) {
+    const container = modal.querySelector(containerSel);
+    if (!container) return;
+    container._fields = fields;   // for + Add filter
+    container.innerHTML = '';
+    const entries = Object.entries(filter || {});
+    if (!entries.length) entries.push(['', '']);
+    for (const [k, v] of entries) container.appendChild(_filterRowEl(k, v, fields));
+    _updateFilterPreview(modal, containerSel);
+}
 
-    hintsEl.innerHTML = `<strong>Filter keys:</strong> ${fields.map(f =>
-        `<code>${f.key}</code> ${f.label || ''}`
-    ).join(' &middot; ')}`;
+function _readFilterRows(modal, containerSel) {
+    const filter = {};
+    modal.querySelectorAll(`${containerSel} .filter-row`).forEach(row => {
+        const sel = row.querySelector('.filter-key');
+        const key = (sel && sel.value && sel.value !== '__custom__')
+            ? sel.value
+            : row.querySelector('.filter-custom-key')?.value?.trim();
+        const val = row.querySelector('.filter-val')?.value?.trim();
+        if (key && val) filter[key] = val;
+    });
+    return filter;
+}
+
+function _updateFilterPreview(modal, containerSel) {
+    const container = modal.querySelector(containerSel);
+    const preview = modal.querySelector(container?.dataset.preview || '');
+    if (!preview) return;
+    const n = Object.keys(_readFilterRows(modal, containerSel)).length;
+    preview.textContent = n ? `${n} active` : '';
+}
+
+function _wireFilterRows(modal, containerSel, addBtnSel, previewSel) {
+    const container = modal.querySelector(containerSel);
+    if (!container) return;
+    container.dataset.preview = previewSel;
+
+    modal.querySelector(addBtnSel)?.addEventListener('click', () => {
+        container.appendChild(_filterRowEl('', '', container._fields || null));
+    });
+    container.addEventListener('change', e => {
+        if (e.target.classList.contains('filter-key'))
+            e.target.closest('.filter-row')?.classList.toggle('custom', e.target.value === '__custom__');
+        _updateFilterPreview(modal, containerSel);
+    });
+    container.addEventListener('input', () => _updateFilterPreview(modal, containerSel));
+    container.addEventListener('click', e => {
+        if (e.target.classList.contains('filter-del')) {
+            e.target.closest('.filter-row')?.remove();
+            _updateFilterPreview(modal, containerSel);
+        }
+    });
 }
 
 function _updateRealtimeNote(modal) {
