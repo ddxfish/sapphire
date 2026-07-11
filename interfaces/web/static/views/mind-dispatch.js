@@ -17,6 +17,7 @@ const CLASSIC = {
     memories: `./memories.js${_v}`,
     people: `./people.js${_v}`,
     knowledge: `./knowledge.js${_v}`,
+    goals: `./goals.js${_v}`,
     // 'self' has no classic equivalent — L0 is palace-only (handled in show()).
 };
 const PALACE = {
@@ -24,6 +25,7 @@ const PALACE = {
     memories: `./palace/memories.js${_v}`,
     people: `./palace/entities.js${_v}`,
     knowledge: `./palace/knowledge.js${_v}`,
+    goals: `./palace/goals.js${_v}`,
 };
 
 let container = null;

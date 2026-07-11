@@ -9307,6 +9307,26 @@ a.gallery-caption:hover {
 }
 .palace-author-pill { font-size: 12px; opacity: 0.8; cursor: help; }
 
+/* Goals (L4) — cards with subtasks + journal */
+.palace-goal-title { font-weight: 600; color: var(--text, #e6e6f0); }
+.palace-goal-prio { font-size: 11px; color: var(--text-muted, #999); }
+.palace-goal-perm { cursor: help; }
+.palace-goal-done { opacity: 0.6; }
+.palace-goal-desc { color: var(--text-muted, #aaa); font-size: 12px; margin: 4px 0 6px; }
+.palace-goal-subs { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
+.palace-goal-sub { display: flex; gap: 7px; align-items: center; font-size: 13px;
+    color: var(--text, #ddd); cursor: pointer; }
+.palace-sub-done { text-decoration: line-through; color: var(--text-muted, #888); }
+.palace-goal-journal { margin: 6px 0; font-size: 12px; }
+.palace-goal-journal summary { color: var(--text-muted, #999); cursor: pointer; }
+.palace-goal-note { color: var(--text-muted, #aaa); padding: 3px 0 0 12px; line-height: 1.4; }
+.palace-goal-noteinput {
+    flex: 1; min-width: 0; background: var(--input-bg, #16172a);
+    color: var(--text, #e6e6f0); border: 1px solid var(--border, #2a2b3e);
+    border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px;
+}
+.palace-goal-noteinput:focus { outline: none; border-color: #c39df5; }
+
 /* Entity short description (tier-1 headline) — the layer-1 line every kind carries */
 .palace-headline-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .palace-headline-row input {
