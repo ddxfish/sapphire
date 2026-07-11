@@ -335,6 +335,7 @@ class FunctionManager:
                     mode_filter = getattr(module, 'MODE_FILTER', None)
                     settings_gate = getattr(module, 'SETTINGS_GATED', None)
                     emoji = getattr(module, 'EMOJI', '')
+                    group = getattr(module, 'GROUP', None)
 
                     if not tools or not executor:
                         logger.warning(f"Module '{module_name}' missing TOOLS or execute()")
@@ -349,6 +350,7 @@ class FunctionManager:
                         'executor': executor,
                         'available_functions': available_functions if available_functions else [t['function']['name'] for t in tools],
                         'emoji': emoji,
+                        'group': group,  # optional display-group (Toolsets UI merges)
                         'get_tools': get_tools_fn,  # settings/library-aware rebuilder, or None
                     }
 
@@ -505,6 +507,7 @@ class FunctionManager:
                         tools = [t for t in tools if t['function']['name'] in available_functions]
 
                     emoji = namespace.get('EMOJI', '')
+                    group = namespace.get('GROUP')
                     mode_filter = namespace.get('MODE_FILTER')
                     settings_gate = namespace.get('SETTINGS_GATED')
 
@@ -539,6 +542,7 @@ class FunctionManager:
                         'executor': executor,
                         'available_functions': available_functions or [t['function']['name'] for t in tools],
                         'emoji': emoji,
+                        'group': group,  # optional display-group (Toolsets UI merges)
                         '_plugin': plugin_name,
                         'get_tools': get_tools_fn,  # settings-aware rebuilder, or None
                     }

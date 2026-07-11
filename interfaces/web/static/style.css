@@ -9292,6 +9292,20 @@ a.gallery-caption:hover {
 .palace-field-bool span { flex: 1; }
 .palace-fields #pal-ent-savefields { margin-top: 8px; }
 
+/* Librarian row (Self dashboard box) + retired chunks */
+.palace-librarian-row {
+    display: flex; align-items: center; gap: 10px; margin-top: 10px;
+    padding-top: 8px; border-top: 1px solid var(--border, #2a2b3e); font-size: 13px;
+}
+.palace-lib-title { font-weight: 600; color: var(--text, #e6e6f0); }
+.palace-lib-status { flex: 1; color: var(--text-muted, #888); font-size: 12px; }
+.palace-chunk-pruned { opacity: 0.55; }
+.palace-pruned-pill {
+    font-size: 11px; padding: 1px 6px; border-radius: 8px;
+    background: var(--bg-tertiary, #1a1b2e); color: var(--text-muted, #999);
+    border: 1px dashed var(--border, #444);
+}
+
 /* ── Self view (L0) — the self sheet. Visually distinct: section cards in a
       responsive grid, live dashboard up top, autosave textareas. ── */
 .palace-self-grid {

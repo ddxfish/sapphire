@@ -86,6 +86,7 @@ async function renderSheet() {
         <div class="palace-more-wrap"><button class="mind-btn" id="pal-self-addbox">+ Add box</button></div>
     `;
     bindCards(el);
+    bindLibrarian(el);
 }
 
 function dashboardCard(d) {
@@ -106,7 +107,51 @@ function dashboardCard(d) {
             </div>
             ${d.most_woven.length ? `<div class="palace-dash-woven">Most woven: ${d.most_woven.map(w => `<span class="palace-pill">${escHtml(w.name)} <b>${w.count}</b></span>`).join('')}</div>` : ''}
             ${d.since ? `<div class="palace-dash-since">Mind since ${escHtml(d.since)}</div>` : ''}
+            <div class="palace-librarian-row">
+                <span class="palace-lib-title">\u{1F9F9} Librarian</span>
+                <span class="palace-lib-status" id="pal-lib-status">checking…</span>
+                <button class="mind-btn-sm" id="pal-lib-run-self" title="Review unprocessed Self-layer memories in this scope">Tidy Self</button>
+                <button class="mind-btn-sm" id="pal-lib-run-all" title="Review all unprocessed memories in this scope (events + self)">Tidy whole scope</button>
+            </div>
         </div>`;
+}
+
+let _libTimer = null;
+
+async function refreshLibStatus(el, { poll = false } = {}) {
+    const box = el.querySelector('#pal-lib-status');
+    if (!box) return;
+    let st;
+    try {
+        st = await palaceGet(`librarian/status?scope=${encodeURIComponent(scope)}`);
+    } catch (e) { box.textContent = 'status unavailable'; return; }
+    clearTimeout(_libTimer);
+    if (st.running) {
+        const c = st.current;
+        box.textContent = `running (${c.scope}): message ${c.messages_done}/${c.messages_total || '?'}`;
+        _libTimer = setTimeout(() => refreshLibStatus(el, { poll: true }), 3000);
+    } else if (poll) {
+        ui.showToast(st.current?.last_message || 'Librarian pass finished', 'success');
+        renderSheet();
+    } else {
+        const mine = (st.scopes || []).find(s => s.scope === scope);
+        box.textContent = mine
+            ? `last pass ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
+            : 'never run in this scope';
+    }
+}
+
+function bindLibrarian(el) {
+    const run = (what) => async () => {
+        try {
+            const r = await palaceSend('librarian/run', 'POST', { scope, what });
+            ui.showToast(r.message || 'Pass started', 'success');
+            refreshLibStatus(el);
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    };
+    el.querySelector('#pal-lib-run-self')?.addEventListener('click', run('self'));
+    el.querySelector('#pal-lib-run-all')?.addEventListener('click', run('all'));
+    refreshLibStatus(el);
 }
 
 function modeChip(mode) {

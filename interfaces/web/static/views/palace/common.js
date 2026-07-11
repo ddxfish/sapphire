@@ -92,12 +92,16 @@ export function metaPanel(meta) {
 export function chunkCard(c, { showLayer = true } = {}) {
     const tierChip = c.tier ? `<span class="palace-tier palace-tier-${c.tier}" title="Tier ${c.tier}: ${['', 'headline', 'facts', 'trivia'][c.tier] || ''}">T${c.tier}</span>` : '';
     const entChip = c.entity_name ? `<span class="palace-ent-chip">${escHtml(c.entity_name)}</span>` : '';
+    const pruned = !!c.meta?.pruned_at;
+    const prunedPill = pruned
+        ? `<span class="palace-pruned-pill" title="Retired by the librarian${c.meta.pruned_reason ? ': ' + escHtml(c.meta.pruned_reason) : ''} — hidden from her recall, restorable">\u{1F9F9} retired</span>`
+        : '';
     return `
-        <div class="mind-mem-card palace-chunk" data-id="${c.id}">
+        <div class="mind-mem-card palace-chunk${pruned ? ' palace-chunk-pruned' : ''}" data-id="${c.id}">
             <div class="mind-mem-header">
                 ${showLayer ? layerChip(c.layer) : ''}
                 ${tierChip}${entChip}
-                ${labelChip(c.label)}
+                ${labelChip(c.label)}${prunedPill}
                 ${keyPill(c.private_key)}
                 <span class="mind-mem-time">${escHtml(timeAgo(c.created))}</span>
                 <span class="mind-mem-id">[${c.id}]</span>
@@ -106,6 +110,7 @@ export function chunkCard(c, { showLayer = true } = {}) {
             <div class="mind-mem-content">${escHtml(c.content)}</div>
             ${metaPanel(c.meta)}
             <div class="mind-mem-actions">
+                ${pruned ? `<button class="mind-btn-sm palace-unprune" data-id="${c.id}" title="Restore to her recall">↩ restore</button>` : ''}
                 <button class="mind-btn-sm palace-del-chunk" data-id="${c.id}" title="Delete">✕</button>
             </div>
         </div>`;
@@ -130,6 +135,15 @@ export function bindChunkCards(el, onChange, ui) {
                 ui.showToast('Deleted', 'success');
                 await onChange();
             } catch (e) { ui.showToast(`Delete failed: ${e.message}`, 'error'); }
+        });
+    });
+    el.querySelectorAll('.palace-unprune').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            try {
+                await palaceSend(`chunks/${btn.dataset.id}/unprune`, 'POST', {});
+                ui.showToast('Restored to her recall', 'success');
+                await onChange();
+            } catch (e) { ui.showToast(`Restore failed: ${e.message}`, 'error'); }
         });
     });
 }

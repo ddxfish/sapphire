@@ -403,7 +403,12 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                     "enabled": func_name in enabled,
                     "is_network": func_name in network_functions
                 })
-            modules[module_name] = {"functions": functions, "count": len(functions), "emoji": module_info.get('emoji', '')}
+            # Same GROUP → one display group (mirrors /api/functions)
+            key = module_info.get('group') or module_name
+            slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
+            slot["functions"].extend(functions)
+            slot["count"] += len(functions)
+            slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
 
         # Prompts data
         prompt_names = prompts.list_prompts()

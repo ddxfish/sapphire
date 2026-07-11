@@ -274,7 +274,13 @@ async def list_functions(request: Request, _=Depends(require_login), system=Depe
                 "enabled": func_name in enabled,
                 "is_network": func_name in network
             })
-        modules[module_name] = {"functions": funcs, "count": len(funcs), "emoji": module_info.get('emoji', '')}
+        # Modules sharing a declared GROUP merge into one display group
+        # (e.g. the mindpalace tool files present as one "Mind Palace").
+        key = module_info.get('group') or module_name
+        slot = modules.setdefault(key, {"functions": [], "count": 0, "emoji": ""})
+        slot["functions"].extend(funcs)
+        slot["count"] += len(funcs)
+        slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
     return {"modules": modules}
 
 
