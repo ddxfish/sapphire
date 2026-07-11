@@ -9278,6 +9278,20 @@ a.gallery-caption:hover {
 .palace-mention-layer { flex-shrink: 0; color: var(--text-muted, #777); font-size: 11px; }
 .palace-mention-text { flex: 1; color: var(--text-secondary, #bbb); min-width: 0; }
 
+/* Template fields form (per-kind details in the entity modal) */
+.palace-fields .palace-field-row {
+    display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px;
+}
+.palace-field-row > span { flex: 0 0 140px; color: var(--text-secondary, #bbb); }
+.palace-field-row input[type="text"] {
+    flex: 1; background: var(--bg-tertiary, #1a1b2e); color: var(--text, #e6e6f0);
+    border: 1px solid var(--border, #333); border-radius: 4px; padding: 5px 8px;
+}
+.palace-field-bool { cursor: pointer; }
+.palace-field-bool input { flex: 0 0 auto; }
+.palace-field-bool span { flex: 1; }
+.palace-fields #pal-ent-savefields { margin-top: 8px; }
+
 /* ── Self view (L0) — the self sheet. Visually distinct: section cards in a
       responsive grid, live dashboard up top, autosave textareas. ── */
 .palace-self-grid {

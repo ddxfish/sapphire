@@ -318,6 +318,51 @@ class PluginLoader:
                     logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
         return []
 
+    def _install_pkg_alias(self, name: str, plugin_dir: Path, info: dict):
+        """Make a user-band plugin importable as `plugins.<name>`.
+
+        Installs a package module in sys.modules with submodule_search_locations
+        pointing at the plugin dir, so submodule imports resolve through the
+        standard machinery. No-op if a real plugins/<name> exists on disk
+        (the genuine namespace package wins) or the alias is already present.
+        Removed in unload_plugin via info["_pkg_alias"].
+        """
+        import sys
+        import importlib
+        import importlib.util
+        from importlib.machinery import ModuleSpec
+
+        alias = f"plugins.{name}"
+        if alias in sys.modules:
+            return
+        if (SYSTEM_PLUGINS_DIR / name).is_dir():
+            return
+        try:
+            pkg = importlib.import_module("plugins")
+            spec = ModuleSpec(alias, None, is_package=True)
+            spec.submodule_search_locations = [str(plugin_dir)]
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[alias] = mod
+            setattr(pkg, name, mod)
+            info["_pkg_alias"] = alias
+        except Exception as e:
+            logger.warning(f"[PLUGINS] {name}: package alias install failed: {e}")
+
+    def _remove_pkg_alias(self, name: str, info: dict):
+        """Drop the plugins.<name> alias and everything imported under it."""
+        import sys
+        alias = info.pop("_pkg_alias", None)
+        if not alias:
+            return
+        for key in [k for k in list(sys.modules) if k == alias or k.startswith(alias + ".")]:
+            sys.modules.pop(key, None)
+        try:
+            import plugins as pkg
+            if getattr(pkg, name, None) is not None:
+                delattr(pkg, name)
+        except Exception:
+            pass
+
     def _load_plugin(self, name: str) -> bool:
         """Load an enabled plugin — check cached verification, register hooks, voice commands.
         Returns True if loaded, False if blocked."""
@@ -387,6 +432,12 @@ class PluginLoader:
         # Offset user plugins into 100-199 band
         if band == "user":
             base_priority = min(base_priority + 100, 199)
+            # User-band plugins live outside the real plugins/ namespace
+            # package, so their own absolute imports ("from plugins.<name>.
+            # tools import x") can't resolve from disk. Install a package
+            # alias whose search path points at the plugin dir — the normal
+            # import machinery handles everything below it.
+            self._install_pkg_alias(name, plugin_dir, info)
 
         capabilities = manifest.get("capabilities", {})
 
@@ -752,6 +803,7 @@ class PluginLoader:
         if self._function_manager:
             self._function_manager.unregister_plugin_tools(name)
         self._unregister_routes(name)
+        self._remove_pkg_alias(name, self._plugins.get(name, {}))
 
         # Unregister dashboard widgets contributed by this plugin.
         # Refuse to touch the 'core' namespace — that's where built-ins live;
@@ -777,6 +829,13 @@ class PluginLoader:
                         unregister_plugin_scope(key)
         except Exception as e:
             logger.warning(f"[PLUGINS] {name}: failed to unregister scopes: {e}")
+
+        # Unregister any contacts provider this plugin installed
+        try:
+            from core.contacts import unregister_provider as _unreg_contacts
+            _unreg_contacts(name)
+        except Exception:
+            pass
 
         # Unregister providers — reset active setting if it pointed to this plugin
         info = self._plugins.get(name, {})

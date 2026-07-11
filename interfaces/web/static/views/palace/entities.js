@@ -1,6 +1,7 @@
 // views/palace/entities.js - Mind › Entities, palace edition (L2: people /
-// places / things). Entity cards → detail modal with tiered chunks, the
-// mention graph ("woven into N memories"), and human-editable kind.
+// places / things / events). Entity cards → detail modal with tiered chunks,
+// the mention graph ("woven into N memories"), human-editable kind, and
+// per-kind template fields (GET templates — defaults + user-defined kinds).
 import { renderSectionHeader, bindSectionHeader } from '../../shared/section-header.js';
 import { helpPills } from '../../features/video-link.js';
 import { renderScopeSidebar, bindScopeSidebar } from '../../shared/scope-sidebar.js';
@@ -12,8 +13,6 @@ import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill,
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'people';
-const KINDS = ['person', 'place', 'thing', 'other'];
-const KIND_ICONS = { person: '\u{1F464}', place: '\u{1F4CD}', thing: '\u{1F4E6}', other: '\u{1F535}' };
 const TIER_NAMES = { 1: 'Headline', 2: 'Facts', 3: 'Trivia' };
 
 let container = null;
@@ -21,6 +20,8 @@ let scope = 'default';
 let scopes = [];
 let unsub = null;
 let _kindFilter = '';   // '' = all
+let TPL = {};           // kind -> template
+let TPL_LIST = [];      // ordered templates
 
 export default {
     init(el) { container = el; },
@@ -30,6 +31,11 @@ export default {
         else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
         delete window._mindTab;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        try {
+            const td = await palaceGet('templates');
+            TPL_LIST = td.templates || [];
+            TPL = Object.fromEntries(TPL_LIST.map(t => [t.kind, t]));
+        } catch (e) { TPL_LIST = []; TPL = {}; }
         render();
     },
     hide() { if (unsub) { unsub(); unsub = null; } }
@@ -57,7 +63,8 @@ function render() {
 
 function kindChip(kind) {
     if (!kind) return '<span class="palace-kind palace-kind-none">unsorted</span>';
-    return `<span class="palace-kind palace-kind-${escHtml(kind)}">${KIND_ICONS[kind] || ''} ${escHtml(kind)}</span>`;
+    const t = TPL[kind];
+    return `<span class="palace-kind palace-kind-${escHtml(kind)}">${t?.icon || ''} ${escHtml(t?.label || kind)}</span>`;
 }
 
 async function renderEntities() {
@@ -71,8 +78,8 @@ async function renderEntities() {
         return;
     }
     const all = data.entities || [];
-    const counts = { '': all.length };
-    for (const k of [...KINDS, null]) counts[k ?? 'none'] = all.filter(x => (x.kind ?? null) === k).length;
+    const counts = { '': all.length, none: all.filter(x => !x.kind).length };
+    for (const t of TPL_LIST) counts[t.kind] = all.filter(x => x.kind === t.kind).length;
     const list = _kindFilter === ''
         ? all
         : all.filter(x => (_kindFilter === 'none' ? !x.kind : x.kind === _kindFilter));
@@ -83,10 +90,7 @@ async function renderEntities() {
     el.innerHTML = `
         <div class="mind-toolbar palace-kind-pills">
             ${pill('', 'All', all.length)}
-            ${pill('person', '\u{1F464} People', counts.person)}
-            ${pill('place', '\u{1F4CD} Places', counts.place)}
-            ${pill('thing', '\u{1F4E6} Things', counts.thing)}
-            ${pill('other', '\u{1F535} Other', counts.other)}
+            ${TPL_LIST.map(t => pill(t.kind, `${t.icon} ${escHtml(t.label)}`, counts[t.kind])).join('')}
             ${pill('none', 'Unsorted', counts.none)}
         </div>
         ${list.length ? `<div class="mind-people-grid">
@@ -111,6 +115,31 @@ async function renderEntities() {
     });
 }
 
+function fieldsForm(ent) {
+    const t = TPL[ent.kind];
+    if (!t) return '';
+    const f = ent.meta?.fields || {};
+    const extras = Object.keys(f).filter(k => !t.fields.some(fd => fd.key === k));
+    const rows = [
+        ...t.fields,
+        ...extras.map(k => ({ key: k, label: k, type: typeof f[k] === 'boolean' ? 'bool' : 'text' })),
+    ];
+    if (!rows.length) return '';
+    return `<div class="palace-tier-section palace-fields">
+        <div class="palace-tier-title">${t.icon} ${escHtml(t.label)} details</div>
+        ${rows.map(fd => fd.type === 'bool' ? `
+            <label class="palace-field-row palace-field-bool">
+                <input type="checkbox" data-fkey="${escHtml(fd.key)}" ${f[fd.key] ? 'checked' : ''}>
+                <span>${escHtml(fd.label)}</span>
+            </label>` : `
+            <label class="palace-field-row">
+                <span>${escHtml(fd.label)}</span>
+                <input type="text" data-fkey="${escHtml(fd.key)}" value="${escHtml(String(f[fd.key] ?? ''))}">
+            </label>`).join('')}
+        <button class="mind-btn" id="pal-ent-savefields">Save details</button>
+    </div>`;
+}
+
 async function showEntityModal(eid) {
     let data;
     try {
@@ -129,11 +158,12 @@ async function showEntityModal(eid) {
                 <h3>${escHtml(ent.name)}</h3>
                 <select id="pal-ent-kind" class="palace-select" title="What kind of entity is this?">
                     <option value="" ${!ent.kind ? 'selected' : ''}>unsorted</option>
-                    ${KINDS.map(k => `<option value="${k}" ${ent.kind === k ? 'selected' : ''}>${KIND_ICONS[k]} ${k}</option>`).join('')}
+                    ${TPL_LIST.map(t => `<option value="${t.kind}" ${ent.kind === t.kind ? 'selected' : ''}>${t.icon} ${escHtml(t.label)}</option>`).join('')}
                 </select>
                 <button class="mind-btn-sm mind-modal-close">✕</button>
             </div>
             <div class="pr-modal-body view-scroll">
+                ${fieldsForm(ent)}
                 ${[1, 2, 3].filter(t => byTier[t].length).map(t => `
                     <div class="palace-tier-section">
                         <div class="palace-tier-title">${TIER_NAMES[t]}</div>
@@ -175,7 +205,21 @@ async function showEntityModal(eid) {
             await palaceSend(`entities/${eid}`, 'PUT', { kind: e.target.value || null });
             ui.showToast('Kind updated', 'success');
             renderEntities();
+            overlay.remove();
+            showEntityModal(eid);   // re-open: the fields form follows the kind
         } catch (err) { ui.showToast(`Update failed: ${err.message}`, 'error'); }
+    });
+
+    overlay.querySelector('#pal-ent-savefields')?.addEventListener('click', async () => {
+        const fields = {};
+        overlay.querySelectorAll('[data-fkey]').forEach(inp => {
+            fields[inp.dataset.fkey] = inp.type === 'checkbox' ? inp.checked : inp.value;
+        });
+        try {
+            await palaceSend(`entities/${eid}`, 'PUT', { fields });
+            ui.showToast('Details saved', 'success');
+            renderEntities();
+        } catch (err) { ui.showToast(`Save failed: ${err.message}`, 'error'); }
     });
 
     overlay.querySelector('#pal-ent-addfact').addEventListener('click', async () => {

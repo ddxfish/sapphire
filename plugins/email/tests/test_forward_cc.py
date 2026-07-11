@@ -18,7 +18,7 @@ def test_cc_sets_cc_header_for_whitelisted_contacts():
     with patch.object(email_tool, '_get_email_creds_detailed', return_value=_CREDS), \
          patch.object(email_tool, '_get_cache', return_value={'raw': [], 'msg_ids': [], 'messages': []}), \
          patch.object(email_tool, '_get_current_people_scope', return_value='default'), \
-         patch('plugins.memory.tools.knowledge_tools.get_people', return_value=_PEOPLE), \
+         patch('core.contacts.get_people', return_value=_PEOPLE), \
          patch.object(email_tool, '_smtp_connect', return_value=smtp):
         result, ok = email_tool._send_email(recipient_id=1, subject='Hi', body='yo', cc=[2])
     assert ok, result
@@ -34,7 +34,7 @@ def test_cc_unwhitelisted_fails_loud_and_does_not_send():
     with patch.object(email_tool, '_get_email_creds_detailed', return_value=_CREDS), \
          patch.object(email_tool, '_get_cache', return_value={'raw': [], 'msg_ids': [], 'messages': []}), \
          patch.object(email_tool, '_get_current_people_scope', return_value='default'), \
-         patch('plugins.memory.tools.knowledge_tools.get_people', return_value=_PEOPLE), \
+         patch('core.contacts.get_people', return_value=_PEOPLE), \
          patch.object(email_tool, '_smtp_connect', return_value=smtp):
         result, ok = email_tool._send_email(recipient_id=1, subject='Hi', body='yo', cc=[3])
     assert not ok
@@ -59,7 +59,7 @@ def test_forward_builds_fwd_subject_and_body_without_leaking_address():
     with patch.object(email_tool, '_get_cache', return_value=cache), \
          patch.object(email_tool, '_get_email_creds_detailed', return_value=_CREDS), \
          patch.object(email_tool, '_get_current_people_scope', return_value='default'), \
-         patch('plugins.memory.tools.knowledge_tools.get_people', return_value=_PEOPLE), \
+         patch('core.contacts.get_people', return_value=_PEOPLE), \
          patch.object(email_tool, '_smtp_connect', return_value=smtp):
         result, ok = email_tool._forward_email(1, recipient_id=1, note='fyi')
     assert ok, result

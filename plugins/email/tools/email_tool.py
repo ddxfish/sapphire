@@ -1036,7 +1036,7 @@ def _delete_emails(indices):
 
 
 def _get_recipients():
-    from plugins.memory.tools.knowledge_tools import get_people
+    from core.contacts import get_people
 
     allow_all = _allow_all_enabled()
 
@@ -1082,7 +1082,7 @@ def _resolve_recipient(recipient_id=None, address=None):
             return None, None, f"Invalid email address: {addr}"
         return addr, addr, None
     if recipient_id is not None:
-        from plugins.memory.tools.knowledge_tools import get_people
+        from core.contacts import get_people
         people_scope = _get_current_people_scope()
         if people_scope is None:
             return None, None, "People contacts are disabled for this chat."

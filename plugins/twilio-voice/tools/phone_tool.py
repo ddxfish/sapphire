@@ -103,7 +103,7 @@ def _get_current_twilio_scope():
 
 
 def _callable_contacts():
-    from plugins.memory.tools.knowledge_tools import get_people
+    from core.contacts import get_people
     scope = _get_current_people_scope()
     if scope is None:
         return None
