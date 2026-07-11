@@ -10,7 +10,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'knowledge';
@@ -80,6 +80,7 @@ async function renderList() {
             <input type="search" id="pal-kn-search" class="palace-search" placeholder="Search knowledge…" value="${escAttr(_search)}">
             ${apill('', 'All')}${apill('user', '\u{1F464} Added by you')}${apill('ai', '\u{1F916} Hers')}
             <button class="mind-btn" id="pal-kn-add">+ Add</button>
+            ${transferButtons()}
             <span class="palace-count">${data.total} chunks</span>
         </div>
         ${chunks.length
@@ -98,6 +99,7 @@ async function renderList() {
         btn.addEventListener('click', () => { _author = btn.dataset.author; _offset = 0; renderList(); });
     });
     el.querySelector('#pal-kn-add')?.addEventListener('click', showAddModal);
+    bindTransfer(el, 'knowledge', () => scope, ui, renderList);
     el.querySelector('#pal-kn-more')?.addEventListener('click', () => { _offset += PAGE; renderList(); });
     bindChunkCards(el, renderList, ui);
 }

@@ -9,7 +9,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, bindChunkCards, describeScopeForDelete } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'people';
@@ -94,6 +94,7 @@ async function renderEntities() {
             ${TPL_LIST.map(t => pill(t.kind, `${t.icon} ${escHtml(t.label)}`, counts[t.kind])).join('')}
             ${pill('none', 'Unsorted', counts.none)}
             <button class="mind-btn" id="pal-ent-new">+ New entity</button>
+            ${transferButtons()}
         </div>
         ${list.length ? `<div class="mind-people-grid">
             ${list.map(e => `
@@ -114,6 +115,7 @@ async function renderEntities() {
         btn.addEventListener('click', () => { _kindFilter = btn.dataset.kind; renderEntities(); });
     });
     el.querySelector('#pal-ent-new')?.addEventListener('click', showNewEntityModal);
+    bindTransfer(el, 'entities', () => scope, ui, renderEntities);
     el.querySelectorAll('.palace-ent-card').forEach(card => {
         card.addEventListener('click', () => showEntityModal(parseInt(card.dataset.id)));
     });

@@ -50,6 +50,52 @@ export async function describeScopeForDelete(name) {
     } catch { return ''; }
 }
 
+// Per-tab, per-scope import/export (2026-07-11). One layer × one scope per
+// file; import lands in the CURRENTLY VIEWED scope, additive + idempotent.
+export function transferButtons() {
+    return `<button class="mind-btn-sm" data-transfer="export" title="Download this tab's data for the current scope">⬇ Export</button>
+            <button class="mind-btn-sm" data-transfer="import" title="Import a matching export file into the current scope">⬆ Import</button>`;
+}
+
+export function bindTransfer(el, layer, getScope, ui, onDone) {
+    el.querySelector('[data-transfer="export"]')?.addEventListener('click', async () => {
+        const scope = getScope();
+        try {
+            const data = await palaceGet(`transfer/export?scope=${encodeURIComponent(scope)}&layer=${encodeURIComponent(layer)}`);
+            const name = `mindpalace-${layer}-${scope}-${new Date().toISOString().slice(0, 10)}.json`;
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+            a.download = name;
+            a.click();
+            URL.revokeObjectURL(a.href);
+            ui.showToast(`Exported ${data.counts.chunks} chunks → ${name}`, 'success');
+        } catch (e) { ui.showToast(`Export failed: ${e.message}`, 'error'); }
+    });
+    el.querySelector('[data-transfer="import"]')?.addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.addEventListener('change', async () => {
+            const file = input.files?.[0];
+            if (!file) return;
+            let data;
+            try { data = JSON.parse(await file.text()); }
+            catch { ui.showToast('Not a JSON file', 'error'); return; }
+            try {
+                const r = await palaceSend('transfer/import', 'POST',
+                    { scope: getScope(), expect_layer: layer, data });
+                const bits = [`${r.imported} imported`, `${r.skipped} skipped`];
+                if (r.entities_upserted) bits.push(`${r.entities_upserted} entities`);
+                if (r.edges_seeded) bits.push(`${r.edges_seeded} connections`);
+                if (r.arrived_as_history) bits.push(`${r.arrived_as_history} as history`);
+                ui.showToast(`Import: ${bits.join(', ')}`, 'success');
+                onDone && onDone();
+            } catch (e) { ui.showToast(`Import failed: ${e.message}`, 'error'); }
+        });
+        input.click();
+    });
+}
+
 export function labelHue(label) {
     if (!label) return 220;
     let h = 0;

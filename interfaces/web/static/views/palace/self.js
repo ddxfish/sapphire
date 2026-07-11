@@ -10,7 +10,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const MAX_CHARS = 2000;
@@ -95,10 +95,14 @@ async function renderSheet() {
             ${data.custom.map(customCard).join('')}
             ${_localBoxes.map(localCard).join('')}
         </div>
-        <div class="palace-more-wrap"><button class="mind-btn" id="pal-self-addbox">+ Add box</button></div>
+        <div class="palace-more-wrap">
+            <button class="mind-btn" id="pal-self-addbox">+ Add box</button>
+            ${transferButtons()}
+        </div>
     `;
     bindCards(el);
     bindLibrarian(el);
+    bindTransfer(el, 'self', () => scope, ui, renderSheet);
 }
 
 function dashboardCard(d) {

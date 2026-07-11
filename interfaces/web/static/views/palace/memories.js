@@ -8,7 +8,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'memory';
@@ -87,6 +87,7 @@ async function renderList() {
                 <option value="self" ${_layer === 'self' ? 'selected' : ''}>Self</option>
             </select>
             <button class="mind-btn" id="pal-mem-add">+ Add Memory</button>
+            ${transferButtons()}
             <span class="palace-count">${data.total} in scope</span>
         </div>
         ${chunks.length
@@ -115,6 +116,7 @@ async function renderList() {
         _layer = e.target.value; _offset = 0; renderList();
     });
     el.querySelector('#pal-mem-add')?.addEventListener('click', showAddModal);
+    bindTransfer(el, 'events', () => scope, ui, renderList);
     el.querySelector('#pal-mem-more')?.addEventListener('click', () => {
         _offset += PAGE; renderList();
     });
