@@ -1,3 +1,9 @@
+# 2.8.5 - Settings > LLM
+- Unified main and secondary models in settings with 1 drag and drop
+- Unified handler and CSS for add/edit, vision checkmark
+# 2.8.4 - Privacy Mode v2
+- Removed whitelist, added "private" checkmark to LLM instead
+- Changed Privacy Mode to eyeball toggle just below chat dropdown
 # 2.8.3 - Chat refactor
 - Changed giant json blobs to rows in db
 - Added Chat Manager to bulk delete, export

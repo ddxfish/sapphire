@@ -5543,9 +5543,18 @@ a.gallery-caption:hover {
 }
 
 /* Custom provider cards — same card/header/accordion structure as core,
-   slimmer header + inline controls (vision, toggle, delete) */
+   slimmer header + inline controls (badge, delete, toggle) */
 .custom-card .provider-header { padding: 10px 12px; }
 .custom-card.disabled .provider-title { opacity: 0.6; }
+.vision-badge {
+    font-size: 11px;
+    line-height: 1;
+    padding: 2px 6px;
+    border: 1px solid var(--trim-border, rgba(74,158,255,0.35));
+    border-radius: 10px;
+    opacity: 0.85;
+    user-select: none;
+}
 .custom-provider-detail { color: var(--text-muted); font-size: var(--font-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .custom-provider-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 

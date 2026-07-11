@@ -205,21 +205,6 @@ export default {
             });
         });
 
-        // Custom provider vision toggle — force image-input support on for VLMs
-        // whose model name can't be auto-detected (override wins in openai_compat).
-        el.querySelectorAll('.custom-provider-vision').forEach(t => {
-            t.addEventListener('change', async e => {
-                const key = e.target.dataset.provider;
-                try {
-                    await updateProvider(key, { supports_images: e.target.checked });
-                    showToast(`Vision ${e.target.checked ? 'ON' : 'OFF'} for ${key} — restart to apply`, 'success');
-                } catch (err) {
-                    showToast('Failed to update vision setting', 'error');
-                    e.target.checked = !e.target.checked;
-                }
-            });
-        });
-
         // Custom provider delete
         el.querySelectorAll('.custom-provider-delete').forEach(btn => {
             btn.addEventListener('click', async () => {
@@ -240,9 +225,9 @@ export default {
         });
 
         // Bind each custom card's pre-rendered edit form (accordion body)
-        Object.keys(ctx.getValue('LLM_CUSTOM_PROVIDERS') || {}).forEach(k => {
+        Object.entries(ctx.getValue('LLM_CUSTOM_PROVIDERS') || {}).forEach(([k, c]) => {
             const host = el.querySelector(`.provider-card[data-provider="${k}"] .provider-fields`);
-            if (host) _bindProviderForm(host, 'pf-' + k, ctx, k);
+            if (host) _bindProviderForm(host, 'pf-' + k, ctx, k, {}, c || {});
         });
 
         // Add provider button
@@ -273,12 +258,12 @@ function _renderCustomRow(k, c, i) {
                     <span class="custom-provider-detail">${_esc(model)} · ${template}</span>
                 </div>
                 <div class="custom-provider-actions">
-                    <label title="Vision — this model can see images. Turn on for VLMs whose name doesn't include a vision token (e.g. Qwen3 27B without 'VL')." onclick="event.stopPropagation()" style="display:flex;align-items:center;gap:3px;font-size:var(--font-sm);color:var(--text-muted);margin-right:8px;cursor:pointer">👁<input type="checkbox" class="custom-provider-vision" data-provider="${k}" ${c.supports_images ? 'checked' : ''}></label>
+                    ${c.supports_images ? '<span class="vision-badge" title="Vision model — sees images">👁</span>' : ''}
+                    <button class="btn btn-sm btn-danger custom-provider-delete" data-provider="${k}" title="Remove">✕</button>
                     <label class="toggle-switch toggle-sm" onclick="event.stopPropagation()">
                         <input type="checkbox" class="custom-provider-enabled" data-provider="${k}" ${enabled ? 'checked' : ''}>
                         <span class="toggle-slider"></span>
                     </label>
-                    <button class="btn btn-sm btn-danger custom-provider-delete" data-provider="${k}" title="Remove">✕</button>
                 </div>
             </div>
             <div class="provider-fields collapsed">
@@ -379,6 +364,9 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
             <div id="${prefix}-suggested" style="margin-top:4px"></div>
         </div>
         <div class="field-row" style="margin-bottom:8px">
+            <label class="checkbox-inline" title="Turn on for VLMs whose name doesn't include a vision token (e.g. Qwen3 27B without 'VL'). Restart to apply."><input type="checkbox" id="${prefix}-vision" ${config.supports_images ? 'checked' : ''}> Vision model — can see images</label>
+        </div>
+        <div class="field-row" style="margin-bottom:8px">
             <label class="checkbox-inline"><input type="checkbox" id="${prefix}-local" ${config.is_local ? 'checked' : ''}> Local / private server (allowed in private chats)</label>
         </div>
         <div class="field-row" style="margin-bottom:8px">
@@ -426,7 +414,7 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
     `;
 }
 
-function _bindProviderForm(root, prefix, ctx, key = null, presets = {}) {
+function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config = {}) {
     const g = id => root.querySelector(`#${prefix}-${id}`);
     const status = g('status');
     const setStatus = (msg, color = 'var(--text-muted)') => {
@@ -545,6 +533,14 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}) {
         };
         const apiKey = g('key')?.value?.trim();
         if (apiKey) common.api_key = apiKey;
+
+        // Vision override is tri-state in the backend: true/false force, absent
+        // (None) falls through to the model-name heuristic. Only send an explicit
+        // false if the provider already had a forced value — otherwise leaving the
+        // box unticked keeps auto-detection alive.
+        const vision = g('vision')?.checked || false;
+        if (vision) common.supports_images = true;
+        else if (typeof config.supports_images === 'boolean') common.supports_images = false;
 
         if (key) {
             // Edit → PUT
