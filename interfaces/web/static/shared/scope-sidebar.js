@@ -40,8 +40,10 @@ export function renderScopeSidebar(scopes, selectedScope) {
 /**
  * Bind the scope sidebar. onScopeChange(name) fires on selection; create/delete
  * are handled here (lockstep + confirm) and call onChanged(name|null) to refresh.
+ * Optional describeScope(name) → Promise<string>: a concrete-stakes line shown
+ * in the typed-DELETE confirm (e.g. per-layer counts from the Mind Palace).
  */
-export function bindScopeSidebar(container, { onScopeChange, onChanged } = {}) {
+export function bindScopeSidebar(container, { onScopeChange, onChanged, describeScope } = {}) {
     bindPanelList(container, {
         onSelect: (name) => onScopeChange && onScopeChange(name),
         onAdd: async () => {
@@ -63,7 +65,11 @@ export function bindScopeSidebar(container, { onScopeChange, onChanged } = {}) {
             const sel = container.querySelector('.panel-list-item.active');
             const name = sel?.dataset.plId;
             if (!name || name === 'default') return;
-            const confirmed = await confirmScopeDelete(name);
+            let stakes = '';
+            if (describeScope) {
+                try { stakes = await describeScope(name) || ''; } catch { /* no line */ }
+            }
+            const confirmed = await confirmScopeDelete(name, stakes);
             if (!confirmed) return;
             const res = await deleteScopeEverywhere(name);
             if (res.ok) {
@@ -76,7 +82,8 @@ export function bindScopeSidebar(container, { onScopeChange, onChanged } = {}) {
 }
 
 // Thorough typed-DELETE confirm. Resolves true only if the user types DELETE.
-function confirmScopeDelete(name) {
+// `stakes`: optional caller-supplied line with the concrete contents at risk.
+function confirmScopeDelete(name, stakes = '') {
     ensureStyles();
     return new Promise(resolve => {
         document.querySelector('.scope-confirm-overlay')?.remove();
@@ -86,7 +93,9 @@ function confirmScopeDelete(name) {
             <div class="scope-confirm-box">
                 <h3>Delete scope “${esc(name)}”?</h3>
                 <p>This removes the <strong>${esc(name)}</strong> scope and <strong>all of its data</strong>
-                   in <strong>every Mind section</strong> — memories, people, knowledge, and goals. This cannot be undone.</p>
+                   in <strong>every Mind section</strong> — not just this tab: memories, self, entities,
+                   knowledge, and goals. This cannot be undone.</p>
+                ${stakes ? `<p class="scope-confirm-stakes"><strong>${esc(stakes)}</strong></p>` : ''}
                 <p class="scope-confirm-prompt">Type <code>DELETE</code> to confirm:</p>
                 <input type="text" class="scope-confirm-input" autocomplete="off" spellcheck="false">
                 <div class="scope-confirm-actions">
@@ -125,6 +134,7 @@ function ensureStyles() {
     .scope-confirm-box h3{margin:0 0 10px;color:var(--text,#eee)}
     .scope-confirm-box p{margin:0 0 10px;color:var(--text-muted,#bbb);line-height:1.5;font-size:.9em}
     .scope-confirm-box code{background:var(--bg,#111);padding:1px 6px;border-radius:4px;color:#ff6b6b}
+    .scope-confirm-stakes{color:#ffb86b !important}
     .scope-confirm-input{width:100%;padding:8px 10px;margin:2px 0 14px;background:var(--input-bg,#111);
       border:1px solid var(--border,#2a2a2a);border-radius:6px;color:var(--text,#eee);font:inherit}
     .scope-confirm-actions{display:flex;justify-content:flex-end;gap:8px}`;

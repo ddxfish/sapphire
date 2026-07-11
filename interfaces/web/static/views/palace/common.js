@@ -9,12 +9,13 @@ export const SCOPE_ENDPOINT = `${API}/scopes`;
 // Same tab ids as MIND_TABS (ids === view ids, routing unchanged) — only the
 // People label shifts: the palace L2 is people/places/THINGS. Self (L0) leads
 // the strip — it's the palace-only layer and the identity root of the graph.
+// ONE Knowledge tab (2026-07-11): human and AI knowledge are the same layer;
+// who wrote it is metadata (meta.added_by), filterable inside the tab.
 export const PALACE_TABS = [
     { id: 'self', label: 'Self', icon: '\u{1F4A0}' },
     { id: 'memories', label: 'Memories', icon: '\u{1F9E0}' },
     { id: 'people', label: 'Entities', icon: '\u{1F465}' },
-    { id: 'knowledge', label: 'Human Knowledge', icon: '\u{1F4DA}' },
-    { id: 'ai-knowledge', label: 'AI Knowledge', icon: '\u{1F916}' },
+    { id: 'knowledge', label: 'Knowledge', icon: '\u{1F4DA}' },
     { id: 'goals', label: 'Goals', icon: '\u{1F3AF}' },
 ];
 
@@ -35,6 +36,18 @@ export async function palaceSend(path, method, body) {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || data.detail || `HTTP ${r.status}`);
     return data;
+}
+
+// Concrete-stakes line for the scope-delete confirm (Krem's fork-B ruling,
+// 2026-07-11): the typed-DELETE box shows exactly what the whole scope holds.
+export async function describeScopeForDelete(name) {
+    try {
+        const st = await palaceGet(`status?scope=${encodeURIComponent(name)}`);
+        const L = st.layers || {};
+        return `Right now “${name}” holds ${L.events || 0} memories, `
+            + `${L.self || 0} self entries, ${st.entities || 0} entities, and `
+            + `${L.knowledge || 0} knowledge chunks — ALL of it goes.`;
+    } catch { return ''; }
 }
 
 export function labelHue(label) {
@@ -92,6 +105,10 @@ export function metaPanel(meta) {
 export function chunkCard(c, { showLayer = true } = {}) {
     const tierChip = c.tier ? `<span class="palace-tier palace-tier-${c.tier}" title="Tier ${c.tier}: ${['', 'headline', 'facts', 'trivia'][c.tier] || ''}">T${c.tier}</span>` : '';
     const entChip = c.entity_name ? `<span class="palace-ent-chip">${escHtml(c.entity_name)}</span>` : '';
+    const author = c.meta?.added_by;
+    const authorPill = author
+        ? `<span class="palace-author-pill" title="Added by ${author === 'ai' ? 'Sapphire' : 'you'}">${author === 'ai' ? '\u{1F916}' : '\u{1F464}'}</span>`
+        : '';
     const pruned = !!c.meta?.pruned_at;
     const prunedPill = pruned
         ? `<span class="palace-pruned-pill" title="Retired by the librarian${c.meta.pruned_reason ? ': ' + escHtml(c.meta.pruned_reason) : ''} — hidden from her recall, restorable">\u{1F9F9} retired</span>`
@@ -100,7 +117,7 @@ export function chunkCard(c, { showLayer = true } = {}) {
         <div class="mind-mem-card palace-chunk${pruned ? ' palace-chunk-pruned' : ''}" data-id="${c.id}">
             <div class="mind-mem-header">
                 ${showLayer ? layerChip(c.layer) : ''}
-                ${tierChip}${entChip}
+                ${tierChip}${entChip}${authorPill}
                 ${labelChip(c.label)}${prunedPill}
                 ${keyPill(c.private_key)}
                 <span class="mind-mem-time">${escHtml(timeAgo(c.created))}</span>

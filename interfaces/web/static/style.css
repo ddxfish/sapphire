@@ -9305,12 +9305,42 @@ a.gallery-caption:hover {
     background: var(--bg-tertiary, #1a1b2e); color: var(--text-muted, #999);
     border: 1px dashed var(--border, #444);
 }
+.palace-author-pill { font-size: 12px; opacity: 0.8; cursor: help; }
+
+/* Entity short description (tier-1 headline) — the layer-1 line every kind carries */
+.palace-headline-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.palace-headline-row input {
+    flex: 1; background: var(--input-bg, #16172a); color: var(--text, #e6e6f0);
+    border: 1px solid #4a336e; border-radius: 8px; padding: 7px 10px;
+    font: inherit; font-size: 13px; min-width: 0;
+}
+.palace-headline-row input:focus { outline: none; border-color: #c39df5; }
+.palace-ent-headline {
+    color: var(--text-muted, #999); font-size: 12px; line-height: 1.35;
+    margin: 4px 0 6px;
+}
+.palace-addfact-form textarea {
+    width: 100%; box-sizing: border-box; resize: vertical; margin-top: 8px;
+    background: var(--input-bg, #16172a); color: var(--text, #e6e6f0);
+    border: 1px solid var(--border, #2a2b3e); border-radius: 8px;
+    padding: 8px 10px; font: inherit; font-size: 13px;
+}
+.palace-addfact-form textarea:focus { outline: none; border-color: #c39df5; }
+.palace-addfact-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 
 /* ── Self view (L0) — the self sheet. Visually distinct: section cards in a
-      responsive grid, live dashboard up top, autosave textareas. ── */
+      responsive grid, live dashboard up top, autosave textareas.
+      Width system (2026-07-11): 6-track grid; wide = full row (identity),
+      half/third = 2-up. Max 2 columns everywhere (Krem's call — 3-up tried
+      and retired same day). Mobile: everything stacks. ── */
 .palace-self-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 14px; margin-top: 14px;
+    display: grid; grid-template-columns: repeat(6, 1fr);
+    gap: 14px; margin-top: 14px; grid-auto-flow: dense;
+}
+.pal-w-wide { grid-column: span 6; }
+.pal-w-half, .pal-w-third { grid-column: span 3; }
+@media (max-width: 980px) {
+    .pal-w-wide, .pal-w-half, .pal-w-third { grid-column: span 6; }
 }
 .palace-self-card { display: flex; flex-direction: column; }
 .palace-self-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
@@ -9330,17 +9360,31 @@ a.gallery-caption:hover {
 }
 .palace-self-text:focus { outline: none; border-color: #c39df5; }
 
-/* Handles: key-value editor */
-.palace-kv-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
-.palace-kv { display: flex; gap: 6px; align-items: center; }
-.palace-kv-key, .palace-kv-val {
+/* Structured lists: the generalized +add row editor (handles, relationships,
+   values, projects, custom lists). Column layout is inline per-card (1-3). */
+.palace-row-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.palace-row { display: grid; gap: 6px; align-items: center; }
+.palace-row input {
     background: var(--input-bg, #16172a); color: var(--text, #e6e6f0);
     border: 1px solid var(--border, #2a2b3e); border-radius: 6px;
     padding: 5px 8px; font: inherit; font-size: 12px; min-width: 0;
 }
-.palace-kv-key { flex: 0 0 34%; }
-.palace-kv-val { flex: 1; }
-.palace-kv-key:focus, .palace-kv-val:focus { outline: none; border-color: #c39df5; }
+.palace-row input:focus { outline: none; border-color: #c39df5; }
+.palace-row-head { margin-bottom: 2px; }
+.palace-row-head span { font-size: 11px; color: var(--text-muted, #888); padding: 0 2px; }
+.palace-addbox-label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--text, #e6e6f0); }
+.palace-addbox-label input, .palace-addbox-label select {
+    display: block; width: 100%; margin-top: 4px; box-sizing: border-box;
+    background: var(--input-bg, #16172a); color: var(--text, #e6e6f0);
+    border: 1px solid var(--border, #2a2b3e); border-radius: 6px;
+    padding: 6px 8px; font: inherit; font-size: 13px;
+}
+.palace-addbox-col {
+    display: block; width: 100%; margin-top: 6px; box-sizing: border-box;
+    background: var(--input-bg, #16172a); color: var(--text, #e6e6f0);
+    border: 1px solid var(--border, #2a2b3e); border-radius: 6px;
+    padding: 6px 8px; font: inherit; font-size: 13px;
+}
 
 /* Dashboard: computed, read-only, distinct purple frame (self layer color) */
 .palace-self-dash {

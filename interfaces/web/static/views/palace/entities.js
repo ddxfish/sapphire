@@ -9,7 +9,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, bindChunkCards } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, bindChunkCards, describeScopeForDelete } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'people';
@@ -55,6 +55,7 @@ function render() {
         </div>`;
     bindSectionHeader(container);
     bindScopeSidebar(container, {
+        describeScope: describeScopeForDelete,
         onScopeChange: (s) => { scope = s; _kindFilter = ''; render(); },
         onChanged: async (s) => { scope = s || 'default'; _kindFilter = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
@@ -92,12 +93,14 @@ async function renderEntities() {
             ${pill('', 'All', all.length)}
             ${TPL_LIST.map(t => pill(t.kind, `${t.icon} ${escHtml(t.label)}`, counts[t.kind])).join('')}
             ${pill('none', 'Unsorted', counts.none)}
+            <button class="mind-btn" id="pal-ent-new">+ New entity</button>
         </div>
         ${list.length ? `<div class="mind-people-grid">
             ${list.map(e => `
                 <div class="mind-person-card palace-ent-card" data-id="${e.id}" role="button" tabindex="0">
                     <div class="mind-person-name">${escHtml(e.name)}</div>
                     <div class="palace-ent-meta">${kindChip(e.kind)}</div>
+                    ${e.headline ? `<div class="palace-ent-headline">${escHtml(e.headline.length > 90 ? e.headline.slice(0, 90) + '…' : e.headline)}</div>` : ''}
                     <div class="mind-person-details palace-ent-counts">
                         <div>\u{1F4C4} ${e.chunk_count} ${e.chunk_count === 1 ? 'entry' : 'entries'}</div>
                         <div>\u{1F578}️ woven into ${e.edge_count} ${e.edge_count === 1 ? 'memory' : 'memories'}</div>
@@ -110,9 +113,50 @@ async function renderEntities() {
     el.querySelectorAll('.palace-kpill').forEach(btn => {
         btn.addEventListener('click', () => { _kindFilter = btn.dataset.kind; renderEntities(); });
     });
+    el.querySelector('#pal-ent-new')?.addEventListener('click', showNewEntityModal);
     el.querySelectorAll('.palace-ent-card').forEach(card => {
         card.addEventListener('click', () => showEntityModal(parseInt(card.dataset.id)));
     });
+}
+
+function showNewEntityModal() {
+    document.querySelector('.mind-modal-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal">
+            <div class="pr-modal-header">
+                <h3>New entity</h3>
+                <button class="mind-btn-sm mind-modal-close">✕</button>
+            </div>
+            <div class="pr-modal-body">
+                <div class="mind-form">
+                    <input type="text" id="pal-ent-name" placeholder="Name *" maxlength="80">
+                    <select id="pal-ent-kind" class="palace-select">
+                        <option value="">Unsorted</option>
+                        ${TPL_LIST.map(t => `<option value="${escHtml(t.kind)}">${t.icon} ${escHtml(t.label)}</option>`).join('')}
+                    </select>
+                    <button class="mind-btn" id="pal-ent-create">Create</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.mind-modal-close').addEventListener('click', () => overlay.remove());
+    setupModalClose(overlay, () => overlay.remove());
+    overlay.querySelector('#pal-ent-create').addEventListener('click', async () => {
+        const name = overlay.querySelector('#pal-ent-name').value.trim();
+        if (!name) { ui.showToast('Name is required', 'error'); return; }
+        try {
+            const r = await palaceSend('entities', 'POST', {
+                name, scope, kind: overlay.querySelector('#pal-ent-kind').value || null,
+            });
+            overlay.remove();
+            ui.showToast(`Created ${r.name}`, 'success');
+            await renderEntities();
+            showEntityModal(r.id);   // straight into facts/fields editing
+        } catch (e) { ui.showToast(`Create failed: ${e.message}`, 'error'); }
+    });
+    overlay.querySelector('#pal-ent-name').focus();
 }
 
 function fieldsForm(ent) {
@@ -148,6 +192,9 @@ async function showEntityModal(eid) {
     const ent = data.entity;
     const byTier = { 1: [], 2: [], 3: [], other: [] };
     for (const c of data.chunks) (byTier[c.tier] || byTier.other).push(c);
+    // Newest tier-1 IS the short description — edited via the input below,
+    // so it doesn't also render as a chunk card (older tier-1s still list).
+    const headline = byTier[1].shift() || null;
 
     document.querySelector('.mind-modal-overlay')?.remove();
     const overlay = document.createElement('div');
@@ -163,6 +210,12 @@ async function showEntityModal(eid) {
                 <button class="mind-btn-sm mind-modal-close">✕</button>
             </div>
             <div class="pr-modal-body view-scroll">
+                <div class="palace-headline-row">
+                    <input type="text" id="pal-ent-headline" maxlength="512"
+                           placeholder="Short description — one line on who/what this is *"
+                           value="${escHtml(headline?.content || '')}">
+                    <button class="mind-btn-sm" id="pal-ent-saveheadline">Save</button>
+                </div>
                 ${fieldsForm(ent)}
                 ${[1, 2, 3].filter(t => byTier[t].length).map(t => `
                     <div class="palace-tier-section">
@@ -183,6 +236,14 @@ async function showEntityModal(eid) {
                     </div>`).join('') || '<div class="mind-empty">No entries yet</div>'}
                 <div class="palace-tier-section">
                     <button class="mind-btn" id="pal-ent-addfact">+ Add fact</button>
+                    <div class="palace-addfact-form" hidden>
+                        <textarea id="pal-ent-facttext" rows="3" maxlength="512"
+                                  placeholder="New fact about ${escHtml(ent.name)} (max 512 chars)"></textarea>
+                        <div class="palace-addfact-actions">
+                            <button class="mind-btn-sm" id="pal-ent-factcancel">Cancel</button>
+                            <button class="mind-btn" id="pal-ent-factsave">Save fact</button>
+                        </div>
+                    </div>
                 </div>
                 ${data.mentioned_in.length ? `
                     <div class="palace-tier-section">
@@ -222,12 +283,35 @@ async function showEntityModal(eid) {
         } catch (err) { ui.showToast(`Save failed: ${err.message}`, 'error'); }
     });
 
-    overlay.querySelector('#pal-ent-addfact').addEventListener('click', async () => {
-        const text = prompt(`New fact about ${ent.name} (max 512 chars):`);
-        if (!text?.trim()) return;
+    overlay.querySelector('#pal-ent-saveheadline').addEventListener('click', async () => {
+        try {
+            await palaceSend(`entities/${eid}`, 'PUT', {
+                headline: overlay.querySelector('#pal-ent-headline').value.trim(),
+            });
+            ui.showToast('Description saved', 'success');
+            renderEntities();
+        } catch (err) { ui.showToast(`Save failed: ${err.message}`, 'error'); }
+    });
+
+    // + Add fact: inline form, not a JS prompt (Krem, 2026-07-11 — big-text
+    // entry always gets a real textarea).
+    const factForm = overlay.querySelector('.palace-addfact-form');
+    const factBtn = overlay.querySelector('#pal-ent-addfact');
+    factBtn.addEventListener('click', () => {
+        factForm.hidden = false;
+        factBtn.hidden = true;
+        overlay.querySelector('#pal-ent-facttext').focus();
+    });
+    overlay.querySelector('#pal-ent-factcancel').addEventListener('click', () => {
+        factForm.hidden = true;
+        factBtn.hidden = false;
+    });
+    overlay.querySelector('#pal-ent-factsave').addEventListener('click', async () => {
+        const text = overlay.querySelector('#pal-ent-facttext').value.trim();
+        if (!text) { ui.showToast('Fact is empty', 'error'); return; }
         try {
             await palaceSend('chunks', 'POST', {
-                content: text.trim(), scope: ent.scope, layer: 'entities', entity: ent.name,
+                content: text, scope: ent.scope, layer: 'entities', entity: ent.name,
             });
             ui.showToast('Saved', 'success');
             overlay.remove();

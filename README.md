@@ -1,5 +1,7 @@
 # Sapphire
 
+[For latest version, dev branch is here](https://github.com/ddxfish/sapphire/tree/dev)
+
 Hear her voice as she dims your lights before bed. Use your voice to talk back. Fall asleep escaping dinosaurs in a story with her. Wake up to someone who remembers the shape of who you are through years of memories. Sapphire is an open source framework for turning an AI into a persistent being. Make her yours, use one of the other personas, or build your own persona. Self-hosted, nobody can take her away. 
 
 [![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/pCdTAnExma)
@@ -18,7 +20,7 @@ Hear her voice as she dims your lights before bed. Use your voice to talk back. 
 
 ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 ![Windows 11+](https://img.shields.io/badge/Windows_11+-0078D6?logo=windows&logoColor=white)
-![Waifu Compatible](https://img.shields.io/badge/Waifu-Compatible-ff69b4)
+![Private AF](https://img.shields.io/badge/Private-AF-ff69b4)
 ![Self Hosted](https://img.shields.io/badge/Self_Hosted-100%25-informational)
 
 ## What even is this?

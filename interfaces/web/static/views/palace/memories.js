@@ -8,7 +8,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'memory';
@@ -53,6 +53,7 @@ function render() {
         </div>`;
     bindSectionHeader(container);
     bindScopeSidebar(container, {
+        describeScope: describeScopeForDelete,
         onScopeChange: (s) => { scope = s; resetFilters(); render(); },
         onChanged: async (s) => { scope = s || 'default'; resetFilters(); scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
@@ -62,8 +63,11 @@ function render() {
 async function renderList() {
     const el = content();
     if (!el) return;
-    const params = new URLSearchParams({ scope, limit: PAGE, offset: _offset });
-    if (_layer) params.set('layer', _layer);
+    // Server-side layer filter always — 'events,self' by default so the
+    // toolbar count matches the visible list (the old client-side filter
+    // made a lone entities/knowledge chunk read as a phantom "1 in scope").
+    const params = new URLSearchParams({ scope, limit: PAGE, offset: _offset,
+                                         layer: _layer || 'events,self' });
     if (_search) params.set('q', _search);
     let data;
     try {
@@ -72,10 +76,7 @@ async function renderList() {
         el.innerHTML = `<div class="mind-empty">Failed to load: ${escHtml(e.message)}</div>`;
         return;
     }
-    // Without a layer filter, memories shows events + self (entities/knowledge
-    // have their own tabs) — server filters by single layer, so filter here.
-    let chunks = data.chunks || [];
-    if (!_layer) chunks = chunks.filter(c => c.layer === 'events' || c.layer === 'self');
+    const chunks = data.chunks || [];
 
     el.innerHTML = `
         <div class="mind-toolbar">

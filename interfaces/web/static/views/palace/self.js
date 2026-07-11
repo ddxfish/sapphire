@@ -10,7 +10,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend } from './common.js';
+import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const MAX_CHARS = 2000;
@@ -32,7 +32,7 @@ export default {
     async show() {
         // Editor semantics: skip SSE refresh while a card is being typed in.
         if (!unsub) unsub = subscribeMindDomain('memory', () => scope,
-            () => container?.offsetParent !== null && !container.querySelector('.palace-self-card textarea:focus, .palace-kv input:focus'),
+            () => container?.offsetParent !== null && !container.querySelector('.palace-self-card textarea:focus, .palace-row input:focus'),
             renderSheet);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
         else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
@@ -57,6 +57,7 @@ function render() {
         </div>`;
     bindSectionHeader(container);
     bindScopeSidebar(container, {
+        describeScope: describeScopeForDelete,
         onScopeChange: (s) => { scope = s; _localBoxes = []; render(); },
         onChanged: async (s) => { scope = s || 'default'; _localBoxes = []; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
@@ -74,14 +75,25 @@ async function renderSheet() {
         return;
     }
     const persisted = new Set(data.custom.map(c => c.section));
-    _localBoxes = _localBoxes.filter(n => !persisted.has(n));
+    _localBoxes = _localBoxes.filter(b => !persisted.has(b.section));
+
+    const customCard = (c) => {
+        const base = { ...c, title: `[${c.section}]`, mode: 'hand', versioned: false, custom: true,
+                       hint: c.fields ? 'custom list' : 'custom box' };
+        return c.fields ? structCard(base) : sectionCard(base);
+    };
+    const localCard = (b) => b.fields
+        ? structCard({ section: b.section, title: `[${b.section}]`, hint: 'custom list — saves when you add rows',
+                       mode: 'hand', custom: true, fields: b.fields, rows: [], width: 'half', history_count: 0 })
+        : sectionCard({ section: b.section, title: `[${b.section}]`, hint: 'custom box — saves when you write',
+                        mode: 'hand', custom: true, content: '', width: 'third', history_count: 0 });
 
     el.innerHTML = `
         ${dashboardCard(data.dashboard)}
         <div class="palace-self-grid">
-            ${data.sections.map(s => s.section === 'handles' ? handlesCard(s) : sectionCard(s)).join('')}
-            ${data.custom.map(c => sectionCard({ ...c, title: `[${c.section}]`, hint: 'custom box', mode: 'hand', versioned: false, custom: true })).join('')}
-            ${_localBoxes.map(n => sectionCard({ section: n, title: `[${n}]`, hint: 'custom box — saves when you write', mode: 'hand', versioned: false, custom: true, content: '', history_count: 0 })).join('')}
+            ${data.sections.map(s => s.fields ? structCard(s) : sectionCard(s)).join('')}
+            ${data.custom.map(customCard).join('')}
+            ${_localBoxes.map(localCard).join('')}
         </div>
         <div class="palace-more-wrap"><button class="mind-btn" id="pal-self-addbox">+ Add box</button></div>
     `;
@@ -159,9 +171,8 @@ function modeChip(mode) {
     return `<span class="palace-mode-chip" title="${escAttr(m.tip)}">${m.icon}</span>`;
 }
 
-function sectionCard(s) {
+function cardHead(s) {
     return `
-        <div class="mind-mem-card palace-self-card" data-section="${escAttr(s.section)}">
             <div class="palace-self-card-head">
                 <span class="palace-self-title">${escHtml(s.title)}</span>
                 ${modeChip(s.mode)}
@@ -169,34 +180,47 @@ function sectionCard(s) {
                 ${s.history_count ? `<button class="mind-btn-sm palace-self-hist" data-section="${escAttr(s.section)}" title="Archived versions">\u{1F4DC} ${s.history_count}</button>` : ''}
                 ${s.custom ? `<button class="mind-btn-sm palace-self-delbox" data-section="${escAttr(s.section)}" title="Remove box">✕</button>` : ''}
             </div>
-            <div class="palace-self-hint">${escHtml(s.hint)}${s.updated ? ` · ${escHtml(timeAgo(s.updated))}` : ''}</div>
+            <div class="palace-self-hint">${escHtml(s.hint)}${s.updated ? ` · ${escHtml(timeAgo(s.updated))}` : ''}</div>`;
+}
+
+function sectionCard(s) {
+    return `
+        <div class="mind-mem-card palace-self-card pal-w-${escAttr(s.width || 'third')}" data-section="${escAttr(s.section)}">
+            ${cardHead(s)}
             <textarea class="palace-self-text" maxlength="${MAX_CHARS}" placeholder="${escAttr(s.hint)}">${escHtml(s.content)}</textarea>
         </div>`;
 }
 
-function handlesCard(s) {
-    const pairs = s.pairs?.length ? s.pairs : [];
-    return `
-        <div class="mind-mem-card palace-self-card palace-self-handles" data-section="handles">
-            <div class="palace-self-card-head">
-                <span class="palace-self-title">${escHtml(s.title)}</span>
-                ${modeChip(s.mode)}
-                <span class="palace-self-saved" hidden>✓ saved</span>
-            </div>
-            <div class="palace-self-hint">${escHtml(s.hint)}${s.updated ? ` · ${escHtml(timeAgo(s.updated))}` : ''}</div>
-            <div class="palace-kv-list">
-                ${pairs.map(p => kvRow(p.key, p.value)).join('')}
-            </div>
-            <button class="mind-btn-sm palace-kv-add">+ add</button>
-        </div>`;
+// The structured-list editor — the Handles "+add" pattern, generalized to any
+// section/box with a fields spec (1–3 columns). Rows live in meta.rows server-
+// side; the canonical text stays the spider/embedding surface.
+function rowGridStyle(n) {
+    const cols = n === 1 ? '1fr' : n === 2 ? 'minmax(90px, 34%) 1fr' : 'minmax(80px, 26%) 1fr 1fr';
+    return `grid-template-columns: ${cols} auto;`;
 }
 
-function kvRow(key = '', value = '') {
-    return `<div class="palace-kv">
-        <input type="text" class="palace-kv-key" placeholder="key" value="${escAttr(key)}">
-        <input type="text" class="palace-kv-val" placeholder="value" value="${escAttr(value)}">
-        <button class="mind-btn-sm palace-kv-del" title="Remove">✕</button>
+function structRow(fields, row = {}) {
+    return `<div class="palace-row" style="${rowGridStyle(fields.length)}">
+        ${fields.map(f => `<input type="text" data-k="${escAttr(f.key)}" placeholder="${escAttr(f.label)}" value="${escAttr(row[f.key] || '')}">`).join('')}
+        <button class="mind-btn-sm palace-row-del" title="Remove">✕</button>
     </div>`;
+}
+
+function structCard(s) {
+    const fields = s.fields || [];
+    const rows = s.rows?.length ? s.rows : [];
+    const atMax = s.max_rows && rows.length >= s.max_rows;
+    return `
+        <div class="mind-mem-card palace-self-card palace-self-struct pal-w-${escAttr(s.width || 'half')}"
+             data-section="${escAttr(s.section)}" data-spec="${escAttr(JSON.stringify(fields))}"
+             ${s.max_rows ? `data-max="${s.max_rows}"` : ''} ${s.custom ? 'data-custom="1"' : ''}>
+            ${cardHead(s)}
+            ${fields.length > 1 ? `<div class="palace-row palace-row-head" style="${rowGridStyle(fields.length)}">${fields.map(f => `<span>${escHtml(f.label)}</span>`).join('')}<span></span></div>` : ''}
+            <div class="palace-row-list">
+                ${rows.map(r => structRow(fields, r)).join('')}
+            </div>
+            <button class="mind-btn-sm palace-row-add" ${atMax ? 'hidden' : ''}>+ add</button>
+        </div>`;
 }
 
 function flashSaved(card) {
@@ -219,16 +243,17 @@ function queueSave(card, section, body, delay = 900) {
     _saveTimers[section] = setTimeout(() => saveSection(card, section, body()), delay);
 }
 
-function collectPairs(card) {
-    return [...card.querySelectorAll('.palace-kv')].map(row => ({
-        key: row.querySelector('.palace-kv-key').value.trim(),
-        value: row.querySelector('.palace-kv-val').value.trim(),
-    })).filter(p => p.key);
+function collectRows(card) {
+    return [...card.querySelectorAll('.palace-row:not(.palace-row-head)')].map(r => {
+        const row = {};
+        r.querySelectorAll('input').forEach(inp => { row[inp.dataset.k] = inp.value.trim(); });
+        return row;
+    }).filter(row => Object.values(row).some(v => v));
 }
 
 function bindCards(el) {
     // Text sections + custom boxes: autosave on idle, flush on blur.
-    el.querySelectorAll('.palace-self-card:not(.palace-self-handles)').forEach(card => {
+    el.querySelectorAll('.palace-self-card:not(.palace-self-struct)').forEach(card => {
         const section = card.dataset.section;
         const ta = card.querySelector('textarea');
         if (!ta) return;
@@ -239,21 +264,33 @@ function bindCards(el) {
         });
     });
 
-    // Handles: KV editor.
-    const hc = el.querySelector('.palace-self-handles');
-    if (hc) {
-        const saveHandles = () => queueSave(hc, 'handles', () => ({ pairs: collectPairs(hc) }), 600);
-        hc.addEventListener('input', e => { if (e.target.matches('.palace-kv input')) saveHandles(); });
-        hc.addEventListener('click', e => {
-            if (e.target.matches('.palace-kv-add')) {
-                hc.querySelector('.palace-kv-list').insertAdjacentHTML('beforeend', kvRow());
-                hc.querySelector('.palace-kv:last-child .palace-kv-key').focus();
-            } else if (e.target.matches('.palace-kv-del')) {
-                e.target.closest('.palace-kv').remove();
-                saveHandles();
+    // Structured lists: the generic row editor (handles, relationships,
+    // values, projects, custom lists). fields_spec rides along for custom
+    // boxes so a not-yet-persisted list creates itself on first save.
+    el.querySelectorAll('.palace-self-struct').forEach(card => {
+        const section = card.dataset.section;
+        const spec = JSON.parse(card.dataset.spec || '[]');
+        const body = () => ({ rows: collectRows(card),
+                              ...(card.dataset.custom ? { fields_spec: spec } : {}) });
+        const save = () => queueSave(card, section, body, 600);
+        const syncAdd = () => {
+            const max = parseInt(card.dataset.max || '0', 10);
+            const n = card.querySelectorAll('.palace-row:not(.palace-row-head)').length;
+            card.querySelector('.palace-row-add').hidden = !!max && n >= max;
+        };
+        card.addEventListener('input', e => { if (e.target.matches('.palace-row input')) save(); });
+        card.addEventListener('click', e => {
+            if (e.target.matches('.palace-row-add')) {
+                card.querySelector('.palace-row-list').insertAdjacentHTML('beforeend', structRow(spec));
+                card.querySelector('.palace-row-list .palace-row:last-child input')?.focus();
+                syncAdd();
+            } else if (e.target.matches('.palace-row-del')) {
+                e.target.closest('.palace-row').remove();
+                syncAdd();
+                save();
             }
         });
-    }
+    });
 
     // History modals.
     el.querySelectorAll('.palace-self-hist').forEach(btn => {
@@ -265,7 +302,7 @@ function bindCards(el) {
         btn.addEventListener('click', async () => {
             const section = btn.dataset.section;
             if (!confirm(`Remove box [${section}]?`)) return;
-            _localBoxes = _localBoxes.filter(n => n !== section);
+            _localBoxes = _localBoxes.filter(b => b.section !== section);
             try {
                 await palaceSend(`self/${encodeURIComponent(section)}`, 'PUT', { content: '', scope });
                 renderSheet();
@@ -274,16 +311,65 @@ function bindCards(el) {
     });
 
     // + Add box.
-    el.querySelector('#pal-self-addbox')?.addEventListener('click', () => {
-        const name = prompt('Box name:');
-        if (!name?.trim()) return;
-        const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 32);
-        if (!slug) { ui.showToast('Invalid box name', 'error'); return; }
-        if (!_localBoxes.includes(slug)) _localBoxes.push(slug);
+    el.querySelector('#pal-self-addbox')?.addEventListener('click', addBoxModal);
+}
+
+function _slug(s) {
+    return s.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+}
+
+function addBoxModal() {
+    document.querySelector('.mind-modal-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal palace-ent-modal">
+            <div class="pr-modal-header">
+                <h3>+ Add box</h3>
+                <button class="mind-btn-sm mind-modal-close">✕</button>
+            </div>
+            <div class="pr-modal-body">
+                <label class="palace-addbox-label">Name
+                    <input type="text" id="pal-box-name" placeholder="e.g. quirks, games-beaten"></label>
+                <label class="palace-addbox-label">Type
+                    <select id="pal-box-type">
+                        <option value="text">Text box (free writing)</option>
+                        <option value="list">Structured list (columns, + add rows)</option>
+                    </select></label>
+                <div id="pal-box-cols" hidden>
+                    <div class="palace-self-hint">Columns (1–3) — e.g. "Game" and "Score"</div>
+                    <input type="text" class="pal-box-col palace-addbox-col" placeholder="Column 1">
+                    <input type="text" class="pal-box-col palace-addbox-col" placeholder="Column 2 (optional)">
+                    <input type="text" class="pal-box-col palace-addbox-col" placeholder="Column 3 (optional)">
+                </div>
+                <div class="palace-more-wrap"><button class="mind-btn" id="pal-box-create">Create</button></div>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
+    setupModalClose(overlay, close);
+    overlay.querySelector('#pal-box-type').addEventListener('change', e => {
+        overlay.querySelector('#pal-box-cols').hidden = e.target.value !== 'list';
+    });
+    overlay.querySelector('#pal-box-create').addEventListener('click', () => {
+        const slug = _slug(overlay.querySelector('#pal-box-name').value || '');
+        if (!slug) { ui.showToast('Box needs a name', 'error'); return; }
+        let fields = null;
+        if (overlay.querySelector('#pal-box-type').value === 'list') {
+            fields = [...overlay.querySelectorAll('.pal-box-col')]
+                .map(i => i.value.trim()).filter(Boolean)
+                .map(label => ({ key: _slug(label), label }));
+            if (!fields.length) { ui.showToast('A list needs at least one column', 'error'); return; }
+        }
+        if (!_localBoxes.some(b => b.section === slug)) _localBoxes.push({ section: slug, fields });
+        close();
         renderSheet().then(() => {
-            content()?.querySelector(`.palace-self-card[data-section="${slug}"] textarea`)?.focus();
+            content()?.querySelector(`.palace-self-card[data-section="${slug}"] textarea, ` +
+                `.palace-self-card[data-section="${slug}"] .palace-row-add`)?.focus();
         });
     });
+    overlay.querySelector('#pal-box-name').focus();
 }
 
 async function showHistory(section) {
