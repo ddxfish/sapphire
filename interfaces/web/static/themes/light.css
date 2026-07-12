@@ -1,5 +1,7 @@
 /* Light Theme - /static/themes/light.css */
 [data-theme="light"] {
+    color-scheme: light;
+
     /* Trim - blue accent for light mode */
     --trim: #1976d2;
     --trim-glow: rgba(25, 118, 210, 0.3);

@@ -6,6 +6,10 @@
    Spacing/font overrides via [data-density] and [data-font] attributes
    ============================================================================= */
 :root {
+    /* Tell the browser we're a dark UI so UA-rendered internals (select
+       option popups, autofill, scrollbars) match. Light themes override. */
+    color-scheme: dark;
+
     /* =========================================================================
        LAYOUT VARIABLES (new)
        ========================================================================= */
@@ -1044,11 +1048,22 @@ select:focus {
 select {
     cursor: pointer;
     appearance: none;
-    background-image: var(--select-arrow);
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    background-size: 20px;
+    /* !important: appearance:none strips the native arrow, so this SVG is the
+       only dropdown affordance a select has. Any component that styles a
+       select with the `background:` SHORTHAND resets background-image and
+       leaves an arrow-less flat box (the "unstyled dropdowns" class bug).
+       Components keep control of background-color; the arrow is untouchable. */
+    background-image: var(--select-arrow) !important;
+    background-repeat: no-repeat !important;
+    background-position: right 8px center !important;
+    background-size: 20px !important;
     padding-right: 35px;
+}
+
+/* Firefox paints option lists from CSS (Chrome uses color-scheme) */
+select option {
+    background: var(--bg-secondary);
+    color: var(--text);
 }
 
 /* Select variants */

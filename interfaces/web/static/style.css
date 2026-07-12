@@ -9190,9 +9190,9 @@ a.gallery-caption:hover {
     border: 1px solid var(--border, #333); border-radius: 6px; font-size: 13px;
 }
 .palace-select {
-    padding: 6px 8px; background: var(--bg-tertiary, #1a1b2e);
+    padding: 6px 28px 6px 8px; background: var(--bg-tertiary, #1a1b2e);
     color: var(--text-primary, #eee); border: 1px solid var(--border, #333);
-    border-radius: 6px; font-size: 13px; cursor: pointer;
+    border-radius: 6px; font-size: 13px; cursor: pointer; width: auto;
 }
 
 /* Layer + tier + entity chips on chunk cards */
@@ -9253,6 +9253,16 @@ a.gallery-caption:hover {
 .palace-kpill.active { border-color: var(--accent, #4a9eff); color: var(--text-primary, #eee); }
 .palace-ent-card { cursor: pointer; }
 .palace-ent-card:hover { border-color: var(--accent, #4a9eff); }
+.palace-ent-card { position: relative; }
+.palace-ent-x {
+    position: absolute; top: 6px; right: 6px;
+    width: 22px; height: 22px; padding: 0; line-height: 20px; font-size: 12px;
+    border: 1px solid var(--border, #333); border-radius: 50%;
+    background: var(--bg-tertiary, #1a1b2e); color: var(--text-muted, #888);
+    cursor: pointer; opacity: 0; transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+}
+.palace-ent-card:hover .palace-ent-x, .palace-ent-x:focus-visible { opacity: 1; }
+.palace-ent-x:hover { color: var(--error-text, #e57373); border-color: var(--error-text, #e57373); }
 .palace-ent-meta { margin: 4px 0 6px; }
 .palace-kind { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
 .palace-kind-person { background: #14263e; color: #7fb5f5; border: 1px solid #24466e; }
@@ -9262,9 +9272,38 @@ a.gallery-caption:hover {
 .palace-kind-none   { background: var(--bg-tertiary, #1a1b2e); color: var(--text-muted, #888); border: 1px solid var(--border, #333); }
 .palace-ent-counts div { font-size: 12px; }
 
-/* Entity detail modal */
-.palace-ent-modal { max-width: 720px; width: min(720px, 92vw); }
-.palace-ent-modal .pr-modal-body { max-height: 70vh; overflow-y: auto; }
+/* Entity detail modal — column flex so the Save/Cancel footer stays pinned
+   while the body scrolls. */
+.palace-ent-modal {
+    max-width: 720px; width: min(720px, 92vw);
+    display: flex; flex-direction: column; max-height: 80vh; overflow: hidden;
+}
+.palace-ent-modal .pr-modal-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.pr-modal-footer {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 12px 20px; border-top: 1px solid var(--border);
+    flex-shrink: 0; background: var(--bg-secondary);
+}
+.palace-btn-primary {
+    background: var(--trim, var(--accent-blue));
+    border-color: var(--trim, var(--accent-blue));
+    color: var(--bg, #0a0a14);
+    font-weight: 600;
+}
+.palace-btn-primary:hover {
+    background: var(--trim, var(--accent-blue));
+    border-color: var(--trim, var(--accent-blue));
+    filter: brightness(1.2);
+}
+.palace-btn-danger {
+    border-color: var(--error-text, #e57373);
+    color: var(--error-text, #e57373);
+}
+.palace-btn-danger:hover {
+    background: rgba(229, 115, 115, 0.12);
+    border-color: var(--error-text, #e57373);
+}
+.pr-modal-footer .palace-btn-danger { margin-right: auto; }
 .palace-tier-section { margin: 14px 0; }
 .palace-tier-title {
     font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
@@ -9290,7 +9329,6 @@ a.gallery-caption:hover {
 .palace-field-bool { cursor: pointer; }
 .palace-field-bool input { flex: 0 0 auto; }
 .palace-field-bool span { flex: 1; }
-.palace-fields #pal-ent-savefields { margin-top: 8px; }
 
 /* Librarian row (Self dashboard box) + retired chunks */
 .palace-librarian-row {
@@ -9305,7 +9343,33 @@ a.gallery-caption:hover {
     background: var(--bg-tertiary, #1a1b2e); color: var(--text-muted, #999);
     border: 1px dashed var(--border, #444);
 }
+.palace-chunk-superseded { opacity: 0.65; }
+.palace-superseded-pill {
+    font-size: 11px; padding: 1px 6px; border-radius: 8px;
+    background: #2a1b3e; color: #c39df5; border: 1px dashed #4a336e;
+}
 .palace-author-pill { font-size: 12px; opacity: 0.8; cursor: help; }
+
+/* The Ledger (v1) — bottom of the Self page, append-only change stream */
+.palace-ledger { margin-top: 4px; }
+.palace-ledger .palace-self-hint { margin-bottom: 8px; }
+.palace-ledger-row {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 3px 0; font-size: 13px; color: var(--text, #ddd);
+}
+.palace-ledger-ts { color: var(--text-muted, #888); font-size: 12px; white-space: nowrap; }
+.palace-ledger-actor { cursor: help; flex-shrink: 0; }
+.palace-ledger-sum { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.palace-ledger-kids { flex-shrink: 0; }
+.palace-ledger-children {
+    margin-left: 26px; padding-left: 10px;
+    border-left: 2px solid var(--border, #2a2b3e); opacity: 0.85;
+}
+.palace-ledger-divider {
+    text-align: center; color: var(--trim, #7aa2f7); font-size: 12px;
+    border-top: 1px dashed var(--trim, #7aa2f7);
+    margin: 6px 0 4px; padding-top: 3px; opacity: 0.8;
+}
 
 /* Goals (L4) — cards with subtasks + journal */
 .palace-goal-title { font-weight: 600; color: var(--text, #e6e6f0); }

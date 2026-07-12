@@ -2,6 +2,7 @@
 // (memories / entities / knowledge). Mirrors shared/mind-common.js idioms so
 // the palace feels like the same Mind the user already knows.
 import { csrfHeaders, escHtml, timeAgo } from '../../shared/mind-common.js';
+import { showExportDialog, showImportDialog } from '../../shared/import-export.js';
 
 export const API = '/api/plugin/mindpalace';
 export const SCOPE_ENDPOINT = `${API}/scopes`;
@@ -57,42 +58,44 @@ export function transferButtons() {
             <button class="mind-btn-sm" data-transfer="import" title="Import a matching export file into the current scope">⬆ Import</button>`;
 }
 
+// Uses the app-standard io dialogs (clipboard + file), same as personas/
+// prompts/toolsets — one import/export experience everywhere.
 export function bindTransfer(el, layer, getScope, ui, onDone) {
     el.querySelector('[data-transfer="export"]')?.addEventListener('click', async () => {
         const scope = getScope();
         try {
             const data = await palaceGet(`transfer/export?scope=${encodeURIComponent(scope)}&layer=${encodeURIComponent(layer)}`);
-            const name = `mindpalace-${layer}-${scope}-${new Date().toISOString().slice(0, 10)}.json`;
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
-            a.download = name;
-            a.click();
-            URL.revokeObjectURL(a.href);
-            ui.showToast(`Exported ${data.counts.chunks} chunks → ${name}`, 'success');
+            showExportDialog({
+                type: 'Mind Palace',
+                name: `${layer} (${scope})`,
+                data,
+                filename: `mindpalace-${layer}-${scope}-${new Date().toISOString().slice(0, 10)}.json`,
+            });
         } catch (e) { ui.showToast(`Export failed: ${e.message}`, 'error'); }
     });
     el.querySelector('[data-transfer="import"]')?.addEventListener('click', () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json,application/json';
-        input.addEventListener('change', async () => {
-            const file = input.files?.[0];
-            if (!file) return;
-            let data;
-            try { data = JSON.parse(await file.text()); }
-            catch { ui.showToast('Not a JSON file', 'error'); return; }
-            try {
+        showImportDialog({
+            type: `Mind Palace ${layer}`,
+            existingNames: [],
+            validate: (parsed) => {
+                if (parsed?.format !== 'mindpalace-export') return 'Not a Mind Palace export file';
+                if (parsed.layer && parsed.layer !== layer)
+                    return `This is a "${parsed.layer}" export — import it from that tab`;
+                return null;
+            },
+            getName: (parsed) => `${(parsed.chunks || []).length} chunks into "${getScope()}"`,
+            onImport: async (parsed) => {
                 const r = await palaceSend('transfer/import', 'POST',
-                    { scope: getScope(), expect_layer: layer, data });
+                    { scope: getScope(), expect_layer: layer, data: parsed });
                 const bits = [`${r.imported} imported`, `${r.skipped} skipped`];
                 if (r.entities_upserted) bits.push(`${r.entities_upserted} entities`);
                 if (r.edges_seeded) bits.push(`${r.edges_seeded} connections`);
                 if (r.arrived_as_history) bits.push(`${r.arrived_as_history} as history`);
                 ui.showToast(`Import: ${bits.join(', ')}`, 'success');
                 onDone && onDone();
-            } catch (e) { ui.showToast(`Import failed: ${e.message}`, 'error'); }
+                return false;   // counts toast above is the feedback — skip the dialog's generic one
+            },
         });
-        input.click();
     });
 }
 
@@ -159,12 +162,18 @@ export function chunkCard(c, { showLayer = true } = {}) {
     const prunedPill = pruned
         ? `<span class="palace-pruned-pill" title="Retired by the librarian${c.meta.pruned_reason ? ': ' + escHtml(c.meta.pruned_reason) : ''} — hidden from her recall, restorable">\u{1F9F9} retired</span>`
         : '';
+    // Archived self-sheet versions (identity/values/projects keep their
+    // becoming-history) — visibly older editions, not current sheet state.
+    const superseded = !!c.meta?.superseded_at;
+    const historyPill = superseded
+        ? `<span class="palace-superseded-pill" title="Archived version — replaced ${escHtml(String(c.meta.superseded_at).slice(0, 10))}. The Self tab shows the current one; 📜 on its card lists these.">\u{1F4DC} history</span>`
+        : '';
     return `
-        <div class="mind-mem-card palace-chunk${pruned ? ' palace-chunk-pruned' : ''}" data-id="${c.id}">
+        <div class="mind-mem-card palace-chunk${pruned ? ' palace-chunk-pruned' : ''}${superseded ? ' palace-chunk-superseded' : ''}" data-id="${c.id}">
             <div class="mind-mem-header">
                 ${showLayer ? layerChip(c.layer) : ''}
                 ${tierChip}${entChip}${authorPill}
-                ${labelChip(c.label)}${prunedPill}
+                ${labelChip(c.label)}${prunedPill}${historyPill}
                 ${keyPill(c.private_key)}
                 <span class="mind-mem-time">${escHtml(timeAgo(c.created))}</span>
                 <span class="mind-mem-id">[${c.id}]</span>

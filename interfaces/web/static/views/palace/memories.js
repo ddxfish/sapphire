@@ -20,11 +20,10 @@ let scopes = [];
 let unsub = null;
 
 let _search = '';
-let _layer = '';       // '' = events+self (all non-entity, non-knowledge)
 let _offset = 0;
 let _searchTimer = null;
 
-function resetFilters() { _search = ''; _layer = ''; _offset = 0; }
+function resetFilters() { _search = ''; _offset = 0; }
 
 export default {
     init(el) { container = el; },
@@ -44,7 +43,7 @@ function content() { return container?.querySelector('#pal-mem-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'memories', help: helpPills('Memories', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — layered memory. Events are her diary; Self is who she is. Expand "meta" on any card to see how the memory was made.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'memories', help: helpPills('Memories', { doc: 'MEMORY.md', inline: true }), status: '\u{1F3DB}️ Mind Palace — her diary, one stream. Deliberate self notes ride along (chip says which); the self SHEET lives on the Self tab. Expand "meta" on any card to see how a memory was made.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
@@ -63,11 +62,11 @@ function render() {
 async function renderList() {
     const el = content();
     if (!el) return;
-    // Server-side layer filter always — 'events,self' by default so the
-    // toolbar count matches the visible list (the old client-side filter
-    // made a lone entities/knowledge chunk read as a phantom "1 in scope").
+    // ONE stream (Krem's ruling, 2026-07-12): events + deliberate self saves,
+    // server-side filtered so the count matches the list. Self-sheet chunks
+    // are excluded — their home is the Self page and the ledger.
     const params = new URLSearchParams({ scope, limit: PAGE, offset: _offset,
-                                         layer: _layer || 'events,self' });
+                                         layer: 'events,self', exclude_sheet: 1 });
     if (_search) params.set('q', _search);
     let data;
     try {
@@ -81,17 +80,12 @@ async function renderList() {
     el.innerHTML = `
         <div class="mind-toolbar">
             <input type="search" id="pal-mem-search" class="palace-search" placeholder="Search memories…" value="${escAttr(_search)}">
-            <select id="pal-mem-layer" class="mind-btn palace-select">
-                <option value="" ${_layer === '' ? 'selected' : ''}>Events + Self</option>
-                <option value="events" ${_layer === 'events' ? 'selected' : ''}>Events</option>
-                <option value="self" ${_layer === 'self' ? 'selected' : ''}>Self</option>
-            </select>
             <button class="mind-btn" id="pal-mem-add">+ Add Memory</button>
             ${transferButtons()}
             <span class="palace-count">${data.total} in scope</span>
         </div>
         ${chunks.length
-            ? `<div class="palace-chunk-list">${chunks.map(c => chunkCard(c, { showLayer: _layer === '' })).join('')}</div>`
+            ? `<div class="palace-chunk-list">${chunks.map(c => chunkCard(c)).join('')}</div>`
             : `<div class="mind-empty">${_search ? 'No matches' : 'No memories yet'}</div>`}
         ${(!_search && _offset + PAGE < data.total)
             ? `<div class="palace-more-wrap"><button class="mind-btn" id="pal-mem-more">Load more (${data.total - _offset - PAGE} older)</button></div>`
@@ -112,9 +106,6 @@ async function renderList() {
         searchBox?.focus();
         searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
     }
-    el.querySelector('#pal-mem-layer')?.addEventListener('change', (e) => {
-        _layer = e.target.value; _offset = 0; renderList();
-    });
     el.querySelector('#pal-mem-add')?.addEventListener('click', showAddModal);
     bindTransfer(el, 'events', () => scope, ui, renderList);
     el.querySelector('#pal-mem-more')?.addEventListener('click', () => {

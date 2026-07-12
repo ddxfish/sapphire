@@ -30,9 +30,13 @@ let _localBoxes = [];   // client-side boxes not yet persisted
 export default {
     init(el) { container = el; },
     async show() {
-        // Editor semantics: skip SSE refresh while a card is being typed in.
+        // Editor semantics: skip SSE refresh while ANY self card holds focus
+        // (buttons included — a re-render mid-edit wipes unsaved input) or a
+        // save is still pending (the 'conse' truncation class, 2026-07-12).
         if (!unsub) unsub = subscribeMindDomain('memory', () => scope,
-            () => container?.offsetParent !== null && !container.querySelector('.palace-self-card textarea:focus, .palace-row input:focus'),
+            () => container?.offsetParent !== null
+                && !container.querySelector('.palace-self-card:focus-within')
+                && !Object.keys(_saveTimers).length,
             renderSheet);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
         else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
@@ -67,6 +71,10 @@ function render() {
 async function renderSheet() {
     const el = content();
     if (!el) return;
+    // Pending saves fire from the still-attached DOM and land BEFORE we read
+    // server state — a stale timer surviving into a re-render used to save
+    // from a detached card and truncate mid-word ('consent' → 'conse').
+    await flushAllSaves();
     let data;
     try {
         data = await palaceGet(`self?scope=${encodeURIComponent(scope)}`);
@@ -99,10 +107,83 @@ async function renderSheet() {
             <button class="mind-btn" id="pal-self-addbox">+ Add box</button>
             ${transferButtons()}
         </div>
+        <div id="pal-ledger"></div>
     `;
     bindCards(el);
     bindLibrarian(el);
     bindTransfer(el, 'self', () => scope, ui, renderSheet);
+    renderLedger(el);
+}
+
+// ─── The Ledger (v1) — append-only change stream, bottom of the sheet ───────
+// Collapsed by default: header counts + the last 3 lines. Expanded: the full
+// stream, unread divider at her last read, pass rows unfold their children.
+// Read-only surface — every row is written by the backend seams.
+
+const LEDGER_ICONS = { user: '\u{1F464}', ai: '\u{1F916}', librarian: '\u{1F9F9}', import: '\u{1F4E6}', system: '⚙️' };
+let _ledgerOpen = false;
+let _ledgerLimit = 30;
+
+function ledgerLine(r) {
+    return `<div class="palace-ledger-row">
+        <span class="palace-ledger-ts">${escHtml((r.ts || '').slice(0, 10))}</span>
+        <span class="palace-ledger-actor" title="${escAttr(r.actor)}">${LEDGER_ICONS[r.actor] || '·'}</span>
+        <span class="palace-ledger-sum">${escHtml(r.summary)}</span>
+        ${r.children ? `<button class="mind-btn-sm palace-ledger-kids" data-id="${r.id}" data-n="${r.children}">▸ ${r.children}</button>` : ''}
+    </div>`;
+}
+
+async function renderLedger(el) {
+    const box = el.querySelector('#pal-ledger');
+    if (!box) return;
+    let data;
+    try {
+        data = await palaceGet(`ledger?scope=${encodeURIComponent(scope)}&limit=${_ledgerOpen ? _ledgerLimit : 3}`);
+    } catch { box.innerHTML = ''; return; }
+    const rows = data.rows || [];
+    const lines = [];
+    let divided = false;
+    for (const r of rows) {
+        if (_ledgerOpen && !divided && data.last_read_ts && r.ts <= data.last_read_ts && lines.length) {
+            lines.push('<div class="palace-ledger-divider">— she has read to here —</div>');
+            divided = true;
+        }
+        lines.push(ledgerLine(r));
+    }
+    box.innerHTML = `
+        <div class="mind-mem-card palace-ledger">
+            <div class="palace-self-card-head">
+                <span class="palace-self-title">\u{1F4D2} Ledger</span>
+                <span class="palace-self-hint">${data.week} this week · ${data.unread} since her last read</span>
+                <button class="mind-btn-sm" id="pal-ledger-toggle">${_ledgerOpen ? '▾ collapse' : '▸ expand'}</button>
+            </div>
+            <div class="palace-self-hint">Every change to her memory, by whoever made it — append-only, read-only.</div>
+            ${rows.length ? lines.join('') : '<div class="mind-empty">Nothing recorded yet — changes land here from now on.</div>'}
+            ${(_ledgerOpen && rows.length < data.total)
+                ? `<div class="palace-more-wrap"><button class="mind-btn-sm" id="pal-ledger-more">Load more (${data.total - rows.length} older)</button></div>`
+                : ''}
+        </div>`;
+    box.querySelector('#pal-ledger-toggle')?.addEventListener('click', () => {
+        _ledgerOpen = !_ledgerOpen;
+        renderLedger(el);
+    });
+    box.querySelector('#pal-ledger-more')?.addEventListener('click', () => {
+        _ledgerLimit += 30;
+        renderLedger(el);
+    });
+    box.querySelectorAll('.palace-ledger-kids').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const row = btn.closest('.palace-ledger-row');
+            const open = row.nextElementSibling?.classList.contains('palace-ledger-children');
+            if (open) { row.nextElementSibling.remove(); btn.textContent = `▸ ${btn.dataset.n}`; return; }
+            try {
+                const d = await palaceGet(`ledger?scope=${encodeURIComponent(scope)}&parent_id=${btn.dataset.id}`);
+                row.insertAdjacentHTML('afterend',
+                    `<div class="palace-ledger-children">${(d.rows || []).map(ledgerLine).join('')}</div>`);
+                btn.textContent = `▾ ${btn.dataset.n}`;
+            } catch (e) { ui.showToast(`Ledger children failed: ${e.message}`, 'error'); }
+        });
+    });
 }
 
 function dashboardCard(d) {
@@ -235,16 +316,31 @@ function flashSaved(card) {
     chip._t = setTimeout(() => { chip.hidden = true; }, 1500);
 }
 
-async function saveSection(card, section, body) {
+async function saveSection(card, section, body, scopeAt = scope) {
     try {
-        await palaceSend(`self/${encodeURIComponent(section)}`, 'PUT', { ...body, scope });
+        await palaceSend(`self/${encodeURIComponent(section)}`, 'PUT', { ...body, scope: scopeAt });
         flashSaved(card);
     } catch (e) { ui.showToast(`Save failed: ${e.message}`, 'error'); }
 }
 
-function queueSave(card, section, body, delay = 900) {
-    clearTimeout(_saveTimers[section]);
-    _saveTimers[section] = setTimeout(() => saveSection(card, section, body()), delay);
+function queueSave(card, section, body, delay = 1000) {
+    clearTimeout(_saveTimers[section]?.t);
+    const scopeAt = scope;   // a flush after a scope switch must not cross-write
+    const fire = () => { delete _saveTimers[section]; return saveSection(card, section, body(), scopeAt); };
+    _saveTimers[section] = { t: setTimeout(fire, delay), fire };
+}
+
+// Fire one section's pending save NOW, reading the live DOM. No-op when idle.
+function flushSave(section) {
+    const p = _saveTimers[section];
+    if (!p) return null;
+    clearTimeout(p.t);
+    return p.fire();
+}
+
+async function flushAllSaves() {
+    const waits = Object.keys(_saveTimers).map(flushSave).filter(Boolean);
+    if (waits.length) await Promise.all(waits);
 }
 
 function collectRows(card) {
@@ -262,10 +358,7 @@ function bindCards(el) {
         const ta = card.querySelector('textarea');
         if (!ta) return;
         ta.addEventListener('input', () => queueSave(card, section, () => ({ content: ta.value })));
-        ta.addEventListener('blur', () => {
-            clearTimeout(_saveTimers[section]);
-            saveSection(card, section, { content: ta.value });
-        });
+        ta.addEventListener('blur', () => flushSave(section));
     });
 
     // Structured lists: the generic row editor (handles, relationships,
@@ -276,7 +369,12 @@ function bindCards(el) {
         const spec = JSON.parse(card.dataset.spec || '[]');
         const body = () => ({ rows: collectRows(card),
                               ...(card.dataset.custom ? { fields_spec: spec } : {}) });
-        const save = () => queueSave(card, section, body, 600);
+        const save = () => queueSave(card, section, body);
+        // Struct inputs had no blur flush (textareas did) — leaving the card
+        // mid-debounce stranded the half-typed word as the final save.
+        card.addEventListener('focusout', e => {
+            if (!card.contains(e.relatedTarget)) flushSave(section);
+        });
         const syncAdd = () => {
             const max = parseInt(card.dataset.max || '0', 10);
             const n = card.querySelectorAll('.palace-row:not(.palace-row-head)').length;

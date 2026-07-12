@@ -6,7 +6,7 @@ import { renderSectionHeader, bindSectionHeader } from '../../shared/section-hea
 import { helpPills } from '../../features/video-link.js';
 import { renderScopeSidebar, bindScopeSidebar } from '../../shared/scope-sidebar.js';
 import { listScopes } from '../../shared/scope-api.js';
-import { escHtml, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
+import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
@@ -89,16 +89,20 @@ async function renderEntities() {
         `<button class="palace-kpill ${_kindFilter === val ? 'active' : ''}" data-kind="${val}">${label} <span>${n}</span></button>` : '';
 
     el.innerHTML = `
+        <div class="mind-toolbar">
+            <button class="mind-btn" id="pal-ent-new">+ New entity</button>
+            ${transferButtons()}
+        </div>
         <div class="mind-toolbar palace-kind-pills">
             ${pill('', 'All', all.length)}
             ${TPL_LIST.map(t => pill(t.kind, `${t.icon} ${escHtml(t.label)}`, counts[t.kind])).join('')}
             ${pill('none', 'Unsorted', counts.none)}
-            <button class="mind-btn" id="pal-ent-new">+ New entity</button>
-            ${transferButtons()}
         </div>
         ${list.length ? `<div class="mind-people-grid">
             ${list.map(e => `
                 <div class="mind-person-card palace-ent-card" data-id="${e.id}" role="button" tabindex="0">
+                    <button class="palace-ent-x" data-id="${e.id}" data-name="${escAttr(e.name)}"
+                            data-chunks="${e.chunk_count}" title="Delete entity">✕</button>
                     <div class="mind-person-name">${escHtml(e.name)}</div>
                     <div class="palace-ent-meta">${kindChip(e.kind)}</div>
                     ${e.headline ? `<div class="palace-ent-headline">${escHtml(e.headline.length > 90 ? e.headline.slice(0, 90) + '…' : e.headline)}</div>` : ''}
@@ -119,6 +123,23 @@ async function renderEntities() {
     el.querySelectorAll('.palace-ent-card').forEach(card => {
         card.addEventListener('click', () => showEntityModal(parseInt(card.dataset.id)));
     });
+    el.querySelectorAll('.palace-ent-x').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            if (!confirm(deleteEntityWarning(btn.dataset.name, parseInt(btn.dataset.chunks) || 0))) return;
+            try {
+                const r = await palaceSend(`entities/${btn.dataset.id}`, 'DELETE');
+                ui.showToast(`Deleted ${r.name}`, 'success');
+                renderEntities();
+            } catch (e2) { ui.showToast(`Delete failed: ${e2.message}`, 'error'); }
+        });
+    });
+}
+
+function deleteEntityWarning(name, chunkCount) {
+    return `Delete "${name}"?\n\nIts ${chunkCount} ${chunkCount === 1 ? 'entry' : 'entries'} `
+        + `(headline, facts, trivia) go with it. Memories that mention it stay — `
+        + `they just lose the link. This cannot be undone.`;
 }
 
 function showNewEntityModal() {
@@ -161,10 +182,10 @@ function showNewEntityModal() {
     overlay.querySelector('#pal-ent-name').focus();
 }
 
-function fieldsForm(ent) {
-    const t = TPL[ent.kind];
+function fieldsForm(kind, fields) {
+    const t = TPL[kind];
     if (!t) return '';
-    const f = ent.meta?.fields || {};
+    const f = fields || {};
     const extras = Object.keys(f).filter(k => !t.fields.some(fd => fd.key === k));
     const rows = [
         ...t.fields,
@@ -182,8 +203,15 @@ function fieldsForm(ent) {
                 <span>${escHtml(fd.label)}</span>
                 <input type="text" data-fkey="${escHtml(fd.key)}" value="${escHtml(String(f[fd.key] ?? ''))}">
             </label>`).join('')}
-        <button class="mind-btn" id="pal-ent-savefields">Save details</button>
     </div>`;
+}
+
+function collectFields(overlay) {
+    const fields = {};
+    overlay.querySelectorAll('[data-fkey]').forEach(inp => {
+        fields[inp.dataset.fkey] = inp.type === 'checkbox' ? inp.checked : inp.value;
+    });
+    return fields;
 }
 
 async function showEntityModal(eid) {
@@ -216,9 +244,8 @@ async function showEntityModal(eid) {
                     <input type="text" id="pal-ent-headline" maxlength="512"
                            placeholder="Short description — one line on who/what this is *"
                            value="${escHtml(headline?.content || '')}">
-                    <button class="mind-btn-sm" id="pal-ent-saveheadline">Save</button>
                 </div>
-                ${fieldsForm(ent)}
+                <div id="pal-ent-fields-holder">${fieldsForm(ent.kind, ent.meta?.fields)}</div>
                 ${[1, 2, 3].filter(t => byTier[t].length).map(t => `
                     <div class="palace-tier-section">
                         <div class="palace-tier-title">${TIER_NAMES[t]}</div>
@@ -258,39 +285,54 @@ async function showEntityModal(eid) {
                             </div>`).join('')}
                     </div>` : ''}
             </div>
+            <div class="pr-modal-footer">
+                <button class="mind-btn palace-btn-danger" id="pal-ent-delete">Delete</button>
+                <button class="mind-btn" id="pal-ent-cancel">Cancel</button>
+                <button class="mind-btn palace-btn-primary" id="pal-ent-save">Save</button>
+            </div>
         </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector('.mind-modal-close').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#pal-ent-cancel').addEventListener('click', () => overlay.remove());
     setupModalClose(overlay, () => overlay.remove());
 
-    overlay.querySelector('#pal-ent-kind').addEventListener('change', async (e) => {
+    overlay.querySelector('#pal-ent-delete').addEventListener('click', async () => {
+        if (!confirm(deleteEntityWarning(ent.name, data.chunks.length))) return;
         try {
-            await palaceSend(`entities/${eid}`, 'PUT', { kind: e.target.value || null });
-            ui.showToast('Kind updated', 'success');
-            renderEntities();
+            const r = await palaceSend(`entities/${eid}`, 'DELETE');
+            ui.showToast(`Deleted ${r.name}`, 'success');
             overlay.remove();
-            showEntityModal(eid);   // re-open: the fields form follows the kind
-        } catch (err) { ui.showToast(`Update failed: ${err.message}`, 'error'); }
-    });
-
-    overlay.querySelector('#pal-ent-savefields')?.addEventListener('click', async () => {
-        const fields = {};
-        overlay.querySelectorAll('[data-fkey]').forEach(inp => {
-            fields[inp.dataset.fkey] = inp.type === 'checkbox' ? inp.checked : inp.value;
-        });
-        try {
-            await palaceSend(`entities/${eid}`, 'PUT', { fields });
-            ui.showToast('Details saved', 'success');
             renderEntities();
-        } catch (err) { ui.showToast(`Save failed: ${err.message}`, 'error'); }
+        } catch (err) { ui.showToast(`Delete failed: ${err.message}`, 'error'); }
     });
 
-    overlay.querySelector('#pal-ent-saveheadline').addEventListener('click', async () => {
+    // One deferred save for kind + headline + fields (footer Save commits all).
+    const kindSel = overlay.querySelector('#pal-ent-kind');
+    const initialFields = JSON.stringify(collectFields(overlay));
+
+    // Kind change re-renders the fields form locally — nothing saves until Save.
+    kindSel.addEventListener('change', () => {
+        const typed = collectFields(overlay);
+        overlay.querySelector('#pal-ent-fields-holder').innerHTML =
+            fieldsForm(kindSel.value || null, { ...(ent.meta?.fields || {}), ...typed });
+    });
+
+    overlay.querySelector('#pal-ent-save').addEventListener('click', async () => {
+        const body = {};
+        if ((ent.kind || '') !== kindSel.value) body.kind = kindSel.value;
+        const hl = overlay.querySelector('#pal-ent-headline').value.trim();
+        if (hl !== (headline?.content || '').trim()) body.headline = hl;
+        // Fields ride along when present and changed (or the kind changed —
+        // the form now belongs to the new kind). Absent form = fields untouched.
+        if (overlay.querySelector('[data-fkey]')) {
+            const fields = collectFields(overlay);
+            if ('kind' in body || JSON.stringify(fields) !== initialFields) body.fields = fields;
+        }
+        if (!Object.keys(body).length) { overlay.remove(); return; }
         try {
-            await palaceSend(`entities/${eid}`, 'PUT', {
-                headline: overlay.querySelector('#pal-ent-headline').value.trim(),
-            });
-            ui.showToast('Description saved', 'success');
+            await palaceSend(`entities/${eid}`, 'PUT', body);
+            ui.showToast('Saved', 'success');
+            overlay.remove();
             renderEntities();
         } catch (err) { ui.showToast(`Save failed: ${err.message}`, 'error'); }
     });
