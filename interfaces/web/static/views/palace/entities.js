@@ -9,7 +9,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'people';
@@ -26,6 +26,7 @@ let TPL_LIST = [];      // ordered templates
 export default {
     init(el) { container = el; },
     async show() {
+        await refreshPalaceTabs();
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderEntities);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
         else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
@@ -267,10 +268,9 @@ async function showEntityModal(eid) {
                     <button class="mind-btn" id="pal-ent-addfact">+ Add fact</button>
                     <div class="palace-addfact-form" hidden>
                         <textarea id="pal-ent-facttext" rows="3" maxlength="512"
-                                  placeholder="New fact about ${escHtml(ent.name)} (max 512 chars)"></textarea>
+                                  placeholder="New fact about ${escHtml(ent.name)} (max 512 chars) — commits with Save below"></textarea>
                         <div class="palace-addfact-actions">
                             <button class="mind-btn-sm" id="pal-ent-factcancel">Cancel</button>
-                            <button class="mind-btn" id="pal-ent-factsave">Save fact</button>
                         </div>
                     </div>
                 </div>
@@ -317,6 +317,10 @@ async function showEntityModal(eid) {
             fieldsForm(kindSel.value || null, { ...(ent.meta?.fields || {}), ...typed });
     });
 
+    // ONE Save for the whole modal (Krem's ruling, 2026-07-12 — the old
+    // per-section "Save fact" re-rendered from the server and wiped unsaved
+    // top-section edits): footer Save commits kind + headline + fields AND
+    // any pending new fact, in one click.
     overlay.querySelector('#pal-ent-save').addEventListener('click', async () => {
         const body = {};
         if ((ent.kind || '') !== kindSel.value) body.kind = kindSel.value;
@@ -328,9 +332,15 @@ async function showEntityModal(eid) {
             const fields = collectFields(overlay);
             if ('kind' in body || JSON.stringify(fields) !== initialFields) body.fields = fields;
         }
-        if (!Object.keys(body).length) { overlay.remove(); return; }
+        const factText = overlay.querySelector('#pal-ent-facttext').value.trim();
+        if (!Object.keys(body).length && !factText) { overlay.remove(); return; }
         try {
-            await palaceSend(`entities/${eid}`, 'PUT', body);
+            if (Object.keys(body).length) await palaceSend(`entities/${eid}`, 'PUT', body);
+            if (factText) {
+                await palaceSend('chunks', 'POST', {
+                    content: factText, scope: ent.scope, layer: 'entities', entity: ent.name,
+                });
+            }
             ui.showToast('Saved', 'success');
             overlay.remove();
             renderEntities();
@@ -347,21 +357,25 @@ async function showEntityModal(eid) {
         overlay.querySelector('#pal-ent-facttext').focus();
     });
     overlay.querySelector('#pal-ent-factcancel').addEventListener('click', () => {
+        // Clear on cancel — hidden text must not silently ride the footer Save.
+        overlay.querySelector('#pal-ent-facttext').value = '';
         factForm.hidden = true;
         factBtn.hidden = false;
     });
-    overlay.querySelector('#pal-ent-factsave').addEventListener('click', async () => {
-        const text = overlay.querySelector('#pal-ent-facttext').value.trim();
-        if (!text) { ui.showToast('Fact is empty', 'error'); return; }
-        try {
-            await palaceSend('chunks', 'POST', {
-                content: text, scope: ent.scope, layer: 'entities', entity: ent.name,
-            });
-            ui.showToast('Saved', 'success');
-            overlay.remove();
-            showEntityModal(eid);
-        } catch (err) { ui.showToast(`Save failed: ${err.message}`, 'error'); }
-    });
 
-    bindChunkCards(overlay, async () => { overlay.remove(); showEntityModal(eid); renderEntities(); }, ui);
+    // Fact ✕ deletes IN PLACE (no modal re-render — a re-render from the
+    // server would wipe unsaved top-section edits, the same bug class as the
+    // old "Save fact" button). The background list refreshes; the modal's
+    // section headers go stale only until next open. Cosmetic > data loss.
+    overlay.querySelectorAll('.palace-del-chunk').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!confirm('Delete this memory?')) return;
+            try {
+                await palaceSend(`chunks/${btn.dataset.id}`, 'DELETE');
+                ui.showToast('Deleted', 'success');
+                btn.closest('.mind-mem-card')?.remove();
+                renderEntities();
+            } catch (e) { ui.showToast(`Delete failed: ${e.message}`, 'error'); }
+        });
+    });
 }

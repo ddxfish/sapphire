@@ -598,6 +598,19 @@ class PluginLoader:
                 info["registered_providers"] = registered
                 logger.debug(f"[PLUGINS] {name}: registered {len(registered)} provider(s)")
 
+        # Register memory layers (mirror-mode declarations consumed by the
+        # active memory plugin; harmless when no memory plugin is loaded)
+        layer_defs = capabilities.get("memory_layers", [])
+        if layer_defs:
+            try:
+                from core.memory_layers import register_layer
+                accepted = [ld.get("key") for ld in layer_defs
+                            if isinstance(ld, dict) and register_layer(ld.get("key"), ld, name)]
+                if accepted:
+                    info["registered_memory_layers"] = accepted
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: memory layer registration failed: {e}")
+
         # Register scheduled tasks with continuity scheduler
         schedules = capabilities.get("schedule", [])
         if schedules and self._scheduler:
@@ -847,6 +860,16 @@ class PluginLoader:
                     settings_manager.set(registry.setting_key, 'none')
                     logger.info(f"[PLUGINS] Reset {registry.setting_key} to 'none' (was '{prov_key}' from disabled plugin)")
                 registry.unregister_plugin(name)
+
+        # Unregister memory layers (registered layers go dark in the memory
+        # plugin — data survives, reads exclude it until re-enable)
+        if info.get("registered_memory_layers"):
+            try:
+                from core.memory_layers import unregister_plugin as _unreg_layers
+                _unreg_layers(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister memory layers: {e}")
+
         # Remove plugin schedule tasks and event sources
         # Snapshot daemon_mod under lock, then stop OUTSIDE lock to avoid
         # ABBA deadlock: _lock → _lifecycle_lock vs _lifecycle_lock → _lock

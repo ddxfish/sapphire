@@ -10,7 +10,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const MAX_CHARS = 2000;
@@ -30,6 +30,7 @@ let _localBoxes = [];   // client-side boxes not yet persisted
 export default {
     init(el) { container = el; },
     async show() {
+        await refreshPalaceTabs();
         // Editor semantics: skip SSE refresh while ANY self card holds focus
         // (buttons included — a re-render mid-edit wipes unsaved input) or a
         // save is still pending (the 'conse' truncation class, 2026-07-12).

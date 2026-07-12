@@ -74,6 +74,41 @@ async function loadViews() {
     );
 }
 
+// Plugin memory layers (v1.1): one generic view module per registered layer
+// (?layer= on the import URL = distinct instance), plus a Mind flyout item
+// after Goals. Registration + injection only happen for layers that exist,
+// so there's nothing to click before this resolves.
+async function loadPluginLayerViews() {
+    let layers = [];
+    try {
+        const r = await fetch('/api/plugin/mindpalace/layers', { credentials: 'same-origin' });
+        if (!r.ok) return;
+        layers = (await r.json()).layers || [];
+    } catch { return; }
+    if (!layers.length) return;
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    let anchor = document.querySelector('.nav-flyout-item[data-view="goals"]');
+    for (const l of layers) {
+        const id = `layer-${l.key}`;
+        try {
+            const mod = await import(`./views/palace/layer.js?layer=${encodeURIComponent(l.key)}${_v ? '&v=' + window.__v : ''}`);
+            registerView(id, mod.default, { group: 'mind' });
+            if (anchor && !document.querySelector(`.nav-flyout-item[data-view="${id}"]`)) {
+                const item = document.createElement('div');
+                item.className = 'nav-flyout-item';
+                item.dataset.view = id;
+                item.setAttribute('role', 'button');
+                item.setAttribute('tabindex', '0');
+                item.innerHTML = `${esc(l.icon || '\u{1F9E9}')} ${esc(l.label)}`;
+                anchor.after(item);
+                anchor = item;   // keep declaration order for multiple layers
+            }
+        } catch (e) {
+            console.error(`[Views] Plugin layer '${l.key}' failed to load:`, e);
+        }
+    }
+}
+
 // Initialize appearance settings from localStorage (theme, density, font)
 // Trim color is per-persona now — default cyan set in CSS body
 function initAppearance() {
@@ -131,6 +166,11 @@ async function init() {
 
         // Load views dynamically (isolated — one broken view won't kill the app)
         await loadViews();
+
+        // Plugin memory layers (v1.1): registered layers get a generic palace
+        // view + a Mind flyout entry. Fire-and-forget — silent no-op when the
+        // mindpalace plugin is off (live-probe precedent: mind-dispatch.js).
+        loadPluginLayerViews();
 
         // === DATA FETCH (can fail without killing the app) ===
         // Must run BEFORE initRouter so chat dropdown has real data when chat.show() fires

@@ -46,6 +46,7 @@ The `capabilities` object declares what the plugin provides:
     "schedule": [ ... ],
     "settings": [ ... ],
     "providers": { ... },
+    "memory_layers": [ ... ],
     "web": { ... },
     "daemon": { ... },
     "services": [ ... ],
@@ -65,6 +66,7 @@ Each capability is documented in its own guide:
 - [Schedule](schedule.md)
 - [Settings & Web UI](settings.md)
 - [Providers (TTS, STT, Embedding, LLM)](providers.md)
+- [Memory Layers](memory-layers.md) — register your own layer in the Mind Palace memory system
 - [Apps](APPS.md)
 - [Themes](THEMES.md)
 - [Widgets](widgets.md) — dashboard action-panel cards (rendered in Settings → Dashboard)

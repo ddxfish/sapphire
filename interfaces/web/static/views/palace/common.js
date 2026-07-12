@@ -20,6 +20,28 @@ export const PALACE_TABS = [
     { id: 'goals', label: 'Goals', icon: '\u{1F3AF}' },
 ];
 
+// Plugin layers (v1.1): registered layers get their own tabs after the core
+// five. Splices PALACE_TABS in place so every view's next render sees them;
+// call at the top of show(). Short cache — one fetch per Mind visit.
+export let PLUGIN_LAYERS = [];
+let _layersTs = 0;
+export async function refreshPalaceTabs() {
+    if (Date.now() - _layersTs < 10_000) return PALACE_TABS;
+    _layersTs = Date.now();
+    try {
+        PLUGIN_LAYERS = (await palaceGet('layers')).layers || [];
+    } catch {
+        PLUGIN_LAYERS = [];
+    }
+    for (let i = PALACE_TABS.length - 1; i >= 0; i--) {
+        if (PALACE_TABS[i].id.startsWith('layer-')) PALACE_TABS.splice(i, 1);
+    }
+    for (const l of PLUGIN_LAYERS) {
+        PALACE_TABS.push({ id: `layer-${l.key}`, label: l.label, icon: l.icon || '\u{1F9E9}' });
+    }
+    return PALACE_TABS;
+}
+
 export async function palaceGet(path) {
     const r = await fetch(`${API}/${path}`, { credentials: 'same-origin' });
     const data = await r.json().catch(() => ({}));
@@ -45,9 +67,14 @@ export async function describeScopeForDelete(name) {
     try {
         const st = await palaceGet(`status?scope=${encodeURIComponent(name)}`);
         const L = st.layers || {};
+        const core = ['events', 'self', 'entities', 'knowledge', 'goals'];
+        const extra = Object.entries(L)
+            .filter(([k]) => !core.includes(k))
+            .reduce((a, [, n]) => a + n, 0);
         return `Right now “${name}” holds ${L.events || 0} memories, `
-            + `${L.self || 0} self entries, ${st.entities || 0} entities, and `
-            + `${L.knowledge || 0} knowledge chunks — ALL of it goes.`;
+            + `${L.self || 0} self entries, ${st.entities || 0} entities, `
+            + (extra ? `${extra} plugin-layer chunks, ` : '')
+            + `and ${L.knowledge || 0} knowledge chunks — ALL of it goes.`;
     } catch { return ''; }
 }
 
@@ -155,8 +182,9 @@ export function chunkCard(c, { showLayer = true } = {}) {
     const tierChip = c.tier ? `<span class="palace-tier palace-tier-${c.tier}" title="Tier ${c.tier}: ${['', 'headline', 'facts', 'trivia'][c.tier] || ''}">T${c.tier}</span>` : '';
     const entChip = c.entity_name ? `<span class="palace-ent-chip">${escHtml(c.entity_name)}</span>` : '';
     const author = c.meta?.added_by;
+    const isPlugin = typeof author === 'string' && author.startsWith('plugin:');
     const authorPill = author
-        ? `<span class="palace-author-pill" title="Added by ${author === 'ai' ? 'Sapphire' : 'you'}">${author === 'ai' ? '\u{1F916}' : '\u{1F464}'}</span>`
+        ? `<span class="palace-author-pill" title="Added by ${isPlugin ? escHtml(author.slice(7)) + ' (plugin)' : (author === 'ai' ? 'Sapphire' : 'you')}">${isPlugin ? '\u{1F9E9}' : (author === 'ai' ? '\u{1F916}' : '\u{1F464}')}</span>`
         : '';
     const pruned = !!c.meta?.pruned_at;
     const prunedPill = pruned

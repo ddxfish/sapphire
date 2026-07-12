@@ -23,13 +23,39 @@ for (const [parent, members] of Object.entries(VIEW_GROUPS)) {
     for (const m of members) VIEW_TO_GROUP[m] = parent;
 }
 
-export function registerView(id, module) {
+export function registerView(id, module, opts = {}) {
     views[id] = { module, initialized: false };
+    // The router works by toggling #view-{id} containers. index.html bakes
+    // them for core views only — registerView owns the rest of the contract,
+    // so runtime registrations (plugin layers, apps) need exactly one call.
+    if (!document.getElementById(`view-${id}`)) {
+        const host = document.getElementById('app-content');
+        if (host) {
+            const el = document.createElement('div');
+            el.id = `view-${id}`;
+            el.className = 'view';
+            el.style.display = 'none';
+            host.appendChild(el);
+        }
+    }
+    if (opts.group && VIEW_GROUPS[opts.group]) {
+        if (!VIEW_GROUPS[opts.group].includes(id)) VIEW_GROUPS[opts.group].push(id);
+        VIEW_TO_GROUP[id] = opts.group;
+    }
 }
 
 export function switchView(viewId) {
     viewId = VIEW_ALIASES[viewId] || viewId;
     if (viewId === currentView) return;
+
+    // Validate the target BEFORE hiding anything — a missing view must be a
+    // loud no-op, never a blank screen.
+    const entry = views[viewId];
+    const el = document.getElementById(`view-${viewId}`);
+    if (!entry || !el) {
+        console.warn(`[Router] View '${viewId}' has no ${entry ? 'container' : 'registration'} — staying on '${currentView}'`);
+        return;
+    }
 
     // Hide current
     if (currentView && views[currentView]) {
@@ -37,11 +63,6 @@ export function switchView(viewId) {
         if (oldEl) oldEl.style.display = 'none';
         views[currentView].module.hide?.();
     }
-
-    // Show target
-    const entry = views[viewId];
-    const el = document.getElementById(`view-${viewId}`);
-    if (!entry || !el) return;
 
     el.style.display = '';
 

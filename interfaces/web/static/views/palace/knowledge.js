@@ -10,7 +10,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'knowledge';
@@ -28,6 +28,7 @@ let _author = '';   // '' = all, 'user', 'ai'
 export default {
     init(el) { container = el; },
     async show() {
+        await refreshPalaceTabs();
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderList);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
         else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }

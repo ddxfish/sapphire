@@ -9195,9 +9195,12 @@ a.gallery-caption:hover {
     border-radius: 6px; font-size: 13px; cursor: pointer; width: auto;
 }
 
-/* Layer + tier + entity chips on chunk cards */
+/* Layer + tier + entity chips on chunk cards. Base carries a neutral look so
+   plugin layers (v1.1) get a styled chip for free; core layers override. */
 .palace-layer {
     font-size: 11px; padding: 2px 8px; border-radius: 10px; text-transform: lowercase;
+    background: var(--bg-tertiary, #1a1b2e); color: var(--text-muted, #999);
+    border: 1px solid var(--border, #333);
 }
 .palace-layer-events   { background: #14263e; color: #7fb5f5; border: 1px solid #24466e; }
 .palace-layer-self     { background: #2a1b3e; color: #c39df5; border: 1px solid #4a336e; }
