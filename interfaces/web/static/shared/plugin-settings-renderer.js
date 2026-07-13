@@ -123,12 +123,72 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         });
     }
 
+    // Wire up list fields (chips + add/remove)
+    for (const field of schema) {
+        if ((field.widget || inferWidget(field)) !== 'list') continue;
+        wireListField(container, field);
+    }
+
     if (onChange) {
         container.addEventListener('change', e => {
             const key = e.target.closest('[data-key]')?.dataset.key;
             if (key) onChange(key, getFieldValue(container, key, schema.find(f => f.key === key)));
         });
     }
+}
+
+function wireListField(container, field) {
+    const wrap = container.querySelector(`.ps-list[data-list-key="${field.key}"]`);
+    if (!wrap) return;
+    const hidden = wrap.querySelector(`#ps-${field.key}`);
+    const chipsEl = wrap.querySelector('.ps-list-chips');
+    const srcEl = wrap.querySelector('.ps-list-src');
+
+    const read = () => { try { const a = JSON.parse(hidden.value); return Array.isArray(a) ? a : []; } catch { return []; } };
+    const write = (items) => {
+        hidden.value = JSON.stringify(items);
+        render();
+        hidden.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const render = () => {
+        const items = read();
+        chipsEl.innerHTML = items.map(v => `
+            <span class="ps-list-chip" data-val="${escapeHtml(v)}" style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;background:var(--bg-secondary,#1a1b2e);border:1px solid var(--border,#333);border-radius:12px;font-size:var(--font-sm,13px)">
+                ${escapeHtml(v)}<a href="#" class="ps-list-del" style="color:var(--text-muted);text-decoration:none">✕</a>
+            </span>`).join('') || '<span style="color:var(--text-muted);font-size:var(--font-sm,13px)">None added</span>';
+        if (srcEl.tagName === 'SELECT') refreshOptions(items);
+    };
+    const refreshOptions = (items) => {
+        const current = srcEl.value;
+        const opts = (srcEl._options || []).filter(o => !items.includes(o));
+        srcEl.innerHTML = opts.map(o => `<option value="${escapeHtml(o)}">${escapeHtml(o)}</option>`).join('');
+        if (opts.includes(current)) srcEl.value = current;
+    };
+
+    chipsEl.addEventListener('click', e => {
+        const del = e.target.closest('.ps-list-del');
+        if (!del) return;
+        e.preventDefault();
+        const val = del.closest('.ps-list-chip')?.dataset.val;
+        write(read().filter(v => v !== val));
+    });
+    wrap.querySelector('.ps-list-add')?.addEventListener('click', () => {
+        const val = (srcEl.value || '').trim();
+        if (!val) return;
+        const items = read();
+        if (!items.includes(val)) write([...items, val]);
+        if (srcEl.tagName === 'INPUT') srcEl.value = '';
+    });
+
+    if (field.options_endpoint && srcEl.tagName === 'SELECT') {
+        fetch(field.options_endpoint).then(r => r.json()).then(data => {
+            const rows = field.data_key ? (data[field.data_key] || []) : (Array.isArray(data) ? data : []);
+            srcEl._options = rows.map(r => typeof r === 'string' ? r : String(r[field.value_field || 'name'] ?? ''))
+                                 .filter(Boolean);
+            refreshOptions(read());
+        }).catch(() => {});
+    }
+    render();
 }
 
 function renderWidget(field, value) {
@@ -169,6 +229,24 @@ function renderWidget(field, value) {
         case 'number':
             return `<input type="number" id="${id}" value="${value}" step="any" placeholder="${escapeHtml(field.placeholder || '')}">`;
 
+        case 'list': {
+            // Chips + "+ Add" row. Value lives as JSON in a hidden input so
+            // readSettingsForm/getFieldValue work unchanged. With
+            // options_endpoint the source is a dropdown (populated after
+            // render, added values filtered out); without, a free-text input.
+            const items = Array.isArray(value) ? value : (value ? [String(value)] : []);
+            const src = field.options_endpoint
+                ? `<select class="ps-list-src" style="flex:1"></select>`
+                : `<input type="text" class="ps-list-src" placeholder="${escapeHtml(field.placeholder || '')}" style="flex:1">`;
+            return `<div class="ps-list" data-list-key="${escapeHtml(field.key)}">
+                <input type="hidden" id="${id}" value="${escapeHtml(JSON.stringify(items))}">
+                <div class="ps-list-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+                <div style="display:flex;gap:6px">${src}
+                    <button type="button" class="btn-action ps-list-add">+ Add</button>
+                </div>
+            </div>`;
+        }
+
         case 'button':
             return `<button type="button" id="${id}" class="btn-action" data-action-url="${escapeHtml(field.action || '')}" data-status-url="${escapeHtml(field.status || '')}">${escapeHtml(field.button_label || field.label || 'Action')}</button>`;
 
@@ -181,6 +259,7 @@ function inferWidget(field) {
     if (field.type === 'boolean') return 'toggle';
     if (field.type === 'number') return 'number';
     if (field.type === 'textarea') return 'textarea';
+    if (field.type === 'list') return 'list';
     if (field.options) return 'select';
     return 'text';
 }
@@ -225,6 +304,9 @@ function coerce(value, field) {
     if (!field) return value;
     if (field.type === 'number') return Number(value) || 0;
     if (field.type === 'boolean') return Boolean(value);
+    if (field.type === 'list') {
+        try { const a = JSON.parse(value); return Array.isArray(a) ? a : []; } catch { return []; }
+    }
     return value;
 }
 

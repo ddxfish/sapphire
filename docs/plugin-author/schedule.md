@@ -27,8 +27,14 @@ Plugins can declare cron tasks that run on a timer, independent of any conversat
 | `description` | string | — | What the task does — also becomes the task's `initial_message` (the prompt sent to the AI when it fires) |
 | `enabled` | bool | true | Whether it runs |
 | `chance` | int | 100 | Percent chance to fire (1-100) |
+| `time_setting` | string | — | Plugin-settings key holding `"HH:MM"` — builds a daily cron from the user's setting. Falls back to `cron` if unset/unparsable |
+| `enabled_setting` | string | — | Plugin-settings key holding a boolean — lets users toggle the task from the plugin's settings panel |
 
 Tasks appear in the Triggers UI and are removed when the plugin is unloaded (disable, uninstall, or hot-reload).
+
+### Settings-linked schedules
+
+`time_setting` / `enabled_setting` make a task user-tunable without code: declare a settings field in the manifest, name its key here, and the loader resolves it at registration and re-syncs the live task whenever the plugin's settings are saved. Edits made directly in the Triggers UI do NOT persist for plugin tasks — they're re-registered from the manifest (and settings) on every boot, so settings are the durable source of truth.
 
 ---
 

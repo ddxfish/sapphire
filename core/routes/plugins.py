@@ -1291,6 +1291,14 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
     except Exception as e:
         logger.warning(f"Tool schema refresh failed for '{plugin_name}': {e}")
 
+    # Re-resolve settings-linked schedule tasks (time_setting/enabled_setting)
+    # so a changed nightly time or toggle applies without a restart.
+    try:
+        from core.plugin_loader import plugin_loader
+        plugin_loader.resync_plugin_schedules(plugin_name)
+    except Exception as e:
+        logger.warning(f"Schedule resync failed for '{plugin_name}': {e}")
+
     # Settings-saved hook: notify the active provider(s) so a plugin can react to
     # its own settings change (e.g. pre-download a newly selected model off the
     # request path). Opt-in + generic — only providers that define

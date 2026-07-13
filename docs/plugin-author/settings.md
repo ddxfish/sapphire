@@ -22,7 +22,7 @@ Declare settings in `plugin.json` and they auto-render in Settings > Plugins:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `key` | yes | Setting key (unique within plugin) |
-| `type` | yes | `"string"`, `"number"`, `"boolean"` |
+| `type` | yes | `"string"`, `"number"`, `"boolean"`, `"list"` (array of strings) |
 | `label` | yes | Display name |
 | `default` | yes | Default value |
 | `help` | no | Description text |
@@ -31,7 +31,22 @@ Declare settings in `plugin.json` and they auto-render in Settings > Plugins:
 | `placeholder` | no | Input hint text |
 | `confirm` | no | Danger confirm gate (see below) |
 
-Widget inference when omitted: `string` -> text, `string` + `options` -> select, `number` -> number spinner, `boolean` -> toggle, `textarea` type -> textarea.
+Widget inference when omitted: `string` -> text, `string` + `options` -> select, `number` -> number spinner, `boolean` -> toggle, `textarea` type -> textarea, `list` -> chips with a "+ Add" row.
+
+### List Fields
+
+`"type": "list"` renders removable chips plus an add row, and saves as a JSON array of strings. By default the add row is free text; to offer a dropdown of valid values, point it at an endpoint:
+
+```json
+{
+    "key": "scopes_to_tend", "type": "list", "label": "Scopes",
+    "default": ["default"],
+    "options_endpoint": "/api/plugin/myplugin/scopes",
+    "data_key": "scopes", "value_field": "name"
+}
+```
+
+`data_key` picks the array out of the JSON response (omit if the response IS the array); `value_field` picks the string out of each row (default `name`; rows may also be plain strings). Already-added values are filtered from the dropdown.
 
 ### Danger Confirm
 

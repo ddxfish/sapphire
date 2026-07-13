@@ -47,6 +47,19 @@ USER_PLUGINS_JSON = PROJECT_ROOT / "user" / "webui" / "plugins.json"
 STATIC_PLUGINS_JSON = PROJECT_ROOT / "interfaces" / "web" / "static" / "core-ui" / "plugins.json"
 
 
+def _time_to_cron(value, fallback: str) -> str:
+    """'HH:MM' → 'M H * * *' (daily). Anything unparsable keeps the manifest
+    cron, so a mistyped settings value degrades to the declared default."""
+    try:
+        hh, mm = str(value).strip().split(':')
+        hh, mm = int(hh), int(mm)
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{mm} {hh} * * *"
+    except (ValueError, AttributeError):
+        pass
+    return fallback
+
+
 class PluginState:
     """Simple JSON key-value store for plugin data.
 
@@ -617,19 +630,14 @@ class PluginLoader:
             task_ids = []
             for sched in schedules:
                 try:
-                    task = self._scheduler.create_task({
-                        "name": sched.get("name", f"{name} task"),
-                        "schedule": sched.get("cron", "0 9 * * *"),
-                        "enabled": sched.get("enabled", True),
-                        "chance": sched.get("chance", 100),
-                        "initial_message": sched.get("description", "Plugin scheduled task"),
-                        "source": f"plugin:{name}",
-                        "handler": sched.get("handler", ""),
-                        "plugin_dir": str(plugin_dir),
-                    })
+                    task = self._scheduler.create_task(
+                        self._sched_task_def(name, sched, plugin_dir))
                     task_ids.append(task["id"])
                     logger.debug(f"[PLUGINS] Registered schedule task '{sched.get('name')}' for {name}")
                 except Exception as e:
+                    # None placeholder keeps task_ids aligned with the manifest
+                    # order — resync_plugin_schedules zips them positionally.
+                    task_ids.append(None)
                     logger.error(f"[PLUGINS] Failed to register schedule for {name}: {e}")
             info["schedule_task_ids"] = task_ids
 
@@ -877,6 +885,8 @@ class PluginLoader:
         with self._lock:
             if self._scheduler and name in self._plugins:
                 for tid in self._plugins[name].get("schedule_task_ids", []):
+                    if not tid:
+                        continue  # None placeholder from a failed registration
                     try:
                         self._scheduler.delete_task(tid)
                     except Exception as e:
@@ -1163,6 +1173,55 @@ class PluginLoader:
 
         logger.info(f"[PLUGINS] Uninstalled: {name}")
 
+    def _sched_task_def(self, name: str, sched: dict, plugin_dir) -> dict:
+        """Build the scheduler task dict for one manifest schedule entry.
+
+        Settings-linked fields: `time_setting` names a plugin-settings key
+        holding "HH:MM" (built into a daily cron, user-local like all crons);
+        `enabled_setting` names a boolean key. Both fall back to the static
+        manifest values, so a bad setting never kills the task.
+        """
+        cron = sched.get("cron", "0 9 * * *")
+        enabled = sched.get("enabled", True)
+        if sched.get("time_setting") or sched.get("enabled_setting"):
+            s = self.get_plugin_settings(name)
+            if sched.get("time_setting"):
+                cron = _time_to_cron(s.get(sched["time_setting"]), cron)
+            if sched.get("enabled_setting") and sched["enabled_setting"] in s:
+                enabled = bool(s[sched["enabled_setting"]])
+        return {
+            "name": sched.get("name", f"{name} task"),
+            "schedule": cron,
+            "enabled": enabled,
+            "chance": sched.get("chance", 100),
+            "initial_message": sched.get("description", "Plugin scheduled task"),
+            "source": f"plugin:{name}",
+            "handler": sched.get("handler", ""),
+            "plugin_dir": str(plugin_dir),
+        }
+
+    def resync_plugin_schedules(self, name: str):
+        """Re-resolve settings-linked schedule fields after a plugin-settings
+        save, updating the live scheduler tasks in place. Static entries (no
+        time_setting/enabled_setting) are left alone. Called from the plugin
+        settings PUT route; a restart reaches the same state via re-registration."""
+        info = self._plugins.get(name)
+        if not info or not self._scheduler or not info.get("loaded"):
+            return
+        schedules = info["manifest"].get("capabilities", {}).get("schedule", [])
+        task_ids = info.get("schedule_task_ids") or []
+        for sched, tid in zip(schedules, task_ids):
+            if not tid or not (sched.get("time_setting") or sched.get("enabled_setting")):
+                continue
+            try:
+                d = self._sched_task_def(name, sched, info["path"])
+                self._scheduler.update_task(
+                    tid, {"schedule": d["schedule"], "enabled": d["enabled"]})
+                logger.info(f"[PLUGINS] Schedule '{d['name']}' resynced for {name}: "
+                            f"'{d['schedule']}' enabled={d['enabled']}")
+            except Exception as e:
+                logger.warning(f"[PLUGINS] Schedule resync failed for {name}: {e}")
+
     def set_scheduler(self, scheduler):
         """Set the continuity scheduler for plugin schedule tasks.
 
@@ -1193,19 +1252,12 @@ class PluginLoader:
             task_ids = []
             for sched in schedules:
                 try:
-                    task = self._scheduler.create_task({
-                        "name": sched.get("name", f"{name} task"),
-                        "schedule": sched.get("cron", "0 9 * * *"),
-                        "enabled": sched.get("enabled", True),
-                        "chance": sched.get("chance", 100),
-                        "initial_message": sched.get("description", "Plugin scheduled task"),
-                        "source": f"plugin:{name}",
-                        "handler": sched.get("handler", ""),
-                        "plugin_dir": str(plugin_dir),
-                    })
+                    task = self._scheduler.create_task(
+                        self._sched_task_def(name, sched, plugin_dir))
                     task_ids.append(task["id"])
                     logger.info(f"[PLUGINS] Deferred schedule registration: '{sched.get('name')}' for {name}")
                 except Exception as e:
+                    task_ids.append(None)
                     logger.error(f"[PLUGINS] Failed deferred schedule for {name}: {e}")
             info["schedule_task_ids"] = task_ids
 
