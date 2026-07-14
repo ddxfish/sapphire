@@ -48,6 +48,7 @@ The `capabilities` object declares what the plugin provides:
     "settings": [ ... ],
     "providers": { ... },
     "memory_layers": [ ... ],
+    "prompts": { ... },
     "web": { ... },
     "daemon": { ... },
     "services": [ ... ],
@@ -68,6 +69,7 @@ Each capability is documented in its own guide:
 - [Settings & Web UI](settings.md)
 - [Providers (TTS, STT, Embedding, LLM)](providers.md)
 - [Memory Layers](memory-layers.md) — register your own layer in the Mind Palace memory system
+- [Prompt Packs](prompts.md) — ship monolith prompts and assembled-prompt pieces (mirror-only, user always wins collisions)
 - [Apps](APPS.md)
 - [Themes](THEMES.md)
 - [Widgets](widgets.md) — dashboard action-panel cards (rendered in Settings → Dashboard)

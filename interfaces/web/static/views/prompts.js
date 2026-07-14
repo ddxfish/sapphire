@@ -93,7 +93,8 @@ function render() {
                     const tokenStr = tokens ? formatCount(tokens) + ' tokens' : '';
                     const typeName = p.type === 'monolith' ? 'Monolith' : 'Assembled';
                     const character = d?.components?.character;
-                    const meta = [typeName, character ? '👤 ' + character : ''].filter(Boolean).join(' · ');
+                    const meta = [typeName, character ? '👤 ' + character : '',
+                                  p.source ? '🧩 Plugin: ' + p.source : ''].filter(Boolean).join(' · ');
                     const isActive = p.name === activePromptName;
                     return `<div class="pr-item-info">
                         <span class="pr-item-name">${p.privacy_required ? '🔒 ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
@@ -136,7 +137,7 @@ function renderEditor() {
                     <h2 id="pr-prompt-name" style="margin:0">${p.privacy_required ? '\u{1F512} ' : ''}${selected}</h2>
                     <button class="btn-icon" id="pr-rename-prompt" title="Rename prompt" style="font-size:14px;opacity:0.5">\u270F</button>
                 </div>
-                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}</span>
+                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}${(prompts.find(x => x.name === selected)?.source) ? ' \u00B7 \u{1F9E9} Plugin: ' + prompts.find(x => x.name === selected).source : ''}</span>
             </div>
             <div class="pr-header-actions">
                 ${!isActive ? '<button class="btn-primary" id="pr-activate">Activate</button>' : '<span class="badge badge-active">Active</span>'}

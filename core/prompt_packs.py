@@ -1,0 +1,160 @@
+# core/prompt_packs.py
+"""Prompt-pack registry — plugins ship prompts via capabilities.prompts.
+
+Mirror-only: pack content lives here in memory, merged into the prompt
+system at READ time (PromptManager properties). It never touches
+user/prompts/*.json — the save paths persist only the private user dicts.
+Disabling the plugin makes its prompts vanish (dark, never deleted).
+User entries always win name collisions; shadowed pack entries are logged.
+
+Same registry pattern as core/memory_layers.py (2026-07-12).
+"""
+import logging
+import threading
+
+logger = logging.getLogger(__name__)
+
+_lock = threading.Lock()
+# plugin_name -> {"monoliths": {name: {content, privacy_required}},
+#                 "components": {type: {key: text}},
+#                 "scenario_presets": {name: {component: value}}}
+_packs = {}
+
+
+def register_pack(plugin_name, monoliths=None, pieces=None):
+    """Register a plugin's prompt pack. `monoliths` and `pieces` use the same
+    JSON shapes as the user files (pieces = {"components": ..., "scenario_presets": ...}).
+    Returns (counts dict, message). Re-registration replaces the pack."""
+    norm_monoliths = {}
+    for k, v in (monoliths or {}).items():
+        if k.startswith('_'):
+            continue
+        if isinstance(v, str):
+            norm_monoliths[k] = {'content': v, 'privacy_required': False}
+        elif isinstance(v, dict) and isinstance(v.get('content'), str):
+            norm_monoliths[k] = v
+        else:
+            logger.warning(f"[PROMPT-PACKS] {plugin_name}: skipping monolith '{k}' (bad shape)")
+
+    pieces = pieces or {}
+    components = {}
+    for ctype, entries in (pieces.get('components') or {}).items():
+        if isinstance(entries, dict):
+            components[ctype] = {k: v for k, v in entries.items()
+                                 if isinstance(v, str) and not k.startswith('_')}
+    presets = {k: v for k, v in (pieces.get('scenario_presets') or {}).items()
+               if isinstance(v, dict) and not k.startswith('_')}
+
+    with _lock:
+        _packs[plugin_name] = {
+            'monoliths': norm_monoliths,
+            'components': components,
+            'scenario_presets': presets,
+        }
+
+    counts = {'monoliths': len(norm_monoliths),
+              'components': sum(len(v) for v in components.values()),
+              'scenario_presets': len(presets)}
+    logger.info(f"[PROMPT-PACKS] {plugin_name}: registered {counts}")
+    _publish_changed()
+    return counts
+
+
+def unregister_plugin(plugin_name):
+    """Drop a plugin's pack (plugin disable/unload). If the active preset was
+    one of its names and no user entry shadows it, hand off to default loudly
+    — same silent-default discipline as prompt_crud.delete_prompt (H3)."""
+    with _lock:
+        pack = _packs.pop(plugin_name, None)
+    if not pack:
+        return
+    logger.info(f"[PROMPT-PACKS] {plugin_name}: unregistered")
+    try:
+        from core import prompt_state
+        from core.prompt_manager import prompt_manager
+        active = prompt_state.get_active_preset_name()
+        gone = set(pack['monoliths']) | set(pack['scenario_presets'])
+        if active in gone and active not in prompt_manager._monoliths \
+                and active not in prompt_manager._scenario_presets:
+            prompt_state.set_active_preset_name('default')
+            logger.warning(
+                f"[PROMPT-PACKS] Active prompt '{active}' came from disabled "
+                f"plugin '{plugin_name}' — active preset reset to 'default'."
+            )
+    except Exception as e:
+        logger.warning(f"[PROMPT-PACKS] active-preset handoff failed: {e}")
+    _publish_changed()
+
+
+def overlay_monoliths():
+    """Merged monoliths across all packs. Cross-pack collisions: first
+    registrant (dict order) wins; later ones are logged and skipped."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for k, v in pack['monoliths'].items():
+                if k in out:
+                    logger.warning(f"[PROMPT-PACKS] monolith '{k}' from {pname} shadowed by another pack")
+                    continue
+                out[k] = v
+    return out
+
+
+def overlay_components():
+    """Merged components across all packs: {type: {key: text}}."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for ctype, entries in pack['components'].items():
+                slot = out.setdefault(ctype, {})
+                for k, v in entries.items():
+                    if k in slot:
+                        logger.warning(f"[PROMPT-PACKS] piece '{ctype}/{k}' from {pname} shadowed by another pack")
+                        continue
+                    slot[k] = v
+    return out
+
+
+def overlay_presets():
+    """Merged scenario presets across all packs."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for k, v in pack['scenario_presets'].items():
+                if k not in out:
+                    out[k] = v
+    return out
+
+
+def get_sources():
+    """{name: plugin_name} for monoliths+presets (name-level badge lookup)."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for k in pack['monoliths']:
+                out.setdefault(k, pname)
+            for k in pack['scenario_presets']:
+                out.setdefault(k, pname)
+    return out
+
+
+def piece_source(ctype, key):
+    """Owning plugin of a component piece, or None."""
+    with _lock:
+        for pname, pack in _packs.items():
+            if key in pack['components'].get(ctype, {}):
+                return pname
+    return None
+
+
+def has_packs():
+    with _lock:
+        return bool(_packs)
+
+
+def _publish_changed():
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.PROMPT_CHANGED, {"name": "", "action": "packs_changed"})
+    except Exception:
+        pass  # Event bus may not be up during early boot / tests

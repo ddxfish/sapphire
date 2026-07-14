@@ -188,15 +188,18 @@ def delete_prompt(name: str) -> bool:
         except Exception:
             was_active = False
 
-        # Delete from monoliths if present
-        if name in prompt_manager.monoliths:
+        # Delete from monoliths if present — PRIVATE dict membership, not the
+        # merged property: pack-shipped prompts are read-only (mirror-only
+        # rule). Deleting a user entry that shadows a pack prompt makes the
+        # pack version show through again — intended.
+        if name in prompt_manager._monoliths:
             del prompt_manager._monoliths[name]
             prompt_manager.save_monoliths()
             logger.info(f"Deleted monolith '{name}'")
             deleted = True
 
         # Delete from scenario_presets if present
-        if name in prompt_manager.scenario_presets:
+        if name in prompt_manager._scenario_presets:
             del prompt_manager._scenario_presets[name]
             prompt_manager.save_scenario_presets()
             logger.info(f"Deleted assembled prompt '{name}'")
@@ -237,7 +240,16 @@ def delete_prompt(name: str) -> bool:
                 logger.error(f"Active-preset reset after delete failed: {e}")
         
         if not deleted:
-            logger.warning(f"Prompt '{name}' not found in any storage")
+            from core import prompt_packs
+            if name in prompt_packs.get_sources():
+                logger.warning(
+                    f"Prompt '{name}' is shipped by plugin "
+                    f"'{prompt_packs.get_sources()[name]}' — read-only, not "
+                    f"deleted. Disable the plugin to remove it, or save a "
+                    f"user prompt with the same name to shadow it."
+                )
+            else:
+                logger.warning(f"Prompt '{name}' not found in any storage")
             return False
         
         return True

@@ -416,14 +416,18 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             slot["emoji"] = slot["emoji"] or module_info.get('emoji', '')
 
         # Prompts data
+        from core import prompt_packs
         prompt_names = prompts.list_prompts()
+        pack_sources = prompt_packs.get_sources()
+        user_prompt_names = set(prompts.prompt_manager._monoliths) | set(prompts.prompt_manager._scenario_presets)
         prompt_list = []
         for name in prompt_names:
             pdata = prompts.get_prompt(name)
             prompt_list.append({
                 'name': name,
                 'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
-                'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata))
+                'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata)),
+                'source': pack_sources.get(name) if name not in user_prompt_names else None
             })
         current_prompt_name = prompts.get_active_preset_name()
         current_prompt_data = prompts.get_prompt(current_prompt_name) if current_prompt_name else None

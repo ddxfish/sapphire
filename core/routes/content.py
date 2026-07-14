@@ -47,7 +47,11 @@ def _build_spice_response():
 async def list_prompts(request: Request, _=Depends(require_login)):
     """List all prompts."""
     from core.chat.history import count_tokens
+    from core import prompt_packs
     prompt_names = prompts.list_prompts()
+    # Pack names shadowed by user entries carry NO source (the user copy wins)
+    pack_sources = prompt_packs.get_sources()
+    user_names = set(prompts.prompt_manager._monoliths) | set(prompts.prompt_manager._scenario_presets)
     prompt_list = []
     for name in prompt_names:
         pdata = prompts.get_prompt(name)
@@ -57,7 +61,8 @@ async def list_prompts(request: Request, _=Depends(require_login)):
             'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
             'char_count': len(content),
             'token_count': count_tokens(content),
-            'privacy_required': pdata.get('privacy_required', False) if isinstance(pdata, dict) else False
+            'privacy_required': pdata.get('privacy_required', False) if isinstance(pdata, dict) else False,
+            'source': pack_sources.get(name) if name not in user_names else None
         })
     return {"prompts": prompt_list, "current": prompts.get_active_preset_name()}
 
@@ -113,29 +118,40 @@ async def delete_prompt(name: str, request: Request, _=Depends(require_login)):
 
 @router.put("/api/prompts/components/{comp_type}/{key}")
 async def save_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
-    """Save a prompt component."""
+    """Save a prompt component.
+
+    Writes the PRIVATE dict — the `.components` property returns a merged
+    copy when plugin prompt-packs are registered, so mutating it would be
+    silently lost. Saving a key that shadows a pack piece is the intended
+    edit path (user wins the merge)."""
     data = await request.json()
     value = data.get('value', '')
-    components = prompts.prompt_manager.components
-    if comp_type not in components:
-        components[comp_type] = {}
-    components[comp_type][key] = value
+    user_components = prompts.prompt_manager._components
+    if comp_type not in user_components:
+        user_components[comp_type] = {}
+    user_components[comp_type][key] = value
     prompts.prompt_manager.save_components()
     publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
-    return {"status": "success", "components": components}
+    return {"status": "success", "components": prompts.prompt_manager.components}
 
 
 @router.delete("/api/prompts/components/{comp_type}/{key}")
 async def delete_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
-    """Delete a prompt component."""
-    components = prompts.prompt_manager.components
-    if comp_type in components and key in components[comp_type]:
-        del components[comp_type][key]
+    """Delete a prompt component (user entries only — pack pieces are
+    read-only; deleting a user shadow makes the pack piece show through)."""
+    user_components = prompts.prompt_manager._components
+    if comp_type in user_components and key in user_components[comp_type]:
+        del user_components[comp_type][key]
         prompts.prompt_manager.save_components()
         publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
-        return {"status": "success", "components": components}
-    else:
-        raise HTTPException(status_code=404, detail=f"Component '{comp_type}/{key}' not found")
+        return {"status": "success", "components": prompts.prompt_manager.components}
+    from core import prompt_packs
+    owner = prompt_packs.piece_source(comp_type, key)
+    if owner:
+        raise HTTPException(status_code=403,
+                            detail=f"'{comp_type}/{key}' is shipped by plugin '{owner}' — "
+                                   f"read-only. Disable the plugin to remove it.")
+    raise HTTPException(status_code=404, detail=f"Component '{comp_type}/{key}' not found")
 
 
 @router.post("/api/prompts/{name}/load")

@@ -236,44 +236,46 @@ class PromptManager:
     def assemble_from_components(self, components):
         """Assemble prompt text from component structure."""
         prompt_parts = []
-        
+        # Merged view — pack pieces resolve here too (user wins collisions)
+        comps = self.components
+
         # Add character (main character description)
         character_key = components.get('character', 'sapphire')
-        if 'character' in self._components:
-            if character_key in self._components['character']:
-                prompt_parts.append(self._components['character'][character_key])
-        
+        if 'character' in comps:
+            if character_key in comps['character']:
+                prompt_parts.append(comps['character'][character_key])
+
         # Add structured components
         components_text = []
-        
+
         component_types = ['goals', 'location', 'relationship', 'format', 'scenario']
         for comp_type in component_types:
             key = components.get(comp_type)
-            if key and comp_type in self._components:
-                if key in self._components[comp_type]:
-                    value = self._components[comp_type][key]
+            if key and comp_type in comps:
+                if key in comps[comp_type]:
+                    value = comps[comp_type][key]
                     if value and value.strip():
                         components_text.append(f"{comp_type.capitalize()}: {value}")
-        
+
         # Extras (multiple allowed)
         extras = components.get('extras', [])
         if extras:
             extras_list = []
-            if 'extras' in self._components:
+            if 'extras' in comps:
                 for extra_key in extras:
-                    if extra_key in self._components['extras']:
-                        extras_list.append(self._components['extras'][extra_key])
+                    if extra_key in comps['extras']:
+                        extras_list.append(comps['extras'][extra_key])
             if extras_list:
                 components_text.append(f"Extras: {', '.join(extras_list)}")
-        
+
         # Emotions (multiple allowed)
         emotions = components.get('emotions', [])
         if emotions:
             emotions_list = []
-            if 'emotions' in self._components:
+            if 'emotions' in comps:
                 for emotion_key in emotions:
-                    if emotion_key in self._components['emotions']:
-                        emotions_list.append(self._components['emotions'][emotion_key])
+                    if emotion_key in comps['emotions']:
+                        emotions_list.append(comps['emotions'][emotion_key])
             if emotions_list:
                 components_text.append(f"Emotions: {', '.join(emotions_list)}")
         
@@ -443,17 +445,37 @@ class PromptManager:
     def disabled_categories(self):
         return self._disabled_categories
     
+    # Read properties merge plugin prompt-packs (core/prompt_packs.py) under
+    # the user entries — USER WINS name collisions. Merged views are fresh
+    # dicts; ALL mutation paths must write the private attrs (_components,
+    # _monoliths, _scenario_presets) — the save_* methods persist only those,
+    # so pack content can never leak into user/prompts/*.json.
     @property
     def components(self):
-        return self._components
-    
+        from core import prompt_packs
+        overlay = prompt_packs.overlay_components()
+        if not overlay:
+            return self._components
+        merged = {}
+        for ctype in set(overlay) | set(self._components):
+            merged[ctype] = {**overlay.get(ctype, {}), **self._components.get(ctype, {})}
+        return merged
+
     @property
     def scenario_presets(self):
-        return self._scenario_presets
-    
+        from core import prompt_packs
+        overlay = prompt_packs.overlay_presets()
+        if not overlay:
+            return self._scenario_presets
+        return {**overlay, **self._scenario_presets}
+
     @property
     def monoliths(self):
-        return self._monoliths
+        from core import prompt_packs
+        overlay = prompt_packs.overlay_monoliths()
+        if not overlay:
+            return self._monoliths
+        return {**overlay, **self._monoliths}
     
     @property
     def spices(self):

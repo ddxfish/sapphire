@@ -624,6 +624,25 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: memory layer registration failed: {e}")
 
+        # Register prompt pack (mirror-only — merged into the prompt system
+        # at read time, never written to user/prompts; user wins collisions)
+        prompts_decl = capabilities.get("prompts", {})
+        if prompts_decl and isinstance(prompts_decl, dict):
+            try:
+                from core import prompt_packs
+                monoliths, pieces = None, None
+                mono_rel = prompts_decl.get("monoliths")
+                if mono_rel:
+                    monoliths = json.loads((plugin_dir / mono_rel).read_text(encoding="utf-8"))
+                pieces_rel = prompts_decl.get("pieces")
+                if pieces_rel:
+                    pieces = json.loads((plugin_dir / pieces_rel).read_text(encoding="utf-8"))
+                counts = prompt_packs.register_pack(name, monoliths=monoliths, pieces=pieces)
+                info["registered_prompt_pack"] = True
+                logger.info(f"[PLUGINS] {name}: prompt pack registered {counts}")
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: prompt pack registration failed: {e}")
+
         # Register scheduled tasks with continuity scheduler
         schedules = capabilities.get("schedule", [])
         if schedules and self._scheduler:
@@ -877,6 +896,16 @@ class PluginLoader:
                 _unreg_layers(name)
             except Exception as e:
                 logger.warning(f"[PLUGINS] {name}: failed to unregister memory layers: {e}")
+
+        # Unregister prompt pack (pack prompts go dark; if one was the active
+        # prompt and no user entry shadows it, the registry hands off to
+        # default loudly)
+        if info.get("registered_prompt_pack"):
+            try:
+                from core import prompt_packs
+                prompt_packs.unregister_plugin(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister prompt pack: {e}")
 
         # Remove plugin schedule tasks and event sources
         # Snapshot daemon_mod under lock, then stop OUTSIDE lock to avoid
