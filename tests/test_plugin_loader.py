@@ -499,6 +499,7 @@ def _make_mock_fm():
     fm.execution_map = {}
     fm._enabled_tools = []
     fm._network_functions = set()
+    fm._hidden_tools = set()
     fm._is_local_map = {}
     fm._loop_warn_map = {}
     fm._function_module_map = {}
@@ -1084,6 +1085,7 @@ def execute(function_name, arguments, config):
             fm._enabled_tools = []
             fm._mode_filters = {}
             fm._network_functions = set()
+            fm._hidden_tools = set()
             fm._is_local_map = {}
             fm._loop_warn_map = {}
             fm._function_module_map = {}
@@ -1125,6 +1127,7 @@ def execute(function_name, arguments, config):
                 fm._enabled_tools = []
                 fm._mode_filters = {}
                 fm._network_functions = set()
+                fm._hidden_tools = set()
                 fm._is_local_map = {}
                 fm._loop_warn_map = {}
                 fm._function_module_map = {}
@@ -1158,6 +1161,7 @@ def execute(function_name, arguments, config):
             fm._enabled_tools = []
             fm._mode_filters = {}
             fm._network_functions = set()
+            fm._hidden_tools = set()
             fm._is_local_map = {}
             fm._loop_warn_map = {}
             fm._function_module_map = {}

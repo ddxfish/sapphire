@@ -270,6 +270,11 @@ class FunctionManager:
         self._is_local_map = {}  # function_name -> is_local value (True, False, or "endpoint")
         self._function_module_map = {}  # function_name -> module_name (for endpoint lookups)
         self._loop_warn_map = {}  # function_name -> (threshold:int, message:str) — loop guard
+        # Tools with top-level 'hidden': true — excluded from 'all'/module/
+        # custom selection and UI enumeration, but resolvable by NAME through
+        # a saved toolset (that's how the librarian's system toolset reaches
+        # its verbs). Never filter the named-toolset path against this set.
+        self._hidden_tools = set()
         # Track what was REQUESTED, not reverse-engineered
         self.current_toolset_name = "none"
         # Set when update_enabled_functions() is called with a dangling toolset
@@ -368,6 +373,8 @@ class FunctionManager:
                             self._network_functions.add(func_name)
                         if 'is_local' in tool:
                             self._is_local_map[func_name] = tool['is_local']
+                        if tool.get('hidden', False):
+                            self._hidden_tools.add(func_name)
                         lw = self._parse_loop_warn(tool)
                         if lw:
                             self._loop_warn_map[func_name] = lw
@@ -554,6 +561,8 @@ class FunctionManager:
                             self._network_functions.add(func_name)
                         if 'is_local' in tool:
                             self._is_local_map[func_name] = tool['is_local']
+                        if tool.get('hidden', False):
+                            self._hidden_tools.add(func_name)
                         lw = self._parse_loop_warn(tool)
                         if lw:
                             self._loop_warn_map[func_name] = lw
@@ -570,10 +579,12 @@ class FunctionManager:
                         self.execution_map[tool['function']['name']] = executor
 
                     # If "all" toolset is active, add new tools to _enabled_tools too
+                    # (hidden tools excluded — 'all' never includes them)
                     if self.current_toolset_name == "all":
                         enabled_names = {t['function']['name'] for t in self._enabled_tools}
                         for tool in tools:
-                            if tool['function']['name'] not in enabled_names:
+                            fname = tool['function']['name']
+                            if fname not in enabled_names and fname not in self._hidden_tools:
                                 self._enabled_tools.append(tool)
                     # If a SAVED toolset is active and it references one of
                     # these new tools by name, auto-add it too. Without this,
@@ -644,6 +655,7 @@ class FunctionManager:
                     self._is_local_map.pop(fname, None)
                     self._loop_warn_map.pop(fname, None)
                     self._function_module_map.pop(fname, None)
+                    self._hidden_tools.discard(fname)
 
                 self.all_possible_tools = [t for t in self.all_possible_tools
                                            if t['function']['name'] not in func_names]
@@ -856,16 +868,19 @@ class FunctionManager:
                 fname = tool['function']['name']
                 self.execution_map[fname] = executor
                 self._function_module_map[fname] = module_name
+                if tool.get('hidden', False):
+                    self._hidden_tools.add(fname)
                 lw = self._parse_loop_warn(tool)
                 if lw:
                     self._loop_warn_map[fname] = lw
                 self.all_possible_tools.append(tool)
 
-            # If "all" toolset is active, add to enabled too
+            # If "all" toolset is active, add to enabled too (hidden excluded)
             if self.current_toolset_name == "all":
                 enabled_names = {t['function']['name'] for t in self._enabled_tools}
                 for tool in tools:
-                    if tool['function']['name'] not in enabled_names:
+                    fname = tool['function']['name']
+                    if fname not in enabled_names and fname not in self._hidden_tools:
                         self._enabled_tools.append(tool)
             # Same auto-add for saved toolsets that reference these tools
             # (mirrors register_plugin_tools fix). 2026-05-16.
@@ -902,6 +917,7 @@ class FunctionManager:
                 self.execution_map.pop(fname, None)
                 self._function_module_map.pop(fname, None)
                 self._loop_warn_map.pop(fname, None)
+                self._hidden_tools.discard(fname)
 
             self.all_possible_tools = [t for t in self.all_possible_tools
                                        if t['function']['name'] not in func_names]
@@ -1020,9 +1036,11 @@ class FunctionManager:
             requested_ability = enabled_names[0] if len(enabled_names) == 1 else "custom"
 
             # Special case: "all" loads every function from every module
+            # (except hidden tools — those only resolve by name via a saved toolset)
             if len(enabled_names) == 1 and enabled_names[0] == "all":
                 self.current_toolset_name = "all"
-                self._enabled_tools = self.all_possible_tools.copy()
+                self._enabled_tools = [t for t in self.all_possible_tools
+                                       if t['function']['name'] not in self._hidden_tools]
                 logger.debug(f"Ability 'all' - LOADED ALL {len(self._enabled_tools)} FUNCTIONS")
                 return
 
@@ -1038,7 +1056,8 @@ class FunctionManager:
                 ability_name = enabled_names[0]
                 self.current_toolset_name = ability_name
                 module_info = self.function_modules[ability_name]
-                enabled_names = module_info['available_functions']
+                enabled_names = [n for n in module_info['available_functions']
+                                 if n not in self._hidden_tools]
                 logger.debug(f"Ability '{ability_name}' (module) requesting {len(enabled_names)} functions")
 
             # Check if this is a toolset name
@@ -1068,9 +1087,14 @@ class FunctionManager:
                 logger.info(f"Fallback applied: zero tools enabled (dangling reference: {bad!r})")
                 return
 
-            # Otherwise treat as direct function name list (custom)
+            # Otherwise treat as direct function name list (custom).
+            # Hidden tools are filtered here too — the UI never offers them,
+            # so a hidden name in an ad-hoc list is stale state, not intent.
+            # (A SAVED toolset naming them resolves above, unfiltered.)
             else:
                 self.current_toolset_name = "custom"
+                enabled_names = [n for n in enabled_names
+                                 if n not in self._hidden_tools]
 
             # Store expected count before filtering
             expected_count = len(enabled_names)
@@ -1139,6 +1163,11 @@ class FunctionManager:
         """Get list of all functions that require network access."""
         return list(self._network_functions)
 
+    def get_hidden_functions(self) -> set:
+        """Names of tools flagged 'hidden': true — kept out of UI enumeration
+        and 'all'/module/custom selection; saved toolsets resolve them by name."""
+        return set(self._hidden_tools)
+
     def get_current_toolset_info(self):
         """Get info about current toolset configuration."""
         actual_count = len(self.enabled_tools)  # Uses property, so mode-filtered
@@ -1146,11 +1175,13 @@ class FunctionManager:
         expected_count = base_count
         
         if self.current_toolset_name == "all":
-            expected_count = len(self.all_possible_tools)
+            expected_count = len([t for t in self.all_possible_tools
+                                  if t['function']['name'] not in self._hidden_tools])
         elif self.current_toolset_name == "none":
             expected_count = 0
         elif self.current_toolset_name in self.function_modules:
-            expected_count = len(self.function_modules[self.current_toolset_name]['available_functions'])
+            expected_count = len([n for n in self.function_modules[self.current_toolset_name]['available_functions']
+                                  if n not in self._hidden_tools])
         elif toolset_manager.toolset_exists(self.current_toolset_name):
             expected_count = len(toolset_manager.get_toolset_functions(self.current_toolset_name))
         

@@ -183,6 +183,26 @@ def _get_merged_plugins():
     return _enforce_locked(merged)
 
 
+def _is_core_essential(name: str) -> bool:
+    """True when a plugin declares essential: true (boolean). Those are core
+    plugins: hidden from the manager UI and refused by the toggle route.
+    A group-STRING essential (alternates like memory/mindpalace) is not core —
+    the pair must stay user-switchable."""
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(name)
+        if info and info.get("manifest", {}).get("essential") is True:
+            return True
+    except Exception:
+        pass
+    # Static core-ui plugins carry the flag in their plugins.json meta
+    try:
+        merged = _get_merged_plugins()
+        return merged.get("plugins", {}).get(name, {}).get("essential") is True
+    except Exception:
+        return False
+
+
 def _cap_title(s: str, n: int = 40) -> str:
     s = (s or "").strip()
     return (s[:n].rstrip() + "…") if len(s) > n else s
@@ -222,7 +242,8 @@ async def list_plugins(request: Request, _=Depends(require_login)):
             "title": _plugin_display_title(meta, name),
             "showInSidebar": meta.get("showInSidebar", True),
             "collapsible": meta.get("collapsible", True),
-            "settingsUI": "core"
+            "settingsUI": "core",
+            "essential": meta.get("essential", False)
         })
         seen.add(name)
 
@@ -283,6 +304,12 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
     """Toggle a plugin."""
     if plugin_name in LOCKED_PLUGINS:
         raise HTTPException(status_code=403, detail=f"Cannot disable locked plugin: {plugin_name}")
+
+    # essential: true (boolean, not a group string) = core plugin — hidden
+    # from the manager UI and never toggleable. Group-string essential
+    # (e.g. "memory" on the memory/mindpalace alternates) stays toggleable.
+    if _is_core_essential(plugin_name):
+        raise HTTPException(status_code=403, detail=f"Cannot toggle core plugin: {plugin_name}")
 
     # Per-plugin lock prevents double-click races
     with _toggle_locks_guard:

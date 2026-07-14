@@ -87,6 +87,7 @@ Inside each tool's schema dict:
 |------|------|---------|-------------|
 | `is_local` | bool/str | `True` | `True` = runs locally, `"endpoint"` = calls external API, `False` = network required |
 | `network` | bool | `false` | Mark as network-dependent (tracked by function manager) |
+| `hidden` | bool | `false` | Hide from the Toolsets UI and from `all`/module/custom selection. The tool still registers and executes; a saved toolset that names it resolves it normally. For internal verbs (e.g. gated sub-agent tools) that would clutter the picker |
 
 ```python
 TOOLS = [{

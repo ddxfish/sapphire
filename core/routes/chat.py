@@ -357,15 +357,18 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         toolsets_set.update(function_manager.get_available_toolsets())
         toolsets_set.update(toolset_manager.get_toolset_names())
         network_functions = set(function_manager.get_network_functions())
+        hidden_functions = function_manager.get_hidden_functions()
 
         toolsets_list = []
         for ts_name in sorted(toolsets_set):
             if ts_name in ['all', 'none']:
                 ts_type = 'builtin'
-                func_list = [t['function']['name'] for t in function_manager.all_possible_tools] if ts_name == 'all' else []
+                func_list = [t['function']['name'] for t in function_manager.all_possible_tools
+                             if t['function']['name'] not in hidden_functions] if ts_name == 'all' else []
             elif ts_name in function_manager.function_modules and not toolset_manager.toolset_exists(ts_name):
                 ts_type = 'module'
-                func_list = function_manager.function_modules[ts_name]['available_functions']
+                func_list = [n for n in function_manager.function_modules[ts_name]['available_functions']
+                             if n not in hidden_functions]
             elif toolset_manager.toolset_exists(ts_name):
                 ts_type = toolset_manager.get_toolset_type(ts_name)
                 func_list = toolset_manager.get_toolset_functions(ts_name)
@@ -397,6 +400,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             functions = []
             for tool in module_info['tools']:
                 func_name = tool['function']['name']
+                if func_name in hidden_functions:
+                    continue
                 functions.append({
                     "name": func_name,
                     "description": tool['function'].get('description', ''),

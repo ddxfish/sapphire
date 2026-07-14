@@ -203,6 +203,7 @@ class TestFunctionManagerThreadSafety:
             ]
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._hidden_tools = set()
             mgr.current_toolset_name = "none"
 
             errors = []

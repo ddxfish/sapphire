@@ -118,23 +118,36 @@ class VoiceChatSystem:
             logger.critical(f"Plugin loader failed — ALL plugins unavailable: {e}", exc_info=True)
             self._plugin_load_error = str(e)
 
-        # Essential-plugin boot assertion — any plugin with manifest.essential=true
-        # MUST be loaded or we scream loud. Silent boot without memory/core tools is
-        # worse than refusing to work. (Doesn't raise — degraded-mode is still better
-        # than dead — but surfaces the failure to the UI and logs.)
+        # Essential-plugin boot assertion — a plugin with manifest.essential=true
+        # MUST be loaded or we scream loud. essential can also be a GROUP STRING
+        # (e.g. "memory" on both the classic memory plugin and mindpalace): the
+        # group is satisfied if ANY plugin sharing that string loaded, so
+        # mutually-exclusive alternates don't false-alarm. Silent boot without
+        # memory/core tools is worse than refusing to work. (Doesn't raise —
+        # degraded-mode is still better than dead — but surfaces the failure to
+        # the UI and logs.)
         self._missing_essential_plugins = []
         try:
             from core.plugin_loader import plugin_loader as _pl
+            _loaded_groups = {
+                _i["manifest"].get("essential")
+                for _i in _pl._plugins.values()
+                if _i.get("loaded") and isinstance(_i.get("manifest", {}).get("essential"), str)
+            }
             for _name, _info in _pl._plugins.items():
-                if _info.get("manifest", {}).get("essential") and not _info.get("loaded"):
-                    self._missing_essential_plugins.append(_name)
-                    reason = _info.get("verify_msg") or ("disabled" if not _info.get("enabled") else "load failed")
-                    logger.critical(
-                        f"ESSENTIAL PLUGIN NOT LOADED: '{_name}' — reason: {reason}. "
-                        f"Sapphire is running in degraded mode. Fix: re-sign the plugin "
-                        f"(python tools/sign_plugin.py plugins/{_name}) or set ALLOW_UNSIGNED_PLUGINS=true."
-                    )
-                    print(f"\n{'='*60}\nSAPPHIRE WARNING: Essential plugin '{_name}' did not load ({reason})\nRunning in degraded mode — memory/core tools unavailable.\n{'='*60}\n", flush=True)
+                _ess = _info.get("manifest", {}).get("essential")
+                if not _ess or _info.get("loaded"):
+                    continue
+                if isinstance(_ess, str) and _ess in _loaded_groups:
+                    continue  # An alternate in the same group carries the load
+                self._missing_essential_plugins.append(_name)
+                reason = _info.get("verify_msg") or ("disabled" if not _info.get("enabled") else "load failed")
+                logger.critical(
+                    f"ESSENTIAL PLUGIN NOT LOADED: '{_name}' — reason: {reason}. "
+                    f"Sapphire is running in degraded mode. Fix: re-sign the plugin "
+                    f"(python tools/sign_plugin.py plugins/{_name}) or set ALLOW_UNSIGNED_PLUGINS=true."
+                )
+                print(f"\n{'='*60}\nSAPPHIRE WARNING: Essential plugin '{_name}' did not load ({reason})\nRunning in degraded mode — memory/core tools unavailable.\n{'='*60}\n", flush=True)
             if self._missing_essential_plugins:
                 try:
                     from core.event_bus import publish, Events

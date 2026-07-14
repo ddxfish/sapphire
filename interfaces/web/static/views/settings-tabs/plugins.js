@@ -4,11 +4,10 @@ import { showDangerConfirm } from '../../shared/danger-confirm.js';
 import { setupModalClose } from '../../shared/modal.js';
 import pluginsAPI from '../../shared/plugins-api.js';
 
-// Infrastructure plugins hidden from toggle list.
-// (Phase 2 v7: backup + continuity were dead core-ui leftovers; the real backup
-// UI lives at views/settings-tabs/backup.js and the real continuity UI is the
-// schedule view. setup-wizard is the only live core-ui plugin.)
-const HIDDEN = new Set(['setup-wizard']);
+// Core plugins hidden from the toggle list: manifest/meta "essential": true
+// (boolean — a group STRING like "memory" marks switchable alternates and
+// stays visible). The toggle route 403s these too; hiding is the UI half.
+const _isHidden = p => p.essential === true;
 
 // Danger confirmation configs for risky plugins
 const DANGER_PLUGINS = {
@@ -518,7 +517,7 @@ export default {
     description: 'Enable or disable feature plugins',
 
     render(ctx) {
-        const visible = (ctx.pluginList || []).filter(p => !HIDDEN.has(p.name));
+        const visible = (ctx.pluginList || []).filter(p => !_isHidden(p));
         if (!visible.length) return '<p class="text-muted">No feature plugins available.</p>';
 
         const allowUnsigned = ctx.settings?.ALLOW_UNSIGNED_PLUGINS ?? false;
@@ -1126,7 +1125,7 @@ export default {
                 // In-place tile + counts update — avoids the full grid
                 // re-render (and the staggered fade-in animation flash)
                 // that ctx.refreshTab() previously triggered. 2026-04-30.
-                const visible = (ctx.pluginList || []).filter(p => !HIDDEN.has(p.name));
+                const visible = (ctx.pluginList || []).filter(p => !_isHidden(p));
                 _updateTileInPlace(el, ctx, name, ctx.lockedPlugins.includes(name));
                 _updateFilterCountsInPlace(el, visible);
 

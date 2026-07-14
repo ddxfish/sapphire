@@ -207,11 +207,13 @@ async def list_toolsets(request: Request, _=Depends(require_login), system=Depen
     ts_set.update(function_manager.get_available_toolsets())
     ts_set.update(toolset_manager.get_toolset_names())
     network_functions = set(function_manager.get_network_functions())
+    hidden = function_manager.get_hidden_functions()
 
     toolsets = []
     for name in sorted(ts_set):
         if name == "all":
-            func_list = [t['function']['name'] for t in function_manager.all_possible_tools]
+            func_list = [t['function']['name'] for t in function_manager.all_possible_tools
+                         if t['function']['name'] not in hidden]
             ts_type = "builtin"
         elif name == "none":
             func_list = []
@@ -220,7 +222,8 @@ async def list_toolsets(request: Request, _=Depends(require_login), system=Depen
             # Pure module (no toolset override) — skip for sidebar
             if filter_mode == "sidebar":
                 continue
-            func_list = function_manager.function_modules[name]['available_functions']
+            func_list = [n for n in function_manager.function_modules[name]['available_functions']
+                         if n not in hidden]
             ts_type = "module"
         elif toolset_manager.toolset_exists(name):
             func_list = toolset_manager.get_toolset_functions(name)
@@ -263,11 +266,14 @@ async def list_functions(request: Request, _=Depends(require_login), system=Depe
     function_manager = system.llm_chat.function_manager
     enabled = set(function_manager.get_enabled_function_names())
     network = set(function_manager.get_network_functions())
+    hidden = function_manager.get_hidden_functions()
     modules = {}
     for module_name, module_info in function_manager.function_modules.items():
         funcs = []
         for tool in module_info['tools']:
             func_name = tool['function']['name']
+            if func_name in hidden:
+                continue
             funcs.append({
                 "name": func_name,
                 "description": tool['function'].get('description', ''),

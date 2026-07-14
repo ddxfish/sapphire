@@ -18,6 +18,7 @@ Every plugin needs a `plugin.json` in its root folder.
 | `short_name` | string | No | — | Legacy fallback for `short_display_name`. Prefer `short_display_name`. |
 | `priority` | int | No | 50 | Execution order within band (lower = first) |
 | `default_enabled` | bool | No | false | Auto-enable on fresh install |
+| `essential` | bool\|string | No | false | `true` = core plugin: boot alarms if it fails to load, hidden from the plugin manager, toggle refused. A **string** names an alternates group (e.g. `"memory"` on both memory and mindpalace): visible and switchable, boot alarms only if NO plugin in the group loaded |
 | `managed_hide` | bool | No | false | Hide plugin entirely in managed/resale mode |
 | `settingsUI` | string\|null | No | `"auto"` | Controls settings panel: `"auto"` (from manifest schema), `"plugin"` (custom JS), `"core"` (hardcoded), or `null` (none) |
 | `pip_dependencies` | string[] | No | `[]` | Python packages required (pip specifiers, e.g. `["telethon>=1.34", "requests"]`). Checked before loading; missing deps shown in UI with install option |

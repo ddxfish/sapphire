@@ -137,6 +137,7 @@ def test_register_and_unregister_loop_warn_map():
         fm._mode_filters = {}
         fm._loop_warn_map = {}
         fm._settings_gates = {}
+        fm._hidden_tools = set()
         fm.current_toolset_name = "none"
 
         tool = {"type": "function", "loop_warn_after": 2, "loop_warn_message": "stop",

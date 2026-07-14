@@ -12,7 +12,7 @@ function escapeHtml(s) {
 /**
  * Render a settings form from a manifest schema array.
  * @param {HTMLElement} container - Where to render
- * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?}]
+ * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?, tab?}]
  * @param {Object} values - Current setting values (merged with defaults by backend)
  * @param {Object} [opts] - {onChange: (key, value) => void}
  */
@@ -22,7 +22,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         return;
     }
 
-    const rows = schema.map(field => {
+    const rowHTML = field => {
         const val = values[field.key] ?? field.default ?? '';
         return `
             <div class="setting-row" data-key="${escapeHtml(field.key)}">
@@ -33,9 +33,45 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
                 <div class="setting-input">${renderWidget(field, val)}</div>
             </div>
         `;
-    }).join('');
+    };
 
-    container.innerHTML = `<div class="settings-grid">${rows}</div>`;
+    // Optional per-field "tab" groups fields under a tab strip. Untagged
+    // fields go to "General" (always first); tagged tabs follow in
+    // first-seen schema order. With <2 groups the output is identical to
+    // the untabbed form, so existing plugins render unchanged.
+    const groups = new Map();
+    for (const field of schema) {
+        const tab = String(field.tab || 'General').trim() || 'General';
+        if (!groups.has(tab)) groups.set(tab, []);
+        groups.get(tab).push(field);
+    }
+
+    if (groups.size < 2) {
+        container.innerHTML = `<div class="settings-grid">${schema.map(rowHTML).join('')}</div>`;
+    } else {
+        const names = [...groups.keys()];
+        if (names.includes('General')) {
+            names.splice(names.indexOf('General'), 1);
+            names.unshift('General');
+        }
+        const strip = `<div class="ps-tabs">${names.map((n, i) =>
+            `<button type="button" class="ps-tab${i === 0 ? ' active' : ''}" data-ps-tab="${escapeHtml(n)}">${escapeHtml(n)}</button>`
+        ).join('')}</div>`;
+        // Every pane stays in the DOM — save (readSettingsForm) and the
+        // widget wiring below scan the whole container by #ps-{key}, so
+        // inactive panes are CSS-hidden, never removed.
+        const panes = names.map((n, i) =>
+            `<div class="settings-grid" data-ps-pane="${escapeHtml(n)}"${i === 0 ? '' : ' hidden'}>${groups.get(n).map(rowHTML).join('')}</div>`
+        ).join('');
+        container.innerHTML = strip + panes;
+        container.querySelector('.ps-tabs').addEventListener('click', e => {
+            const btn = e.target.closest('.ps-tab');
+            if (!btn) return;
+            container.querySelectorAll('.ps-tab').forEach(b => b.classList.toggle('active', b === btn));
+            container.querySelectorAll('[data-ps-pane]').forEach(p =>
+                p.toggleAttribute('hidden', p.dataset.psPane !== btn.dataset.psTab));
+        });
+    }
 
     // Attach confirm gates and onChange handlers
     for (const field of schema) {

@@ -1,6 +1,12 @@
+# 2.8.7 
+- 
 # 2.8.6 - Plugins and daemons
 - Daemon > Filters changed to dropdowns instead of JSON
 - Plugins now have subprocess officially, and plugins can make their own conda
+- Plugin events are now settings, not hard coded files
+- Added core registry for memory layers
+- Plugin Settings has tabs now
+- Hidden tools for memory librarian and internal use
 # 2.8.5 - Settings > LLM
 - Unified main and secondary models in settings with 1 drag and drop
 - Unified handler and CSS for add/edit, vision checkmark

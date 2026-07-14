@@ -2592,6 +2592,36 @@ div.hb-response-summary {
     grid-template-columns: repeat(2, 1fr);
     gap: 12px 20px;
 }
+/* Author display:grid beats the [hidden] UA style — make hidden win
+   (plugin settings tabs CSS-hide inactive panes, never remove them). */
+.settings-grid[hidden] { display: none; }
+
+/* Plugin settings tab strip (per-field "tab" in manifest schema).
+   Cloned from .mind-tabs — kept separate, those classes carry ancestor
+   layout dependencies. */
+.ps-tabs {
+    display: inline-flex;
+    gap: 4px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: 3px;
+    margin-bottom: 14px;
+}
+.ps-tab {
+    padding: 6px 14px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--font-sm);
+    cursor: pointer;
+}
+.ps-tab:hover { color: var(--text); }
+.ps-tab.active {
+    background: var(--trim-light, rgba(74, 158, 255, 0.15));
+    color: var(--text);
+    border: 1px solid var(--trim-border, var(--border));
+}
 
 /* Setting rows — stacked: label above input */
 .setting-row {
