@@ -89,6 +89,15 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - More RAM if you need a local LLM
 - (recommended) Nvidia GPU for TTS/STT
 
+## Try It Now — Online Persona Builder
+
+Want to see what persona building looks like before installing? **[Try the online persona builder](https://sapphireblue.dev/builder)** — describe the companion you want, and we'll generate a complete Sapphire persona for you to preview. Download it and import it when you install.
+
+- No installation required
+- Design a companion in minutes
+- Preview prompt, voice, toolset, and personality
+- Download and use with your Sapphire instance
+
 ## Windows Easy Installer
 This is our beta Windows 11 installer. It installs git, conda, and sapphire. You can use it as a launcher, to troubleshoot, or switch between dev and main branch. Use this if you want easy mode on Windows.
 
@@ -179,6 +188,7 @@ Or use the in-app update button in Settings → Dashboard. See [INSTALLATION.md 
 |-------|-------------|
 | [Installation](docs/INSTALLATION.md) | Setup guide, systemd service |
 | [Quick Start](docs/QUICK-START.md) | First persona, LLM setup, integrations |
+| [Persona Builder](docs/BUILDER.md) | Online tool to design and preview personas |
 | [Plugin Author Guide](docs/plugin-author/README.md) | Build plugins with hooks, tools, providers, apps, themes |
 | [API](docs/API.md) | All ~280 REST endpoints |
 | [Backups](docs/BACKUPS.md) | Automatic and manual backup system |

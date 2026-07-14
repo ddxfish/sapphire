@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create a Sapphire Companion - Online Persona Builder</title>
+    <link rel="stylesheet" href="/static/styles/main.css?v={{ v }}">
+    <style>
+        :root {
+            --primary: #4a9eff;
+            --primary-dark: #3d7aff;
+            --accent: #00d4ff;
+            --text: #e0e0e0;
+            --text-secondary: #b0b0b0;
+            --bg: #1a1a2e;
+            --bg-secondary: #16213e;
+            --border: #333;
+            --success: #4ade80;
+            --error: #f87171;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: linear-gradient(135deg, var(--bg) 0%, var(--bg-secondary) 100%);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .navbar {
+            background: rgba(26, 26, 46, 0.95);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+        
+        .navbar-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .navbar-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+        
+        .navbar-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            margin-left: 2rem;
+            transition: color 0.3s;
+        }
+        
+        .navbar-links a:hover {
+            color: var(--accent);
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+        
+        .builder-container {
+            display: flex;
+            flex-direction: column;
+            gap: 3rem;
+        }
+        
+        .builder-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .builder-header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .builder-header p {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .tagline {
+            font-style: italic;
+            color: var(--accent);
+            margin-top: 1rem;
+            font-size: 1.25rem;
+        }
+        
+        .btn-back {
+            background: none;
+            border: none;
+            color: var(--primary);
+            font-size: 1rem;
+            cursor: pointer;
+            margin-bottom: 1rem;
+            padding: 0.5rem 0;
+            transition: color 0.3s;
+        }
+        
+        .btn-back:hover {
+            color: var(--accent);
+        }
+        
+        .builder-form,
+        .preview-content {
+            background: rgba(22, 33, 62, 0.5);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            backdrop-filter: blur(10px);
+        }
+        
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+            color: var(--text);
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: rgba(26, 26, 46, 0.5);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 1rem;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.1);
+        }
+        
+        textarea.form-input {
+            min-height: 150px;
+            resize: vertical;
+        }
+        
+        .char-count {
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+            text-align: right;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        
+        .btn-primary:hover:not(:disabled) {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.3);
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            border: 1px solid var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-secondary:hover:not(:disabled) {
+            background: rgba(74, 158, 255, 0.1);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        
+        .btn-large {
+            width: 100%;
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .btn-loading {
+            display: inline-block;
+        }
+        
+        .builder-info {
+            background: rgba(22, 33, 62, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-top: 2rem;
+        }
+        
+        .builder-info h3 {
+            margin-bottom: 1rem;
+            color: var(--accent);
+        }
+        
+        .builder-info ol {
+            margin-left: 1.5rem;
+            color: var(--text-secondary);
+        }
+        
+        .builder-info li {
+            margin-bottom: 0.5rem;
+        }
+        
+        .preview-section {
+            margin-bottom: 2rem;
+        }
+        
+        .preview-section h3 {
+            color: var(--accent);
+            margin-bottom: 1rem;
+        }
+        
+        .preview-section p {
+            color: var(--text-secondary);
+            line-height: 1.8;
+        }
+        
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            background: rgba(26, 26, 46, 0.5);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        
+        .config-item label {
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        .config-item span {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        
+        .preview-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+        
+        .preview-actions .btn {
+            flex: 1;
+            min-width: 200px;
+            justify-content: center;
+        }
+        
+        .toast {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            animation: slideUp 0.3s ease-out;
+            z-index: 1000;
+        }
+        
+        .toast.success {
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+        }
+        
+        .toast.error {
+            background: rgba(248, 113, 113, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(100px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .builder-header h1 {
+                font-size: 1.75rem;
+            }
+            
+            .navbar-links {
+                display: none;
+            }
+            
+            .config-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .preview-actions {
+                flex-direction: column;
+            }
+            
+            .preview-actions .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <div class="navbar-content">
+            <div class="navbar-title">Sapphire Persona Builder</div>
+            <div class="navbar-links">
+                <a href="https://github.com/ddxfish/sapphire" target="_blank">GitHub</a>
+                <a href="https://sapphireblue.dev" target="_blank">Website</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div id="app"></div>
+    </div>
+    
+    <script>
+        // Global config for Sapphire (needed by views)
+        window.BOOT_VERSION = '{{ v }}';
+        window.APP_CONFIG = {
+            csrf_token: '{{ csrf_token() }}'
+        };
+    </script>
+    
+    <script type="module">
+        import { render as renderBuilder } from '/static/views/builder.js?v=' + window.BOOT_VERSION;
+        
+        const appContainer = document.getElementById('app');
+        renderBuilder(appContainer).catch(error => {
+            console.error('Failed to render builder:', error);
+            appContainer.innerHTML = '<div style="color: red; padding: 2rem; text-align: center;">Failed to load persona builder</div>';
+        });
+    </script>
+</body>
+</html>

@@ -601,6 +601,18 @@ async def login_page(request: Request, _=Depends(require_setup)):
     })
 
 
+@app.get("/builder")
+async def builder_page(request: Request):
+    """Online persona builder - public access (no authentication required)."""
+    csrf_token = generate_csrf_token(request)
+    return _no_cache_html("builder.html", {
+        "request": request,
+        "csrf_token": lambda: csrf_token,
+        "v": BOOT_VERSION,
+        "app_version": APP_VERSION
+    })
+
+
 @app.post("/login")
 async def login_submit(request: Request):
     """Handle login form."""
@@ -834,6 +846,7 @@ from core.routes.store import router as store_router
 from core.routes.dashboard import router as dashboard_router
 from core.routes.body import router as body_router
 from core.routes.videos import router as videos_router
+from core.routes.persona_builder import router as persona_builder_router
 
 app.include_router(chat_router)
 app.include_router(tts_router)
@@ -849,4 +862,5 @@ app.include_router(store_router)
 app.include_router(dashboard_router)
 app.include_router(body_router)
 app.include_router(videos_router)
+app.include_router(persona_builder_router)
 
