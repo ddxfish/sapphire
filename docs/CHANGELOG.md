@@ -1,5 +1,5 @@
-# 2.8.7 
-- 
+# 2.8.7 - Plugin prompts
+- Plugins can hot-load prompt packs
 # 2.8.6 - Plugins and daemons
 - Daemon > Filters changed to dropdowns instead of JSON
 - Plugins now have subprocess officially, and plugins can make their own conda

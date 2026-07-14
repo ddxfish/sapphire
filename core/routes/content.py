@@ -76,8 +76,17 @@ async def reload_prompts(request: Request, _=Depends(require_login)):
 
 @router.get("/api/prompts/components")
 async def get_prompt_components(request: Request, _=Depends(require_login)):
-    """Get prompt components."""
-    return {"components": prompts.prompt_manager.components}
+    """Get prompt components (merged view) + plugin sources for pack pieces.
+    A user piece shadowing a pack key carries no source (the user copy wins)."""
+    from core import prompt_packs
+    user_components = prompts.prompt_manager._components
+    sources = {
+        ctype: {k: v for k, v in entries.items()
+                if k not in user_components.get(ctype, {})}
+        for ctype, entries in prompt_packs.component_sources().items()
+    }
+    return {"components": prompts.prompt_manager.components,
+            "sources": {k: v for k, v in sources.items() if v}}
 
 
 @router.get("/api/prompts/{name}")

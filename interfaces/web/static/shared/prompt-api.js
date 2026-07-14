@@ -8,6 +8,12 @@ export async function getComponents() {
   return data.components || {};
 }
 
+// Components + plugin-pack sources ({type: {key: pluginName}}) in one fetch
+export async function getComponentsWithSources() {
+  const data = await fetchWithTimeout('/api/prompts/components');
+  return { components: data.components || {}, sources: data.sources || {} };
+}
+
 export async function listPrompts() {
   // Always fetch fresh list - cache may be stale after create/delete
   const data = await fetchWithTimeout('/api/prompts');

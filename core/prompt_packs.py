@@ -147,6 +147,18 @@ def piece_source(ctype, key):
     return None
 
 
+def component_sources():
+    """{type: {key: plugin_name}} for every pack piece — UI badge lookup."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for ctype, entries in pack['components'].items():
+                slot = out.setdefault(ctype, {})
+                for k in entries:
+                    slot.setdefault(k, pname)
+    return out
+
+
 def has_packs():
     with _lock:
         return bool(_packs)

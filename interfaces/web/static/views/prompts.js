@@ -1,5 +1,5 @@
 // views/prompts.js - Prompt editor view (accordion-based inline editing)
-import { listPrompts, getPrompt, getComponents, savePrompt, deletePrompt,
+import { listPrompts, getPrompt, getComponentsWithSources, savePrompt, deletePrompt,
          saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
 import { PERSONA_TABS } from '../shared/persona-tabs.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
@@ -14,6 +14,7 @@ import { helpPills } from '../features/video-link.js';
 let container = null;
 let prompts = [];
 let components = {};
+let componentSources = {};  // {type: {key: pluginName}} — plugin-pack pieces (🧩 badge)
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
 let selectedData = null;
@@ -44,9 +45,10 @@ export default {
 // ── Data ──
 async function loadAll() {
     try {
-        const [pList, comps] = await Promise.all([listPrompts(), getComponents()]);
+        const [pList, compData] = await Promise.all([listPrompts(), getComponentsWithSources()]);
         prompts = (pList || []).sort((a, b) => a.name.localeCompare(b.name));
-        components = comps || {};
+        components = compData.components || {};
+        componentSources = compData.sources || {};
 
         const active = prompts.find(p => p.active);
         activePromptName = active?.name || null;
@@ -199,7 +201,7 @@ function renderSingleAccordion(type, comps) {
                     <div class="pr-piece-row">
                         <select class="pr-piece-select" data-type="${type}">
                             <option value="">None</option>
-                            ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}</option>`).join('')}
+                            ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}</option>`).join('')}
                         </select>
                         ${current ? `<button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${current}" title="Rename">\u270F</button>` : ''}
                     </div>
@@ -241,16 +243,16 @@ function renderMultiAccordion(type, comps) {
                 <div class="pr-accordion-body">
                     <div class="pr-chips">
                         ${keys.map(k => `
-                            <label class="pr-chip${current.includes(k) ? ' active' : ''}" title="${escAttr(defs[k] || '')}">
+                            <label class="pr-chip${current.includes(k) ? ' active' : ''}" title="${escAttr((componentSources[type]?.[k] ? `[Plugin: ${componentSources[type][k]}] ` : '') + (defs[k] || ''))}">
                                 <input type="checkbox" data-type="${type}" data-key="${k}" ${current.includes(k) ? 'checked' : ''}>
-                                <span>${k}</span>
+                                <span>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}</span>
                             </label>
                         `).join('')}
                     </div>
                     ${keys.length ? `
                         <div class="pr-piece-row">
                             <select class="pr-piece-select" data-type="${type}">
-                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}</option>`).join('')}
+                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}</option>`).join('')}
                             </select>
                             <button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${target}" title="Rename">\u270F</button>
                         </div>
