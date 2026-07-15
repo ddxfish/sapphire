@@ -246,7 +246,7 @@ export const replayTts = async (idx) => {
 /** Stream a known text via /api/tts/stream → SSE → existing playback queue.
  * Returns true if at least one chunk arrived, false if the endpoint was
  * unavailable (503) so the caller can fall back. Other errors throw. */
-export const playTextStreaming = async (text) => {
+export const playTextStreaming = async (text, voice = null) => {
     stop(true);  // clear any current playback before starting new stream
 
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -255,7 +255,7 @@ export const playTextStreaming = async (text) => {
         res = await fetch('/api/tts/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ text }),
+            body: JSON.stringify(voice ? { text, voice } : { text }),
         });
     } catch (e) {
         throw new Error(`network: ${e.message}`);

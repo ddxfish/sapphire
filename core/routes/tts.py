@@ -166,10 +166,13 @@ async def handle_tts_stream(request: Request, _=Depends(require_login), system=D
         raise HTTPException(status_code=400, detail="No text provided")
     if len(text) > _TTS_MAX_CHARS:
         raise HTTPException(status_code=413, detail=f"Text too long (max {_TTS_MAX_CHARS:,})")
+    voice = (data.get('voice') or '').strip() or None
+    if voice:
+        voice = _validate_tts_voice(voice)
 
     def generate():
         from core.tts.stream_pump import StreamingTTSPump
-        pump = StreamingTTSPump(system=system)
+        pump = StreamingTTSPump(system=system, voice_override=voice)
         try:
             # Whole text in one push — chunker splits at sentence boundaries.
             # The final sentence (no trailing uppercase) emerges from flush.

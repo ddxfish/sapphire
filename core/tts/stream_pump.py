@@ -74,10 +74,15 @@ class StreamingTTSPump:
             `total_chars`, `interrupted`, `stream_id`. Observational.
     """
 
-    def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None):
+    def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None,
+                 voice_override: Optional[str] = None):
         self.system = system
         self.tts = getattr(system, "tts", None)
         self.provider = getattr(self.tts, "_provider", None) if self.tts else None
+        # Explicit per-pump voice (e.g. /api/tts/stream `voice` param). Beats
+        # the brain-override ContextVar and the global voice. None = unchanged
+        # legacy chain — chat streaming never passes this.
+        self.voice_override = (voice_override or "").strip() or None
         # Decide ONCE whether to use the streaming Kokoro endpoint
         # (multi-segment yield per chunk) or the legacy single-blob path.
         # Providers without a real streaming impl fall through to
@@ -438,14 +443,15 @@ class StreamingTTSPump:
         # persona voice, patched by the twilio daemon) beats the global voice.
         # Resolved here in _submit — still inside the stream's context, so the
         # brain override ContextVar is visible.
-        voice = None
-        try:
-            from core.chat.stream_brain import get_override
-            _o = get_override()
-            if _o:
-                voice = (_o.get("settings") or {}).get("tts_voice") or None
-        except Exception:
-            pass
+        voice = self.voice_override
+        if not voice:
+            try:
+                from core.chat.stream_brain import get_override
+                _o = get_override()
+                if _o:
+                    voice = (_o.get("settings") or {}).get("tts_voice") or None
+            except Exception:
+                pass
         voice = voice or getattr(self.tts, "voice_name", None) or "af_heart"
         speed = getattr(self.tts, "speed", None) or 1.0
         logger.info(
