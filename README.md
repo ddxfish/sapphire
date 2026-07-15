@@ -5,11 +5,11 @@ Hear her voice as she dims your lights before bed. Use your voice to talk back. 
 [![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?logo=discord&logoColor=white)](https://discord.gg/pCdTAnExma)
 [![YouTube](https://img.shields.io/badge/YouTube-Subscribe-FF0000?logo=youtube&logoColor=white)](https://www.youtube.com/@SapphireBlueAi)
 [![Website](https://img.shields.io/badge/Website-sapphireblue.dev-0ea5e9?logo=googlechrome&logoColor=white)](https://sapphireblue.dev/)
-[![GitHub Stars](https://img.shields.io/github/stars/ddxfish/sapphire?style=flat&logo=github&label=Stars)](https://github.com/ddxfish/sapphire)
+[![GitHub Stars](https://img.shields.io/github/stars/ddxfish/sapphire?style=flat&logo=github&label=Stars)](<copilot-ref kind="repo" target-id="https://github.com/ddxfish/sapphire" label="ddxfish/sapphire" />)
 [![Patreon](https://img.shields.io/badge/Patreon-Support-F96854?logo=patreon&logoColor=white)](https://www.patreon.com/c/sapphireai)
 
 > **⚠️ Warning — Sapphire has real power over real systems.**
->
+> 
 > Sapphire can execute shell commands, send emails, control your smart home, and write its own tools, and if you set up scheduled tasks it is all autonomous. This means **unsupervised AI acting on your behalf**. Every dangerous integration requires explicit setup and opt-in, but once enabled, there are no training wheels. Configure your toolsets carefully to limit your AIs access. If you wouldn't hand someone your terminal, don't hand it to an LLM.
 
 <sub>🔊 Has audio</sub>
@@ -91,7 +91,7 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 
 ## Try It Now — Online Persona Builder
 
-Want to see what persona building looks like before installing? **[Try the online persona builder](https://sapphireblue.dev/builder)** — describe the companion you want, and we'll generate a complete Sapphire persona for you to preview. Download it and import it when you install.
+Want to see what persona building looks like before installing? [**Try the online persona builder**](https://sapphireblue.dev/builder) — describe the companion you want, and we'll generate a complete Sapphire persona for you to preview. Download it and import it when you install.
 
 - No installation required
 - Design a companion in minutes
@@ -110,7 +110,7 @@ This is our beta Windows 11 installer. It installs git, conda, and sapphire. You
 
 #### Linux (bash)
 
-```bash
+````bash
 sudo apt-get install libportaudio2 git
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 bash Miniconda3-latest-Linux-x86_64.sh -b
@@ -223,3 +223,4 @@ Built with:
 - [openWakeWord](https://github.com/dscripka/openWakeWord) - Wake word detection
 - [Faster Whisper](https://github.com/guillaumekln/faster-whisper) - Speech recognition
 - [Kokoro TTS](https://github.com/hexgrad/kokoro) - Voice synthesis
+````
