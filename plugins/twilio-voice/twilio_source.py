@@ -33,7 +33,8 @@ _ENGINE_FRAME = 512          # silero wants 512-sample 16k frames
 # barge-in stop flag would swallow them). Encoded once per process.
 _CUE_FILES = {"think": "think_pulse.wav",             # still working (1/s pulse)
               "barge": "respond_ding.wav",            # you cut in — floor's yours
-              "hangup": "hangup_bye.wav"}             # goodbye chime before BYE
+              "hangup": "hangup_bye.wav",             # goodbye chime before BYE
+              "error": "error_glitch.wav"}            # turn failed — spoken "sorry, I glitched"
 # (respond_lift retired as barge cue 2026-07-15 — two notes/410ms stomped the
 # caller's first words; the single short ding stays out of their way.)
 _cue_frames = {}

@@ -96,9 +96,10 @@ class ConversationDriver:
         self._sink = sink
 
     def set_cues(self, fn):
-        """Optional turn-cue player: fn(name) with name in {'think','barge'}.
+        """Optional turn-cue player: fn(name) with name in {'think','barge','error'}.
         think = still working (fires ~1/s from capture until her first audio),
-        barge = user interrupted and the floor is theirs. Wired per-surface
+        barge = user interrupted and the floor is theirs,
+        error = the turn failed (canned spoken apology). Wired per-surface
         (phone today; conversation/wakeword modes join in the v2.9 soundscape)."""
         self._cue_fn = fn
 
@@ -197,6 +198,11 @@ class ConversationDriver:
                                  "chat": self._chat_name, "foreign": _foreign})
                     elif et == "tts_chunk":
                         sink.feed_chunk(event)
+                    elif et == "error":
+                        # chat_stream signals some faults as yielded events, not
+                        # raises (e.g. private-prompt block). Surface them like
+                        # any other turn failure instead of ending in silence.
+                        raise RuntimeError(event.get("text") or "stream error event")
                     if getattr(stream, "cancel_flag", False):
                         break
             finally:
@@ -208,6 +214,10 @@ class ConversationDriver:
                                             "chat": self._chat_name, "foreign": _foreign})
         except Exception as e:
             logger.error(f"[CONV] streaming turn failed: {e}")
+            # Spoken failure cue: a dead provider must not read as a hung line.
+            # Surfaces that wired cues (phone) play a canned "sorry, I glitched"
+            # — pre-synthesized, so it works even when TTS is the thing that died.
+            self._cue("error")
         finally:
             pulse_stop.set()
             self._active_sink = None

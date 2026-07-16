@@ -182,3 +182,38 @@ def test_barge_arms_once_on_tts_chunk(pub):
     for _ in range(3):
         d.push_frame(*frame(100, False))
     d.engine.arm_barge.assert_called_once()          # armed only at the tts_chunk
+
+
+# ── spoken failure path (2026-07-16): a failed turn must not be dead air ─────
+
+@patch("core.conversation.driver.publish")
+def test_error_event_fires_error_cue(pub):
+    """A yielded {"type":"error"} event (chat_stream's non-raise fault path)
+    must fire the error cue instead of ending the turn in silence."""
+    events = [{"type": "error", "text": "provider down"}]
+    d, system, fs, sink = _driver(events=events)
+    cues = []
+    d.set_cues(cues.append)
+    d.push_frame(*frame(150, True))
+    for _ in range(3):
+        d.push_frame(*frame(100, False))
+    assert "error" in cues
+    system.llm_chat.end_stream.assert_called_once()  # stream still closed cleanly
+    assert d.engine.state == IDLE                    # line stays up for a retry
+
+
+@patch("core.conversation.driver.publish")
+def test_stream_exception_fires_error_cue(pub):
+    """A raise out of chat_stream (dead provider) must fire the error cue."""
+    def _boom(text):
+        raise RuntimeError("provider exploded")
+        yield  # pragma: no cover
+    d, system, fs, sink = _driver()
+    fs.chat_stream.side_effect = _boom
+    cues = []
+    d.set_cues(cues.append)
+    d.push_frame(*frame(150, True))
+    for _ in range(3):
+        d.push_frame(*frame(100, False))
+    assert "error" in cues
+    assert d.engine.state == IDLE
