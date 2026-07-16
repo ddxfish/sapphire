@@ -39,6 +39,8 @@ Callback contract
                       no barge-in, returning the engine to IDLE.
   arm_barge()         the driver calls this when the response becomes interruptible
                       (prose streaming / audio playing).
+  begin_response()    external speech (a call greeting) enters RESPONDING from IDLE
+                      so user speech over it barges instead of piling a turn.
 
 PCM frames are int16 little-endian bytes; frame duration is derived from length,
 so timing is deterministic (no wall clock) — feed known-size frames in tests.
@@ -126,6 +128,17 @@ class ConversationEngine:
                 # the hold timer restarts fresh once prose arms it.
                 self._barge_ms = 0.0
             return
+
+    def begin_response(self):
+        """Enter RESPONDING for externally-produced speech (a call greeting) so
+        concurrent user speech is a barge-in, not a parallel turn. Only valid from
+        IDLE — returns False (and does nothing) mid-utterance/mid-turn."""
+        if self.state != IDLE:
+            return False
+        self.state = RESPONDING
+        self._barge_ms = 0.0
+        self.barge_enabled = False
+        return True
 
     def arm_barge(self):
         """Driver calls this once the response is interruptible (prose streaming /

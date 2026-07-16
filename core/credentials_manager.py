@@ -899,12 +899,18 @@ class CredentialsManager:
             'account_sid': acct.get('account_sid', ''),
             'auth_token': self._unscramble(acct.get('auth_token', '')),
             'transport': acct.get('transport', 'tls'),
+            'call_provider': acct.get('call_provider', ''),
+            'call_model': acct.get('call_model', ''),
+            'elevate_key': self._unscramble(acct.get('elevate_key', '')),
+            'elevate_toolset': acct.get('elevate_toolset', ''),
         }
 
     def set_twilio_account(self, scope: str, sip_domain: str, sip_user: str,
                            sip_pass: str, number: str = '', chat: str = 'default',
                            greeting: str = '', account_sid: str = '',
-                           auth_token: str = '', transport: str = 'tls') -> bool:
+                           auth_token: str = '', transport: str = 'tls',
+                           call_provider: str = '', call_model: str = '',
+                           elevate_key: str = '', elevate_toolset: str = '') -> bool:
         """Create/update a Twilio account. sip_pass and auth_token (the REST
         API secret for outbound calls) are scrambled before save."""
         with self._lock:
@@ -921,6 +927,10 @@ class CredentialsManager:
                     'account_sid': account_sid,
                     'auth_token': self._scramble(auth_token) if auth_token else '',
                     'transport': transport if transport in ('tls', 'udp') else 'tls',
+                    'call_provider': call_provider,
+                    'call_model': call_model,
+                    'elevate_key': self._scramble(elevate_key) if elevate_key else '',
+                    'elevate_toolset': elevate_toolset,
                 }
                 if not self._save():
                     logger.error(f"Failed to persist twilio account '{scope}'")
@@ -963,6 +973,10 @@ class CredentialsManager:
                 'account_sid': acct.get('account_sid', ''),
                 'rest_configured': bool(acct.get('account_sid') and acct.get('auth_token')),
                 'transport': acct.get('transport', 'tls'),
+                'call_provider': acct.get('call_provider', ''),
+                'call_model': acct.get('call_model', ''),
+                'elevate_configured': bool(acct.get('elevate_key')),
+                'elevate_toolset': acct.get('elevate_toolset', ''),
             })
         return result
 

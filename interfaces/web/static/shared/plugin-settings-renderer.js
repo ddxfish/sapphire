@@ -367,8 +367,10 @@ function attachConfirmGate(container, field, managed) {
             return;
         }
 
-        // Block confirm-gated values entirely in managed mode
-        if (managed) {
+        // Block confirm-gated values entirely in managed mode — unless the
+        // manifest opts out (`allow_managed: true`, e.g. alpha-feature gates
+        // that warn rather than protect the host).
+        if (managed && !conf.allow_managed) {
             if (widget === 'select') e.target.value = previousValue;
             else if (widget === 'toggle') { e.target.checked = previousValue === 'true'; }
             else if (widget === 'radio') {

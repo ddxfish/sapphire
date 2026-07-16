@@ -178,6 +178,39 @@ class ConversationDriver:
             self._active_sink = None
             self.engine.turn_finished()            # no-op if a barge-in already moved us on
 
+    # ── external speech (call greetings) ────────────────────────────────────
+    def speak_direct(self, audio_bytes, on_begin=None):
+        """Play pre-synthesized audio as an engine-aware pseudo-turn. The engine
+        holds RESPONDING while it plays (barge armed), so a listener talking over
+        it interrupts cleanly instead of spawning a parallel turn. Blocks until
+        the audio drains or a barge-in cuts it. Returns False if the engine was
+        already mid-turn (audio is skipped — never stomp a live utterance).
+        `on_begin` fires once the engine commits, before the first frame plays —
+        the caller's hook for recording what is about to be said."""
+        import base64
+        if not audio_bytes:
+            return False
+        if not self.engine.begin_response():
+            logger.info("[CONV] speak_direct skipped — engine not idle")
+            return False
+        if on_begin is not None:
+            try:
+                on_begin()
+            except Exception as e:
+                logger.warning(f"[CONV] speak_direct on_begin failed: {e}")
+        sink = self._ensure_sink()
+        sink.start()
+        self._active_sink = sink
+        self.engine.arm_barge()
+        try:
+            sink.feed_chunk({"audio_b64": base64.b64encode(audio_bytes).decode()})
+            sink.finish()
+            self._wait_sink(sink)
+        finally:
+            self._active_sink = None
+            self.engine.turn_finished()    # no-op if a barge-in already moved us on
+        return True
+
     # ── sink ────────────────────────────────────────────────────────────────
     def _ensure_sink(self):
         if self._sink is None:

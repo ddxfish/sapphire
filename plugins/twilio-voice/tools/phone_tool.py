@@ -3,8 +3,10 @@
 phone_call: dial a whitelisted contact and run the live conversation engine on
 the bridged call. The People whitelist is the blast shield (email pattern):
 only contacts with 'Allow AI to call' + a phone number are dialable — no
-direct-number parameter in v1. The heavy lifting (REST originate, pending-call
-correlation, ephemeral chat spin-off, report-back) lives in the plugin daemon.
+direct-number parameter in v1. Called with no recipient_id it returns the menu
+(callable contacts + switchable models) — one tool, no separate lister (AIX).
+The heavy lifting (REST originate, pending-call correlation, ephemeral chat
+spin-off, report-back) lives in the plugin daemon.
 """
 import logging
 import sys
@@ -14,7 +16,6 @@ logger = logging.getLogger(__name__)
 ENABLED = True
 EMOJI = '📞'
 AVAILABLE_FUNCTIONS = [
-    'get_phone_contacts',
     'phone_call',
 ]
 
@@ -23,28 +24,21 @@ TOOLS = [
         "type": "function",
         "is_local": True,
         "function": {
-            "name": "get_phone_contacts",
-            "description": "List contacts you are allowed to call (id + name). Use the id with phone_call().",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "is_local": True,
-        "function": {
             "name": "phone_call",
             "description": (
                 "Place a real phone call to a whitelisted contact. The call is a live "
                 "voice conversation — when they answer, you'll be talking with them. "
-                "By default the call runs in its own side chat and reports back here "
-                "when it ends; set ephemeral=false to run it in THIS chat instead."
+                "Call with NO recipient_id first to see who you can call and which "
+                "models are available. By default the call runs in its own side chat "
+                "and reports back here when it ends; set ephemeral=false to run it in "
+                "THIS chat instead."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "recipient_id": {
                         "type": "integer",
-                        "description": "Contact id from get_phone_contacts()",
+                        "description": "Contact id from the menu (call with no arguments to see it)",
                     },
                     "goal": {
                         "type": "string",
@@ -56,7 +50,15 @@ TOOLS = [
                     },
                     "opening_line": {
                         "type": "string",
-                        "description": "Your first words, spoken the moment they answer (e.g. \"Hey! It's Sapphire.\"). Recommended — it sets the cadence. Omit to wait for them to speak first.",
+                        "description": "Your first words, spoken the moment they answer (e.g. \"Hey! It's Sapphire.\"). Omit to stay quiet and let them speak first — better when calling businesses.",
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "LLM for the call, by name from the menu (e.g. a fast non-thinking model — phone latency matters). Omit for the number's default.",
+                    },
+                    "memory": {
+                        "type": "boolean",
+                        "description": "false (default): the call runs memory-isolated. true: your memory scopes travel with you onto the call (use when the call needs what you know).",
                     },
                     "prompt": {
                         "type": "string",
@@ -67,7 +69,7 @@ TOOLS = [
                         "description": "Hard call-duration cap in minutes (default 10, carrier-enforced).",
                     },
                 },
-                "required": ["recipient_id", "goal"],
+                "required": [],
             },
         },
     },
@@ -110,31 +112,74 @@ def _callable_contacts():
     return [p for p in get_people(scope) if p.get('call_whitelisted') and p.get('phone')]
 
 
-def _get_phone_contacts():
-    contacts = _callable_contacts()
-    if contacts is None:
-        return "People contacts are disabled for this chat.", False
-    if not contacts:
-        return ("No contacts are whitelisted for calls. Ask the user to enable "
-                "'Allow AI to call' on a contact in Mind → People."), False
-    lines = ["Contacts you can call:"]
-    lines += [f"  [{p['id']}] {p['name']}" for p in contacts]
+def _enabled_providers():
+    from core.chat.llm_providers import provider_registry
+    return [p for p in provider_registry.get_all_providers() if p.get('enabled')]
+
+
+def _match_provider(name):
+    """Resolve a spoken/typed model name to a provider key: exact key or
+    display_name (case-insensitive) first, then unique substring. None = no match."""
+    n = (name or "").strip().lower()
+    if not n:
+        return None
+    provs = _enabled_providers()
+    for p in provs:
+        if n == (p.get('key') or '').lower() or n == (p.get('display_name') or '').lower():
+            return p['key']
+    part = [p for p in provs
+            if n in (p.get('key') or '').lower() or n in (p.get('display_name') or '').lower()]
+    return part[0]['key'] if len(part) == 1 else None
+
+
+def _call_menu(contacts):
+    """The no-args response: who's callable + which brains are switchable."""
+    lines = []
+    if contacts:
+        lines.append("Contacts you can call (use recipient_id):")
+        lines += [f"  [{p['id']}] {p['name']}" for p in contacts]
+    else:
+        lines.append("No contacts are whitelisted for calls. Ask the user to enable "
+                     "'Allow AI to call' on a contact in Mind → People.")
+    default_prov = ""
+    scope = _get_current_twilio_scope()
+    if scope:
+        try:
+            from core.credentials_manager import credentials
+            default_prov = credentials.get_twilio_account(scope).get('call_provider', '')
+        except Exception:
+            pass
+    provs = _enabled_providers()
+    if provs:
+        lines.append("Models for the call (model= param, omit for default):")
+        for p in provs:
+            mark = "  <- call default" if p['key'] == default_prov else ""
+            lines.append(f"  {p.get('display_name') or p['key']}{mark}")
     return '\n'.join(lines), True
 
 
 def _phone_call(recipient_id, goal, ephemeral=True, prompt=None, max_minutes=10,
-                opening_line=None):
+                opening_line=None, model=None, memory=False):
     contacts = _callable_contacts()
     if contacts is None:
         return "People contacts are disabled for this chat.", False
+    if recipient_id is None:
+        return _call_menu(contacts)
     # Single gate: only a whitelisted-with-phone contact resolves — no other
     # path to a dialable number (email _resolve_recipient lineage).
     person = next((p for p in contacts if p['id'] == recipient_id), None)
     if person is None:
-        return "That contact isn't whitelisted for calls (or has no phone number). Use get_phone_contacts().", False
+        return "That contact isn't whitelisted for calls (or has no phone number). Call phone_call with no arguments to see the menu.", False
     goal = (goal or "").strip()
     if not goal:
         return "A goal is required — say what the call is for.", False
+
+    provider = None
+    if model:
+        provider = _match_provider(model)
+        if provider is None:
+            return (f"No model matches '{model}'. Call phone_call with no arguments "
+                    "to see the available models."), False
 
     daemon = _daemon()
     if daemon is None or not hasattr(daemon, "place_call"):
@@ -158,15 +203,14 @@ def _phone_call(recipient_id, goal, ephemeral=True, prompt=None, max_minutes=10,
         to_number=person['phone'], to_name=person['name'], goal=goal,
         origin_chat=origin_chat, ephemeral=bool(ephemeral),
         prompt=(prompt or "").strip() or None, max_minutes=mins, scope=scope,
-        opening_line=(opening_line or "").strip() or None)
+        opening_line=(opening_line or "").strip() or None,
+        provider=provider, memory=bool(memory))
     return msg, ok
 
 
 def execute(function_name, arguments, config):
     try:
-        if function_name == "get_phone_contacts":
-            return _get_phone_contacts()
-        elif function_name == "phone_call":
+        if function_name == "phone_call":
             return _phone_call(
                 recipient_id=arguments.get('recipient_id'),
                 goal=arguments.get('goal', ''),
@@ -174,6 +218,8 @@ def execute(function_name, arguments, config):
                 prompt=arguments.get('prompt'),
                 max_minutes=arguments.get('max_minutes', 10),
                 opening_line=arguments.get('opening_line'),
+                model=arguments.get('model'),
+                memory=arguments.get('memory', False),
             )
         else:
             return f"Unknown function: {function_name}", False

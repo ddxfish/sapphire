@@ -15,12 +15,31 @@ from core.conversation.vad import SpeechGate
 
 # ── SpeechGate ──────────────────────────────────────────────────────────────
 def test_speech_gate_threshold():
-    probs = iter([0.9, 0.1, 0.6, 0.49])
+    # Hysteresis (2026-07-15): enter at `threshold`, STAY in speech down to
+    # exit_threshold (default threshold - 0.15). Mid-word dips don't flicker.
+    probs = iter([0.9, 0.1, 0.6, 0.49, 0.2])
     g = SpeechGate(threshold=0.5, score_fn=lambda chunk: next(probs))
-    assert g.is_speech(b"x") is True       # 0.9 >= 0.5
-    assert g.is_speech(b"x") is False      # 0.1
-    assert g.is_speech(b"x") is True       # 0.6
-    assert g.is_speech(b"x") is False      # 0.49 < 0.5
+    assert g.is_speech(b"x") is True       # 0.9 >= 0.5 (enter)
+    assert g.is_speech(b"x") is False      # 0.1 < 0.35 (exit)
+    assert g.is_speech(b"x") is True       # 0.6 >= 0.5 (enter again)
+    assert g.is_speech(b"x") is True       # 0.49 >= 0.35 — hysteresis holds
+    assert g.is_speech(b"x") is False      # 0.2 < 0.35 — real silence releases
+
+
+def test_speech_gate_hysteresis_never_enters_below_threshold():
+    # From silence, a score in the hysteresis band must NOT start speech.
+    probs = iter([0.45, 0.45])
+    g = SpeechGate(threshold=0.5, score_fn=lambda chunk: next(probs))
+    assert g.is_speech(b"x") is False      # 0.45 < 0.5 — band only applies in-speech
+    assert g.is_speech(b"x") is False
+
+
+def test_speech_gate_reset_clears_hysteresis():
+    probs = iter([0.9, 0.45])
+    g = SpeechGate(threshold=0.5, score_fn=lambda chunk: next(probs))
+    assert g.is_speech(b"x") is True       # in speech
+    g.reset()
+    assert g.is_speech(b"x") is False      # 0.45 judged as fresh entry, not held
 
 
 def test_speech_gate_swallows_scorer_error():

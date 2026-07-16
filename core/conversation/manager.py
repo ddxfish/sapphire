@@ -63,29 +63,42 @@ class ConversationManager:
         src.start()                                # raises on failure -> handoff restores wakeword
         return src
 
-    def _build_gate(self):
+    def _build_gate(self, tuning=None):
         if self._injected_gate is not None:
             return self._injected_gate
         import config
         from core.conversation.vad import SpeechGate
-        return SpeechGate(threshold=float(getattr(config, "CONVERSATION_VAD_THRESHOLD", 0.5)))
+        t = tuning or {}
+        threshold = float(t.get("vad_threshold") or
+                          getattr(config, "CONVERSATION_VAD_THRESHOLD", 0.5))
+        return SpeechGate(threshold=threshold)
 
     @property
     def active(self):
         return bool(getattr(self.system, "conversation_mode_enabled", False))
 
-    def _build_driver(self, chat_name=None):
+    def _build_driver(self, chat_name=None, tuning=None):
         """Fresh driver from current settings so tuning applies without restart.
-        chat_name targets a specific chat (phone calls); None = default (local/browser)."""
+        chat_name targets a specific chat (phone calls); None = default (local/browser).
+        `tuning` overrides individual engine knobs per session (a phone profile);
+        falsy/absent values inherit the global Settings > Conversation keys."""
         import config
+        t = tuning or {}
+        kw = {}
+        if t.get("max_utterance_ms"):
+            kw["max_utterance_ms"] = int(t["max_utterance_ms"])
         return ConversationDriver(
             self.system,
             chat_name=chat_name,
             start_word=str(getattr(config, "CONVERSATION_START_WORD", "")),
             start_word_fuzzy=float(getattr(config, "CONVERSATION_START_WORD_FUZZY", 0.7)),
-            endpoint_silence_ms=int(getattr(config, "CONVERSATION_ENDPOINT_SILENCE_MS", 700)),
-            min_speech_ms=int(getattr(config, "CONVERSATION_MIN_SPEECH_MS", 200)),
-            barge_hold_ms=int(getattr(config, "CONVERSATION_BARGE_HOLD_MS", 90)),
+            endpoint_silence_ms=int(t.get("endpoint_silence_ms") or
+                                    getattr(config, "CONVERSATION_ENDPOINT_SILENCE_MS", 700)),
+            min_speech_ms=int(t.get("min_speech_ms") or
+                              getattr(config, "CONVERSATION_MIN_SPEECH_MS", 200)),
+            barge_hold_ms=int(t.get("barge_hold_ms") or
+                              getattr(config, "CONVERSATION_BARGE_HOLD_MS", 90)),
+            **kw,
         )
 
     def start_local(self):
@@ -126,12 +139,16 @@ class ConversationManager:
         return src if ok else None
 
     def start_external(self, source_ctor, chat_name=None, source_label="external",
-                       session_id=None):
+                       session_id=None, tuning=None):
         """Start an external conversation session (a phone call). Each session gets
         its OWN driver + gate + source — N sessions run concurrently up to the slot
         cap (CONVERSATION_EXTERNAL_SLOTS). `source_ctor(driver, gate)` builds a
         source that is ALSO the TTS sink (duplex pattern) and must be `.start()`-ed
         by the ctor. Returns the source or None (slot cap / build failure).
+        `tuning` (optional dict: vad_threshold / endpoint_silence_ms / min_speech_ms /
+        barge_hold_ms / max_utterance_ms) overrides the global conversation knobs
+        for THIS session only — the caller's audio profile (phone lines are noisier
+        than a desk mic). Falsy entries inherit the global settings.
 
         Unlike the operator path this never touches conversation_mode_enabled or
         the wakeword — a call brings its own transport and contends for nothing
@@ -155,8 +172,8 @@ class ConversationManager:
                 logger.warning(f"[CONV] start_external({source_label}) refused — "
                                f"chat '{chat_name}' already has a live session")
                 return None
-            driver = self._build_driver(chat_name=chat_name)
-            gate = self._build_gate()
+            driver = self._build_driver(chat_name=chat_name, tuning=tuning)
+            gate = self._build_gate(tuning=tuning)
             try:
                 src = source_ctor(driver, gate)
                 driver.set_sink(src)       # source IS the sink (duplex pattern)

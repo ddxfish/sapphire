@@ -33,6 +33,11 @@ def save_account(body=None, credentials=None, **_):
             return {"ok": False, "error": "sip_pass required for a new account"}
     # REST creds (outbound calling) are optional; blank auth_token keeps stored.
     auth_token = (body.get("auth_token") or "").strip() or existing.get("auth_token", "")
+    # Elevation passphrase: blank keeps stored; the literal sentinel "-" clears it
+    # (the UI never round-trips the key itself, so blank can't mean "remove").
+    elevate_key = (body.get("elevate_key") or "").strip() or existing.get("elevate_key", "")
+    if elevate_key == "-":
+        elevate_key = ""
     ok = credentials.set_twilio_account(
         scope, sip_domain=sip_domain, sip_user=sip_user, sip_pass=sip_pass,
         number=(body.get("number") or "").strip(),
@@ -40,7 +45,11 @@ def save_account(body=None, credentials=None, **_):
         greeting=(body.get("greeting") or "").strip(),
         account_sid=(body.get("account_sid") or "").strip(),
         auth_token=auth_token,
-        transport=(body.get("transport") or "tls").strip())
+        transport=(body.get("transport") or "tls").strip(),
+        call_provider=(body.get("call_provider") or "").strip(),
+        call_model=(body.get("call_model") or "").strip(),
+        elevate_key=elevate_key,
+        elevate_toolset=(body.get("elevate_toolset") or "").strip())
     return {"ok": bool(ok)}
 
 

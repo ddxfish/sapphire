@@ -8,6 +8,18 @@ import { registerPluginSettings } from '/static/shared/plugin-registry.js';
 import { createAccountManager } from '/static/shared/account-manager.js';
 
 const API = '/api/plugin/twilio-voice/accounts';
+const SETTINGS_API = '/api/webui/plugins/twilio-voice/settings';
+
+let _providers = null;          // [{key, display_name, enabled}] cache
+async function fetchProviders() {
+    if (_providers) return _providers;
+    try {
+        const r = await fetch('/api/llm/providers');
+        const d = r.ok ? await r.json() : {};
+        _providers = (d.providers || []).filter(p => p.enabled);
+    } catch { _providers = []; }
+    return _providers;
+}
 
 const manager = createAccountManager({
     prefix: 'twv',
@@ -27,7 +39,67 @@ const manager = createAccountManager({
     addLabel: '+ Add Number',
     addPrompt: 'Name for this number (e.g. "default", "work"):',
     renderEditor: renderNumberEditor,
+    listFooter: renderCallTuning,
 });
+
+// ── Call audio tuning (plugin-wide) ─────────────────────────────────────────
+// Phone-profile overrides for the conversation engine, applied to every call.
+// 0/blank = inherit the matching Settings > Conversation key.
+const TUNING_FIELDS = [
+    ['vad_threshold', 'VAD speech threshold', '0.6 rejects most line noise. 0 = inherit global.', '0.05'],
+    ['endpoint_silence_ms', 'End-of-speech silence (ms)', 'Pause before she decides the caller is done. 0 = inherit (700).', '50'],
+    ['min_speech_ms', 'Minimum utterance (ms)', 'Shorter speech is discarded as a blip. 0 = inherit (200).', '50'],
+    ['barge_hold_ms', 'Barge-in hold (ms)', 'Sustained caller speech before it cuts her off. 200 keeps line noise from clipping her. 0 = inherit (90).', '10'],
+    ['max_utterance_ms', 'Utterance hard cap (ms)', 'Backstop when noise pins the VAD open. 0 = inherit (30000). Try 15000-20000 on noisy lines.', '1000'],
+];
+
+async function renderCallTuning(footer, { csrfHeaders }) {
+    let s = {};
+    try {
+        const r = await fetch(SETTINGS_API);
+        s = r.ok ? (await r.json()).settings || {} : {};
+    } catch { /* defaults below */ }
+    const rows = TUNING_FIELDS.map(([key, label, hint, step]) => `
+        <div class="am-group">
+            <label for="twvt-${key}">${label}</label>
+            <input type="number" id="twvt-${key}" value="${s[key] ?? 0}" min="0" step="${step}">
+            <div class="am-hint">${hint}</div>
+        </div>`).join('');
+    footer.innerHTML = `
+        <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
+            <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">Call audio tuning</div>
+            <div class="am-hint" style="margin-bottom:12px">Phone lines hear differently than your desk mic — these override Settings > Conversation for calls only (all numbers). Applies from the next call.</div>
+            ${rows}
+            <button type="button" class="am-action-btn" id="twvt-save">Save Tuning</button>
+        </div>`;
+    footer.querySelector('#twvt-save').addEventListener('click', async () => {
+        const btn = footer.querySelector('#twvt-save');
+        const settings = {};
+        for (const [key] of TUNING_FIELDS) {
+            settings[key] = parseFloat(footer.querySelector(`#twvt-${key}`).value) || 0;
+        }
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+        try {
+            const res = await fetch(SETTINGS_API, {
+                method: 'PUT',
+                headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ settings }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            btn.textContent = 'Saved';
+            btn.className = 'am-action-btn success';
+        } catch (e) {
+            btn.textContent = 'Error';
+            btn.className = 'am-action-btn error';
+        }
+        setTimeout(() => {
+            btn.textContent = 'Save Tuning';
+            btn.className = 'am-action-btn';
+            btn.disabled = false;
+        }, 3000);
+    });
+}
 
 
 function renderNumberEditor(body, scope, item, helpers) {
@@ -68,7 +140,26 @@ function renderNumberEditor(body, scope, item, helpers) {
         <div class="am-group">
             <label for="twv-greeting">Greeting</label>
             <input type="text" id="twv-greeting" value="${s.greeting || ''}" placeholder="Hey, this is Sapphire.">
-            <div class="am-hint">Spoken on pickup. A Realtime rule's greeting overrides this per-rule.</div>
+            <div class="am-hint">Spoken on pickup. BLANK = greeting off — she stays quiet and waits for the caller to speak first. A Realtime rule's greeting overrides this per-rule.</div>
+        </div>
+        <div class="am-group">
+            <label for="twv-call-provider">Call model (default)</label>
+            <div class="am-row">
+                <select id="twv-call-provider" style="flex:1"><option value="">— inherit (chat / global) —</option></select>
+                <input type="text" id="twv-call-model" value="${s.call_model || ''}" placeholder="model override (optional)" style="flex:1">
+            </div>
+            <div class="am-hint">Default brain for calls on this number — pick something fast and non-thinking (phone latency). A Realtime rule's model, or her model= on phone_call, overrides per call.</div>
+        </div>
+        <div class="am-group">
+            <label for="twv-elevate-key">Elevation passphrase</label>
+            <div class="am-row">
+                <input type="password" id="twv-elevate-key" placeholder="${s.elevate_configured ? 'Leave blank to keep existing... (- to clear)' : 'e.g. alligator3'}">
+                <span class="am-action-btn${s.elevate_configured ? ' success' : ''}" style="cursor:default;padding:6px 12px;font-size:12px">
+                    ${s.elevate_configured ? '✓ Stored' : 'Not set'}
+                </span>
+            </div>
+            <input type="text" id="twv-elevate-toolset" value="${s.elevate_toolset || ''}" placeholder="default toolset to unlock (e.g. sapphire)" style="margin-top:8px">
+            <div class="am-hint">Speak this on a call to unlock a toolset ("switch toolset, the key is alligator three"). Fuzzy-matched for voice transcription; 3 tries per call; elevation ends at hangup. Encrypted on disk. Enter a single dash (-) to remove. Blank = feature off.</div>
         </div>
         <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
             <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">Outbound calling (optional)</div>
@@ -91,6 +182,19 @@ function renderNumberEditor(body, scope, item, helpers) {
         <button type="button" class="am-action-btn" id="twv-save">Save</button>
     `;
 
+    // Provider dropdown fills async (shared /api/llm/providers cache).
+    fetchProviders().then(provs => {
+        const sel = body.querySelector('#twv-call-provider');
+        if (!sel) return;
+        for (const p of provs) {
+            const opt = document.createElement('option');
+            opt.value = p.key;
+            opt.textContent = p.display_name || p.key;
+            if (p.key === (s.call_provider || '')) opt.selected = true;
+            sel.appendChild(opt);
+        }
+    });
+
     body.querySelector('#twv-save').addEventListener('click', async () => {
         const btn = body.querySelector('#twv-save');
         const payload = {
@@ -103,6 +207,10 @@ function renderNumberEditor(body, scope, item, helpers) {
             greeting: body.querySelector('#twv-greeting').value.trim(),
             account_sid: body.querySelector('#twv-sid').value.trim(),
             auth_token: body.querySelector('#twv-token').value.trim(),
+            call_provider: body.querySelector('#twv-call-provider').value,
+            call_model: body.querySelector('#twv-call-model').value.trim(),
+            elevate_key: body.querySelector('#twv-elevate-key').value.trim(),
+            elevate_toolset: body.querySelector('#twv-elevate-toolset').value.trim(),
         };
         if (!payload.sip_domain || !payload.sip_user) {
             helpers.showResult(false, 'SIP domain and username are required');

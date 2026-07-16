@@ -1,14 +1,26 @@
 {
   "name": "twilio-voice",
   "short_display_name": "Twilio Voice",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sapphire answers real phone calls over Twilio SIP — no open ports (outbound SIP registration). Multi-account; per-number on/off via Triggers > Daemon.",
   "author": "Sapphire Trinity",
   "icon": "📞",
   "priority": 50,
   "default_enabled": true,
   "capabilities": {
-    "tools": ["tools/phone_tool.py"],
+    "tools": ["tools/phone_tool.py", "tools/elevate_tool.py"],
+    "settings": [
+      {"key": "vad_threshold", "type": "number", "label": "Call VAD speech threshold", "default": 0.6,
+       "help": "Phone lines are noisier than a desk mic — 0.6 rejects most line noise. 0 = inherit Settings > Conversation."},
+      {"key": "endpoint_silence_ms", "type": "number", "label": "Call end-of-speech silence (ms)", "default": 0,
+       "help": "Pause before she decides the caller is done. 0 = inherit Settings > Conversation (700)."},
+      {"key": "min_speech_ms", "type": "number", "label": "Call minimum utterance (ms)", "default": 0,
+       "help": "Speech shorter than this is discarded as a blip. 0 = inherit Settings > Conversation (200)."},
+      {"key": "barge_hold_ms", "type": "number", "label": "Call barge-in hold (ms)", "default": 200,
+       "help": "Sustained caller speech before it cuts her off mid-reply. Phone default 200 so line noise doesn't clip her. 0 = inherit (90)."},
+      {"key": "max_utterance_ms", "type": "number", "label": "Call utterance hard cap (ms)", "default": 0,
+       "help": "Backstop when noise pins the VAD open: force the turn after this long. 0 = inherit engine default (30000). Try 15000-20000 on noisy lines."}
+    ],
     "scopes": [
       {
         "key": "twilio",

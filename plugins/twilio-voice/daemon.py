@@ -14,7 +14,6 @@ No open ports: outbound SIP registration + keepalive holds the NAT pinhole
 client-initiated flow, router SIP-ALG irrelevant); UDP stays a per-account
 fallback in the account editor. Media is μ-law RTP over UDP on both.
 """
-import base64
 import json
 import logging
 import threading
@@ -224,7 +223,8 @@ def _outbound_take(scope, x_header=None):
 
 
 def place_call(to_number, to_name, goal, origin_chat, ephemeral=True,
-               prompt=None, max_minutes=10.0, scope="default", opening_line=None):
+               prompt=None, max_minutes=10.0, scope="default", opening_line=None,
+               provider=None, memory=False):
     """Originate an outbound call via Twilio REST; the bridged leg arrives at
     our registered SIP endpoint and runs the live conversation engine.
     Returns (ok, message-for-the-AI)."""
@@ -259,7 +259,8 @@ def place_call(to_number, to_name, goal, origin_chat, ephemeral=True,
 
     chat = origin_chat
     if ephemeral:
-        chat = _setup_outbound_chat(system, scope, to_number, prompt, origin_chat)
+        chat = _setup_outbound_chat(system, scope, to_number, prompt, origin_chat,
+                                    provider=provider, memory=memory)
         if chat is None:
             return False, "Could not set up the call's side chat."
 
@@ -294,13 +295,20 @@ def place_call(to_number, to_name, goal, origin_chat, ephemeral=True,
                   f"call, which runs in {where}. Goal noted: {goal}")
 
 
-def _setup_outbound_chat(system, scope, to_number, prompt, origin_chat):
+def _setup_outbound_chat(system, scope, to_number, prompt, origin_chat,
+                         provider=None, memory=False):
     """Fresh per-call side chat, marked for the ephemeral reaper.
 
     Identity truth for outbound: SHE places the call, so the side chat INHERITS
     the origin chat's prompt + voice — she goes out as whoever she was when she
     dialed. The tool's `prompt` param overrides per call. Realtime rules (the
-    inbound gates/personas) are never consulted for outbound."""
+    inbound gates/personas) are never consulted for outbound.
+
+    Brain precedence: tool `model=` param (resolved to `provider`) > account's
+    call_provider/call_model default > inherit the origin chat's. `memory=False`
+    (the default) scope-isolates the side chat like an inbound line — a call is
+    a hot-mic transcription environment; her real scopes are opt-in per call."""
+    from core.credentials_manager import credentials
     digits = "".join(c for c in (to_number or "") if c.isalnum()) or "unknown"
     safe = f"_phoneout_{scope}_{digits}".lower()
     try:
@@ -322,16 +330,56 @@ def _setup_outbound_chat(system, scope, to_number, prompt, origin_chat):
             patch["prompt"] = origin["prompt"]          # inherit who she is
         if origin.get("tts_voice"):
             patch["tts_voice"] = origin["tts_voice"]    # and how she sounds
-        for _k in ("llm_primary", "llm_model"):
-            if origin.get(_k):
-                patch[_k] = origin[_k]                  # and which brain (2026-07-04:
+        acct = credentials.get_twilio_account(scope)
+        if provider:
+            patch["llm_primary"] = provider             # per-call choice wins
+        elif acct.get("call_provider"):
+            patch["llm_primary"] = acct["call_provider"]
+            if acct.get("call_model"):
+                patch["llm_model"] = acct["call_model"]
+        else:
+            for _k in ("llm_primary", "llm_model"):
+                if origin.get(_k):
+                    patch[_k] = origin[_k]              # and which brain (2026-07-04:
                                                         # unset fell to global default
                                                         # = claude = phone latency)
+        try:
+            from core.chat.function_manager import scope_setting_keys
+            if memory:
+                for _sk in scope_setting_keys():        # her scopes travel with her
+                    if origin.get(_sk):
+                        patch[_sk] = origin[_sk]
+            else:
+                for _sk in scope_setting_keys():        # isolated per-call value
+                    patch[_sk] = safe
+        except Exception as _se:
+            logger.warning(f"[TWILIO] outbound scope setup failed ({_se})")
         system.llm_chat.session_manager.set_named_chat_settings(safe, patch)
         return safe
     except Exception as e:
         logger.warning(f"[TWILIO] outbound chat setup failed: {e}")
         return None
+
+
+def _call_tuning():
+    """Phone-profile VAD/turn overrides from the plugin's settings (Settings >
+    Plugins > Twilio Voice > Call audio tuning). 0/blank entries inherit the
+    global Settings > Conversation keys — see manager.start_external(tuning=)."""
+    try:
+        s = _plugin_loader.get_plugin_settings("twilio-voice") if _plugin_loader else {}
+    except Exception:
+        s = {}
+    keys = ("vad_threshold", "endpoint_silence_ms", "min_speech_ms",
+            "barge_hold_ms", "max_utterance_ms")
+    tuning = {}
+    for k in keys:
+        try:
+            v = float(s.get(k) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            tuning[k] = v
+    return tuning
 
 
 def _rule_for(scope, caller):
@@ -419,29 +467,15 @@ def _on_call(scope, caller, session):
         _call_ended(scope, caller, chat, ephemeral, "busy", 0.0, 0)
         return
 
-    mgr = system.get_conversation_manager()
-    from .twilio_source import TwilioConversationSource
-
-    def ctor(driver, gate):
-        src = TwilioConversationSource(driver, gate, session)
-        src.start()
-        return src
-
-    src = mgr.start_external(ctor, chat_name=chat, source_label="phone", session_id=sid)
-    if src is None:
-        logger.warning("[TWILIO] no conversation slot free — rejecting call")
-        calls.pop(chat, None)
-        session.stop()
-        _call_ended(scope, caller, chat, ephemeral, "busy", 0.0, 0)
-        return
-
-    # Inbound: the Realtime rule's greeting (fallback: the account's).
-    # Outbound: the tool's opening_line — SHE speaks first, like a real caller;
-    # blank means wait for the callee's hello.
+    # Greeting text: inbound = the Realtime rule's (fallback: the account's);
+    # outbound = the tool's opening_line. BLANK = greeting off — she stays quiet
+    # and waits for them to speak first. Synthesized BEFORE the mic goes hot so
+    # synth latency isn't dead air she's already listening through.
     if direction == "outbound":
         greeting = (ob.get("opening_line") or "").strip()
     else:
         greeting = ((task or {}).get("trigger_config", {}).get("greeting") or acct.get("greeting") or "").strip()
+    greeting_audio = None
     if greeting:
         try:
             _voice = ((task or {}).get("trigger_config", {}).get("tts_voice") or "").strip() or None
@@ -451,23 +485,50 @@ def _on_call(scope, caller, session):
                     _voice = (system.llm_chat.session_manager.read_chat_settings(chat) or {}).get("tts_voice") or None
                 except Exception:
                     _voice = None
-            audio = system.tts.generate_audio_data(greeting, voice=_voice)
-            if not audio and _voice:
+            greeting_audio = system.tts.generate_audio_data(greeting, voice=_voice)
+            if not greeting_audio and _voice:
                 # Bad/missing voice must degrade to the default voice, not silence.
                 logger.warning(f"[TWILIO] greeting voice '{_voice}' produced no audio — falling back to default voice")
-                audio = system.tts.generate_audio_data(greeting)
-            if audio:
-                src.feed_chunk({"audio_b64": base64.b64encode(audio).decode()})
+                greeting_audio = system.tts.generate_audio_data(greeting)
         except Exception as e:
-            logger.warning(f"[TWILIO] greeting failed: {e}")
-        # Record the greeting as her opening line in the call's chat, so she knows
-        # what she said on pickup — it's in-context for the caller's first reply and
-        # shows in the chat. Written to the target chat directly (not active).
+            logger.warning(f"[TWILIO] greeting synthesis failed: {e}")
+
+    mgr = system.get_conversation_manager()
+    from .twilio_source import TwilioConversationSource
+
+    def ctor(driver, gate):
+        src = TwilioConversationSource(driver, gate, session)
+        src.start()
+        return src
+
+    src = mgr.start_external(ctor, chat_name=chat, source_label="phone",
+                             session_id=sid, tuning=_call_tuning())
+    if src is None:
+        logger.warning("[TWILIO] no conversation slot free — rejecting call")
+        calls.pop(chat, None)
+        session.stop()
+        _call_ended(scope, caller, chat, ephemeral, "busy", 0.0, 0)
+        return
+
+    if greeting_audio:
+        # Engine-aware greeting: play through the driver so the state machine
+        # holds RESPONDING while it speaks — their voice over it is a clean
+        # barge-in, not a parallel turn (the old direct-to-RTP feed left the
+        # engine IDLE on a hot mic: pickup words started a second turn and she
+        # double-greeted). on_begin records the line in the call's chat before
+        # the first frame plays — she knows what she said on pickup, and a
+        # barged first turn (endpoint >= 700ms later) always sees it in history.
+        def _record_greeting():
+            try:
+                system.llm_chat.session_manager.append_messages_to_chat(
+                    chat, [{"role": "assistant", "content": greeting}])
+            except Exception as e:
+                logger.warning(f"[TWILIO] greeting history write failed: {e}")
         try:
-            system.llm_chat.session_manager.append_messages_to_chat(
-                chat, [{"role": "assistant", "content": greeting}])
+            if not src.driver.speak_direct(greeting_audio, on_begin=_record_greeting):
+                logger.info("[TWILIO] greeting skipped — caller was already talking")
         except Exception as e:
-            logger.warning(f"[TWILIO] greeting history write failed: {e}")
+            logger.warning(f"[TWILIO] greeting playback failed: {e}")
 
     started = time.time()
     session.wait_ended()
@@ -475,7 +536,16 @@ def _on_call(scope, caller, session):
         mgr.stop_external(sid)
     except Exception as e:
         logger.warning(f"[TWILIO] conversation stop error: {e}")
-    calls.pop(chat, None)
+    rec = calls.pop(chat, None) or {}
+    if rec.get("elevated_from") is not None:
+        # The caller elevated this chat's toolset mid-call (elevate_toolset) —
+        # elevation dies with the call, restore the pre-call value.
+        try:
+            system.llm_chat.session_manager.set_named_chat_settings(
+                chat, {"toolset": rec["elevated_from"]})
+            logger.info(f"[TWILIO] restored chat '{chat}' toolset after elevated call")
+        except Exception as e:
+            logger.warning(f"[TWILIO] toolset restore failed: {e}")
     duration = round(time.time() - started, 1)
     if ob and ob["origin_chat"] != chat:
         # Report back to the chat that placed the call — WITH the transcript, so
@@ -552,7 +622,13 @@ def _resolve_chat(system, scope, caller, task):
         # 'none' (not the 'all' create_chat inherits); every scope falls back to an
         # isolated per-caller value (the throwaway chat name), never the owner's
         # 'default'. The rule opts INTO capability/memory by setting these itself.
-        patch["toolset"] = (task or {}).get("toolset") or "none"
+        # One exception: a number with an elevation passphrase configured defaults
+        # to the (hidden) elevate_toolset tool ALONE — still zero capability until
+        # the caller speaks the key (tools/elevate_tool.py).
+        from core.credentials_manager import credentials
+        _acct = credentials.get_twilio_account(scope)
+        _default_ts = "elevate_toolset" if _acct.get("elevate_key") else "none"
+        patch["toolset"] = (task or {}).get("toolset") or _default_ts
         try:
             from core.chat.function_manager import scope_setting_keys
             for _sk in scope_setting_keys():
@@ -566,6 +642,11 @@ def _resolve_chat(system, scope, caller, task):
             patch["llm_primary"] = prov
         if (task or {}).get("model"):
             patch["llm_model"] = task["model"]
+        if "llm_primary" not in patch and _acct.get("call_provider"):
+            # No rule choice → the number's call-model default (Settings > Plugins).
+            patch["llm_primary"] = _acct["call_provider"]
+            if _acct.get("call_model") and "llm_model" not in patch:
+                patch["llm_model"] = _acct["call_model"]
         system.llm_chat.session_manager.set_named_chat_settings(safe, patch)
     except Exception as e:
         # B1: a setup failure must NOT dump a stranger into the owner's 'default'

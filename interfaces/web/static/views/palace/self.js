@@ -211,6 +211,19 @@ function dashboardCard(d) {
                 <button class="mind-btn-sm" id="pal-lib-run-self" title="Review unprocessed Self-layer memories in this scope">Tidy Self</button>
                 <button class="mind-btn-sm" id="pal-lib-run-all" title="Review all unprocessed memories in this scope (events + self)">Tidy whole scope</button>
             </div>
+            <div class="palace-librarian-row">
+                <span class="palace-lib-title">\u{1F6E0} Maintenance</span>
+                <select class="mind-btn-sm" id="pal-maint-action" title="Self-serve maintenance for alpha testing — import, rescue, reset">
+                    <option value="">choose action…</option>
+                    <option value="import_v1">Import from Memory v1 (all scopes)</option>
+                    <option value="generate_metadata">Generate missing metadata</option>
+                    <option value="reset_importance">Reset importance ratings</option>
+                    <option value="restore_retired">Restore retired memories</option>
+                    <option value="wipe_scope">⚠ Delete ALL memories in scope</option>
+                </select>
+                <button class="mind-btn-sm" id="pal-maint-run">Run</button>
+                <span class="palace-lib-status" id="pal-maint-result"></span>
+            </div>
         </div>`;
 }
 
@@ -224,6 +237,15 @@ async function refreshLibStatus(el, { poll = false } = {}) {
         st = await palaceGet(`librarian/status?scope=${encodeURIComponent(scope)}`);
     } catch (e) { box.textContent = 'status unavailable'; return; }
     clearTimeout(_libTimer);
+    if (st.enabled === false) {
+        // Alpha master toggle off — the row stays discoverable, the buttons go.
+        box.textContent = 'disabled (alpha — enable in Settings → Plugins → Mind Palace)';
+        el.querySelector('#pal-lib-run-self')?.setAttribute('hidden', '');
+        el.querySelector('#pal-lib-run-all')?.setAttribute('hidden', '');
+        return;
+    }
+    el.querySelector('#pal-lib-run-self')?.removeAttribute('hidden');
+    el.querySelector('#pal-lib-run-all')?.removeAttribute('hidden');
     if (st.running) {
         const c = st.current;
         box.textContent = `running (${c.scope}): message ${c.messages_done}/${c.messages_total || '?'}`;
@@ -249,7 +271,69 @@ function bindLibrarian(el) {
     };
     el.querySelector('#pal-lib-run-self')?.addEventListener('click', run('self'));
     el.querySelector('#pal-lib-run-all')?.addEventListener('click', run('all'));
+    bindMaintenance(el);
     refreshLibStatus(el);
+}
+
+// Per-action gates: `confirm` = ok/cancel dialog; `prompt` = the user must
+// TYPE the scope name (destructive tier). Actions with neither run directly.
+const MAINT = {
+    reset_importance: {
+        confirm: s => `Reset importance ratings in scope '${s}'?\n\n` +
+            'All ratings return to unrated; favorites and permanent goals return to 0.95. ' +
+            'No memory content is touched.',
+    },
+    restore_retired: {
+        confirm: s => `Restore all retired memories in scope '${s}'?\n\n` +
+            'Every librarian-pruned memory returns to her recall. Atomize/merge ' +
+            'retirements are kept — their content lives on in derived entries.',
+    },
+    import_v1: {
+        confirm: () => 'Import everything from the classic Memory v1 system?\n\n' +
+            'Additive and idempotent — re-running copies zero duplicates. All scopes ' +
+            'are imported. The v1 databases are opened read-only and are never modified.',
+    },
+    generate_metadata: {},
+    wipe_scope: {
+        prompt: s => `⚠ PERMANENTLY DELETE all Mind Palace data in scope '${s}' — ` +
+            'memories, entities, connections, goals, and self sheet?\n\n' +
+            'Memory v1 is a separate system and is never touched.\n\n' +
+            'Type the scope name to confirm:',
+    },
+};
+
+function bindMaintenance(el) {
+    const result = el.querySelector('#pal-maint-result');
+    el.querySelector('#pal-maint-run')?.addEventListener('click', async () => {
+        const action = el.querySelector('#pal-maint-action')?.value;
+        if (!action) { ui.showToast('Choose a maintenance action first', 'warning'); return; }
+        const gate = MAINT[action] || {};
+        const body = { action, scope };
+        if (gate.prompt) {
+            const typed = prompt(gate.prompt(scope));
+            if (typed === null) return;
+            if (typed !== scope) { ui.showToast('Scope name did not match — nothing deleted', 'warning'); return; }
+            body.confirm = typed;
+        } else if (gate.confirm && !confirm(gate.confirm(scope))) return;
+        try {
+            const r = await palaceSend('maintenance', 'POST', body);
+            const bits = [];
+            if ('cleared' in r) bits.push(`${r.cleared} cleared`);
+            if ('restored' in r) bits.push(`${r.restored} restored`);
+            if (r.skipped) bits.push(`${r.skipped} kept (atomize/merge)`);
+            if ('stamped' in r) bits.push(`${r.stamped} stamped · ${r.edges} links seeded`);
+            if ('deleted_chunks' in r) bits.push(`${r.deleted_chunks} memories · ${r.deleted_entities} entities · ${r.deleted_edges} connections deleted`);
+            if (r.summary) {
+                if (result) result.textContent = r.summary;
+                ui.showToast('Import finished', 'success');
+            } else {
+                const msg = bits.join(' · ') || 'done';
+                if (result) result.textContent = msg;
+                ui.showToast(`Maintenance: ${msg}`, 'success');
+            }
+            if (action === 'wipe_scope' || action === 'import_v1') renderSheet();
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    });
 }
 
 function modeChip(mode) {
