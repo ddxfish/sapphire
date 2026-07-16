@@ -184,6 +184,34 @@ def test_barge_arms_once_on_tts_chunk(pub):
     d.engine.arm_barge.assert_called_once()          # armed only at the tts_chunk
 
 
+# ── silent regen on first-token timeout (2026-07-16, phone surface) ──────────
+
+@patch("core.conversation.driver.publish")
+def test_llm_timeout_arms_silent_retry(pub):
+    """set_llm_timeout(>0) arms the one-shot retry on the stream; the retry
+    callback plays a triple think-tick (the caller's only tell)."""
+    d, system, fs, sink = _driver()
+    d.set_llm_timeout(20)
+    cues = []
+    d.set_cues(cues.append)
+    d.push_frame(*frame(150, True))
+    for _ in range(3):
+        d.push_frame(*frame(100, False))
+    assert fs.timeout_retry == 1
+    n0 = cues.count("think")
+    fs.on_timeout_retry()
+    assert cues.count("think") == n0 + 3
+
+
+@patch("core.conversation.driver.publish")
+def test_no_llm_timeout_leaves_stream_unarmed(pub):
+    d, system, fs, sink = _driver()
+    d.push_frame(*frame(150, True))
+    for _ in range(3):
+        d.push_frame(*frame(100, False))
+    assert "timeout_retry" not in fs.__dict__      # never set when feature is off
+
+
 # ── spoken failure path (2026-07-16): a failed turn must not be dead air ─────
 
 @patch("core.conversation.driver.publish")

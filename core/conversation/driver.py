@@ -70,6 +70,7 @@ class ConversationDriver:
         self._chat_name = chat_name     # None = default chat (local/browser); set for phone calls
         self._tts_split = (tts_split or "").strip().lower() or None   # per-surface pump split mode
         self._cue_fn = None             # optional turn-cue player (v2.9 soundscape)
+        self._llm_timeout = 0.0         # >0 arms the one-shot silent regen on first-token timeout
         self._transcribe_fn = transcribe_fn or self._whisper_transcribe
         self._sink_factory = sink_factory          # injectable; default = PumpkinChunker
         self._sink = None
@@ -102,6 +103,18 @@ class ConversationDriver:
         error = the turn failed (canned spoken apology). Wired per-surface
         (phone today; conversation/wakeword modes join in the v2.9 soundscape)."""
         self._cue_fn = fn
+
+    def set_llm_timeout(self, seconds):
+        """Per-surface LLM deadline (phone today). The actual read timeout rides
+        the call chat's `llm_request_timeout` setting into the provider client;
+        this arms the matching one-shot SILENT retry on the stream — the caller
+        hears a quick triple think-tick, never an apology, unless the retry
+        also dies (then the 'error' cue speaks as usual)."""
+        self._llm_timeout = float(seconds or 0)
+
+    def _retry_cue(self):
+        for _ in range(3):              # triple-tick: the line's alive, still working
+            self._cue("think")
 
     def _cue(self, name):
         if self._cue_fn is None:
@@ -180,6 +193,11 @@ class ConversationDriver:
                 # sentence synthesizes while the rest still generates. Inert
                 # when TTS streaming is globally off (pump stays disabled).
                 stream.tts_split_override = self._tts_split
+            if self._llm_timeout > 0:
+                # One silent regen if the provider never sends a first token
+                # before the read timeout — the caller only hears the tick.
+                stream.timeout_retry = 1
+                stream.on_timeout_retry = self._retry_cue
             try:
                 armed = False    # barge-in stays blocked until AUDIO actually flows
                 for event in stream.chat_stream(text):

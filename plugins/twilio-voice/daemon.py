@@ -397,6 +397,18 @@ def _cues_enabled():
         return True
 
 
+def _llm_timeout():
+    """First-token deadline for call turns, seconds (plugin setting, 0=off).
+    Rides the call chat's settings into the provider client; the driver arms
+    the matching one-shot silent regen. Calls only — chats keep the 240s
+    system default (slower chat models are legitimate)."""
+    try:
+        s = _plugin_loader.get_plugin_settings("twilio-voice") if _plugin_loader else {}
+        return max(0.0, float(s.get("llm_timeout", 20) or 0))
+    except Exception:
+        return 20.0
+
+
 def _rule_for(scope, caller):
     """The Realtime rule handling this caller on this number, or None.
     Most-specific-wins: a rule whose caller filter matches beats the no-filter
@@ -544,6 +556,11 @@ def _on_call(scope, caller, session):
                 src.cues_enabled = True
             except Exception as e:
                 logger.warning(f"[TWILIO] cue wiring failed: {e}")
+
+        try:
+            src.driver.set_llm_timeout(_llm_timeout())   # one-shot silent regen on first-token stall
+        except Exception as e:
+            logger.warning(f"[TWILIO] llm timeout wiring failed: {e}")
 
         if greeting_audio:
             # Engine-aware greeting: play through the driver so the state machine
@@ -747,6 +764,11 @@ def _resolve_chat(system, scope, caller, task):
             logger.warning(f"[TWILIO] scope isolation fallback failed ({_se})")
         if tc.get("tts_voice"):                     # rule's voice -> per-stream TTS
             patch["tts_voice"] = tc["tts_voice"]
+        _to = _llm_timeout()
+        if _to > 0:
+            # Snappy provider read deadline for call turns — rides chat settings
+            # into _select_provider. The driver's silent-regen retry pairs with it.
+            patch["llm_request_timeout"] = _to
         prov = (task or {}).get("provider")
         if prov and prov != "auto":
             patch["llm_primary"] = prov

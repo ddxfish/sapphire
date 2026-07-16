@@ -103,6 +103,7 @@ async function renderSheet() {
             ${data.sections.map(s => s.fields ? structCard(s) : sectionCard(s)).join('')}
             ${data.custom.map(customCard).join('')}
             ${_localBoxes.map(localCard).join('')}
+            <div id="pal-wake-tools" class="mind-mem-card palace-self-card pal-w-half"></div>
         </div>
         <div class="palace-more-wrap">
             <button class="mind-btn" id="pal-self-addbox">+ Add box</button>
@@ -119,6 +120,121 @@ async function renderSheet() {
     bindLibrarian(el);
     bindTransfer(el, 'self', () => scope, ui, renderSheet);
     renderLedger(el);
+    renderWakeTools(el);
+}
+
+// ─── Wake tools card — user-armed live checks at wake (2026-07-16) ──────────
+// +Add Tool arms a tool call that read_self(depth>=1) executes and appends.
+// HUMAN-ARMED ONLY: this card is the sole write surface (update_self refuses
+// the section) — the consent boundary that makes autorun safe.
+
+async function renderWakeTools(el) {
+    const box = el.querySelector('#pal-wake-tools');
+    if (!box) return;
+    let data, opts;
+    try {
+        [data, opts] = await Promise.all([
+            palaceGet(`wake-tools?scope=${encodeURIComponent(scope)}`),
+            palaceGet('wake-tools/options'),
+        ]);
+    } catch { box.innerHTML = ''; return; }
+    const byName = Object.fromEntries((opts.tools || []).map(t => [t.name, t]));
+    const rows = data.tools || [];
+    const paramSummary = p => Object.entries(p || {})
+        .filter(([, v]) => v !== '' && v != null)
+        .map(([k, v]) => `${escHtml(k)}=${escHtml(String(v))}`).join(' · ');
+    box.innerHTML = `
+        <div class="palace-self-card-head">
+            <span class="palace-self-title">🔧 Wake tools</span>
+            <span class="palace-self-hint">${rows.length}/${data.max_rows}</span>
+        </div>
+        <div class="palace-self-hint">Run automatically at wake (read_self depth ≥ 1); results land at the end of her sheet. Armed here only — she can't edit this list herself.</div>
+        <div class="pal-wake-list" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+            ${rows.map(r => `
+            <div class="pal-wake-row" data-id="${r.id}" style="border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;${r.enabled ? '' : 'opacity:.55'}">
+                <div style="display:flex;align-items:center;gap:8px">
+                    <input type="checkbox" class="pal-wake-en" ${r.enabled ? 'checked' : ''} title="Run at wake">
+                    <b style="flex:1;overflow-wrap:anywhere">${escHtml(r.tool)}</b>
+                    <input type="number" class="pal-wake-chars" value="${r.max_chars ?? data.default_chars}" min="128" max="4096" title="Max result characters shown at wake" style="width:72px">
+                    <button class="mind-btn-sm pal-wake-del" title="Remove">✕</button>
+                </div>
+                ${paramSummary(r.params) ? `<div class="palace-self-hint" style="margin:2px 0 0 24px">${paramSummary(r.params)}</div>` : ''}
+            </div>`).join('') || '<div class="palace-self-hint">No wake tools yet — she wakes with her sheet alone.</div>'}
+        </div>
+        <div class="pal-wake-add" style="margin-top:8px">
+            ${rows.length < data.max_rows ? `
+            <select id="pal-wake-pick" class="mind-btn-sm" style="max-width:100%">
+                <option value="">+ Add tool…</option>
+                ${(opts.tools || []).map(t => `<option value="${escAttr(t.name)}">${escHtml(t.name)}</option>`).join('')}
+            </select>
+            <div id="pal-wake-form" hidden style="margin-top:6px"></div>` : ''}
+        </div>`;
+    bindWakeTools(el, box, byName, data.default_chars);
+}
+
+function bindWakeTools(el, box, byName, defChars) {
+    box.querySelectorAll('.pal-wake-row').forEach(row => {
+        const id = row.dataset.id;
+        row.querySelector('.pal-wake-en')?.addEventListener('change', async e => {
+            try {
+                await palaceSend(`wake-tools/${id}`, 'PUT', { enabled: e.target.checked });
+                renderWakeTools(el);
+            } catch (err) { ui.showToast(err.message, 'error'); }
+        });
+        row.querySelector('.pal-wake-chars')?.addEventListener('change', async e => {
+            try { await palaceSend(`wake-tools/${id}`, 'PUT', { max_chars: Number(e.target.value) }); }
+            catch (err) { ui.showToast(err.message, 'error'); }
+        });
+        row.querySelector('.pal-wake-del')?.addEventListener('click', async () => {
+            if (!confirm('Remove this wake tool?')) return;
+            try {
+                await palaceSend(`wake-tools/${id}`, 'DELETE');
+                renderWakeTools(el);
+            } catch (err) { ui.showToast(err.message, 'error'); }
+        });
+    });
+    const pick = box.querySelector('#pal-wake-pick');
+    pick?.addEventListener('change', () => {
+        const spec = byName[pick.value];
+        const form = box.querySelector('#pal-wake-form');
+        if (!spec || !form) { if (form) form.hidden = true; return; }
+        form.hidden = false;
+        form.innerHTML = `
+            ${spec.description ? `<div class="palace-self-hint">${escHtml(spec.description)}</div>` : ''}
+            ${spec.params.map(p => `
+                <input type="text" class="pal-wake-param" data-key="${escAttr(p.key)}" data-type="${escAttr(p.type)}"
+                    placeholder="${escAttr(p.key)}${p.required ? ' *' : ''} — ${escAttr(p.description || p.type)}"
+                    style="width:100%;margin-top:4px">`).join('')}
+            <div style="display:flex;gap:6px;margin-top:6px;align-items:center">
+                <label class="palace-self-hint">max chars <input type="number" id="pal-wake-new-chars" value="${defChars}" min="128" max="4096" style="width:72px"></label>
+                <button class="mind-btn-sm" id="pal-wake-save">Arm</button>
+                <button class="mind-btn-sm" id="pal-wake-cancel">Cancel</button>
+            </div>`;
+        form.querySelector('#pal-wake-cancel').addEventListener('click', () => {
+            pick.value = '';
+            form.hidden = true;
+        });
+        form.querySelector('#pal-wake-save').addEventListener('click', async () => {
+            const params = {};
+            form.querySelectorAll('.pal-wake-param').forEach(inp => {
+                const v = inp.value.trim();
+                if (!v) return;
+                const t = inp.dataset.type;
+                params[inp.dataset.key] =
+                    t === 'integer' ? parseInt(v, 10) :
+                    t === 'number' ? Number(v) :
+                    t === 'boolean' ? ['true', '1', 'yes', 'on'].includes(v.toLowerCase()) : v;
+            });
+            try {
+                await palaceSend('wake-tools', 'POST', {
+                    scope, tool: pick.value, params,
+                    max_chars: Number(form.querySelector('#pal-wake-new-chars').value) || undefined,
+                });
+                ui.showToast(`Armed ${pick.value} at wake`, 'success');
+                renderWakeTools(el);
+            } catch (err) { ui.showToast(err.message, 'error'); }
+        });
+    });
 }
 
 // ─── Upcoming Events — bottom-right, beside the Ledger ──────────────────────

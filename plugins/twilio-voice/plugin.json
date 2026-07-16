@@ -21,7 +21,9 @@
       {"key": "barge_hold_ms", "type": "number", "label": "Call barge-in hold (ms)", "default": 200,
        "help": "Sustained caller speech before it cuts her off mid-reply. Phone default 200 so line noise doesn't clip her. 0 = inherit (90)."},
       {"key": "max_utterance_ms", "type": "number", "label": "Call utterance hard cap (ms)", "default": 0,
-       "help": "Backstop when noise pins the VAD open: force the turn after this long. 0 = inherit engine default (30000). Try 15000-20000 on noisy lines."}
+       "help": "Backstop when noise pins the VAD open: force the turn after this long. 0 = inherit engine default (30000). Try 15000-20000 on noisy lines."},
+      {"key": "llm_timeout", "type": "number", "label": "Call LLM first-token timeout (s)", "default": 20,
+       "help": "If the model hasn't started answering within this many seconds, the turn silently regenerates once (a quick triple think-tick is the only tell); if the retry stalls too, she speaks the glitch apology. Calls only — normal chats keep the 240s default. 0 = off."}
     ],
     "scopes": [
       {

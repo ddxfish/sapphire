@@ -345,7 +345,8 @@ class StreamingChat:
                 tool_pending_sent = set()  # Track which tool indices got early UI hint
                 final_response = None
                 first_chunk_time = None  # Track when generation actually starts
-                
+                chunk_count = 0  # init BEFORE the try — the except reads it, and creation can raise
+
                 try:
                     logger.info(f"[STREAM] Creating provider stream [{provider.provider_name}] (effective_model={effective_model})")
                     self.current_stream = provider.chat_completion_stream(
@@ -353,8 +354,6 @@ class StreamingChat:
                         tools=enabled_tools if enabled_tools else None,
                         generation_params=gen_params
                     )
-                    
-                    chunk_count = 0
                     for event in self.current_stream:
                         chunk_count += 1
                         
@@ -444,6 +443,24 @@ class StreamingChat:
                         break
                 
                 except Exception as e:
+                    # Silent regen (surface opt-in via stream attrs, set by the
+                    # conversation driver for phone calls): a timeout with ZERO
+                    # chunks received retries once with a fresh provider stream —
+                    # same messages, no error row in history, no spoken apology.
+                    _en = type(e).__name__.lower()
+                    _timeoutish = "timeout" in _en or "timed out" in str(e).lower()
+                    if (_timeoutish and chunk_count == 0 and not self.cancel_flag
+                            and int(getattr(self, "timeout_retry", 0) or 0) > 0):
+                        self.timeout_retry = int(self.timeout_retry) - 1
+                        logger.warning("[STREAMING] first-token timeout — silent retry with a fresh stream")
+                        self._cleanup_stream()
+                        _cb = getattr(self, "on_timeout_retry", None)
+                        if _cb:
+                            try:
+                                _cb()
+                            except Exception:
+                                pass
+                        continue    # burns one tool-iteration slot; messages unchanged
                     logger.error(f"[ERR] [STREAMING] Iteration {iteration + 1} failed: {e}", exc_info=True)
                     self._cleanup_stream()
                     raise

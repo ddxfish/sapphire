@@ -1090,7 +1090,16 @@ class LLMChat:
                     logger.error(f"Privacy check failed (defaulting to BLOCK): {e}")
                     raise ConnectionError("Privacy check encountered an error — blocking provider for safety. Check logs.")
 
-                provider = get_provider_by_key(chat_primary, providers_config, config.LLM_REQUEST_TIMEOUT, model_override=chat_model)
+                # Per-chat first-token/read deadline (e.g. phone call chats get a
+                # snappy 20s from the twilio daemon; everything else keeps the
+                # 240s system default — slower chat models are unaffected).
+                try:
+                    _rt = float(chat_settings.get('llm_request_timeout') or 0)
+                except (TypeError, ValueError):
+                    _rt = 0.0
+                provider = get_provider_by_key(chat_primary, providers_config,
+                                               _rt if _rt > 0 else config.LLM_REQUEST_TIMEOUT,
+                                               model_override=chat_model)
                 if not provider:
                     raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
 

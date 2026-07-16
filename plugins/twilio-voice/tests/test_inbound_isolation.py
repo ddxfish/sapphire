@@ -131,6 +131,27 @@ def test_real_toolset_beats_elevate_default(monkeypatch):
     assert calls["patch"]["toolset"] == "phone_helpers"
 
 
+# ── call LLM timeout rides the ephemeral chat's settings (2026-07-16) ────────
+
+def test_ephemeral_chat_gets_llm_timeout():
+    """Plugin setting (default 20s with no loader) lands as llm_request_timeout
+    so _select_provider builds the call's provider with a snappy read deadline."""
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567",
+                         {"trigger_config": {"ephemeral": True}})
+    assert calls["patch"]["llm_request_timeout"] == 20.0
+
+
+def test_llm_timeout_zero_leaves_settings_alone(monkeypatch):
+    monkeypatch.setattr(daemon, "_llm_timeout", lambda: 0.0)
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567",
+                         {"trigger_config": {"ephemeral": True}})
+    assert "llm_request_timeout" not in calls["patch"]
+
+
 def test_ephemeral_setup_failure_refuses_not_default():
     system = _system()
     system.llm_chat.session_manager.set_named_chat_settings.side_effect = RuntimeError("boom")
