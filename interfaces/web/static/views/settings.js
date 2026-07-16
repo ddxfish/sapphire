@@ -363,6 +363,10 @@ function createCtx() {
             await loadData();
             renderTabContent();
         },
+        // For async completions (env-build polls etc.): refreshTab() re-renders
+        // whatever tab is CURRENTLY active, wiping its unsaved edits — gate on
+        // this before refreshing from a background task.
+        isTabActive(id) { return activeTab === id; },
         loadPluginTab,
         syncDynamicTabs,
         refreshSidebar() { render(); }

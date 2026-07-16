@@ -498,7 +498,11 @@ async function _pollEnvBuild(el, ctx, name) {
             _syncEnvStrip(el, cached);
             if (status.state === 'ready') {
                 ui.showToast(`Environment ready for ${name} — plugin reloaded`, 'success');
-                await ctx.refreshTab();
+                // Only re-render if the user is still on this tab — refreshTab()
+                // redraws the ACTIVE tab and would wipe half-typed edits there.
+                // ctx.pluginList is already updated above, so a later visit
+                // renders the ready state without this refresh.
+                if (ctx.isTabActive?.('plugins')) await ctx.refreshTab();
             } else {
                 const lastLine = (status.log_tail || []).filter(Boolean).pop() || 'see user/logs';
                 ui.showToast(`Environment build failed for ${name}: ${lastLine}`, 'error', 0);

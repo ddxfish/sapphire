@@ -1208,8 +1208,9 @@ async def remove_plugin_env(plugin_name: str, _=Depends(require_login)):
         raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
     if plugin_envs.build_state(plugin_name).get("state") == "building":
         raise HTTPException(status_code=409, detail="Build in progress")
-    plugin_loader._stop_services(plugin_name)
-    if not plugin_envs.remove_env(plugin_name):
+    # conda env remove can run tens of seconds — keep it off the event loop.
+    await asyncio.to_thread(plugin_loader._stop_services, plugin_name)
+    if not await asyncio.to_thread(plugin_envs.remove_env, plugin_name):
         raise HTTPException(status_code=500, detail="conda env remove failed")
     return {"status": "ok"}
 

@@ -1418,7 +1418,20 @@ class PluginLoader:
             port = port or svc.get("port")
             if port:
                 try:
-                    kill_process_on_port(int(port))
+                    port = int(port)
+                except (TypeError, ValueError):
+                    logger.warning(f"[PLUGINS] Invalid service port {port!r} for '{name}' — service not started")
+                    continue
+                # Never kill/claim Sapphire's own ports — a typo'd plugin port
+                # setting must not SIGTERM the web UI, TTS server, or proxy.
+                import config
+                core_ports = {int(getattr(config, k, 0) or 0)
+                              for k in ("WEB_UI_PORT", "TTS_SERVER_PORT", "SOCKS_PORT")} - {0}
+                if port in core_ports:
+                    logger.error(f"[PLUGINS] Service port {port} for '{name}' is a Sapphire core port — service NOT started (fix the plugin's port setting)")
+                    continue
+                try:
+                    kill_process_on_port(port)
                 except Exception:
                     pass
 

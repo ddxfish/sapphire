@@ -987,11 +987,14 @@ async def compress_chat(chat_name: str, request: Request, _=Depends(require_logi
     if keep_last < 1:
         raise HTTPException(status_code=400, detail="keep_last_turns must be at least 1")
     # If the kept tail fills the LLM history window, the summary at position 0
-    # is never sent to the model — compressed but invisible.
+    # is never sent to the model — compressed but invisible. LLM_MAX_HISTORY
+    # counts single MESSAGES; get_messages_for_llm retains max_history // 2
+    # user turns, so that halved value is the real ceiling for keep_last_turns.
     max_history = getattr(config, 'LLM_MAX_HISTORY', 30)
-    if max_history and keep_last >= max_history:
+    max_turns = max_history // 2
+    if max_turns and keep_last >= max_turns:
         raise HTTPException(status_code=400,
-                            detail=f"keep_last_turns must be under the LLM history window ({max_history} turns) or the summary never reaches the model.")
+                            detail=f"keep_last_turns must be under {max_turns} (half the {max_history}-message LLM history window) or the summary never reaches the model.")
     if chat_name in _live_call_chats(system):
         raise HTTPException(status_code=409,
                             detail=f"'{chat_name}' has a live phone call — hang up before compressing.")

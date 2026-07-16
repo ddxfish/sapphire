@@ -2509,9 +2509,14 @@ class ChatSessionManager:
             with self._lock, self._get_connection() as conn:
                 cur = conn.execute("UPDATE chats SET messages = '[]', updated_at = ? WHERE name = ?",
                                    (datetime.now().isoformat(), chat_name))
-                conn.commit()
                 if cur.rowcount == 0:
                     return False
+                # Rows chats keep messages in chat_messages, not the blob —
+                # sweep them too (same pattern as clear_chat) or this is a
+                # silent no-op on any post-rowify chat.
+                conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (chat_name,))
+                conn.commit()
+                self._rows_state.pop(chat_name, None)
             if chat_name == self.active_chat_name:
                 self.current_chat.messages = []
             return True
@@ -2551,10 +2556,12 @@ class ChatSessionManager:
                         to_delete.append(row['name'])
                 for name in to_delete:
                     conn.execute("DELETE FROM chats WHERE name = ?", (name,))
+                    conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (name,))
                     try:
                         conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (name,))
                     except Exception:
                         pass
+                    self._rows_state.pop(name, None)
                 conn.commit()
         except Exception as e:
             logger.error(f"reap_ephemeral_chats failed: {e}")

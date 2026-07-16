@@ -106,6 +106,7 @@ def handle_client(conn, addr, mpv_path):
                 req = json.loads(line)
                 cmd = req.get("command") or []
             except Exception:
+                req = None
                 cmd = []
             rid = req.get("request_id") if isinstance(req, dict) else None
             reply = {"error": "command not allowed by bridge"}
