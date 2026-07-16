@@ -230,6 +230,28 @@ def test_compress_allows_local_provider_for_private_chat(chat_client, monkeypatc
     assert r.status_code == 200, r.text
 
 
+def test_compress_private_chat_skips_backup(chat_client, monkeypatch):
+    """[REGRESSION_GUARD] Fork 2A (2026-07-16): private chats never write the
+    plaintext backup export — even with backup:true in the request."""
+    import config
+    from core.chat import compress
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    sm.read_chat_settings.return_value = {'private_chat': True}
+    monkeypatch.setattr(config, 'LLM_CUSTOM_PROVIDERS',
+                        {'localbox': {'enabled': True, 'is_local': True,
+                                      'base_url': 'http://127.0.0.1:1234/v1'}},
+                        raising=False)
+    spy = MagicMock(return_value=(True, None))
+    monkeypatch.setattr(compress, 'start_compress_job', spy)
+
+    r = c.post('/api/chats/trinity/compress', headers={'X-CSRF-Token': csrf},
+               json={'mode': 'whole', 'provider': 'localbox',
+                     'keep_last_turns': 1, 'backup': True})
+    assert r.status_code == 200, r.text
+    assert spy.call_args.kwargs['backup'] is False
+
+
 def test_compress_guard_uses_half_history_window(chat_client, monkeypatch):
     """[REGRESSION_GUARD] LLM_MAX_HISTORY counts single MESSAGES; retention is
     max_history // 2 user turns (get_messages_for_llm). The compressed-but-

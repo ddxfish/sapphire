@@ -370,7 +370,7 @@ async function openCompressModal(name) {
             · keep last <input type="number" id="cm-c-keep" value="10" min="1" style="width:4.5em"> turns verbatim
         </div>
         <div class="cm-form-row">
-            <label><input type="checkbox" id="cm-c-backup" checked> Back up full JSON to user/history/exports/ first</label>
+            <label><input type="checkbox" id="cm-c-backup" checked> Back up full JSON to user/history/exports/ first (skipped for private chats)</label>
         </div>
         <div class="cm-modal-btns">
             <button class="cm-btn" id="cm-c-cancel">Cancel</button>

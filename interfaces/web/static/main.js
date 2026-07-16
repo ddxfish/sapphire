@@ -178,6 +178,14 @@ async function init() {
         try {
             initData = await getInitData();
             ui.initFromInitData(initData);
+            // One-time notice: global privacy mode was removed in v2.8.4 —
+            // users still carrying the old setting are otherwise silently
+            // unprotected after upgrade.
+            if (initData?.privacy_v2_notice && !localStorage.getItem('privacyV2NoticeShown')) {
+                localStorage.setItem('privacyV2NoticeShown', '1');
+                ui.showToast('Heads up: global privacy mode was removed and your old setting no longer applies. '
+                    + 'Mark individual chats private with the eye icon in the sidebar.', 'warning', 0);
+            }
             // Show any plugin load errors from startup (before SSE was connected)
             if (initData?.load_errors?.length) {
                 for (const err of initData.load_errors) {

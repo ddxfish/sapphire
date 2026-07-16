@@ -89,6 +89,12 @@ def test_whitelist_and_incognito_fully_removed():
                 text = p.read_text(encoding='utf-8', errors='ignore')
             except OSError:
                 continue
+            # Fork 1A exception (2026-07-16): routes/chat.py reads the
+            # ORPHANED START_IN_PRIVACY_MODE key from user settings.json to
+            # show the one-time "global privacy mode was removed" upgrade
+            # notice. Masking that exact literal keeps every other
+            # resurrection of the dead names fatal.
+            text = text.replace('START_IN_PRIVACY_MODE', '')
             for needle in needles:
                 if needle in text:
                     offenders.append(f"{p.relative_to(PROJECT_ROOT)}: {needle}")

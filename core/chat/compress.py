@@ -282,6 +282,17 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     pairs = compress_messages(head, mode, provider, int(target_tokens),
                               on_progress=on_progress)
 
+    # Fork 4A (2026-07-16): "compression" that grows the chat is refused —
+    # chatty local models can summarize a small head into MORE tokens than
+    # the original. Write-last means the chat is untouched by this abort.
+    summary_tokens = sum(count_tokens(_text_of(p.get("content"))) for p in pairs)
+    head_tokens = sum(count_tokens(_text_of(m.get("content"))) for m in head)
+    if summary_tokens >= head_tokens:
+        raise RuntimeError(
+            f"Compression would grow the chat (summary ~{summary_tokens} tokens vs "
+            f"~{head_tokens} in the compressed span) — aborted, nothing written. "
+            f"Try a lower target or a terser model.")
+
     new_msgs = pairs + tail
     # expected_count + expected_digest: if anyone (heartbeat, daemon, the
     # operator) wrote to this chat during the minutes of LLM work, abort

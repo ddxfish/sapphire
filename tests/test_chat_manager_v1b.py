@@ -380,6 +380,9 @@ class TestCompressChat:
         mgr = chat_env()
         mgr.create_chat("bigone")
         msgs = turn(1) + turn(2, with_tools=True) + turn(3) + turn(4)
+        # Head must dwarf the mock summary or the fork-4A inflation guard
+        # (correctly) aborts before the behavior under test.
+        msgs[0]["content"] += " lorem ipsum dolor" * 100
         mgr.append_messages_to_chat("bigone", msgs)
         monkeypatch.setattr(compress, "make_provider",
                             lambda k, m: MockProvider())
@@ -435,8 +438,9 @@ class TestCompressChat:
         from core.chat import compress
         mgr = chat_env()
         mgr.create_chat("livewire")
-        mgr.append_messages_to_chat("livewire",
-                                    sum((turn(i) for i in range(1, 5)), []))
+        seeded = sum((turn(i) for i in range(1, 5)), [])
+        seeded[0]["content"] += " lorem ipsum dolor" * 100  # keep head > mock summary (fork-4A guard)
+        mgr.append_messages_to_chat("livewire", seeded)
 
         class TalkativeProvider:
             def chat_completion(self, messages, tools=None, generation_params=None):
@@ -454,6 +458,21 @@ class TestCompressChat:
         contents = [m["content"] for m in mgr.export_chat("livewire")["messages"]]
         assert "question 99" in contents      # the mid-job turn survives
         assert "SUMMARY" not in contents      # no partial compress written
+
+    def test_compress_refuses_inflation(self, chat_env, monkeypatch):
+        """[REGRESSION_GUARD] Fork 4A (2026-07-16): a 'summary' as big as the
+        compressed span aborts before the write — tiny chats + chatty local
+        models must not GROW under an operation named compress."""
+        from core.chat import compress
+        mgr = chat_env()
+        mgr.create_chat("tiny")
+        mgr.append_messages_to_chat("tiny", turn(1) + turn(2))
+        monkeypatch.setattr(compress, "make_provider", lambda k, m: MockProvider())
+        before = mgr.export_chat("tiny")["messages"]
+        with pytest.raises(RuntimeError, match="grow"):
+            compress._compress_chat(mgr, "tiny", "whole", "mock", "",
+                                    5000, 1, backup=False)
+        assert mgr.export_chat("tiny")["messages"] == before  # untouched
 
     def test_job_serialization_and_status(self, chat_env, monkeypatch):
         from core.chat import compress

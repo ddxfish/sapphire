@@ -181,6 +181,21 @@ export default {
             });
         });
 
+        // Auto-enroll stragglers (fork 3A, 2026-07-16): the header says "Auto
+        // tries top to bottom", so the rendered list must BE the stored order.
+        // Providers missing from LLM_FALLBACK_ORDER (e.g. openai on older
+        // installs) rendered numbered but Auto never tried them.
+        {
+            const storedOrder = ctx.getValue('LLM_FALLBACK_ORDER') || [];
+            const renderedOrder = [...el.querySelectorAll('#providers-list > [data-provider]')]
+                .map(c => c.dataset.provider);
+            if (renderedOrder.length && JSON.stringify(renderedOrder) !== JSON.stringify(storedOrder)) {
+                updateFallbackOrder(renderedOrder)
+                    .then(() => { ctx.settings.LLM_FALLBACK_ORDER = renderedOrder; })
+                    .catch(() => {});   // next drag persists it
+            }
+        }
+
         // Drag-drop reorder — the list IS the full fallback order (core + custom)
         initProviderDragDrop(el.querySelector('#providers-list'), async order => {
             try {

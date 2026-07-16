@@ -204,12 +204,15 @@ function dashboardCard(d) {
                 ${stat(d.favorites, 'favorites')}
             </div>
             ${d.most_woven.length ? `<div class="palace-dash-woven">Most woven: ${d.most_woven.map(w => `<span class="palace-pill">${escHtml(w.name)} <b>${w.count}</b></span>`).join('')}</div>` : ''}
+            ${(d.upcoming || []).length ? `<div class="palace-dash-woven">\u{1F5D3} Upcoming: ${d.upcoming.map(u =>
+                `<span class="palace-pill" title="${escAttr(u.preview)}">${escHtml(u.date.length > 10 ? u.date.slice(5, 10) + ' ' + u.date.slice(11) : u.date.slice(5))} <b>${escHtml(u.preview.slice(0, 28))}${u.preview.length > 28 ? '…' : ''}</b></span>`).join('')}</div>` : ''}
             ${d.since ? `<div class="palace-dash-since">Mind since ${escHtml(d.since)}</div>` : ''}
             <div class="palace-librarian-row">
                 <span class="palace-lib-title">\u{1F9F9} Librarian</span>
                 <span class="palace-lib-status" id="pal-lib-status">checking…</span>
                 <button class="mind-btn-sm" id="pal-lib-run-self" title="Review unprocessed Self-layer memories in this scope">Tidy Self</button>
                 <button class="mind-btn-sm" id="pal-lib-run-all" title="Review all unprocessed memories in this scope (events + self)">Tidy whole scope</button>
+                <button class="mind-btn-sm" id="pal-lib-run-dates" title="Temporal pass: resolve date mentions into real calendar dates (feeds Upcoming)">\u{1F5D3} Dates</button>
             </div>
             <div class="palace-librarian-row">
                 <span class="palace-lib-title">\u{1F6E0} Maintenance</span>
@@ -217,6 +220,8 @@ function dashboardCard(d) {
                     <option value="">choose action…</option>
                     <option value="import_v1">Import from Memory v1 (all scopes)</option>
                     <option value="generate_metadata">Generate missing metadata</option>
+                    <option value="redate_regex">Update date metadata (built-in rules)</option>
+                    <option value="redate_model">Update date metadata (librarian model)</option>
                     <option value="reset_importance">Reset importance ratings</option>
                     <option value="restore_retired">Restore retired memories</option>
                     <option value="wipe_scope">⚠ Delete ALL memories in scope</option>
@@ -240,12 +245,12 @@ async function refreshLibStatus(el, { poll = false } = {}) {
     if (st.enabled === false) {
         // Alpha master toggle off — the row stays discoverable, the buttons go.
         box.textContent = 'disabled (alpha — enable in Settings → Plugins → Mind Palace)';
-        el.querySelector('#pal-lib-run-self')?.setAttribute('hidden', '');
-        el.querySelector('#pal-lib-run-all')?.setAttribute('hidden', '');
+        ['#pal-lib-run-self', '#pal-lib-run-all', '#pal-lib-run-dates'].forEach(s =>
+            el.querySelector(s)?.setAttribute('hidden', ''));
         return;
     }
-    el.querySelector('#pal-lib-run-self')?.removeAttribute('hidden');
-    el.querySelector('#pal-lib-run-all')?.removeAttribute('hidden');
+    ['#pal-lib-run-self', '#pal-lib-run-all', '#pal-lib-run-dates'].forEach(s =>
+        el.querySelector(s)?.removeAttribute('hidden'));
     if (st.running) {
         const c = st.current;
         box.textContent = `running (${c.scope}): message ${c.messages_done}/${c.messages_total || '?'}`;
@@ -254,7 +259,10 @@ async function refreshLibStatus(el, { poll = false } = {}) {
         ui.showToast(st.current?.last_message || 'Librarian pass finished', 'success');
         renderSheet();
     } else {
-        const mine = (st.scopes || []).find(s => s.scope === scope);
+        // Two state rows per scope now (review + temporal) — the status line
+        // reads the review row; the temporal pass reports via toast/Upcoming.
+        const mine = (st.scopes || []).find(s =>
+            s.scope === scope && (s.pass || 'review') === 'review');
         box.textContent = mine
             ? `last pass ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
             : 'never run in this scope';
@@ -262,15 +270,17 @@ async function refreshLibStatus(el, { poll = false } = {}) {
 }
 
 function bindLibrarian(el) {
-    const run = (what) => async () => {
+    const run = (what, pass) => async () => {
         try {
-            const r = await palaceSend('librarian/run', 'POST', { scope, what });
+            const r = await palaceSend('librarian/run', 'POST',
+                pass ? { scope, what, pass } : { scope, what });
             ui.showToast(r.message || 'Pass started', 'success');
             refreshLibStatus(el);
         } catch (e) { ui.showToast(e.message, 'error'); }
     };
     el.querySelector('#pal-lib-run-self')?.addEventListener('click', run('self'));
     el.querySelector('#pal-lib-run-all')?.addEventListener('click', run('all'));
+    el.querySelector('#pal-lib-run-dates')?.addEventListener('click', run('all', 'temporal'));
     bindMaintenance(el);
     refreshLibStatus(el);
 }
@@ -294,6 +304,17 @@ const MAINT = {
             'are imported. The v1 databases are opened read-only and are never modified.',
     },
     generate_metadata: {},
+    redate_regex: {
+        confirm: s => `Re-run the built-in date rules over scope '${s}'?\n\n` +
+            'Every memory is re-dated against its own saved date. Dates the ' +
+            'librarian resolved are kept. Memory content is never touched.',
+    },
+    redate_model: {
+        confirm: s => `Re-date scope '${s}' with the librarian model?\n\n` +
+            'All date verdicts reopen and a temporal pass starts now (batch and ' +
+            'daily caps apply — re-run or let the nightly drain the rest). ' +
+            'Requires the Librarian alpha toggle. Memory content is never touched.',
+    },
     wipe_scope: {
         prompt: s => `⚠ PERMANENTLY DELETE all Mind Palace data in scope '${s}' — ` +
             'memories, entities, connections, goals, and self sheet?\n\n' +
@@ -321,7 +342,10 @@ function bindMaintenance(el) {
             if ('cleared' in r) bits.push(`${r.cleared} cleared`);
             if ('restored' in r) bits.push(`${r.restored} restored`);
             if (r.skipped) bits.push(`${r.skipped} kept (atomize/merge)`);
-            if ('stamped' in r) bits.push(`${r.stamped} stamped · ${r.edges} links seeded`);
+            if ('stamped' in r) bits.push(`${r.stamped} stamped` + ('edges' in r ? ` · ${r.edges} links seeded` : ''));
+            if ('kept' in r) bits.push(`${r.kept} librarian verdicts kept`);
+            if ('requeued' in r) bits.push(`${r.requeued} verdicts reopened`);
+            if (r.message) bits.push(r.message);
             if ('deleted_chunks' in r) bits.push(`${r.deleted_chunks} memories · ${r.deleted_entities} entities · ${r.deleted_edges} connections deleted`);
             if (r.summary) {
                 if (result) result.textContent = r.summary;

@@ -518,7 +518,21 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                     "nav_target": scope_def.get("nav_target"),
                 })
 
+        # One-time frontend notice for pre-v2.8.4 global-privacy-mode users:
+        # the whitelist system was removed and the old key is orphaned — without
+        # this the privacy downgrade is silent (bug hunt 2026-07-15 #8, fork 1A).
+        privacy_v2_notice = False
+        try:
+            _user_settings_path = PROJECT_ROOT / 'user' / 'settings.json'
+            if _user_settings_path.exists():
+                privacy_v2_notice = bool(json.loads(
+                    _user_settings_path.read_text(encoding='utf-8')
+                ).get('START_IN_PRIVACY_MODE'))
+        except Exception:
+            pass
+
         return {
+            "privacy_v2_notice": privacy_v2_notice,
             "toolsets": {
                 "list": toolsets_list,
                 "current": current_toolset
@@ -1024,7 +1038,11 @@ async def compress_chat(chat_name: str, request: Request, _=Depends(require_logi
     ok, err = compress.start_compress_job(
         sm, chat_name, mode=mode, provider_key=provider_key,
         model=(data.get('model') or '').strip(), target_tokens=target_tokens,
-        keep_last_turns=keep_last, backup=bool(data.get('backup', True)))
+        keep_last_turns=keep_last,
+        # Fork 2A (2026-07-16): private chats never write the plaintext
+        # backup export — the whole point of the flag is nothing readable
+        # leaves the DB.
+        backup=bool(data.get('backup', True)) and not bool(chat_settings.get('private_chat')))
     if not ok:
         raise HTTPException(status_code=409, detail=err)
     return {"status": "started", "chat": chat_name, "mode": mode}
