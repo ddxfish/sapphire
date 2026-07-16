@@ -733,7 +733,12 @@ def _resolve_chat(system, scope, caller, task):
         from core.credentials_manager import credentials
         _acct = credentials.get_twilio_account(scope)
         _default_ts = "elevate_toolset" if _acct.get("elevate_key") else "none"
-        patch["toolset"] = (task or {}).get("toolset") or _default_ts
+        # The Realtime modal always saves an explicit toolset ('none' by default),
+        # so 'none' must not veto the elevate default: 'none' means "no capability",
+        # and the lone hidden elevate tool grants none until the number's passphrase
+        # is spoken. Only a rule naming a REAL toolset overrides it.
+        _task_ts = ((task or {}).get("toolset") or "").strip()
+        patch["toolset"] = _task_ts if _task_ts and _task_ts != "none" else _default_ts
         try:
             from core.chat.function_manager import scope_setting_keys
             for _sk in scope_setting_keys():

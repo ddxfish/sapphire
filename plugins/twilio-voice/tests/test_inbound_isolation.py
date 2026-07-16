@@ -93,6 +93,44 @@ def test_ephemeral_rule_toolset_and_scope_honored():
     assert calls["patch"]["memory_scope"] == "shared_line"
 
 
+# ── elevate default vs the modal's explicit 'none' (2026-07-16) ──────────────
+# The Realtime modal always saves toolset='none' explicitly, which used to veto
+# the elevate default — making passphrase elevation unreachable from any
+# UI-created rule. 'none' now falls through to the elevate default; a real
+# toolset still wins.
+
+def _patch_account(monkeypatch, acct):
+    from core.credentials_manager import credentials
+    monkeypatch.setattr(credentials, "get_twilio_account", lambda scope: acct)
+
+
+def test_explicit_none_with_key_gets_elevate(monkeypatch):
+    _patch_account(monkeypatch, {"elevate_key": "alligator3"})
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567", {
+        "trigger_config": {"ephemeral": True}, "toolset": "none"})
+    assert calls["patch"]["toolset"] == "elevate_toolset"
+
+
+def test_explicit_none_without_key_stays_none(monkeypatch):
+    _patch_account(monkeypatch, {})
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567", {
+        "trigger_config": {"ephemeral": True}, "toolset": "none"})
+    assert calls["patch"]["toolset"] == "none"
+
+
+def test_real_toolset_beats_elevate_default(monkeypatch):
+    _patch_account(monkeypatch, {"elevate_key": "alligator3"})
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567", {
+        "trigger_config": {"ephemeral": True}, "toolset": "phone_helpers"})
+    assert calls["patch"]["toolset"] == "phone_helpers"
+
+
 def test_ephemeral_setup_failure_refuses_not_default():
     system = _system()
     system.llm_chat.session_manager.set_named_chat_settings.side_effect = RuntimeError("boom")

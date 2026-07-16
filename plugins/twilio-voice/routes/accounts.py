@@ -12,7 +12,19 @@ def list_accounts(credentials=None, **_):
     """GET /api/plugin/twilio-voice/accounts -> {accounts: [...]} (no secrets)."""
     if credentials is None:
         return {"accounts": []}
-    return {"accounts": credentials.list_twilio_accounts()}
+    accounts = credentials.list_twilio_accounts()
+    for a in accounts:
+        # `badge`: shown by the Realtime editor under the number picker — the
+        # one place the owner looks when wiring a rule, so elevation state is
+        # visible where it matters (never the key itself).
+        if a.get("elevate_configured"):
+            lock = (a.get("elevate_toolset") or "").strip()
+            a["badge"] = ("\U0001F511 Elevation key set — the elevate tool rides this "
+                          "number's inbound calls, even with tools 'none'. "
+                          + (f"Unlocks '{lock}' only." if lock else
+                             "No unlock toolset set on the account yet — a matched "
+                             "key will have nothing to open."))
+    return {"accounts": accounts}
 
 
 def save_account(body=None, credentials=None, **_):

@@ -93,6 +93,7 @@ export async function openRealtimeEditor(task, refresh) {
                 <div class="sched-field" id="rt-subsource-field">
                     <label id="rt-subsource-label">Endpoint</label>
                     <select id="rt-subsource"></select>
+                    <div id="rt-subsource-badge" class="text-muted" style="display:none;font-size:var(--font-xs);margin-top:4px;padding:6px 8px;border-left:2px solid var(--warning, #e08a2b);background:rgba(224,138,43,0.07)"></div>
                 </div>
                 <div class="sched-field">
                     <label>Callers</label>
@@ -203,9 +204,19 @@ export async function openRealtimeEditor(task, refresh) {
     const subField = modal.querySelector('#rt-subsource-field');
     const subLabel = modal.querySelector('#rt-subsource-label');
     const subSel = modal.querySelector('#rt-subsource');
+    const subBadge = modal.querySelector('#rt-subsource-badge');
+    // Per-option `badge` from the dynamic endpoint (e.g. Twilio: "elevation key
+    // set on this number") — shown for the selected option only.
+    let subBadges = {};
+    const showSubBadge = () => {
+        const b = subBadges[subSel.value] || '';
+        subBadge.textContent = b;
+        subBadge.style.display = b ? '' : 'none';
+    };
     async function syncSubSource(preselect) {
         const src = sources.find(s => s.name === modal.querySelector('#rt-source').value);
         const sf = _subSourceField(src);
+        subBadges = {};
         if (!sf) { subField.style.display = 'none'; subSel.dataset.key = ''; return; }
         subField.style.display = 'block';
         subLabel.textContent = sf.label || 'Endpoint';
@@ -219,14 +230,17 @@ export async function openRealtimeEditor(task, refresh) {
             for (const o of options) {
                 const ov = typeof o === 'string' ? o : (o.value || o.id || o.name);
                 const ol = typeof o === 'string' ? o : (o.label || o.name || o.value);
+                if (o && typeof o === 'object' && o.badge) subBadges[ov] = o.badge;
                 const opt = document.createElement('option');
                 opt.value = ov; opt.textContent = ol;
                 subSel.appendChild(opt);
             }
             if (preselect) subSel.value = preselect;
         } catch { subSel.innerHTML = '<option value="">Could not load options</option>'; }
+        showSubBadge();
     }
     modal.querySelector('#rt-source').addEventListener('change', () => syncSubSource(null));
+    subSel.addEventListener('change', showSubBadge);
     const initSub = _subSourceField(sources.find(s => s.name === curSource));
     await syncSubSource(initSub ? tc[initSub.key] : null);
 

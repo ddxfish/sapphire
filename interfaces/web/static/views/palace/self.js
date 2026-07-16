@@ -246,24 +246,7 @@ function dashboardCard(d) {
             <div class="palace-librarian-row">
                 <span class="palace-lib-title">\u{1F9F9} Librarian</span>
                 <span class="palace-lib-status" id="pal-lib-status">checking…</span>
-                <button class="mind-btn-sm" id="pal-lib-run-self" title="Review unprocessed Self-layer memories in this scope">Tidy Self</button>
-                <button class="mind-btn-sm" id="pal-lib-run-all" title="Review all unprocessed memories in this scope (events + self)">Tidy whole scope</button>
-                <button class="mind-btn-sm" id="pal-lib-run-dates" title="Temporal pass: resolve date mentions into real calendar dates (feeds Upcoming)">\u{1F5D3} Dates</button>
-            </div>
-            <div class="palace-librarian-row">
-                <span class="palace-lib-title">\u{1F6E0} Maintenance</span>
-                <select class="mind-btn-sm" id="pal-maint-action" title="Self-serve maintenance for alpha testing — import, rescue, reset">
-                    <option value="">choose action…</option>
-                    <option value="import_v1">Import from Memory v1 (all scopes)</option>
-                    <option value="generate_metadata">Generate missing metadata</option>
-                    <option value="redate_regex">Update date metadata (built-in rules)</option>
-                    <option value="redate_model">Update date metadata (librarian model)</option>
-                    <option value="reset_importance">Reset importance ratings</option>
-                    <option value="restore_retired">Restore retired memories</option>
-                    <option value="wipe_scope">⚠ Delete ALL memories in scope</option>
-                </select>
-                <button class="mind-btn-sm" id="pal-maint-run">Run</button>
-                <span class="palace-lib-status" id="pal-maint-result"></span>
+                <button class="mind-btn-sm" id="pal-lib-admin" title="Run passes, migration, and rescue tools — the operator console">\u{1F6E0}️ Admin</button>
             </div>
         </div>`;
 }
@@ -279,14 +262,9 @@ async function refreshLibStatus(el, { poll = false } = {}) {
     } catch (e) { box.textContent = 'status unavailable'; return; }
     clearTimeout(_libTimer);
     if (st.enabled === false) {
-        // Alpha master toggle off — the row stays discoverable, the buttons go.
         box.textContent = 'disabled (alpha — enable in Settings → Plugins → Mind Palace)';
-        ['#pal-lib-run-self', '#pal-lib-run-all', '#pal-lib-run-dates'].forEach(s =>
-            el.querySelector(s)?.setAttribute('hidden', ''));
         return;
     }
-    ['#pal-lib-run-self', '#pal-lib-run-all', '#pal-lib-run-dates'].forEach(s =>
-        el.querySelector(s)?.removeAttribute('hidden'));
     if (st.running) {
         const c = st.current;
         box.textContent = `running (${c.scope}): message ${c.messages_done}/${c.messages_total || '?'}`;
@@ -295,105 +273,24 @@ async function refreshLibStatus(el, { poll = false } = {}) {
         ui.showToast(st.current?.last_message || 'Librarian pass finished', 'success');
         renderSheet();
     } else {
-        // Two state rows per scope now (review + temporal) — the status line
-        // reads the review row; the temporal pass reports via toast/Upcoming.
-        const mine = (st.scopes || []).find(s =>
-            s.scope === scope && (s.pass || 'review') === 'review');
+        // Resident's summary line — the most recent of the per-pass rows.
+        // Operating the passes lives in Mind → Admin.
+        const mine = (st.scopes || [])
+            .filter(s => s.scope === scope && s.last_pass)
+            .sort((a, b) => (b.last_pass || '').localeCompare(a.last_pass || ''))[0];
         box.textContent = mine
-            ? `last pass ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
+            ? `last ${mine.pass} pass ${timeAgo(mine.last_pass)}`
             : 'never run in this scope';
     }
 }
 
 function bindLibrarian(el) {
-    const run = (what, pass) => async () => {
-        try {
-            const r = await palaceSend('librarian/run', 'POST',
-                pass ? { scope, what, pass } : { scope, what });
-            ui.showToast(r.message || 'Pass started', 'success');
-            refreshLibStatus(el);
-        } catch (e) { ui.showToast(e.message, 'error'); }
-    };
-    el.querySelector('#pal-lib-run-self')?.addEventListener('click', run('self'));
-    el.querySelector('#pal-lib-run-all')?.addEventListener('click', run('all'));
-    el.querySelector('#pal-lib-run-dates')?.addEventListener('click', run('all', 'temporal'));
-    bindMaintenance(el);
-    refreshLibStatus(el);
-}
-
-// Per-action gates: `confirm` = ok/cancel dialog; `prompt` = the user must
-// TYPE the scope name (destructive tier). Actions with neither run directly.
-const MAINT = {
-    reset_importance: {
-        confirm: s => `Reset importance ratings in scope '${s}'?\n\n` +
-            'All ratings return to unrated; favorites and permanent goals return to 0.95. ' +
-            'No memory content is touched.',
-    },
-    restore_retired: {
-        confirm: s => `Restore all retired memories in scope '${s}'?\n\n` +
-            'Every librarian-pruned memory returns to her recall. Atomize/merge ' +
-            'retirements are kept — their content lives on in derived entries.',
-    },
-    import_v1: {
-        confirm: () => 'Import everything from the classic Memory v1 system?\n\n' +
-            'Additive and idempotent — re-running copies zero duplicates. All scopes ' +
-            'are imported. The v1 databases are opened read-only and are never modified.',
-    },
-    generate_metadata: {},
-    redate_regex: {
-        confirm: s => `Re-run the built-in date rules over scope '${s}'?\n\n` +
-            'Every memory is re-dated against its own saved date. Dates the ' +
-            'librarian resolved are kept. Memory content is never touched.',
-    },
-    redate_model: {
-        confirm: s => `Re-date scope '${s}' with the librarian model?\n\n` +
-            'All date verdicts reopen and a temporal pass starts now (batch and ' +
-            'daily caps apply — re-run or let the nightly drain the rest). ' +
-            'Requires the Librarian alpha toggle. Memory content is never touched.',
-    },
-    wipe_scope: {
-        prompt: s => `⚠ PERMANENTLY DELETE all Mind Palace data in scope '${s}' — ` +
-            'memories, entities, connections, goals, and self sheet?\n\n' +
-            'Memory v1 is a separate system and is never touched.\n\n' +
-            'Type the scope name to confirm:',
-    },
-};
-
-function bindMaintenance(el) {
-    const result = el.querySelector('#pal-maint-result');
-    el.querySelector('#pal-maint-run')?.addEventListener('click', async () => {
-        const action = el.querySelector('#pal-maint-action')?.value;
-        if (!action) { ui.showToast('Choose a maintenance action first', 'warning'); return; }
-        const gate = MAINT[action] || {};
-        const body = { action, scope };
-        if (gate.prompt) {
-            const typed = prompt(gate.prompt(scope));
-            if (typed === null) return;
-            if (typed !== scope) { ui.showToast('Scope name did not match — nothing deleted', 'warning'); return; }
-            body.confirm = typed;
-        } else if (gate.confirm && !confirm(gate.confirm(scope))) return;
-        try {
-            const r = await palaceSend('maintenance', 'POST', body);
-            const bits = [];
-            if ('cleared' in r) bits.push(`${r.cleared} cleared`);
-            if ('restored' in r) bits.push(`${r.restored} restored`);
-            if (r.skipped) bits.push(`${r.skipped} kept (atomize/merge)`);
-            if ('stamped' in r) bits.push(`${r.stamped} stamped` + ('edges' in r ? ` · ${r.edges} links seeded` : ''));
-            if ('kept' in r) bits.push(`${r.kept} librarian verdicts kept`);
-            if ('requeued' in r) bits.push(`${r.requeued} verdicts reopened`);
-            if (r.message) bits.push(r.message);
-            if ('deleted_chunks' in r) bits.push(`${r.deleted_chunks} memories · ${r.deleted_entities} entities · ${r.deleted_edges} connections deleted`);
-            if (r.summary) {
-                if (result) result.textContent = r.summary;
-                ui.showToast('Import finished', 'success');
-            } else {
-                const msg = bits.join(' · ') || 'done';
-                if (result) result.textContent = msg;
-                ui.showToast(`Maintenance: ${msg}`, 'success');
-            }
-            if (action === 'wipe_scope' || action === 'import_v1') renderSheet();
-        } catch (e) { ui.showToast(e.message, 'error'); }
+    el.querySelector('#pal-lib-admin')?.addEventListener('click', async () => {
+        const { switchView } = await import('../../core/router.js');
+        window._mindScope = scope;   // Admin opens on the scope being viewed
+        switchView('admin');
     });
+    refreshLibStatus(el);
 }
 
 function modeChip(mode) {

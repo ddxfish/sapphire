@@ -17,6 +17,10 @@ function escapeHtml(s) {
  * @param {Object} [opts] - {onChange: (key, value) => void}
  */
 export function renderSettingsForm(container, schema, values = {}, { onChange, managed } = {}) {
+    // hidden:true fields never render here — they belong to a dedicated UI
+    // (e.g. Mind → Admin) and are skipped by readSettingsForm too, so a
+    // Settings-page save can't clobber them with defaults.
+    schema = (schema || []).filter(f => !f.hidden);
     if (!schema?.length) {
         container.innerHTML = '<p style="color:var(--text-muted)">No settings available.</p>';
         return;
@@ -308,6 +312,9 @@ export function readSettingsForm(container, schema) {
     for (const field of schema) {
         // Skip action buttons — they're not settings
         if ((field.widget || inferWidget(field)) === 'button') continue;
+        // Skip hidden fields — not in this form's DOM; including them would
+        // send their DEFAULTS and overwrite values owned by another UI.
+        if (field.hidden) continue;
         const val = getFieldValue(container, field.key, field);
         // Password field: skip if empty (preserve stored key), send empty if sentinel
         if (field.type === 'password') {

@@ -18,6 +18,7 @@ export const PALACE_TABS = [
     { id: 'people', label: 'Entities', icon: '\u{1F465}' },
     { id: 'knowledge', label: 'Knowledge', icon: '\u{1F4DA}' },
     { id: 'goals', label: 'Goals', icon: '\u{1F3AF}' },
+    { id: 'admin', label: 'Admin', icon: '\u{1F6E0}️' },
 ];
 
 // Plugin layers (v1.1): registered layers get their own tabs after the core
@@ -36,8 +37,10 @@ export async function refreshPalaceTabs() {
     for (let i = PALACE_TABS.length - 1; i >= 0; i--) {
         if (PALACE_TABS[i].id.startsWith('layer-')) PALACE_TABS.splice(i, 1);
     }
+    // Layer tabs slot in BEFORE Admin — the operator console stays last.
     for (const l of PLUGIN_LAYERS) {
-        PALACE_TABS.push({ id: `layer-${l.key}`, label: l.label, icon: l.icon || '\u{1F9E9}' });
+        PALACE_TABS.splice(PALACE_TABS.findIndex(t => t.id === 'admin'), 0,
+            { id: `layer-${l.key}`, label: l.label, icon: l.icon || '\u{1F9E9}' });
     }
     return PALACE_TABS;
 }

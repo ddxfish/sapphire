@@ -18,7 +18,7 @@ const CLASSIC = {
     people: `./people.js${_v}`,
     knowledge: `./knowledge.js${_v}`,
     goals: `./goals.js${_v}`,
-    // 'self' has no classic equivalent — L0 is palace-only (handled in show()).
+    // 'self' and 'admin' have no classic equivalent — palace-only (show()).
 };
 const PALACE = {
     self: `./palace/self.js${_v}`,
@@ -26,6 +26,13 @@ const PALACE = {
     people: `./palace/entities.js${_v}`,
     knowledge: `./palace/knowledge.js${_v}`,
     goals: `./palace/goals.js${_v}`,
+    admin: `./palace/admin.js${_v}`,
+};
+
+// Palace-only views: friendly pointer instead of a missing classic module.
+const PALACE_ONLY = {
+    self: ['\u{1F4A0} Self', 'The self layer lives in the Mind Palace memory system. Enable the Mind Palace plugin to give Sapphire a self-sheet.'],
+    admin: ['\u{1F6E0}️ Admin', 'The Admin console belongs to the Mind Palace memory system. Enable the Mind Palace plugin to manage the librarian, migration, and rescue tools.'],
 };
 
 let container = null;
@@ -52,15 +59,13 @@ export default {
     async show() {
         const active = await palaceActive();
         const wantKind = active ? 'palace' : 'classic';
-        // L0 self layer is palace-only. Under the classic system there's no
-        // self view — show a friendly pointer instead of erroring on a
-        // missing module import.
-        if (VIEW === 'self' && !active) {
+        if (PALACE_ONLY[VIEW] && !active) {
             if (impl?.hide) { try { impl.hide(); } catch {} }
             impl = null; implKind = null;
+            const [title, note] = PALACE_ONLY[VIEW];
             container.innerHTML = `<div class="view-placeholder">
-                <h2>\u{1F4A0} Self</h2>
-                <p style="color:var(--text-muted);font-size:var(--font-sm)">The self layer lives in the Mind Palace memory system. Enable the Mind Palace plugin to give Sapphire a self-sheet.</p>
+                <h2>${title}</h2>
+                <p style="color:var(--text-muted);font-size:var(--font-sm)">${note}</p>
             </div>`;
             return;
         }
