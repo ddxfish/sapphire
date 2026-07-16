@@ -369,16 +369,22 @@ def _call_tuning():
         s = _plugin_loader.get_plugin_settings("twilio-voice") if _plugin_loader else {}
     except Exception:
         s = {}
-    keys = ("vad_threshold", "endpoint_silence_ms", "min_speech_ms",
-            "barge_hold_ms", "max_utterance_ms")
+    # (min, max) sanity clamps: a mistyped value (vad_threshold 50 from percent
+    # confusion, or a sub-second max_utterance_ms) would otherwise silently
+    # deafen the whole call. 0/blank still means "inherit global" (dropped
+    # before clamping); a positive-but-insane value is clamped into a working
+    # range rather than bricking the call.
+    bounds = {"vad_threshold": (0.05, 0.95), "endpoint_silence_ms": (100, 5000),
+              "min_speech_ms": (50, 3000), "barge_hold_ms": (20, 2000),
+              "max_utterance_ms": (2000, 120000)}
     tuning = {}
-    for k in keys:
+    for k, (lo, hi) in bounds.items():
         try:
             v = float(s.get(k) or 0)
         except (TypeError, ValueError):
             v = 0
         if v > 0:
-            tuning[k] = v
+            tuning[k] = max(lo, min(v, hi))
     return tuning
 
 
@@ -502,59 +508,80 @@ def _on_call(scope, caller, session):
         except Exception as e:
             logger.warning(f"[TWILIO] greeting synthesis failed: {e}")
 
-    mgr = system.get_conversation_manager()
-    from .twilio_source import TwilioConversationSource
+    # Everything from here owns calls[chat]; a raise in setup (start_external
+    # builds the driver/gate, get_conversation_manager, etc.) must NOT orphan
+    # the record — an orphaned entry marks the chat busy forever (every future
+    # call rejected) until restart. Guaranteed cleanup on any failure.
+    mgr = None
+    try:
+        mgr = system.get_conversation_manager()
+        from .twilio_source import TwilioConversationSource
 
-    def ctor(driver, gate):
-        src = TwilioConversationSource(driver, gate, session)
-        src.start()
-        return src
+        def ctor(driver, gate):
+            src = TwilioConversationSource(driver, gate, session)
+            src.start()
+            return src
 
-    # tts_split='sentence': first audio at the first sentence boundary instead
-    # of end-of-generation (paragraph mode deferred ALL synth on a typical
-    # one-paragraph spoken reply — seconds of dead air). Inert if TTS
-    # streaming is globally off.
-    src = mgr.start_external(ctor, chat_name=chat, source_label="phone",
-                             session_id=sid, tuning=_call_tuning(),
-                             tts_split="sentence")
-    if src is None:
-        logger.warning("[TWILIO] no conversation slot free — rejecting call")
-        calls.pop(chat, None)
-        session.stop()
-        _call_ended(scope, caller, chat, ephemeral, "busy", 0.0, 0)
-        return
+        # tts_split='sentence': first audio at the first sentence boundary instead
+        # of end-of-generation (paragraph mode deferred ALL synth on a typical
+        # one-paragraph spoken reply — seconds of dead air). Inert if TTS
+        # streaming is globally off.
+        src = mgr.start_external(ctor, chat_name=chat, source_label="phone",
+                                 session_id=sid, tuning=_call_tuning(),
+                                 tts_split="sentence")
+        if src is None:
+            logger.warning("[TWILIO] no conversation slot free — rejecting call")
+            calls.pop(chat, None)
+            session.stop()
+            _call_ended(scope, caller, chat, ephemeral, "busy", 0.0, 0)
+            return
 
-    if _cues_enabled():
-        # Turn cues (v2.9 soundscape): endpoint tick / think pulse / barge ack
-        # via the driver's hooks; the hangup chime rides wait()'s sentinel path.
-        try:
-            src.driver.set_cues(src.play_cue)
-            src.cues_enabled = True
-        except Exception as e:
-            logger.warning(f"[TWILIO] cue wiring failed: {e}")
-
-    if greeting_audio:
-        # Engine-aware greeting: play through the driver so the state machine
-        # holds RESPONDING while it speaks — their voice over it is a clean
-        # barge-in, not a parallel turn (the old direct-to-RTP feed left the
-        # engine IDLE on a hot mic: pickup words started a second turn and she
-        # double-greeted). on_begin records the line in the call's chat before
-        # the first frame plays — she knows what she said on pickup, and a
-        # barged first turn (endpoint >= 700ms later) always sees it in history.
-        def _record_greeting():
+        if _cues_enabled():
+            # Turn cues (v2.9 soundscape): endpoint tick / think pulse / barge ack
+            # via the driver's hooks; the hangup chime rides wait()'s sentinel path.
             try:
-                system.llm_chat.session_manager.append_messages_to_chat(
-                    chat, [{"role": "assistant", "content": greeting}])
+                src.driver.set_cues(src.play_cue)
+                src.cues_enabled = True
             except Exception as e:
-                logger.warning(f"[TWILIO] greeting history write failed: {e}")
-        try:
-            if not src.driver.speak_direct(greeting_audio, on_begin=_record_greeting):
-                logger.info("[TWILIO] greeting skipped — caller was already talking")
-        except Exception as e:
-            logger.warning(f"[TWILIO] greeting playback failed: {e}")
+                logger.warning(f"[TWILIO] cue wiring failed: {e}")
 
-    started = time.time()
-    session.wait_ended()
+        if greeting_audio:
+            # Engine-aware greeting: play through the driver so the state machine
+            # holds RESPONDING while it speaks — their voice over it is a clean
+            # barge-in, not a parallel turn (the old direct-to-RTP feed left the
+            # engine IDLE on a hot mic: pickup words started a second turn and she
+            # double-greeted). on_begin records the line in the call's chat before
+            # the first frame plays — she knows what she said on pickup, and a
+            # barged first turn (endpoint >= 700ms later) always sees it in history.
+            def _record_greeting():
+                try:
+                    system.llm_chat.session_manager.append_messages_to_chat(
+                        chat, [{"role": "assistant", "content": greeting}])
+                except Exception as e:
+                    logger.warning(f"[TWILIO] greeting history write failed: {e}")
+            try:
+                if not src.driver.speak_direct(greeting_audio, on_begin=_record_greeting):
+                    logger.info("[TWILIO] greeting skipped — caller was already talking")
+            except Exception as e:
+                logger.warning(f"[TWILIO] greeting playback failed: {e}")
+
+        started = time.time()
+        session.wait_ended()
+    except Exception as e:
+        logger.error(f"[TWILIO] call handling crashed on '{scope}' (chat={chat}): {e}",
+                     exc_info=True)
+        if mgr is not None:
+            try:
+                mgr.stop_external(sid)
+            except Exception:
+                pass
+        try:
+            session.stop()
+        except Exception:
+            pass
+        calls.pop(chat, None)
+        _call_ended(scope, caller, chat, ephemeral, "error", 0.0, 0)
+        return
     try:
         mgr.stop_external(sid)
     except Exception as e:
@@ -635,8 +662,18 @@ def _report_back(system, origin_chat, report):
             "tts_enabled": False, "browser_tts": False,
             "trigger_config": {"chat_from_payload": True},
         }
-        threading.Thread(target=lambda: executor.run(task), daemon=True,
-                         name="twilio-report").start()
+        def _run():
+            # A raise INSIDE executor.run() would otherwise die in this thread
+            # with the transcript unwritten (the executor persists the turn only
+            # on success) — the "durable record" would silently evaporate on any
+            # LLM hiccup. Fall back to the plain write so the outcome survives.
+            try:
+                executor.run(task)
+            except Exception as e:
+                logger.warning(f"[TWILIO] report-back turn errored ({e}); "
+                               "writing plain record instead")
+                _fallback()
+        threading.Thread(target=_run, daemon=True, name="twilio-report").start()
     except Exception as e:
         logger.warning(f"[TWILIO] report-back turn failed ({e}); falling back to plain write")
         _fallback()

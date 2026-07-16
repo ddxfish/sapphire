@@ -75,13 +75,30 @@ def _norm_key(s):
     return "".join(_NUM_WORDS.get(w, w) for w in s.split())
 
 
+def _split_key(s):
+    """Normalized key → (alpha_part, digit_part). Spoken-digit folding already
+    turned 'three' into '3' in _norm_key, so the digit run is stable across STT."""
+    n = _norm_key(s)
+    return ("".join(c for c in n if not c.isdigit()),
+            "".join(c for c in n if c.isdigit()))
+
+
 def _key_matches(spoken, stored):
+    """Digits are LOAD-BEARING (exact match); the word part stays fuzzy for VOIP
+    transcription noise. This kills the old hole where fuzzy-0.8 on the whole
+    string made the number decorative ('alligator3' matched a bare 'alligator'
+    at 0.95). A word+number key now needs the right word AND the exact number."""
     if not stored:
         return False
-    a, b = _norm_key(spoken), _norm_key(stored)
-    if not a:
+    sa, sd = _split_key(spoken)
+    ta, td = _split_key(stored)
+    if not (sa or sd):
         return False
-    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+    if sd != td:                    # numeric part must match exactly
+        return False
+    if not ta:                      # digit-only key — exact match already proven
+        return True
+    return difflib.SequenceMatcher(None, sa, ta).ratio() >= 0.85
 
 
 def _elevate(key, toolset=None):
