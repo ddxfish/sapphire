@@ -15,6 +15,10 @@ Security posture:
   oracle). Guessed keys are never logged.
 - Key match is fuzzy (VOIP transcription: normalize case/punctuation, spoken
   digits) but rate-limited: 3 attempts per call, then dead until hangup.
+- The account's elevate_toolset is a LOCK, not a suggestion: when set, the key
+  unlocks that toolset and nothing else — a caller-named toolset is overridden
+  (the owner decided the destination in config, not mid-call over a noisy
+  line). Only with no lock configured does the spoken toolset name count.
 - Elevation dies with the call: the daemon restores the chat's pre-call
   toolset at hangup (elevated_from on the live-call record).
 """
@@ -83,6 +87,18 @@ def _split_key(s):
             "".join(c for c in n if c.isdigit()))
 
 
+def _resolve_target(named, locked):
+    """Pick the elevation target. The owner-configured toolset (the lock) always
+    wins; a caller-named toolset only counts when no lock is set. Returns
+    (target, overrode) — overrode True when the caller named something else and
+    the lock overrode it (the reply says so; post-key honesty is fine)."""
+    named = (named or "").strip()
+    locked = (locked or "").strip()
+    if locked:
+        return locked, bool(named and named.lower() != locked.lower())
+    return named, False
+
+
 def _key_matches(spoken, stored):
     """Digits are LOAD-BEARING (exact match); the word part stays fuzzy for VOIP
     transcription noise. This kills the old hole where fuzzy-0.8 on the whole
@@ -127,7 +143,7 @@ def _elevate(key, toolset=None):
         return _REFUSAL, False
 
     # Key accepted — the caller is the owner now; errors past here can be honest.
-    target = (toolset or "").strip() or (acct.get("elevate_toolset") or "").strip()
+    target, overrode = _resolve_target(toolset, acct.get("elevate_toolset"))
     if not target:
         return "The key matched, but no default toolset is configured for this number and none was named.", False
     from core.toolsets import toolset_manager
@@ -147,8 +163,11 @@ def _elevate(key, toolset=None):
         return "The key matched, but the switch failed — check the logs.", False
     logger.info(f"[TWILIO] call chat '{chat}' elevated to toolset '{target}' "
                 f"(was '{prior}') by passphrase on '{call.get('scope')}'")
-    return (f"Elevated — toolset '{target}' is active from your next message. "
-            "It lasts until this call ends."), True
+    msg = (f"Elevated — toolset '{target}' is active from your next message. "
+           "It lasts until this call ends.")
+    if overrode:
+        msg += f" (This number is locked to '{target}'.)"
+    return msg, True
 
 
 def execute(function_name, arguments, config):

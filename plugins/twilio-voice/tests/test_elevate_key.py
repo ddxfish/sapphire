@@ -58,3 +58,25 @@ def test_empty_and_missing():
 def test_digit_only_key_needs_exact_digits():
     assert el._key_matches("one two three", "123") is True
     assert el._key_matches("one two four", "123") is False
+
+
+# ── toolset lock (2026-07-16): configured elevate_toolset always wins ─────────
+def test_lock_wins_when_nothing_named():
+    assert el._resolve_target(None, "sapphire") == ("sapphire", False)
+
+
+def test_lock_overrides_named_toolset():
+    # Caller asks for 'all' on a locked number → lock wins, reply notes it.
+    assert el._resolve_target("all", "sapphire") == ("sapphire", True)
+
+
+def test_lock_matching_name_is_not_an_override():
+    assert el._resolve_target("Sapphire", "sapphire") == ("sapphire", False)
+
+
+def test_no_lock_uses_named_toolset():
+    assert el._resolve_target("limited", "") == ("limited", False)
+
+
+def test_no_lock_nothing_named_is_empty():
+    assert el._resolve_target("", None) == ("", False)

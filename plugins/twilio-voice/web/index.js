@@ -158,7 +158,7 @@ function renderNumberEditor(body, scope, item, helpers) {
                     ${s.elevate_configured ? '✓ Stored' : 'Not set'}
                 </span>
             </div>
-            <input type="text" id="twv-elevate-toolset" value="${s.elevate_toolset || ''}" placeholder="default toolset to unlock (e.g. sapphire)" style="margin-top:8px">
+            <input type="text" id="twv-elevate-toolset" value="${s.elevate_toolset || ''}" placeholder="toolset this key unlocks — locks elevation to it (e.g. sapphire)" style="margin-top:8px">
             <div class="am-hint">Speak this on a call to unlock a toolset ("switch toolset, the key is alligator three"). Use a word + a number (e.g. "alligator37") — the word is fuzzy-matched for voice transcription but the number must match exactly, which is what makes it hard to guess. 3 tries per call; elevation ends at hangup. Encrypted on disk. Enter a single dash (-) to remove. Blank = feature off.</div>
         </div>
         <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">

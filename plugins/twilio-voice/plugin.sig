@@ -12,12 +12,12 @@
     "sip_endpoint.py": "sha256:b7d50a3bca6e51c55c27ba3d6be05bd75ef348be72f1516f7cb5e5952d112ba5",
     "tests/conftest.py": "sha256:f8ed516b8df922ab32ea901437920e901ff3d61917ff8287f9217893da2bebf0",
     "tests/test_codec.py": "sha256:1b04054d68a51ee3fa3d4281423972a50617c923942d61ee987a4001726d874f",
-    "tests/test_elevate_key.py": "sha256:1c5817caf4184c97c2b854e56845a95f7031bab86d3b4ee1787d37e077c4b99d",
+    "tests/test_elevate_key.py": "sha256:93078e2b255d9f97500247c21f5e11d8ebab2272263c3dd3ca2747bac8a01261",
     "tests/test_inbound_isolation.py": "sha256:a7ccc0cfc050f386eeab5c2b7b3ab9975d10f9d355d48c34f0758ac3b82dbb18",
-    "tools/elevate_tool.py": "sha256:a0c1479dc65306af67c11860c0b9dced0c00478bff124034554b1016fd8fd6b9",
+    "tools/elevate_tool.py": "sha256:894af814c2d175d4e367988bfb6d2c1a8cb23b6438c386c44e477098f9664937",
     "tools/phone_tool.py": "sha256:f09d4f4af6ce587e74c80ccc11fcdaa7ebe6311fb32f80bdc0f50cb57bf825e0",
     "twilio_source.py": "sha256:7a9a0b6d7c8589a18011b2ccd130275a03c090a70065a3e5ac6f2337666db65d",
-    "web/index.js": "sha256:3a7a6462b37b43c999eb6edb214717996033cf43bfa4c18fc0ee9590715b4389"
+    "web/index.js": "sha256:a758ec0bed0b79f0ac89a52d58068b431c308a47d2edc320de28fbbc542a97a7"
   },
-  "signature": "gexKFAmGq7OrLcvZ+XJni8hLUDMtmIr2G4mc0MQdlfW037ik9mYX7dFPayTCU8fGnbKFOcHvAWMR4feMyx5JCA=="
+  "signature": "VY//2CemH/nsIxdDk1aKpbaCgdf5ptazNc5UK2bhcx6TKeX0eRIUybIxhKHfGpfhM7hx2CamB108MNe6w1dtDQ=="
 }
