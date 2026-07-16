@@ -108,13 +108,51 @@ async function renderSheet() {
             <button class="mind-btn" id="pal-self-addbox">+ Add box</button>
             ${transferButtons()}
         </div>
-        <div id="pal-ledger"></div>
+        <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+            <!-- flex-basis 0 = columns size by RATIO, not content — long ledger
+                 lines wrap (overflow-wrap inherits) instead of stealing width -->
+            <div id="pal-ledger" style="flex:3 1 0;min-width:340px;overflow-wrap:anywhere"></div>
+            <div id="pal-upcoming" style="flex:2 1 0;min-width:280px;overflow-wrap:anywhere">${upcomingCard(data.dashboard)}</div>
+        </div>
     `;
     bindCards(el);
     bindLibrarian(el);
     bindTransfer(el, 'self', () => scope, ui, renderSheet);
     renderLedger(el);
 }
+
+// ─── Upcoming Events — bottom-right, beside the Ledger ──────────────────────
+// A read-only view over meta.event_dates: the regex floor stamps at save
+// time, so a dated memory lands here the moment it's created (SSE re-renders
+// the sheet). Rides the sheet fetch (dashboard.upcoming) — no extra request.
+
+function fmtEventDate(d) {
+    const dt = new Date(d.length > 10 ? d : d + 'T12:00');   // noon guards TZ backslide
+    if (isNaN(dt)) return d;
+    const opts = { weekday: 'short', month: 'short', day: 'numeric' };
+    if (dt.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    const day = dt.toLocaleDateString(undefined, opts);
+    return d.length > 10 ? `${day} · ${d.slice(11)}` : day;
+}
+
+function upcomingCard(dash) {
+    const items = dash?.upcoming || [];
+    const rows = items.map(u => `
+        <div class="palace-ledger-row" title="${escAttr(`[${u.id}] ${u.preview}`)}">
+            <span class="palace-ledger-ts">${escHtml(fmtEventDate(u.date))}</span>
+            <span class="palace-ledger-sum">${escHtml(u.preview)}</span>
+        </div>`).join('');
+    return `
+        <div class="mind-mem-card palace-ledger">
+            <div class="palace-self-card-head">
+                <span class="palace-self-title">\u{1F5D3} Upcoming Events</span>
+                <span class="palace-self-hint">${items.length ? `next ${items.length}` : ''}</span>
+            </div>
+            <div class="palace-self-hint">Dates her memories point to — stamped the moment a memory is saved.</div>
+            ${rows || '<div class="mind-empty">Nothing on the calendar — mention a date in chat and it lands here.</div>'}
+        </div>`;
+}
+
 
 // ─── The Ledger (v1) — append-only change stream, bottom of the sheet ───────
 // Collapsed by default: header counts + the last 3 lines. Expanded: the full
@@ -204,8 +242,6 @@ function dashboardCard(d) {
                 ${stat(d.favorites, 'favorites')}
             </div>
             ${d.most_woven.length ? `<div class="palace-dash-woven">Most woven: ${d.most_woven.map(w => `<span class="palace-pill">${escHtml(w.name)} <b>${w.count}</b></span>`).join('')}</div>` : ''}
-            ${(d.upcoming || []).length ? `<div class="palace-dash-woven">\u{1F5D3} Upcoming: ${d.upcoming.map(u =>
-                `<span class="palace-pill" title="${escAttr(u.preview)}">${escHtml(u.date.length > 10 ? u.date.slice(5, 10) + ' ' + u.date.slice(11) : u.date.slice(5))} <b>${escHtml(u.preview.slice(0, 28))}${u.preview.length > 28 ? '…' : ''}</b></span>`).join('')}</div>` : ''}
             ${d.since ? `<div class="palace-dash-since">Mind since ${escHtml(d.since)}</div>` : ''}
             <div class="palace-librarian-row">
                 <span class="palace-lib-title">\u{1F9F9} Librarian</span>

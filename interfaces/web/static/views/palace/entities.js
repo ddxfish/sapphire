@@ -233,7 +233,8 @@ async function showEntityModal(eid) {
     overlay.innerHTML = `
         <div class="pr-modal palace-ent-modal">
             <div class="pr-modal-header">
-                <h3>${escHtml(ent.name)}</h3>
+                <h3 id="pal-ent-title">${escHtml(ent.name)}</h3>
+                <button class="mind-btn-sm" id="pal-ent-rename" title="Rename — commits with Save below">✏️</button>
                 <select id="pal-ent-kind" class="palace-select" title="What kind of entity is this?">
                     <option value="" ${!ent.kind ? 'selected' : ''}>unsorted</option>
                     ${TPL_LIST.map(t => `<option value="${t.kind}" ${ent.kind === t.kind ? 'selected' : ''}>${t.icon} ${escHtml(t.label)}</option>`).join('')}
@@ -306,6 +307,23 @@ async function showEntityModal(eid) {
         } catch (err) { ui.showToast(`Delete failed: ${err.message}`, 'error'); }
     });
 
+    // Pencil → the title swaps to an input; the rename commits with the
+    // footer Save like everything else (one-Save ruling, 2026-07-12).
+    overlay.querySelector('#pal-ent-rename').addEventListener('click', () => {
+        const h = overlay.querySelector('#pal-ent-title');
+        if (!h) return;   // already editing
+        h.outerHTML = `<input type="text" id="pal-ent-name-edit" maxlength="80"
+            value="${escAttr(ent.name)}"
+            style="flex:1;min-width:140px;font-size:1.05em;font-weight:600">`;
+        overlay.querySelector('#pal-ent-rename').hidden = true;
+        overlay.querySelector('#pal-ent-name-edit').focus();
+    });
+    const pendingName = () => {
+        const inp = overlay.querySelector('#pal-ent-name-edit');
+        const v = inp ? inp.value.trim() : '';
+        return (v && v !== ent.name) ? v : null;
+    };
+
     // One deferred save for kind + headline + fields (footer Save commits all).
     const kindSel = overlay.querySelector('#pal-ent-kind');
     const initialFields = JSON.stringify(collectFields(overlay));
@@ -323,6 +341,8 @@ async function showEntityModal(eid) {
     // any pending new fact, in one click.
     overlay.querySelector('#pal-ent-save').addEventListener('click', async () => {
         const body = {};
+        const newName = pendingName();
+        if (newName) body.name = newName;
         if ((ent.kind || '') !== kindSel.value) body.kind = kindSel.value;
         const hl = overlay.querySelector('#pal-ent-headline').value.trim();
         if (hl !== (headline?.content || '').trim()) body.headline = hl;
@@ -337,8 +357,11 @@ async function showEntityModal(eid) {
         try {
             if (Object.keys(body).length) await palaceSend(`entities/${eid}`, 'PUT', body);
             if (factText) {
+                // entity by NAME — after a rename the old name would mint a
+                // fresh entity, so the fact follows the new name.
                 await palaceSend('chunks', 'POST', {
-                    content: factText, scope: ent.scope, layer: 'entities', entity: ent.name,
+                    content: factText, scope: ent.scope, layer: 'entities',
+                    entity: newName || ent.name,
                 });
             }
             ui.showToast('Saved', 'success');
