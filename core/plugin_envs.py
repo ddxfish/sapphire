@@ -226,8 +226,15 @@ def _build_worker(plugin_name: str, env_spec: dict, conda: str, on_done):
         _set_build(plugin_name, step=step_label)
         log_fh.write(f"\n=== {step_label}: {' '.join(cmd)} ===\n")
         log_fh.flush()
+        run_kwargs = {}
+        if os.name == "posix":
+            # Die with Sapphire: a restart mid-build otherwise orphans the
+            # conda/pip child for up to CONDA_TIMEOUT of CPU and disk churn.
+            from core.process_manager import _make_child_die_with_parent
+            run_kwargs["preexec_fn"] = _make_child_die_with_parent
         result = subprocess.run(
             cmd, stdout=log_fh, stderr=subprocess.STDOUT, timeout=timeout,
+            **run_kwargs,
         )
         if result.returncode != 0:
             raise RuntimeError(f"{step_label} failed (exit {result.returncode})")

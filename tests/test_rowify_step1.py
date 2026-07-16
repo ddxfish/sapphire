@@ -165,6 +165,46 @@ class TestRowsReadPath:
         assert mgr.set_active_chat("bigchat")
         assert [m["content"] for m in mgr.get_messages()] == ["row msg 2", "row msg 3"]
 
+    def test_append_after_capped_load_lands_at_store_tail(self, chat_env, tmp_path, monkeypatch):
+        """[REGRESSION_GUARD] Crown-jewel gap (scout O4): every capped-load
+        test was READ-only. Writes depend on the offset watermark
+        (offset = total - loaded); a broken offset passes all read tests and
+        silently eats the oldest history of any >cap chat."""
+        from core.chat.history import ChatSessionManager
+        monkeypatch.setattr(ChatSessionManager, "_ROWS_LOAD_CAP", 2)
+        mgr = chat_env()
+        db = str(tmp_path / "sapphire_history.db")
+        five = [{"role": "user", "content": f"old {i}"} for i in range(1, 6)]
+        _insert_rows_chat(db, "bigchat", five)
+
+        assert mgr.set_active_chat("bigchat")   # newest 2 in memory, offset=3
+        mgr.add_user_message("fresh")
+
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT seq, message_json FROM chat_messages "
+                            "WHERE chat_name='bigchat' ORDER BY seq").fetchall()
+        conn.close()
+        assert [r["seq"] for r in rows] == [0, 1, 2, 3, 4, 5]  # tail, not colliding at 2
+        assert json.loads(rows[-1]["message_json"])["content"] == "fresh"
+        assert len(mgr.export_chat("bigchat")["messages"]) == 6  # old head intact
+
+    def test_mutation_resync_after_capped_load_keeps_below_offset_rows(
+            self, chat_env, tmp_path, monkeypatch):
+        """Companion to the append pin: a shrink (trim/remove) triggers the
+        WINDOW resync — DELETE seq >= offset must spare rows BELOW the offset."""
+        from core.chat.history import ChatSessionManager
+        monkeypatch.setattr(ChatSessionManager, "_ROWS_LOAD_CAP", 2)
+        mgr = chat_env()
+        five = [{"role": "user", "content": f"old {i}"} for i in range(1, 6)]
+        _insert_rows_chat(str(tmp_path / "sapphire_history.db"), "bigchat", five)
+
+        assert mgr.set_active_chat("bigchat")
+        assert mgr.remove_last_messages(1)      # shrink → full window resync
+
+        out = [m["content"] for m in mgr.export_chat("bigchat")["messages"]]
+        assert out == ["old 1", "old 2", "old 3", "old 4"]  # below-offset rows survived
+
     def test_delete_chat_sweeps_chat_messages(self, chat_env, tmp_path):
         mgr = chat_env()
         db = str(tmp_path / "sapphire_history.db")

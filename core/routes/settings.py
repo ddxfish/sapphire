@@ -979,19 +979,20 @@ async def add_custom_provider(request: Request, _=Depends(require_login)):
     if name in custom:
         raise HTTPException(status_code=400, detail=f"Provider '{name}' already exists")
 
-    # Route API key to credentials
-    api_key = data.pop('api_key', None)
-    if api_key and api_key.strip():
-        from core.credentials_manager import credentials
-        credentials.set_llm_api_key(name, api_key.strip())
-
-    # Build config
+    # Validate BEFORE storing the API key — the old order persisted the key
+    # first, so a 400 on template/base_url left an orphaned credential entry.
     template = data.get('template', 'openai')
     if template not in provider_registry._classes:
         raise HTTPException(status_code=400, detail=f"Unknown provider template '{template}'")
     base_url = (data.get('base_url') or '').strip()
     if not base_url:
         raise HTTPException(status_code=400, detail="A base URL is required for a custom provider")
+
+    # Route API key to credentials
+    api_key = data.pop('api_key', None)
+    if api_key and api_key.strip():
+        from core.credentials_manager import credentials
+        credentials.set_llm_api_key(name, api_key.strip())
     provider_config = {
         'template': template,
         'display_name': data.get('display_name', name),

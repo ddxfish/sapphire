@@ -141,7 +141,15 @@ class VoiceChatSystem:
                 if isinstance(_ess, str) and _ess in _loaded_groups:
                     continue  # An alternate in the same group carries the load
                 self._missing_essential_plugins.append(_name)
-                reason = _info.get("verify_msg") or ("disabled" if not _info.get("enabled") else "load failed")
+                # verify_msg is a STATUS, not a failure: a disabled plugin with
+                # a good signature carries verify_msg="verified" — printing that
+                # as the reason sent debugging the wrong way (2026-07-16).
+                if not _info.get("enabled"):
+                    reason = "disabled"
+                elif _info.get("verify_msg") and _info.get("verify_msg") != "verified":
+                    reason = _info.get("verify_msg")
+                else:
+                    reason = "load failed"
                 logger.critical(
                     f"ESSENTIAL PLUGIN NOT LOADED: '{_name}' — reason: {reason}. "
                     f"Sapphire is running in degraded mode. Fix: re-sign the plugin "

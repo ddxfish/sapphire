@@ -577,7 +577,10 @@ function _bindProviderForm(root, prefix, ctx, key = null, presets = {}, config =
         // Add → POST
         const name = g('name')?.value?.trim();
         if (!name) { setStatus('Name required', 'var(--error)'); return; }
-        if (!common.base_url && selectedTemplate !== 'anthropic') { setStatus('URL required', 'var(--error)'); return; }
+        // No anthropic exception: the backend requires base_url for ALL custom
+        // providers (anthropic_compat genuinely raises without one) — skipping
+        // the check here just moved the failure server-side after key storage.
+        if (!common.base_url) { setStatus('URL required', 'var(--error)'); return; }
 
         const body = { ...common, name, display_name: name, template: selectedTemplate };
         if (Object.keys(adv.generation_params).length) body.generation_params = adv.generation_params;
