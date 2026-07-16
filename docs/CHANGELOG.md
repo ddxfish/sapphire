@@ -1,9 +1,12 @@
-# 2.8.7 - Plugin prompts
+# 2.8.7 - Plugin prompts + Twilio
 - Plugins can hot-load prompt packs
+- Twilio respects engine at first message, select model
+- switch_model and switch_toolset in Settings > Tools
+- Twilio has elevate_toolset with password
 # 2.8.6 - Plugins and daemons
 - Daemon > Filters changed to dropdowns instead of JSON
 - Plugins now have subprocess officially, and plugins can make their own conda
-- Plugin events are now settings, not hard coded files
+- Plugin events (cron) are now settings, not hard coded files
 - Added core registry for memory layers
 - Plugin Settings has tabs now
 - Hidden tools for memory librarian and internal use
