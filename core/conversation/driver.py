@@ -64,10 +64,12 @@ def match_start_word(text, phrases_csv, threshold=0.7):
 class ConversationDriver:
     def __init__(self, system, transcribe_fn=None, sink_factory=None,
                  sample_rate=16000, start_word="", start_word_fuzzy=0.7,
-                 chat_name=None, **engine_kw):
+                 chat_name=None, tts_split=None, **engine_kw):
         self.system = system
         self.sample_rate = sample_rate
         self._chat_name = chat_name     # None = default chat (local/browser); set for phone calls
+        self._tts_split = (tts_split or "").strip().lower() or None   # per-surface pump split mode
+        self._cue_fn = None             # optional turn-cue player (v2.9 soundscape)
         self._transcribe_fn = transcribe_fn or self._whisper_transcribe
         self._sink_factory = sink_factory          # injectable; default = PumpkinChunker
         self._sink = None
@@ -93,6 +95,21 @@ class ConversationDriver:
         both directions), so the manager wires it here instead of building a PumpkinChunker."""
         self._sink = sink
 
+    def set_cues(self, fn):
+        """Optional turn-cue player: fn(name) with name in {'think','barge'}.
+        think = still working (fires ~1/s from capture until her first audio),
+        barge = user interrupted and the floor is theirs. Wired per-surface
+        (phone today; conversation/wakeword modes join in the v2.9 soundscape)."""
+        self._cue_fn = fn
+
+    def _cue(self, name):
+        if self._cue_fn is None:
+            return
+        try:
+            self._cue_fn(name)
+        except Exception as e:
+            logger.debug(f"[CONV] cue '{name}' failed: {e}")
+
     # ── engine callbacks ────────────────────────────────────────────────────
     def _on_turn(self, pcm):
         self._spawn(self._run_turn, pcm)           # non-blocking: STT/LLM/TTS off the audio path
@@ -112,10 +129,21 @@ class ConversationDriver:
                 sink.stop()                        # cut local audio now
             except Exception as e:
                 logger.warning(f"[CONV] barge-in sink.stop failed: {e}")
+        self._cue("barge")                         # floor's yours — she heard you
 
     # ── the streaming turn ──────────────────────────────────────────────────
     def _run_turn(self, pcm):
         message_id = uuid.uuid4().hex
+        # Turn cues: a soft think-pulse every second until her audio starts
+        # flowing — fills the STT+LLM dead air that reads as a hung line on a
+        # phone call. (No capture-tick: it sat too close to the first pulse to
+        # read as a separate signal — Krem's live-call verdict 2026-07-15.)
+        pulse_stop = threading.Event()
+        if self._cue_fn is not None:
+            def _pulse():
+                while not pulse_stop.wait(1.0):
+                    self._cue("think")
+            threading.Thread(target=_pulse, daemon=True, name="conv-think-pulse").start()
         try:
             text = self._transcribe_fn(pcm)
             if not (text and text.strip()):
@@ -146,6 +174,11 @@ class ConversationDriver:
                                               "chat": self._chat_name, "foreign": _foreign})
 
             stream, sid, chat = self.system.llm_chat.begin_stream(self._chat_name)
+            if self._tts_split:
+                # Phone surface: force the sentence-split pump so the first
+                # sentence synthesizes while the rest still generates. Inert
+                # when TTS streaming is globally off (pump stays disabled).
+                stream.tts_split_override = self._tts_split
             try:
                 armed = False    # barge-in stays blocked until AUDIO actually flows
                 for event in stream.chat_stream(text):
@@ -155,6 +188,7 @@ class ConversationDriver:
                     # arming on content let a caller's talk-pause-talk cadence cancel a
                     # reasoning model's turn during its silent thinking phase.
                     if not armed and et == "tts_chunk":
+                        pulse_stop.set()          # her voice takes over from the pulse
                         self.engine.arm_barge()   # she's speaking now — interruptible
                         armed = True
                     if et == "content":
@@ -175,6 +209,7 @@ class ConversationDriver:
         except Exception as e:
             logger.error(f"[CONV] streaming turn failed: {e}")
         finally:
+            pulse_stop.set()
             self._active_sink = None
             self.engine.turn_finished()            # no-op if a barge-in already moved us on
 

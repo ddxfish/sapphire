@@ -205,8 +205,22 @@ async function _loadEventSources(modal, initialFilter) {
     const select = modal.querySelector('#ed-event-source');
     if (!select) return;
 
+    // Seed SYNCHRONOUSLY before the fetch: Save reads the source select and
+    // the filter rows directly, so a save landing while the fetch is in
+    // flight was silently wiping both (saved filter -> null, source -> '').
+    // Free-text rows now; upgraded to dropdowns when sources arrive.
+    const savedSource = select.dataset.currentValue;
+    if (savedSource && !Array.from(select.options).some(o => o.value === savedSource)) {
+        const opt = document.createElement('option');
+        opt.value = savedSource;
+        opt.textContent = savedSource;
+        opt.selected = true;
+        select.appendChild(opt);
+    }
+    _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
+
     try {
-        const res = await fetch('/api/events/sources');
+        const res = await fetch('/api/events/sources', { signal: AbortSignal.timeout(10000) });
         if (!res.ok) throw new Error('Failed to fetch event sources');
         const data = await res.json();
         _sourcesCache = data.sources || [];
@@ -215,8 +229,7 @@ async function _loadEventSources(modal, initialFilter) {
 
         if (_sourcesCache.length === 0) {
             select.innerHTML += '<option value="" disabled>No daemon plugins loaded</option>';
-            _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
-            return;
+            return;   // rows already seeded above — don't clobber in-flight edits
         }
 
         // Group by plugin
@@ -242,13 +255,25 @@ async function _loadEventSources(modal, initialFilter) {
         const current = select.dataset.currentValue;
         if (current) select.value = current;
 
-        // Build filter rows + task fields for pre-selected source
-        _buildFilterRows(modal, '#ed-filter-rows', initialFilter, _fieldsFor(select.value));
+        // Upgrade the seeded rows to dropdowns for the pre-selected source.
+        // Prefer what's live in the DOM — the user may have edited rows
+        // while the fetch was in flight.
+        const live = _readFilterRows(modal, '#ed-filter-rows');
+        _buildFilterRows(modal, '#ed-filter-rows',
+                         Object.keys(live).length ? live : initialFilter,
+                         _fieldsFor(select.value));
         _renderTaskFields(modal);
     } catch {
         select.innerHTML = '<option value="">Select event source...</option><option value="" disabled>Could not load sources</option>';
-        // Still show the saved filter so an edit+save can't silently wipe it
-        _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
+        if (savedSource) {
+            const opt = document.createElement('option');
+            opt.value = savedSource;
+            opt.textContent = savedSource;
+            opt.selected = true;
+            select.appendChild(opt);
+        }
+        // Rows were seeded synchronously above — leave them alone so an
+        // edit+save during/after a failed fetch can't silently wipe them.
     }
 }
 

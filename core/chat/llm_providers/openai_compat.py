@@ -15,6 +15,7 @@ This is the default provider and your 99% use case.
 import hashlib
 import json
 import logging
+import threading
 from typing import Dict, Any, List, Optional, Generator
 
 from openai import OpenAI
@@ -22,6 +23,35 @@ from openai import OpenAI
 from .base import BaseProvider, LLMResponse, ToolCall, retry_on_rate_limit, server_answered
 
 logger = logging.getLogger(__name__)
+
+# ── Shared HTTP transport pool ───────────────────────────────────────────────
+# Provider objects are rebuilt every turn (cheap), but the TRANSPORT persists
+# here so the TCP+TLS connection to each endpoint stays warm across turns.
+# Without this, every voice/phone turn paid a fresh DNS+TCP+TLS handshake:
+# each new OpenAI() got its own httpx pool, and httpx's default
+# keepalive_expiry (5s) is shorter than any conversational gap anyway.
+# API keys ride per-request headers, so providers sharing an endpoint can
+# safely share a pool; per-request timeouts still come from each provider's
+# own OpenAI(timeout=...) (explicit timeout wins over the client's). 2026-07-15.
+_HTTP_POOL = {}
+_HTTP_POOL_LOCK = threading.Lock()
+_KEEPALIVE_SECONDS = 120.0
+
+
+def _shared_http_client(base_url):
+    import httpx
+    key = (base_url or "").rstrip("/")
+    with _HTTP_POOL_LOCK:
+        cli = _HTTP_POOL.get(key)
+        if cli is None or cli.is_closed:
+            cli = httpx.Client(
+                limits=httpx.Limits(max_connections=100,
+                                    max_keepalive_connections=20,
+                                    keepalive_expiry=_KEEPALIVE_SECONDS),
+                timeout=httpx.Timeout(600.0, connect=10.0),
+            )
+            _HTTP_POOL[key] = cli
+        return cli
 
 
 class OpenAICompatProvider(BaseProvider):
@@ -39,7 +69,8 @@ class OpenAICompatProvider(BaseProvider):
         self._client = OpenAI(
             base_url=self.base_url,
             api_key=self.api_key,
-            timeout=self.request_timeout
+            timeout=self.request_timeout,
+            http_client=_shared_http_client(self.base_url),
         )
 
         # Fireworks prompt caching: stable session ID for replica affinity
@@ -184,7 +215,8 @@ class OpenAICompatProvider(BaseProvider):
                     test_client = OpenAI(
                         base_url=corrected,
                         api_key=self.api_key,
-                        timeout=self.request_timeout
+                        timeout=self.request_timeout,
+                        http_client=_shared_http_client(corrected),
                     )
                     test_client.models.list(timeout=self.health_check_timeout)
                     logger.info(f"Auto-corrected base_url: {self.base_url} -> {corrected}")

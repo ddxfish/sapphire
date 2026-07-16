@@ -80,8 +80,14 @@ def test_keep_components_skips_unchecked(pm, monkeypatch):
     monkeypatch.setattr(pc, "save_prompt", lambda name, data, allow_overwrite=False: (True, "ok"))
 
     class FakePM:
+        """Mirrors the real PromptManager contract: reads via the merged
+        `.components` property, writes via `._components` (with no packs
+        registered the property returns the private dict directly)."""
         def __init__(self):
-            self.components = {}
+            self._components = {}
+        @property
+        def components(self):
+            return self._components
         def save_components(self):
             pass
     fake = FakePM()

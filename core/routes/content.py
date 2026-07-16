@@ -913,7 +913,11 @@ async def _import_persona_from_bundle(data):
                         existing_piece = prompt_manager.components.get(comp_type, {}).get(key)
                         if existing_piece and not overwrite_prompt:
                             continue
-                        prompt_manager.components.setdefault(comp_type, {})[key] = value
+                        # Write the PRIVATE dict — `.components` is a merged
+                        # COPY when prompt-packs are registered; writing to it
+                        # silently drops every imported piece (see PUT
+                        # /api/prompts/components above for the same rule).
+                        prompt_manager._components.setdefault(comp_type, {})[key] = value
                 prompt_manager.save_components()
 
             # Save prompt

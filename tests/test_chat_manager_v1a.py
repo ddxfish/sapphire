@@ -172,3 +172,120 @@ class TestKnowledgeRenameScope:
         kt = kt_tmp
         assert kt.rename_scope("__rag__:never_existed", "__rag__:x") is True
         assert kt.rename_scope("default", "nope") is False
+
+
+class TestReapSweepsRows:
+    def test_reap_deletes_message_rows_and_watermark(self, chat_env, tmp_path):
+        """[REGRESSION_GUARD] Ephemeral chats are born rows — the reaper must
+        sweep chat_messages + _rows_state like delete_chat does, or the
+        'deleted' conversation resurrects when the same caller's chat name is
+        recreated (bug hunt 2026-07-15 #1)."""
+        mgr = chat_env()
+        mgr.create_chat("eph_call")
+        mgr.append_messages_to_chat("eph_call", [
+            {"role": "user", "content": "old call"}])
+        mgr.set_named_chat_settings("eph_call", {
+            "ephemeral_source": "twilio",
+            "ephemeral_last_call": 1000.0,
+            "ephemeral_ttl_min": 10})
+        mgr._rows_state["eph_call"] = {"offset": 0, "count": 1}
+
+        reaped = mgr.reap_ephemeral_chats(now_epoch=1000.0 + 601)
+        assert "eph_call" in reaped
+        assert raw(tmp_path, "SELECT * FROM chats WHERE name='eph_call'") == []
+        assert raw(tmp_path, "SELECT * FROM chat_messages WHERE chat_name='eph_call'") == []
+        assert "eph_call" not in mgr._rows_state
+
+
+class TestClearNamedChatMessages:
+    def test_clears_rows_chat(self, chat_env, tmp_path):
+        """[REGRESSION_GUARD] clear_named_chat_messages was blob-only — on a
+        rows chat it no-oped and a caller phoning back got the previous call's
+        entire history (bug hunt 2026-07-15 #2)."""
+        mgr = chat_env()
+        mgr.create_chat("callback")
+        mgr.append_messages_to_chat("callback", [
+            {"role": "user", "content": "last call"},
+            {"role": "assistant", "content": "bye"}])
+        mgr._rows_state["callback"] = {"offset": 0, "count": 2}
+
+        assert mgr.clear_named_chat_messages("callback")
+        assert raw(tmp_path, "SELECT * FROM chat_messages WHERE chat_name='callback'") == []
+        assert len(raw(tmp_path, "SELECT * FROM chats WHERE name='callback'")) == 1  # chat survives
+        assert mgr.export_chat("callback")["messages"] == []
+        assert "callback" not in mgr._rows_state
+
+    def test_clears_active_chat_memory_and_next_save_is_clean(self, chat_env):
+        mgr = chat_env()
+        mgr.add_user_message("wipe me")
+        assert mgr.clear_named_chat_messages("default")
+        assert mgr.get_messages() == []
+        mgr.add_user_message("fresh start")  # post-clear save must not resurrect
+        assert [m["content"] for m in mgr.export_chat("default")["messages"]] == ["fresh start"]
+
+    def test_missing_chat_returns_false(self, chat_env):
+        assert not chat_env().clear_named_chat_messages("ghost")
+
+
+class TestForeignAppendHeal:
+    def test_incremental_save_absorbs_background_append(self, chat_env, tmp_path):
+        """[REGRESSION_GUARD] A background append (cron/agent) to a chat with a
+        live rows watermark lands at MAX(seq)+1 without bumping the watermark.
+        The next incremental save must absorb those rows ahead of its unsaved
+        tail — the old code PK-collided at their seqs and, since the in-memory
+        list never shrinks, every later save failed identically: the rest of a
+        live call was lost (bug hunt 2026-07-15 #3)."""
+        mgr = chat_env()
+        mgr.create_chat("callchat")
+        assert mgr.set_active_chat("callchat")
+        mgr.add_user_message("turn one")  # establishes the rows watermark
+
+        # Simulate the override-lane append: rows written behind the watermark
+        # with NO in-memory/watermark sync (direct SQL, like another writer).
+        state = dict(mgr._rows_state["callchat"])
+        conn = sqlite3.connect(str(tmp_path / "sapphire_history.db"))
+        conn.execute(
+            "INSERT INTO chat_messages (chat_name, seq, role, message_json) VALUES (?, ?, ?, ?)",
+            ("callchat", state["offset"] + state["count"], "user",
+             json.dumps({"role": "user", "content": "foreign append"})))
+        conn.commit()
+        conn.close()
+
+        mgr.add_user_message("turn two")  # must heal, not collide
+
+        stored = [m["content"] for m in mgr.export_chat("callchat")["messages"]]
+        assert stored == ["turn one", "foreign append", "turn two"]  # both writers survive, in order
+        assert "foreign append" in [m.get("content") for m in mgr.get_messages()]  # absorbed into memory
+
+
+class TestReplaceMessagesDigest:
+    def test_equal_count_mutation_aborts(self, chat_env, tmp_path):
+        """[REGRESSION_GUARD] expected_count alone is blind to equal-count
+        mutations — an in-place edit during a minutes-long compress was
+        silently reverted by the stale tail (bug hunt 2026-07-15 #10)."""
+        mgr = chat_env()
+        mgr.create_chat("comp")
+        mgr.append_messages_to_chat("comp", [{"role": "user", "content": "original"}])
+        stale_digest = mgr.messages_digest(mgr.export_chat("comp")["messages"])
+
+        # Equal-count content mutation lands mid-job (edit-in-place class)
+        conn = sqlite3.connect(str(tmp_path / "sapphire_history.db"))
+        conn.execute(
+            "UPDATE chat_messages SET message_json = ? WHERE chat_name = 'comp'",
+            (json.dumps({"role": "user", "content": "edited meanwhile"}),))
+        conn.commit()
+        conn.close()
+
+        ok, err = mgr.replace_messages(
+            "comp", [{"role": "user", "content": "summary"}],
+            expected_count=1, expected_digest=stale_digest)
+        assert not ok and "changed" in err.lower()
+        assert mgr.export_chat("comp")["messages"][0]["content"] == "edited meanwhile"  # nothing written
+
+        # Fresh digest passes and the write lands
+        fresh = mgr.messages_digest(mgr.export_chat("comp")["messages"])
+        ok, err = mgr.replace_messages(
+            "comp", [{"role": "user", "content": "summary"}],
+            expected_count=1, expected_digest=fresh)
+        assert ok, err
+        assert mgr.export_chat("comp")["messages"][0]["content"] == "summary"

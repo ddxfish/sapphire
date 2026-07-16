@@ -598,7 +598,11 @@ def _prompt_pieces(args):
         value = args.get('value', '')
         if not key or not value:
             return "Both key and value are required for create.", False
-        comps.setdefault(component, {})[key] = value
+        # Write the PRIVATE dict — `.components` is a merged COPY when plugin
+        # prompt-packs are registered; mutating it is silently lost (same trap
+        # as the web routes, see content.py). Shadowing a pack piece is the
+        # intended edit path (user wins the merge).
+        prompts.prompt_manager._components.setdefault(component, {})[key] = value
         prompts.prompt_manager.save_components()
         publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key})
         return (f"Created {component}/'{key}' in the library. Not active — "
@@ -619,7 +623,15 @@ def _prompt_pieces(args):
         active = active or any(k == key for k, _ in get_transients().get(component, []))
         if active:
             return f"'{key}' is currently active — remove it first, then delete.", False
-        del comps[component][key]
+        # Delete from the PRIVATE dict — pack pieces are read-only (deleting
+        # from the merged copy would claim success while changing nothing).
+        user_comps = prompts.prompt_manager._components
+        if key not in user_comps.get(component, {}):
+            from core import prompt_packs
+            owner = prompt_packs.piece_source(component, key)
+            return (f"'{component}/{key}' is shipped by plugin '{owner or 'a plugin'}' — "
+                    f"read-only. Disable the plugin to remove it.", False)
+        del user_comps[component][key]
         prompts.prompt_manager.save_components()
         publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key, "action": "deleted"})
         return f"Deleted {component}/{key} from the library.", True

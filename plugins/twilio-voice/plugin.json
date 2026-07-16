@@ -10,6 +10,8 @@
   "capabilities": {
     "tools": ["tools/phone_tool.py", "tools/elevate_tool.py"],
     "settings": [
+      {"key": "call_cues", "type": "boolean", "label": "Turn cue sounds on calls", "default": true,
+       "help": "Soft chimes on the line: a gentle 1/s pulse while she's thinking, a quiet ding when you barge in, and a goodbye chime before hangup."},
       {"key": "vad_threshold", "type": "number", "label": "Call VAD speech threshold", "default": 0.6,
        "help": "Phone lines are noisier than a desk mic — 0.6 rejects most line noise. 0 = inherit Settings > Conversation."},
       {"key": "endpoint_silence_ms", "type": "number", "label": "Call end-of-speech silence (ms)", "default": 0,

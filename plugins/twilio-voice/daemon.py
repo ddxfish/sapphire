@@ -382,6 +382,15 @@ def _call_tuning():
     return tuning
 
 
+def _cues_enabled():
+    """Turn-cue sounds on calls (plugin setting, default ON)."""
+    try:
+        s = _plugin_loader.get_plugin_settings("twilio-voice") if _plugin_loader else {}
+        return bool(s.get("call_cues", True))
+    except Exception:
+        return True
+
+
 def _rule_for(scope, caller):
     """The Realtime rule handling this caller on this number, or None.
     Most-specific-wins: a rule whose caller filter matches beats the no-filter
@@ -501,14 +510,28 @@ def _on_call(scope, caller, session):
         src.start()
         return src
 
+    # tts_split='sentence': first audio at the first sentence boundary instead
+    # of end-of-generation (paragraph mode deferred ALL synth on a typical
+    # one-paragraph spoken reply — seconds of dead air). Inert if TTS
+    # streaming is globally off.
     src = mgr.start_external(ctor, chat_name=chat, source_label="phone",
-                             session_id=sid, tuning=_call_tuning())
+                             session_id=sid, tuning=_call_tuning(),
+                             tts_split="sentence")
     if src is None:
         logger.warning("[TWILIO] no conversation slot free — rejecting call")
         calls.pop(chat, None)
         session.stop()
         _call_ended(scope, caller, chat, ephemeral, "busy", 0.0, 0)
         return
+
+    if _cues_enabled():
+        # Turn cues (v2.9 soundscape): endpoint tick / think pulse / barge ack
+        # via the driver's hooks; the hangup chime rides wait()'s sentinel path.
+        try:
+            src.driver.set_cues(src.play_cue)
+            src.cues_enabled = True
+        except Exception as e:
+            logger.warning(f"[TWILIO] cue wiring failed: {e}")
 
     if greeting_audio:
         # Engine-aware greeting: play through the driver so the state machine
@@ -548,9 +571,11 @@ def _on_call(scope, caller, session):
             logger.warning(f"[TWILIO] toolset restore failed: {e}")
     duration = round(time.time() - started, 1)
     if ob and ob["origin_chat"] != chat:
-        # Report back to the chat that placed the call — WITH the transcript, so
-        # the caller-Sapphire actually knows what was said (the side chat is
-        # ephemeral and gets reaped; this copy is the durable record).
+        # Report back to the chat that placed the call — as a TRIGGERED TURN,
+        # not a silent transcript dump: the report lands as a clearly-labeled
+        # user-role message and she responds to it, so the origin chat learns
+        # the outcome the moment the line drops. (The side chat is ephemeral
+        # and gets reaped; this copy is the durable record.)
         try:
             lines = []
             for m in (system.llm_chat.session_manager.read_chat_messages(chat) or []):
@@ -560,11 +585,14 @@ def _on_call(scope, caller, session):
             transcript = "\n".join(lines)
             if len(transcript) > 6000:
                 transcript = "…(earlier trimmed)…\n" + transcript[-6000:]
-            body = (f"\U0001F4DE My call to {ob['to_name']} just ended ({int(duration)}s). "
-                    + (f"Transcript:\n{transcript}" if transcript
-                       else "No words made it into the record."))
-            system.llm_chat.session_manager.append_messages_to_chat(
-                ob["origin_chat"], [{"role": "assistant", "content": body}])
+            report = (
+                f"[Automated phone-call report — this is the phone system, not the "
+                f"user typing. Your outbound call to {ob['to_name']} ended after "
+                f"{int(duration)}s"
+                + (f". The goal was: {ob['goal']}" if (ob.get('goal') or '').strip() else "")
+                + ". Transcript below — acknowledge the outcome for the user.]\n\n"
+                + (transcript or "(no words made it into the record)"))
+            _report_back(system, ob["origin_chat"], report)
         except Exception as e:
             logger.warning(f"[TWILIO] report-back to '{ob['origin_chat']}' failed: {e}")
     _call_ended(scope, caller, chat, ephemeral, "hangup", duration, 0,
@@ -572,6 +600,46 @@ def _on_call(scope, caller, session):
                 origin_chat=(ob or {}).get("origin_chat", ""),
                 goal=(ob or {}).get("goal", ""))
     logger.info(f"[TWILIO] {direction} call with {caller} on '{scope}' ended (chat={chat})")
+
+
+def _report_back(system, origin_chat, report):
+    """Deliver the call report as a real AI turn in the origin chat via the
+    continuity executor (the Discord-inbound template): the report lands as a
+    user-role message, she replies to it, both persist in one append. Voice
+    stays OFF — it's a chat turn. chat_from_payload makes the origin chat
+    answer with its OWN persona/toolset/scopes, as if the report were typed
+    into it. Falls back to a plain user-role history write when the executor
+    is unavailable or the origin chat hosts a live call (A2 write race)."""
+    def _fallback():
+        try:
+            system.llm_chat.session_manager.append_messages_to_chat(
+                origin_chat, [{"role": "user", "content": report}])
+        except Exception as e:
+            logger.warning(f"[TWILIO] report-back fallback write failed: {e}")
+    try:
+        live = set()
+        try:
+            live = system.get_conversation_manager().external_chats()
+        except Exception:
+            pass
+        if origin_chat in live:
+            logger.info(f"[TWILIO] origin chat '{origin_chat}' hosts a live call — "
+                        "plain report write instead of a turn")
+            return _fallback()
+        executor = getattr(getattr(system, "continuity_scheduler", None), "executor", None)
+        if executor is None:
+            return _fallback()
+        task = {
+            "name": "phone-call report", "source": "twilio-voice",
+            "chat_target": origin_chat, "initial_message": report,
+            "tts_enabled": False, "browser_tts": False,
+            "trigger_config": {"chat_from_payload": True},
+        }
+        threading.Thread(target=lambda: executor.run(task), daemon=True,
+                         name="twilio-report").start()
+    except Exception as e:
+        logger.warning(f"[TWILIO] report-back turn failed ({e}); falling back to plain write")
+        _fallback()
 
 
 def _resolve_chat(system, scope, caller, task):

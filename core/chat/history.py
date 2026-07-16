@@ -1335,6 +1335,29 @@ class ChatSessionManager:
             self._rows_state[eff_name] = {"offset": offset, "count": len(msgs)}
             eff_chat._needs_full_resync = False
         elif len(msgs) > state["count"]:
+            # Heal before inserting: a background append (cron/agent →
+            # append_messages_to_chat on a NON-active chat) lands rows at
+            # MAX(seq)+1 without touching this watermark — the active-chat
+            # append path syncs it, the override lane cannot (ContextVar
+            # isolation). Inserting at offset+count would PK-collide with
+            # those rows, and since the in-memory list never shrinks, every
+            # later save of a live override stream would fail identically.
+            # Absorb the foreign rows into the in-memory list ahead of the
+            # unsaved tail instead: both writers survive, in order.
+            expected_next = state["offset"] + state["count"]
+            store_next = conn.execute(
+                "SELECT COALESCE(MAX(seq) + 1, 0) FROM chat_messages "
+                "WHERE chat_name = ?", (eff_name,)).fetchone()[0]
+            if store_next > expected_next:
+                foreign = conn.execute(
+                    "SELECT message_json FROM chat_messages "
+                    "WHERE chat_name = ? AND seq >= ? ORDER BY seq",
+                    (eff_name, expected_next)).fetchall()
+                absorbed = [json.loads(r["message_json"]) for r in foreign]
+                msgs[state["count"]:state["count"]] = absorbed
+                state["count"] += len(absorbed)
+                logger.info(f"Absorbed {len(absorbed)} background-appended "
+                            f"message(s) into '{eff_name}' before save")
             conn.executemany(
                 "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
                 "VALUES (?, ?, ?, ?)",
@@ -1607,8 +1630,20 @@ class ChatSessionManager:
                  END AS n FROM chats WHERE name = ?""", (chat_name,)).fetchone()
         return None if row is None else (row["n"] or 0)
 
+    def messages_digest(self, msgs: List[Dict[str, Any]]) -> str:
+        """Content fingerprint for replace_messages' optimistic concurrency.
+        Count-only checks miss equal-count mutations (in-place edit,
+        remove-last + regenerate) — a compress landing after one silently
+        reverts it with the stale tail. Compare digests of the same
+        export_chat pipeline instead."""
+        import hashlib
+        return hashlib.sha256(
+            json.dumps(msgs, sort_keys=True, ensure_ascii=False, default=str)
+            .encode("utf-8")).hexdigest()
+
     def replace_messages(self, chat_name: str, new_msgs: List[Dict[str, Any]],
-                         expected_count: Optional[int] = None):
+                         expected_count: Optional[int] = None,
+                         expected_digest: Optional[str] = None):
         """Replace a chat's ENTIRE message list (the trim/compress writer).
 
         Returns (ok, error_str). Format-preserving: a rows chat gets a full
@@ -1637,6 +1672,14 @@ class ChatSessionManager:
                         return False, (f"Chat changed during the operation "
                                        f"({expected_count} → {current} messages) "
                                        f"— aborted, nothing was written")
+                if expected_digest is not None:
+                    exp = self.export_chat(chat_name)
+                    if exp is None:
+                        return False, f"Chat '{chat_name}' not found"
+                    if self.messages_digest(exp["messages"]) != expected_digest:
+                        return False, ("Chat changed during the operation "
+                                       "(content differs from when it was read) "
+                                       "— aborted, nothing was written")
                 if chat_name == self.active_chat_name:
                     self.current_chat.messages = new_msgs  # setter flags full resync
                     # Total replacement: the resync must delete from seq 0,

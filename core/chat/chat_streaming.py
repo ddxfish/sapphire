@@ -120,6 +120,10 @@ class StreamingChat:
         tts_pump = StreamingTTSPump(
             system=self.main_chat.system,
             cancel_check=lambda: self.cancel_flag or self.tts_stopped,
+            # Set by the conversation driver for phone calls (sentence-split =
+            # first audio at the first sentence, not end-of-generation). None
+            # everywhere else — global Settings > TTS behavior unchanged.
+            split_override=getattr(self, "tts_split_override", None),
         )
         self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 

@@ -283,11 +283,15 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
                               on_progress=on_progress)
 
     new_msgs = pairs + tail
-    # expected_count: if anyone (heartbeat, daemon, the operator) wrote to
-    # this chat during the minutes of LLM work, abort instead of clobbering
-    # their turns — the job fails with a clear error, the chat keeps them.
-    ok, err = session_manager.replace_messages(chat_name, new_msgs,
-                                               expected_count=len(msgs))
+    # expected_count + expected_digest: if anyone (heartbeat, daemon, the
+    # operator) wrote to this chat during the minutes of LLM work, abort
+    # instead of clobbering their turns — the job fails with a clear error,
+    # the chat keeps them. The digest also catches equal-count mutations
+    # (in-place edit, remove + regenerate) the count check is blind to.
+    ok, err = session_manager.replace_messages(
+        chat_name, new_msgs,
+        expected_count=len(msgs),
+        expected_digest=session_manager.messages_digest(msgs))
     if not ok:
         raise RuntimeError(err)
     session_manager._prune_orphaned_tool_images(chat_name)

@@ -28,6 +28,36 @@ logger = logging.getLogger(__name__)
 
 _ENGINE_FRAME = 512          # silero wants 512-sample 16k frames
 
+# ── Turn cues (v2.9 soundscape, phone surface) ───────────────────────────────
+# Tiny pre-encoded chimes written STRAIGHT to RTP (bypassing the sink, whose
+# barge-in stop flag would swallow them). Encoded once per process.
+_CUE_FILES = {"think": "think_pulse.wav",             # still working (1/s pulse)
+              "barge": "respond_ding.wav",            # you cut in — floor's yours
+              "hangup": "hangup_bye.wav"}             # goodbye chime before BYE
+# (respond_lift retired as barge cue 2026-07-15 — two notes/410ms stomped the
+# caller's first words; the single short ding stays out of their way.)
+_cue_frames = {}
+_cue_lock = threading.Lock()
+
+
+def _frames_for(name):
+    with _cue_lock:
+        if name in _cue_frames:
+            return _cue_frames[name]
+        frames = []
+        try:
+            from pathlib import Path
+            path = Path(__file__).parent / "sounds" / _CUE_FILES[name]
+            data, sr = sf.read(str(path))
+            if data.ndim > 1:
+                data = data.mean(axis=1)
+            pcm16 = (np.clip(data, -1, 1) * 32767).astype(np.int16)
+            frames = engine_to_phone_frames(pcm16, sr)
+        except Exception as e:
+            logger.warning(f"[TWILIO] cue '{name}' load failed: {e}")
+        _cue_frames[name] = frames
+        return frames
+
 
 class TwilioConversationSource:
     def __init__(self, driver, gate, session):
@@ -39,6 +69,15 @@ class TwilioConversationSource:
         self._thread = None
         self._stop_flag = threading.Event()
         self._playing = False
+        self.cues_enabled = False       # daemon wires driver.set_cues + flips this
+
+    def play_cue(self, name):
+        """Play a turn cue on the wire. Direct session.write — cues must survive
+        the sink's post-barge stop flag and never touch engine/turn state."""
+        if not self.session._alive.is_set():
+            return
+        for frame in _frames_for(name):
+            self.session.write(frame)
 
     # ── SOURCE lifecycle (driver re-calls start() each turn to re-arm) ────────
     def start(self):
@@ -136,5 +175,13 @@ class TwilioConversationSource:
         # <<HANG UP>> sentinel: her goodbye has fully drained — end the call now.
         # The io loop sees the session die and sends the (Route-correct) BYE.
         if getattr(self.session, "_hangup_after_drain", False):
+            if self.cues_enabled:
+                frames = _frames_for("hangup")
+                if frames:
+                    # The goodbye chime plays IN FULL before the BYE — pace is
+                    # 20ms/frame, so wait it out plus a small network tail.
+                    for f in frames:
+                        self.session.write(f)
+                    time.sleep(len(frames) * 0.02 + 0.15)
             logger.info("[TWILIO] goodbye drained — hanging up (sentinel)")
             self.session.stop()

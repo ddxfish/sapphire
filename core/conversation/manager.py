@@ -77,11 +77,13 @@ class ConversationManager:
     def active(self):
         return bool(getattr(self.system, "conversation_mode_enabled", False))
 
-    def _build_driver(self, chat_name=None, tuning=None):
+    def _build_driver(self, chat_name=None, tuning=None, tts_split=None):
         """Fresh driver from current settings so tuning applies without restart.
         chat_name targets a specific chat (phone calls); None = default (local/browser).
         `tuning` overrides individual engine knobs per session (a phone profile);
-        falsy/absent values inherit the global Settings > Conversation keys."""
+        falsy/absent values inherit the global Settings > Conversation keys.
+        `tts_split` forces the TTS pump's split mode for this surface (phone =
+        'sentence' so first audio doesn't wait for full generation)."""
         import config
         t = tuning or {}
         kw = {}
@@ -90,6 +92,7 @@ class ConversationManager:
         return ConversationDriver(
             self.system,
             chat_name=chat_name,
+            tts_split=tts_split,
             start_word=str(getattr(config, "CONVERSATION_START_WORD", "")),
             start_word_fuzzy=float(getattr(config, "CONVERSATION_START_WORD_FUZZY", 0.7)),
             endpoint_silence_ms=int(t.get("endpoint_silence_ms") or
@@ -139,7 +142,7 @@ class ConversationManager:
         return src if ok else None
 
     def start_external(self, source_ctor, chat_name=None, source_label="external",
-                       session_id=None, tuning=None):
+                       session_id=None, tuning=None, tts_split=None):
         """Start an external conversation session (a phone call). Each session gets
         its OWN driver + gate + source — N sessions run concurrently up to the slot
         cap (CONVERSATION_EXTERNAL_SLOTS). `source_ctor(driver, gate)` builds a
@@ -172,7 +175,8 @@ class ConversationManager:
                 logger.warning(f"[CONV] start_external({source_label}) refused — "
                                f"chat '{chat_name}' already has a live session")
                 return None
-            driver = self._build_driver(chat_name=chat_name, tuning=tuning)
+            driver = self._build_driver(chat_name=chat_name, tuning=tuning,
+                                        tts_split=tts_split)
             gate = self._build_gate(tuning=tuning)
             try:
                 src = source_ctor(driver, gate)

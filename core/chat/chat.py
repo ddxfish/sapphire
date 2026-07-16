@@ -1094,13 +1094,27 @@ class LLMChat:
                 if not provider:
                     raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
 
-                try:
-                    if provider.health_check():
-                        logger.info(f"Using chat-specific provider '{chat_primary}'" +
-                                   (f" with model '{chat_model}'" if chat_model else ""))
-                        return (chat_primary, provider, chat_model)
-                except Exception as e:
-                    pass  # Fall through to error
+                # Pinned-provider health TTL: this path re-runs EVERY turn, and
+                # the pre-flight models.list round-trip was pure added latency on
+                # phone turns (a pinned provider has no fallback — it just raises).
+                # A pass is trusted for 60s; between checks the completion call
+                # itself is the health signal. 2026-07-15.
+                import time as _time
+                _hc = getattr(self, "_pinned_health_cache", None)
+                if _hc is None:
+                    _hc = self._pinned_health_cache = {}
+                healthy = _time.time() < _hc.get(chat_primary, 0)
+                if not healthy:
+                    try:
+                        healthy = bool(provider.health_check())
+                    except Exception:
+                        healthy = False
+                    if healthy:
+                        _hc[chat_primary] = _time.time() + 60.0
+                if healthy:
+                    logger.info(f"Using chat-specific provider '{chat_primary}'" +
+                               (f" with model '{chat_model}'" if chat_model else ""))
+                    return (chat_primary, provider, chat_model)
 
                 raise ConnectionError(f"Provider '{chat_primary}' failed health check - no fallback for specific provider selection")
             

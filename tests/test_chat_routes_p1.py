@@ -230,6 +230,36 @@ def test_compress_allows_local_provider_for_private_chat(chat_client, monkeypatc
     assert r.status_code == 200, r.text
 
 
+def test_compress_guard_uses_half_history_window(chat_client, monkeypatch):
+    """[REGRESSION_GUARD] LLM_MAX_HISTORY counts single MESSAGES; retention is
+    max_history // 2 user turns (get_messages_for_llm). The compressed-but-
+    invisible guard must reject keep_last_turns at HALF the window — the old
+    full-window compare let keep_last in [half, full) through, and the summary
+    never reached the model (bug hunt 2026-07-15 #9)."""
+    import config
+    from core.chat import compress
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    sm.read_chat_settings.return_value = {}
+    monkeypatch.setattr(config, 'LLM_MAX_HISTORY', 30, raising=False)
+    monkeypatch.setattr(config, 'LLM_CUSTOM_PROVIDERS',
+                        {'localbox': {'enabled': True, 'is_local': True,
+                                      'base_url': 'http://127.0.0.1:1234/v1'}},
+                        raising=False)
+    monkeypatch.setattr(compress, 'start_compress_job', lambda *a, **k: (True, None))
+
+    # 15 == 30 // 2: first invisible value — must be refused
+    r = c.post('/api/chats/trinity/compress', headers={'X-CSRF-Token': csrf},
+               json={'mode': 'whole', 'provider': 'localbox', 'keep_last_turns': 15})
+    assert r.status_code == 400
+    assert 'keep_last_turns' in r.json()['detail']
+
+    # 14: last visible value — must pass the guard and start the job
+    r = c.post('/api/chats/trinity/compress', headers={'X-CSRF-Token': csrf},
+               json={'mode': 'whole', 'provider': 'localbox', 'keep_last_turns': 14})
+    assert r.status_code == 200, r.text
+
+
 # ─── Private chat: persona load preserves the flag ───────────────────────────
 
 def test_persona_load_preserves_private_chat(chat_client, monkeypatch):

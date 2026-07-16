@@ -75,7 +75,8 @@ class StreamingTTSPump:
     """
 
     def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None,
-                 voice_override: Optional[str] = None):
+                 voice_override: Optional[str] = None,
+                 split_override: Optional[str] = None):
         self.system = system
         self.tts = getattr(system, "tts", None)
         self.provider = getattr(self.tts, "_provider", None) if self.tts else None
@@ -101,7 +102,11 @@ class StreamingTTSPump:
         # Split mode + pause overrides — see Settings → TTS → Streaming.
         # 'paragraph' (default) preserves prosody across sentences;
         # 'sentence' lowers latency at the cost of flatter prosody.
-        split_mode = (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower()
+        # split_override: per-pump forcing (phone calls force 'sentence' —
+        # paragraph mode defers ALL synth to end-of-generation on a typical
+        # one-paragraph spoken reply, which is seconds of dead air on a call).
+        split_mode = ((split_override or "").strip().lower()
+                      or (getattr(config, "TTS_STREAMING_SPLIT_MODE", "paragraph") or "paragraph").strip().lower())
         pause_overrides = {
             "sentence":  int(getattr(config, "TTS_STREAMING_PAUSE_SENTENCE_MS", 0) or 0),
             "paragraph": int(getattr(config, "TTS_STREAMING_PAUSE_PARAGRAPH_MS", 80) or 80),

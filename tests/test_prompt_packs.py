@@ -108,6 +108,36 @@ def test_delete_user_shadow_reveals_pack(tmp_path, monkeypatch):
     assert prompt_manager.monoliths["pack_mono"]["content"] == "Pack version"
 
 
+def test_prompt_pieces_tool_writes_user_dict_with_pack_registered(tmp_path, monkeypatch):
+    """[REGRESSION_GUARD] The AI's prompt_pieces create/delete mutated the
+    MERGED `.components` property — a throwaway copy whenever any pack is
+    registered — then saved the untouched private dict: create claimed
+    success while writing nothing (bug hunt 2026-07-15 #4). Must write
+    `_components`, and delete must refuse pack-shipped pieces."""
+    from functions.meta import _prompt_pieces
+    _register()  # pack ships emotions/pack_emotion → .components is a merged copy
+    monkeypatch.setattr(prompt_manager, "USER_DIR", tmp_path)
+    try:
+        msg, ok = _prompt_pieces({"action": "create", "component": "emotions",
+                                  "key": "toolmade", "value": "made by tool"})
+        assert ok, msg
+        assert prompt_manager._components.get("emotions", {}).get("toolmade") == "made by tool"
+
+        msg, ok = _prompt_pieces({"action": "delete", "component": "emotions",
+                                  "key": "toolmade"})
+        assert ok, msg
+        assert "toolmade" not in prompt_manager._components.get("emotions", {})
+
+        # Pack piece: visible in the merged view, refused for delete
+        msg, ok = _prompt_pieces({"action": "delete", "component": "emotions",
+                                  "key": "pack_emotion"})
+        assert not ok
+        assert "read-only" in msg
+        assert "pack_emotion" in prompt_manager.components["emotions"]  # still served
+    finally:
+        prompt_manager._components.get("emotions", {}).pop("toolmade", None)
+
+
 def test_assemble_uses_pack_pieces():
     _register(pieces={
         "components": {
