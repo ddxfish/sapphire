@@ -121,8 +121,16 @@ async def delete_prompt(name: str, request: Request, _=Depends(require_login)):
     if prompts.delete_prompt(name):
         publish(Events.PROMPT_DELETED, {"name": name})
         return {"status": "success", "name": name}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to delete prompt")
+    # delete_prompt returns False for pack-shipped prompts (read-only) and
+    # for unknown names — surface the real reason instead of a generic 500.
+    from core import prompt_packs
+    owner = prompt_packs.get_sources().get(name)
+    if owner:
+        raise HTTPException(status_code=403,
+                            detail=f"'{name}' is shipped by plugin '{owner}' — read-only. "
+                                   f"Disable the plugin to remove it, or save a user prompt "
+                                   f"with the same name to shadow it.")
+    raise HTTPException(status_code=404, detail=f"Prompt '{name}' not found")
 
 
 @router.put("/api/prompts/components/{comp_type}/{key}")

@@ -277,6 +277,7 @@ function openTrimModal(name) {
     });
     const preview = async () => {
         const out = overlay.querySelector('#cm-trim-preview');
+        if (!out) return null;   // modal closed while a debounced preview was pending
         try {
             const r = await api.trimChat(name, { ...vals(), preview: true });
             overlay.querySelector('#cm-trim-shape').textContent =
@@ -431,7 +432,15 @@ function startCompressPoll() {
         }
         clearInterval(_compressPoll);
         _compressPoll = null;
-        if (!s.done) return;
+        if (!s.done) {
+            // Not running AND not done while we were watching a live job:
+            // the job state reset — almost always a server restart mid-job.
+            // Write-last means the chat is untouched; say so instead of
+            // silently never delivering the toast the user is waiting on.
+            ui.showToast('Compress job vanished — the server likely restarted mid-job. '
+                + 'The chat is untouched; re-run the compress.', 'error', 10000);
+            return;
+        }
         if (s.ok) {
             const r = s.result || {};
             ui.showToast(`Compressed ${r.chat}: ${r.messages_before} → ${r.messages_after} messages `

@@ -688,9 +688,17 @@ async def import_history(request: Request, _=Depends(require_login), system=Depe
         raise HTTPException(status_code=400, detail="Invalid messages array")
     try:
         session_manager = system.llm_chat.session_manager
-        session_manager.current_chat.messages = messages
-        session_manager._save_current_chat()
+        # replace_messages instead of raw assignment: gains the streaming
+        # guard (importing over an in-flight generation interleaved/corrupted)
+        # and the full offset reset (a >cap chat kept its old head under raw
+        # assignment — import wasn't actually a full replace).
+        chat_name = session_manager.active_chat_name
+        ok, err = session_manager.replace_messages(chat_name, messages)
+        if not ok:
+            raise HTTPException(status_code=409, detail=err)
         return {"status": "success", "message": f"Imported {len(messages)} messages"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -923,7 +931,7 @@ async def archive_chat(chat_name: str, request: Request, _=Depends(require_login
     data = await request.json()
     archived = bool((data or {}).get('archived', True))
     sm = system.llm_chat.session_manager
-    if not sm.set_named_chat_settings(chat_name, {"archived": archived}):
+    if not sm.set_named_chat_settings(chat_name, {"archived": archived}, touch_updated=False):
         raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
     origin = request.headers.get('X-Session-ID')
     publish(Events.CHAT_ARCHIVED, {"chat_name": chat_name, "archived": archived, "origin": origin})

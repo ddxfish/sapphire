@@ -2513,10 +2513,15 @@ class ChatSessionManager:
             logger.error(f"Failed to update settings: {e}")
             return False
 
-    def set_named_chat_settings(self, chat_name: str, patch: Dict[str, Any]) -> bool:
+    def set_named_chat_settings(self, chat_name: str, patch: Dict[str, Any],
+                                touch_updated: bool = True) -> bool:
         """Merge `patch` into a SPECIFIC (possibly non-active) chat's settings via a
         direct DB write. Lets a realtime daemon (Twilio) configure a call chat it
-        never activates. Mirrors in-memory settings if it IS the active chat."""
+        never activates. Mirrors in-memory settings if it IS the active chat.
+
+        touch_updated=False for pure-metadata patches (archive flag): updated_at
+        feeds the Manager's 'Last active' sort and its 'Older than N days' bulk
+        selector — bumping it for a shade toggle blinds both."""
         self._ensure_db()
         try:
             with self._lock, self._get_connection() as conn:
@@ -2528,8 +2533,12 @@ class ChatSessionManager:
                 except Exception:
                     s = {}
                 s.update(patch)
-                conn.execute("UPDATE chats SET settings = ?, updated_at = ? WHERE name = ?",
-                             (json.dumps(s), datetime.now().isoformat(), chat_name))
+                if touch_updated:
+                    conn.execute("UPDATE chats SET settings = ?, updated_at = ? WHERE name = ?",
+                                 (json.dumps(s), datetime.now().isoformat(), chat_name))
+                else:
+                    conn.execute("UPDATE chats SET settings = ? WHERE name = ?",
+                                 (json.dumps(s), chat_name))
                 conn.commit()
             if chat_name == self.active_chat_name:
                 self.current_settings.update(patch)

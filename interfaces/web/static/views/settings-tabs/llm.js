@@ -182,8 +182,14 @@ export default {
         });
 
         // Drag-drop reorder — the list IS the full fallback order (core + custom)
-        initProviderDragDrop(el.querySelector('#providers-list'), order => {
-            updateFallbackOrder(order);
+        initProviderDragDrop(el.querySelector('#providers-list'), async order => {
+            try {
+                await updateFallbackOrder(order);
+            } catch (e) {
+                // Fire-and-forget left the UI showing an order the disk never
+                // got — surface the failure so the user re-drags.
+                showToast(`Failed to save provider order: ${e.message}`, 'error');
+            }
         });
 
         // Custom provider enable toggle

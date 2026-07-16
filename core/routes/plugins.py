@@ -306,10 +306,21 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
         raise HTTPException(status_code=403, detail=f"Cannot disable locked plugin: {plugin_name}")
 
     # essential: true (boolean, not a group string) = core plugin — hidden
-    # from the manager UI and never toggleable. Group-string essential
+    # from the manager UI. Refuse only the OFF direction: a core plugin that
+    # ended up disabled (e.g. unsigned-policy auto-disable) must stay
+    # re-enable-able or it's UI-unrecoverable. Group-string essential
     # (e.g. "memory" on the memory/mindpalace alternates) stays toggleable.
     if _is_core_essential(plugin_name):
-        raise HTTPException(status_code=403, detail=f"Cannot toggle core plugin: {plugin_name}")
+        currently_on = True  # unknown state → keep the old refuse-everything behavior
+        try:
+            from core.plugin_loader import plugin_loader as _pl_ess
+            _info_ess = _pl_ess.get_plugin_info(plugin_name)
+            if _info_ess is not None:
+                currently_on = bool(_info_ess.get("enabled"))
+        except Exception:
+            pass
+        if currently_on:
+            raise HTTPException(status_code=403, detail=f"Cannot disable core plugin: {plugin_name}")
 
     # Per-plugin lock prevents double-click races
     with _toggle_locks_guard:
@@ -954,6 +965,10 @@ async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
         raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
     if info.get("band") != "user":
         raise HTTPException(status_code=403, detail="Cannot uninstall system plugins")
+    from core import plugin_envs
+    if plugin_envs.build_state(plugin_name).get("state") == "building":
+        raise HTTPException(status_code=409,
+                            detail="Environment build in progress — wait for it to finish before uninstalling")
     try:
         plugin_loader.uninstall_plugin(plugin_name)
         # Sync toolset and notify frontend

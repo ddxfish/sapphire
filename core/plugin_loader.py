@@ -1073,6 +1073,17 @@ class PluginLoader:
         if info.get("loaded"):
             self.unload_plugin(name)
 
+        # Best-effort conda env cleanup in the background — multi-GB envs take
+        # tens of seconds to remove and nothing else will ever reclaim them
+        # once the plugin is gone (the UI's env strip goes with it).
+        if info.get("manifest", {}).get("environment"):
+            try:
+                from core import plugin_envs
+                threading.Thread(target=plugin_envs.remove_env, args=(name,),
+                                 daemon=True, name=f"env-rm-{name}").start()
+            except Exception:
+                pass
+
         # Remove from internal dict
         with self._lock:
             self._plugins.pop(name, None)

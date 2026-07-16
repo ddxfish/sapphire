@@ -167,7 +167,10 @@ def env_status(plugin_name: str, env_spec: dict) -> str:
     if not env_python(plugin_name):
         return "error" if b.get("state") == "error" else "missing"
     if _read_receipt(plugin_name).get("spec_hash") != spec_hash(env_spec):
-        return "stale"
+        # A failed pip step leaves python present but no receipt — that's a
+        # failed BUILD, not an outdated env. Reporting "stale" here hid the
+        # error behind an "Environment outdated / Rebuild" strip forever.
+        return "error" if b.get("state") == "error" else "stale"
     return "ready"
 
 

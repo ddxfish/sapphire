@@ -54,6 +54,25 @@ def test_env_status_building_wins():
             plugin_envs._builds.pop("ghost-plugin", None)
 
 
+def test_env_status_failed_build_is_error_not_stale(monkeypatch):
+    """[REGRESSION_GUARD] conda create ok + pip failed leaves python present
+    with no receipt. That's a failed BUILD — reporting 'stale' rendered
+    'Environment outdated / Rebuild' and hid the error forever (bug hunt
+    2026-07-15 F3#10). Without a this-boot build error it's still 'stale'."""
+    monkeypatch.setattr(plugin_envs, "find_conda", lambda: "/fake/conda")
+    monkeypatch.setattr(plugin_envs, "env_python", lambda name: "/fake/python")
+    monkeypatch.setattr(plugin_envs, "_read_receipt", lambda name: {})
+    with plugin_envs._builds_lock:
+        plugin_envs._builds["ghost-plugin"] = {"state": "error", "error": "pip boom"}
+    try:
+        assert plugin_envs.env_status("ghost-plugin", {"python": "3.11"}) == "error"
+    finally:
+        with plugin_envs._builds_lock:
+            plugin_envs._builds.pop("ghost-plugin", None)
+    # No build record this boot → genuinely outdated, not an error
+    assert plugin_envs.env_status("ghost-plugin", {"python": "3.11"}) == "stale"
+
+
 def test_remove_refused_while_building(monkeypatch):
     monkeypatch.setattr(plugin_envs, "find_conda", lambda: "/fake/conda")
     with plugin_envs._builds_lock:

@@ -227,6 +227,25 @@ class TestClearNamedChatMessages:
         assert not chat_env().clear_named_chat_messages("ghost")
 
 
+class TestArchiveTimestamp:
+    def test_metadata_patch_preserves_updated_at(self, chat_env, tmp_path):
+        """[REGRESSION_GUARD] Archiving bumped updated_at — an idle chat
+        jumped to the top of 'Last active' and dodged the 'Older than N days'
+        bulk selector for another N days (bug hunt 2026-07-15 F2#4)."""
+        mgr = chat_env()
+        mgr.create_chat("dusty")
+        before = raw(tmp_path, "SELECT updated_at FROM chats WHERE name='dusty'")[0]["updated_at"]
+
+        assert mgr.set_named_chat_settings("dusty", {"archived": True}, touch_updated=False)
+        after = raw(tmp_path, "SELECT updated_at FROM chats WHERE name='dusty'")[0]["updated_at"]
+        assert after == before                                    # shade toggle: no bump
+        assert mgr.get_settings_for("dusty")["archived"] is True  # flag still landed
+
+        assert mgr.set_named_chat_settings("dusty", {"prompt": "p2"})
+        bumped = raw(tmp_path, "SELECT updated_at FROM chats WHERE name='dusty'")[0]["updated_at"]
+        assert bumped >= after                                    # default still bumps
+
+
 class TestForeignAppendHeal:
     def test_incremental_save_absorbs_background_append(self, chat_env, tmp_path):
         """[REGRESSION_GUARD] A background append (cron/agent) to a chat with a

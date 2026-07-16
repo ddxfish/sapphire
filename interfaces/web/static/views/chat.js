@@ -218,14 +218,19 @@ export default {
                 await api.updateChatSettings(chatName, { private_chat: goingPrivate });
                 eyeBtn.classList.toggle('private-on', goingPrivate);
                 if (goingPrivate) {
-                    // Warn (don't silently switch) if this chat's model is cloud
+                    // Warn (don't silently switch) if this chat's model is cloud.
+                    // Only claim "local" when the provider actually resolves as
+                    // local — before llmProviders loads (or in auto mode) the
+                    // old toast promised "local only" for a cloud setup.
                     const provider = getVal(container, '#sb-llm-primary') || 'auto';
                     const meta = llmProviders.find(p => p.key === provider);
-                    const isCloud = meta && !meta.is_local;
-                    ui.showToast(isCloud
-                        ? `Private chat ON — but '${provider}' is a cloud model and will refuse. Pick a local model.`
-                        : 'Private chat ON — local models and tools only',
-                        isCloud ? 'error' : 'success');
+                    if (meta && !meta.is_local) {
+                        ui.showToast(`Private chat ON — but '${provider}' is a cloud model and will refuse. Pick a local model.`, 'error');
+                    } else if (meta && meta.is_local) {
+                        ui.showToast('Private chat ON — local models and tools only', 'success');
+                    } else {
+                        ui.showToast('Private chat ON — cloud models and tools will refuse', 'success');
+                    }
                 } else {
                     ui.showToast('Private chat off', 'success');
                 }

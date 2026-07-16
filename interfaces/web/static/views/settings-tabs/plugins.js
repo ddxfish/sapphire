@@ -476,14 +476,30 @@ async function _pollEnvBuild(el, ctx, name) {
     if (envPolling.has(name)) return;
     envPolling.add(name);
     try {
+        let misses = 0;   // consecutive failed status checks
         for (let i = 0; i < 1800; i++) {   // 2s interval, ~1h cap
             await new Promise(r => setTimeout(r, 2000));
             let status;
             try {
                 const res = await fetch(`/api/plugins/${name}/env-status`);
-                if (!res.ok) continue;
+                if (!res.ok) {
+                    // Plugin uninstalled/route gone: don't grind a dead
+                    // endpoint every 2s for an hour with no signal.
+                    if (++misses >= 5) {
+                        ui.showToast(`Lost track of the environment build for ${name} — status endpoint unavailable`, 'error');
+                        return;
+                    }
+                    continue;
+                }
+                misses = 0;
                 status = await res.json();
-            } catch { continue; }
+            } catch {
+                if (++misses >= 5) {
+                    ui.showToast(`Lost track of the environment build for ${name} — status endpoint unreachable`, 'error');
+                    return;
+                }
+                continue;
+            }
 
             const cached = ctx.pluginList?.find(p => p.name === name);
             if (cached) cached.env = status;
@@ -509,6 +525,10 @@ async function _pollEnvBuild(el, ctx, name) {
             }
             return;
         }
+        // Fell out of the loop: still "building" after the ~1h cap — say so
+        // instead of freezing the strip at "Building…" with no explanation.
+        ui.showToast(`Environment build for ${name} is still running after 1h — stopped watching; `
+            + `check the plugin card or user/logs/env-build-${name}.log`, 'error', 0);
     } finally {
         envPolling.delete(name);
     }

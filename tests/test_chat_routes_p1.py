@@ -405,15 +405,15 @@ def test_delete_history_count_zero_returns_400(chat_client):
 
 # ─── 2.28 History import replaces, does not append ───────────────────────────
 
-def test_import_history_replaces_not_appends(chat_client):
-    """[PROACTIVE] POST /api/history/import must ASSIGN the messages list,
-    not extend the existing list. Otherwise importing into a non-empty chat
-    leaves old messages above the imported ones."""
+def test_import_history_routes_through_replace_messages(chat_client):
+    """[REGRESSION_GUARD] Import must go through replace_messages — the old
+    raw current_chat.messages assignment skipped the streaming guard and the
+    capped-load offset reset, so importing over a >cap chat silently kept the
+    old head (bug hunt 2026-07-15 #11). Replace semantics now live in
+    replace_messages itself (pinned by the rowify/manager suites)."""
     c, csrf, mock_system, fm, captured = chat_client
-    existing_chat = MagicMock()
-    existing_chat.messages = [{'role': 'user', 'content': 'old'}]
-    mock_system.llm_chat.session_manager.current_chat = existing_chat
-    mock_system.llm_chat.session_manager._save_current_chat = MagicMock()
+    sm = mock_system.llm_chat.session_manager
+    sm.replace_messages = MagicMock(return_value=(True, ""))
 
     new_msgs = [
         {'role': 'user', 'content': 'new-1'},
@@ -425,9 +425,25 @@ def test_import_history_replaces_not_appends(chat_client):
         json={'messages': new_msgs},
     )
     assert r.status_code == 200
-    # messages was ASSIGNED (not extended) — identity is the new list
-    assert existing_chat.messages == new_msgs
-    assert mock_system.llm_chat.session_manager._save_current_chat.call_count == 1
+    args = sm.replace_messages.call_args[0]
+    assert args[0] == 'trinity'      # active chat
+    assert args[1] == new_msgs       # the full imported list
+
+
+def test_import_history_refused_while_streaming(chat_client):
+    """A stream mid-flight on the active chat must refuse the import (409),
+    not interleave with it."""
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    sm.replace_messages = MagicMock(
+        return_value=(False, "Chat is streaming — try again in a moment"))
+    r = c.post(
+        '/api/history/import',
+        headers={'X-CSRF-Token': csrf},
+        json={'messages': [{'role': 'user', 'content': 'x'}]},
+    )
+    assert r.status_code == 409
+    assert 'streaming' in r.json()['detail'].lower()
 
 
 # ─── 2.29 Import non-list messages returns 400 ───────────────────────────────
