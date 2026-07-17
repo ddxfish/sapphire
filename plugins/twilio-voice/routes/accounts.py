@@ -12,19 +12,7 @@ def list_accounts(credentials=None, **_):
     """GET /api/plugin/twilio-voice/accounts -> {accounts: [...]} (no secrets)."""
     if credentials is None:
         return {"accounts": []}
-    accounts = credentials.list_twilio_accounts()
-    for a in accounts:
-        # `badge`: shown by the Realtime editor under the number picker — the
-        # one place the owner looks when wiring a rule, so elevation state is
-        # visible where it matters (never the key itself).
-        if a.get("elevate_configured"):
-            lock = (a.get("elevate_toolset") or "").strip()
-            a["badge"] = ("\U0001F511 Elevation key set — the elevate tool rides this "
-                          "number's inbound calls, even with tools 'none'. "
-                          + (f"Unlocks '{lock}' only." if lock else
-                             "No unlock toolset set on the account yet — a matched "
-                             "key will have nothing to open."))
-    return {"accounts": accounts}
+    return {"accounts": credentials.list_twilio_accounts()}
 
 
 def save_account(body=None, credentials=None, **_):
@@ -45,11 +33,8 @@ def save_account(body=None, credentials=None, **_):
             return {"ok": False, "error": "sip_pass required for a new account"}
     # REST creds (outbound calling) are optional; blank auth_token keeps stored.
     auth_token = (body.get("auth_token") or "").strip() or existing.get("auth_token", "")
-    # Elevation passphrase: blank keeps stored; the literal sentinel "-" clears it
-    # (the UI never round-trips the key itself, so blank can't mean "remove").
-    elevate_key = (body.get("elevate_key") or "").strip() or existing.get("elevate_key", "")
-    if elevate_key == "-":
-        elevate_key = ""
+    # (Elevation moved to the Realtime rule 2026-07-16 — the key lives in the
+    # rule's trigger_config now, one config surface. Stored account keys are inert.)
     ok = credentials.set_twilio_account(
         scope, sip_domain=sip_domain, sip_user=sip_user, sip_pass=sip_pass,
         number=(body.get("number") or "").strip(),
@@ -59,9 +44,7 @@ def save_account(body=None, credentials=None, **_):
         auth_token=auth_token,
         transport=(body.get("transport") or "tls").strip(),
         call_provider=(body.get("call_provider") or "").strip(),
-        call_model=(body.get("call_model") or "").strip(),
-        elevate_key=elevate_key,
-        elevate_toolset=(body.get("elevate_toolset") or "").strip())
+        call_model=(body.get("call_model") or "").strip())
     return {"ok": bool(ok)}
 
 

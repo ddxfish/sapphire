@@ -1,21 +1,24 @@
 # Elevate tool — spoken-passphrase toolset elevation for live phone calls.
 """
 elevate_toolset: the owner calls Sapphire, speaks the passphrase set on the
-Twilio number ("switch toolset, the key is alligator three"), and the call's
+Realtime rule ("switch toolset, the key is alligator three"), and the call's
 chat gets a real toolset — next turn. Mirror of functions/meta.py switch_toolset
-with a phone-shaped lock on it.
+with a phone-shaped lock on it. Key, unlock toolset, and the allow switch ALL
+live on the Realtime rule (one config surface, 2026-07-16); the daemon stamps
+them onto the live call record at setup.
 
 Security posture:
 - The tool schema reveals NOTHING: no toolset names, no capability hints. It is
   `hidden: true` (out of the UI and the 'all' toolset) and reaches a call chat
-  only as the default lone tool on numbers with a key configured (daemon
+  only as the default lone tool on rules with elevation enabled (daemon
   _resolve_chat), or by name in a saved toolset.
-- Works only in a chat CURRENTLY hosting a live INBOUND call. All failures —
-  no call, wrong key, attempts exhausted — return the same generic line (no
-  oracle). Guessed keys are never logged.
+- Works only in a chat CURRENTLY hosting a live INBOUND call whose Realtime
+  rule has "Allow elevation" checked and a key set. All failures — no call,
+  rule not allowed, wrong key, attempts exhausted — return the same generic
+  line (no oracle). Guessed keys are never logged.
 - Key match is fuzzy (VOIP transcription: normalize case/punctuation, spoken
   digits) but rate-limited: 3 attempts per call, then dead until hangup.
-- The account's elevate_toolset is a LOCK, not a suggestion: when set, the key
+- The rule's elevate_toolset is a LOCK, not a suggestion: when set, the key
   unlocks that toolset and nothing else — a caller-named toolset is overridden
   (the owner decided the destination in config, not mid-call over a noisy
   line). Only with no lock configured does the spoken toolset name count.
@@ -119,7 +122,6 @@ def _key_matches(spoken, stored):
 
 def _elevate(key, toolset=None):
     from core.api_fastapi import get_system
-    from core.credentials_manager import credentials
 
     system = get_system()
     try:
@@ -129,21 +131,27 @@ def _elevate(key, toolset=None):
     call = (getattr(system, "_twilio_active_calls", None) or {}).get(chat)
     if not call or call.get("direction") != "inbound":
         return _REFUSAL, False
+    # Per-rule opt-in (Realtime modal "Allow elevation" checkbox): a key on the
+    # number is not enough — the rule hosting this call must allow it too. Same
+    # generic refusal as every other failure (no oracle).
+    if not call.get("allow_elevation"):
+        return _REFUSAL, False
 
     attempts = int(call.get("elevate_attempts", 0))
     if attempts >= _MAX_ATTEMPTS:
         logger.warning(f"[TWILIO] elevate locked out (attempts exhausted) on chat '{chat}'")
         return _REFUSAL, False
 
-    acct = credentials.get_twilio_account(call.get("scope", "default"))
-    if not _key_matches(key, acct.get("elevate_key", "")):
+    # Key + lock live on the Realtime rule, stamped onto the call record by the
+    # daemon at call setup — no credentials lookup mid-call.
+    if not _key_matches(key, call.get("elevate_key", "")):
         call["elevate_attempts"] = attempts + 1
         logger.warning(f"[TWILIO] elevate attempt {attempts + 1}/{_MAX_ATTEMPTS} "
                        f"failed on '{call.get('scope')}' (chat={chat})")
         return _REFUSAL, False
 
     # Key accepted — the caller is the owner now; errors past here can be honest.
-    target, overrode = _resolve_target(toolset, acct.get("elevate_toolset"))
+    target, overrode = _resolve_target(toolset, call.get("elevate_toolset"))
     if not target:
         return "The key matched, but no default toolset is configured for this number and none was named.", False
     from core.toolsets import toolset_manager

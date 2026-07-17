@@ -150,17 +150,6 @@ function renderNumberEditor(body, scope, item, helpers) {
             </div>
             <div class="am-hint">Default brain for calls on this number — pick something fast and non-thinking (phone latency). A Realtime rule's model, or her model= on phone_call, overrides per call.</div>
         </div>
-        <div class="am-group">
-            <label for="twv-elevate-key">Elevation passphrase</label>
-            <div class="am-row">
-                <input type="password" id="twv-elevate-key" placeholder="${s.elevate_configured ? 'Leave blank to keep existing... (- to clear)' : 'e.g. alligator3'}">
-                <span class="am-action-btn${s.elevate_configured ? ' success' : ''}" style="cursor:default;padding:6px 12px;font-size:12px">
-                    ${s.elevate_configured ? '✓ Stored' : 'Not set'}
-                </span>
-            </div>
-            <input type="text" id="twv-elevate-toolset" value="${s.elevate_toolset || ''}" placeholder="toolset this key unlocks — locks elevation to it (e.g. sapphire)" style="margin-top:8px">
-            <div class="am-hint">Speak this on a call to unlock a toolset ("switch toolset, the key is alligator three"). Use a word + a number (e.g. "alligator37") — the word is fuzzy-matched for voice transcription but the number must match exactly, which is what makes it hard to guess. 3 tries per call; elevation ends at hangup. Encrypted on disk. Enter a single dash (-) to remove. Blank = feature off.</div>
-        </div>
         <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
             <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">Outbound calling (optional)</div>
             <div class="am-hint" style="margin-bottom:12px">Lets Sapphire place calls from this number (the phone_call tool). From the Twilio Console dashboard — separate from the SIP credentials above.</div>
@@ -209,8 +198,6 @@ function renderNumberEditor(body, scope, item, helpers) {
             auth_token: body.querySelector('#twv-token').value.trim(),
             call_provider: body.querySelector('#twv-call-provider').value,
             call_model: body.querySelector('#twv-call-model').value.trim(),
-            elevate_key: body.querySelector('#twv-elevate-key').value.trim(),
-            elevate_toolset: body.querySelector('#twv-elevate-toolset').value.trim(),
         };
         if (!payload.sip_domain || !payload.sip_user) {
             helpers.showResult(false, 'SIP domain and username are required');

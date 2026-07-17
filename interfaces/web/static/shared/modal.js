@@ -129,7 +129,7 @@ export function showModal(title, fields, onSave = null, options = {}) {
   } else {
     buttonsHTML = `
       <button class="btn btn-secondary modal-cancel">Cancel</button>
-      <button class="btn btn-primary modal-save">Save</button>
+      <button class="btn btn-primary modal-save">${escapeHtml(options.saveLabel || 'Save')}</button>
     `;
   }
   
@@ -187,11 +187,12 @@ export function showModal(title, fields, onSave = null, options = {}) {
 
 /**
  * Simple confirm dialog
+ * @param {Object} options - { title?, saveLabel? } — e.g. saveLabel: 'Delete'
  */
-export function showConfirm(message, onConfirm) {
-  return showModal('Confirm', [
+export function showConfirm(message, onConfirm, options = {}) {
+  return showModal(options.title || 'Confirm', [
     { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);">${escapeHtml(message)}</p>` }
-  ], () => onConfirm());
+  ], () => onConfirm(), { saveLabel: options.saveLabel || 'Confirm' });
 }
 
 /**

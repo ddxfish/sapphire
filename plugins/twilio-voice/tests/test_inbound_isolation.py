@@ -95,39 +95,47 @@ def test_ephemeral_rule_toolset_and_scope_honored():
 
 # ── elevate default vs the modal's explicit 'none' (2026-07-16) ──────────────
 # The Realtime modal always saves toolset='none' explicitly, which used to veto
-# the elevate default — making passphrase elevation unreachable from any
-# UI-created rule. 'none' now falls through to the elevate default; a real
-# toolset still wins.
+# the elevate default. 'none' falls through to the elevate default; a real
+# toolset still wins. Since the one-Jason consolidation, the key + allow switch
+# both live on the rule's trigger_config — no account involvement at all.
 
-def _patch_account(monkeypatch, acct):
-    from core.credentials_manager import credentials
-    monkeypatch.setattr(credentials, "get_twilio_account", lambda scope: acct)
-
-
-def test_explicit_none_with_key_gets_elevate(monkeypatch):
-    _patch_account(monkeypatch, {"elevate_key": "alligator3"})
+def test_explicit_none_with_key_and_allowance_gets_elevate():
     system = _system()
     calls = _capture_patch(system)
     daemon._resolve_chat(system, "acct1", "+15551234567", {
-        "trigger_config": {"ephemeral": True}, "toolset": "none"})
+        "trigger_config": {"ephemeral": True, "allow_elevation": True,
+                           "elevate_key": "alligator3"},
+        "toolset": "none"})
     assert calls["patch"]["toolset"] == "elevate_toolset"
 
 
-def test_explicit_none_without_key_stays_none(monkeypatch):
-    _patch_account(monkeypatch, {})
+def test_allowance_without_key_stays_none():
+    """Checkbox alone isn't enough — no passphrase, no elevate tool."""
     system = _system()
     calls = _capture_patch(system)
     daemon._resolve_chat(system, "acct1", "+15551234567", {
-        "trigger_config": {"ephemeral": True}, "toolset": "none"})
+        "trigger_config": {"ephemeral": True, "allow_elevation": True},
+        "toolset": "none"})
     assert calls["patch"]["toolset"] == "none"
 
 
-def test_real_toolset_beats_elevate_default(monkeypatch):
-    _patch_account(monkeypatch, {"elevate_key": "alligator3"})
+def test_key_without_allowance_stays_none():
+    """A key in config with the checkbox off is refused — the checkbox is the switch."""
     system = _system()
     calls = _capture_patch(system)
     daemon._resolve_chat(system, "acct1", "+15551234567", {
-        "trigger_config": {"ephemeral": True}, "toolset": "phone_helpers"})
+        "trigger_config": {"ephemeral": True, "elevate_key": "alligator3"},
+        "toolset": "none"})
+    assert calls["patch"]["toolset"] == "none"
+
+
+def test_real_toolset_beats_elevate_default():
+    system = _system()
+    calls = _capture_patch(system)
+    daemon._resolve_chat(system, "acct1", "+15551234567", {
+        "trigger_config": {"ephemeral": True, "allow_elevation": True,
+                           "elevate_key": "alligator3"},
+        "toolset": "phone_helpers"})
     assert calls["patch"]["toolset"] == "phone_helpers"
 
 

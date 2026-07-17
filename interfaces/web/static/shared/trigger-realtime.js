@@ -93,7 +93,6 @@ export async function openRealtimeEditor(task, refresh) {
                 <div class="sched-field" id="rt-subsource-field">
                     <label id="rt-subsource-label">Endpoint</label>
                     <select id="rt-subsource"></select>
-                    <div id="rt-subsource-badge" class="text-muted" style="display:none;font-size:var(--font-xs);margin-top:4px;padding:6px 8px;border-left:2px solid var(--warning, #e08a2b);background:rgba(224,138,43,0.07)"></div>
                 </div>
                 <div class="sched-field">
                     <label>Callers</label>
@@ -150,6 +149,24 @@ export async function openRealtimeEditor(task, refresh) {
                     <label>Phone context <span class="help-tip" data-tip="A per-turn note she sees so she knows it's a live call — invisible to the caller, never saved (rides the ghost rail). Use {caller} for the number. Leave blank for a sensible default.">?</span></label>
                     <textarea id="rt-phone-note" rows="2" placeholder="You're on a phone call with {caller}. Voice transcription — reply briefly, spoken aloud, no markdown.">${_esc(tc.phone_note || '')}</textarea>
                 </div>
+                <div class="sched-checkbox">
+                    <label><input type="checkbox" id="rt-public" ${tc.public_line === false ? '' : 'checked'}> Public line — apply safety rails <span class="help-tip" data-tip="Appends the conduct rails from Settings > Plugins > Twilio Voice (bait defense, stranger posture — the 'don't repeat stuff' text). Uncheck for a trusted line like your own number, so she can be fully herself.">?</span></label>
+                </div>
+                <div class="sched-checkbox">
+                    <label><input type="checkbox" id="rt-allow-elev" ${tc.allow_elevation ? 'checked' : ''}> Allow toolset elevation by passphrase <span class="help-tip" data-tip="A caller on this rule can unlock tools by speaking the passphrase (&quot;switch toolset, the key is alligator three&quot;). Word part fuzzy for voice transcription, number exact. 3 tries per call; elevation ends at hangup.">?</span></label>
+                </div>
+                <div id="rt-elev-fields" style="display:${tc.allow_elevation ? 'block' : 'none'};margin:2px 0 8px 22px">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                        <div class="sched-field">
+                            <label>Passphrase <span class="help-tip" data-tip="Use a word + a number (e.g. alligator3) — the number must be heard exactly, which is what makes it hard to guess.">?</span></label>
+                            <input type="password" id="rt-elev-key" value="${_esc(tc.elevate_key || '')}" placeholder="e.g. alligator3" autocomplete="new-password">
+                        </div>
+                        <div class="sched-field">
+                            <label>Unlocks toolset <span class="help-tip" data-tip="The key opens THIS toolset and nothing else (a caller naming another one is overridden). 'none' = the caller must name a toolset — not recommended.">?</span></label>
+                            <select id="rt-elev-toolset">${toolsetOpts(tc.elevate_toolset || 'none')}</select>
+                        </div>
+                    </div>
+                </div>
 
                 <div style="font-size:var(--font-sm);opacity:.85;margin-top:4px">ⓘ A session is an outside line. Tools default to <b>none</b> — grant them on purpose.</div>
 
@@ -204,19 +221,9 @@ export async function openRealtimeEditor(task, refresh) {
     const subField = modal.querySelector('#rt-subsource-field');
     const subLabel = modal.querySelector('#rt-subsource-label');
     const subSel = modal.querySelector('#rt-subsource');
-    const subBadge = modal.querySelector('#rt-subsource-badge');
-    // Per-option `badge` from the dynamic endpoint (e.g. Twilio: "elevation key
-    // set on this number") — shown for the selected option only.
-    let subBadges = {};
-    const showSubBadge = () => {
-        const b = subBadges[subSel.value] || '';
-        subBadge.textContent = b;
-        subBadge.style.display = b ? '' : 'none';
-    };
     async function syncSubSource(preselect) {
         const src = sources.find(s => s.name === modal.querySelector('#rt-source').value);
         const sf = _subSourceField(src);
-        subBadges = {};
         if (!sf) { subField.style.display = 'none'; subSel.dataset.key = ''; return; }
         subField.style.display = 'block';
         subLabel.textContent = sf.label || 'Endpoint';
@@ -230,17 +237,14 @@ export async function openRealtimeEditor(task, refresh) {
             for (const o of options) {
                 const ov = typeof o === 'string' ? o : (o.value || o.id || o.name);
                 const ol = typeof o === 'string' ? o : (o.label || o.name || o.value);
-                if (o && typeof o === 'object' && o.badge) subBadges[ov] = o.badge;
                 const opt = document.createElement('option');
                 opt.value = ov; opt.textContent = ol;
                 subSel.appendChild(opt);
             }
             if (preselect) subSel.value = preselect;
         } catch { subSel.innerHTML = '<option value="">Could not load options</option>'; }
-        showSubBadge();
     }
     modal.querySelector('#rt-source').addEventListener('change', () => syncSubSource(null));
-    subSel.addEventListener('change', showSubBadge);
     const initSub = _subSourceField(sources.find(s => s.name === curSource));
     await syncSubSource(initSub ? tc[initSub.key] : null);
 
@@ -315,6 +319,12 @@ export async function openRealtimeEditor(task, refresh) {
         } catch (e) { showToast('Could not create chat', 'error'); }
     });
 
+    // ── Elevation fields reveal on check ──
+    const elevCheck = modal.querySelector('#rt-allow-elev');
+    elevCheck.addEventListener('change', () => {
+        modal.querySelector('#rt-elev-fields').style.display = elevCheck.checked ? 'block' : 'none';
+    });
+
     // ── Tools orange when armed (per-caller) ──
     const toolSel = modal.querySelector('#rt-toolset');
     const armTools = () => {
@@ -351,6 +361,13 @@ export async function openRealtimeEditor(task, refresh) {
         const callerList = modal.querySelector('#rt-callers-list').value.trim();
         const filter = (callersOnly && callerList) ? { caller: callerList } : null;
 
+        const allowElev = modal.querySelector('#rt-allow-elev').checked;
+        const elevKey = modal.querySelector('#rt-elev-key').value.trim();
+        if (allowElev && !elevKey) { alert('Elevation is on but no passphrase is set.'); return; }
+        // 'none' in the unlock dropdown means NO lock (caller names the toolset) — store as blank.
+        const elevTsRaw = modal.querySelector('#rt-elev-toolset').value || '';
+        const elevTs = elevTsRaw === 'none' ? '' : elevTsRaw;
+
         const eph = modal.querySelector('input[name="rt-route"]:checked').value === 'ephemeral';
         const scopeFields = (eph && scopeContainer) ? readScopeSettingsFromDom(scopeContainer, { missingValue: 'none' }) : {};
 
@@ -358,6 +375,10 @@ export async function openRealtimeEditor(task, refresh) {
             source, filter, greeting: modal.querySelector('#rt-greeting').value.trim(),
             tts_voice: modal.querySelector('#rt-voice').value || '',
             phone_note: modal.querySelector('#rt-phone-note').value.trim(),
+            public_line: modal.querySelector('#rt-public').checked,
+            allow_elevation: allowElev,
+            elevate_key: allowElev ? elevKey : '',
+            elevate_toolset: allowElev ? elevTs : '',
             ephemeral: eph,
             ephemeral_minutes: eph ? (parseInt(modal.querySelector('#rt-ttl').value) || 0) : 10,
         };

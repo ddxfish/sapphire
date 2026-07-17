@@ -9404,25 +9404,54 @@ a.gallery-caption:hover {
     margin: 6px 0 4px; padding-top: 3px; opacity: 0.8;
 }
 
-/* Goals (L4) — cards with subtasks + journal */
-.palace-goal-title { font-weight: 600; color: var(--text, #e6e6f0); }
-.palace-goal-prio { font-size: 11px; color: var(--text-muted, #999); }
-.palace-goal-perm { cursor: help; }
-.palace-goal-done { opacity: 0.6; }
-.palace-goal-desc { color: var(--text-muted, #aaa); font-size: 12px; margin: 4px 0 6px; }
-.palace-goal-subs { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
-.palace-goal-sub { display: flex; gap: 7px; align-items: center; font-size: 13px;
-    color: var(--text, #ddd); cursor: pointer; }
-.palace-sub-done { text-decoration: line-through; color: var(--text-muted, #888); }
-.palace-goal-journal { margin: 6px 0; font-size: 12px; }
-.palace-goal-journal summary { color: var(--text-muted, #999); cursor: pointer; }
-.palace-goal-note { color: var(--text-muted, #aaa); padding: 3px 0 0 12px; line-height: 1.4; }
-.palace-goal-noteinput {
+/* Goals (L4) v2 — spacious cards (air over density, Krem's ruling 2026-07-16) */
+.pgoal-list { display: flex; flex-direction: column; gap: 14px; max-width: 880px; }
+.pgoal-card {
+    background: var(--bg-secondary, #1b1c2e); border: 1px solid var(--border, #2a2b3e);
+    border-radius: 10px; padding: 16px 18px; line-height: 1.55;
+}
+.pgoal-closed { opacity: 0.55; }
+.pgoal-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pgoal-perm { cursor: help; }
+.pgoal-title { font-weight: 600; font-size: 15px; color: var(--text, #e6e6f0);
+    flex: 1 1 auto; min-width: 160px; }
+.pgoal-age { font-size: 11px; color: var(--text-muted, #888); white-space: nowrap;
+    margin-left: auto; }
+.pgoal-chip {
+    font-size: 11px; padding: 2px 9px; border-radius: 10px; white-space: nowrap;
+    background: var(--bg-tertiary, #24253a); color: var(--text-muted, #aaa);
+}
+.pgoal-chip-due { color: var(--trim, #7aa2f7); }
+.pgoal-desc { color: var(--text-secondary, #b9b9c6); font-size: 13px; margin-top: 7px; }
+.pgoal-instr { margin-top: 7px; font-size: 12.5px; }
+.pgoal-instr summary { color: var(--text-muted, #999); cursor: pointer; }
+.pgoal-instr-body { white-space: pre-wrap; color: var(--text-secondary, #b9b9c6);
+    padding: 5px 0 0 14px; }
+.pgoal-subs {
+    display: flex; flex-direction: column; gap: 9px; margin-top: 13px;
+    padding-top: 11px; border-top: 1px solid var(--border, #2a2b3e);
+}
+.pgoal-sub { display: flex; gap: 10px; align-items: baseline; }
+.pgoal-sub input[type=checkbox] { transform: translateY(2px); cursor: pointer; }
+.pgoal-sub-main { flex: 1; min-width: 0; }
+.pgoal-sub-title { font-size: 13.5px; color: var(--text, #ddd); }
+.pgoal-sub-done .pgoal-sub-title { text-decoration: line-through; color: var(--text-muted, #888); }
+.pgoal-sub-meta { font-size: 11px; color: var(--text-muted, #888); margin-left: 7px; }
+.pgoal-sub-desc { font-size: 12px; color: var(--text-muted, #9a9ab0); margin-top: 2px; }
+.pgoal-addsub { align-self: flex-start; }
+.pgoal-journal { margin-top: 11px; font-size: 12.5px; }
+.pgoal-journal summary { color: var(--text-muted, #999); cursor: pointer; }
+.pgoal-note { color: var(--text-muted, #aaa); padding: 4px 0 0 12px; line-height: 1.5; }
+.pgoal-foot { display: flex; gap: 8px; margin-top: 13px; align-items: center; }
+.pgoal-noteinput {
     flex: 1; min-width: 0; background: var(--input-bg, #16172a);
     color: var(--text, #e6e6f0); border: 1px solid var(--border, #2a2b3e);
-    border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12px;
+    border-radius: 6px; padding: 5px 9px; font: inherit; font-size: 12px;
 }
-.palace-goal-noteinput:focus { outline: none; border-color: #c39df5; }
+.pgoal-noteinput:focus { outline: none; border-color: #c39df5; }
+.pgoal-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    margin: 10px 0 14px; }
+.pgoal-sort { margin-left: auto; }
 
 /* Entity short description (tier-1 headline) — the layer-1 line every kind carries */
 .palace-headline-row { display: flex; gap: 8px; margin-bottom: 12px; }
