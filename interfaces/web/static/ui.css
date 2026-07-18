@@ -76,6 +76,28 @@
     margin-bottom: var(--space-sm);
     border-bottom: 1px solid var(--border-subtle);
 }
+/* The scroll container (.view-body) has top/side padding, and scrolled
+   content shows through it above a top:0 sticky. Pull the rows up into
+   that band and re-pad inside — the strip stays solid. Values mirror
+   .view-body's padding (16/20px, 12/16px ≤768px). */
+.view-body > .ui-rows {
+    margin-top: -16px;
+    margin-left: -20px;
+    margin-right: -20px;
+    padding-top: 16px;
+    padding-left: 20px;
+    padding-right: 20px;
+}
+@media (max-width: 768px) {
+    .view-body > .ui-rows {
+        margin-top: -12px;
+        margin-left: -16px;
+        margin-right: -16px;
+        padding-top: 12px;
+        padding-left: 16px;
+        padding-right: 16px;
+    }
+}
 .ui-row {
     display: flex;
     align-items: center;

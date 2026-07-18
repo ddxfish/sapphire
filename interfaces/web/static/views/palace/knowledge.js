@@ -138,6 +138,10 @@ function docRow(d) {
 function collectionBlock(c, isTopic = false) {
     const docs = (c.documents || []).map(docRow).join('');
     const topics = (c.topics || []).map(t => collectionBlock(t, true)).join('');
+    const grid = imageGrid(c.documents);
+    // Filtering hides drawers with nothing to show; unfiltered browsing
+    // still shows empty drawers (they're organization, not results).
+    if ((_kind || _filter) && !docs && !topics && !grid) return '';
     return `
         <div class="plib-coll ${isTopic ? 'plib-topic' : 'plib-cat'}" data-cid="${c.id}">
             <div class="plib-coll-head">
@@ -149,7 +153,7 @@ function collectionBlock(c, isTopic = false) {
             </div>
             ${topics}
             ${docs ? `<div class="plib-docs">${docs}</div>` : ''}
-            ${imageGrid(c.documents)}
+            ${grid}
         </div>`;
 }
 
