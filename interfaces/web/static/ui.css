@@ -173,6 +173,28 @@
 .ui-chip-busy   { color: var(--trim);         border-color: var(--trim-border); }
 .ui-chip-accent { color: var(--trim);         background: var(--trim-light); border-color: transparent; }
 
+/* ── ui-pill — filter/toggle pill (button) ───────────────────────────────── */
+.ui-pill {
+    font-size: var(--font-sm);
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+.ui-pill:hover { border-color: var(--border-hover); color: var(--text-secondary); }
+.ui-pill-on {
+    border-color: var(--trim-border);
+    color: var(--trim);
+    background: var(--trim-light);
+}
+
+/* ── ui-meta-text — small muted inline facts (time, ids) ─────────────────── */
+.ui-meta-text { font-size: var(--font-sm); color: var(--text-muted); white-space: nowrap; }
+
 /* ── ui-empty — empty state ──────────────────────────────────────────────── */
 .ui-empty {
     text-align: center;

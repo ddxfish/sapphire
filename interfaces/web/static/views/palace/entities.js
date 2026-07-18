@@ -20,6 +20,8 @@ let scope = 'default';
 let scopes = [];
 let unsub = null;
 let _kindFilter = '';   // '' = all
+let _q = '';
+let _qTimer = null;
 let TPL = {};           // kind -> template
 let TPL_LIST = [];      // ordered templates
 
@@ -57,8 +59,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; _kindFilter = ''; render(); },
-        onChanged: async (s) => { scope = s || 'default'; _kindFilter = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; _kindFilter = ''; _q = ''; render(); },
+        onChanged: async (s) => { scope = s || 'default'; _kindFilter = ''; _q = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderEntities();
 }
@@ -82,22 +84,31 @@ async function renderEntities() {
     const all = data.entities || [];
     const counts = { '': all.length, none: all.filter(x => !x.kind).length };
     for (const t of TPL_LIST) counts[t.kind] = all.filter(x => x.kind === t.kind).length;
-    const list = _kindFilter === ''
+    let list = _kindFilter === ''
         ? all
         : all.filter(x => (_kindFilter === 'none' ? !x.kind : x.kind === _kindFilter));
+    if (_q) list = list.filter(e =>
+        [e.name, e.kind, e.headline].filter(Boolean).join(' ')
+            .toLowerCase().includes(_q));
 
     const pill = (val, label, n) => n || val === '' ?
-        `<button class="palace-kpill ${_kindFilter === val ? 'active' : ''}" data-kind="${val}">${label} <span>${n}</span></button>` : '';
+        `<button class="ui-pill ${_kindFilter === val ? 'ui-pill-on' : ''}" data-kind="${val}">${label} ${n}</button>` : '';
 
     el.innerHTML = `
-        <div class="mind-toolbar">
-            <button class="mind-btn" id="pal-ent-new">+ New entity</button>
-            ${transferButtons()}
-        </div>
-        <div class="mind-toolbar palace-kind-pills">
-            ${pill('', 'All', all.length)}
-            ${TPL_LIST.map(t => pill(t.kind, `${t.icon} ${escHtml(t.label)}`, counts[t.kind])).join('')}
-            ${pill('none', 'Unsorted', counts.none)}
+        <div class="ui-rows">
+            <div class="ui-row">
+                <input type="search" id="pal-ent-search" class="palace-search" placeholder="Search entities — name, kind, headline…" value="${escAttr(_q)}">
+                <span class="palace-count">${_q ? `${list.length} of ${all.length}` : `${all.length} entities`}</span>
+            </div>
+            <div class="ui-row">
+                ${pill('', 'All', all.length)}
+                ${TPL_LIST.map(t => pill(t.kind, `${t.icon} ${escHtml(t.label)}`, counts[t.kind])).join('')}
+                ${pill('none', 'Unsorted', counts.none)}
+            </div>
+            <div class="ui-row">
+                <button class="mind-btn" id="pal-ent-new">+ New entity</button>
+                ${transferButtons()}
+            </div>
         </div>
         ${list.length ? `<div class="mind-people-grid">
             ${list.map(e => `
@@ -113,10 +124,19 @@ async function renderEntities() {
                         ${e.mentions ? `<div title="Mentions since the librarian's last pass">\u{1F514} ${e.mentions} unprocessed</div>` : ''}
                     </div>
                 </div>`).join('')}
-        </div>` : '<div class="mind-empty">No entities in this scope yet — save a memory to the entities layer, or mention someone new.</div>'}
+        </div>` : `<div class="ui-empty">${_q ? 'No entities match the search' : 'No entities in this scope yet — save a memory to the entities layer, or mention someone new.'}</div>`}
     `;
 
-    el.querySelectorAll('.palace-kpill').forEach(btn => {
+    const searchBox = el.querySelector('#pal-ent-search');
+    searchBox?.addEventListener('input', () => {
+        clearTimeout(_qTimer);
+        _qTimer = setTimeout(() => { _q = searchBox.value.trim().toLowerCase(); renderEntities(); }, 250);
+    });
+    if (_q && document.activeElement === document.body) {
+        searchBox?.focus();
+        searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
+    }
+    el.querySelectorAll('[data-kind]').forEach(btn => {
         btn.addEventListener('click', () => { _kindFilter = btn.dataset.kind; renderEntities(); });
     });
     el.querySelector('#pal-ent-new')?.addEventListener('click', showNewEntityModal);

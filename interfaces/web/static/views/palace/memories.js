@@ -22,8 +22,9 @@ let unsub = null;
 let _search = '';
 let _offset = 0;
 let _searchTimer = null;
+let _layer = '';           // '' = both streams; 'events' | 'self' filter pills
 
-function resetFilters() { _search = ''; _offset = 0; }
+function resetFilters() { _search = ''; _offset = 0; _layer = ''; }
 
 export default {
     init(el) { container = el; },
@@ -67,32 +68,49 @@ async function renderList() {
     // server-side filtered so the count matches the list. Self-sheet chunks
     // are excluded — their home is the Self page and the ledger.
     const params = new URLSearchParams({ scope, limit: PAGE, offset: _offset,
-                                         layer: 'events,self', exclude_sheet: 1 });
+                                         layer: _layer || 'events,self',
+                                         exclude_sheet: 1 });
     if (_search) params.set('q', _search);
     let data;
     try {
         data = await palaceGet(`chunks?${params}`);
     } catch (e) {
-        el.innerHTML = `<div class="mind-empty">Failed to load: ${escHtml(e.message)}</div>`;
+        el.innerHTML = `<div class="ui-empty">Failed to load: ${escHtml(e.message)}</div>`;
         return;
     }
     const chunks = data.chunks || [];
 
+    const pill = (val, label) =>
+        `<button class="ui-pill ${_layer === val ? 'ui-pill-on' : ''}" data-layer-pill="${val}">${label}</button>`;
     el.innerHTML = `
-        <div class="mind-toolbar">
-            <input type="search" id="pal-mem-search" class="palace-search" placeholder="Search memories…" value="${escAttr(_search)}">
-            <button class="mind-btn" id="pal-mem-add">+ Add Memory</button>
-            ${transferButtons()}
-            <span class="palace-count">${data.total} in scope</span>
+        <div class="ui-rows">
+            <div class="ui-row">
+                <input type="search" id="pal-mem-search" class="palace-search" placeholder="Search memories…" value="${escAttr(_search)}">
+                <span class="palace-count">${data.total} in scope</span>
+            </div>
+            <div class="ui-row">
+                ${pill('', 'All')}${pill('events', 'Events')}${pill('self', 'Self')}
+            </div>
+            <div class="ui-row">
+                <button class="mind-btn" id="pal-mem-add">+ Add Memory</button>
+                ${transferButtons()}
+            </div>
         </div>
         ${chunks.length
             ? `<div class="palace-chunk-list">${chunks.map(c => chunkCard(c)).join('')}</div>`
-            : `<div class="mind-empty">${_search ? 'No matches' : 'No memories yet'}</div>`}
+            : `<div class="ui-empty">${_search ? 'No matches' : 'No memories yet'}</div>`}
         ${(!_search && _offset + PAGE < data.total)
             ? `<div class="palace-more-wrap"><button class="mind-btn" id="pal-mem-more">Load more (${data.total - _offset - PAGE} older)</button></div>`
             : ''}
     `;
 
+    el.querySelectorAll('[data-layer-pill]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            _layer = btn.dataset.layerPill;
+            _offset = 0;
+            renderList();
+        });
+    });
     const searchBox = el.querySelector('#pal-mem-search');
     searchBox?.addEventListener('input', () => {
         clearTimeout(_searchTimer);

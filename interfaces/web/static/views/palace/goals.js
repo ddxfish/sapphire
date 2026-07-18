@@ -23,6 +23,20 @@ let scopes = [];
 let unsub = null;
 let _status = 'active';
 let _sort = 'priority';
+let _q = '';
+let _qTimer = null;
+
+// Search spans every field a goal carries — title, descriptions,
+// instructions, subtasks, journal — so "the div that contains it" shows
+// and the rest hide (Krem's TODO).
+function goalMatches(g) {
+    if (!_q) return true;
+    const hay = [g.title, g.description, g.instructions, g.due,
+        ...(g.subtasks || []).flatMap(s => [s.title, s.description, s.instructions]),
+        ...(g.progress || []).map(p => p.note)]
+        .filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(_q);
+}
 
 export default {
     init(el) { container = el; },
@@ -53,8 +67,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; _status = 'active'; render(); },
-        onChanged: async (s) => { scope = s || 'default'; _status = 'active'; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; _status = 'active'; _q = ''; render(); },
+        onChanged: async (s) => { scope = s || 'default'; _status = 'active'; _q = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderList();
 }
@@ -140,28 +154,43 @@ async function renderList() {
         el.innerHTML = `<div class="mind-empty">Failed to load: ${escHtml(e.message)}</div>`;
         return;
     }
-    const goals = (data.goals || []).slice().sort(SORTS[_sort] || SORTS.priority);
+    const all = (data.goals || []).slice().sort(SORTS[_sort] || SORTS.priority);
+    const goals = all.filter(goalMatches);
     const pill = (val, label) =>
-        `<button class="palace-kpill ${_status === val ? 'active' : ''}" data-status="${val}">${label}</button>`;
+        `<button class="ui-pill ${_status === val ? 'ui-pill-on' : ''}" data-status="${val}">${label}</button>`;
     const sortOpt = (val, label) =>
         `<option value="${val}" ${_sort === val ? 'selected' : ''}>${label}</option>`;
     el.innerHTML = `
-        <div class="mind-toolbar pgoal-actions">
-            <button class="mind-btn" id="pal-goal-add">+ Add goal</button>
-            ${transferButtons()}
-            <span class="palace-count">${goals.length} goals</span>
-        </div>
-        <div class="pgoal-filters">
-            ${pill('active', 'Active')}${pill('completed', 'Completed')}${pill('abandoned', 'Abandoned')}${pill('all', 'All')}
-            <select class="palace-select pgoal-sort" title="Sort">
-                ${sortOpt('priority', 'Sort: priority')}${sortOpt('updated', 'Sort: recent')}${sortOpt('created', 'Sort: created')}${sortOpt('alpha', 'Sort: A→Z')}${sortOpt('due', 'Sort: due date')}
-            </select>
+        <div class="ui-rows">
+            <div class="ui-row">
+                <input type="search" id="pal-goal-search" class="palace-search" placeholder="Search goals — titles, descriptions, instructions, subtasks, journal…" value="${escHtml(_q)}">
+                <span class="palace-count">${_q ? `${goals.length} of ${all.length}` : `${all.length} goals`}</span>
+            </div>
+            <div class="ui-row">
+                ${pill('active', 'Active')}${pill('completed', 'Completed')}${pill('abandoned', 'Abandoned')}${pill('all', 'All')}
+                <select class="palace-select pgoal-sort" title="Sort">
+                    ${sortOpt('priority', 'Sort: priority')}${sortOpt('updated', 'Sort: recent')}${sortOpt('created', 'Sort: created')}${sortOpt('alpha', 'Sort: A→Z')}${sortOpt('due', 'Sort: due date')}
+                </select>
+            </div>
+            <div class="ui-row">
+                <button class="mind-btn" id="pal-goal-add">+ Add goal</button>
+                ${transferButtons()}
+            </div>
         </div>
         ${goals.length
             ? `<div class="pgoal-list">${goals.map(goalCard).join('')}</div>`
-            : `<div class="mind-empty">No ${_status === 'all' ? '' : _status + ' '}goals in this scope — she plans with create_goal, or use + Add goal.</div>`}
+            : `<div class="ui-empty">${_q ? 'No goals match the search' : `No ${_status === 'all' ? '' : _status + ' '}goals in this scope — she plans with create_goal, or use + Add goal.`}</div>`}
     `;
-    el.querySelectorAll('.palace-kpill').forEach(btn => {
+    const searchBox = el.querySelector('#pal-goal-search');
+    searchBox?.addEventListener('input', () => {
+        clearTimeout(_qTimer);
+        _qTimer = setTimeout(() => { _q = searchBox.value.trim().toLowerCase(); renderList(); }, 250);
+    });
+    if (_q && document.activeElement === document.body) {
+        searchBox?.focus();
+        searchBox?.setSelectionRange(searchBox.value.length, searchBox.value.length);
+    }
+    el.querySelectorAll('[data-status]').forEach(btn => {
         btn.addEventListener('click', () => { _status = btn.dataset.status; renderList(); });
     });
     el.querySelector('.pgoal-sort')?.addEventListener('change', e => { _sort = e.target.value; renderList(); });

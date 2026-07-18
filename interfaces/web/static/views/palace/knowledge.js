@@ -70,14 +70,16 @@ function render() {
 
 const KIND_ICON = { note: '\u{1F4DD}', article: '\u{1F4F0}', book: '\u{1F4DA}', reference: '\u{1F4C4}', image: '\u{1F5BC}\u{FE0F}' };
 const IMP_LABEL = { high: '\u{1F53A} high', med: '● med', low: '○ low' };
-let _imagesOnly = false;
+let _kind = '';            // '' all · 'note' · 'file' (article/book/ref) · 'image'
 
 function jobFor(docId) {
     return (_catalog?.jobs || []).find(j => j.doc_id === docId);
 }
 
 function matchesFilter(d) {
-    if (_imagesOnly && d.kind !== 'image') return false;
+    if (_kind === 'image' && d.kind !== 'image') return false;
+    if (_kind === 'note' && d.kind !== 'note') return false;
+    if (_kind === 'file' && (d.kind === 'note' || d.kind === 'image')) return false;
     if (!_filter) return true;
     const hay = [d.title, d.author, d.description,
                  ...(d.image?.people || []), d.image?.place]
@@ -103,7 +105,7 @@ function imageGrid(docs) {
 
 function docRow(d) {
     if (d.kind === 'image') return '';           // images render as tiles
-    if (_imagesOnly || !matchesFilter(d)) return '';
+    if (!matchesFilter(d)) return '';
     const job = jobFor(d.id);
     let status = '';
     if (job && job.state === 'error') {
@@ -168,20 +170,27 @@ async function renderShelf() {
     const unfiled = (_catalog.unfiled || []).map(docRow).join('');
     const unfiledGrid = imageGrid(_catalog.unfiled);
     el.innerHTML = `
-        <div class="mind-toolbar plib-actions">
-            <button class="mind-btn" id="plib-add-note">\u{1F4DD} Note</button>
-            <button class="mind-btn" id="plib-add-file">\u{1F4C4} File</button>
-            <button class="mind-btn" id="plib-add-bulk">\u{1F4DA} Bulk</button>
-            <button class="mind-btn" id="plib-add-images">\u{1F5BC}\u{FE0F} Images</button>
-            <button class="mind-btn" id="plib-add-folder">\u{1F4C2} Folder</button>
-            <button class="mind-btn" id="plib-add-cat">+ Category</button>
-            <span class="palace-count">${_catalog.total} documents</span>
+        <div class="ui-rows">
+            <div class="ui-row">
+                <input type="search" id="plib-filter" class="palace-search" placeholder="Filter by title, author, place, or people…" value="${escAttr(_filter)}">
+                <span class="palace-count">${_catalog.total} documents</span>
+            </div>
+            <div class="ui-row" id="plib-kind-pills">
+                <button class="ui-pill ${_kind === '' ? 'ui-pill-on' : ''}" data-kind="">All</button>
+                <button class="ui-pill ${_kind === 'note' ? 'ui-pill-on' : ''}" data-kind="note">\u{1F4DD} Notes</button>
+                <button class="ui-pill ${_kind === 'file' ? 'ui-pill-on' : ''}" data-kind="file">\u{1F4C4} Files</button>
+                <button class="ui-pill ${_kind === 'image' ? 'ui-pill-on' : ''}" data-kind="image">\u{1F5BC}\u{FE0F} Images</button>
+            </div>
+            <div class="ui-row">
+                <button class="mind-btn" id="plib-add-note">+ \u{1F4DD} Note</button>
+                <button class="mind-btn" id="plib-add-file">+ \u{1F4C4} File</button>
+                <button class="mind-btn" id="plib-add-bulk">+ \u{1F4DA} Bulk</button>
+                <button class="mind-btn" id="plib-add-images">+ \u{1F5BC}\u{FE0F} Images</button>
+                <button class="mind-btn" id="plib-add-folder">+ \u{1F4C2} Folder</button>
+                <button class="mind-btn" id="plib-add-cat">+ Category</button>
+            </div>
         </div>
         ${renderFolders()}
-        <div class="pgoal-filters">
-            <input type="search" id="plib-filter" class="palace-search" placeholder="Filter by title, author, place, or people…" value="${escAttr(_filter)}">
-            <button class="mind-btn-sm plib-pill ${_imagesOnly ? 'plib-pill-on' : ''}" id="plib-pill-images">\u{1F5BC}\u{FE0F} Images only</button>
-        </div>
         <div class="plib-shelf">
             ${cats.map(c => collectionBlock(c)).join('')}
             ${unfiled || unfiledGrid ? `<div class="plib-coll plib-cat"><div class="plib-coll-head"><span class="plib-coll-name">▸ (unfiled)</span></div>${unfiled ? `<div class="plib-docs">${unfiled}</div>` : ''}${unfiledGrid}</div>` : ''}
@@ -206,7 +215,9 @@ async function renderShelf() {
     imagesInput?.addEventListener('change', () => { if (imagesInput.files.length) imagesModal([...imagesInput.files]); });
     const filter = el.querySelector('#plib-filter');
     filter?.addEventListener('input', () => { _filter = filter.value.trim().toLowerCase(); renderShelf(); });
-    el.querySelector('#plib-pill-images')?.addEventListener('click', () => { _imagesOnly = !_imagesOnly; renderShelf(); });
+    el.querySelectorAll('#plib-kind-pills [data-kind]').forEach(btn => {
+        btn.addEventListener('click', () => { _kind = btn.dataset.kind; renderShelf(); });
+    });
     bindShelf(el);
     syncPolling();
 }

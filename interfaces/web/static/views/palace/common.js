@@ -200,22 +200,19 @@ export function chunkCard(c, { showLayer = true } = {}) {
         ? `<span class="palace-superseded-pill" title="Archived version — replaced ${escHtml(String(c.meta.superseded_at).slice(0, 10))}. The Self tab shows the current one; 📜 on its card lists these.">\u{1F4DC} history</span>`
         : '';
     return `
-        <div class="mind-mem-card palace-chunk${pruned ? ' palace-chunk-pruned' : ''}${superseded ? ' palace-chunk-superseded' : ''}" data-id="${c.id}">
-            <div class="mind-mem-header">
+        <div class="ui-card palace-chunk${pruned ? ' palace-chunk-pruned' : ''}${superseded ? ' palace-chunk-superseded' : ''}" data-id="${c.id}">
+            <button class="ui-card-x palace-del-chunk" data-id="${c.id}" title="Delete">✕</button>
+            <div class="ui-card-meta" style="margin-top:0;padding-right:26px">
                 ${showLayer ? layerChip(c.layer) : ''}
                 ${tierChip}${entChip}${authorPill}
                 ${labelChip(c.label)}${prunedPill}${historyPill}
                 ${keyPill(c.private_key)}
-                <span class="mind-mem-time">${escHtml(timeAgo(c.created))}</span>
-                <span class="mind-mem-id">[${c.id}]</span>
+                <span class="ui-meta-text" style="margin-left:auto">${escHtml(timeAgo(c.created))} · [${c.id}]</span>
                 ${favStar(c.id, c.favorite)}
             </div>
-            <div class="mind-mem-content">${escHtml(c.content)}</div>
+            <div class="ui-card-body">${escHtml(c.content)}</div>
             ${metaPanel(c.meta)}
-            <div class="mind-mem-actions">
-                ${pruned ? `<button class="mind-btn-sm palace-unprune" data-id="${c.id}" title="Restore to her recall">↩ restore</button>` : ''}
-                <button class="mind-btn-sm palace-del-chunk" data-id="${c.id}" title="Delete">✕</button>
-            </div>
+            ${pruned ? `<div class="ui-card-actions"><button class="mind-btn-sm palace-unprune" data-id="${c.id}" title="Restore to her recall">↩ restore</button></div>` : ''}
         </div>`;
 }
 
