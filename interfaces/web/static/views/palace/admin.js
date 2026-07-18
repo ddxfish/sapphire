@@ -186,7 +186,7 @@ function nightlySummary() {
 
 function actionsDropdown(spec, libDisabled) {
     return `
-        <details class="dash-action-dropdown">
+        <details class="dash-action-dropdown ui-card-bottom">
             <summary><span>Actions</span><span class="chev">▾</span></summary>
             <div class="dash-action-dropdown-menu">
                 ${spec.actions.map((a, i) => `
@@ -204,32 +204,29 @@ function passCard(p, st, libEnabled) {
         ? `last ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
         : 'never run in this scope';
     return `
-        <div class="mind-mem-card pal-admin-card" data-card="${escAttr(p.key)}"
-             style="flex:1 1 230px;min-width:215px${on ? '' : ';opacity:.6'}">
-            <div class="palace-self-card-head">
-                <span class="palace-self-title">${p.icon} ${escHtml(p.title)}</span>
-                <label class="setting-toggle" style="margin-left:auto" title="Include this pass in the nightly round. Off = the nightly skips it; Run always works.">
+        <div class="ui-card" data-card="${escAttr(p.key)}" style="${on ? '' : 'opacity:.6'}">
+            <div class="ui-row">
+                <span class="ui-card-title" style="padding-right:0">${p.icon} ${escHtml(p.title)}</span>
+                <label class="ui-toggle" style="margin-left:auto" title="Include this pass in the nightly round. Off = the nightly skips it; ▶ Run always works.">
                     <input type="checkbox" data-pass-toggle="${escAttr(p.key)}" ${on ? 'checked' : ''}>
-                    <span>nightly</span>
+                    <span class="ui-toggle-slider"></span>
                 </label>
             </div>
-            <div class="palace-self-hint">${escHtml(p.blurb)}</div>
-            <div class="palace-self-hint" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'librarian disabled (alpha)')}</div>
+            <div class="ui-card-body">${escHtml(p.blurb)}</div>
+            <div class="ui-card-meta"><span class="ui-chip" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'alpha off')}</span></div>
             ${actionsDropdown(p, !libEnabled)}
-            <div class="palace-self-hint pal-admin-result" data-result="${escAttr(p.key)}"></div>
+            <div class="ui-card-body" data-result="${escAttr(p.key)}"></div>
         </div>`;
 }
 
 function opsCard(o) {
     return `
-        <div class="mind-mem-card pal-admin-card" data-card="${escAttr(o.key)}"
-             style="flex:1 1 230px;min-width:215px${o.danger ? ';border-color:var(--error,#f44)' : ''}">
-            <div class="palace-self-card-head">
-                <span class="palace-self-title">${o.icon} ${escHtml(o.title)}</span>
-            </div>
-            <div class="palace-self-hint">${escHtml(o.blurb)}</div>
+        <div class="ui-card" data-card="${escAttr(o.key)}"
+             ${o.danger ? 'style="border-color:var(--error-border)"' : ''}>
+            <div class="ui-card-title" style="padding-right:0">${o.icon} ${escHtml(o.title)}</div>
+            <div class="ui-card-body">${escHtml(o.blurb)}</div>
             ${actionsDropdown(o, false)}
-            <div class="palace-self-hint pal-admin-result" data-result="${escAttr(o.key)}"></div>
+            <div class="ui-card-body" data-result="${escAttr(o.key)}"></div>
         </div>`;
 }
 
@@ -240,44 +237,54 @@ async function renderConsole() {
     try {
         st = await palaceGet(`librarian/status?scope=${encodeURIComponent(scope)}`);
     } catch (e) {
-        el.innerHTML = `<div class="mind-empty">Failed to load: ${escHtml(e.message)}</div>`;
+        el.innerHTML = `<div class="ui-empty">Failed to load: ${escHtml(e.message)}</div>`;
         return;
     }
     const libEnabled = st.enabled !== false;
-    const master = libEnabled
-        ? 'alpha toggle on'
-        : 'disabled — enable in Settings → Plugins → Mind Palace (alpha)';
     el.innerHTML = `
-        <div class="palace-self-card-head">
-            <span class="palace-self-title">\u{1F9F9} Librarian</span>
-            <span class="palace-self-hint" id="pal-adm-master">${escHtml(master)}</span>
-            <button class="mind-btn-sm" id="pal-adm-settings" style="margin-left:auto">⚙ Settings</button>
-        </div>
-        <div class="palace-self-hint" id="pal-adm-nightly">${escHtml(nightlySummary())}</div>
-        <div class="palace-self-hint" id="pal-adm-running"></div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin:8px 0 18px">
-            ${PASSES.map(p => passCard(p, st, libEnabled)).join('')}
-        </div>
-        <div class="palace-self-card-head">
-            <span class="palace-self-title">\u{1F6E0} Maintenance & Migration</span>
-            <span class="palace-self-hint">per-scope · every run lands in the Ledger</span>
-        </div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin:8px 0">
-            ${OPS.map(opsCard).join('')}
-        </div>
-        <div class="palace-self-card-head" style="margin-top:18px">
-            <span class="palace-self-title">\u{1F52C} Tool console</span>
-            <span class="palace-self-hint">her READ-ONLY tools, raw output, zero fingerprints — no recall boosts, no ledger stamp, no wake tools</span>
-        </div>
-        <div class="mind-mem-card pal-admin-card" style="padding:14px 16px">
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                <select id="pal-peek-tool" class="palace-select">
-                    ${Object.entries(PEEK_TOOLS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('')}
-                </select>
-                <span id="pal-peek-fields" style="display:flex;gap:8px;flex-wrap:wrap"></span>
-                <button class="mind-btn" id="pal-peek-run">▶ Run</button>
+        <div class="ui-box">
+            <div class="ui-box-head">
+                <span class="ui-dot ${libEnabled ? 'ui-dot-ok' : ''}" title="${libEnabled ? 'Librarian alpha: on' : 'Librarian alpha: off'}"></span>
+                <span class="ui-box-title">\u{1F9F9} Librarian</span>
+                <span class="ui-box-desc" id="pal-adm-nightly">${escHtml(nightlySummary())}</span>
+                ${libEnabled ? '' : '<span class="ui-chip ui-chip-warn" title="Enable in Settings → Plugins → Mind Palace">alpha off</span>'}
+                <div class="ui-box-actions">
+                    <button class="mind-btn-sm" id="pal-adm-settings">⚙ Settings</button>
+                </div>
             </div>
-            <pre id="pal-peek-out" class="pal-peek-out" hidden></pre>
+            <div class="ui-box-body">
+                <div class="ui-card-body" id="pal-adm-running" style="margin:0 0 8px"></div>
+                <div class="ui-grid">
+                    ${PASSES.map(p => passCard(p, st, libEnabled)).join('')}
+                </div>
+            </div>
+        </div>
+        <div class="ui-box">
+            <div class="ui-box-head">
+                <span class="ui-box-title">\u{1F6E0} Maintenance & Migration</span>
+                <span class="ui-box-desc">per-scope · every run lands in the Ledger</span>
+            </div>
+            <div class="ui-box-body">
+                <div class="ui-grid">
+                    ${OPS.map(opsCard).join('')}
+                </div>
+            </div>
+        </div>
+        <div class="ui-box">
+            <div class="ui-box-head">
+                <span class="ui-box-title">\u{1F52C} Tool console</span>
+                <span class="ui-box-desc">her READ-ONLY tools, raw output, zero fingerprints — no recall boosts, no ledger stamp, no wake tools</span>
+            </div>
+            <div class="ui-box-body">
+                <div class="ui-row">
+                    <select id="pal-peek-tool" class="palace-select">
+                        ${Object.entries(PEEK_TOOLS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('')}
+                    </select>
+                    <span id="pal-peek-fields" class="ui-row" style="gap:8px"></span>
+                    <button class="mind-btn" id="pal-peek-run">▶ Run</button>
+                </div>
+                <pre id="pal-peek-out" class="pal-peek-out" hidden></pre>
+            </div>
         </div>`;
     bindConsole(el);
     bindPeek(el);
@@ -350,7 +357,7 @@ function bindConsole(el) {
             const key = input.dataset.passToggle;
             try {
                 await savePluginSettings({ [`librarian_pass_${key}`]: input.checked });
-                const card = el.querySelector(`.pal-admin-card[data-card="${key}"]`);
+                const card = el.querySelector(`.ui-card[data-card="${key}"]`);
                 if (card) card.style.opacity = input.checked ? '' : '.6';
                 const nl = el.querySelector('#pal-adm-nightly');
                 if (nl) nl.textContent = nightlySummary();
@@ -458,7 +465,7 @@ async function refreshRunning(el, preloaded) {
         const box = el.querySelector(`[data-pass-status="${p.key}"]`);
         if (!box) continue;
         const mine = (st.scopes || []).find(s => s.scope === scope && s.pass === p.key);
-        if (st.enabled === false) box.textContent = 'librarian disabled (alpha)';
+        if (st.enabled === false) box.textContent = 'alpha off';
         else box.textContent = mine
             ? `last ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
             : 'never run in this scope';

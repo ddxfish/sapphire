@@ -59,6 +59,10 @@ pypdf>=4.0.0
 # EPUB parsing (Library / Knowledge v3)
 ebooklib>=0.20
 
+# HEIC/HEIF decode for Library images (iPhone default format).
+# Zero transitive pip deps beyond Pillow; wheels bundle libheif natively.
+pillow-heif>=0.16.0
+
 # Timezone data (required on Windows, bundled on Linux/macOS)
 tzdata>=2024.1
 

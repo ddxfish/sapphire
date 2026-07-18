@@ -34,6 +34,15 @@ def _privacy_excluded(rel: str) -> bool:
     return False
 
 
+# Cache floor — ALWAYS excluded, all platforms. `user/models/` is rebuildable-
+# cache territory BY CONTRACT (Krem's ruling 2026-07-18): everything under it
+# is re-downloaded on first use (HF models via the Windows HF_HOME redirect,
+# dtln, silero VAD, geonames). Anything precious must live elsewhere in user/.
+# Without this, Windows installs back up 100s of MB of model blobs.
+def _cache_excluded(rel: str) -> bool:
+    return rel == 'models' or rel.startswith('models/')
+
+
 def _exclude_patterns_setting():
     """User-defined exclude globs from settings (tolerates list OR newline string)."""
     raw = getattr(config, 'BACKUPS_EXCLUDE_PATTERNS', None) or []
@@ -48,6 +57,8 @@ def _is_excluded(rel: str, user_patterns=None) -> bool:
     `*.log`). Shared by the tar filter and the size estimator so the preview
     matches the real backup exactly."""
     if _privacy_excluded(rel):
+        return True
+    if _cache_excluded(rel):
         return True
     for pat in (user_patterns or []):
         if not pat:

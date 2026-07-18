@@ -4,7 +4,20 @@ Privacy floor always applies; user fnmatch globs add on top; the estimator sums
 uncompressed sizes with a per-folder breakdown, and the preview uses the SAME
 exclusion logic as the real tar filter.
 """
-from core.backup import _is_excluded, _privacy_excluded, backup_manager
+from core.backup import _cache_excluded, _is_excluded, _privacy_excluded, backup_manager
+
+
+def test_cache_floor_models_always_excluded():
+    """user/models/ is rebuildable-cache territory by contract (2026-07-18) —
+    hardcoded so existing installs get it (settings defaults never reach a
+    persisted settings.json)."""
+    assert _cache_excluded("models")
+    assert _cache_excluded("models/hf/blobs/abc123")
+    assert _cache_excluded("models/geonames/cities.npz")
+    assert not _cache_excluded("models-custom/x")     # no false prefix match
+    assert not _cache_excluded("history/chat.db")
+    assert _is_excluded("models/hf/x.onnx", [])       # wired into the shared filter
+    assert not _is_excluded("memory/library.db", [])
 
 
 def test_privacy_floor_always_excluded():

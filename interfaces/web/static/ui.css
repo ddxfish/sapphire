@@ -1,0 +1,220 @@
+/* ui.css — the archetype layer (2026-07-18, CSS unification campaign).
+   Sits BETWEEN shared.css (tokens) and style.css (per-page residue).
+
+   Eight archetypes replace the per-tab families as tabs convert:
+     ui-box    fenced section: heading bar (title · desc · dot · actions) + body
+     ui-rows   sticky header rows: search / filter+sort / actions
+     ui-card   item card: title, chips, ✕ top-right, hover actions, detail
+     ui-grid   responsive auto-fill grid (--ui-col sets the min column)
+     ui-chip   one chip system (ok / warn / err / busy / accent)
+     ui-dot    status circle (ok / off / err / warn)
+     ui-empty  empty state
+     ui-toggle compact switch
+   Everything reads shared.css tokens only — themes flow through untouched.
+   Rule of the campaign: when a tab adopts these, its old CSS family is
+   deleted from style.css in the same pass. */
+
+/* ── ui-box — fenced section ─────────────────────────────────────────────── */
+.ui-box {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-secondary);
+    margin-bottom: var(--space-lg);
+}
+.ui-box-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-md) var(--space-lg);
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+.ui-box-title {
+    font-size: var(--font-md);
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+}
+.ui-box-desc {
+    font-size: var(--font-sm);
+    color: var(--text-muted);
+    flex: 1;
+    min-width: 140px;
+}
+.ui-box-actions {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+.ui-box-body { padding: var(--space-lg); }
+.ui-box-body-flush { padding: 0; }
+
+/* ── ui-dot — status circle ──────────────────────────────────────────────── */
+.ui-dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    flex-shrink: 0;
+}
+.ui-dot-ok   { background: var(--success);  box-shadow: 0 0 5px var(--success-light); }
+.ui-dot-warn { background: var(--warning); }
+.ui-dot-err  { background: var(--error); }
+
+/* ── ui-rows — sticky header rows (search / filter+sort / actions) ───────── */
+.ui-rows {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+    padding-bottom: var(--space-md);
+    margin-bottom: var(--space-sm);
+    border-bottom: 1px solid var(--border-subtle);
+}
+.ui-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+}
+.ui-row-end { margin-left: auto; display: flex; gap: var(--space-sm); }
+
+/* ── ui-card — item card ─────────────────────────────────────────────────── */
+.ui-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg-secondary);
+    padding: var(--space-md) var(--space-lg);
+    line-height: 1.55;
+    transition: border-color var(--transition-fast);
+}
+/* Pin an element (e.g. an Actions row) to the card's bottom edge so it
+   aligns across a grid row regardless of body length. */
+.ui-card-bottom { margin-top: auto; padding-top: var(--space-sm); }
+.ui-card:hover { border-color: var(--border-hover); }
+.ui-card-title {
+    font-size: var(--font-base);
+    font-weight: 600;
+    color: var(--text);
+    padding-right: 26px;   /* room for the ✕ */
+}
+.ui-card-x {
+    position: absolute;
+    top: var(--space-sm);
+    right: var(--space-sm);
+    opacity: 0.35;
+    cursor: pointer;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: var(--font-base);
+    padding: 2px 6px;
+}
+.ui-card-x:hover { opacity: 1; color: var(--error-text); }
+.ui-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: var(--space-sm);
+    margin-bottom: var(--space-sm);
+    align-items: center;
+}
+.ui-card-body {
+    margin-top: var(--space-sm);
+    font-size: var(--font-base);
+    color: var(--text-secondary);
+}
+/* hover-reveal actions — the chat-toolbar pattern */
+.ui-card-actions {
+    display: flex;
+    gap: var(--space-xs);
+    margin-top: var(--space-sm);
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+.ui-card:hover .ui-card-actions,
+.ui-card:focus-within .ui-card-actions { opacity: 1; }
+/* expandable detail */
+.ui-card-detail { display: none; margin-top: var(--space-sm); }
+.ui-card.expanded .ui-card-detail { display: block; }
+
+/* ── ui-grid — responsive auto-fill ──────────────────────────────────────── */
+.ui-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--ui-col, 230px), 1fr));
+    gap: var(--space-md);
+}
+.ui-grid-sm { --ui-col: 150px; }
+.ui-grid-lg { --ui-col: 320px; }
+
+/* ── ui-chip — one chip system ───────────────────────────────────────────── */
+.ui-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--font-sm);
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.ui-chip-ok     { color: var(--success-text); border-color: var(--success-border); }
+.ui-chip-warn   { color: var(--warning-text); border-color: var(--warning-border); }
+.ui-chip-err    { color: var(--error-text);   border-color: var(--error-border); }
+.ui-chip-busy   { color: var(--trim);         border-color: var(--trim-border); }
+.ui-chip-accent { color: var(--trim);         background: var(--trim-light); border-color: transparent; }
+
+/* ── ui-empty — empty state ──────────────────────────────────────────────── */
+.ui-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: var(--font-base);
+    padding: var(--space-2xl) var(--space-lg);
+}
+
+/* ── ui-toggle — compact switch ──────────────────────────────────────────── */
+.ui-toggle {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 18px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.ui-toggle input { opacity: 0; width: 0; height: 0; }
+.ui-toggle-slider {
+    position: absolute;
+    inset: 0;
+    border-radius: 9px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-light);
+    transition: background var(--transition-fast);
+}
+.ui-toggle-slider::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+    transition: transform var(--transition-fast), background var(--transition-fast);
+}
+.ui-toggle input:checked + .ui-toggle-slider {
+    background: var(--trim-light);
+    border-color: var(--trim-border);
+}
+.ui-toggle input:checked + .ui-toggle-slider::before {
+    transform: translateX(16px);
+    background: var(--trim);
+}
