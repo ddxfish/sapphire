@@ -12,7 +12,7 @@ import { helpPills } from '../../features/video-link.js';
 import { renderScopeSidebar, bindScopeSidebar } from '../../shared/scope-sidebar.js';
 import { listScopes } from '../../shared/scope-api.js';
 import { csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab } from '../../shared/mind-common.js';
-import { setupModalClose } from '../../shared/modal.js';
+import { setupModalClose, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
 import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete } from './common.js';
 
@@ -55,6 +55,7 @@ const OPS = [
       blurb: 'Copy from Memory v1 (opened read-only, never modified) and rebuild derived metadata.',
       actions: [
           { label: 'Import from Memory v1 (all scopes)', maint: 'import_v1' },
+          { label: 'Copy knowledge into the Library (v1 + v2)', library: 'migrate' },
           { label: 'Generate missing metadata', maint: 'generate_metadata' },
       ] },
     { key: 'rescue', icon: '\u{1F6DF}', title: 'Rescue',
@@ -263,9 +264,83 @@ async function renderConsole() {
         </div>
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:stretch;margin:8px 0">
             ${OPS.map(opsCard).join('')}
+        </div>
+        <div class="palace-self-card-head" style="margin-top:18px">
+            <span class="palace-self-title">\u{1F52C} Tool console</span>
+            <span class="palace-self-hint">her READ-ONLY tools, raw output, zero fingerprints — no recall boosts, no ledger stamp, no wake tools</span>
+        </div>
+        <div class="mind-mem-card pal-admin-card" style="padding:14px 16px">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                <select id="pal-peek-tool" class="palace-select">
+                    ${Object.entries(PEEK_TOOLS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('')}
+                </select>
+                <span id="pal-peek-fields" style="display:flex;gap:8px;flex-wrap:wrap"></span>
+                <button class="mind-btn" id="pal-peek-run">▶ Run</button>
+            </div>
+            <pre id="pal-peek-out" class="pal-peek-out" hidden></pre>
         </div>`;
     bindConsole(el);
+    bindPeek(el);
     refreshRunning(el, st);
+}
+
+// ─── Tool console (read-only peek — she sees this exact text) ────────────────
+
+const PEEK_TOOLS = {
+    search_memory: { label: '\u{1F50D} search_memory', fields: [
+        { id: 'query', ph: 'query *' },
+        { id: 'layer', ph: 'layer (blank = all)' },
+        { id: 'depth', ph: 'depth 0-2', type: 'number' },
+    ] },
+    read_self: { label: '\u{1F4A0} read_self', fields: [
+        { id: 'depth', ph: 'depth 0-2', type: 'number', val: '1' },
+    ] },
+    get_recent_memories: { label: '\u{1F9E0} get_recent_memories', fields: [
+        { id: 'count', ph: 'count', type: 'number', val: '10' },
+    ] },
+    library: { label: '\u{1F3DB} library', fields: [] },
+    read_document: { label: '\u{1F4D6} read_document', fields: [
+        { id: 'document_id', ph: 'doc id *', type: 'number' },
+        { id: 'page', ph: 'page', type: 'number' },
+        { id: 'around', ph: 'around §', type: 'number' },
+    ] },
+    list_goals: { label: '\u{1F3AF} list_goals', fields: [
+        { id: 'goal_id', ph: 'goal id (deep view)', type: 'number' },
+        { id: 'status', ph: 'status (active | all…)' },
+    ] },
+};
+
+function bindPeek(el) {
+    const toolSel = el.querySelector('#pal-peek-tool');
+    const fieldsEl = el.querySelector('#pal-peek-fields');
+    const out = el.querySelector('#pal-peek-out');
+    if (!toolSel) return;
+    const renderFields = () => {
+        const t = PEEK_TOOLS[toolSel.value];
+        fieldsEl.innerHTML = (t?.fields || []).map(f =>
+            `<input class="palace-search" style="width:150px" data-peek="${f.id}"
+                type="${f.type || 'text'}" placeholder="${escAttr(f.ph)}"
+                value="${escAttr(f.val || '')}">`).join('');
+    };
+    renderFields();
+    toolSel.addEventListener('change', renderFields);
+    el.querySelector('#pal-peek-run')?.addEventListener('click', async () => {
+        const args = {};
+        fieldsEl.querySelectorAll('[data-peek]').forEach(inp => {
+            if (inp.value.trim() !== '') args[inp.dataset.peek] = inp.value.trim();
+        });
+        out.hidden = false;
+        out.textContent = '…';
+        try {
+            const r = await palaceSend('console/peek', 'POST',
+                { scope, tool: toolSel.value, args });
+            out.textContent = r.output || '(empty)';
+            out.classList.toggle('pal-peek-warn', r.ok === false);
+        } catch (e) {
+            out.textContent = `✗ ${e.message}`;
+            out.classList.add('pal-peek-warn');
+        }
+    });
 }
 
 function bindConsole(el) {
@@ -306,6 +381,22 @@ function setResult(el, key, text) {
 }
 
 async function runAction(el, spec, action) {
+    if (action.library === 'migrate') {
+        showConfirm('Copy knowledge from Memory v1 AND old palace knowledge chunks into the Library? '
+            + 'Additive and idempotent — already-copied groups skip. v1 stays read-only and keeps '
+            + 'working; nothing is deleted anywhere. Embedding continues in the background.',
+            async () => {
+                try {
+                    const r = await palaceSend('library/migrate', 'POST', {});
+                    const rep = r.report || {};
+                    const f = s => s ? `${s.imported} in · ${s.skipped} skipped · ${s.failed} failed` : '?';
+                    const msg = `v2 chunks: ${f(rep.v2)} — v1: ${rep.v1?.absent ? 'not present' : f(rep.v1)}`;
+                    setResult(el, spec.key, msg);
+                    ui.showToast('Library migration done — embedding continues in background', 'success');
+                } catch (e) { ui.showToast(e.message, 'error'); }
+            }, { title: 'Library migration', saveLabel: 'Copy' });
+        return;
+    }
     if (action.run) {
         try {
             const r = await palaceSend('librarian/run', 'POST', { scope, ...action.run });

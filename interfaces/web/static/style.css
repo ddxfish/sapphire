@@ -9491,6 +9491,16 @@ a.gallery-caption:hover {
     padding: 22px 26px; margin-top: 4px;
 }
 
+/* Admin tool console — raw tool output, exactly what she sees */
+.pal-peek-out {
+    margin-top: 12px; white-space: pre-wrap; overflow: auto; max-height: 460px;
+    font: 12px/1.55 ui-monospace, 'Cascadia Code', Consolas, monospace;
+    color: var(--text-secondary, #c9c9d6); background: var(--input-bg, #16172a);
+    border: 1px solid var(--border, #2a2b3e); border-radius: 8px;
+    padding: 12px 14px;
+}
+.pal-peek-warn { border-color: #a66; }
+
 /* Entity short description (tier-1 headline) — the layer-1 line every kind carries */
 .palace-headline-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .palace-headline-row input {
