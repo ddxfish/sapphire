@@ -9453,6 +9453,44 @@ a.gallery-caption:hover {
     margin: 10px 0 14px; }
 .pgoal-sort { margin-left: auto; }
 
+/* The Library (Knowledge v3) — drawers, docs, reader. Spacious like Goals. */
+.plib-shelf { display: flex; flex-direction: column; gap: 14px; max-width: 940px; }
+.plib-coll {
+    background: var(--bg-secondary, #1b1c2e); border: 1px solid var(--border, #2a2b3e);
+    border-radius: 10px; padding: 13px 16px; line-height: 1.5;
+}
+.plib-topic { background: transparent; border: none; border-left: 2px solid var(--border, #2a2b3e);
+    border-radius: 0; margin: 6px 0 6px 10px; padding: 4px 0 4px 14px; }
+.plib-coll-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.plib-coll-name { font-weight: 600; font-size: 14.5px; color: var(--text, #e6e6f0); }
+.plib-coll-desc { color: var(--text-muted, #9a9ab0); font-size: 12.5px; flex: 1; min-width: 120px; }
+.plib-coll-head .mind-btn-sm { opacity: 0.45; }
+.plib-coll-head:hover .mind-btn-sm { opacity: 1; }
+.plib-docs { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.plib-doc { display: flex; align-items: baseline; gap: 9px; padding: 7px 9px;
+    border-radius: 8px; }
+.plib-doc:hover { background: var(--bg-tertiary, #22233a); }
+.plib-doc-icon { flex-shrink: 0; }
+.plib-doc-main { flex: 1; min-width: 180px; }
+.plib-doc-title { font-size: 13.5px; color: var(--text, #e2e2ee); cursor: pointer; }
+.plib-doc-title:hover { color: var(--trim, #7aa2f7); text-decoration: underline; }
+.plib-doc-author { font-size: 12px; color: var(--text-muted, #999); margin-left: 8px; }
+.plib-doc-desc { font-size: 12px; color: var(--text-muted, #9a9ab0); margin-top: 2px; }
+.plib-doc-age { font-size: 11px; color: var(--text-muted, #888); white-space: nowrap; }
+.plib-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+    background: var(--bg-tertiary, #24253a); color: var(--text-muted, #aaa); }
+.plib-chip-busy { color: var(--trim, #7aa2f7); }
+.plib-chip-err { color: #e55; cursor: help; }
+.plib-doc .mind-btn-sm { opacity: 0.4; }
+.plib-doc:hover .mind-btn-sm { opacity: 1; }
+.plib-reader-title { font-weight: 600; font-size: 15px; color: var(--text, #e6e6f0); }
+.plib-reader {
+    max-width: 860px; white-space: pre-wrap; line-height: 1.65; font-size: 14px;
+    color: var(--text-secondary, #c9c9d6); background: var(--bg-secondary, #1b1c2e);
+    border: 1px solid var(--border, #2a2b3e); border-radius: 10px;
+    padding: 22px 26px; margin-top: 4px;
+}
+
 /* Entity short description (tier-1 headline) — the layer-1 line every kind carries */
 .palace-headline-row { display: flex; gap: 8px; margin-bottom: 12px; }
 .palace-headline-row input {

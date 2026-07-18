@@ -41,7 +41,6 @@ const VIEW_MODULES = {
     memories: `./views/mind-dispatch.js?view=memories${_v ? '&v=' + window.__v : ''}`,
     people:   `./views/mind-dispatch.js?view=people${_v ? '&v=' + window.__v : ''}`,
     knowledge: `./views/mind-dispatch.js?view=knowledge${_v ? '&v=' + window.__v : ''}`,
-    'ai-knowledge': `./views/ai-knowledge.js${_v}`,
     goals:    `./views/mind-dispatch.js?view=goals${_v ? '&v=' + window.__v : ''}`,
     admin:    `./views/mind-dispatch.js?view=admin${_v ? '&v=' + window.__v : ''}`,
     settings: `./views/settings.js${_v}`,

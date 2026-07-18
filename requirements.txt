@@ -56,6 +56,9 @@ Pillow>=10.0.0
 # PDF parsing
 pypdf>=4.0.0
 
+# EPUB parsing (Library / Knowledge v3)
+ebooklib>=0.20
+
 # Timezone data (required on Windows, bundled on Linux/macOS)
 tzdata>=2024.1
 
