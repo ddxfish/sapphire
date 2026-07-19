@@ -14,7 +14,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab } from '../../shared/mind-common.js';
 import { setupModalClose, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 
@@ -182,9 +182,11 @@ export default {
     async show() {
         await refreshPalaceTabs();
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
-        else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
+        else { const s = recallMindScope() || await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
         delete window._mindTab;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
+        rememberMindScope(scope);
         await loadSettings();
         render();
     },
@@ -227,8 +229,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; render(); },
-        onChanged: async (s) => { scope = s || 'default'; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; rememberMindScope(s); render(); },
+        onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderConsole();
 }

@@ -9,7 +9,7 @@ import { renderScopeSidebar, bindScopeSidebar } from '../../shared/scope-sidebar
 import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, PLUGIN_LAYERS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, PLUGIN_LAYERS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
 
 const params = new URL(import.meta.url).searchParams;
 const LAYER = params.get('layer') || '';
@@ -33,9 +33,11 @@ export default {
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderList);
         await refreshPalaceTabs();
         spec = PLUGIN_LAYERS.find(l => l.key === LAYER) || null;
-        const s = await scopeForChatTab(SCOPE_KEY);
+        const s = recallMindScope() || await scopeForChatTab(SCOPE_KEY);
         if (s) scope = s;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
+        rememberMindScope(scope);
         render();
     },
     hide() { if (unsub) { unsub(); unsub = null; } }
@@ -67,8 +69,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; _search = ''; _offset = 0; render(); },
-        onChanged: async (s) => { scope = s || 'default'; _search = ''; _offset = 0; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; rememberMindScope(s); _search = ''; _offset = 0; render(); },
+        onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); _search = ''; _offset = 0; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderList();
 }

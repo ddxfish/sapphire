@@ -11,7 +11,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { csrfHeaders, escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { showModal, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { API, PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete } from './common.js';
+import { API, PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, rememberMindScope, recallMindScope } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'knowledge';
@@ -32,9 +32,11 @@ export default {
         await refreshPalaceTabs();
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderShelf);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
-        else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
+        else { const s = recallMindScope() || await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
         delete window._mindTab;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
+        rememberMindScope(scope);
         _reader = null;
         render();
     },
@@ -60,8 +62,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; _reader = null; _filter = ''; render(); },
-        onChanged: async (s) => { scope = s || 'default'; _reader = null; _filter = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; rememberMindScope(s); _reader = null; _filter = ''; render(); },
+        onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); _reader = null; _filter = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderShelf();
 }

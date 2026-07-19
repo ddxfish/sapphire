@@ -9,7 +9,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, labelChip, keyPill, metaPanel, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'people';
@@ -31,9 +31,11 @@ export default {
         await refreshPalaceTabs();
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderEntities);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
-        else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
+        else { const s = recallMindScope() || await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
         delete window._mindTab;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
+        rememberMindScope(scope);
         try {
             const td = await palaceGet('templates');
             TPL_LIST = td.templates || [];
@@ -59,8 +61,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; _kindFilter = ''; _q = ''; render(); },
-        onChanged: async (s) => { scope = s || 'default'; _kindFilter = ''; _q = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; rememberMindScope(s); _kindFilter = ''; _q = ''; render(); },
+        onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); _kindFilter = ''; _q = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderEntities();
 }

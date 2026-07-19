@@ -8,7 +8,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, escAttr, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { setupModalClose } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, chunkCard, bindChunkCards, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'memory';
@@ -32,9 +32,11 @@ export default {
         await refreshPalaceTabs();
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderList);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
-        else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
+        else { const s = recallMindScope() || await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
         delete window._mindTab;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
+        rememberMindScope(scope);
         render();
     },
     hide() { if (unsub) { unsub(); unsub = null; } }
@@ -55,8 +57,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; resetFilters(); render(); },
-        onChanged: async (s) => { scope = s || 'default'; resetFilters(); scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; rememberMindScope(s); resetFilters(); render(); },
+        onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); resetFilters(); scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderList();
 }

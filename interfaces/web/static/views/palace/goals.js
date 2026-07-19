@@ -12,7 +12,7 @@ import { listScopes } from '../../shared/scope-api.js';
 import { escHtml, timeAgo, scopeForChatTab, subscribeMindDomain } from '../../shared/mind-common.js';
 import { showModal, showConfirm } from '../../shared/modal.js';
 import * as ui from '../../ui.js';
-import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer } from './common.js';
+import { PALACE_TABS, refreshPalaceTabs, SCOPE_ENDPOINT, palaceGet, palaceSend, describeScopeForDelete, transferButtons, bindTransfer, rememberMindScope, recallMindScope } from './common.js';
 
 const SCOPE_KEY = 'memory_scope';
 const DOMAIN = 'goal';   // mind_events domain (singular — matches the publisher)
@@ -44,9 +44,11 @@ export default {
         await refreshPalaceTabs();
         if (!unsub) unsub = subscribeMindDomain(DOMAIN, () => scope, () => container?.offsetParent !== null, renderList);
         if (window._mindScope) { scope = window._mindScope; delete window._mindScope; }
-        else { const s = await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
+        else { const s = recallMindScope() || await scopeForChatTab(SCOPE_KEY); if (s) scope = s; }
         delete window._mindTab;
         scopes = await listScopes(SCOPE_ENDPOINT);
+        if (scope !== 'default' && !scopes.some(x => x.name === scope)) scope = 'default';
+        rememberMindScope(scope);
         render();
     },
     hide() { if (unsub) { unsub(); unsub = null; } }
@@ -67,8 +69,8 @@ function render() {
     bindSectionHeader(container);
     bindScopeSidebar(container, {
         describeScope: describeScopeForDelete,
-        onScopeChange: (s) => { scope = s; _status = 'active'; _q = ''; render(); },
-        onChanged: async (s) => { scope = s || 'default'; _status = 'active'; _q = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
+        onScopeChange: (s) => { scope = s; rememberMindScope(s); _status = 'active'; _q = ''; render(); },
+        onChanged: async (s) => { scope = s || 'default'; rememberMindScope(scope); _status = 'active'; _q = ''; scopes = await listScopes(SCOPE_ENDPOINT); render(); },
     });
     renderList();
 }

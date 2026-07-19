@@ -45,6 +45,20 @@ export async function refreshPalaceTabs() {
     return PALACE_TABS;
 }
 
+// ─── Remembered scope — tab switches respect the last sidebar pick ──────────
+// (Krem 2026-07-19: every tab hop reset scope to the chat's default.)
+// Priority at tab-show: explicit handoff (window._mindScope) > remembered >
+// the active chat's scope. Survives reloads via localStorage.
+let _rememberedScope = null;
+export function rememberMindScope(s) {
+    _rememberedScope = s || null;
+    try { localStorage.setItem('palace_scope', s || ''); } catch {}
+}
+export function recallMindScope() {
+    if (_rememberedScope) return _rememberedScope;
+    try { return localStorage.getItem('palace_scope') || null; } catch { return null; }
+}
+
 export async function palaceGet(path) {
     const r = await fetch(`${API}/${path}`, { credentials: 'same-origin' });
     const data = await r.json().catch(() => ({}));
