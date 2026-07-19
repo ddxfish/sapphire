@@ -401,18 +401,23 @@ class ConversationHistory:
         return display_msgs
 
     def get_messages_for_llm(
-        self, 
+        self,
         reserved_tokens: int = 0,
         provider: str = None,
-        in_tool_cycle: bool = False
+        in_tool_cycle: bool = False,
+        context_limit: int = None
     ) -> List[Dict[str, Any]]:
         """
         Get messages formatted for LLM with TRIMMING applied.
-        
+
         Args:
             reserved_tokens: Tokens to reserve for system prompt + current user message.
             provider: Target provider ('claude', 'lmstudio', etc) for format decisions.
             in_tool_cycle: True if we're mid-tool-cycle and need thinking_raw for Claude.
+            context_limit: Per-call override for the token trim budget. None =
+                the global CONTEXT_LIMIT setting. Continuity tasks that carry
+                their own limit (the librarian's night sessions) pass it here —
+                before this, the global setting silently capped them.
         
         Notes:
             - Thinking is NEVER sent to LLMs (they don't need previous reasoning)
@@ -516,8 +521,9 @@ class ConversationHistory:
                     msgs.pop(0)
         
         # TRIMMING STEP 2: Token-based trimming (skip if context_limit is 0)
-        context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
-        
+        if context_limit is None:
+            context_limit = getattr(config, 'CONTEXT_LIMIT', 32000)
+
         if context_limit > 0:
             safety_buffer = int(context_limit * 0.01) + 512
             effective_limit = context_limit - safety_buffer - reserved_tokens
@@ -2161,8 +2167,11 @@ class ChatSessionManager:
             logger.error(f"Failed to read settings for chat '{chat_name}': {e}")
             return None
 
-    def read_chat_messages(self, chat_name: str, provider: str = None) -> List[Dict[str, Any]]:
-        """Read messages from a named chat WITHOUT switching active chat."""
+    def read_chat_messages(self, chat_name: str, provider: str = None,
+                           context_limit: int = None) -> List[Dict[str, Any]]:
+        """Read messages from a named chat WITHOUT switching active chat.
+        context_limit overrides the global trim budget for this read (the
+        librarian's 128K night sessions)."""
         self._ensure_db()
         try:
             with self._get_connection() as conn:
@@ -2179,7 +2188,8 @@ class ChatSessionManager:
                 # Apply same trimming as get_messages_for_llm
                 chat = ConversationHistory()
                 chat.messages = messages
-                return chat.get_messages_for_llm(provider=provider)
+                return chat.get_messages_for_llm(provider=provider,
+                                                 context_limit=context_limit)
         except Exception as e:
             logger.error(f"Failed to read chat '{chat_name}': {e}")
             return []

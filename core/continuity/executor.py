@@ -600,9 +600,13 @@ class ContinuityExecutor:
             if _ev_images:
                 msg = msg + self._save_event_images(_ev_images, target_chat, session_manager)
 
-            # Read history from target chat WITHOUT switching active chat
+            # Read history from target chat WITHOUT switching active chat.
+            # The task's context_limit (when set) governs the history trim
+            # too — before this, the global CONTEXT_LIMIT silently capped
+            # long-session tasks (the librarian's 128K nights) at read time.
             history_messages = session_manager.read_chat_messages(
-                target_chat, provider=task_settings.get("provider")
+                target_chat, provider=task_settings.get("provider"),
+                context_limit=task_settings.get("context_limit")
             )
 
             try:
@@ -645,6 +649,11 @@ class ContinuityExecutor:
                     session_manager.append_to_chat(target_chat, msg, response or "")
 
                 if degraded:
+                    # Surface degradation in the RESULT too — callers that
+                    # gate work on the run (the librarian's drain stamps)
+                    # must be able to tell "model failed" from "model
+                    # declined"; success stays True for backward compat.
+                    result["degraded"] = degraded
                     publish(Events.CONTINUITY_TASK_ERROR, {
                         "task": task.get("name", "Unknown"),
                         "error": degraded,
