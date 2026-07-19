@@ -168,10 +168,13 @@
 .ui-card-detail { display: none; margin-top: var(--space-sm); }
 .ui-card.expanded .ui-card-detail { display: block; }
 
-/* ── ui-grid — responsive auto-fill ──────────────────────────────────────── */
+/* ── ui-grid — responsive auto-fill, capped at 5 columns ─────────────────── */
+/* The max() floor keeps each track at least 1/5 of the row (minus gaps), so
+   auto-fill can never place a 6th column on ultrawide panels. */
 .ui-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(var(--ui-col, 230px), 1fr));
+    grid-template-columns: repeat(auto-fill,
+        minmax(max(var(--ui-col, 230px), calc((100% - 4 * var(--space-md)) / 5)), 1fr));
     gap: var(--space-md);
 }
 .ui-grid-sm { --ui-col: 150px; }

@@ -21,9 +21,20 @@ const SCOPE_KEY = 'memory_scope';
 // The librarian pipeline, in nightly order. Toggle = "part of the nightly
 // recipe"; a Run click is explicit human intent and always works (Krem
 // ruling, 2026-07-16).
+// Each pass carries its help card (the ? modal): a plain paragraph plus
+// Input → Processing → Output and the exact tools she holds. Written at
+// grade 10-12 reading level on purpose — same facts, easier read (Krem's
+// ruling 2026-07-19; the librarian is novel AND complex).
 const PASSES = [
     { key: 'dates', icon: '\u{1F5D3}', title: 'Dates',
       blurb: 'Resolve date mentions into real calendar dates — feeds Upcoming Events.',
+      help: {
+          about: 'Finds memories that mention a date or time, and turns those mentions into real calendar dates. These dates feed the Upcoming and Just-happened lists on her Self page.',
+          input: 'A batch of memories that mention time. Each one is shown with the date it was saved, plus worked examples.',
+          processing: 'She works out what date the text points to, using the saved date as the anchor. "Tomorrow at noon" saved July 15 becomes July 16, 12:00. Code rejects any date that is not real.',
+          output: 'Each memory gets its dates filed. "No real date here" counts as an answer too. Once filed, a memory never comes back into this queue.',
+          tools: ['set_event_dates — one call files every memory in the message'],
+      },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'dates' } },
           { label: 'Redate all (built-in rules)', maint: 'redate_regex' },
@@ -31,20 +42,57 @@ const PASSES = [
       ] },
     { key: 'link', icon: '\u{1F517}', title: 'Link',
       blurb: 'Connect memories to the existing people, places, and things they name.',
+      help: {
+          about: 'Connects memories to the people, places, and things they mention. These links are the paths her recall follows — one memory pulls in the ones connected to it.',
+          input: 'Memories that name something the system could not match on its own, plus a list of the people and things she already knows.',
+          processing: 'She decides which person or thing each memory is really about. Names must match something that already exists — linking never creates a new entry. Unknown names get a note instead of a guess.',
+          output: 'Links between memories and what they mention. "No link needed" is a recorded answer too.',
+          tools: ['set_links — one call covers every memory in the message'],
+      },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'link' } },
       ] },
     { key: 'dedup', icon: '\u{1F46F}', title: 'Dedup',
       blurb: 'Fold measured near-duplicates — similarity-gated in code, reversible.',
+      help: {
+          about: 'Folds memories that record the same thing twice. Code finds the lookalikes first, by measuring how similar the stored memories are. She only answers one question per group: same thing, or actually different?',
+          input: 'Groups of near-identical memories. Every pair in a group already passed the similarity bar before she sees it.',
+          processing: 'For each group she either merges it or leaves it alone. Code re-checks the math before any merge goes through. Favorites and core memories refuse to merge. By default her rewording is ignored — the longest original text survives word for word.',
+          output: 'Each merged group becomes one memory that keeps the earliest date. The originals are hidden, not deleted, and can be brought back. Everything scanned gets marked as checked, so it never recycles.',
+          tools: ['merge_memories(ids) — one call per group',
+                  'Dry-run scan (button below) — the same finder, no AI, no marks'],
+      },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'dedup' } },
           { label: '🔍 Dry-run scan (no model)', preview: 'dedup' },
       ] },
     { key: 'sort', icon: '\u{1F9F9}', title: 'Sort',
       blurb: 'The review charter: mark, split, promote, retire — oldest first.',
+      help: {
+          about: 'The review pass. She reads her oldest unreviewed memories and picks one action for each: keep it, split it, promote it, or retire it.',
+          input: 'A batch of raw memories, oldest first, full text, plus her review charter ("be gentle with the early ones").',
+          processing: 'One action per memory. Code blocks her from retiring favorites and core memories. Importance ratings only count when the Importance feature is turned on.',
+          output: 'Each memory gets marked as reviewed. Splits, promotions, and retirements are all soft and reversible, and every action lands in the Ledger.',
+          tools: ['mark_processed(id, importance?, favorite?) — fine as it is (the default)',
+                  'atomize_memory(id, parts) — split a tangled entry',
+                  'promote_memory(id, layer) — copy up to her self sheet or onto a person/thing',
+                  'prune_memory(id, reason) — soft retire, reversible'],
+      },
       actions: [
           { label: '▶ Run now (whole scope)', run: { what: 'all', pass: 'sort' } },
           { label: '▶ Run now (self layer only)', run: { what: 'self', pass: 'sort' } },
+      ] },
+    { key: 'self', icon: '\u{1FA9E}', title: 'Self',
+      blurb: 'She tends her own self sheet, then takes one final look to verify.',
+      help: {
+          about: 'Her self-sheet hour, last in the night so the sort pass\'s promotions have already landed. She reads her own sheet, updates what has drifted, then gets the updated sheet back for one final check before the night ends.',
+          input: 'Her live self sheet — identity, values, projects, relationships, voice, handles, origin — shown in full.',
+          processing: 'Two rounds. First she tends: update the sections that no longer read true; a good section needs no call. Then she verifies: the updated sheet comes back, and she can still fix it. Code folds duplicate lines, and the wake-tools section can never be written.',
+          output: 'An updated sheet. Every edit saves the old version into the sheet\'s history, so nothing is ever lost.',
+          tools: ['update_self(section, content) — rewrite one section whole'],
+      },
+      actions: [
+          { label: '▶ Run now', run: { what: 'all', pass: 'self' } },
       ] },
 ];
 
@@ -201,17 +249,49 @@ function actionsDropdown(spec, libDisabled) {
 function capsLine(key) {
     // The caps that govern this pass, inline — glanceable, click to adjust.
     const s = settings || {};
-    const bits = [
-        `batch ${s.librarian_batch_size ?? 20}`,
-        `${s.librarian_items_per_message ?? 10}/msg`,
-        `${s.librarian_max_passes_per_day ?? 3}/day`,
-    ];
+    const bits = key === 'self'
+        ? [`${s.librarian_max_passes_per_day ?? 3}/day`]   // batch/msg N/A: the sheet is the batch
+        : [
+            `batch ${s.librarian_batch_size ?? 20}`,
+            `${s.librarian_items_per_message ?? 10}/msg`,
+            `${s.librarian_max_passes_per_day ?? 3}/day`,
+        ];
     if (key === 'dedup') {
         bits.push(`≥${s.librarian_merge_threshold ?? 0.9}`);
         bits.push(`rewrite ${s.librarian_merge_rewrite ? 'on' : 'off'}`);
     }
     if (s.librarian_model) bits.push(String(s.librarian_model));
     return bits.join(' · ');
+}
+
+function helpModal(p) {
+    const h = p.help;
+    if (!h) return;
+    document.querySelector('.mind-modal-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal palace-ent-modal">
+            <div class="pr-modal-header">
+                <h3>${p.icon} ${escHtml(p.title)} — what this pass does</h3>
+                <button class="mind-btn-sm mind-modal-close">✕</button>
+            </div>
+            <div class="pr-modal-body view-scroll">
+                <p style="margin-top:0">${escHtml(h.about)}</p>
+                <p><b>Input</b> — ${escHtml(h.input)}</p>
+                <p><b>Processing</b> — ${escHtml(h.processing)}</p>
+                <p><b>Output</b> — ${escHtml(h.output)}</p>
+                <p style="margin-bottom:4px"><b>Tools she holds</b></p>
+                <ul style="margin-top:0">
+                    ${(h.tools || []).map(t => `<li>${escHtml(t)}</li>`).join('')}
+                </ul>
+                <p class="ui-meta-text" style="white-space:normal">Every pass runs as her. A session starts with her self sheet loaded, all of one night shares one chat, and every action is logged in the Ledger.</p>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
+    setupModalClose(overlay, close);
 }
 
 function passCard(p, st, libEnabled) {
@@ -224,7 +304,8 @@ function passCard(p, st, libEnabled) {
         <div class="ui-card" data-card="${escAttr(p.key)}" style="${on ? '' : 'opacity:.6'}">
             <div class="ui-row">
                 <span class="ui-card-title" style="padding-right:0">${p.icon} ${escHtml(p.title)}</span>
-                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Librarian settings" style="margin-left:auto">⚙</button>
+                <button class="mind-btn-sm" data-pass-help="${escAttr(p.key)}" title="What this pass does" style="margin-left:auto">?</button>
+                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Librarian settings">⚙</button>
                 <label class="ui-toggle" title="Include this pass in the nightly round. Off = the nightly skips it; ▶ Run always works.">
                     <input type="checkbox" data-pass-toggle="${escAttr(p.key)}" ${on ? 'checked' : ''}>
                     <span class="ui-toggle-slider"></span>
@@ -233,7 +314,7 @@ function passCard(p, st, libEnabled) {
             <div class="ui-card-body">${escHtml(p.blurb)}</div>
             <div class="ui-card-meta">
                 <span class="ui-chip" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'alpha off')}</span>
-                <span class="ui-meta-text" data-caps="${escAttr(p.key)}" style="cursor:pointer" title="The caps governing this pass — click to adjust">${escHtml(capsLine(p.key))}</span>
+                <span class="ui-meta-text" data-caps="${escAttr(p.key)}" style="cursor:pointer;white-space:normal" title="The caps governing this pass — click to adjust">${escHtml(capsLine(p.key))}</span>
             </div>
             ${actionsDropdown(p, !libEnabled)}
             <div class="ui-card-body" data-result="${escAttr(p.key)}"></div>
@@ -297,13 +378,15 @@ async function renderConsole() {
                 <span class="ui-box-desc">her READ-ONLY tools, raw output, zero fingerprints — no recall boosts, no ledger stamp, no wake tools</span>
             </div>
             <div class="ui-box-body">
-                <div class="ui-row">
-                    <select id="pal-peek-tool" class="palace-select">
-                        ${Object.entries(PEEK_TOOLS).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('')}
-                    </select>
-                    <span id="pal-peek-fields" class="ui-row" style="gap:8px"></span>
-                    <button class="mind-btn" id="pal-peek-run">▶ Run</button>
-                </div>
+                ${Object.entries(PEEK_TOOLS).map(([k, t]) => `
+                <div class="ui-row" data-peek-row="${escAttr(k)}" style="width:100%;margin-bottom:8px">
+                    <span class="ui-meta-text" style="min-width:180px;color:var(--text-secondary)">${t.label}</span>
+                    ${(t.fields || []).map(f =>
+                        `<input class="palace-search" style="flex:1 1 140px;max-width:240px" data-peek="${escAttr(f.id)}"
+                            type="${f.type || 'text'}" placeholder="${escAttr(f.ph)}"
+                            value="${escAttr(f.val || '')}">`).join('')}
+                    <button class="mind-btn-sm" data-peek-run="${escAttr(k)}" style="margin-left:auto">▶ Run</button>
+                </div>`).join('')}
                 <pre id="pal-peek-out" class="pal-peek-out" hidden></pre>
             </div>
         </div>`;
@@ -339,36 +422,29 @@ const PEEK_TOOLS = {
 };
 
 function bindPeek(el) {
-    const toolSel = el.querySelector('#pal-peek-tool');
-    const fieldsEl = el.querySelector('#pal-peek-fields');
+    // One full-width row per tool: name · params · Run, wrapping as the
+    // panel narrows. One shared output pane below the rows.
     const out = el.querySelector('#pal-peek-out');
-    if (!toolSel) return;
-    const renderFields = () => {
-        const t = PEEK_TOOLS[toolSel.value];
-        fieldsEl.innerHTML = (t?.fields || []).map(f =>
-            `<input class="palace-search" style="width:150px" data-peek="${f.id}"
-                type="${f.type || 'text'}" placeholder="${escAttr(f.ph)}"
-                value="${escAttr(f.val || '')}">`).join('');
-    };
-    renderFields();
-    toolSel.addEventListener('change', renderFields);
-    el.querySelector('#pal-peek-run')?.addEventListener('click', async () => {
-        const args = {};
-        fieldsEl.querySelectorAll('[data-peek]').forEach(inp => {
-            if (inp.value.trim() !== '') args[inp.dataset.peek] = inp.value.trim();
-        });
-        out.hidden = false;
-        out.textContent = '…';
-        try {
-            const r = await palaceSend('console/peek', 'POST',
-                { scope, tool: toolSel.value, args });
-            out.textContent = r.output || '(empty)';
-            out.classList.toggle('pal-peek-warn', r.ok === false);
-        } catch (e) {
-            out.textContent = `✗ ${e.message}`;
-            out.classList.add('pal-peek-warn');
-        }
-    });
+    el.querySelectorAll('[data-peek-run]').forEach(btn =>
+        btn.addEventListener('click', async () => {
+            const tool = btn.dataset.peekRun;
+            const row = el.querySelector(`[data-peek-row="${tool}"]`);
+            const args = {};
+            row?.querySelectorAll('[data-peek]').forEach(inp => {
+                if (inp.value.trim() !== '') args[inp.dataset.peek] = inp.value.trim();
+            });
+            out.hidden = false;
+            out.textContent = '…';
+            try {
+                const r = await palaceSend('console/peek', 'POST',
+                    { scope, tool, args });
+                out.textContent = r.output || '(empty)';
+                out.classList.toggle('pal-peek-warn', r.ok === false);
+            } catch (e) {
+                out.textContent = `✗ ${e.message}`;
+                out.classList.add('pal-peek-warn');
+            }
+        }));
 }
 
 function bindConsole(el) {
@@ -407,6 +483,13 @@ function bindConsole(el) {
         b.addEventListener('click', () => {
             const key = b.dataset.passGear || b.dataset.caps;
             settingsModal(key === 'dedup' ? 'dedup' : 'general');
+        }));
+
+    // ? per pass — the IPO help modal.
+    el.querySelectorAll('[data-pass-help]').forEach(b =>
+        b.addEventListener('click', () => {
+            const p = PASSES.find(x => x.key === b.dataset.passHelp);
+            if (p) helpModal(p);
         }));
 }
 
@@ -558,14 +641,17 @@ async function settingsModal(initialTab = 'general') {
         <div class="pr-modal palace-ent-modal">
             <div class="pr-modal-header">
                 <h3>⚙ Librarian settings</h3>
-                <button class="mind-btn-sm mind-modal-close">✕</button>
+                <span style="display:flex;gap:8px;align-items:center">
+                    <button class="mind-btn" id="pal-adm-settings-save"
+                        style="background:var(--trim);border-color:var(--trim);color:var(--bg)">Save</button>
+                    <button class="mind-btn-sm mind-modal-close">✕</button>
+                </span>
             </div>
             <div class="pr-modal-body view-scroll">
                 <div class="ui-row" style="margin-bottom:10px">
                     ${SETTINGS_TABS.map(t => `<button class="ui-pill" data-tab="${t.key}">${t.label}</button>`).join('')}
                 </div>
                 ${SETTINGS_TABS.map(t => `<div data-pane="${t.key}" style="display:none"></div>`).join('')}
-                <div class="palace-more-wrap"><button class="mind-btn" id="pal-adm-settings-save">Save</button></div>
             </div>
         </div>`;
     document.body.appendChild(overlay);

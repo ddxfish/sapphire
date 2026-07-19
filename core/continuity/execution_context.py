@@ -132,8 +132,13 @@ class ExecutionContext:
         ai_name = 'Sapphire'
         system_prompt = system_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
 
-        # Datetime injection
-        if self.task_settings.get("inject_datetime"):
+        # Datetime injection. inject_datetime='date' stamps the DAY only —
+        # for multi-run sessions (librarian nights) a minute stamp would
+        # change the system prompt every run and torch the provider's
+        # prompt cache across the whole session. True keeps the classic
+        # minute form.
+        inject_dt = self.task_settings.get("inject_datetime")
+        if inject_dt:
             try:
                 from zoneinfo import ZoneInfo
                 tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
@@ -142,7 +147,17 @@ class ExecutionContext:
             except Exception:
                 now = datetime.now()
                 tz_label = ""
-            system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}{tz_label}"
+            if inject_dt == 'date':
+                system_prompt = f"{system_prompt}\n\nCurrent date: {now.strftime('%A, %B %d, %Y')}{tz_label}"
+            else:
+                system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}{tz_label}"
+
+        # Task-supplied append (e.g. the librarian's session-start self
+        # snapshot) — ambient identity context, not a message. Rides every
+        # round; stable within a session so the prompt cache holds.
+        extra = self.task_settings.get("system_append")
+        if extra:
+            system_prompt = f"{system_prompt}\n\n{extra}"
 
         return system_prompt
 

@@ -333,6 +333,7 @@ class ContinuityExecutor:
             "max_tool_rounds": task.get("max_tool_rounds"),
             "max_parallel_tools": task.get("max_parallel_tools"),
             "context_limit": task.get("context_limit"),
+            "system_append": task.get("system_append"),
         }
         missing_scopes = []
         for setting_key in scope_setting_keys():
