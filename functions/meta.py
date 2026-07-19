@@ -288,6 +288,24 @@ def _normalize_name(name: str) -> str:
     return n
 
 
+def _resolve_name(name, candidates):
+    """Strictly match a name against real candidates: exact, then case-insensitive,
+    then dash/underscore/space-collapsed. Returns the store's own name or None."""
+    if not name:
+        return None
+    if name in candidates:
+        return name
+    low = name.lower().strip()
+    for c in candidates:
+        if c.lower() == low:
+            return c
+    norm = _normalize_name(name)
+    for c in candidates:
+        if _normalize_name(c) == norm:
+            return c
+    return None
+
+
 def _require_component(component):
     if component not in VALID_COMPONENTS:
         raise MetaError(f"Invalid component '{component}'. Valid: {', '.join(VALID_COMPONENTS)}")
@@ -416,10 +434,10 @@ def _prompt_view(args):
             header += f"\n[Pieces: {_pieces_summary()}]"
         return f"{header}\n\n{content}", True
 
-    name = _normalize_name(name)
-    prompt_data = prompts.get_prompt(name)
+    name = _resolve_name(name, prompts.list_prompts())
+    prompt_data = prompts.get_prompt(name) if name else None
     if not prompt_data:
-        return f"Prompt '{name}' not found.", False
+        return f"Prompt '{args.get('name')}' not found. Available: {', '.join(prompts.list_prompts())}", False
     content = prompt_data.get('content') if isinstance(prompt_data, dict) else str(prompt_data)
     prompt_type = prompt_data.get('type', 'unknown') if isinstance(prompt_data, dict) else 'monolith'
     return f"[{name} - {prompt_type}]\n\n{content}", True
@@ -440,10 +458,10 @@ def _prompt_switch(args):
             lines.append(f"  {n} ({ptype}, {len(content)} chars){marker}")
         return '\n'.join(lines), True
 
-    name = _normalize_name(name)
-    prompt_data = prompts.get_prompt(name)
+    name = _resolve_name(name, prompts.list_prompts())
+    prompt_data = prompts.get_prompt(name) if name else None
     if not prompt_data:
-        return f"Prompt '{name}' not found.", False
+        return f"Prompt '{args.get('name')}' not found. Available: {', '.join(prompts.list_prompts())}", False
 
     prompts.clear_transients()  # a mood doesn't survive becoming someone else
     ok, msg = prompts.activate_prompt(name, _system())
@@ -488,8 +506,9 @@ def _prompt_create(args):
     content = args.get('content', '')
     if not name or not content:
         return "Both name and content are required.", False
-    if prompts.get_prompt(name):
-        return f"Prompt '{name}' already exists — pick another name, or prompt_switch to it and use prompt_edit.", False
+    existing = _resolve_name(args.get('name', ''), prompts.list_prompts())
+    if existing:
+        return f"Prompt '{existing}' already exists — pick another name, or prompt_switch to it and use prompt_edit.", False
 
     ok, msg = prompts.save_prompt(name, {"type": "monolith", "content": content})
     if not ok:
@@ -505,8 +524,9 @@ def _prompt_pieces(args):
 
     action = (args.get('action') or '').lower().strip()
     component = _normalize_component(args.get('component', ''))
-    key = _normalize_name(args.get('key', ''))
     comps = prompts.prompt_manager.components
+    key = args.get('key', '')
+    key = _resolve_name(key, comps.get(component, {})) or _normalize_name(key)
 
     if action == 'list':
         if not component:

@@ -198,6 +198,22 @@ function actionsDropdown(spec, libDisabled) {
         </details>`;
 }
 
+function capsLine(key) {
+    // The caps that govern this pass, inline — glanceable, click to adjust.
+    const s = settings || {};
+    const bits = [
+        `batch ${s.librarian_batch_size ?? 20}`,
+        `${s.librarian_items_per_message ?? 10}/msg`,
+        `${s.librarian_max_passes_per_day ?? 3}/day`,
+    ];
+    if (key === 'dedup') {
+        bits.push(`≥${s.librarian_merge_threshold ?? 0.9}`);
+        bits.push(`rewrite ${s.librarian_merge_rewrite ? 'on' : 'off'}`);
+    }
+    if (s.librarian_model) bits.push(String(s.librarian_model));
+    return bits.join(' · ');
+}
+
 function passCard(p, st, libEnabled) {
     const on = passEnabled(p.key);
     const mine = (st.scopes || []).find(s => s.scope === scope && s.pass === p.key);
@@ -208,13 +224,17 @@ function passCard(p, st, libEnabled) {
         <div class="ui-card" data-card="${escAttr(p.key)}" style="${on ? '' : 'opacity:.6'}">
             <div class="ui-row">
                 <span class="ui-card-title" style="padding-right:0">${p.icon} ${escHtml(p.title)}</span>
-                <label class="ui-toggle" style="margin-left:auto" title="Include this pass in the nightly round. Off = the nightly skips it; ▶ Run always works.">
+                <button class="mind-btn-sm" data-pass-gear="${escAttr(p.key)}" title="Librarian settings" style="margin-left:auto">⚙</button>
+                <label class="ui-toggle" title="Include this pass in the nightly round. Off = the nightly skips it; ▶ Run always works.">
                     <input type="checkbox" data-pass-toggle="${escAttr(p.key)}" ${on ? 'checked' : ''}>
                     <span class="ui-toggle-slider"></span>
                 </label>
             </div>
             <div class="ui-card-body">${escHtml(p.blurb)}</div>
-            <div class="ui-card-meta"><span class="ui-chip" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'alpha off')}</span></div>
+            <div class="ui-card-meta">
+                <span class="ui-chip" data-pass-status="${escAttr(p.key)}">${escHtml(libEnabled ? statusLine : 'alpha off')}</span>
+                <span class="ui-meta-text" data-caps="${escAttr(p.key)}" style="cursor:pointer" title="The caps governing this pass — click to adjust">${escHtml(capsLine(p.key))}</span>
+            </div>
             ${actionsDropdown(p, !libEnabled)}
             <div class="ui-card-body" data-result="${escAttr(p.key)}"></div>
         </div>`;
@@ -380,7 +400,20 @@ function bindConsole(el) {
         });
     });
 
-    el.querySelector('#pal-adm-settings')?.addEventListener('click', settingsModal);
+    el.querySelector('#pal-adm-settings')?.addEventListener('click', () => settingsModal('general'));
+
+    // Per-card gears + the caps line itself: open settings on that pass's tab.
+    el.querySelectorAll('[data-pass-gear],[data-caps]').forEach(b =>
+        b.addEventListener('click', () => {
+            const key = b.dataset.passGear || b.dataset.caps;
+            settingsModal(key === 'dedup' ? 'dedup' : 'general');
+        }));
+}
+
+function refreshCapsLines(el) {
+    el?.querySelectorAll('[data-caps]').forEach(s => {
+        s.textContent = capsLine(s.dataset.caps);
+    });
 }
 
 function setResult(el, key, text) {
@@ -489,7 +522,15 @@ async function refreshRunning(el, preloaded) {
 // ⚙ Librarian settings — the hidden manifest fields, rendered by the SAME
 // shared renderer the Settings page uses (schema lives in plugin.json only).
 // The 4 pass toggles are excluded — the cards are their home.
-async function settingsModal() {
+// Tab → the settings keys that belong to it. Passes without unique settings
+// share General; future per-pass settings slot into new tabs here.
+const SETTINGS_TABS = [
+    { key: 'general', label: 'General', match: () => true },
+    { key: 'dedup', label: '\u{1F46F} Dedup',
+      keys: ['librarian_merge_threshold', 'librarian_merge_rewrite'] },
+];
+
+async function settingsModal(initialTab = 'general') {
     let schema = [];
     try {
         const r = await fetch('/api/webui/plugins', { credentials: 'same-origin' });
@@ -500,6 +541,13 @@ async function settingsModal() {
         .filter(f => f.hidden && !f.key.startsWith('librarian_pass_'))
         .map(f => ({ ...f, hidden: false }));
     if (!fields.length) { ui.showToast('Settings schema unavailable', 'error'); return; }
+    const claimed = new Set(SETTINGS_TABS.flatMap(t => t.keys || []));
+    const groups = {};
+    for (const t of SETTINGS_TABS) {
+        groups[t.key] = t.keys
+            ? fields.filter(f => t.keys.includes(f.key))
+            : fields.filter(f => !claimed.has(f.key));
+    }
     const { renderSettingsForm, readSettingsForm } =
         await import('../../shared/plugin-settings-renderer.js');
 
@@ -513,7 +561,10 @@ async function settingsModal() {
                 <button class="mind-btn-sm mind-modal-close">✕</button>
             </div>
             <div class="pr-modal-body view-scroll">
-                <div id="pal-adm-settings-form"></div>
+                <div class="ui-row" style="margin-bottom:10px">
+                    ${SETTINGS_TABS.map(t => `<button class="ui-pill" data-tab="${t.key}">${t.label}</button>`).join('')}
+                </div>
+                ${SETTINGS_TABS.map(t => `<div data-pane="${t.key}" style="display:none"></div>`).join('')}
                 <div class="palace-more-wrap"><button class="mind-btn" id="pal-adm-settings-save">Save</button></div>
             </div>
         </div>`;
@@ -521,15 +572,34 @@ async function settingsModal() {
     const close = () => overlay.remove();
     overlay.querySelector('.mind-modal-close').addEventListener('click', close);
     setupModalClose(overlay, close);
-    const form = overlay.querySelector('#pal-adm-settings-form');
-    renderSettingsForm(form, fields, settings);
+    // Both panes render once and stay live — tab switches only toggle
+    // display, so half-edited values survive tab hops and Save reads both.
+    for (const t of SETTINGS_TABS) {
+        renderSettingsForm(overlay.querySelector(`[data-pane="${t.key}"]`),
+                           groups[t.key], settings);
+    }
+    const selectTab = (key) => {
+        overlay.querySelectorAll('[data-tab]').forEach(b =>
+            b.classList.toggle('ui-pill-on', b.dataset.tab === key));
+        overlay.querySelectorAll('[data-pane]').forEach(p =>
+            p.style.display = p.dataset.pane === key ? '' : 'none');
+    };
+    overlay.querySelectorAll('[data-tab]').forEach(b =>
+        b.addEventListener('click', () => selectTab(b.dataset.tab)));
+    selectTab(SETTINGS_TABS.some(t => t.key === initialTab) ? initialTab : 'general');
     overlay.querySelector('#pal-adm-settings-save').addEventListener('click', async () => {
         try {
-            await savePluginSettings(readSettingsForm(form, fields));
+            const patch = {};
+            for (const t of SETTINGS_TABS) {
+                Object.assign(patch, readSettingsForm(
+                    overlay.querySelector(`[data-pane="${t.key}"]`), groups[t.key]));
+            }
+            await savePluginSettings(patch);
             ui.showToast('Librarian settings saved', 'success');
             close();
             const nl = content()?.querySelector('#pal-adm-nightly');
             if (nl) nl.textContent = nightlySummary();
+            refreshCapsLines(content());
         } catch (e) { ui.showToast(`Save failed: ${e.message}`, 'error'); }
     });
 }
