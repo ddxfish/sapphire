@@ -23,8 +23,9 @@ let _search = '';
 let _offset = 0;
 let _searchTimer = null;
 let _layer = '';           // '' = both streams; 'events' | 'self' filter pills
+let _keyed = false;        // 🔒 only memories carrying a private key
 
-function resetFilters() { _search = ''; _offset = 0; _layer = ''; }
+function resetFilters() { _search = ''; _offset = 0; _layer = ''; _keyed = false; }
 
 export default {
     init(el) { container = el; },
@@ -73,6 +74,7 @@ async function renderList() {
                                          layer: _layer || 'events,self',
                                          exclude_sheet: 1 });
     if (_search) params.set('q', _search);
+    if (_keyed) params.set('keyed', 1);
     let data;
     try {
         data = await palaceGet(`chunks?${params}`);
@@ -92,6 +94,7 @@ async function renderList() {
             </div>
             <div class="ui-row">
                 ${pill('', 'All')}${pill('events', 'Events')}${pill('self', 'Self')}
+                <button class="ui-pill ${_keyed ? 'ui-pill-on' : ''}" id="pal-mem-keyed" title="Only memories saved with a private key">🔒 Keyed</button>
             </div>
             <div class="ui-row">
                 <button class="mind-btn" id="pal-mem-add">+ Add Memory</button>
@@ -112,6 +115,11 @@ async function renderList() {
             _offset = 0;
             renderList();
         });
+    });
+    el.querySelector('#pal-mem-keyed')?.addEventListener('click', () => {
+        _keyed = !_keyed;
+        _offset = 0;
+        renderList();
     });
     const searchBox = el.querySelector('#pal-mem-search');
     searchBox?.addEventListener('input', () => {
