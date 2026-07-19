@@ -37,6 +37,7 @@ const PASSES = [
       },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'dates' } },
+          { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'dates' } },
           { label: 'Redate all (built-in rules)', maint: 'redate_regex' },
           { label: 'Redate all (librarian model)', maint: 'redate_model' },
       ] },
@@ -51,6 +52,7 @@ const PASSES = [
       },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'link' } },
+          { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'link' } },
       ] },
     { key: 'dedup', icon: '\u{1F46F}', title: 'Dedup',
       blurb: 'Fold measured near-duplicates — similarity-gated in code, reversible.',
@@ -64,6 +66,7 @@ const PASSES = [
       },
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'dedup' } },
+          { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'dedup' } },
           { label: '🔍 Dry-run scan (no model)', preview: 'dedup' },
       ] },
     { key: 'sort', icon: '\u{1F9F9}', title: 'Sort',
@@ -80,6 +83,7 @@ const PASSES = [
       },
       actions: [
           { label: '▶ Run now (whole scope)', run: { what: 'all', pass: 'sort' } },
+          { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'sort' } },
           { label: '▶ Run now (self layer only)', run: { what: 'self', pass: 'sort' } },
       ] },
     { key: 'self', icon: '\u{1FA9E}', title: 'Self',
@@ -535,6 +539,34 @@ async function runAction(el, spec, action) {
             }, { title: 'Library migration', saveLabel: 'Copy' });
         return;
     }
+    if (action.drain) {
+        // Run ALL — fetch the LIVE queue depth, then confirm with real
+        // numbers + a rough token range before draining the whole thing.
+        let d;
+        try {
+            d = await palaceGet(`librarian/queue-depth?scope=${encodeURIComponent(scope)}&kind=${action.drain.pass}`);
+        } catch (e) { ui.showToast(e.message, 'error'); return; }
+        if (!d.depth) {
+            ui.showToast(`Nothing queued for the ${action.drain.pass} pass in '${scope}'.`, 'success');
+            return;
+        }
+        const tk = n => n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
+        showConfirm(
+            `Drain the ENTIRE ${action.drain.pass} queue for scope '${scope}'?\n\n`
+            + `${d.depth} memories waiting · ~${d.batches} batches of ${d.batch_size} · `
+            + `roughly ${tk(d.est_tokens_low)}–${tk(d.est_tokens_high)} tokens on your librarian model.\n\n`
+            + `Each batch runs in its own chat (flat context). This bypasses the daily cap `
+            + `and may take a while — you can Stop it between batches.`,
+            async () => {
+                try {
+                    const r = await palaceSend('librarian/drain', 'POST', { scope, ...action.drain });
+                    ui.showToast(r.message || 'Draining…', 'success');
+                    setResult(el, spec.key, r.message || 'draining…');
+                    refreshRunning(el);
+                } catch (e) { ui.showToast(e.message, 'error'); }
+            }, { title: `Run ALL — ${action.drain.pass}`, saveLabel: `Drain ${d.depth}` });
+        return;
+    }
     if (action.preview) {
         // Mechanical similarity scan only — no LLM, no stamps, no cap spend.
         try {
@@ -597,6 +629,29 @@ async function refreshRunning(el, preloaded) {
         catch { line.textContent = ''; return; }
     }
     clearTimeout(_libTimer);
+    const dr = st.current?.drain;
+    if (dr) {
+        const done = dr.handled || 0, left = dr.remaining || 0;
+        line.innerHTML = '';
+        const txt = document.createElement('span');
+        txt.textContent = `⏳ Draining ${dr.kind} (${st.current.scope}): batch ${dr.batch} · `
+            + `${done} done · ${left} left${dr.stopping ? ' · stopping…' : ''} `;
+        line.appendChild(txt);
+        if (!dr.stopping) {
+            const stop = document.createElement('button');
+            stop.className = 'mind-btn-sm';
+            stop.textContent = '■ Stop';
+            stop.title = 'Stop after the current batch — finished batches stay done';
+            stop.addEventListener('click', async () => {
+                stop.disabled = true;
+                try { const r = await palaceSend('librarian/drain-stop', 'POST', {}); ui.showToast(r.message, 'success'); }
+                catch (e) { ui.showToast(e.message, 'error'); }
+            });
+            line.appendChild(stop);
+        }
+        _libTimer = setTimeout(() => refreshRunning(el), 3000);
+        return;
+    }
     if (st.running) {
         const c = st.current;
         line.textContent = `⏳ ${c.kind || ''} pass running (${c.scope}): message ${c.messages_done}/${c.messages_total || '?'}`;
@@ -637,7 +692,8 @@ async function settingsModal(initialTab = 'general') {
             .find(p => p.name === 'mindpalace')?.settings_schema || [];
     } catch {}
     const fields = schema
-        .filter(f => f.hidden && !f.key.startsWith('librarian_pass_'))
+        .filter(f => (f.hidden || f.key === 'librarian_enabled')
+            && !f.key.startsWith('librarian_pass_'))
         .map(f => ({ ...f, hidden: false }));
     if (!fields.length) { ui.showToast('Settings schema unavailable', 'error'); return; }
     const claimed = new Set(SETTINGS_TABS.flatMap(t => t.keys || []));

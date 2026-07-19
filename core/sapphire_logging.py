@@ -22,14 +22,25 @@ for _stream in (sys.stdout, sys.stderr):
 # Dump Python traceback on SIGSEGV/SIGFPE/SIGABRT to stderr
 faulthandler.enable()
 
+# Pytest imports this module transitively (and test_log_level_hot_reload
+# directly). Without a guard, the TEST process attaches the SAME
+# user/logs/sapphire.log handler as the live service — test records
+# interleave with production lines (2026-07-19: mock ExecCtx retries and a
+# test traceback landed in the live log mid-drain-autopsy, and a stray
+# traceback there can false-trip the health script's "zero errors since
+# boot" check). Tests keep the console handler (pytest captures stdout);
+# only the production log files are off-limits.
+_UNDER_PYTEST = 'pytest' in sys.modules or 'PYTEST_CURRENT_TEST' in os.environ
+
 # Early stderr capture - ensures ANY errors get logged
 _startup_log = None
-try:
-    os.makedirs('user/logs', exist_ok=True)
-    _startup_log = open('user/logs/startup_errors.log', 'a', encoding='utf-8')
-    _startup_log.write(f"\n--- Startup attempt ---\n")
-except Exception:
-    pass
+if not _UNDER_PYTEST:
+    try:
+        os.makedirs('user/logs', exist_ok=True)
+        _startup_log = open('user/logs/startup_errors.log', 'a', encoding='utf-8')
+        _startup_log.write(f"\n--- Startup attempt ---\n")
+    except Exception:
+        pass
 
 def _log_startup_error(msg):
     """Log critical startup errors before main logging is ready."""
@@ -93,14 +104,16 @@ _init_avatars()
 # (em-dash, smart quote, emoji) in a log record raises UnicodeEncodeError
 # inside emit(), which logging.handleError() swallows but the message is
 # lost. Companion fix to the stdout reconfigure above.
-file_handler = TimedRotatingFileHandler(
-    'user/logs/sapphire.log',
-    when='midnight',
-    interval=1,
-    backupCount=30,
-    encoding='utf-8',
-)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+file_handler = None
+if not _UNDER_PYTEST:
+    file_handler = TimedRotatingFileHandler(
+        'user/logs/sapphire.log',
+        when='midnight',
+        interval=1,
+        backupCount=30,
+        encoding='utf-8',
+    )
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
 # Colored console formatter
 class ColoredFormatter(logging.Formatter):
@@ -131,8 +144,9 @@ root_logger.setLevel(logging.INFO)
 for handler in root_logger.handlers[:]:
     root_logger.removeHandler(handler)
 
-# Add both handlers
-root_logger.addHandler(file_handler)
+# Add both handlers (file only outside pytest — see _UNDER_PYTEST above)
+if file_handler is not None:
+    root_logger.addHandler(file_handler)
 root_logger.addHandler(console_handler)
 
 # Quiet down noisy third-party loggers. These flood with wire-level chatter —

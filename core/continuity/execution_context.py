@@ -444,6 +444,7 @@ class ExecutionContext:
                      f"(~{tool_schema_tokens} schema tokens), "
                      f"history={len(history_messages) if history_messages else 0} msgs")
         final_content = None
+        llm_retries = 0  # one rescue decode per run — shared by both garbage shapes below
 
         overflow_reason = None
         loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
@@ -574,6 +575,29 @@ class ExecutionContext:
                         _inject_tool_images(messages, tool_images, self.provider)
                     continue
 
+                # A tool task whose reply hit max_tokens WITHOUT a tool call is
+                # a failed generation, not an answer (librarian b12 2026-07-19:
+                # 35K chars of looping thinking, finish=length, the call never
+                # came — one more sentence of budget and it would have landed).
+                # Retry once with identical messages: nothing is appended, so
+                # the garbage never poisons the fresh decode. A second length-
+                # death keeps the text (the chat is the audit surface) but
+                # flags degraded so workers don't count the message as ok.
+                if (getattr(response_msg, 'finish_reason', None) == 'length'
+                        and self.tools):
+                    if llm_retries < 1:
+                        llm_retries += 1
+                        logger.warning(
+                            f"[ExecCtx] finish=length with no tool call "
+                            f"({len(response_msg.content)} chars) — retrying "
+                            f"turn once with a fresh decode.")
+                        continue
+                    self.degraded_reason = (
+                        "LLM hit max_tokens without completing a tool call, "
+                        "twice (truncated text kept for audit)."
+                    )
+                    logger.warning(f"[ExecCtx] {self.degraded_reason}")
+
                 final_content = response_msg.content
                 messages.append({"role": "assistant", "content": final_content})
                 break
@@ -581,9 +605,15 @@ class ExecutionContext:
                 # Provider returned no content AND no tool_calls. This is
                 # rare but happens with some smaller / quantized models or
                 # when a provider trims to fit its own input cap and has
-                # no budget left for output. Without setting degraded_reason
-                # the empty assistant message hits the chat with no signal
-                # to the user — surface the cause via metadata. Scout 2 #3.
+                # no budget left for output. Same rescue as the length-death
+                # above: empty is never a legitimate answer, so spend the
+                # run's one retry before breaking degraded. Scout 2 #3.
+                if llm_retries < 1:
+                    llm_retries += 1
+                    logger.warning(
+                        "[ExecCtx] LLM returned empty content with no tool "
+                        "calls — retrying turn once.")
+                    continue
                 self.degraded_reason = (
                     "LLM returned empty content with no tool calls "
                     "(provider may have hit its own input cap or model "
