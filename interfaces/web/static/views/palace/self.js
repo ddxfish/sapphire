@@ -121,6 +121,125 @@ async function renderSheet() {
     bindTransfer(el, 'self', () => scope, ui, renderSheet);
     renderLedger(el);
     renderWakeTools(el);
+    renderResident(el);
+}
+
+// ─── Resident rows — who tends this scope (2026-07-19) ──────────────────────
+// Lives INSIDE the Dashboard card (replacing the old Librarian status line;
+// the Admin button stays). Row 1: prompt + provider/model, chat-sidebar
+// style. Row 2: one labeled slide toggle per librarian pass — per-scope
+// nightly opt-ins, DEFAULT OFF, gated on top by the global Admin toggles.
+// Blank prompt/provider = the classic fallbacks (librarian chat persona /
+// auto provider / global librarian model).
+
+const RESIDENT_PASSES = [
+    { key: 'dates', label: 'Dates', title: 'Resolve date mentions into calendar dates' },
+    { key: 'link', label: 'Link', title: 'Connect memories to people/places/things' },
+    { key: 'dedup', label: 'Dedup', title: 'Fold measured near-duplicates' },
+    { key: 'sort', label: 'Sort', title: 'Review: keep, split, promote, retire' },
+    { key: 'self', label: 'Self', title: 'Tend the self sheet, then verify' },
+];
+
+async function renderResident(el) {
+    const row = el.querySelector('#pal-resident');
+    const passRow = el.querySelector('#pal-res-passes');
+    if (!row || !passRow) return;
+    let res = {}, prompts = [], providers = [], metadata = {};
+    try {
+        const [{ getPrompts }, { fetchLLMProviders }] = await Promise.all([
+            import('../../shared/init-data.js'),
+            import('../../shared/continuity-api.js'),
+        ]);
+        const [r, p, llm] = await Promise.all([
+            palaceGet(`resident?scope=${encodeURIComponent(scope)}`),
+            getPrompts().catch(() => null),
+            fetchLLMProviders().catch(() => ({})),
+        ]);
+        res = r.resident || {};
+        prompts = ((p && p.list) || [])
+            .map(x => typeof x === 'string' ? x : (x.name || ''))
+            .filter(Boolean);
+        providers = (llm.providers || []).filter(x => x.enabled);
+        metadata = llm.metadata || {};
+    } catch {
+        row.querySelector('.palace-lib-status').textContent = 'unavailable';
+        return;
+    }
+    if (res.prompt && !prompts.includes(res.prompt)) prompts.push(res.prompt);
+
+    const save = async (patch) => {
+        try {
+            await palaceSend('resident', 'PUT', { scope, ...patch });
+        } catch (e) { ui.showToast(`Resident save failed: ${e.message}`, 'error'); }
+    };
+
+    row.querySelector('.palace-lib-status').outerHTML = `
+        <select id="pal-res-prompt" class="palace-select" title="Prompt the librarian speaks as when tending this scope. Blank = the librarian chat's persona.">
+            <option value="">prompt: default</option>
+            ${prompts.map(p => `<option value="${escAttr(p)}" ${p === res.prompt ? 'selected' : ''}>${escHtml(p)}</option>`).join('')}
+        </select>
+        <select id="pal-res-provider" class="palace-select" title="Provider for this scope's librarian passes">
+            <option value="">provider: auto</option>
+            ${providers.map(pr => `<option value="${escAttr(pr.key)}" ${pr.key === res.provider ? 'selected' : ''}>${escHtml(pr.name || pr.key)}</option>`).join('')}
+        </select>
+        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes"></select>`;
+
+    const provSel = row.querySelector('#pal-res-provider');
+    const modelSel = row.querySelector('#pal-res-model');
+    const updateModels = () => {
+        // Chat-sidebar pattern: core providers list model_options; custom
+        // providers have the model baked in; no provider = global default.
+        const key = provSel.value;
+        const pConfig = providers.find(x => x.key === key);
+        const opts = (metadata[key] || {}).model_options || {};
+        if (!key) {
+            modelSel.innerHTML = `<option value="">model: global default</option>`;
+            modelSel.disabled = true;
+            return;
+        }
+        if (pConfig && pConfig.is_core === false) {
+            modelSel.innerHTML = `<option value="">${escHtml(pConfig.model || '(provider model)')}</option>`;
+            modelSel.disabled = true;
+            return;
+        }
+        modelSel.disabled = false;
+        modelSel.innerHTML = `<option value="">provider default</option>`
+            + Object.entries(opts).map(([k, v]) =>
+                `<option value="${escAttr(k)}" ${k === res.model ? 'selected' : ''}>${escHtml(v)}</option>`).join('');
+        if (res.model && !opts[res.model]) {
+            modelSel.innerHTML += `<option value="${escAttr(res.model)}" selected>${escHtml(res.model)}</option>`;
+        }
+    };
+    updateModels();
+
+    row.querySelector('#pal-res-prompt').addEventListener('change',
+        (e) => save({ prompt: e.target.value }));
+    provSel.addEventListener('change', () => {
+        res.model = '';
+        updateModels();
+        save({ provider: provSel.value, model: '' });
+    });
+    modelSel.addEventListener('change', () => save({ model: modelSel.value }));
+
+    const passes = res.passes || {};
+    passRow.innerHTML = `
+        <span class="palace-lib-title" title="Nightly librarian passes THIS scope opts into. Default off — the global Admin toggles gate these on top. Manual ▶ Run in Admin always works.">\u{1F9F9} Librarian</span>
+        ${RESIDENT_PASSES.map(p => `
+            <span style="display:inline-flex;align-items:center;gap:6px" title="${escAttr(p.title)} — nightly opt-in for this scope">
+                <span class="ui-meta-text">${p.label}</span>
+                <label class="ui-toggle">
+                    <input type="checkbox" data-res-pass="${p.key}" ${passes[p.key] ? 'checked' : ''}>
+                    <span class="ui-toggle-slider"></span>
+                </label>
+            </span>`).join('')}
+    `;
+    passRow.querySelectorAll('[data-res-pass]').forEach(cb =>
+        cb.addEventListener('change', () => {
+            const next = {};
+            passRow.querySelectorAll('[data-res-pass]').forEach(x =>
+                next[x.dataset.resPass] = x.checked);
+            save({ passes: next });
+        }));
 }
 
 // ─── Wake tools card — user-armed live checks at wake (2026-07-16) ──────────
@@ -359,11 +478,12 @@ function dashboardCard(d) {
             </div>
             ${d.most_woven.length ? `<div class="palace-dash-woven">Most woven: ${d.most_woven.map(w => `<span class="palace-pill">${escHtml(w.name)} <b>${w.count}</b></span>`).join('')}</div>` : ''}
             ${d.since ? `<div class="palace-dash-since">Mind since ${escHtml(d.since)}</div>` : ''}
-            <div class="palace-librarian-row">
-                <span class="palace-lib-title">\u{1F9F9} Librarian</span>
-                <span class="palace-lib-status" id="pal-lib-status">checking…</span>
+            <div class="palace-librarian-row" id="pal-resident">
+                <span class="palace-lib-title">\u{1FAAA} Resident</span>
+                <span class="palace-lib-status">loading…</span>
                 <button class="mind-btn-sm" id="pal-lib-admin" title="Run passes, migration, and rescue tools — the operator console">\u{1F6E0}️ Admin</button>
             </div>
+            <div class="palace-librarian-row" id="pal-res-passes"></div>
         </div>`;
 }
 

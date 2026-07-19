@@ -240,9 +240,8 @@ function passEnabled(key) {
 function nightlySummary() {
     if (!settings.librarian_nightly_enabled) return 'Nightly round: off — passes run only when you click Run.';
     const t = settings.librarian_nightly_time || '03:30';
-    const sc = (settings.librarian_nightly_scopes || ['default']).join(', ');
     const skipped = PASSES.filter(p => !passEnabled(p.key)).map(p => p.title.toLowerCase());
-    return `Nightly round: on · ${t} · scopes: ${sc}`
+    return `Nightly round: on · ${t} · scopes opt in on their Self pages (Resident strip)`
         + (skipped.length ? ` · skipping ${skipped.join(', ')}` : '');
 }
 
