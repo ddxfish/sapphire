@@ -192,6 +192,10 @@ async function renderShelf() {
                 <button class="mind-btn" id="plib-add-images">+ \u{1F5BC}\u{FE0F} Images</button>
                 <button class="mind-btn" id="plib-add-folder">+ \u{1F4C2} Folder</button>
                 <button class="mind-btn" id="plib-add-cat">+ Category</button>
+                <span class="ui-row-end">
+                    <button class="mind-btn" id="plib-export" title="Download this scope's whole library as a zip (files + annotations; re-importable into any scope)">⇓ Export</button>
+                    <button class="mind-btn" id="plib-import" title="Import a library export zip INTO this scope — re-imports skip what's already here">⇑ Import</button>
+                </span>
             </div>
         </div>
         ${renderFolders()}
@@ -203,7 +207,40 @@ async function renderShelf() {
         <input type="file" id="plib-file-input" hidden>
         <input type="file" id="plib-bulk-input" hidden multiple>
         <input type="file" id="plib-images-input" hidden multiple accept="image/*,.heic,.heif">
+        <input type="file" id="plib-zip-input" hidden accept=".zip">
     `;
+    el.querySelector('#plib-export')?.addEventListener('click', () => {
+        location.href = `${API}/library/export?scope=${encodeURIComponent(scope)}`;
+    });
+    const zipInput = el.querySelector('#plib-zip-input');
+    el.querySelector('#plib-import')?.addEventListener('click', () => {
+        zipInput.value = '';
+        zipInput.click();
+    });
+    zipInput?.addEventListener('change', async () => {
+        const f = zipInput.files[0];
+        if (!f) return;
+        ui.showToast(`Importing into '${scope}'…`, 'info');
+        const fd = new FormData();
+        fd.append('file', f);
+        fd.append('scope', scope);
+        try {
+            const r = await fetch(`${API}/library/import-zip`, {
+                method: 'POST', credentials: 'same-origin',
+                headers: csrfHeaders(), body: fd,
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+            const rep = data.report || {};
+            const bits = [`${rep.imported ?? 0} imported`,
+                          `${rep.skipped ?? 0} skipped`];
+            if (rep.failed) bits.push(`${rep.failed} failed`);
+            if (rep.watch_attached) bits.push(`${rep.watch_attached} folder(s) attached`);
+            if ((rep.watch_missing || []).length) bits.push(`${rep.watch_missing.length} folder path(s) missing here`);
+            ui.showToast(`Library import: ${bits.join(' · ')} — embedding continues in background`, rep.failed ? 'warning' : 'success');
+            render();
+        } catch (e) { ui.showToast(`Import failed: ${e.message}`, 'error'); }
+    });
     el.querySelector('#plib-add-note')?.addEventListener('click', noteModal);
     el.querySelector('#plib-add-cat')?.addEventListener('click', () => collectionModal(null, null));
     el.querySelector('#plib-add-folder')?.addEventListener('click', folderModal);

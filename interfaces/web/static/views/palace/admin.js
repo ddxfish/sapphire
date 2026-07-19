@@ -117,6 +117,11 @@ const OPS = [
       blurb: 'Typed confirmation required, double-checked server-side. Memory v1 is a separate system — never touched.',
       actions: [
           { label: '⚠ Delete ALL memories in scope', maint: 'wipe_scope', danger: true },
+          { label: '⚠ Clear ONE tab: Memories', maint: 'clear_layer', layer: 'events', danger: true },
+          { label: '⚠ Clear ONE tab: Self', maint: 'clear_layer', layer: 'self', danger: true },
+          { label: '⚠ Clear ONE tab: Entities', maint: 'clear_layer', layer: 'entities', danger: true },
+          { label: '⚠ Clear ONE tab: Goals', maint: 'clear_layer', layer: 'goals', danger: true },
+          { label: '⚠ Clear ONE tab: Knowledge (incl. Library files)', maint: 'clear_layer', layer: 'knowledge', danger: true },
       ] },
 ];
 
@@ -139,6 +144,13 @@ const MAINT = {
             'are imported. The v1 databases are opened read-only and are never modified.',
     },
     generate_metadata: {},
+    clear_layer: {
+        prompt: s => `⚠ PERMANENTLY DELETE one tab's data in scope '${s}' — ` +
+            'just that tab, the rest of the scope stays.\n\n' +
+            'Knowledge also deletes the scope\'s Library documents and their ' +
+            'files. Other scopes and Memory v1 are never touched.\n\n' +
+            `Type the scope name ('${s}') to confirm:`,
+    },
     redate_regex: {
         confirm: s => `Re-run the built-in date rules over scope '${s}'?\n\n` +
             'Every memory is re-dated against its own saved date. Dates the ' +
@@ -152,7 +164,8 @@ const MAINT = {
     },
     wipe_scope: {
         prompt: s => `⚠ PERMANENTLY DELETE all Mind Palace data in scope '${s}' — ` +
-            'memories, entities, connections, goals, and self sheet?\n\n' +
+            'memories, entities, connections, goals, self sheet, AND the ' +
+            'scope\'s Library (documents + their files)?\n\n' +
             'Memory v1 is a separate system and is never touched.\n\n' +
             'Type the scope name to confirm:',
     },
@@ -545,6 +558,7 @@ async function runAction(el, spec, action) {
     }
     const gate = MAINT[action.maint] || {};
     const body = { action: action.maint, scope };
+    if (action.layer) body.layer = action.layer;
     if (gate.prompt) {
         const typed = prompt(gate.prompt(scope));
         if (typed === null) return;
@@ -562,6 +576,7 @@ async function runAction(el, spec, action) {
         if ('requeued' in r) bits.push(`${r.requeued} verdicts reopened`);
         if (r.message) bits.push(r.message);
         if ('deleted_chunks' in r) bits.push(`${r.deleted_chunks} memories · ${r.deleted_entities} entities · ${r.deleted_edges} connections deleted`);
+        if (r.library_docs_deleted) bits.push(`${r.library_docs_deleted} library docs deleted`);
         const msg = r.summary || bits.join(' · ') || 'done';
         setResult(el, spec.key, msg);
         ui.showToast(r.summary ? 'Import finished' : `Maintenance: ${msg}`, 'success');

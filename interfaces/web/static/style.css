@@ -1091,6 +1091,11 @@ body {
 .view-header-actions { display: flex; gap: 8px; align-items: center; }
 
 .view-body { flex: 1; min-height: 0; padding: 16px 20px; }
+/* Sticky-header tabs: the container's top padding is a band scrolled
+   content shows through ABOVE a top:0 sticky — drop it there and let
+   .ui-rows carry its own top spacing inside the sticky (solid background).
+   Non-sticky views keep the classic 16px. */
+.view-body:has(> .ui-rows) { padding-top: 0; }
 .view-scroll { overflow-y: auto; }
 
 /* Shared buttons */
