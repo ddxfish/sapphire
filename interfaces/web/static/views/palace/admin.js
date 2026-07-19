@@ -38,6 +38,7 @@ const PASSES = [
       blurb: 'Fold measured near-duplicates — similarity-gated in code, reversible.',
       actions: [
           { label: '▶ Run now', run: { what: 'all', pass: 'dedup' } },
+          { label: '🔍 Dry-run scan (no model)', preview: 'dedup' },
       ] },
     { key: 'sort', icon: '\u{1F9F9}', title: 'Sort',
       blurb: 'The review charter: mark, split, promote, retire — oldest first.',
@@ -402,6 +403,19 @@ async function runAction(el, spec, action) {
                     ui.showToast('Library migration done — embedding continues in background', 'success');
                 } catch (e) { ui.showToast(e.message, 'error'); }
             }, { title: 'Library migration', saveLabel: 'Copy' });
+        return;
+    }
+    if (action.preview) {
+        // Mechanical similarity scan only — no LLM, no stamps, no cap spend.
+        try {
+            const r = await palaceGet(`librarian/dedup-preview?scope=${encodeURIComponent(scope)}`);
+            const cls = r.clusters || [];
+            const groups = cls.map(c => c.ids.join('+')).slice(0, 8).join(' · ');
+            const msg = `${r.scanned} scanned @ ≥${r.threshold} → ${cls.length} cluster(s)`
+                + (cls.length ? `: ${groups}${cls.length > 8 ? ' …' : ''}` : ' — shelf looks clean');
+            setResult(el, spec.key, msg);
+            ui.showToast(`Dedup dry-run: ${cls.length} duplicate cluster(s)`, cls.length ? 'warning' : 'success');
+        } catch (e) { ui.showToast(e.message, 'error'); }
         return;
     }
     if (action.run) {
