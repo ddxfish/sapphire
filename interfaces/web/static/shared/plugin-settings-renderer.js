@@ -324,8 +324,11 @@ export function readSettingsForm(container, schema) {
         // send their DEFAULTS and overwrite values owned by another UI.
         if (field.hidden) continue;
         const val = getFieldValue(container, field.key, field);
-        // Password field: skip if empty (preserve stored key), send empty if sentinel
-        if (field.type === 'password') {
+        // Password field: skip if empty (preserve stored key), send empty if
+        // sentinel. Keyed off the RESOLVED widget, not just type — a
+        // widget:"password" field with a non-password type would otherwise
+        // wipe its stored secret on any unrelated save (scout, 2026-07-20).
+        if (field.type === 'password' || (field.widget || inferWidget(field)) === 'password') {
             if (val === '__CLEAR__') { result[field.key] = ''; continue; }
             if (!val) continue;
         }

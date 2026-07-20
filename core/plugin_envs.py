@@ -34,7 +34,8 @@ RECEIPT_NAME = "sapphire-env.json"
 CONDA_TIMEOUT = 1800
 PIP_TIMEOUT = 3600
 
-_conda_exe = None       # cached find_conda result ('' = searched, not found)
+_conda_exe = None       # cached find_conda result; '' = last scan missed
+                        # (misses re-scan every call — conda may arrive later)
 _envs_dir = None        # cached conda envs directory
 _cache_lock = threading.Lock()
 

@@ -24,7 +24,9 @@ def test_holidays_always_recur():
 
 def test_birthday_near_date_recurs():
     assert temporal.recurring('Birthday: June 3') == ['--06-03']
-    assert temporal.recurring("Krem's birthday is march 3rd") == ['--03-03']
+    assert temporal.recurring("Krem's birthday is March 3rd") == ['--03-03']
+    # Lowercase month-verbs never mint recurrences (SURE policy):
+    assert temporal.recurring("her birthday, the 3rd may be rainy") == []
     assert temporal.recurring('anniversary on 12 of September') == ['--09-12']
 
 

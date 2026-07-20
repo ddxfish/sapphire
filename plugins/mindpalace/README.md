@@ -16,9 +16,10 @@ Mutually exclusive with the classic Memory plugin (same tool names — enable
 one, not both). `import_v2` copies the old stores in; the old DBs are opened
 read-only and never touched — switching back is always possible.
 
-Tools: `save_memory`, `search_memory`, `get_recent_memories`, `delete_memory`,
-`read_self`, `update_self`, `create_goal`, `list_goals`, `update_goal`,
-`delete_goal`, `import_v2`, `run_librarian`, plus the librarian verbs below.
+Tools: `save_memory`, `search_memory`, `get_recent_memories`, `update_memory`,
+`delete_memory`, `read_self`, `update_self`, `read_ledger`, `create_goal`,
+`list_goals`, `update_goal`, `delete_goal`, `library`, `read_document`,
+`view_image`, `import_v2`, `run_librarian`, plus the librarian verbs below.
 
 ## Goals (L4)
 
@@ -43,7 +44,7 @@ On top of that, **edges** — rows in the `edges` table — connect the graph:
 
 | Edge | Created by | Meaning |
 |------|-----------|---------|
-| chunk →(mentions)→ entity | Save-time matcher, backfill, `link_memory` | This memory talks about that person/place/thing |
+| chunk →(mentions)→ entity | Save-time matcher, backfill, the link pass (`set_links`) | This memory talks about that person/place/thing |
 | chunk →(derived_from)→ chunk | `atomize_memory`, `promote_memory` | Provenance: this chunk was distilled from that one |
 | chunk ↔ its own entity | Structural (the `entity_id` column) | An entity's own tiered facts |
 
@@ -86,8 +87,8 @@ duplicates by construction: the walk excludes its own seeds, so nothing in
 the connected block repeats the direct results or the self sheet.
 
 Mention edges also bump the entity's **mentions counter** — the 🔔 number on
-entity cards. That counter means "mentions since the librarian's last pass":
-it is the librarian's dirty flag, and each pass resets it.
+entity cards. That counter means "mentions since the librarian's last SORT
+pass": it is the sort pass's dirty flag, and only the sort pass resets it.
 
 ## Self sheet — structured sections
 

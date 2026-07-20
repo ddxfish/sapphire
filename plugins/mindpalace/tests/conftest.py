@@ -12,7 +12,8 @@ Travels with the plugin. The main suite skips it (norecursedirs = user).
 import sys
 from pathlib import Path
 
-PLUGIN_DIR = Path(__file__).resolve().parent.parent          # .../mindpalace
+PLUGIN_DIR = Path(__file__).absolute().parent.parent         # .../mindpalace
+# .absolute(), never .resolve() — the symlinked-plugin house rule.
 _repo_root = PLUGIN_DIR
 while _repo_root != _repo_root.parent and not (_repo_root / "core").is_dir():
     _repo_root = _repo_root.parent

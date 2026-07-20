@@ -643,7 +643,17 @@ class ContinuityExecutor:
                 if hasattr(ctx, 'new_messages') and ctx.new_messages:
                     from core.chat.chat_tool_calling import wire_to_canonical
                     canonical_messages = wire_to_canonical(ctx.new_messages)
-                    session_manager.append_messages_to_chat(target_chat, canonical_messages)
+                    appended = session_manager.append_messages_to_chat(
+                        target_chat, canonical_messages)
+                    if appended is False:
+                        # Deleted chat or active-stream-wait timeout — the
+                        # tool effects already happened; the transcript is
+                        # now missing this exchange. Surface it (scout,
+                        # 2026-07-20) instead of discarding the bool.
+                        logger.warning(
+                            f"[Continuity] Transcript append to "
+                            f"'{target_chat}' FAILED — the chat is missing "
+                            f"this exchange (deleted mid-run or stream-busy).")
                 else:
                     # Fallback to simple pair if new_messages not available
                     session_manager.append_to_chat(target_chat, msg, response or "")

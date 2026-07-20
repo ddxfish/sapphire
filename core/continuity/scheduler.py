@@ -147,7 +147,17 @@ class ContinuityScheduler:
         try:
             with open(self._tasks_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            all_tasks = {t["id"]: t for t in data.get("tasks", [])}
+            # Per-entry tolerance (scout, 2026-07-20): one malformed entry
+            # (missing "id") used to KeyError the whole comprehension →
+            # _tasks = {} → and the same boot's plugin registration then
+            # PERSISTED the wipe. Skip bad entries loudly instead.
+            all_tasks = {}
+            for t in data.get("tasks", []):
+                if isinstance(t, dict) and t.get("id"):
+                    all_tasks[t["id"]] = t
+                else:
+                    logger.error(f"[Continuity] Skipping malformed task entry "
+                                 f"(no id): {str(t)[:120]}")
 
             # Purge plugin-sourced tasks — plugins re-register theirs via set_scheduler()
             plugin_count = 0
@@ -175,8 +185,23 @@ class ContinuityScheduler:
             logger.info(f"[Continuity] Loaded {len(self._tasks)} tasks")
         except Exception as e:
             logger.error(f"[Continuity] Failed to load tasks: {e}")
+            # Preserve the unreadable file before anything can persist over
+            # it — a later _save_tasks (plugin registration runs the same
+            # boot) would otherwise make the wipe permanent with no backup
+            # (scout, 2026-07-20).
+            try:
+                import shutil
+                from datetime import datetime as _dt
+                bad = self._tasks_path.with_name(
+                    self._tasks_path.name +
+                    f".bad-{_dt.now().strftime('%Y%m%d-%H%M%S')}")
+                shutil.copy2(self._tasks_path, bad)
+                logger.error(f"[Continuity] Unreadable tasks file preserved "
+                             f"at {bad.name} — restore by hand after fixing.")
+            except Exception:
+                pass
             self._tasks = {}
-    
+
     def _save_tasks(self):
         """Save tasks to JSON file (atomic write via temp + rename)."""
         try:
@@ -636,10 +661,18 @@ class ContinuityScheduler:
 
             logger.info(f"[Continuity] '{task_name}' schedule '{schedule}' - MATCHED at {now.strftime('%H:%M')}")
 
-            # If task is already running, queue it instead of overlapping
+            # If task is already running, queue it instead of overlapping.
+            # Cap at 3 (scout, 2026-07-20): the cron path was UNCAPPED — a
+            # heartbeat wedged behind a hung provider accumulated one queued
+            # fire per matched minute, then machine-gunned them all on
+            # release. Missed fires beyond the cap coalesce into nothing.
             with self._lock:
                 if self._task_running.get(task_id, False):
                     queue = self._task_pending.setdefault(task_id, [])
+                    if len(queue) >= 3:
+                        logger.warning(f"[Continuity] '{task_name}' pending "
+                                       f"queue full — coalescing this fire")
+                        continue
                     queue.append((None, None))  # Cron queues don't carry event data
                     logger.info(f"[Continuity] '{task_name}' busy — queued (pending: {len(queue)})")
                     self._log_activity(task_id, task_name, "queued", {"pending": len(queue)})

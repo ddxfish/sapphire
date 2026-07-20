@@ -833,6 +833,14 @@ def _task(message, scope, model='', toolset=SORT_TOOLSET,
         'name': f'{name} ({scope})',
         'source': 'mindpalace-librarian',
         'chat_target': chat,
+        # Non-memory scopes are DELIBERATELY off for librarian runs.
+        # Declaring them explicitly (None = disabled) instead of omitting
+        # them silences the executor's missing-scope-keys warning — which
+        # fired ~200×/night on drains, burying the accidental-omission
+        # class it exists to catch (scout, 2026-07-20).
+        **{k: None for k in ('bitcoin_scope', 'discord_scope', 'email_scope',
+                             'github_scope', 'gcal_scope', 'telegram_scope',
+                             'twilio_scope', 'wordpress_scope')},
         'prompt': res.get('prompt') or _persona_for_chat(),
         'model': res.get('model') or model,
         'toolset': toolset,

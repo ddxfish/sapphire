@@ -167,15 +167,13 @@ def _resolve(text, anchor):
             mo, d = _MONTHS.get(m[mi].lower().rstrip('.')), int(m[di])
             if not mo:
                 continue
-            # Month-verb collision guard (scout find, 2026-07-19): "out of
-            # 20, 5 may fail" → May 5; "we march 12 miles" → Mar 12. For
+            # Month-verb collision guard (scouts, 2026-07-19/20): "out of
+            # 20, 5 may fail" → May 5; "we march 12 miles" → Mar 12; and
+            # the ordinal is NOT evidence ("the 3rd may be rainy"). For
             # month words that double as common verbs, a lowercase token
-            # with no year and no ordinal is not SURE — skip (the phrase
-            # stays a refers_to_time candidate for the librarian).
-            tok = m[mi].rstrip('.')
-            if (tok in ('may', 'march') and not m[yi]
-                    and not re.search(r'\d(st|nd|rd|th)\b', m[0],
-                                      re.IGNORECASE)):
+            # resolves ONLY with an explicit year — anything less stays a
+            # refers_to_time candidate for the librarian.
+            if m[mi].rstrip('.') in ('may', 'march') and not m[yi]:
                 continue
             if m[yi]:
                 y = int(m[yi])
@@ -309,7 +307,7 @@ def _resolve(text, anchor):
 
 RX_RECUR_KEY = re.compile(
     r"\b(birthday|b-?day|anniversary|born|every\s+year|each\s+year|"
-    r"annual(?:ly)?)\b", re.IGNORECASE)
+    r"annual(?:ly)?|yearly)\b", re.IGNORECASE)
 _RECUR_WINDOW = 40      # chars between keyword and date phrase
 
 
@@ -350,13 +348,10 @@ def _recurring(text):
         for rx, mi, di in ((RX_MONTH_DAY, 1, 2), (RX_DAY_MONTH, 2, 1)):
             for m in rx.finditer(text):
                 mo = _MONTHS.get(m[mi].lower().rstrip('.'))
-                # Same month-verb guard as _resolve (fixer-scout,
-                # 2026-07-19): "out of 20 birthdays, 5 may fail" must not
-                # mint a --05-05 recurrence.
-                tok = m[mi].rstrip('.')
-                if (tok in ('may', 'march')
-                        and not re.search(r'\d(st|nd|rd|th)\b', m[0],
-                                          re.IGNORECASE)):
+                # Same month-verb guard as _resolve (scouts 2026-07-19/20):
+                # lowercase may/march never mint a recurrence — "her
+                # birthday, the 3rd may be rainy" must not create --05-03.
+                if m[mi].rstrip('.') in ('may', 'march'):
                     continue
                 if mo and near(m):
                     add(mo, int(m[di]))

@@ -528,14 +528,18 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     )
     if key in {'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT'}:
         clear_session_cache()
+    # Tracks switch outcome so we know whether to persist + rollback.
+    # Defined BEFORE the first toggle site that can set it.
+    switch_ok = {'value': True}  # default True; set False on switch failure
     if key == 'WAKE_WORD_ENABLED':
         system = get_system()
-        await asyncio.to_thread(system.toggle_wakeword, value)
+        ok = await asyncio.to_thread(system.toggle_wakeword, value)
+        if ok is False:
+            # toggle_* report failure by RETURN, not raise (scout,
+            # 2026-07-20 — same class as the batch-route fix).
+            switch_ok['value'] = False
     # Provider switches: fire-and-forget when ?async=true (setup wizard uses this)
     run_async = request.query_params.get('async') == 'true'
-
-    # Tracks switch outcome so we know whether to persist + rollback
-    switch_ok = {'value': True}  # default True; set False on switch failure
 
     async def _do_stt_switch(val):
         try:
@@ -584,7 +588,9 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         else:
             await _do_stt_switch(value)
     if key == 'STT_ENABLED':
-        await asyncio.to_thread(get_system().toggle_stt, value)
+        ok = await asyncio.to_thread(get_system().toggle_stt, value)
+        if ok is False:
+            switch_ok['value'] = False
     if key == 'TTS_PROVIDER':
         if run_async:
             if persist:
@@ -606,7 +612,9 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
         else:
             await _do_embedding_switch(value)
     if key == 'TTS_ENABLED':
-        await asyncio.to_thread(get_system().toggle_tts, value)
+        ok = await asyncio.to_thread(get_system().toggle_tts, value)
+        if ok is False:
+            switch_ok['value'] = False
         if value:
             try:
                 system = get_system()

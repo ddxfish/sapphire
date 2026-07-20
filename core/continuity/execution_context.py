@@ -615,7 +615,7 @@ class ExecutionContext:
                 # no budget left for output. Same rescue as the length-death
                 # above: empty is never a legitimate answer, so spend the
                 # run's one retry before breaking degraded. Scout 2 #3.
-                if llm_retries < 1:
+                if llm_retries < 1 and i + 1 < max_iterations:
                     llm_retries += 1
                     logger.warning(
                         "[ExecCtx] LLM returned empty content with no tool "

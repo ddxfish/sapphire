@@ -1272,6 +1272,16 @@ class ChatSessionManager:
                 logger.debug(f"Saved chat '{eff_name}' ({len(eff_chat.messages)} messages)")
             except Exception as e:
                 logger.error(f"Failed to save chat '{eff_name}': {e}")
+                # Restore the blob path's self-healing property for rows
+                # chats (scout, 2026-07-20): after ANY failed save, force a
+                # full window resync so the next save rebuilds from the
+                # in-memory truth. Flag ONLY — never pop _rows_state: the
+                # offset must survive (a stateless resync deletes from seq 0
+                # and would erase below-window history on capped chats).
+                try:
+                    eff_chat._needs_full_resync = True
+                except Exception:
+                    pass
                 try:
                     publish(Events.CONTINUITY_TASK_ERROR, {
                         "task": "Chat Save",
@@ -1338,6 +1348,13 @@ class ChatSessionManager:
                 "VALUES (?, ?, ?, ?)",
                 [(eff_name, offset + i, m.get("role"), self._row_json(m))
                  for i, m in enumerate(msgs)])
+            conn.commit()
+            # Watermark advances only AFTER the commit lands (scout,
+            # 2026-07-20): advancing first meant a commit-frame failure
+            # (disk-full/IO at fsync) left memory claiming the write
+            # happened — silent divergence, and the heal could resurrect
+            # deleted rows. _convert_chat_to_rows already demonstrates
+            # this ordering.
             self._rows_state[eff_name] = {"offset": offset, "count": len(msgs)}
             eff_chat._needs_full_resync = False
         elif len(msgs) > state["count"]:
@@ -1369,8 +1386,13 @@ class ChatSessionManager:
                 "VALUES (?, ?, ?, ?)",
                 [(eff_name, state["offset"] + i, msgs[i].get("role"), self._row_json(msgs[i]))
                  for i in range(state["count"], len(msgs))])
+            conn.commit()
+            # Post-commit only — see the resync branch. (The heal's earlier
+            # count += absorbed is safe pre-commit: those rows were already
+            # committed by the OTHER writer's connection.)
             state["count"] = len(msgs)
-        conn.commit()
+        else:
+            conn.commit()
         return True
 
     # ── Rowify step 3: lazy blob→rows conversion (tmp/chat-storage-rowify-plan.md) ──

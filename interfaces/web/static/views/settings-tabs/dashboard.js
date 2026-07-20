@@ -1147,7 +1147,9 @@ async function checkForUpdate(el, retry = 0) {
         const branchEl = el.querySelector('#dash-branch');
         if (branchEl && updateStatus.branch) {
             const tag = updateStatus.is_fork ? `${updateStatus.branch} · fork` : updateStatus.branch;
-            branchEl.textContent = `· ${_esc(tag)}`;
+            // textContent needs the RAW string — escaping here rendered
+            // literal &amp;/&quot; for branch names (scout, 2026-07-20).
+            branchEl.textContent = `· ${tag}`;
         }
         if (updateStatus.available) {
             window.dispatchEvent(new CustomEvent('update-available', { detail: updateStatus }));
