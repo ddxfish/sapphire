@@ -256,6 +256,16 @@
         "name_field": "name",
         "label_template": "{name} ({count})",
         "nav_target": "mind:memories"
+      },
+      {
+        "key": "people",
+        "label": "people",
+        "endpoint": "/api/plugin/mindpalace/scopes",
+        "data_key": "scopes",
+        "value_field": "name",
+        "name_field": "name",
+        "label_template": "{name} ({count})",
+        "nav_target": "mind:entities"
       }
     ],
     "routes": [

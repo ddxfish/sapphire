@@ -3,7 +3,7 @@
   "version": "0.15.0",
   "files": {
     "README.md": "sha256:4e8434c18d1331ce7829f54e8d97bb32dd5611091fae50f525442391d4aa84bd",
-    "plugin.json": "sha256:e19d68084b146197a95bf77ac938d8cf9e488d3ef9c8b7a70f3364cdeb2cd38f",
+    "plugin.json": "sha256:a40591cdb6ce8292cc127c3a2307471b95b67d7e604b57335bf1a29110c201a7",
     "routes/browse.py": "sha256:f6dc2de3b37f333bafc830bbc95bbbb0b03c4e0b03c942682739bd1c076dc32f",
     "routes/goals_routes.py": "sha256:5bd7a69960707327c0cb17b92238e8547ba95f338ef2224d2e0bd7580afd64c0",
     "routes/library_routes.py": "sha256:7003b18c8cb67311e32004452a37f78e4e368cdda00158e08a94aa984b0ba107",
@@ -61,5 +61,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "pcMt1m0TUt1xAjIEZJYN3tGAHWZydclzcs1/+o85la6FblHPZArP6qlxcVgfIDS4VHuVtKtNuuTtUgh4PReFDA=="
+  "signature": "iUpdiCdcZAtULoYwaQuYrvUTadp+JsdLaGyNh0jUNkeekfpMLo3UeY8yg5v3UOenk+/w0Tu8GqCyQcwrDZZhCA=="
 }
