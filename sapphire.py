@@ -655,10 +655,13 @@ class VoiceChatSystem:
             if provider == 'none':
                 provider = 'faster_whisper'
             if self.switch_stt_provider(provider):
-                _settings.set('STT_PROVIDER', provider, persist=True)
+                # Same double-fire guard as toggle_tts (HDF scout, 2026-07-19).
+                _settings.set('STT_PROVIDER', provider, persist=True,
+                              _skip_callbacks=True)
                 return True
             return False
-        _settings.set('STT_PROVIDER', 'none', persist=True)
+        _settings.set('STT_PROVIDER', 'none', persist=True,
+                      _skip_callbacks=True)
         return self.switch_stt_provider('none')
 
     def _init_tts_provider(self, provider_name, base_dir=None):
@@ -848,10 +851,16 @@ class VoiceChatSystem:
             if provider == 'none':
                 provider = 'kokoro'
             if self.switch_tts_provider(provider):
-                _settings.set('TTS_PROVIDER', provider, persist=True)
+                # _skip_callbacks: the reload callback IS switch_tts_provider —
+                # without it the switch fires twice, the second time INSIDE
+                # settings._lock, stalling every config read app-wide for the
+                # provider-restart duration (HDF scout, 2026-07-19).
+                _settings.set('TTS_PROVIDER', provider, persist=True,
+                              _skip_callbacks=True)
                 return True
             return False
-        _settings.set('TTS_PROVIDER', 'none', persist=True)
+        _settings.set('TTS_PROVIDER', 'none', persist=True,
+                      _skip_callbacks=True)
         return self.switch_tts_provider('none')
 
     def speak_error(self, error_type):

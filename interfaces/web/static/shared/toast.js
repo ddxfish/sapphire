@@ -23,8 +23,15 @@ export function showToast(message, type = 'info', duration = 4000) {
       setTimeout(() => chatbg.classList.remove('shake'), 500);
     }
   }
-  
-  setTimeout(() => toast.remove(), duration);
+
+  // duration <= 0 = persistent, click to dismiss — same contract as
+  // ui.js showToast (aligned 2026-07-19; they previously disagreed).
+  if (duration > 0) {
+    setTimeout(() => toast.remove(), duration);
+  } else {
+    toast.style.cursor = 'pointer';
+    toast.addEventListener('click', () => toast.remove());
+  }
 }
 
 /**

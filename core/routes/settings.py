@@ -345,7 +345,14 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
                 from core.embeddings import switch_embedding_provider
                 switch_embedding_provider(value)
             else:
-                await asyncio.to_thread(getattr(system, action), value)
+                result = await asyncio.to_thread(getattr(system, action), value)
+                # switch_*/toggle_* report failure by RETURNING False, not
+                # raising (HDF scout, 2026-07-19) — without this, a failed
+                # provider switch persisted as success and the UI toasted OK
+                # while the runtime sat on the fallback.
+                if result is False:
+                    raise RuntimeError(f"{action} reported failure "
+                                       f"(returned False)")
             switch_ok = True
         except Exception as e:
             logger.error(f"Deferred action {action} failed: {e}")
@@ -532,14 +539,20 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
 
     async def _do_stt_switch(val):
         try:
-            await asyncio.to_thread(get_system().switch_stt_provider, val)
+            ok = await asyncio.to_thread(get_system().switch_stt_provider, val)
+            if ok is False:
+                # switch_* reports failure by RETURN, not raise (HDF scout,
+                # 2026-07-19) — without this a failed switch persisted as OK.
+                raise RuntimeError("switch_stt_provider returned False")
         except Exception as e:
             logger.error(f"Background STT switch failed: {e}")
             switch_ok['value'] = False
 
     async def _do_tts_switch(val):
         try:
-            await asyncio.to_thread(get_system().switch_tts_provider, val)
+            ok = await asyncio.to_thread(get_system().switch_tts_provider, val)
+            if ok is False:
+                raise RuntimeError("switch_tts_provider returned False")
             try:
                 system = get_system()
                 chat_settings = system.llm_chat.session_manager.get_chat_settings()

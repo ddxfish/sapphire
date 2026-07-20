@@ -520,6 +520,17 @@ class PluginLoader:
             if refusal:
                 self._function_manager.unregister_plugin_tools(name)
                 hook_runner.unregister_plugin(name)
+                # A refused plugin's tool files already EXEC'd — any
+                # module-level side effects (contacts providers, etc.) must
+                # unwind too, or a "not loaded" plugin keeps serving
+                # whitelist decisions from the wrong store (scout find,
+                # 2026-07-19: mindpalace's provider survived the memory-
+                # collision refusal).
+                try:
+                    from core.contacts import unregister_provider as _unreg_contacts
+                    _unreg_contacts(name)
+                except Exception:
+                    pass
                 self._load_errors.append(refusal)
                 from core.event_bus import publish, Events
                 publish(Events.PLUGIN_LOAD_ERROR, refusal)

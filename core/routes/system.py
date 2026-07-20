@@ -751,7 +751,9 @@ async def set_metrics_enabled(request: Request, _=Depends(require_login)):
     from core.settings_manager import settings
     data = await request.json()
     enabled = bool(data.get("enabled", True))
-    settings.set("METRICS_ENABLED", enabled)
+    # persist — a privacy-adjacent toggle silently reverting on restart is
+    # the wrong kind of surprise (HDF scout, 2026-07-19).
+    settings.set("METRICS_ENABLED", enabled, persist=True)
     return {"enabled": enabled}
 
 

@@ -10,10 +10,13 @@
 // enabled only when something deletable is selected. One delete location.
 
 function esc(s) {
+    // Quote-escaping included — output lands in attribute contexts
+    // (title="…", data-pl-id="…") with user-controlled strings; same class
+    // as the modal.js fix (2026-07-19).
     if (s == null) return '';
     const d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**

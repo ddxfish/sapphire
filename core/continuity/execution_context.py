@@ -583,18 +583,25 @@ class ExecutionContext:
                 # the garbage never poisons the fresh decode. A second length-
                 # death keeps the text (the chat is the audit surface) but
                 # flags degraded so workers don't count the message as ok.
-                if (getattr(response_msg, 'finish_reason', None) == 'length'
-                        and self.tools):
-                    if llm_retries < 1:
+                # Provider dialects for "hit the token ceiling": openai-compat
+                # says 'length', Claude/anthropic-compat pass raw 'max_tokens',
+                # openai_responses says 'incomplete' (fixer-scout, 2026-07-19 —
+                # matching only 'length' left the b12 class live elsewhere).
+                _finish = getattr(response_msg, 'finish_reason', None)
+                if _finish in ('length', 'max_tokens', 'incomplete') and self.tools:
+                    if llm_retries < 1 and i + 1 < max_iterations:
+                        # (last-iteration length-deaths skip the retry — the
+                        # continue would exit the loop and DROP the text the
+                        # audit contract promises to keep.)
                         llm_retries += 1
                         logger.warning(
-                            f"[ExecCtx] finish=length with no tool call "
+                            f"[ExecCtx] finish={_finish} with no tool call "
                             f"({len(response_msg.content)} chars) — retrying "
                             f"turn once with a fresh decode.")
                         continue
                     self.degraded_reason = (
-                        "LLM hit max_tokens without completing a tool call, "
-                        "twice (truncated text kept for audit)."
+                        "LLM hit max_tokens without completing a tool call "
+                        "(truncated text kept for audit)."
                     )
                     logger.warning(f"[ExecCtx] {self.degraded_reason}")
 

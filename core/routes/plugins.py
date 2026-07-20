@@ -2282,6 +2282,10 @@ async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
             body = await request.json()
         except Exception:
             body = {}
+        if not isinstance(body, dict):
+            # A JSON list/string/number body would 500 every handler's
+            # body.get() — normalize to empty dict (fixer-scout, 2026-07-19).
+            body = {}
 
     # Build handler kwargs: path params + body + settings + credentials + query params + request
     settings = plugin_loader.get_plugin_settings(plugin_name)

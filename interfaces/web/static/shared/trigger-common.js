@@ -25,10 +25,12 @@ export const TRIGGER_TABS = [
 // ── Formatters ───────────────────────────────────────────────────────
 
 export function esc(str) {
+    // Quote-escaping included — used in attribute interpolations; same
+    // class as the modal.js fix (2026-07-19).
     if (!str) return '';
     const div = document.createElement('div');
     div.textContent = str;
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 export function formatHourRange(start, end) {

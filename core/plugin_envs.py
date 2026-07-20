@@ -45,11 +45,13 @@ _builds_lock = threading.Lock()
 
 
 def find_conda():
-    """Locate the conda executable. Returns str path or None. Cached."""
+    """Locate the conda executable. Returns str path or None. Positive
+    results cache; a MISS re-scans each call so conda installed after boot
+    is picked up without a restart (scout find, 2026-07-19)."""
     global _conda_exe
     with _cache_lock:
-        if _conda_exe is not None:
-            return _conda_exe or None
+        if _conda_exe:
+            return _conda_exe
 
         candidates = []
         env_exe = os.environ.get("CONDA_EXE")

@@ -304,6 +304,10 @@ function inferWidget(field) {
     if (field.type === 'number') return 'number';
     if (field.type === 'textarea') return 'textarea';
     if (field.type === 'list') return 'list';
+    // type:"password" without an explicit widget fell through to 'text' and
+    // rendered the stored secret in a plaintext value="..." (live: the
+    // ElevenLabs API key on screen — HDF scout, 2026-07-19).
+    if (field.type === 'password') return 'password';
     if (field.options) return 'select';
     return 'text';
 }
