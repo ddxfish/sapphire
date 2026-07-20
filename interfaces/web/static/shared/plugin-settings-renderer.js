@@ -4,9 +4,13 @@
 import { showDangerConfirm } from './danger-confirm.js';
 
 function escapeHtml(s) {
+    // Must escape quotes too — output lands in value="..." attributes; the
+    // list widget stores JSON (`["a"]`) whose quotes truncated the attribute
+    // and the next save persisted [] — silent list-setting wipe (scout find,
+    // 2026-07-19).
     const d = document.createElement('div');
     d.textContent = s ?? '';
-    return d.innerHTML;
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**

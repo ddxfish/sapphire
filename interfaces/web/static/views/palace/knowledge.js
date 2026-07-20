@@ -24,6 +24,7 @@ let _catalog = null;
 let _folders = [];
 let _reader = null;        // doc id open in the reader, null = shelf view
 let _filter = '';
+let _filterTimer = null;
 let _pollTimer = null;
 
 export default {
@@ -257,7 +258,19 @@ async function renderShelf() {
     bulkInput?.addEventListener('change', () => { if (bulkInput.files.length) bulkModal([...bulkInput.files]); });
     imagesInput?.addEventListener('change', () => { if (imagesInput.files.length) imagesModal([...imagesInput.files]); });
     const filter = el.querySelector('#plib-filter');
-    filter?.addEventListener('input', () => { _filter = filter.value.trim().toLowerCase(); renderShelf(); });
+    // Debounce + refocus (memories.js pattern) — renderShelf replaces the
+    // input node, so an undebounced re-render dropped focus every keystroke.
+    filter?.addEventListener('input', () => {
+        clearTimeout(_filterTimer);
+        _filterTimer = setTimeout(() => {
+            _filter = filter.value.trim().toLowerCase();
+            renderShelf();
+        }, 300);
+    });
+    if (_filter && document.activeElement === document.body) {
+        filter?.focus();
+        filter?.setSelectionRange(filter.value.length, filter.value.length);
+    }
     el.querySelectorAll('#plib-kind-pills [data-kind]').forEach(btn => {
         btn.addEventListener('click', () => { _kind = btn.dataset.kind; renderShelf(); });
     });

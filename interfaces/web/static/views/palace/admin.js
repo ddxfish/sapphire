@@ -180,6 +180,7 @@ let scope = 'default';
 let scopes = [];
 let settings = {};
 let _libTimer = null;
+let _libGen = 0;
 
 export default {
     init(el) { container = el; },
@@ -623,11 +624,17 @@ async function runAction(el, spec, action) {
 async function refreshRunning(el, preloaded) {
     const line = el.querySelector('#pal-adm-running');
     if (!line) return;
+    // Generation token (scout find, 2026-07-19): the old clearTimeout-after-
+    // await let a stale chain (pre-scope-switch fetch resolving late) kill
+    // the live chain and rebind the 3s poll onto detached DOM — frozen
+    // drain indicators + zombie background polling after leaving the tab.
+    const gen = ++_libGen;
     let st = preloaded;
     if (!st) {
         try { st = await palaceGet(`librarian/status?scope=${encodeURIComponent(scope)}`); }
         catch { line.textContent = ''; return; }
     }
+    if (gen !== _libGen || !el.isConnected) return;
     clearTimeout(_libTimer);
     const dr = st.current?.drain;
     if (dr) {

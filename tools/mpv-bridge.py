@@ -17,7 +17,7 @@ command `["x-screenshot", "<mode>"]` does the file dance locally and returns
 the JPEG as base64 in the JSON reply.
 
 Usage (movie night):
-    python3 mpv-bridge.py --allow 192.168.0.206
+    python3 mpv-bridge.py --allow 192.168.1.50
     # defaults: --port 9877, --socket /tmp/mpvsocket, --bind 0.0.0.0
 
 Stdlib only — copy this single file anywhere, no Sapphire install needed.

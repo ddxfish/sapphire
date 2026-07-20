@@ -695,5 +695,9 @@ export const showToast = (msg, type = 'error', duration = 4000) => {
         }
     }
 
-    setTimeout(() => toast.remove(), duration);
+    // duration <= 0 = persistent (close-button only). Previously the timer
+    // ran unconditionally, so duration 0 removed the toast on the next tick —
+    // the privacy-mode-removal notice was never seen by anyone (scout find,
+    // 2026-07-19; same bug killed the 1h env-build-cap message).
+    if (duration > 0) setTimeout(() => toast.remove(), duration);
 };

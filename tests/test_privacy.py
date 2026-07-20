@@ -31,7 +31,7 @@ def test_auto_mode_excludes_unchecked_provider_in_private_chat():
 
 def test_auto_mode_allows_checked_local_in_private_chat(monkeypatch):
     """is_local: True in the provider's own config (the checkbox) passes the
-    private gate — the jane-qwen case (LAN server, non-loopback URL)."""
+    private gate — the LAN-server case (non-loopback URL, user-checked)."""
     from core.chat.llm_providers import provider_registry
 
     class FakeProv:
@@ -42,7 +42,7 @@ def test_auto_mode_allows_checked_local_in_private_chat(monkeypatch):
     monkeypatch.setattr(provider_registry, 'get_provider_by_key',
                         lambda *a, **k: FakeProv())
     cfg = {'janeq': {'enabled': True, 'is_local': True, 'provider': 'openai',
-                     'base_url': 'http://192.168.0.206:1234/v1', 'model': 'q'}}
+                     'base_url': 'http://192.0.2.10:1234/v1', 'model': 'q'}}
     result = provider_registry.get_first_available_provider(
         cfg, ['janeq'], 1.0, force_privacy=True)
     assert result is not None

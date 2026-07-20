@@ -2271,10 +2271,13 @@ async def plugin_route_dispatch(plugin_name: str, path: str, request: Request):
 
     handler, path_params = result
 
-    # Parse request body for POST/PUT (skip for multipart — handler reads form directly)
+    # Parse request body for POST/PUT/DELETE (skip for multipart — handler
+    # reads form directly). DELETE included 2026-07-19: confirm tokens ride
+    # DELETE bodies (scope-api.js sends {confirm:'DELETE'}) and were being
+    # silently dropped here — handlers could never check them.
     body = {}
     content_type = request.headers.get("content-type", "")
-    if request.method in ("POST", "PUT") and "multipart" not in content_type:
+    if request.method in ("POST", "PUT", "DELETE") and "multipart" not in content_type:
         try:
             body = await request.json()
         except Exception:

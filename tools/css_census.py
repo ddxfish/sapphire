@@ -14,7 +14,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path('/home/bander/sapphire/sapphire')
+ROOT = Path(__file__).resolve().parents[1]
 CSS = ROOT / 'interfaces/web/static/style.css'
 SCRATCH = Path(__file__).parent
 

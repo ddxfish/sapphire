@@ -29,9 +29,14 @@ export function setupModalClose(overlay, closeFn) {
 }
 
 export function escapeHtml(text) {
+  // The div/textContent trick escapes & < > but NOT quotes — and this output
+  // is interpolated into value="..." attributes. A title containing
+  // `" autofocus onfocus="..."` was a no-interaction XSS via the edit modal's
+  // auto-focus, and any quote-bearing title silently truncated on save
+  // (scout find, 2026-07-19). Quotes escape explicitly.
   const div = document.createElement('div');
   div.textContent = text;
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /**
