@@ -1,0 +1,16 @@
+{
+    "kind": "person",
+    "label": "Person",
+    "icon": "👤",
+    "order": 10,
+    "fields": [
+        {"key": "relationship", "label": "Relationship", "type": "text"},
+        {"key": "nicknames", "label": "Nicknames (comma-separated)", "type": "text"},
+        {"key": "phone", "label": "Phone", "type": "text"},
+        {"key": "email", "label": "Email", "type": "text"},
+        {"key": "address", "label": "Address", "type": "text"},
+        {"key": "birthday", "label": "Birthday", "type": "text"},
+        {"key": "allow_email", "label": "Allow email", "type": "bool", "default": false},
+        {"key": "allow_call", "label": "Allow phone calls", "type": "bool", "default": false}
+    ]
+}

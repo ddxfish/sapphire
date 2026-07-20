@@ -1,0 +1,575 @@
+{
+  "name": "mindpalace",
+  "short_display_name": "Mind",
+  "short_name": "Mind Palace",
+  "version": "0.15.0",
+  "description": "Layered memory supersystem (v3) — self/events/entities/knowledge layers behind one tool surface. Mutually exclusive with the Memory plugin: enable one, not both. Import copies from the classic system; old data is never touched.",
+  "author": "sapphire",
+  "icon": "🏛️",
+  "priority": 1,
+  "default_enabled": false,
+  "capabilities": {
+    "tools": [
+      "tools/palace_tools.py",
+      "tools/import_tools.py",
+      "tools/self_tools.py",
+      "tools/librarian_tools.py",
+      "tools/goal_tools.py",
+      "tools/library_tools.py"
+    ],
+    "settings": [
+      {
+        "key": "librarian_enabled",
+        "type": "boolean",
+        "label": "Librarian (ALPHA)",
+        "default": false,
+        "help": "Master switch for the librarian: single-purpose passes that date, link, dedup, and sort memories. Off = the core memory system runs alone. Configure passes, schedules, and maintenance in Mind → Admin. Alpha — testing cohort only.",
+        "tab": "Librarian",
+        "confirm": {
+          "values": [
+            "true"
+          ],
+          "title": "Enable the Librarian — Alpha Feature",
+          "warnings": [
+            "Alpha testing — not ready for production use",
+            "The AI reviews and reorganizes its own memories: dating, linking, merging, splitting, promoting, and retiring entries",
+            "Nothing is ever hard-deleted — retired memories stay visible in the Memories view and restore with one click",
+            "Mind → Admin can undo librarian retirements in bulk"
+          ],
+          "buttonLabel": "Enable Librarian (Alpha)",
+          "allow_managed": true
+        }
+      },
+      {
+        "key": "librarian_pass_dates",
+        "type": "boolean",
+        "label": "Nightly pass: dates",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "librarian_pass_link",
+        "type": "boolean",
+        "label": "Nightly pass: link",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "librarian_pass_dedup",
+        "type": "boolean",
+        "label": "Nightly pass: dedup",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "librarian_pass_sort",
+        "type": "boolean",
+        "label": "Nightly pass: sort",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "librarian_pass_self",
+        "type": "boolean",
+        "label": "Nightly pass: self",
+        "default": true,
+        "hidden": true
+      },
+      {
+        "key": "librarian_context_tokens",
+        "type": "number",
+        "label": "Context limit (tokens)",
+        "default": 131072,
+        "help": "Context window for librarian sessions — the night chat grows across passes and the normal chat default trims it far too early. 131072 (128K) suits most models; raise to 262144 only if the librarian model supports it.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_batch_size",
+        "type": "number",
+        "label": "Memories per pass",
+        "default": 20,
+        "help": "How many unprocessed memories one librarian pass takes on. The rest wait for the next pass.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_items_per_message",
+        "type": "number",
+        "label": "Memories per message",
+        "default": 10,
+        "help": "How many memories are presented per chat message during a pass. Smaller = more careful, more tokens.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_max_passes_per_day",
+        "type": "number",
+        "label": "Max passes per day (per kind)",
+        "default": 3,
+        "help": "Safety cap per scope and pass kind across all triggers (button, tool, schedule).",
+        "hidden": true
+      },
+      {
+        "key": "librarian_merge_threshold",
+        "type": "number",
+        "label": "Duplicate threshold",
+        "default": 0.9,
+        "help": "Similarity (0.5-0.99) two memories must measure before merge_memories will fold them — enforced in code, not prompt. Higher = only near-identical entries merge.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_merge_rewrite",
+        "type": "boolean",
+        "label": "Allow rewrite on merge",
+        "default": false,
+        "help": "Let merge_memories write a distilled replacement text. Off (default): the longest original survives verbatim — the similarity gate proves two entries are duplicates, but nothing validates a rewrite, so a bad model could fabricate the surviving text.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_drain_batches_per_chat",
+        "type": "number",
+        "label": "Drain: batches per chat",
+        "default": 3,
+        "help": "Run ALL groups this many batches into one rolling chat before resetting — accumulated context helps judgment passes (sort) calibrate; 1 = fresh chat every batch.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_fresh_chat",
+        "type": "boolean",
+        "label": "Fresh chat per session",
+        "default": true,
+        "help": "Each librarian session gets its own chat (librarian-YYYYMMDD-HHMM): a per-session audit trail that keeps old pass transcripts out of new passes' context. Off: everything lands in the single shared 'librarian' chat.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_model",
+        "type": "string",
+        "label": "Model override",
+        "default": "",
+        "help": "Model for librarian passes (empty = the app's normal selection). Passes read raw memory in bulk — a local model here is both a cost and a privacy lever. The dates pass wants a 9B-class model or better; below that, the built-in date resolver alone is more accurate.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_nightly_enabled",
+        "type": "boolean",
+        "label": "Nightly tending schedule",
+        "default": false,
+        "help": "Run the nightly round: an importance decay tick (when Importance is enabled), then librarian passes over every scope that opted in on its Self page (Resident strip — per-scope pass pills, default off). Manual runs are unaffected.",
+        "hidden": true
+      },
+      {
+        "key": "librarian_nightly_time",
+        "type": "string",
+        "label": "Nightly time",
+        "default": "03:30",
+        "placeholder": "HH:MM",
+        "help": "Local time for the nightly run (24h HH:MM).",
+        "hidden": true
+      },
+      {
+        "key": "importance_enabled",
+        "type": "boolean",
+        "label": "Importance (ALPHA)",
+        "default": false,
+        "help": "Master switch for the importance system: librarian ratings, spider pricing by salience, nightly decay, and recall boost. Off = flat, neutral memory — no lurking variables. Alpha — testing cohort only.",
+        "tab": "Importance",
+        "confirm": {
+          "values": [
+            "true"
+          ],
+          "title": "Enable Importance — Alpha Feature",
+          "warnings": [
+            "Alpha testing — not ready for production use",
+            "Memories gain salience ratings that shape which connections surface in search",
+            "With the nightly schedule on, ratings drift down over time (decay) and direct recalls nudge them up",
+            "Memory content is never changed or deleted — Mind → Admin resets all ratings in one click"
+          ],
+          "buttonLabel": "Enable Importance (Alpha)",
+          "allow_managed": true
+        }
+      },
+      {
+        "key": "importance_decay_per_night",
+        "type": "number",
+        "label": "Importance: decay per night",
+        "default": 0.005,
+        "help": "Nightly drift toward the floor (0.1) for rated, non-favorite memories below the 0.9 core band. Unrated memories never move. 0 disables decay. Applies only while Importance is enabled.",
+        "tab": "Importance"
+      },
+      {
+        "key": "importance_boost_per_recall",
+        "type": "number",
+        "label": "Importance: boost per recall",
+        "default": 0.02,
+        "help": "Bump when a rated memory comes back as a direct search hit — once per memory per day, ceiling 0.85 (recall alone never mints core status). Unrated memories never move. 0 disables. Applies only while Importance is enabled.",
+        "tab": "Importance"
+      },
+      {
+        "key": "self_important_per_item",
+        "type": "number",
+        "label": "Wake: important memories per item",
+        "default": 5,
+        "help": "read_self(depth) pulls this many memories for EACH value, project, and relationship on the self sheet (the Important Memories wake section, deduped against recent memories). Depth 1 caps at 3 per item; this sets the depth-2 ceiling (max 10). 0 turns the section off.",
+        "tab": "Search"
+      },
+      {
+        "key": "spider_depth1_tokens",
+        "type": "number",
+        "label": "Spider: connections budget at depth 1 (tokens)",
+        "default": 2000,
+        "help": "Size cap for the 'Connected memories' block at depth 1, on top of the direct results (typically ~2K) — about 4K total.",
+        "tab": "Search"
+      },
+      {
+        "key": "spider_depth2_tokens",
+        "type": "number",
+        "label": "Spider: connections budget at depth 2 (tokens)",
+        "default": 6000,
+        "help": "Size cap for the 'Connected memories' block at depth 2 — about 8K total with a typical base return. Depth 3+ clamps to 2.",
+        "tab": "Search"
+      },
+      {
+        "key": "knowledge_search_chunks",
+        "type": "number",
+        "label": "Knowledge: chunks per document in mixed search",
+        "default": 2,
+        "help": "A big document (a whole book) is hundreds of sub-chunks — in an all-layer search, each knowledge document surfaces at most this many (1-10). search_memory with layer='knowledge' ignores the cap for deep dives.",
+        "tab": "Search"
+      }
+    ],
+    "schedule": [
+      {
+        "name": "Librarian nightly",
+        "cron": "30 3 * * *",
+        "handler": "schedule/nightly.py",
+        "time_setting": "librarian_nightly_time",
+        "enabled_setting": "librarian_nightly_enabled",
+        "enabled": false,
+        "description": "Nightly mind tending: importance decay tick (when Importance is enabled), then librarian passes over the configured scopes (when Librarian is enabled)."
+      }
+    ],
+    "scopes": [
+      {
+        "key": "memory",
+        "label": "memory",
+        "endpoint": "/api/plugin/mindpalace/scopes",
+        "data_key": "scopes",
+        "value_field": "name",
+        "name_field": "name",
+        "label_template": "{name} ({count})",
+        "nav_target": "mind:memories"
+      }
+    ],
+    "routes": [
+      {
+        "method": "GET",
+        "path": "scopes",
+        "handler": "routes/scopes.py:list_scopes"
+      },
+      {
+        "method": "POST",
+        "path": "scopes",
+        "handler": "routes/scopes.py:create_scope"
+      },
+      {
+        "method": "DELETE",
+        "path": "scopes/{name}",
+        "handler": "routes/scopes.py:delete_scope"
+      },
+      {
+        "method": "GET",
+        "path": "status",
+        "handler": "routes/browse.py:status"
+      },
+      {
+        "method": "GET",
+        "path": "layers",
+        "handler": "routes/browse.py:list_layers"
+      },
+      {
+        "method": "GET",
+        "path": "chunks",
+        "handler": "routes/browse.py:list_chunks"
+      },
+      {
+        "method": "POST",
+        "path": "chunks",
+        "handler": "routes/browse.py:create_chunk"
+      },
+      {
+        "method": "DELETE",
+        "path": "chunks/{cid}",
+        "handler": "routes/browse.py:delete_chunk"
+      },
+      {
+        "method": "POST",
+        "path": "chunks/{cid}/favorite",
+        "handler": "routes/browse.py:toggle_favorite"
+      },
+      {
+        "method": "POST",
+        "path": "chunks/{cid}/unprune",
+        "handler": "routes/browse.py:unprune_chunk"
+      },
+      {
+        "method": "POST",
+        "path": "librarian/run",
+        "handler": "routes/browse.py:librarian_run"
+      },
+      {
+        "method": "POST",
+        "path": "maintenance",
+        "handler": "routes/browse.py:maintenance"
+      },
+      {
+        "method": "GET",
+        "path": "librarian/status",
+        "handler": "routes/browse.py:librarian_status"
+      },
+      {
+        "method": "GET",
+        "path": "librarian/dedup-preview",
+        "handler": "routes/browse.py:librarian_dedup_preview"
+      },
+      {
+        "method": "GET",
+        "path": "librarian/queue-depth",
+        "handler": "routes/browse.py:librarian_queue_depth"
+      },
+      {
+        "method": "POST",
+        "path": "librarian/drain",
+        "handler": "routes/browse.py:librarian_drain"
+      },
+      {
+        "method": "POST",
+        "path": "librarian/drain-stop",
+        "handler": "routes/browse.py:librarian_drain_stop"
+      },
+      {
+        "method": "GET",
+        "path": "resident",
+        "handler": "routes/browse.py:get_resident"
+      },
+      {
+        "method": "PUT",
+        "path": "resident",
+        "handler": "routes/browse.py:put_resident"
+      },
+      {
+        "method": "GET",
+        "path": "library/export",
+        "handler": "routes/library_routes.py:export_zip"
+      },
+      {
+        "method": "POST",
+        "path": "library/import-zip",
+        "handler": "routes/library_routes.py:import_zip"
+      },
+      {
+        "method": "GET",
+        "path": "self",
+        "handler": "routes/self_routes.py:get_sheet"
+      },
+      {
+        "method": "GET",
+        "path": "ledger",
+        "handler": "routes/self_routes.py:get_ledger"
+      },
+      {
+        "method": "PUT",
+        "path": "self/{section}",
+        "handler": "routes/self_routes.py:put_section"
+      },
+      {
+        "method": "GET",
+        "path": "self/{section}/history",
+        "handler": "routes/self_routes.py:section_history"
+      },
+      {
+        "method": "GET",
+        "path": "wake-tools",
+        "handler": "routes/self_routes.py:list_wake_tools"
+      },
+      {
+        "method": "GET",
+        "path": "wake-tools/options",
+        "handler": "routes/self_routes.py:wake_tool_options"
+      },
+      {
+        "method": "POST",
+        "path": "wake-tools",
+        "handler": "routes/self_routes.py:create_wake_tool"
+      },
+      {
+        "method": "PUT",
+        "path": "wake-tools/{wid}",
+        "handler": "routes/self_routes.py:update_wake_tool"
+      },
+      {
+        "method": "DELETE",
+        "path": "wake-tools/{wid}",
+        "handler": "routes/self_routes.py:delete_wake_tool"
+      },
+      {
+        "method": "GET",
+        "path": "templates",
+        "handler": "routes/browse.py:list_templates"
+      },
+      {
+        "method": "GET",
+        "path": "goals",
+        "handler": "routes/goals_routes.py:list_goals"
+      },
+      {
+        "method": "POST",
+        "path": "goals",
+        "handler": "routes/goals_routes.py:create_goal"
+      },
+      {
+        "method": "PUT",
+        "path": "goals/{gid}",
+        "handler": "routes/goals_routes.py:update_goal"
+      },
+      {
+        "method": "DELETE",
+        "path": "goals/{gid}",
+        "handler": "routes/goals_routes.py:delete_goal"
+      },
+      {
+        "method": "GET",
+        "path": "transfer/export",
+        "handler": "routes/transfer.py:export_data"
+      },
+      {
+        "method": "POST",
+        "path": "transfer/import",
+        "handler": "routes/transfer.py:import_data"
+      },
+      {
+        "method": "GET",
+        "path": "entities",
+        "handler": "routes/browse.py:list_entities"
+      },
+      {
+        "method": "POST",
+        "path": "entities",
+        "handler": "routes/browse.py:create_entity"
+      },
+      {
+        "method": "GET",
+        "path": "entities/{eid}",
+        "handler": "routes/browse.py:entity_detail"
+      },
+      {
+        "method": "PUT",
+        "path": "entities/{eid}",
+        "handler": "routes/browse.py:update_entity"
+      },
+      {
+        "method": "DELETE",
+        "path": "entities/{eid}",
+        "handler": "routes/browse.py:delete_entity"
+      },
+      {
+        "method": "GET",
+        "path": "library/catalog",
+        "handler": "routes/library_routes.py:catalog"
+      },
+      {
+        "method": "POST",
+        "path": "library/collections",
+        "handler": "routes/library_routes.py:create_collection"
+      },
+      {
+        "method": "PUT",
+        "path": "library/collections/{cid}",
+        "handler": "routes/library_routes.py:update_collection"
+      },
+      {
+        "method": "DELETE",
+        "path": "library/collections/{cid}",
+        "handler": "routes/library_routes.py:delete_collection"
+      },
+      {
+        "method": "POST",
+        "path": "library/notes",
+        "handler": "routes/library_routes.py:create_note"
+      },
+      {
+        "method": "POST",
+        "path": "library/upload",
+        "handler": "routes/library_routes.py:upload"
+      },
+      {
+        "method": "GET",
+        "path": "library/documents/{did}",
+        "handler": "routes/library_routes.py:get_document"
+      },
+      {
+        "method": "PUT",
+        "path": "library/documents/{did}",
+        "handler": "routes/library_routes.py:update_document"
+      },
+      {
+        "method": "DELETE",
+        "path": "library/documents/{did}",
+        "handler": "routes/library_routes.py:delete_document"
+      },
+      {
+        "method": "GET",
+        "path": "library/documents/{did}/download",
+        "handler": "routes/library_routes.py:download"
+      },
+      {
+        "method": "GET",
+        "path": "library/documents/{did}/thumb",
+        "handler": "routes/library_routes.py:image_thumb"
+      },
+      {
+        "method": "GET",
+        "path": "library/documents/{did}/file",
+        "handler": "routes/library_routes.py:image_file"
+      },
+      {
+        "method": "PUT",
+        "path": "library/documents/{did}/image-meta",
+        "handler": "routes/library_routes.py:image_meta"
+      },
+      {
+        "method": "GET",
+        "path": "library/folders",
+        "handler": "routes/library_routes.py:list_folders"
+      },
+      {
+        "method": "POST",
+        "path": "library/folders",
+        "handler": "routes/library_routes.py:add_folder"
+      },
+      {
+        "method": "DELETE",
+        "path": "library/folders/{fid}",
+        "handler": "routes/library_routes.py:delete_folder"
+      },
+      {
+        "method": "POST",
+        "path": "library/folders/{fid}/rescan",
+        "handler": "routes/library_routes.py:rescan_folder"
+      },
+      {
+        "method": "POST",
+        "path": "library/migrate",
+        "handler": "routes/library_routes.py:migrate"
+      },
+      {
+        "method": "GET",
+        "path": "library/migration",
+        "handler": "routes/library_routes.py:migration_status"
+      },
+      {
+        "method": "POST",
+        "path": "console/peek",
+        "handler": "routes/library_routes.py:peek"
+      }
+    ]
+  },
+  "essential": "memory"
+}

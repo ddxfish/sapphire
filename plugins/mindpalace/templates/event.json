@@ -1,0 +1,11 @@
+{
+    "kind": "event",
+    "label": "Event",
+    "icon": "📅",
+    "order": 40,
+    "fields": [
+        {"key": "date", "label": "Date", "type": "text"},
+        {"key": "location", "label": "Location", "type": "text"},
+        {"key": "participants", "label": "Participants", "type": "text"}
+    ]
+}

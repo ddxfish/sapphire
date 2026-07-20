@@ -1,0 +1,10 @@
+{
+    "kind": "thing",
+    "label": "Thing",
+    "icon": "📦",
+    "order": 30,
+    "fields": [
+        {"key": "location", "label": "Location (where it lives)", "type": "text"},
+        {"key": "nicknames", "label": "Nicknames (comma-separated)", "type": "text"}
+    ]
+}
