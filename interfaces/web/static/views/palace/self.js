@@ -376,7 +376,7 @@ function upcomingCard(dash) {
     const items = dash?.upcoming || [];
     const rows = items.map(u => `
         <div class="palace-ledger-row" title="${escAttr(`[${u.id}] ${u.preview}`)}">
-            <span class="palace-ledger-ts">${escHtml(fmtEventDate(u.date))}</span>
+            <span class="palace-ledger-ts">${u.recurring ? '↻ ' : ''}${escHtml(fmtEventDate(u.date))}</span>
             <span class="palace-ledger-sum">${escHtml(u.preview)}</span>
         </div>`).join('');
     return `

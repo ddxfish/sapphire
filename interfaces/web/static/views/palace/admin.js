@@ -666,10 +666,12 @@ async function refreshRunning(el, preloaded) {
         const box = el.querySelector(`[data-pass-status="${p.key}"]`);
         if (!box) continue;
         const mine = (st.scopes || []).find(s => s.scope === scope && s.pass === p.key);
-        if (st.enabled === false) box.textContent = 'alpha off';
-        else box.textContent = mine
+        if (st.enabled === false) { box.textContent = 'alpha off'; continue; }
+        box.textContent = mine
             ? `last ${timeAgo(mine.last_pass)} · ${mine.passes_today} today`
             : 'never run in this scope';
+        const depth = st.queues?.[p.key];
+        if (depth !== undefined) box.textContent += ` · ${depth} waiting`;
     }
 }
 
