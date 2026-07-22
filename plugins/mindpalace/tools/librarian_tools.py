@@ -469,7 +469,10 @@ def _insert_derived(cursor, pt, md, src_row, content, layer, scope,
         pair = amap.get(h.lower())
         if pair and pair[0] not in mention_ids and pair[0] != entity_id:
             mention_ids.append(pair[0])
-    meta = md.save_meta(content, exclude_names=[h.lower() for h in hits])
+    # anchor=created: the content was LIVED at the source's timestamp — a
+    # "tonight" in a February memory must not resolve against drain day.
+    meta = md.save_meta(content, exclude_names=[h.lower() for h in hits],
+                        anchor=created)
     meta['derived_from'] = src_id
     meta['librarian_v'] = 1
     # Born reviewed: she just made this chunk during a pass — it must not

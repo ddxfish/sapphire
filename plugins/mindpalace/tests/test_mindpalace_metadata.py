@@ -425,3 +425,13 @@ def test_backfill_stamps_preserves_import_key_seeds_and_is_idempotent(palace):
             "SELECT mentions FROM entities WHERE name = 'Krem'").fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_save_meta_threads_anchor(palace):
+    # 2026-07-21: save_meta gained anchor= so librarian-derived chunks can
+    # resolve relative dates against their inherited created.
+    m = md.save_meta("we sailed tonight", anchor='2026-02-12T12:00:00+00:00')
+    assert m.get('event_dates') == ['2026-02-12']
+    from datetime import datetime
+    m2 = md.save_meta("we sailed tonight")     # no anchor = genuinely new = today
+    assert m2.get('event_dates') == [datetime.now().strftime('%Y-%m-%d')]

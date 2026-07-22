@@ -679,6 +679,18 @@ def _wake_recent(pt, scope, depth):
 _IMPORTANT_SOURCES = (('values', 'concept'), ('projects', 'project'),
                       ('relationships', 'name'))
 _IMPORTANT_ROWS_PER_SECTION = 5
+_IMPORTANT_RECORD_CHARS = 220     # per-record trim inside this leg
+_IMPORTANT_TERM_CHARS = 80        # group heading (sheet rows can be creeds)
+_IMPORTANT_CHAR_BUDGET = {1: 4000, 2: 8000}
+
+
+def _trim(text, n):
+    """Whitespace-collapsed head, cut at a word boundary. The wake view is
+    an overview — [id] + search_memory is the path to any full record."""
+    text = ' '.join(str(text).split())
+    if len(text) <= n:
+        return text
+    return (text[:n].rsplit(' ', 1)[0] or text[:n]) + '…'
 
 
 def _important_per_item(depth):
@@ -740,14 +752,23 @@ def _wake_important(pt, cursor, scope, depth, seen):
     if not per:
         return ''
     try:
+        # Char-budgeted like every other leg (this one ran 64% of a 30k
+        # read_self, 2026-07-21). Budget enforced at PULL time — once spent,
+        # remaining sheet items are counted, not searched, so no ids are
+        # claimed into `seen` without being shown.
+        budget = _IMPORTANT_CHAR_BUDGET[2 if depth >= 2 else 1]
         current = _current_sections(cursor, scope)
-        groups = []
+        used, skipped = 0, 0
+        blocks = []
         for sec, field in _IMPORTANT_SOURCES:
             row = current.get(sec)
             rows = ((row or {}).get('meta') or {}).get('rows') or []
             for r in rows[:_IMPORTANT_ROWS_PER_SECTION]:
                 term = str((r or {}).get(field) or '').strip()
                 if not term:
+                    continue
+                if used >= budget:
+                    skipped += 1
                     continue
                 if sec == 'relationships':
                     hits = _entity_memories(pt, cursor, scope, term, per, seen)
@@ -757,14 +778,20 @@ def _wake_important(pt, cursor, scope, depth, seen):
                     hits = _semantic_memories(pt, scope, term, per, seen)
                 if hits:
                     seen.update(h[0] for h in hits)
-                    groups.append((term, hits))
-        if not groups:
+                    lines = [f"— {_trim(term, _IMPORTANT_TERM_CHARS)}:"]
+                    lines += [pt._format_chunk(
+                        h[0], _trim(h[1], _IMPORTANT_RECORD_CHARS), *h[2:6])
+                        for h in hits]
+                    block = "\n".join(lines)
+                    used += len(block)
+                    blocks.append(block)
+        if not blocks:
             return ''
-        lines = ["\n◆ Important memories (what your sheet cares about)"]
-        for term, hits in groups:
-            lines.append(f"— {term}:")
-            lines.extend(pt._format_chunk(*h[:6]) for h in hits)
-        return "\n".join(lines)
+        out = ["\n◆ Important memories (what your sheet cares about)"] + blocks
+        if skipped:
+            out.append(f"…and {skipped} more sheet items — "
+                       f"search_memory reaches them.")
+        return "\n".join(out)
     except Exception as e:
         logger.warning(f"[MINDPALACE] Wake important skipped (sheet unaffected): {e}")
         return ''

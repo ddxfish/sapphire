@@ -221,11 +221,14 @@ def derivable_meta(content: str, exclude_names=(), anchor=None) -> dict:
     return meta
 
 
-def save_meta(content: str, exclude_names=()) -> dict:
+def save_meta(content: str, exclude_names=(), anchor=None) -> dict:
     """Full save-time meta: derivable subset + boot window + tool context.
     The context fields (model/chat/persona/channel) only exist forward —
-    they are unknowable retroactively, so backfill() never writes them."""
-    meta = derivable_meta(content, exclude_names=exclude_names)
+    they are unknowable retroactively, so backfill() never writes them.
+    `anchor`: pass the inherited created for chunks whose content predates
+    this call (librarian-derived) — default None resolves relative dates
+    against now, which is only right for genuinely-new content."""
+    meta = derivable_meta(content, exclude_names=exclude_names, anchor=anchor)
     meta['session_id'] = SESSION_ID
     meta.update(_context_fields())
     return meta

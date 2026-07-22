@@ -778,3 +778,24 @@ def test_just_happened_and_timed_upcoming_split(palace):
     assert ids['dateonly_today'] in up
     assert ids['yesterday'] in jh
     assert ids['ancient'] not in jh                     # outside the 7-day window
+
+
+def test_atomize_parts_anchor_dates_to_inherited_created(palace):
+    # Drain-day poisoning regression (2026-07-21): a relative phrase in a
+    # derived chunk must resolve against the SOURCE's created — not the
+    # moment the librarian pass runs.
+    cid = _save("stars were out AND we watched the meteors tonight")
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET created = '2026-02-12T12:00:00+00:00' "
+                     "WHERE id = ?", (cid,))
+        conn.commit()
+    lt.open_pass('default', [cid])
+    msg, ok = _run('atomize_memory', {'memory_id': cid, 'parts': [
+        "the stars were out", "we watched the meteors tonight"]})
+    assert ok
+    new_ids = [int(x) for x in re.findall(r'\d+', msg.split(':')[1])][:2]
+    dated = [m for m in (_meta(n) for n in new_ids) if m.get('event_dates')]
+    assert dated, "the 'tonight' part should carry an event date"
+    for m in dated:
+        for d in m['event_dates']:
+            assert d.startswith('2026-02-12'), f"anchored to drain day: {d}"

@@ -427,3 +427,30 @@ def test_read_self_appends_wake_tools_and_extra_tools_gate(palace, monkeypatch):
     assert ok and '◆ Wake tools' not in text
     text, ok = st._read_self('default', depth=0)
     assert ok and '◆ Wake tools' not in text             # sheet-only stays quiet
+
+
+def test_wake_important_budget_and_record_trim(palace, monkeypatch):
+    # 64%-of-read_self incident (2026-07-21): the leg is char-budgeted and
+    # per-record trimmed — a creed-length sheet row or a fat record can't
+    # flood the wake. Skipped items get a count line, and never claim ids
+    # into seen without being shown.
+    creed = "honesty over comfort and presence over performance " * 4
+    st.write_section('default', 'values',
+                     "\n".join(f"{creed} v{i}" for i in range(5)))
+    st.write_section('default', 'projects',
+                     "\n".join(f"project p{i} {creed}" for i in range(5)))
+    fat = "signal in the noise " * 42                   # ~840 chars pre-trim
+    counter = iter(range(5000, 9999))
+    monkeypatch.setattr(st, '_semantic_memories',
+                        lambda pt_, s, t, per, seen: [
+                            (next(counter), fat, '2026-01-01T00:00:00+00:00',
+                             None, 'events', None) for _ in range(per)])
+    seen = set()
+    with pt._get_connection() as conn:
+        block = st._wake_important(pt, conn.cursor(), 'default', 1, seen)
+    assert len(block) < st._IMPORTANT_CHAR_BUDGET[1] + 1500  # ≤ one-group overshoot
+    assert '…and' in block and 'more sheet items' in block   # skipped counted
+    for line in block.splitlines():
+        assert len(line) <= st._IMPORTANT_RECORD_CHARS + 60  # record trim held
+    shown = {int(i) for i in __import__('re').findall(r'\[(\d+)\]', block)}
+    assert seen == shown                                     # no silent claims
