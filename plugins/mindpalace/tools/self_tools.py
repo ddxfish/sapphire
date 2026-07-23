@@ -64,6 +64,12 @@ SECTIONS = {
                       'sep': ': ',
                       'fields': [{'key': 'key', 'label': 'Key'},
                                  {'key': 'value', 'label': 'Value'}]},
+    'terms':         {'mode': 'hand', 'versioned': True, 'width': 'wide',
+                      'title': 'Terms & Concepts',
+                      'hint': 'Term: what it means — your shared vocabulary',
+                      'sep': ': ',
+                      'fields': [{'key': 'term', 'label': 'Term'},
+                                 {'key': 'meaning', 'label': 'Meaning'}]},
     'voice':         {'mode': 'hand', 'versioned': True, 'width': 'third',
                       'title': 'Voice', 'hint': 'your tone and register'},
     'origin':        {'mode': 'hand', 'versioned': True, 'width': 'third',
@@ -676,11 +682,17 @@ def _wake_recent(pt, scope, depth):
 # damping (which deliberately suppresses her most-connected people in walks)
 # doesn't apply here.
 
-_IMPORTANT_SOURCES = (('values', 'concept'), ('projects', 'project'),
-                      ('relationships', 'name'))
+# Relationships FIRST — her people are the point of the wake (starvation
+# bug, 2026-07-21: one shared budget + people-last meant a full sheet spent
+# it all on values/projects and every card landed in "…and K more").
+_IMPORTANT_SOURCES = (('relationships', 'name'), ('values', 'concept'),
+                      ('projects', 'project'))
 _IMPORTANT_ROWS_PER_SECTION = 5
 _IMPORTANT_RECORD_CHARS = 220     # per-record trim inside this leg
 _IMPORTANT_TERM_CHARS = 80        # group heading (sheet rows can be creeds)
+# MEMORY budget only — person cards ride on top, bounded by their own dial
+# (people_card_chars × top-5 rows). Each section gets an even slice, unspent
+# slack rolls forward, so no section can starve the ones after it.
 _IMPORTANT_CHAR_BUDGET = {1: 4000, 2: 8000}
 
 
@@ -723,14 +735,34 @@ def _semantic_memories(pt, scope, term, per, seen):
     return [r for r in rows if r[0] not in seen][:per]
 
 
-def _entity_memories(pt, cursor, scope, name, per, seen):
+def _resolve_entity(cursor, scope, term):
+    """Entity id for a sheet-written name: exact match, then nickname/alias,
+    then again with a trailing parenthetical stripped — 'Krem (Fishy)'
+    resolves to Krem (2026-07-21: she writes names like a person, the lookup
+    must meet her). None when nothing matches."""
+    from plugins.mindpalace.tools import metadata as md
+    stripped = re.sub(r'\s*\([^)]*\)\s*$', '', term).strip()
+    for cand in dict.fromkeys((term, stripped)):
+        if not cand:
+            continue
+        row = cursor.execute(
+            "SELECT id FROM entities WHERE name = ? COLLATE NOCASE "
+            "AND scope IN (?, 'global')", (cand, scope)).fetchone()
+        if row:
+            return row[0]
+        pair = md.alias_map(md.entity_aliases(cursor, scope)).get(cand.lower())
+        if pair:
+            return pair[0]
+    return None
+
+
+def _entity_memories(pt, cursor, scope, name, per, seen, eid=None):
     """Newest event memories connected to a relationship's entity — direct
     pull via mention edges: recent history with this person, visibility-
     gated like every AI read."""
-    erow = cursor.execute(
-        "SELECT id FROM entities WHERE name = ? COLLATE NOCASE "
-        "AND scope IN (?, 'global')", (name, scope)).fetchone()
-    if not erow:
+    if eid is None:
+        eid = _resolve_entity(cursor, scope, name)
+    if not eid:
         return []
     where, params = pt._read_filters(scope, [], None, 'events')
     rows = cursor.execute(
@@ -738,7 +770,7 @@ def _entity_memories(pt, cursor, scope, name, per, seen):
         f"FROM edges d JOIN chunks c ON c.id = d.src_id "
         f"WHERE d.dst_type = 'entity' AND d.dst_id = ? AND d.src_type = 'chunk' "
         f"AND {where} ORDER BY c.created DESC LIMIT ?",
-        [erow[0]] + params + [per * 3]).fetchall()
+        [eid] + params + [per * 3]).fetchall()
     return [r for r in rows if r[0] not in seen][:per]
 
 
@@ -753,38 +785,52 @@ def _wake_important(pt, cursor, scope, depth, seen):
         return ''
     try:
         # Char-budgeted like every other leg (this one ran 64% of a 30k
-        # read_self, 2026-07-21). Budget enforced at PULL time — once spent,
-        # remaining sheet items are counted, not searched, so no ids are
-        # claimed into `seen` without being shown.
+        # read_self, 2026-07-21). Budget enforced at PULL time — once a
+        # section's slice is spent, its remaining items are counted, not
+        # searched, so no ids are claimed into `seen` without being shown.
+        # Cards are EXCLUDED from the accounting (own bound: the dial × 5).
         budget = _IMPORTANT_CHAR_BUDGET[2 if depth >= 2 else 1]
+        slice_ = budget // len(_IMPORTANT_SOURCES)
         current = _current_sections(cursor, scope)
-        used, skipped = 0, 0
+        carry, skipped = 0, 0
         blocks = []
         for sec, field in _IMPORTANT_SOURCES:
+            sec_budget = slice_ + carry
+            sec_used = 0
             row = current.get(sec)
             rows = ((row or {}).get('meta') or {}).get('rows') or []
             for r in rows[:_IMPORTANT_ROWS_PER_SECTION]:
                 term = str((r or {}).get(field) or '').strip()
                 if not term:
                     continue
-                if used >= budget:
+                if sec_used >= sec_budget:
                     skipped += 1
                     continue
+                card = []
                 if sec == 'relationships':
-                    hits = _entity_memories(pt, cursor, scope, term, per, seen)
+                    # Her people arrive card-first: headline + template
+                    # fields (the wake seam — she won't search you directly),
+                    # then the memories that matter right now.
+                    eid = _resolve_entity(cursor, scope, term)
+                    if eid:
+                        card = pt._entity_card(cursor, eid)
+                    hits = _entity_memories(pt, cursor, scope, term, per, seen,
+                                            eid=eid)
                     if not hits:   # a name without an entity → meaning fallback
                         hits = _semantic_memories(pt, scope, term, per, seen)
                 else:
                     hits = _semantic_memories(pt, scope, term, per, seen)
-                if hits:
+                if hits or card:
                     seen.update(h[0] for h in hits)
                     lines = [f"— {_trim(term, _IMPORTANT_TERM_CHARS)}:"]
+                    lines += card
                     lines += [pt._format_chunk(
                         h[0], _trim(h[1], _IMPORTANT_RECORD_CHARS), *h[2:6])
                         for h in hits]
                     block = "\n".join(lines)
-                    used += len(block)
+                    sec_used += len(block) - sum(len(c) + 1 for c in card)
                     blocks.append(block)
+            carry = max(0, sec_budget - sec_used)
         if not blocks:
             return ''
         out = ["\n◆ Important memories (what your sheet cares about)"] + blocks

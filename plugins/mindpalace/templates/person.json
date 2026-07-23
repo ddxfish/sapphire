@@ -10,6 +10,12 @@
         {"key": "email", "label": "Email", "type": "text"},
         {"key": "address", "label": "Address", "type": "text"},
         {"key": "birthday", "label": "Birthday", "type": "text"},
+        {"key": "notes", "label": "Notes", "type": "textarea"},
+        {"key": "background", "label": "Background", "type": "textarea"},
+        {"key": "interests", "label": "Interests", "type": "textarea"},
+        {"key": "voice", "label": "Voice & humor", "type": "textarea"},
+        {"key": "likes", "label": "Likes", "type": "textarea"},
+        {"key": "dislikes", "label": "Dislikes", "type": "textarea"},
         {"key": "allow_email", "label": "Allow email", "type": "bool", "default": false},
         {"key": "allow_call", "label": "Allow phone calls", "type": "bool", "default": false}
     ]

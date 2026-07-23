@@ -211,6 +211,14 @@
         "tab": "Search"
       },
       {
+        "key": "people_card_chars",
+        "type": "number",
+        "label": "Person card size (chars)",
+        "default": 1500,
+        "help": "Max characters of a person's card (description + Background/Interests/Voice/Likes/Dislikes fields) when it renders to the AI — on a direct name search, and card-first in read_self's important-people groups. Clamped 200-4000. Sparse cards arrive whole; rich ones get trimmed to fit.",
+        "tab": "Search"
+      },
+      {
         "key": "spider_depth1_tokens",
         "type": "number",
         "label": "Spider: connections budget at depth 1 (tokens)",

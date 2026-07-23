@@ -102,3 +102,13 @@ def test_cache_invalidates_on_new_user_file(tmp_path, monkeypatch):
     assert set(tpl.get_templates()) == {'thing'}
     _write_tpl(user, 'boat.json', {'kind': 'boat'})
     assert set(tpl.get_templates()) == {'thing', 'boat'}
+
+
+def test_textarea_field_type_ships_on_person():
+    t = tpl.get_templates()['person']
+    by_key = {f['key']: f for f in t['fields']}
+    assert by_key['background']['type'] == 'textarea'
+    assert by_key['voice']['type'] == 'textarea'
+    assert by_key['likes']['type'] == 'textarea'
+    assert by_key['dislikes']['type'] == 'textarea'
+    assert by_key['relationship']['type'] == 'text'      # untouched

@@ -8671,10 +8671,14 @@ a.gallery-caption:hover {
     display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px;
 }
 .palace-field-row > span { flex: 0 0 140px; color: var(--text-secondary, #bbb); }
-.palace-field-row input[type="text"] {
+.palace-field-row input[type="text"],
+.palace-field-row textarea {
     flex: 1; background: var(--bg-tertiary, #1a1b2e); color: var(--text, #e6e6f0);
     border: 1px solid var(--border, #333); border-radius: 4px; padding: 5px 8px;
 }
+.palace-field-row textarea { resize: vertical; font: inherit; font-size: 13px; }
+.palace-field-area { align-items: flex-start; }
+.palace-field-area > span { padding-top: 5px; }
 .palace-field-bool { cursor: pointer; }
 .palace-field-bool input { flex: 0 0 auto; }
 .palace-field-bool span { flex: 1; }
@@ -8882,12 +8886,15 @@ a.gallery-caption:hover {
 
 /* Entity short description (tier-1 headline) — the layer-1 line every kind carries */
 .palace-headline-row { display: flex; gap: 8px; margin-bottom: 12px; }
-.palace-headline-row input {
+.palace-headline-row input,
+.palace-headline-row textarea {
     flex: 1; background: var(--input-bg, #16172a); color: var(--text, #e6e6f0);
     border: 1px solid #4a336e; border-radius: 8px; padding: 7px 10px;
     font: inherit; font-size: 13px; min-width: 0;
 }
-.palace-headline-row input:focus { outline: none; border-color: #c39df5; }
+.palace-headline-row textarea { resize: vertical; }
+.palace-headline-row input:focus,
+.palace-headline-row textarea:focus { outline: none; border-color: #c39df5; }
 .palace-ent-headline {
     color: var(--text-muted, #999); font-size: 12px; line-height: 1.35;
     margin: 4px 0 6px;

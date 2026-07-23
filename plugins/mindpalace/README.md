@@ -93,7 +93,7 @@ pass": it is the sort pass's dirty flag, and only the sort pass resets it.
 ## Self sheet — structured sections
 
 Some self sections are **structured lists** (relationships, handles, values,
-projects): canonical storage is still plain text (one row per line, fields
+projects, terms & concepts): canonical storage is still plain text (one row per line, fields
 joined by " — ", or ": " for handles) so search, embeddings, entity linking
 and the spider are untouched — but the parsed rows also live in the chunk's
 meta, and the Mind → Self UI edits them as rows with per-column inputs and
@@ -103,6 +103,15 @@ so the sheet spiders straight to the people on it. "+ Add box" can create a
 Score) — and Sapphire edits the same box with plain `update_self` text lines.
 Layout: identity spans the full row; everything else sits two-up (stacks on
 mobile). Max 2 columns by design.
+
+**Person cards** (2026-07-21): a person entity's description plus its
+descriptive template fields (Background / Interests / Voice & humor / Likes /
+Dislikes — textarea fields on the person kind) render to the AI at exactly
+two seams: searching the person by name (or nickname) appends their card,
+and `read_self`'s important-people groups arrive card-first — so the people
+on her relationships sheet reach her at wake without a search. Flat per-card
+cap (`people_card_chars`, default 1500); fields are otherwise UI/contacts
+only.
 
 ## Alpha toggles (Librarian & Importance)
 

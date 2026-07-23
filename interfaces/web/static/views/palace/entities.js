@@ -221,6 +221,10 @@ function fieldsForm(kind, fields) {
             <label class="palace-field-row palace-field-bool">
                 <input type="checkbox" data-fkey="${escHtml(fd.key)}" ${f[fd.key] ? 'checked' : ''}>
                 <span>${escHtml(fd.label)}</span>
+            </label>` : fd.type === 'textarea' ? `
+            <label class="palace-field-row palace-field-area">
+                <span>${escHtml(fd.label)}</span>
+                <textarea data-fkey="${escHtml(fd.key)}" rows="3" maxlength="500">${escHtml(String(f[fd.key] ?? ''))}</textarea>
             </label>` : `
             <label class="palace-field-row">
                 <span>${escHtml(fd.label)}</span>
@@ -265,9 +269,8 @@ async function showEntityModal(eid) {
             </div>
             <div class="pr-modal-body view-scroll">
                 <div class="palace-headline-row">
-                    <input type="text" id="pal-ent-headline" maxlength="512"
-                           placeholder="Short description — one line on who/what this is *"
-                           value="${escHtml(headline?.content || '')}">
+                    <textarea id="pal-ent-headline" rows="3" maxlength="512"
+                              placeholder="Description — a few lines on who/what this is *">${escHtml(headline?.content || '')}</textarea>
                 </div>
                 <div id="pal-ent-fields-holder">${fieldsForm(ent.kind, ent.meta?.fields)}</div>
                 ${[1, 2, 3].filter(t => byTier[t].length).map(t => `

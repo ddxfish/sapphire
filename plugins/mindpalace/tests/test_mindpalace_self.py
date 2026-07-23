@@ -454,3 +454,148 @@ def test_wake_important_budget_and_record_trim(palace, monkeypatch):
         assert len(line) <= st._IMPORTANT_RECORD_CHARS + 60  # record trim held
     shown = {int(i) for i in __import__('re').findall(r'\[(\d+)\]', block)}
     assert seen == shown                                     # no silent claims
+
+
+# ─── Terms section + person cards (2026-07-21) ───────────────────────────────
+
+def _set_fields(name, fields):
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        eid, raw = cur.execute(
+            'SELECT id, meta FROM entities WHERE name = ?', (name,)).fetchone()
+        meta = json.loads(raw) if raw else {}
+        meta['fields'] = fields
+        cur.execute('UPDATE entities SET meta = ? WHERE id = ?',
+                    (json.dumps(meta), eid))
+        conn.commit()
+    return eid
+
+
+def test_terms_section_exists_and_stays_out_of_important(palace):
+    assert 'terms' in st.SECTIONS and st.SECTIONS['terms']['width'] == 'wide'
+    assert 'terms' not in {s for s, _ in st._IMPORTANT_SOURCES}
+    st.write_section('default', 'terms',
+                     "LHF: low hanging fruit\nHDF: a bug-free-zone density gauge")
+    text, ok = st._read_self('default')
+    assert ok and '◆ Terms & Concepts' in text
+    assert 'LHF: low hanging fruit' in text
+    with pt._get_connection() as conn:
+        row = st._current_sections(conn.cursor(), 'default')['terms']
+    assert row['meta']['rows'][0] == {'term': 'LHF',
+                                      'meaning': 'low hanging fruit'}
+
+
+def test_wake_important_person_card_first(palace):
+    hid = _save("Zebra is the ship engineer, dry humor",
+                layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
+        conn.commit()
+    _set_fields('Zebra', {'background': 'grew up dockside', 'likes': 'apples',
+                          'dislikes': '', 'allow_call': False})
+    b = _save("Zebra helped test the rudder")
+    st.write_section('default', 'relationships', 'Zebra — my tester')
+    block = _important()
+    assert '— Zebra:' in block
+    assert 'Zebra is the ship engineer' in block         # headline, card-first
+    assert 'Background: grew up dockside' in block
+    assert 'Likes: apples' in block
+    assert 'Dislikes' not in block                       # empty fields skip
+    assert f"[{b}]" in block                             # memories still follow
+
+
+def test_person_card_flat_cap(palace, monkeypatch):
+    from core.plugin_loader import plugin_loader
+    monkeypatch.setattr(plugin_loader, 'get_plugin_settings',
+                        lambda n: {'people_card_chars': 200})
+    _save("a note", layer='entities', entity='Verbose')
+    _set_fields('Verbose', {'background': 'wordy background line ' * 30})
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        eid = cur.execute("SELECT id FROM entities WHERE name = 'Verbose'"
+                          ).fetchone()[0]
+        card = pt._entity_card(cur, eid)
+    assert card and sum(len(l) for l in card) <= 260     # cap + ellipsis slack
+
+
+def test_search_by_name_appends_card(palace):
+    _save("keeps every tide chart annotated", layer='entities',
+          entity='Marisol')
+    _set_fields('Marisol', {'interests': 'tide charts'})
+    _save("saw Marisol at the market")
+    out, ok = pt._search_memory('Marisol', 'default')
+    assert ok and '👤 Marisol — card:' in out
+    assert 'Interests: tide charts' in out
+    out2, _ok2 = pt._search_memory('rudder blueprints', 'default')
+    assert '👤' not in out2                              # no card without a name hit
+
+
+def test_wake_important_people_never_starved(palace, monkeypatch):
+    # Starvation regression (2026-07-21): full values/projects sections must
+    # not spend the budget before her people — relationships render first,
+    # cards outside the memory accounting.
+    hid = _save("Zebra is the ship engineer", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
+        conn.commit()
+    _set_fields('Zebra', {'background': 'grew up dockside'})
+    b = _save("Zebra helped test the rudder")
+    st.write_section('default', 'relationships', 'Zebra — my tester')
+    creed = "presence over performance and honesty over comfort " * 4
+    st.write_section('default', 'values',
+                     "\n".join(f"{creed} v{i}" for i in range(5)))
+    st.write_section('default', 'projects',
+                     "\n".join(f"project p{i} {creed}" for i in range(5)))
+    fat = "signal in the noise " * 42
+    counter = iter(range(5000, 9999))
+    monkeypatch.setattr(st, '_semantic_memories',
+                        lambda pt_, s, t, per, seen: [
+                            (next(counter), fat, '2026-01-01T00:00:00+00:00',
+                             None, 'events', None) for _ in range(per)])
+    block = _important(depth=1)
+    assert '— Zebra:' in block                           # person present
+    assert 'Background: grew up dockside' in block       # with card
+    assert f"[{b}]" in block                             # and memories
+    assert '…and' in block                               # fat tail still capped
+
+
+def test_wake_important_resolves_parenthetical_names(palace):
+    # "Krem (Fishy)" regression (2026-07-21): she writes names like a person;
+    # the card lookup strips a trailing parenthetical to find the entity.
+    hid = _save("Zebra is the ship engineer", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
+        conn.commit()
+    _set_fields('Zebra', {'background': 'grew up dockside'})
+    st.write_section('default', 'relationships', 'Zebra (Zeb) — my tester')
+    block = _important()
+    assert '— Zebra (Zeb):' in block
+    assert 'Zebra is the ship engineer' in block
+    assert 'Background: grew up dockside' in block
+
+
+def test_wake_important_resolves_nicknames(palace):
+    _save("keeps the engine humming", layer='entities', entity='Zebra')
+    _set_fields('Zebra', {'nicknames': 'Zeb, Stripes', 'likes': 'apples'})
+    st.write_section('default', 'relationships', 'Stripes — engine whisperer')
+    block = _important()
+    assert '— Stripes:' in block
+    assert 'Likes: apples' in block
+
+
+def test_entity_edits_hit_the_ledger(palace):
+    # "Who wrote my Background?" (2026-07-22): card edits — fields,
+    # description, kind — must leave a ledger trail she can read.
+    from plugins.mindpalace.routes import browse
+    _save("a note", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        eid = conn.execute(
+            "SELECT id FROM entities WHERE name = 'Zebra'").fetchone()[0]
+    out = browse.update_entity(eid=eid, body={
+        'fields': {'background': 'grown in a lab', 'likes': 'apples'},
+        'headline': 'the ship engineer'})
+    assert out['success']
+    text, ok = st._read_ledger('default')
+    assert ok and 'updated entity "Zebra"' in text
+    assert 'background' in text and 'likes' in text     # field names named
+    assert 'description' in text                        # headline edit too

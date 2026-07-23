@@ -45,7 +45,7 @@ def _load_file(path: Path):
             key = _SLUG_RE.sub('', str(f.get('key', '')).strip().lower())
             if not key:
                 continue
-            ftype = f.get('type') if f.get('type') in ('text', 'bool') else 'text'
+            ftype = f.get('type') if f.get('type') in ('text', 'bool', 'textarea') else 'text'
             fields.append({'key': key, 'label': str(f.get('label') or key),
                            'type': ftype, 'default': f.get('default')})
         return {'kind': kind, 'label': str(t.get('label') or kind.title()),

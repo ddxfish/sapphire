@@ -413,7 +413,14 @@ def update_entity(eid=None, body=None, **_):
                 new_name = candidate
         new_kind = kind if 'kind' in b else row[1]
         meta = _parse_meta(row[2]) or {}
+        # Every edit lands in the ledger (2026-07-22 — she asked "who wrote
+        # my Background?" and the ledger had never heard of field edits):
+        # one combined row per save, field diffs by name, values in detail.
+        changed, field_diff = [], None
+        if 'kind' in b and new_kind != row[1]:
+            changed.append(f"kind → {new_kind or 'none'}")
         if fields is not None:
+            old_f = meta.get('fields') or {}
             spec = {f['key']: f for f in
                     tpl.get_templates().get(new_kind, {}).get('fields', [])}
             clean = {}
@@ -427,6 +434,13 @@ def update_entity(eid=None, body=None, **_):
                     v = str(v).strip()
                     if v:
                         clean[k] = v[:512]
+            diff_keys = sorted(k for k in {**old_f, **clean}
+                               if old_f.get(k) != clean.get(k))
+            if diff_keys:
+                changed.append('fields: ' + ', '.join(diff_keys))
+                field_diff = {k: [str(old_f.get(k, ''))[:200],
+                                  str(clean.get(k, ''))[:200]]
+                              for k in diff_keys}
             meta['fields'] = clean
         now = pt._now()
         headline_changed = False
@@ -446,9 +460,11 @@ def update_entity(eid=None, body=None, **_):
                         "meta, created, updated) VALUES ('entities', ?, ?, ?, 1, ?, ?, ?)",
                         (row[0], text, eid, json.dumps(hm), now, now))
                 headline_changed = True
+                changed.append('description')
             elif head:
                 cur.execute('DELETE FROM chunks WHERE id = ?', (head[0],))
                 headline_changed = True
+                changed.append('description cleared')
         cur.execute('UPDATE entities SET kind = ?, meta = ?, updated = ? WHERE id = ?',
                     (new_kind, json.dumps(meta) if meta else None, now, eid))
         if new_name:
@@ -456,6 +472,12 @@ def update_entity(eid=None, body=None, **_):
             pt._ledger(row[0], 'user', 'update', layer='entities', target=eid,
                        cursor=cur,
                        summary=f'renamed entity "{row[3]}" → "{new_name}"')
+        if changed:
+            pt._ledger(row[0], 'user', 'update', layer='entities', target=eid,
+                       cursor=cur,
+                       detail={'fields': field_diff} if field_diff else None,
+                       summary=(f'updated entity "{new_name or row[3]}" — '
+                                + '; '.join(changed)))
         conn.commit()
     if headline_changed:
         pt.reset_backfill_latch()   # headline re-embeds on the next sweep

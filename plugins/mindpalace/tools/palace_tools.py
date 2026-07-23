@@ -1541,7 +1541,17 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
                                       [r[0] for r in rows], depth)
                 if block:
                     out += "\n\n" + block
+            if card_txt:
+                out = card_txt + "\n\n" + out
             return out, True
+
+        # Direct look at a person/place/thing by name → their card rides
+        # along (headline + template fields, the one AI-facing field seam).
+        card_txt = ''
+        if layer in (None, 'entities'):
+            card = _query_card(query, scope)
+            if card:
+                card_txt = f"👤 {card[0]} — card:\n" + "\n".join(card[1])
 
         _backfill_embeddings()
 
@@ -1587,17 +1597,20 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
 
         # Zero direct hits — G4 rung 1/2 can still find an entity epicenter
         # (e.g. the query names someone whose facts use different words).
+        card_lead = (card_txt + "\n\n") if card_txt else ''
         if depth:
             block = _spider_block(query, scope, private_key, [], depth)
             if block:
-                return f"No direct matches for '{query}'{layer_note}{label_note}.\n\n" + block, True
+                return (f"No direct matches for '{query}'{layer_note}{label_note}.\n\n"
+                        + card_lead + block), True
 
         if layer is None:
             lib_block = _library_mixed(query, scope, private_key)
             if lib_block:
                 return (f"No memories found for '{query}'{label_note}, but the "
-                        f"library has matches:\n\n" + lib_block), True
-        return f"No memories found for '{query}'{layer_note}{label_note}.", True
+                        f"library has matches:\n\n" + card_lead + lib_block), True
+        return (f"No memories found for '{query}'{layer_note}{label_note}."
+                + ("\n\n" + card_txt if card_txt else '')), True
 
     except Exception as e:
         logger.error(f"[MINDPALACE] Error searching memory: {e}")
@@ -1899,6 +1912,90 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
     except Exception as e:
         logger.error(f"[MINDPALACE] Function error: {e}")
         return f"Mind palace error: {e}", False
+
+
+# ---------------------------------------------------------------------------
+# Person cards — the ONE seam where template fields reach the AI (they are
+# otherwise UI/contacts-only). Rendered on a direct search hit (the query IS
+# an entity's name/nickname) and folded into read_self's important-people
+# groups. Flat per-card cap; asymmetry comes from the data, not the code
+# (coffee sip, 2026-07-21).
+
+_CARD_FIELDS = (('relationship', 'Relationship'), ('birthday', 'Birthday'),
+                ('notes', 'Notes'),   # v1 people-import bios land here
+                ('background', 'Background'), ('interests', 'Interests'),
+                ('voice', 'Voice'), ('likes', 'Likes'), ('dislikes', 'Dislikes'))
+
+
+def _people_card_chars() -> int:
+    try:
+        from core.plugin_loader import plugin_loader
+        v = int(plugin_loader.get_plugin_settings('mindpalace')
+                .get('people_card_chars', 1500))
+    except Exception:
+        v = 1500
+    return min(max(v, 200), 4000)
+
+
+def _entity_card(cursor, eid) -> list:
+    """Card lines for an entity: newest headline chunk + non-empty descriptive
+    fields, capped at people_card_chars. Private-keyed headlines stay out —
+    the wake renders for every persona (same gate class as the dashboard).
+    Returns [] when nothing is curated."""
+    try:
+        cap = _people_card_chars()
+        lines = []
+        row = cursor.execute(
+            "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
+            "AND private_key IS NULL "
+            "AND json_extract(meta, '$.pruned_at') IS NULL "
+            "AND json_extract(meta, '$.superseded_at') IS NULL "
+            "ORDER BY created DESC, id DESC LIMIT 1", (eid,)).fetchone()
+        if row and row[0]:
+            lines.append(' '.join(row[0].split()))
+        raw = cursor.execute('SELECT meta FROM entities WHERE id = ?',
+                             (eid,)).fetchone()
+        try:
+            f = (json.loads(raw[0]) or {}).get('fields') or {}
+        except Exception:
+            f = {}
+        for key, label in _CARD_FIELDS:
+            val = ' '.join(str(f.get(key) or '').split())
+            if val and val.lower() not in ('false', 'none'):
+                lines.append(f"{label}: {val}")
+        out, used = [], 0
+        for ln in lines:
+            if used + len(ln) > cap:
+                room = cap - used
+                if room > 40:
+                    out.append(ln[:room].rsplit(' ', 1)[0] + '…')
+                break
+            out.append(ln)
+            used += len(ln) + 1
+        return out
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] entity card skipped: {e}")
+        return []
+
+
+def _query_card(query, scope):
+    """(name, card_lines) when the whole query IS an entity name or nickname
+    in scope — she looked THEM up, so the card comes too. None otherwise."""
+    q = (query or '').strip().lower()
+    if not q or len(q) > 64:
+        return None
+    try:
+        from plugins.mindpalace.tools import metadata as md
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            amap = md.alias_map(md.entity_aliases(cursor, scope))
+            pair = amap.get(q)
+            if not pair:
+                return None
+            lines = _entity_card(cursor, pair[0])
+            return (pair[1], lines) if lines else None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
