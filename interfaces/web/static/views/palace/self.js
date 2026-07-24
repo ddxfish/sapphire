@@ -189,11 +189,7 @@ async function renderResident(el) {
             <option value="">provider: auto</option>
             ${providers.map(pr => `<option value="${escAttr(pr.key)}" ${pr.key === res.provider ? 'selected' : ''}>${escHtml(pr.name || pr.key)}</option>`).join('')}
         </select>
-        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes"></select>
-        <select id="pal-res-watched" class="palace-select" title="Tamper watch: prompt changes to this persona land in this scope's ledger. Blank = watch the resident prompt.">
-            <option value="">watch: resident prompt</option>
-            ${watchOpts.map(p => `<option value="${escAttr(p)}" ${p === res.watched_prompt ? 'selected' : ''}>watch: ${escHtml(p)}</option>`).join('')}
-        </select>`;
+        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes"></select>`;
 
     const provSel = row.querySelector('#pal-res-provider');
     const modelSel = row.querySelector('#pal-res-model');
@@ -225,8 +221,6 @@ async function renderResident(el) {
 
     row.querySelector('#pal-res-prompt').addEventListener('change',
         (e) => save({ prompt: e.target.value }));
-    row.querySelector('#pal-res-watched').addEventListener('change',
-        (e) => save({ watched_prompt: e.target.value }));
     provSel.addEventListener('change', () => {
         res.model = '';
         updateModels();
@@ -253,6 +247,33 @@ async function renderResident(el) {
                 next[x.dataset.resPass] = x.checked);
             save({ passes: next });
         }));
+
+    // Ledger row (2026-07-23): the prompt-ledger opt-out + its watch target.
+    // The toggle gates RECORDING for this scope; the flip itself lands in the
+    // ledger, so a blind window always starts with a visible row.
+    const ledgerRow = el.querySelector('#pal-res-ledger');
+    if (!ledgerRow) return;
+    const ledgerOn = res.prompt_ledger !== false;
+    ledgerRow.innerHTML = `
+        <span class="palace-lib-title" title="Tamper watch: changes to the watched persona's prompt land in this scope's ledger. Off = prompt changes go unrecorded for this scope (the flip itself is recorded).">\u{1F4DC} Ledger</span>
+        <span style="display:inline-flex;align-items:center;gap:6px">
+            <span class="ui-meta-text">Prompt changes</span>
+            <label class="ui-toggle">
+                <input type="checkbox" id="pal-res-ledger-on" ${ledgerOn ? 'checked' : ''}>
+                <span class="ui-toggle-slider"></span>
+            </label>
+        </span>
+        <select id="pal-res-watched" class="palace-select" ${ledgerOn ? '' : 'disabled'} title="Which persona's prompt this scope's ledger tracks. Blank = the resident prompt.">
+            <option value="">watch: resident prompt</option>
+            ${watchOpts.map(p => `<option value="${escAttr(p)}" ${p === res.watched_prompt ? 'selected' : ''}>watch: ${escHtml(p)}</option>`).join('')}
+        </select>`;
+    const watchedSel = ledgerRow.querySelector('#pal-res-watched');
+    watchedSel.addEventListener('change',
+        (e) => save({ watched_prompt: e.target.value }));
+    ledgerRow.querySelector('#pal-res-ledger-on').addEventListener('change', (e) => {
+        watchedSel.disabled = !e.target.checked;
+        save({ prompt_ledger: e.target.checked });
+    });
 }
 
 // ─── Wake tools card — user-armed live checks at wake (2026-07-16) ──────────
@@ -521,6 +542,7 @@ function dashboardCard(d) {
                 <button class="mind-btn-sm" id="pal-lib-admin" title="Run passes, migration, and rescue tools — the operator console">\u{1F6E0}️ Admin</button>
             </div>
             <div class="palace-librarian-row" id="pal-res-passes"></div>
+            <div class="palace-librarian-row" id="pal-res-ledger"></div>
         </div>`;
 }
 

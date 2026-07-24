@@ -143,6 +143,18 @@ def test_one_event_lands_in_every_watching_scope(palace):
     assert _rows('s3c', layer='prompt') == []
 
 
+def test_prompt_ledger_off_gates_the_watch(palace):
+    """The Self-page toggle: off = this scope records no prompt changes at
+    all; back on = the watch resumes. The flip row itself is put_resident's
+    job (tested with the route)."""
+    pt.set_scope_resident('s3d', prompt='sapph-first', prompt_ledger=False)
+    _edit_and_flush(_mono(), _mono(before='', after='born'))   # edit AND save
+    assert _rows('s3d', layer='prompt') == []
+    pt.set_scope_resident('s3d', prompt_ledger=True)
+    _edit_and_flush(_mono())
+    assert len(_rows('s3d', layer='prompt')) == 1
+
+
 def test_component_edit_checks_preset_containment(palace, monkeypatch):
     from core import prompts
     monkeypatch.setattr(prompts, 'get_prompt', lambda n: {

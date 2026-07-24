@@ -611,7 +611,10 @@ def _ensure_db():
             # watched_prompt (2026-07-22, prompt ledger): the persona whose
             # prompt this scope's ledger tracks; NULL falls back to the
             # resident prompt. Distinct column — don't overload residency.
-            for col in ('prompt', 'provider', 'model', 'lib_passes', 'watched_prompt'):
+            # prompt_ledger (2026-07-23): the opt-out — '0' disables prompt
+            # recording for this scope; NULL/anything else = on (default).
+            for col in ('prompt', 'provider', 'model', 'lib_passes',
+                        'watched_prompt', 'prompt_ledger'):
                 if col not in scols:
                     cursor.execute(f'ALTER TABLE mind_scopes ADD COLUMN {col} TEXT')
 
@@ -943,13 +946,14 @@ def scope_resident(scope: str) -> dict:
     tended until someone flips its pills. Fails toward empty (silent-default
     invariant: no scope inherits another resident's voice on error)."""
     empty = {'prompt': None, 'provider': None, 'model': None, 'passes': {},
-             'watched_prompt': None}
+             'watched_prompt': None, 'prompt_ledger': True}
     try:
         if not _ensure_db():
             return empty
         with _get_connection() as conn:
             row = conn.execute('SELECT prompt, provider, model, lib_passes, '
-                               'watched_prompt FROM mind_scopes WHERE name = ?',
+                               'watched_prompt, prompt_ledger '
+                               'FROM mind_scopes WHERE name = ?',
                                (scope,)).fetchone()
         if not row:
             return empty
@@ -961,16 +965,19 @@ def scope_resident(scope: str) -> dict:
                 passes = {}
         return {'prompt': row[0] or None, 'provider': row[1] or None,
                 'model': row[2] or None, 'passes': passes,
-                'watched_prompt': row[4] or None}
+                'watched_prompt': row[4] or None,
+                'prompt_ledger': row[5] != '0'}
     except Exception as e:
         logger.warning(f"[MINDPALACE] scope_resident('{scope}') failed: {e}")
         return empty
 
 
 def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
-                       passes=None, watched_prompt=None) -> bool:
+                       passes=None, watched_prompt=None,
+                       prompt_ledger=None) -> bool:
     """Upsert residency fields. None leaves a field untouched; '' clears
-    prompt/model/watched_prompt. `passes` replaces the whole opt-in dict."""
+    prompt/model/watched_prompt. `passes` replaces the whole opt-in dict.
+    `prompt_ledger` takes a bool: False stores '0' (recording off)."""
     try:
         if not _ensure_db():
             return False
@@ -995,6 +1002,9 @@ def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
             if watched_prompt is not None:
                 sets.append('watched_prompt = ?')
                 vals.append(str(watched_prompt).strip() or None)
+            if prompt_ledger is not None:
+                sets.append('prompt_ledger = ?')
+                vals.append('1' if prompt_ledger else '0')
             if sets:
                 cur.execute(f"UPDATE mind_scopes SET {', '.join(sets)} "
                             f"WHERE name = ?", vals + [scope])

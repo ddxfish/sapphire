@@ -576,7 +576,8 @@ def put_resident(body=None, **_):
     ok = pt.set_scope_resident(scope, prompt=b.get('prompt'),
                                provider=b.get('provider'),
                                model=b.get('model'), passes=b.get('passes'),
-                               watched_prompt=b.get('watched_prompt'))
+                               watched_prompt=b.get('watched_prompt'),
+                               prompt_ledger=b.get('prompt_ledger'))
     if not ok:
         return {'error': 'save failed'}, 500
     new = pt.scope_resident(scope)
@@ -587,6 +588,12 @@ def put_resident(body=None, **_):
         if old[k] != new[k]:
             changed.append(f"{k} → {new[k] or 'none'}")
             diff[k] = [old[k] or '', new[k] or '']
+    if old['prompt_ledger'] != new['prompt_ledger']:
+        # Turning recording OFF still lands this row: the blind window's
+        # first line is the fact that it began.
+        state = 'on' if new['prompt_ledger'] else 'off'
+        changed.append(f'prompt ledger → {state}')
+        diff['prompt_ledger'] = ['on' if old['prompt_ledger'] else 'off', state]
     if old['passes'] != new['passes']:
         on = sorted(k for k, v in new['passes'].items() if v)
         changed.append('passes → ' + (', '.join(on) or 'none'))

@@ -58,9 +58,14 @@ def _now():
 
 
 def _watchers(cursor):
-    """[(scope, watched_prompt_name)] for every scope that watches one."""
+    """[(scope, watched_prompt_name)] for every scope that watches one.
+    A scope whose prompt_ledger toggle is off ('0') watches nothing — the
+    flip itself is recorded by put_resident, so a blind window always
+    STARTS with a visible row (silent disablement would be the one tamper
+    the ledger couldn't witness)."""
     rows = cursor.execute(
-        'SELECT name, COALESCE(watched_prompt, prompt) FROM mind_scopes'
+        "SELECT name, COALESCE(watched_prompt, prompt) FROM mind_scopes "
+        "WHERE COALESCE(prompt_ledger, '1') != '0'"
     ).fetchall()
     return [(n, w) for n, w in rows if w]
 

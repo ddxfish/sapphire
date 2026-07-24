@@ -44,7 +44,16 @@ def palace(tmp_path, monkeypatch):
 def test_resident_defaults_empty(palace):
     res = pt.scope_resident('anita')
     assert res == {'prompt': None, 'provider': None, 'model': None,
-                   'passes': {}, 'watched_prompt': None}
+                   'passes': {}, 'watched_prompt': None, 'prompt_ledger': True}
+
+
+def test_prompt_ledger_toggle_roundtrip(palace):
+    pt.set_scope_resident('anita', prompt_ledger=False)
+    assert pt.scope_resident('anita')['prompt_ledger'] is False
+    pt.set_scope_resident('anita', model='glm-9b')   # untouched by other saves
+    assert pt.scope_resident('anita')['prompt_ledger'] is False
+    pt.set_scope_resident('anita', prompt_ledger=True)
+    assert pt.scope_resident('anita')['prompt_ledger'] is True
 
 
 def test_resident_roundtrip_and_clear(palace):

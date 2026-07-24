@@ -297,6 +297,20 @@ def test_put_resident_change_and_noop(palace):
     assert len(rows) == 2 and 'passes → dedup' in rows[1]['summary']
 
 
+def test_put_resident_prompt_ledger_flip_is_recorded(palace):
+    """Disabling prompt recording writes one last row — a blind window
+    always starts with a visible line."""
+    browse.put_resident(body={'scope': 'w2b', 'prompt_ledger': False})
+    rows = _rows('w2b', layer='self', target='resident')
+    assert len(rows) == 1 and 'prompt ledger → off' in rows[0]['summary']
+    assert rows[0]['detail']['fields']['prompt_ledger'] == ['on', 'off']
+    browse.put_resident(body={'scope': 'w2b', 'prompt_ledger': False})  # no-op
+    assert len(_rows('w2b', layer='self', target='resident')) == 1
+    browse.put_resident(body={'scope': 'w2b', 'prompt_ledger': True})
+    rows = _rows('w2b', layer='self', target='resident')
+    assert len(rows) == 2 and 'prompt ledger → on' in rows[1]['summary']
+
+
 def test_scope_birth_and_death_rows(palace):
     pt.create_scope('w3')
     pt.create_scope('w3')                       # ensure-exists: silent
