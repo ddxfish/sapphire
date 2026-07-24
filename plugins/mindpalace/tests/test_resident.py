@@ -44,7 +44,7 @@ def palace(tmp_path, monkeypatch):
 def test_resident_defaults_empty(palace):
     res = pt.scope_resident('anita')
     assert res == {'prompt': None, 'provider': None, 'model': None,
-                   'passes': {}}
+                   'passes': {}, 'watched_prompt': None}
 
 
 def test_resident_roundtrip_and_clear(palace):

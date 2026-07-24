@@ -104,11 +104,23 @@ async def get_prompt(name: str, request: Request, _=Depends(require_login)):
 
 @router.put("/api/prompts/{name}")
 async def save_prompt(name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Save a prompt."""
+    """Save a prompt. Optional 'reason' in the body rides the prompt ledger
+    (the mutation layer emits the audit event — prompt_manager saver diffs)."""
     data = await request.json()
-    success, msg = prompts.save_prompt(name, data)
+    reason = (data.pop('reason', None) or '').strip() or None
+    success, msg = prompts.save_prompt(name, data, reason=reason)
     if success:
         publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
+        if reason:
+            # Reason-only delivery: with no content diff the saver emits
+            # nothing, so a why typed after the last keystroke needs its own
+            # event. The sink is idempotent when the diff already carried it.
+            try:
+                from core.audit import emit
+                emit({'kind': 'reason', 'name': name, 'actor': 'user',
+                      'reason': reason})
+            except Exception:
+                pass
         reapply_if_active(system, 'prompt', name)
         return {"status": "success", "name": name}
     else:
@@ -116,9 +128,10 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
 
 
 @router.delete("/api/prompts/{name}")
-async def delete_prompt(name: str, request: Request, _=Depends(require_login)):
-    """Delete a prompt."""
-    if prompts.delete_prompt(name):
+async def delete_prompt(name: str, request: Request, _=Depends(require_login),
+                        reason: str = None):
+    """Delete a prompt. Optional ?reason= lands in the prompt ledger."""
+    if prompts.delete_prompt(name, reason=(reason or '').strip() or None):
         publish(Events.PROMPT_DELETED, {"name": name})
         return {"status": "success", "name": name}
     # delete_prompt returns False for pack-shipped prompts (read-only) and
@@ -143,23 +156,36 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     edit path (user wins the merge)."""
     data = await request.json()
     value = data.get('value', '')
+    reason = (data.get('reason') or '').strip() or None
     user_components = prompts.prompt_manager._components
     if comp_type not in user_components:
         user_components[comp_type] = {}
     user_components[comp_type][key] = value
-    prompts.prompt_manager.save_components()
+    prompts.prompt_manager.save_components(reason=reason)
     publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
+    if reason:
+        # Reason-only delivery — see save_prompt: no diff means no saver
+        # event, and the why must still reach the ledger.
+        try:
+            from core.audit import emit
+            emit({'kind': 'reason', 'comp_type': comp_type, 'key': key,
+                  'actor': 'user', 'reason': reason})
+        except Exception:
+            pass
     return {"status": "success", "components": prompts.prompt_manager.components}
 
 
 @router.delete("/api/prompts/components/{comp_type}/{key}")
-async def delete_prompt_component(comp_type: str, key: str, request: Request, _=Depends(require_login)):
+async def delete_prompt_component(comp_type: str, key: str, request: Request,
+                                  _=Depends(require_login), reason: str = None):
     """Delete a prompt component (user entries only — pack pieces are
-    read-only; deleting a user shadow makes the pack piece show through)."""
+    read-only; deleting a user shadow makes the pack piece show through).
+    Optional ?reason= lands in the prompt ledger."""
     user_components = prompts.prompt_manager._components
     if comp_type in user_components and key in user_components[comp_type]:
         del user_components[comp_type][key]
-        prompts.prompt_manager.save_components()
+        prompts.prompt_manager.save_components(
+            reason=(reason or '').strip() or None)
         publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
         return {"status": "success", "components": prompts.prompt_manager.components}
     from core import prompt_packs

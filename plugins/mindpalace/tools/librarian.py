@@ -1057,6 +1057,7 @@ def _drain_loop(scope, what, kind):
     _drain_active = True
     total = batches = 0
     stopped = False
+    run_begin(scope, f'Run ALL ({kind})')
     try:
         # Rolling chats (Krem, 2026-07-19): group N batches into one chat
         # before resetting — judgment passes (sort) calibrate better with
@@ -1101,6 +1102,7 @@ def _drain_loop(scope, what, kind):
         # pass that legitimately claimed during the scan window and letting
         # two workers share _open_pass.
         left = _queue_depth(scope, kind)
+        run_end(scope, left=left)
         verb = 'stopped' if stopped else 'complete'
         _finish(f"Drain {verb} for '{scope}' ({kind}): {total} handled across "
                 f"{batches} batch(es), {left} left in the queue.")
@@ -1138,12 +1140,95 @@ def _run_messages(scope, groups, cfg, toolset, name, present):
     return oks
 
 
+# ─── Run grouping (2026-07-24, Krem's ledger-spam find) ─────────────────────
+# A drain or nightly round used to leave one TOP-LEVEL pass row per batch —
+# a 400-item Run ALL was ~21 lines of her ledger saying the same thing.
+# Now the orchestrators open a RUN row first; batch pass rows land as its
+# children (items as grandchildren), stats aggregate in memory, and run_end
+# appends ONE 'report' child with the after-action summary. Readers overlay
+# the newest report onto the run line — append-only holds, and a crashed
+# run honestly still says "running…" with a stale timestamp. Single manual
+# passes stay unwrapped (one batch, one line — never was spam).
+
+_runs = {}          # scope -> {'id', 'label', 'batches', 'presented',
+_runs_lock = threading.Lock()   # 'handled', 'verbs', 'extra'}
+
+_RUN_VERBS = {'promoted': 'promoted', 'retired': 'retired', 'split': 'split',
+              'merged': 'merged', 'linked': 'linked', 'dated': 'dated',
+              'edited': 'edited', 'saved': 'saved'}
+
+
+def run_begin(scope, label):
+    """Open a run row for this scope; subsequent _write_ledger batch rows
+    nest under it. No-ops (keeps the outer run) if one is already open."""
+    from plugins.mindpalace.tools import ledger as lg
+    with _runs_lock:
+        if scope in _runs:
+            return
+    rid = lg.record(scope, 'librarian', 'pass', target='run',
+                    summary=f'{label} — running…')
+    if rid is None:
+        return   # ledger down: batches fall back to top-level rows
+    with _runs_lock:
+        _runs[scope] = {'id': rid, 'label': label, 'batches': 0,
+                        'presented': 0, 'handled': 0, 'verbs': {}, 'extra': {}}
+
+
+def _run_note(scope, **counts):
+    """Fold extra counters into the run report (dedup 'scanned', link
+    'connections') — things batch verbs don't carry."""
+    with _runs_lock:
+        ctx = _runs.get(scope)
+        if ctx:
+            for k, n in counts.items():
+                ctx['extra'][k] = ctx['extra'].get(k, 0) + int(n or 0)
+
+
+def run_end(scope, left=None):
+    """Close the run: append ONE 'report' child carrying the after-action
+    summary. Readers overlay it onto the run line."""
+    from plugins.mindpalace.tools import ledger as lg
+    with _runs_lock:
+        ctx = _runs.pop(scope, None)
+    if not ctx:
+        return
+    if ctx['batches'] == 0 and not ctx['extra']:
+        summary = f"{ctx['label']}: nothing to do"
+    else:
+        bits = [f"{n} {_RUN_VERBS.get(a, a)}"
+                for a, n in sorted(ctx['verbs'].items()) if n]
+        bits += [f"{n} {k}" for k, n in sorted(ctx['extra'].items()) if n]
+        summary = (f"{ctx['label']}: {ctx['batches']} batch(es), "
+                   f"{ctx['handled']}/{ctx['presented']} handled"
+                   + (f" — {', '.join(bits)}" if bits else ''))
+    if left:
+        summary += f" ({left} still queued)"
+    lg.record(scope, 'librarian', 'report', parent_id=ctx['id'],
+              target=ctx['id'], summary=summary,
+              detail={'batches': ctx['batches'], 'presented': ctx['presented'],
+                      'handled': ctx['handled'], 'verbs': ctx['verbs'],
+                      **ctx['extra']})
+
+
 def _write_ledger(cur, scope, stats, summary, kind):
     """Ledger v1: the whole pass lands as ONE parent 'pass' row with each
     verb as a child under it — one line in her sheet tail and the unread
-    view, browsable children on the Self page."""
+    view, browsable children on the Self page. Inside a run (drain/nightly)
+    the pass row nests under the run row instead, and its stats fold into
+    the run report."""
     from plugins.mindpalace.tools import ledger as lg
+    run_id = None
+    with _runs_lock:
+        ctx = _runs.get(scope)
+        if ctx:
+            run_id = ctx['id']
+            ctx['batches'] += 1
+            ctx['presented'] += stats.get('presented') or 0
+            ctx['handled'] += stats.get('handled') or 0
+            for c in stats.get('ledger') or []:
+                ctx['verbs'][c['action']] = ctx['verbs'].get(c['action'], 0) + 1
     parent = lg.record(scope, 'librarian', 'pass', summary=summary,
+                       parent_id=run_id,
                        detail={'presented': stats['presented'],
                                'handled': stats['handled'], 'kind': kind},
                        cursor=cur)
@@ -1535,6 +1620,7 @@ def _worker_dedup(scope):
                              {'presented': 0, 'handled': 0,
                               'scanned': len(batch_ids)})
                 conn.commit()
+            _run_note(scope, scanned=len(batch_ids))
             _finish(f"Dedup pass: {len(batch_ids)} scanned in '{scope}' — "
                     f"no near-duplicates.")
             return

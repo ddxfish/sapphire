@@ -23,6 +23,72 @@ let openAccordion = null;
 let editTarget = {};        // { type: key } per-type editing target
 let saveTimer = null;
 let compSaveTimers = {};
+// Editing-session reasons ('prompt' or `${type}:${key}` → {text, at}). Sent
+// with each save; the palace ledger folds them into the session's row. A
+// why belongs to the editing session it was typed in: entries age out with
+// the backend's 30-min window (scout find: a stale why silently mislabeling
+// a later edit is the exact failure this feature exists to prevent), and
+// ALL entries wipe on prompt switch.
+let pendingReasons = {};
+const REASON_WINDOW_MS = 30 * 60 * 1000;
+
+function liveReason(id) {
+    const r = pendingReasons[id];
+    if (!r) return '';
+    if (Date.now() - r.at > REASON_WINDOW_MS) { delete pendingReasons[id]; return ''; }
+    return r.text;
+}
+
+function touchReason(id) {
+    const r = pendingReasons[id];
+    if (r) r.at = Date.now();   // content keystrokes keep the session's why alive
+}
+
+function ensureReasonRow(anchor, id, commitNow) {
+    // commitNow: async () => save carrying the current reason — awaited by
+    // the ✓ button so "sent" means sent (she can read it right away), not
+    // "sitting in the field" (Krem's live find, 2026-07-23).
+    const sib = anchor.nextElementSibling;
+    if (sib?.classList?.contains('pr-reason-row')) {
+        if (sib.dataset.rid === id) return;
+        sib.remove();   // row belonged to a different piece — never show a stale why
+    }
+    const row = document.createElement('div');
+    row.className = 'pr-reason-row';
+    row.dataset.rid = id;
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'input pr-reason-input';
+    inp.placeholder = 'why? — optional, lands next to this change in her ledger';
+    inp.value = liveReason(id);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-icon pr-reason-commit';
+    btn.textContent = '✓';
+    btn.title = 'Send this reason now — lands in her ledger immediately';
+    row.appendChild(inp);
+    row.appendChild(btn);
+    anchor.insertAdjacentElement('afterend', row);
+    inp.addEventListener('input', () => {
+        pendingReasons[id] = { text: inp.value.trim(), at: Date.now() };
+    });
+    const commit = async () => {
+        if (!inp.value.trim()) return;
+        btn.disabled = true;
+        btn.textContent = '…';
+        try {
+            await commitNow();
+            btn.textContent = 'sent ✓';
+        } catch {
+            btn.textContent = '✕';
+            ui.showToast('Reason send failed', 'error');
+        }
+        setTimeout(() => { btn.textContent = '✓'; btn.disabled = false; }, 1500);
+    };
+    btn.addEventListener('click', commit);
+    inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') commit(); });
+    inp.addEventListener('change', () => { commitNow().catch(() => {}); });
+}
 let previewOpen = false;
 
 const SINGLE_TYPES = ['character', 'location', 'goals', 'relationship', 'format', 'scenario'];
@@ -299,6 +365,7 @@ function bindEvents() {
             selected = name;
             openAccordion = null;
             editTarget = {};
+            pendingReasons = {};   // a why never crosses a prompt switch
             try { selectedData = await getPrompt(selected); } catch { selectedData = null; }
             render();
         },
@@ -453,12 +520,25 @@ function bindEvents() {
     });
 
     // Monolith content
+    const commitPromptReason = async () => {
+        if (!selected || !selectedData) return;
+        const why = liveReason('prompt');
+        await savePrompt(selected,
+            why ? { ...selectedData, reason: why } : selectedData);
+    };
     layout.querySelector('#pr-content')?.addEventListener('input', e => {
         if (selectedData) {
             selectedData.content = e.target.value;
+            ensureReasonRow(e.target, 'prompt', commitPromptReason);
+            touchReason('prompt');
             debouncedSavePrompt();
         }
     });
+    // A live reason survives re-renders — put its row back
+    const monoText = layout.querySelector('#pr-content');
+    if (monoText && liveReason('prompt')) {
+        ensureReasonRow(monoText, 'prompt', commitPromptReason);
+    }
 
     // --- Accordion headers ---
     layout.querySelectorAll('.pr-accordion-header').forEach(hdr => {
@@ -559,11 +639,22 @@ function bindAccordionBodyEvents(body, type) {
         }, { once: true });
     });
 
-    // Definition text (debounced save)
-    body.querySelector('.pr-def-text')?.addEventListener('input', e => {
+    // Definition text (debounced save) — first edit slides in the reason row
+    const defText = body.querySelector('.pr-def-text');
+    const commitPieceReason = async () => {
+        const k = defText.dataset.key;
+        await saveComponent(type, k, defText.value, liveReason(`${type}:${k}`));
+    };
+    defText?.addEventListener('input', e => {
         const key = e.target.dataset.key;
+        ensureReasonRow(e.target, `${type}:${key}`, commitPieceReason);
+        touchReason(`${type}:${key}`);
         debouncedSaveComponent(type, key, e.target.value);
     });
+    // A live reason survives re-renders — put its row back
+    if (defText && liveReason(`${type}:${defText.dataset.key}`)) {
+        ensureReasonRow(defText, `${type}:${defText.dataset.key}`, commitPieceReason);
+    }
 
     // Action buttons
     body.querySelectorAll('[data-action]').forEach(btn => {
@@ -808,7 +899,9 @@ function debouncedSavePrompt() {
     saveTimer = setTimeout(async () => {
         if (!selected || !selectedData) return;
         try {
-            await savePrompt(selected, selectedData);
+            const why = liveReason('prompt');
+            await savePrompt(selected,
+                why ? { ...selectedData, reason: why } : selectedData);
             if (selected === activePromptName) await loadPrompt(selected);
             updateScene();
             refreshPreview();
@@ -823,7 +916,7 @@ function debouncedSaveComponent(type, key, value) {
     clearTimeout(compSaveTimers[timerId]);
     compSaveTimers[timerId] = setTimeout(async () => {
         try {
-            await saveComponent(type, key, value);
+            await saveComponent(type, key, value, liveReason(timerId));
             if (components[type]) components[type][key] = value;
             // If this component is used by the current prompt, refresh preview
             if (selectedData?.components) {

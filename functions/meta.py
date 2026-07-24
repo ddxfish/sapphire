@@ -95,7 +95,8 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "old_text": {"type": "string", "description": "Exact text to replace"},
-                    "new_text": {"type": "string", "description": "Replacement text"}
+                    "new_text": {"type": "string", "description": "Replacement text"},
+                    "reason": {"type": "string", "description": "Why you're changing it — recorded next to the change in your memory ledger (optional)"}
                 },
                 "required": ["old_text", "new_text"]
             }
@@ -111,7 +112,8 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "New prompt name (lowercase, no spaces)"},
-                    "content": {"type": "string", "description": "Full prompt text"}
+                    "content": {"type": "string", "description": "Full prompt text"},
+                    "reason": {"type": "string", "description": "Why — recorded next to the change in your memory ledger (optional)"}
                 },
                 "required": ["name", "content"]
             }
@@ -137,7 +139,8 @@ TOOLS = [
                     },
                     "key": {"type": "string", "description": "Piece key"},
                     "value": {"type": "string", "description": "Piece text (create only)"},
-                    "minutes": {"type": "integer", "description": "Set only: activate temporarily for N minutes, then auto-revert"}
+                    "minutes": {"type": "integer", "description": "Set only: activate temporarily for N minutes, then auto-revert"},
+                    "reason": {"type": "string", "description": "Why — recorded next to the change in your memory ledger (optional)"}
                 },
                 "required": ["action"]
             }
@@ -409,7 +412,12 @@ def _save_and_activate_assembled(system) -> str:
         if _assembled_state.get(k):
             components[k] = list(_assembled_state[k])
 
-    ok, msg = prompts.save_prompt(preset_name, {"type": "assembled", "components": components})
+    # audit=False: the caller's activation event already describes this
+    # change ("piece X added to Y") — a preset-diff row would double-log it.
+    # The audit snapshot still refreshes so nothing shows up as a phantom
+    # change on the next diff.
+    ok, msg = prompts.save_prompt(preset_name, {"type": "assembled", "components": components},
+                                  audit=False)
     if not ok:
         raise MetaError(f"Failed to save preset: {msg}")
     ok, msg = prompts.activate_prompt(preset_name, system)
@@ -471,6 +479,20 @@ def _prompt_switch(args):
     return f"Switched to '{name}' ({prompt_type}).", True
 
 
+def _audit_emit(event):
+    """Fire-and-forget prompt-ledger emit (core.audit) — never blocks the
+    tool; with no sink registered it's a no-op."""
+    try:
+        from core.audit import emit
+        emit(event)
+    except Exception:
+        pass
+
+
+def _reason(args):
+    return (args.get('reason') or '').strip() or None
+
+
 def _prompt_edit(args):
     from core import prompts
     from core.event_bus import publish, Events
@@ -487,7 +509,8 @@ def _prompt_edit(args):
     content = prompt_data.get('content', '') if isinstance(prompt_data, dict) else str(prompt_data)
     new_content = _exact_replace(content, args.get('old_text', ''), args.get('new_text', ''), f"prompt '{current}'")
 
-    ok, msg = prompts.save_prompt(current, {"type": "monolith", "content": new_content})
+    ok, msg = prompts.save_prompt(current, {"type": "monolith", "content": new_content},
+                                  reason=_reason(args))
     if not ok:
         return f"Failed to save: {msg}", False
     publish(Events.PROMPT_CHANGED, {"name": current, "action": "saved"})
@@ -510,7 +533,8 @@ def _prompt_create(args):
     if existing:
         return f"Prompt '{existing}' already exists — pick another name, or prompt_switch to it and use prompt_edit.", False
 
-    ok, msg = prompts.save_prompt(name, {"type": "monolith", "content": content})
+    ok, msg = prompts.save_prompt(name, {"type": "monolith", "content": content},
+                                  reason=_reason(args))
     if not ok:
         return f"Failed to create: {msg}", False
     publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
@@ -527,6 +551,14 @@ def _prompt_pieces(args):
     comps = prompts.prompt_manager.components
     key = args.get('key', '')
     key = _resolve_name(key, comps.get(component, {})) or _normalize_name(key)
+
+    def _act(key_, active, ttl=None):
+        e = {'kind': 'activation', 'comp_type': component, 'key': key_,
+             'active': active, 'prompt': prompts.get_active_preset_name(),
+             'actor': 'ai', 'reason': _reason(args)}
+        if ttl:
+            e['ttl_minutes'] = ttl
+        _audit_emit(e)
 
     if action == 'list':
         if not component:
@@ -575,6 +607,7 @@ def _prompt_pieces(args):
             minutes = max(1, min(int(minutes), MAX_TRANSIENT_MINUTES))
             prompts.set_transient_piece(component, key, minutes)
             _resnapshot(system)
+            _act(key, True, ttl=minutes)
             return f"Set {component}='{key}' for {minutes}m (temporary — reverts automatically). {_status_string()}", True
         with _state_lock:
             if component in LIST_COMPONENTS:
@@ -584,6 +617,7 @@ def _prompt_pieces(args):
             else:
                 _assembled_state[component] = key
         _save_and_activate_assembled(system)
+        _act(key, True)
         verb = "Added" if component in LIST_COMPONENTS else "Set"
         return f"{verb} {component}='{key}'. {_status_string()}", True
 
@@ -593,6 +627,7 @@ def _prompt_pieces(args):
         # Transient entries first — dropping one never touches the preset
         if key and prompts.remove_transient_piece(component, key):
             _resnapshot(system)
+            _act(key, False)
             return f"Removed temporary {component} '{key}'. {_status_string()}", True
         if component in LIST_COMPONENTS:
             if not key:
@@ -602,15 +637,25 @@ def _prompt_pieces(args):
                     return f"'{key}' not in current {component}.", False
                 _assembled_state[component].remove(key)
             _save_and_activate_assembled(system)
+            _act(key, False)
             return f"Removed '{key}' from {component}. {_status_string()}", True
         # Single-value component: clear any transient shadow, reset to default
         trans = get_transients()
-        if component in trans:
+        had_transient = component in trans
+        if had_transient:
             prompts.remove_transient_piece(component, trans[component][0][0])
         default = STATE_DEFAULTS.get(component, 'default')
         with _state_lock:
+            prev = _assembled_state.get(component)
             _assembled_state[component] = default
+        # No-op guard (scout find 2026-07-22): already at default and no
+        # transient to clear → nothing changed; a save + "piece removed"
+        # ledger row here was ghost evidence.
+        if not had_transient and prev in (None, default):
+            return f"{component} is already '{default}'.", True
         _save_and_activate_assembled(system)
+        if prev not in (None, default):
+            _act(prev, False)
         return f"Reset {component} to '{default}'. {_status_string()}", True
 
     if action == 'create':
@@ -623,7 +668,7 @@ def _prompt_pieces(args):
         # as the web routes, see content.py). Shadowing a pack piece is the
         # intended edit path (user wins the merge).
         prompts.prompt_manager._components.setdefault(component, {})[key] = value
-        prompts.prompt_manager.save_components()
+        prompts.prompt_manager.save_components(reason=_reason(args))
         publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key})
         return (f"Created {component}/'{key}' in the library. Not active — "
                 f"prompt_pieces(action='set', component='{component}', key='{key}') to wear it."), True
@@ -652,7 +697,7 @@ def _prompt_pieces(args):
             return (f"'{component}/{key}' is shipped by plugin '{owner or 'a plugin'}' — "
                     f"read-only. Disable the plugin to remove it.", False)
         del user_comps[component][key]
-        prompts.prompt_manager.save_components()
+        prompts.prompt_manager.save_components(reason=_reason(args))
         publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key, "action": "deleted"})
         return f"Deleted {component}/{key} from the library.", True
 

@@ -128,3 +128,81 @@ def test_executor_wiring(palace, monkeypatch):
     ledger.record('default', 'user', 'edited', summary='a visible change')
     text, ok = self_tools.execute('read_ledger', {'count': 5}, None)
     assert ok and 'a visible change' in text
+
+
+# ─── read_ledger(id=…): the deep view (prompt-ledger Phase 1, 2026-07-22) ────
+
+def test_stream_lines_carry_row_ids(palace):
+    rid = ledger.record('default', 'user', 'edited', layer='self',
+                        summary='wrote Voice')
+    text, ok = self_tools._read_ledger('default')
+    assert ok and f'- [{rid}] ' in text
+    assert 'id= for a row' in text          # the head teaches the dive
+
+
+def test_id_deep_view_renders_field_diffs(palace):
+    rid = ledger.record('default', 'user', 'update', layer='entities',
+                        target=27, summary='updated entity "Krem" — fields: background',
+                        detail={'fields': {'background': ['', 'grown in a lab']}})
+    text, ok = self_tools._read_ledger('default', ids=[rid])
+    assert ok
+    assert f'[{rid}]' in text and 'entities' in text and '27' in text
+    assert 'background: "" → "grown in a lab"' in text
+
+
+def test_id_deep_view_renders_before_after_reason(palace):
+    rid = ledger.record('default', 'user', 'edited', layer='prompt',
+                        target='component/emotions/happy',
+                        summary='prompt piece "happy" removed',
+                        detail={'before': 'old piece text', 'after': '',
+                                'reason': 'wanted Sapph to choose her emotions'})
+    text, ok = self_tools._read_ledger('default', ids=[rid])
+    assert ok
+    assert 'reason: wanted Sapph to choose her emotions' in text
+    assert 'before: old piece text' in text
+
+
+def test_id_deep_view_lists_pass_children(palace):
+    parent = ledger.record('default', 'librarian', 'pass',
+                           summary='dedup pass — 2 merged')
+    kid = ledger.record('default', 'librarian', 'merged',
+                        summary='merged two garden memories', parent_id=parent)
+    text, ok = self_tools._read_ledger('default', ids=[parent])
+    assert ok
+    assert 'children (1):' in text and f'[{kid}] merged' in text
+
+
+def test_id_deep_view_is_scope_guarded(palace):
+    rid = ledger.record('secret', 'user', 'edited', summary='private change')
+    text, ok = self_tools._read_ledger('default', ids=[rid])
+    assert ok
+    assert 'no such entry' in text and 'private change' not in text
+
+
+def test_id_deep_view_clips_huge_values(palace):
+    rid = ledger.record('default', 'user', 'edited',
+                        detail={'before': 'y' * 6000, 'after': 'z'})
+    text, ok = self_tools._read_ledger('default', ids=[rid])
+    assert ok and '… [truncated]' in text
+    assert 'y' * (ledger.DETAIL_VALUE_CHARS + 10) not in text
+
+
+def test_parse_ledger_ids_accepts_model_variants(palace):
+    p = self_tools._parse_ledger_ids
+    assert p(1234) == [1234]
+    assert p('1234') == [1234]
+    assert p('1234, 1235') == [1234, 1235]
+    assert p([1234, '1235']) == [1234, 1235]
+    assert p(None) is None
+    assert p('garbage') is None
+    assert len(p(','.join(str(i) for i in range(50)))) == 10   # capped
+
+
+def test_id_deep_view_via_executor_and_stamps_watermark(palace, monkeypatch):
+    monkeypatch.setattr(pt, '_get_current_scope', lambda: 'default')
+    rid = ledger.record('default', 'user', 'edited', summary='the change',
+                        detail={'fields': {'notes': ['old', 'new']}})
+    text, ok = self_tools.execute('read_ledger', {'id': str(rid)}, None)
+    assert ok and 'notes: "old" → "new"' in text
+    text, ok = self_tools._read_ledger('default', new_only=True)
+    assert ok and 'Nothing new' in text     # the dive counts as reading

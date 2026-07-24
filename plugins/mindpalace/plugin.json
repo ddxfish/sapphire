@@ -394,6 +394,11 @@
       },
       {
         "method": "PUT",
+        "path": "ledger/{lid}/reason",
+        "handler": "routes/self_routes.py:patch_ledger_reason"
+      },
+      {
+        "method": "PUT",
         "path": "self/{section}",
         "handler": "routes/self_routes.py:put_section"
       },

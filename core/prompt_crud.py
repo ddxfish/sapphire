@@ -106,15 +106,19 @@ def get_prompt(name: str):
     return None
 
 
-def save_prompt(name: str, data: dict, allow_overwrite: bool = True) -> tuple[bool, str]:
+def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
+                reason: str = None, audit: bool = True) -> tuple[bool, str]:
     """
     Save a prompt - updates user JSON files (monoliths or scenario_presets).
-    
+
     Args:
         name: Prompt name
         data: Prompt data with 'type' and 'content'/'components'
         allow_overwrite: If True, allows overwriting same-type prompts
-    
+        reason: optional why — rides the prompt-ledger audit event
+        audit: False when a higher-level event already describes this save
+            (piece activations) — the audit snapshot still refreshes
+
     Returns:
         (success: bool, message: str)
     """
@@ -140,7 +144,7 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True) -> tuple[bo
                 'content': data['content'],
                 'privacy_required': data.get('privacy_required', False)
             }
-            prompt_manager.save_monoliths()
+            prompt_manager.save_monoliths(reason=reason, audit=audit)
             logger.info(f"Saved monolith '{name}'")
             return True, f"Saved monolith '{name}'"
 
@@ -149,7 +153,7 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True) -> tuple[bo
             # Store privacy_required at top level of preset
             components['_privacy_required'] = data.get('privacy_required', False)
             prompt_manager._scenario_presets[name] = components
-            prompt_manager.save_scenario_presets()
+            prompt_manager.save_scenario_presets(reason=reason, audit=audit)
             logger.info(f"Saved assembled prompt '{name}'")
             return True, f"Saved assembled '{name}'"
         
@@ -165,7 +169,7 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True) -> tuple[bo
         return False, str(e)
 
 
-def delete_prompt(name: str) -> bool:
+def delete_prompt(name: str, reason: str = None) -> bool:
     """Delete a prompt from storage.
 
     If the deleted prompt is currently active, auto-switch the active preset
@@ -194,14 +198,14 @@ def delete_prompt(name: str) -> bool:
         # pack version show through again — intended.
         if name in prompt_manager._monoliths:
             del prompt_manager._monoliths[name]
-            prompt_manager.save_monoliths()
+            prompt_manager.save_monoliths(reason=reason)
             logger.info(f"Deleted monolith '{name}'")
             deleted = True
 
         # Delete from scenario_presets if present
         if name in prompt_manager._scenario_presets:
             del prompt_manager._scenario_presets[name]
-            prompt_manager.save_scenario_presets()
+            prompt_manager.save_scenario_presets(reason=reason)
             logger.info(f"Deleted assembled prompt '{name}'")
             deleted = True
 

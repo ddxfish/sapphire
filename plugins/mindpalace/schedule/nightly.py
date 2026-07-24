@@ -72,25 +72,35 @@ def run(event):
         # One session chat PER SCOPE for the round — each resident's night
         # is its own transcript under its own prompt.
         chats = {sc: librarian.mint_session_chat(sc) for sc in tended}
-        for kind in librarian.PASS_KINDS:
-            if not librarian.pass_enabled(kind):
-                notes.append(f"{kind}: off (Admin toggle)")
-                continue
-            for scope, on in tended.items():
-                if kind not in on:
+        # One RUN row per tended scope for the whole round (Krem's
+        # ledger-spam find, 2026-07-24): every pass batch nests under it and
+        # run_end writes the single after-action line she actually reads.
+        # A quiet night still reports "nothing to do" — presence is signal.
+        for sc in tended:
+            librarian.run_begin(sc, 'nightly tending')
+        try:
+            for kind in librarian.PASS_KINDS:
+                if not librarian.pass_enabled(kind):
+                    notes.append(f"{kind}: off (Admin toggle)")
                     continue
-                # One crashed pass must not abort the rest of the round.
-                try:
-                    msg, ok = librarian.run_blocking(scope, kind=kind,
-                                                     chat=chats[scope])
-                except Exception as e:
-                    msg, ok = f"crashed: {e}", False
-                    logger.error(f"[LIBRARIAN] Nightly {kind} pass crashed "
-                                 f"for '{scope}': {e}", exc_info=True)
-                notes.append(f"{kind} {scope}: {msg}")
-                if not ok:
-                    logger.warning(f"[LIBRARIAN] Nightly {kind} pass skipped "
-                                   f"for '{scope}': {msg}")
+                for scope, on in tended.items():
+                    if kind not in on:
+                        continue
+                    # One crashed pass must not abort the rest of the round.
+                    try:
+                        msg, ok = librarian.run_blocking(scope, kind=kind,
+                                                         chat=chats[scope])
+                    except Exception as e:
+                        msg, ok = f"crashed: {e}", False
+                        logger.error(f"[LIBRARIAN] Nightly {kind} pass crashed "
+                                     f"for '{scope}': {e}", exc_info=True)
+                    notes.append(f"{kind} {scope}: {msg}")
+                    if not ok:
+                        logger.warning(f"[LIBRARIAN] Nightly {kind} pass skipped "
+                                       f"for '{scope}': {msg}")
+        finally:
+            for sc in tended:
+                librarian.run_end(sc)
 
     result = " | ".join(notes)
     logger.info(f"[LIBRARIAN] Nightly round done — {result}")

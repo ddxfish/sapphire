@@ -167,7 +167,12 @@ async function renderResident(el) {
         row.querySelector('.palace-lib-status').textContent = 'unavailable';
         return;
     }
-    if (res.prompt && !prompts.includes(res.prompt)) prompts.push(res.prompt);
+    // Per-select option lists: a since-deleted current value stays selectable
+    // in ITS dropdown only, never leaking into the sibling one.
+    const promptOpts = [...prompts];
+    if (res.prompt && !promptOpts.includes(res.prompt)) promptOpts.push(res.prompt);
+    const watchOpts = [...prompts];
+    if (res.watched_prompt && !watchOpts.includes(res.watched_prompt)) watchOpts.push(res.watched_prompt);
 
     const save = async (patch) => {
         try {
@@ -178,13 +183,17 @@ async function renderResident(el) {
     row.querySelector('.palace-lib-status').outerHTML = `
         <select id="pal-res-prompt" class="palace-select" title="Prompt the librarian speaks as when tending this scope. Blank = the librarian chat's persona.">
             <option value="">prompt: default</option>
-            ${prompts.map(p => `<option value="${escAttr(p)}" ${p === res.prompt ? 'selected' : ''}>${escHtml(p)}</option>`).join('')}
+            ${promptOpts.map(p => `<option value="${escAttr(p)}" ${p === res.prompt ? 'selected' : ''}>${escHtml(p)}</option>`).join('')}
         </select>
         <select id="pal-res-provider" class="palace-select" title="Provider for this scope's librarian passes">
             <option value="">provider: auto</option>
             ${providers.map(pr => `<option value="${escAttr(pr.key)}" ${pr.key === res.provider ? 'selected' : ''}>${escHtml(pr.name || pr.key)}</option>`).join('')}
         </select>
-        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes"></select>`;
+        <select id="pal-res-model" class="palace-select" title="Model for this scope's librarian passes"></select>
+        <select id="pal-res-watched" class="palace-select" title="Tamper watch: prompt changes to this persona land in this scope's ledger. Blank = watch the resident prompt.">
+            <option value="">watch: resident prompt</option>
+            ${watchOpts.map(p => `<option value="${escAttr(p)}" ${p === res.watched_prompt ? 'selected' : ''}>watch: ${escHtml(p)}</option>`).join('')}
+        </select>`;
 
     const provSel = row.querySelector('#pal-res-provider');
     const modelSel = row.querySelector('#pal-res-model');
@@ -216,6 +225,8 @@ async function renderResident(el) {
 
     row.querySelector('#pal-res-prompt').addEventListener('change',
         (e) => save({ prompt: e.target.value }));
+    row.querySelector('#pal-res-watched').addEventListener('change',
+        (e) => save({ watched_prompt: e.target.value }));
     provSel.addEventListener('change', () => {
         res.model = '';
         updateModels();
@@ -399,6 +410,7 @@ function upcomingCard(dash) {
 const LEDGER_ICONS = { user: '\u{1F464}', ai: '\u{1F916}', librarian: '\u{1F9F9}', import: '\u{1F4E6}', system: '⚙️' };
 let _ledgerOpen = false;
 let _ledgerLimit = 30;
+let _expandedKids = new Set();   // parent ids whose children stay open across re-renders
 
 function ledgerLine(r) {
     return `<div class="palace-ledger-row">
@@ -406,6 +418,7 @@ function ledgerLine(r) {
         <span class="palace-ledger-actor" title="${escAttr(r.actor)}">${LEDGER_ICONS[r.actor] || '·'}</span>
         <span class="palace-ledger-sum">${escHtml(r.summary)}</span>
         ${r.children ? `<button class="mind-btn-sm palace-ledger-kids" data-id="${r.id}" data-n="${r.children}">▸ ${r.children}</button>` : ''}
+        ${r.actor !== 'ai' ? `<button class="mind-btn-sm palace-ledger-why" data-id="${r.id}" data-reason="${escAttr((r.detail || {}).reason || '')}" title="Add or edit the why — it lands next to this change in her ledger">✏</button>` : ''}
     </div>`;
 }
 
@@ -447,18 +460,40 @@ async function renderLedger(el) {
         _ledgerLimit += 30;
         renderLedger(el);
     });
+    box.querySelectorAll('.palace-ledger-why').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const cur = btn.dataset.reason || '';
+            const reason = prompt('Why? (what she’ll see next to this change — empty clears it)', cur);
+            if (reason === null || reason === cur) return;
+            try {
+                await palaceSend(`ledger/${btn.dataset.id}/reason`, 'PUT', { scope, reason });
+                renderLedger(el);
+            } catch (e) { ui.showToast(`Reason save failed: ${e.message}`, 'error'); }
+        });
+    });
     box.querySelectorAll('.palace-ledger-kids').forEach(btn => {
         btn.addEventListener('click', async () => {
             const row = btn.closest('.palace-ledger-row');
             const open = row.nextElementSibling?.classList.contains('palace-ledger-children');
-            if (open) { row.nextElementSibling.remove(); btn.textContent = `▸ ${btn.dataset.n}`; return; }
+            if (open) {
+                row.nextElementSibling.remove();
+                btn.textContent = `▸ ${btn.dataset.n}`;
+                _expandedKids.delete(btn.dataset.id);
+                return;
+            }
             try {
                 const d = await palaceGet(`ledger?scope=${encodeURIComponent(scope)}&parent_id=${btn.dataset.id}`);
                 row.insertAdjacentHTML('afterend',
                     `<div class="palace-ledger-children">${(d.rows || []).map(ledgerLine).join('')}</div>`);
                 btn.textContent = `▾ ${btn.dataset.n}`;
+                _expandedKids.add(btn.dataset.id);
             } catch (e) { ui.showToast(`Ledger children failed: ${e.message}`, 'error'); }
         });
+    });
+    // Re-open the children that were open before this re-render (a ✏ reason
+    // save re-fetches the panel — expansion state must survive it)
+    box.querySelectorAll('.palace-ledger-kids').forEach(btn => {
+        if (_expandedKids.has(btn.dataset.id)) btn.click();
     });
 }
 

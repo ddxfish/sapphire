@@ -128,7 +128,9 @@ TOOLS = [
                 "short tail in read_self. Every recorded change to your mind "
                 "(user edits, librarian passes, imports, deletions, your own "
                 "saves), newest first with full summaries. Call it when a tail "
-                "line sticks out, or with new_only after time away."
+                "line sticks out, or with new_only after time away. Every line "
+                "leads with an [id] — call again with id= for the full row: "
+                "field diffs (old → new), before/after content, reasons."
             ),
             "parameters": {
                 "type": "object",
@@ -140,6 +142,10 @@ TOOLS = [
                     "new_only": {
                         "type": "boolean",
                         "description": "Only entries since you last read the ledger (read_self and read_ledger both count as reading it)."
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Deep view: one row id or a few comma-separated (e.g. '1234' or '1234,1235'). Shows the full entry — field diffs, before/after, reason, pass children. Overrides count/new_only."
                     }
                 }
             }
@@ -511,6 +517,11 @@ def _wake_tools_block(pt, scope):
 def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
     try:
         pt = _pt()
+        try:   # close in-flight prompt-edit sessions BEFORE the read opens —
+            from plugins.mindpalace.tools import prompt_audit   # the tail must
+            prompt_audit.flush(scope, force=True)               # see them
+        except Exception:
+            pass
         with pt._get_connection() as conn:
             cursor = conn.cursor()
             current = _current_sections(cursor, scope)
@@ -843,10 +854,26 @@ def _wake_important(pt, cursor, scope, depth, seen):
         return ''
 
 
-def _read_ledger(scope, count=20, new_only=False):
+def _parse_ledger_ids(raw):
+    """The id argument → list of ints (max 10) or None. Accepts whatever the
+    model sends: 1234, '1234', '1234,1235', [1234, '1235']."""
+    if raw is None:
+        return None
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).replace(' ', '').split(',')
+    ids = []
+    for p in parts:
+        try:
+            ids.append(int(p))
+        except (TypeError, ValueError):
+            continue
+    return ids[:10] or None
+
+
+def _read_ledger(scope, count=20, new_only=False, ids=None):
     """The deep view behind the read_self tail. Reading here stamps the same
     watermark read_self does — 'new' means 'since I last looked', whichever
-    door the look came through."""
+    door the look came through. With ids, renders those rows in full (diffs,
+    before/after, reason) instead of the stream."""
     try:
         count = min(max(int(count), 1), 100)
     except (TypeError, ValueError):
@@ -854,8 +881,18 @@ def _read_ledger(scope, count=20, new_only=False):
     try:
         pt = _pt()
         from plugins.mindpalace.tools import ledger
+        try:   # close in-flight prompt-edit sessions — she reads current truth
+            from plugins.mindpalace.tools import prompt_audit
+            prompt_audit.flush(scope, force=True)
+        except Exception:
+            pass
         with pt._get_connection() as conn:
             cursor = conn.cursor()
+            if ids:
+                block, shown = ledger.detail_block(cursor, scope, ids)
+                ledger.mark_read(cursor, scope)
+                conn.commit()
+                return f"◆ Ledger — entry detail (scope '{scope}')\n" + block, True
             since = ledger.last_read_ts(cursor, scope) if new_only else None
             block, shown = ledger.read_block(cursor, scope, count, since_ts=since)
             ledger.mark_read(cursor, scope)
@@ -864,7 +901,7 @@ def _read_ledger(scope, count=20, new_only=False):
             return ("Nothing new in the ledger since your last read." if new_only
                     else "The ledger is empty — no changes recorded in this scope yet."), True
         head = (f"◆ Ledger — {'new since your last read' if new_only else 'change stream'} "
-                f"(scope '{scope}', newest first)")
+                f"(scope '{scope}', newest first — id= for a row's full detail)")
         return head + "\n" + block, True
     except Exception as e:
         logger.error(f"[MINDPALACE] read_ledger failed: {e}")
@@ -1220,7 +1257,8 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
                               extra_tools=bool(arguments.get("extra_tools", True)))
         elif function_name == "read_ledger":
             return _read_ledger(scope, count=arguments.get("count", 20),
-                                new_only=bool(arguments.get("new_only", False)))
+                                new_only=bool(arguments.get("new_only", False)),
+                                ids=_parse_ledger_ids(arguments.get("id")))
         elif function_name == "update_self":
             if scope == 'global':
                 return ("Cannot write to the global scope. Global is read-only for "

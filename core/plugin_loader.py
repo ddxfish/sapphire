@@ -531,6 +531,11 @@ class PluginLoader:
                     _unreg_contacts(name)
                 except Exception:
                     pass
+                try:
+                    from core.audit import unregister_sink as _unreg_audit
+                    _unreg_audit(name)
+                except Exception:
+                    pass
                 self._load_errors.append(refusal)
                 from core.event_bus import publish, Events
                 publish(Events.PLUGIN_LOAD_ERROR, refusal)
@@ -885,6 +890,15 @@ class PluginLoader:
         try:
             from core.contacts import unregister_provider as _unreg_contacts
             _unreg_contacts(name)
+        except Exception:
+            pass
+
+        # Unregister any change-audit sink this plugin installed (same
+        # unwind rationale as contacts: tool files EXEC'd at load, their
+        # module-level registrations must not outlive the plugin)
+        try:
+            from core.audit import unregister_sink as _unreg_audit
+            _unreg_audit(name)
         except Exception:
             pass
 

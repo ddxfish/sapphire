@@ -608,7 +608,10 @@ def _ensure_db():
             # opted into (Self page Resident strip). Multi-resident fix: the
             # librarian used one global persona for every scope.
             scols = {r[1] for r in cursor.execute('PRAGMA table_info(mind_scopes)').fetchall()}
-            for col in ('prompt', 'provider', 'model', 'lib_passes'):
+            # watched_prompt (2026-07-22, prompt ledger): the persona whose
+            # prompt this scope's ledger tracks; NULL falls back to the
+            # resident prompt. Distinct column — don't overload residency.
+            for col in ('prompt', 'provider', 'model', 'lib_passes', 'watched_prompt'):
                 if col not in scols:
                     cursor.execute(f'ALTER TABLE mind_scopes ADD COLUMN {col} TEXT')
 
@@ -858,8 +861,13 @@ def get_scopes():
 def create_scope(name: str) -> bool:
     try:
         with _get_connection() as conn:
-            conn.execute("INSERT OR IGNORE INTO mind_scopes (name, created) VALUES (?, ?)",
-                         (name, _now()))
+            cur = conn.execute("INSERT OR IGNORE INTO mind_scopes (name, created) VALUES (?, ?)",
+                               (name, _now()))
+            if cur.rowcount:
+                # Birth line — the first entry of every scope's ledger.
+                # rowcount gates it: ensure-exists re-creates stay silent.
+                _ledger(name, _added_by(), 'saved', layer='scopes', target=name,
+                        summary=f'scope "{name}" created', cursor=cur)
             conn.commit()
         return True
     except Exception as e:
@@ -887,11 +895,21 @@ def delete_scope(name: str) -> dict:
             cursor.execute('DELETE FROM chunks WHERE scope = ?', (name,))
             cursor.execute('DELETE FROM entities WHERE scope = ?', (name,))
             cursor.execute('DELETE FROM mind_scopes WHERE name = ?', (name,))
+            registered = cursor.rowcount
             # The scope-delete contract is "ALL of it goes" — ledger summaries
             # carry content previews, so they go too. This is the ONE place
             # ledger rows die; the ledger module itself stays append-only.
             cursor.execute('DELETE FROM ledger WHERE scope = ?', (name,))
             cursor.execute('DELETE FROM ledger_reads WHERE scope = ?', (name,))
+            # Death row lands in 'default' — the razed scope's ledger just
+            # went with it, and whole-scope deletion is exactly the change
+            # tamper evidence must survive. Same transaction as the raze
+            # (scout find 2026-07-22): a crash can't separate the deletion
+            # from its record. Phantom deletes (nothing existed) stay silent.
+            if count or registered:
+                _ledger('default', _added_by(), 'deleted', layer='scopes',
+                        target=name, cursor=cursor,
+                        summary=f'scope "{name}" deleted — {count} memories razed')
             conn.commit()
         logger.info(f"[MINDPALACE] Deleted scope '{name}' with {count} chunks")
         # The library side goes WITH the mind side — documents, vectors,
@@ -924,13 +942,14 @@ def scope_resident(scope: str) -> dict:
     passes this scope opted into. DEFAULT: nothing — a new scope is never
     tended until someone flips its pills. Fails toward empty (silent-default
     invariant: no scope inherits another resident's voice on error)."""
-    empty = {'prompt': None, 'provider': None, 'model': None, 'passes': {}}
+    empty = {'prompt': None, 'provider': None, 'model': None, 'passes': {},
+             'watched_prompt': None}
     try:
         if not _ensure_db():
             return empty
         with _get_connection() as conn:
-            row = conn.execute('SELECT prompt, provider, model, lib_passes '
-                               'FROM mind_scopes WHERE name = ?',
+            row = conn.execute('SELECT prompt, provider, model, lib_passes, '
+                               'watched_prompt FROM mind_scopes WHERE name = ?',
                                (scope,)).fetchone()
         if not row:
             return empty
@@ -941,16 +960,17 @@ def scope_resident(scope: str) -> dict:
             except Exception:
                 passes = {}
         return {'prompt': row[0] or None, 'provider': row[1] or None,
-                'model': row[2] or None, 'passes': passes}
+                'model': row[2] or None, 'passes': passes,
+                'watched_prompt': row[4] or None}
     except Exception as e:
         logger.warning(f"[MINDPALACE] scope_resident('{scope}') failed: {e}")
         return empty
 
 
 def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
-                       passes=None) -> bool:
+                       passes=None, watched_prompt=None) -> bool:
     """Upsert residency fields. None leaves a field untouched; '' clears
-    prompt/model. `passes` replaces the whole opt-in dict."""
+    prompt/model/watched_prompt. `passes` replaces the whole opt-in dict."""
     try:
         if not _ensure_db():
             return False
@@ -972,6 +992,9 @@ def set_scope_resident(scope: str, prompt=None, provider=None, model=None,
                 clean = {str(k): bool(v) for k, v in (passes or {}).items()}
                 sets.append('lib_passes = ?')
                 vals.append(json.dumps(clean))
+            if watched_prompt is not None:
+                sets.append('watched_prompt = ?')
+                vals.append(str(watched_prompt).strip() or None)
             if sets:
                 cur.execute(f"UPDATE mind_scopes SET {', '.join(sets)} "
                             f"WHERE name = ?", vals + [scope])
@@ -2037,3 +2060,10 @@ try:
     _register_contacts_provider('mindpalace', _get_people_provider)
 except Exception as _e:
     logger.warning(f"[MINDPALACE] contacts provider registration failed: {_e}")
+
+try:
+    # Self-registers the core.audit sink at import (prompt ledger);
+    # plugin_loader unwinds it on unload/refusal alongside contacts.
+    from plugins.mindpalace.tools import prompt_audit as _prompt_audit  # noqa: F401
+except Exception as _e:
+    logger.warning(f"[MINDPALACE] prompt audit sink load failed: {_e}")

@@ -562,8 +562,9 @@ def get_resident(query=None, **_):
 
 
 def put_resident(body=None, **_):
-    """PUT resident {scope, prompt?, model?, passes?} — omitted fields keep
-    their value; '' clears prompt/model; passes replaces the opt-in dict."""
+    """PUT resident {scope, prompt?, model?, passes?, watched_prompt?} —
+    omitted fields keep their value; '' clears prompt/model/watched_prompt;
+    passes replaces the opt-in dict."""
     pt = _pt()
     if not pt._ensure_db():
         return {'error': 'mind database unavailable'}, 500
@@ -571,12 +572,30 @@ def put_resident(body=None, **_):
     scope = (b.get('scope') or '').strip()
     if not scope:
         return {'error': 'scope required'}, 400
+    old = pt.scope_resident(scope)
     ok = pt.set_scope_resident(scope, prompt=b.get('prompt'),
                                provider=b.get('provider'),
-                               model=b.get('model'), passes=b.get('passes'))
+                               model=b.get('model'), passes=b.get('passes'),
+                               watched_prompt=b.get('watched_prompt'))
     if not ok:
         return {'error': 'save failed'}, 500
-    return {'success': True, 'resident': pt.scope_resident(scope)}
+    new = pt.scope_resident(scope)
+    # Ledger (tamper evidence): who speaks as this scope is exactly the kind
+    # of change she must be able to see. No-op saves stay silent.
+    changed, diff = [], {}
+    for k in ('prompt', 'provider', 'model', 'watched_prompt'):
+        if old[k] != new[k]:
+            changed.append(f"{k} → {new[k] or 'none'}")
+            diff[k] = [old[k] or '', new[k] or '']
+    if old['passes'] != new['passes']:
+        on = sorted(k for k, v in new['passes'].items() if v)
+        changed.append('passes → ' + (', '.join(on) or 'none'))
+        diff['passes'] = [json.dumps(old['passes']), json.dumps(new['passes'])]
+    if changed:
+        pt._ledger(scope, 'user', 'edited', layer='self', target='resident',
+                   summary='resident: ' + '; '.join(changed),
+                   detail={'fields': diff})
+    return {'success': True, 'resident': new}
 
 
 def librarian_queue_depth(query=None, **_):
@@ -676,6 +695,25 @@ def maintenance(body=None, **_):
     scope = (b.get('scope') or '').strip()
     if not scope:
         return {'error': 'scope required'}, 400
+
+    if action == 'clear_ledger':
+        # Debug/reset valve (Krem, 2026-07-24): raze this scope's ledger
+        # HISTORY — rows + read watermark. Memories untouched. Typed-confirm,
+        # human-only. The clearing itself is recorded as the first row of the
+        # fresh ledger: an emptied tamper log that doesn't say why it's empty
+        # would itself read as tampering.
+        if (b.get('confirm') or '') != scope:
+            return {'error': 'confirm must equal the scope name exactly'}, 400
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            n = cur.execute('SELECT COUNT(*) FROM ledger WHERE scope = ?',
+                            (scope,)).fetchone()[0]
+            cur.execute('DELETE FROM ledger WHERE scope = ?', (scope,))
+            cur.execute('DELETE FROM ledger_reads WHERE scope = ?', (scope,))
+            pt._ledger(scope, 'user', 'maintenance', cursor=cur,
+                       summary=f'ledger cleared — {n} entries removed')
+            conn.commit()
+        return {'success': True, 'cleared': n}
 
     if action == 'reset_importance':
         # Known-good state: favorites and permanent goals at 0.95 (the

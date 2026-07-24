@@ -43,8 +43,9 @@ class PromptManager:
         
         # Ensure user directory exists (bootstrap should have run, but be safe)
         self.USER_DIR.mkdir(parents=True, exist_ok=True)
-        
+
         self._load_all()
+        self._audit_seed()   # silent — boot state is the baseline, not a change
     
     def _load_all(self):
         """Load all prompt data from user/prompts/ JSON files."""
@@ -168,11 +169,17 @@ class PromptManager:
             logger.error(f"Template replacement failed: {e}")
             return text
     
-    def reload(self):
-        """Reload all prompt data from disk."""
+    def reload(self, audit_reason='file reload'):
+        """Reload all prompt data from disk. Diffs the reloaded state against
+        the audit snapshot — an out-of-band edit (vim, factory reset, restored
+        backup) becomes ledger rows instead of silence. Our own savers refresh
+        the snapshot first, so the file watcher's reload after a normal save
+        emits nothing."""
         with self._lock:
             self._load_all()
             logger.info("Prompt data reloaded")
+        self._audit_diff(('monoliths', 'presets', 'components'),
+                         reason=audit_reason)
     
     def start_file_watcher(self):
         """Start background file watcher for user prompts."""
@@ -285,7 +292,7 @@ class PromptManager:
         
         return "\n\n".join(prompt_parts)
     
-    def save_scenario_presets(self):
+    def save_scenario_presets(self, reason=None, audit=True):
         """Save scenario presets to user/prompts/prompt_pieces.json"""
         with self._lock:
             # Scenario presets live in prompt_pieces.json. If its load failed
@@ -315,8 +322,9 @@ class PromptManager:
                 json.dump(data, f, indent=2)
             tmp_path.replace(target_path)
             logger.info(f"Saved scenario presets to {target_path}")
-    
-    def save_monoliths(self):
+        self._audit_diff(('presets',), reason, audit)
+
+    def save_monoliths(self, reason=None, audit=True):
         """Save monoliths to user/prompts/prompt_monoliths.json"""
         with self._lock:
             # 2026-04-22 fix E2 — refuse to save if the last load failed.
@@ -361,8 +369,65 @@ class PromptManager:
                 json.dump(data, f, indent=2)
             tmp_path.replace(target_path)
             logger.info(f"Saved monoliths to {target_path}")
-    
-    def save_components(self):
+        self._audit_diff(('monoliths',), reason, audit)
+
+    # ── Audit snapshots (prompt ledger, 2026-07-22) ──────────────────────────
+    # The savers diff persisted state against these snapshots and emit one
+    # core.audit event per changed item — so EVERY writer (routes, her tools,
+    # persona import, merge, factory reset via reload) is covered at the
+    # mutation layer instead of enumerated per caller. Boot seeds silently.
+
+    def _audit_state(self):
+        return {
+            'monoliths': {k: (v.get('content', '') if isinstance(v, dict) else str(v))
+                          for k, v in self._monoliths.items()},
+            'presets': {k: json.dumps(v, sort_keys=True, ensure_ascii=False)
+                        for k, v in self._scenario_presets.items()},
+            'components': {t: dict(kv) for t, kv in self._components.items()},
+        }
+
+    def _audit_seed(self):
+        try:
+            self._audit_snap = self._audit_state()
+        except Exception:
+            self._audit_snap = {'monoliths': {}, 'presets': {}, 'components': {}}
+
+    def _audit_diff(self, stores, reason=None, audit=True):
+        """Emit change events for the named stores vs the snapshot, then
+        refresh the snapshot. audit=False refreshes silently — used when a
+        higher-level event (a piece activation) already describes the change.
+        Never raises: audit is evidence, not a gate."""
+        try:
+            from core.audit import emit, actor
+            cur = self._audit_state()
+            snap = getattr(self, '_audit_snap', None)
+            if snap is None:
+                self._audit_snap = cur
+                return
+            who = actor()
+            for store in stores:
+                old, new = snap.get(store, {}), cur.get(store, {})
+                if audit and store == 'components':
+                    for t in set(old) | set(new):
+                        o, n = old.get(t, {}), new.get(t, {})
+                        for key in set(o) | set(n):
+                            if o.get(key, '') != n.get(key, ''):
+                                emit({'kind': 'component', 'comp_type': t,
+                                      'key': key, 'before': o.get(key, ''),
+                                      'after': n.get(key, ''),
+                                      'actor': who, 'reason': reason})
+                elif audit:
+                    for name in set(old) | set(new):
+                        if old.get(name, '') != new.get(name, ''):
+                            emit({'kind': 'monolith', 'name': name,
+                                  'before': old.get(name, ''),
+                                  'after': new.get(name, ''),
+                                  'actor': who, 'reason': reason})
+                snap[store] = new
+        except Exception as e:
+            logger.warning(f"[PROMPTS] audit diff skipped: {e}")
+
+    def save_components(self, reason=None, audit=True):
         """Save components to user/prompts/prompt_pieces.json"""
         with self._lock:
             if getattr(self, '_load_failed', {}).get('pieces'):
@@ -391,7 +456,8 @@ class PromptManager:
                 json.dump(data, f, indent=2)
             tmp_path.replace(target_path)
             logger.info(f"Saved components to {target_path}")
-    
+        self._audit_diff(('components',), reason, audit)
+
     def save_spices(self):
         """Save spices to user/prompts/prompt_spices.json"""
         with self._lock:
@@ -513,7 +579,7 @@ class PromptManager:
                 src = self.CORE_DIR / fname
                 if src.exists():
                     shutil.copy2(src, self.USER_DIR / fname)
-            self.reload()
+            self.reload(audit_reason='reset to factory defaults')
             logger.info("Prompts reset to factory defaults")
             return True
         except Exception as e:
@@ -551,8 +617,8 @@ class PromptManager:
                         self._scenario_presets[name] = preset
                         added["presets"] += 1
 
-                self.save_components()
-                self.save_scenario_presets()
+                self.save_components(reason='merged app defaults')
+                self.save_scenario_presets(reason='merged app defaults')
 
             # --- Monoliths ---
             core_mono_path = self.CORE_DIR / "prompt_monoliths.json"
@@ -570,7 +636,7 @@ class PromptManager:
                             self._monoliths[key] = val
                         added["monoliths"] += 1
 
-                self.save_monoliths()
+                self.save_monoliths(reason='merged app defaults')
 
             # --- Spices ---
             core_spice_path = self.CORE_DIR / "prompt_spices.json"

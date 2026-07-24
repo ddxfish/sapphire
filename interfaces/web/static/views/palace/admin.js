@@ -121,6 +121,7 @@ const OPS = [
       blurb: 'Typed confirmation required, double-checked server-side. Memory v1 is a separate system — never touched.',
       actions: [
           { label: '⚠ Delete ALL memories in scope', maint: 'wipe_scope', danger: true },
+          { label: '🧹 Clear ledger history', maint: 'clear_ledger', danger: true },
           { label: '⚠ Clear ONE tab: Memories', maint: 'clear_layer', layer: 'events', danger: true },
           { label: '⚠ Clear ONE tab: Self', maint: 'clear_layer', layer: 'self', danger: true },
           { label: '⚠ Clear ONE tab: Entities', maint: 'clear_layer', layer: 'entities', danger: true },
@@ -148,6 +149,14 @@ const MAINT = {
             'are imported. The v1 databases are opened read-only and are never modified.',
     },
     generate_metadata: {},
+    clear_ledger: {
+        prompt: s => `⚠ PERMANENTLY DELETE the ledger history for scope '${s}'.\n\n` +
+            'Every recorded change (who did what, when, before/after diffs) is ' +
+            'erased — memories themselves are untouched. The clearing is ' +
+            'recorded as the first row of the fresh ledger, so she can see it ' +
+            'happened.\n\n' +
+            `Type the scope name ('${s}') to confirm:`,
+    },
     clear_layer: {
         prompt: s => `⚠ PERMANENTLY DELETE one tab's data in scope '${s}' — ` +
             'just that tab, the rest of the scope stays.\n\n' +

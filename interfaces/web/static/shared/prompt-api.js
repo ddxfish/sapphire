@@ -48,11 +48,11 @@ export async function deletePrompt(name) {
   return res;
 }
 
-export async function saveComponent(type, key, value) {
+export async function saveComponent(type, key, value, reason) {
   return await fetchWithTimeout(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ value })
+    body: JSON.stringify(reason ? { value, reason } : { value })
   });
 }
 

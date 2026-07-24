@@ -248,3 +248,181 @@ def test_record_failure_isolated(palace, monkeypatch):
     assert lg.record('s11', 'user', 'edited', summary='x') is None
     msg, ok = pt._save_memory('op survives a dead ledger', 's11')
     assert ok
+
+
+# ─── Coverage holes closed (prompt-ledger Phase 2, 2026-07-22) ───────────────
+# wake_tools CRUD, residency, scope birth/death — the three seams the audit
+# found silent. All land as 'user' rows: visible in her wake tail.
+
+def test_wake_tool_crud_hits_the_ledger(palace, monkeypatch):
+    # Full-suite order independence: with a booted system _known_tools()
+    # returns the real enabled list (no 'get_weather'); pin the skip path.
+    monkeypatch.setattr(self_routes, '_known_tools', lambda: None)
+    out = self_routes.create_wake_tool(body={'scope': 'w1', 'tool': 'get_weather',
+                                             'params': {'city': 'Tampa'}})
+    wid = out['id']
+    self_routes.update_wake_tool(wid=wid, body={'enabled': False})
+    self_routes.update_wake_tool(wid=wid, body={'position': 3})   # reorder only
+    self_routes.delete_wake_tool(wid=wid)
+    rows = _rows('w1', layer='self')
+    assert [r['action'] for r in rows] == ['saved', 'edited', 'deleted']
+    assert rows[0]['summary'] == 'armed "get_weather" at wake'
+    assert rows[1]['summary'] == 'wake tool "get_weather": disabled'
+    assert rows[1]['detail']['fields']['enabled'] == ['on', 'off']
+    assert rows[2]['summary'] == 'disarmed "get_weather" wake tool'
+    with pt._get_connection() as conn:
+        block = lg.tail_block(conn.cursor(), 'w1')
+    assert 'armed' in block                     # surfaces in her wake tail
+
+
+def test_wake_tool_noop_update_stays_silent(palace, monkeypatch):
+    monkeypatch.setattr(self_routes, '_known_tools', lambda: None)
+    out = self_routes.create_wake_tool(body={'scope': 'w1b', 'tool': 'get_weather'})
+    self_routes.update_wake_tool(wid=out['id'], body={'enabled': True})  # already on
+    rows = _rows('w1b', layer='self')
+    assert [r['action'] for r in rows] == ['saved']
+
+
+def test_put_resident_change_and_noop(palace):
+    browse.put_resident(body={'scope': 'w2', 'model': 'fireworks-glm',
+                              'prompt': 'sapph-first'})
+    browse.put_resident(body={'scope': 'w2'})              # no-op save
+    rows = _rows('w2', layer='self', target='resident')
+    assert len(rows) == 1
+    assert 'model → fireworks-glm' in rows[0]['summary']
+    assert 'prompt → sapph-first' in rows[0]['summary']
+    assert rows[0]['detail']['fields']['model'] == ['', 'fireworks-glm']
+    browse.put_resident(body={'scope': 'w2', 'passes': {'dedup': True}})
+    rows = _rows('w2', layer='self', target='resident')
+    assert len(rows) == 2 and 'passes → dedup' in rows[1]['summary']
+
+
+def test_scope_birth_and_death_rows(palace):
+    pt.create_scope('w3')
+    pt.create_scope('w3')                       # ensure-exists: silent
+    birth = _rows('w3', layer='scopes')
+    assert len(birth) == 1 and birth[0]['summary'] == 'scope "w3" created'
+    lg.record('w3', 'user', 'edited', summary='doomed')
+    pt.delete_scope('w3')
+    assert _rows('w3') == []                    # razed with the scope
+    death = _rows('default', layer='scopes')
+    assert len(death) == 1
+    assert death[0]['summary'].startswith('scope "w3" deleted')
+    assert death[0]['actor'] == 'user'
+
+
+def test_phantom_scope_delete_stays_silent(palace):
+    pt.delete_scope('never-existed')
+    assert _rows('default', layer='scopes') == []
+
+
+# ─── Librarian run grouping (2026-07-24, ledger-spam fix) ────────────────────
+# Drains/nightly used to write one TOP-LEVEL pass row per batch. Now the
+# orchestrators open a run row, batches nest under it, and run_end appends a
+# 'report' child that readers overlay onto the run line.
+
+def _fake_batch(i):
+    return {'presented': 20, 'handled': 15,
+            'ledger': [{'action': 'promoted', 'summary': f'kept {i}'}]}
+
+
+def test_librarian_run_groups_batches_into_one_line(palace):
+    from plugins.mindpalace.tools import librarian as lib
+    lib.run_begin('r1', 'Run ALL (sort)')
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        for i in range(3):
+            lib._write_ledger(cur, 'r1', _fake_batch(i), f'sort pass: batch {i}', 'sort')
+        conn.commit()
+    lib.run_end('r1', left=5)
+    top = [r for r in _rows('r1') if r['parent_id'] is None]
+    assert len(top) == 1                       # ONE line for the whole run
+    with pt._get_connection() as conn:
+        block, shown = lg.read_block(conn.cursor(), 'r1')
+    assert shown == 1
+    assert 'Run ALL (sort): 3 batch(es), 45/60 handled' in block
+    assert '3 promoted' in block and '(5 still queued)' in block
+    assert 'running…' not in block             # report replaced the opener
+    with pt._get_connection() as conn:         # tail overlays too
+        tail = lg.tail_block(conn.cursor(), 'r1')
+    assert '3 batch(es)' in tail and 'running…' not in tail
+
+
+def test_run_drilldown_keeps_batches_and_items(palace):
+    from plugins.mindpalace.tools import librarian as lib
+    lib.run_begin('r2', 'nightly tending')
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        lib._write_ledger(cur, 'r2', _fake_batch(0), 'sort pass: batch', 'sort')
+        conn.commit()
+    lib.run_end('r2')
+    run_id = [r for r in _rows('r2') if r['parent_id'] is None][0]['id']
+    kids = self_routes.get_ledger(query={'scope': 'r2', 'parent_id': str(run_id)})
+    batch = [k for k in kids['rows'] if k['action'] == 'pass']
+    assert len(batch) == 1
+    assert batch[0]['children'] == 1           # the item row — UI can drill on
+    # top-level UI row shows the after-action, not "running…"
+    ui = self_routes.get_ledger(query={'scope': 'r2'})
+    assert 'nightly tending: 1 batch(es)' in ui['rows'][0]['summary']
+
+
+def test_run_crash_leaves_honest_running_line(palace):
+    from plugins.mindpalace.tools import librarian as lib
+    lib.run_begin('r3', 'Run ALL (dedup)')
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        lib._write_ledger(cur, 'r3', _fake_batch(0), 'dedup pass', 'dedup')
+        conn.commit()
+    # no run_end — crash. The line stays honest about it.
+    with pt._get_connection() as conn:
+        block, _ = lg.read_block(conn.cursor(), 'r3')
+    assert 'running…' in block
+    lib._runs.pop('r3', None)                  # don't leak into other tests
+
+
+def test_run_notes_and_quiet_night(palace):
+    from plugins.mindpalace.tools import librarian as lib
+    lib.run_begin('r4', 'Run ALL (dedup)')
+    lib._run_note('r4', scanned=40)
+    lib._run_note('r4', scanned=20)
+    lib.run_end('r4')
+    with pt._get_connection() as conn:
+        block, _ = lg.read_block(conn.cursor(), 'r4')
+    assert '60 scanned' in block
+    lib.run_begin('r5', 'nightly tending')
+    lib.run_end('r5')
+    with pt._get_connection() as conn:
+        block, _ = lg.read_block(conn.cursor(), 'r5')
+    assert 'nightly tending: nothing to do' in block
+
+
+def test_unwrapped_single_pass_stays_one_top_level_row(palace):
+    from plugins.mindpalace.tools import librarian as lib
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        lib._write_ledger(cur, 'r6', _fake_batch(0), 'sort pass: 20 reviewed', 'sort')
+        conn.commit()
+    top = [r for r in _rows('r6') if r['parent_id'] is None]
+    assert len(top) == 1 and top[0]['summary'] == 'sort pass: 20 reviewed'
+
+
+# ─── clear_ledger maintenance valve (2026-07-24) ─────────────────────────────
+
+def test_clear_ledger_requires_typed_confirm_and_records_itself(palace):
+    for i in range(4):
+        lg.record('c1', 'user', 'edited', summary=f'change {i}')
+    st._read_self('c1')                        # watermark row exists
+    out, code = browse.maintenance(body={'action': 'clear_ledger',
+                                         'scope': 'c1', 'confirm': 'wrong'})
+    assert code == 400
+    assert len(_rows('c1')) == 4               # nothing touched
+    out = browse.maintenance(body={'action': 'clear_ledger',
+                                   'scope': 'c1', 'confirm': 'c1'})
+    assert out['success'] and out['cleared'] == 4
+    rows = _rows('c1')
+    assert len(rows) == 1                      # the fresh ledger's first row
+    assert rows[0]['summary'] == 'ledger cleared — 4 entries removed'
+    with pt._get_connection() as conn:
+        left = conn.execute("SELECT COUNT(*) FROM ledger_reads "
+                            "WHERE scope='c1'").fetchone()[0]
+    assert left == 0                           # watermark reset too

@@ -118,15 +118,29 @@ def put_section(section=None, body=None, **_):
     return {'success': True, 'message': msg}
 
 
-def _ledger_row(r, children=0):
+def _ledger_row(r, children=0, note_id=None, note_detail=None, report=None):
     detail = None
     if r[7]:
         try:
             detail = json.loads(r[7])
         except Exception:
             pass
+    if note_id:
+        # A 'noted' child overrides the effective reason (B+D: annotations
+        # are append-only children; readers overlay the newest one).
+        detail = dict(detail or {})
+        nd = None
+        try:
+            nd = json.loads(note_detail) if note_detail else None
+        except Exception:
+            pass
+        if nd and nd.get('reason'):
+            detail['reason'] = nd['reason']
+        else:
+            detail.pop('reason', None)
     return {'id': r[0], 'ts': r[1], 'actor': r[2], 'action': r[3],
-            'layer': r[4], 'target': r[5], 'summary': r[6],
+            'layer': r[4], 'target': r[5],
+            'summary': report or r[6],   # a run's after-action replaces "running…"
             'detail': detail, 'children': children}
 
 
@@ -141,6 +155,11 @@ def get_ledger(query=None, **_):
         return {'error': 'mind database unavailable'}, 500
     q = query or {}
     scope = q.get('scope') or 'default'
+    try:   # close any in-flight prompt-edit session — readers see current truth
+        from plugins.mindpalace.tools import prompt_audit
+        prompt_audit.flush(scope, force=True)
+    except Exception:
+        pass
     try:
         limit = min(int(q.get('limit', 30)), 200)
         offset = max(int(q.get('offset', 0)), 0)
@@ -150,14 +169,24 @@ def get_ledger(query=None, **_):
     with pt._get_connection() as conn:
         cur = conn.cursor()
         if parent_id:
+            # Children can have children of their own (run → batches →
+            # items) — carry the counts so the UI can drill all the way.
             rows = cur.execute(
-                'SELECT id, ts, actor, action, layer, target, summary, detail '
-                'FROM ledger WHERE parent_id = ? AND scope = ? ORDER BY id',
-                (parent_id, scope)).fetchall()
-            return {'rows': [_ledger_row(r) for r in rows]}
+                'SELECT l.id, l.ts, l.actor, l.action, l.layer, l.target, '
+                '  l.summary, l.detail, '
+                '  (SELECT COUNT(*) FROM ledger c WHERE c.parent_id = l.id) '
+                'FROM ledger l WHERE l.parent_id = ? AND l.scope = ? '
+                'ORDER BY l.id', (parent_id, scope)).fetchall()
+            return {'rows': [_ledger_row(r[:8], r[8]) for r in rows]}
         rows = cur.execute(
             'SELECT l.id, l.ts, l.actor, l.action, l.layer, l.target, l.summary, l.detail, '
-            '  (SELECT COUNT(*) FROM ledger c WHERE c.parent_id = l.id) '
+            '  (SELECT COUNT(*) FROM ledger c WHERE c.parent_id = l.id), '
+            "  (SELECT n.id FROM ledger n WHERE n.parent_id = l.id "
+            "   AND n.action = 'noted' ORDER BY n.id DESC LIMIT 1), "
+            "  (SELECT n.detail FROM ledger n WHERE n.parent_id = l.id "
+            "   AND n.action = 'noted' ORDER BY n.id DESC LIMIT 1), "
+            "  (SELECT rp.summary FROM ledger rp WHERE rp.parent_id = l.id "
+            "   AND rp.action = 'report' ORDER BY rp.id DESC LIMIT 1) "
             'FROM ledger l WHERE l.scope = ? AND l.parent_id IS NULL '
             'ORDER BY l.id DESC LIMIT ? OFFSET ?', (scope, limit, offset)).fetchall()
         total = cur.execute(
@@ -178,8 +207,44 @@ def get_ledger(query=None, **_):
             unread = cur.execute(
                 f'SELECT COUNT(*) FROM ledger WHERE {unread_where}',
                 (scope,)).fetchone()[0]
-    return {'rows': [_ledger_row(r[:8], r[8]) for r in rows], 'total': total,
-            'week': week, 'unread': unread, 'last_read_ts': last_read}
+    return {'rows': [_ledger_row(r[:8], r[8], r[9], r[10], r[11]) for r in rows],
+            'total': total, 'week': week, 'unread': unread,
+            'last_read_ts': last_read}
+
+
+def patch_ledger_reason(lid=None, body=None, **_):
+    """PUT ledger/{lid}/reason {scope, reason} — annotate a row after the
+    fact. HUMAN-ONLY surface (no tool path). APPEND-ONLY (B+D ruling,
+    2026-07-22): the annotation is a CHILD row (action 'noted') — the target
+    row is never touched, so the ledger stays hash-chain-ready. Readers
+    overlay the newest note as the effective reason. Guard: non-'ai' target
+    rows only; her own reasons arrive with her actions."""
+    st, pt = _st(), _pt()
+    from plugins.mindpalace.tools import ledger as lg
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    try:
+        lid = int(lid)
+    except (TypeError, ValueError):
+        return {'error': 'invalid id'}, 400
+    b = body or {}
+    scope = (b.get('scope') or '').strip() or 'default'
+    reason = ' '.join(str(b.get('reason') or '').split())[:500]
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            'SELECT actor, layer FROM ledger WHERE id = ? AND scope = ?',
+            (lid, scope)).fetchone()
+        if not row:
+            return {'error': 'not found'}, 404
+        if row[0] == 'ai':
+            return {'error': "her own rows keep the reason she gave"}, 403
+        lg.record(scope, 'user', 'noted', layer=row[1], target=lid,
+                  parent_id=lid,
+                  summary=(f'reason: {reason}' if reason else 'reason cleared'),
+                  detail={'reason': reason} if reason else None, cursor=cur)
+        conn.commit()
+    return {'success': True, 'reason': reason or None}
 
 
 def section_history(section=None, query=None, **_):
@@ -303,6 +368,11 @@ def create_wake_tool(body=None, **_):
             (scope, tool, json.dumps(params, ensure_ascii=False), max_chars,
              n, pt._now()))
         wid = cur.lastrowid
+        from plugins.mindpalace.tools import ledger as lg
+        lg.record(scope, 'user', 'saved', layer='self', target=f'wake_tool/{wid}',
+                  summary=f'armed "{tool}" at wake', cursor=cur,
+                  detail={'params': params, 'max_chars': max_chars}
+                  if params or max_chars else None)
         conn.commit()
     return {'success': True, 'id': wid}
 
@@ -337,10 +407,39 @@ def update_wake_tool(wid=None, body=None, **_):
     with pt._get_connection() as conn:
         cur = conn.cursor()
         st._ensure_wake_table(cur)
+        old = cur.execute('SELECT scope, tool, params, max_chars, enabled '
+                          'FROM wake_tools WHERE id = ?', (wid,)).fetchone()
+        if not old:
+            return {'error': 'not found'}, 404
         cur.execute(f'UPDATE wake_tools SET {", ".join(sets)} WHERE id = ?',
                     params + [wid])
-        if not cur.rowcount:
-            return {'error': 'not found'}, 404
+        # Ledger (tamper evidence at wake): what actually changed; pure
+        # position reorders stay silent — drag noise isn't a change to her.
+        changed, diff = [], {}
+        if 'enabled' in b and bool(b['enabled']) != bool(old[4]):
+            changed.append('enabled' if b['enabled'] else 'disabled')
+            diff['enabled'] = ['on' if old[4] else 'off',
+                               'on' if b['enabled'] else 'off']
+        if 'params' in b and isinstance(b['params'], dict):
+            try:
+                old_p = json.loads(old[2]) if old[2] else {}
+            except Exception:
+                old_p = {}
+            if b['params'] != old_p:
+                changed.append('params')
+                diff['params'] = [json.dumps(old_p, ensure_ascii=False),
+                                  json.dumps(b['params'], ensure_ascii=False)]
+        if 'max_chars' in b:
+            new_c = _wake_clamp_chars(b['max_chars'])
+            if new_c != old[3]:
+                changed.append(f'output cap → {new_c or "default"}')
+                diff['max_chars'] = [str(old[3] or ''), str(new_c or '')]
+        if changed:
+            from plugins.mindpalace.tools import ledger as lg
+            lg.record(old[0], 'user', 'edited', layer='self',
+                      target=f'wake_tool/{wid}', cursor=cur,
+                      summary=f'wake tool "{old[1]}": ' + ', '.join(changed),
+                      detail={'fields': diff})
         conn.commit()
     return {'success': True}
 
@@ -356,8 +455,15 @@ def delete_wake_tool(wid=None, **_):
     with pt._get_connection() as conn:
         cur = conn.cursor()
         st._ensure_wake_table(cur)
-        cur.execute('DELETE FROM wake_tools WHERE id = ?', (wid,))
-        if not cur.rowcount:
+        old = cur.execute('SELECT scope, tool, params, max_chars '
+                          'FROM wake_tools WHERE id = ?', (wid,)).fetchone()
+        if not old:
             return {'error': 'not found'}, 404
+        cur.execute('DELETE FROM wake_tools WHERE id = ?', (wid,))
+        from plugins.mindpalace.tools import ledger as lg
+        lg.record(old[0], 'user', 'deleted', layer='self',
+                  target=f'wake_tool/{wid}', cursor=cur,
+                  summary=f'disarmed "{old[1]}" wake tool',
+                  detail={'params': old[2] or '{}', 'max_chars': old[3]})
         conn.commit()
     return {'success': True}

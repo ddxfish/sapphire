@@ -1529,6 +1529,20 @@ body {
 
 .pr-def-actions { display: flex; gap: 8px; margin-top: 10px; }
 
+/* Prompt-ledger reason row — slides in under a dirty piece/monolith */
+.pr-reason-row { margin: 6px 0 2px; display: flex; gap: 6px; align-items: center; }
+.pr-reason-row .pr-reason-input {
+    flex: 1;
+    font-size: var(--font-xs);
+    opacity: 0.85;
+    padding: 6px 8px;
+}
+.pr-reason-row .pr-reason-commit {
+    font-size: var(--font-xs);
+    white-space: nowrap;
+    flex: none;
+}
+
 /* Multi-select chips */
 .pr-chips {
     display: flex;
