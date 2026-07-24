@@ -8964,6 +8964,12 @@ a.gallery-caption:hover {
     padding: 5px 8px; font: inherit; font-size: 12px; min-width: 0;
 }
 .palace-row input:focus { outline: none; border-color: #c39df5; }
+.palace-row-imp {
+    display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+    user-select: none; font-size: 13px; color: var(--text-muted, #888);
+}
+.palace-row-imp input { accent-color: #c39df5; margin: 0; }
+.palace-row-imp:has(input:checked) { color: #c39df5; }
 .palace-row-head { margin-bottom: 2px; }
 .palace-row-head span { font-size: 11px; color: var(--text-muted, #888); padding: 0 2px; }
 .palace-addbox-label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--text, #e6e6f0); }

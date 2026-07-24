@@ -371,12 +371,18 @@ def _seed_backfill_rows(palace):
     return orig_ts
 
 
-def test_linkable_text_restricts_to_link_fields():
+def test_linkable_text_restricts_to_marked_link_fields():
     meta = {'link_fields': ['concept'],
-            'rows': [{'concept': 'trust', 'why': 'Krem taught me'},
+            'rows': [{'concept': 'trust', 'why': 'Krem taught me',
+                      'important': True},
                      {'concept': 'Sailing', 'why': ''}]}
-    assert md.linkable_text('trust — Krem taught me\nSailing', meta) == \
-        'trust\nSailing'
+    # Only the MARKED row's concept — unmarked rows and whys are invisible.
+    assert md.linkable_text('trust — Krem taught me (important)\nSailing',
+                            meta) == 'trust'
+    # No marked rows → '' (fails closed: an unmarked sheet seeds nothing).
+    meta_quiet = {'link_fields': ['concept'],
+                  'rows': [{'concept': 'Sailing', 'why': 'the boat'}]}
+    assert md.linkable_text('Sailing — the boat', meta_quiet) == ''
     # No declaration → whole content linkable (the norm).
     assert md.linkable_text('anything at all', {}) == 'anything at all'
     assert md.linkable_text('anything at all', None) == 'anything at all'
@@ -384,29 +390,37 @@ def test_linkable_text_restricts_to_link_fields():
 
 def test_backfill_honors_link_fields(palace):
     """Spider containment survives re-stamping: a chunk declaring
-    meta.link_fields is matched/harvested on those fields only — an entity
-    named in a why gets no edge even on backfill."""
+    meta.link_fields is matched/harvested on marked rows' link fields only —
+    an entity named in a why (or an unmarked key) gets no edge even on
+    backfill, while a marked key still links."""
     palace._ensure_db()
     conn = sqlite3.connect(palace._get_db_path())
     ts = "2026-07-01T00:00:00+00:00"
     try:
-        conn.execute("INSERT INTO entities (name, scope, created, updated) "
-                     "VALUES ('Krem', 'default', ?, ?)", (ts, ts))
+        for name in ('Krem', 'Sailing'):
+            conn.execute("INSERT INTO entities (name, scope, created, updated) "
+                         "VALUES (?, 'default', ?, ?)", (name, ts, ts))
         meta = {'section': 'values', 'link_fields': ['concept'],
-                'rows': [{'concept': 'trust', 'why': 'Krem taught me'}]}
+                'rows': [{'concept': 'trust', 'why': 'Krem taught me'},
+                         {'concept': 'Sailing', 'why': 'the boat dream',
+                          'important': True}]}
         conn.execute(
             "INSERT INTO chunks (layer, scope, content, meta, created, updated) "
-            "VALUES ('self', 'default', 'trust — Krem taught me', ?, ?, ?)",
+            "VALUES ('self', 'default', "
+            "'trust — Krem taught me\nSailing — the boat dream (important)', "
+            "?, ?, ?)",
             (json.dumps(meta), ts, ts))
         conn.commit()
     finally:
         conn.close()
     res = md.backfill()
-    assert res.get('stamped') == 1 and res.get('edges') == 0
+    assert res.get('stamped') == 1 and res.get('edges') == 1
     conn = sqlite3.connect(palace._get_db_path())
     try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM edges WHERE kind = 'mentions'").fetchone()[0] == 0
+        linked = {r[0] for r in conn.execute(
+            "SELECT e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
+            "WHERE d.kind = 'mentions'")}
+        assert linked == {'Sailing'}   # marked key links; Krem (why) doesn't
         m = json.loads(conn.execute(
             "SELECT meta FROM chunks WHERE layer = 'self'").fetchone()[0])
         assert m['link_fields'] == ['concept']   # preserved through merge

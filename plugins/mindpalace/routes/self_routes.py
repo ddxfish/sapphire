@@ -53,6 +53,7 @@ def get_sheet(query=None, **_):
             'mode': spec['mode'], 'versioned': bool(spec.get('versioned')),
             'width': spec.get('width', 'half'),
             'fields': fields, 'max_rows': spec.get('max'),
+            'link_fields': spec.get('link_fields'),
             'rows': _rows_of(row, fields, sep) or ([] if fields else None),
             'content': row['content'] if row else '',
             'updated': row['updated'] if row else None,

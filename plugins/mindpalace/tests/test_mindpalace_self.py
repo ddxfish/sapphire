@@ -99,6 +99,29 @@ def test_values_two_col_bare_concept_still_works():
         "curiosity — pulls me forward\nhonesty"
 
 
+def test_important_mark_tolerant_parse_and_canonical_render():
+    """'(important)' accepted in key or value position (case-insensitive),
+    stripped into the row flag, re-rendered at line end — what she reads is
+    what she writes."""
+    fields = st.SECTIONS['relationships']['fields']
+    text = ("Krem (important) — the one who builds me\n"
+            "Rook — holds the line (IMPORTANT)\n"
+            "Marisol — market friend\n"
+            "betelgeuse (important)")
+    rows = st.text_to_rows(text, fields, ' — ')
+    assert rows == [
+        {'name': 'Krem', 'why': 'the one who builds me', 'important': True},
+        {'name': 'Rook', 'why': 'holds the line', 'important': True},
+        {'name': 'Marisol', 'why': 'market friend'},
+        {'name': 'betelgeuse', 'why': '', 'important': True}]
+    canon = st.rows_to_text(rows, fields, ' — ')
+    assert canon == ("Krem — the one who builds me (important)\n"
+                     "Rook — holds the line (important)\n"
+                     "Marisol — market friend\n"
+                     "betelgeuse (important)")
+    assert st.text_to_rows(canon, fields, ' — ') == rows   # stable round-trip
+
+
 def test_sanitize_fields_spec_slugs_caps_dedups():
     spec = st.sanitize_fields_spec([
         {'label': 'Game Title'}, {'key': 'score', 'label': 'Score'},
@@ -120,42 +143,70 @@ def test_write_relationships_stores_rows_and_links_entities(palace):
                      "VALUES ('Krem', 'default', ?, ?)", (ts, ts))
         conn.commit()
     msg, ok = st.write_section('default', 'relationships',
-                               "Krem — the one who builds me")
+                               "Krem — the one who builds me (important)")
     assert ok, msg
     assert 'linked: Krem' in msg
     row = _chunk('default', 'relationships')
-    assert row['meta']['rows'] == [{'name': 'Krem', 'why': 'the one who builds me'}]
-    assert row['content'] == "Krem — the one who builds me"
+    assert row['meta']['rows'] == [{'name': 'Krem',
+                                    'why': 'the one who builds me',
+                                    'important': True}]
+    assert row['content'] == "Krem — the one who builds me (important)"
+
+
+def test_unmarked_rows_never_link_nor_pull(palace):
+    """The flip: an UNMARKED row seeds nothing — no mentions edge even when
+    the key names a real entity, and no important-memories group."""
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        conn.execute("INSERT INTO entities (name, scope, created, updated) "
+                     "VALUES ('Krem', 'default', ?, ?)", (ts, ts))
+        conn.commit()
+    msg, ok = st.write_section('default', 'relationships', "Krem — builds me")
+    assert ok, msg
+    assert 'linked' not in msg
+    row = _chunk('default', 'relationships')
+    with pt._get_connection() as conn:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE src_type = 'chunk' "
+            "AND src_id = ?", (row['id'],)).fetchone()[0]
+    assert n == 0
+    _save("Krem fixed the rudder")
+    assert _important() == ''   # nothing marked → nothing summoned
 
 
 def test_values_why_never_spiders(palace):
-    """Spider containment: only the concept field seeds mentions edges —
-    an entity named in a why gets no edge, and the chunk stamps its
-    link_fields so backfill honors the same rule."""
+    """Spider containment + the flip: only MARKED rows' concept fields seed
+    mentions edges — an entity named in a why (or in an unmarked concept)
+    gets no edge, and the chunk stamps its link_fields so backfill honors
+    the same rule."""
     with pt._get_connection() as conn:
         ts = pt._now()
-        for name in ('Krem', 'Sailing'):
+        for name in ('Krem', 'Sailing', 'Rook'):
             conn.execute("INSERT INTO entities (name, scope, created, updated) "
                          "VALUES (?, 'default', ?, ?)", (name, ts, ts))
         conn.commit()
     msg, ok = st.write_section(
         'default', 'values',
-        "Sailing — Krem promised me the boat\ntrust — chosen, not defaulted")
+        "Sailing — Krem promised me the boat (important)\n"
+        "Rook — steady colleague\n"
+        "trust — chosen, not defaulted (important)")
     assert ok, msg
-    assert 'linked: Sailing' in msg and 'Krem' not in msg
+    assert 'linked: Sailing' in msg and 'Krem' not in msg and 'Rook' not in msg
     row = _chunk('default', 'values')
     assert row['meta']['link_fields'] == ['concept']
     assert row['meta']['rows'][0] == {'concept': 'Sailing',
-                                      'why': 'Krem promised me the boat'}
+                                      'why': 'Krem promised me the boat',
+                                      'important': True}
     with pt._get_connection() as conn:
         linked = {r[0] for r in conn.execute(
             "SELECT e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
             "WHERE d.src_type = 'chunk' AND d.src_id = ? "
             "AND d.dst_type = 'entity'", (row['id'],))}
-    assert linked == {'Sailing'}
-    # Noun candidates harvest from concepts only — why-words never breed
-    # future entities via the link pass.
-    for word in ('boat', 'promised', 'defaulted'):
+    assert linked == {'Sailing'}   # marked concept only — Krem (why) and
+    #                                Rook (unmarked concept) stay quiet
+    # Noun candidates harvest from marked concepts only — why-words never
+    # breed future entities via the link pass.
+    for word in ('boat', 'promised', 'defaulted', 'colleague'):
         assert word not in [n.lower() for n in
                             row['meta'].get('noun_candidates', [])]
 
@@ -336,13 +387,13 @@ def _important(depth=2, seen=None):
 
 
 def test_wake_important_groups_values_growing_relationships(palace):
-    st.write_section('default', 'values', 'sailing')
-    st.write_section('default', 'growing', 'boat build')
+    st.write_section('default', 'values', 'sailing (important)')
+    st.write_section('default', 'growing', 'boat build (important)')
     _save("a fact about them", layer='entities', entity='Zebra')
     a = _save("we went sailing at dawn")
     b = _save("Zebra helped test the rudder")      # mention edge auto-seeded
     c = _save("the boat build hit a snag")
-    st.write_section('default', 'relationships', 'Zebra — my tester')
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
     block = _important()
     assert '◆ Important memories' in block
     assert '— sailing:' in block and f"[{a}]" in block
@@ -351,7 +402,7 @@ def test_wake_important_groups_values_growing_relationships(palace):
 
 
 def test_wake_important_dedups_and_claims_seen(palace):
-    st.write_section('default', 'values', 'sailing')
+    st.write_section('default', 'values', 'sailing (important)')
     a = _save("we went sailing at dawn")
     seen = {a}
     assert _important(seen=seen) == ''              # only hit already shown
@@ -361,7 +412,8 @@ def test_wake_important_dedups_and_claims_seen(palace):
 
 
 def test_wake_important_relationship_without_entity_falls_back(palace):
-    st.write_section('default', 'relationships', 'Marisol — market friend')
+    st.write_section('default', 'relationships',
+                     'Marisol — market friend (important)')
     a = _save("saw Marisol at the market")
     block = _important()
     assert '— Marisol:' in block and f"[{a}]" in block
@@ -386,7 +438,7 @@ def test_wake_important_caps_per_item(palace, monkeypatch):
     from core.plugin_loader import plugin_loader
     monkeypatch.setattr(plugin_loader, 'get_plugin_settings',
                         lambda n: {'self_important_per_item': 2})
-    st.write_section('default', 'values', 'sailing')
+    st.write_section('default', 'values', 'sailing (important)')
     ids = [_save(f"sailing log number {i}") for i in range(4)]
     block = _important()
     shown = [i for i in ids if f"[{i}]" in block]
@@ -536,9 +588,9 @@ def test_wake_important_budget_and_record_trim(palace, monkeypatch):
     # into seen without being shown.
     creed = "honesty over comfort and presence over performance " * 4
     st.write_section('default', 'values',
-                     "\n".join(f"{creed} v{i}" for i in range(5)))
+                     "\n".join(f"{creed} v{i} (important)" for i in range(5)))
     st.write_section('default', 'growing',
-                     "\n".join(f"thread t{i} {creed}" for i in range(5)))
+                     "\n".join(f"thread t{i} {creed} (important)" for i in range(5)))
     fat = "signal in the noise " * 42                   # ~840 chars pre-trim
     counter = iter(range(5000, 9999))
     monkeypatch.setattr(st, '_semantic_memories',
@@ -594,7 +646,7 @@ def test_wake_important_person_card_first(palace):
     _set_fields('Zebra', {'background': 'grew up dockside', 'likes': 'apples',
                           'dislikes': '', 'allow_call': False})
     b = _save("Zebra helped test the rudder")
-    st.write_section('default', 'relationships', 'Zebra — my tester')
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
     block = _important()
     assert '— Zebra:' in block
     assert 'Zebra is the ship engineer' in block         # headline, card-first
@@ -640,12 +692,12 @@ def test_wake_important_people_never_starved(palace, monkeypatch):
         conn.commit()
     _set_fields('Zebra', {'background': 'grew up dockside'})
     b = _save("Zebra helped test the rudder")
-    st.write_section('default', 'relationships', 'Zebra — my tester')
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
     creed = "presence over performance and honesty over comfort " * 4
     st.write_section('default', 'values',
-                     "\n".join(f"{creed} v{i}" for i in range(5)))
+                     "\n".join(f"{creed} v{i} (important)" for i in range(5)))
     st.write_section('default', 'growing',
-                     "\n".join(f"thread t{i} {creed}" for i in range(5)))
+                     "\n".join(f"thread t{i} {creed} (important)" for i in range(5)))
     fat = "signal in the noise " * 42
     counter = iter(range(5000, 9999))
     monkeypatch.setattr(st, '_semantic_memories',
@@ -667,9 +719,10 @@ def test_wake_important_resolves_parenthetical_names(palace):
         conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
         conn.commit()
     _set_fields('Zebra', {'background': 'grew up dockside'})
-    st.write_section('default', 'relationships', 'Zebra (Zeb) — my tester')
+    st.write_section('default', 'relationships',
+                     'Zebra (Zeb) — my tester (important)')
     block = _important()
-    assert '— Zebra (Zeb):' in block
+    assert '— Zebra (Zeb):' in block   # (Zeb) survives; (important) consumed
     assert 'Zebra is the ship engineer' in block
     assert 'Background: grew up dockside' in block
 
@@ -677,7 +730,8 @@ def test_wake_important_resolves_parenthetical_names(palace):
 def test_wake_important_resolves_nicknames(palace):
     _save("keeps the engine humming", layer='entities', entity='Zebra')
     _set_fields('Zebra', {'nicknames': 'Zeb, Stripes', 'likes': 'apples'})
-    st.write_section('default', 'relationships', 'Stripes — engine whisperer')
+    st.write_section('default', 'relationships',
+                     'Stripes — engine whisperer (important)')
     block = _important()
     assert '— Stripes:' in block
     assert 'Likes: apples' in block

@@ -197,17 +197,21 @@ def alias_map(alias_rows):
 def linkable_text(content, meta):
     """The text the GRAPH sees for a chunk. A structured self section may
     declare meta.link_fields (write_section stamps it from the section
-    spec): only those fields' row values are eligible for entity matching
-    and noun candidates — for values, the concept spiders, the why never
-    does (Sapph's ask, 2026-07-24). Every seeding surface (save, backfill)
-    must route its match text through here so the containment survives
-    re-stamping. Falls back to full content — the norm for ordinary chunks."""
+    spec): only rows marked important contribute, and only their link
+    fields — salience is opt-in per row (Sapph's flip, 2026-07-24: the why
+    never spiders, and neither does an unmarked key). No marked rows → ''
+    — an unmarked sheet seeds nothing. Every seeding surface (save,
+    backfill) must route its match text through here so the containment
+    survives re-stamping. Chunks with no link policy return full content —
+    the norm."""
     try:
         lf = (meta or {}).get('link_fields')
         rows = (meta or {}).get('rows')
         if lf and isinstance(rows, list):
             vals = [str((r or {}).get(k) or '').strip()
-                    for r in rows for k in lf]
+                    for r in rows
+                    if isinstance(r, dict) and r.get('important')
+                    for k in lf]
             return "\n".join(v for v in vals if v)
     except Exception:
         pass

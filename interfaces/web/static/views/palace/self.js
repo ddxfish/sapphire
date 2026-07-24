@@ -616,14 +616,18 @@ function sectionCard(s) {
 // The structured-list editor — the Handles "+add" pattern, generalized to any
 // section/box with a fields spec (1–3 columns). Rows live in meta.rows server-
 // side; the canonical text stays the spider/embedding surface.
-function rowGridStyle(n) {
+function rowGridStyle(n, linky = false) {
     const cols = n === 1 ? '1fr' : n === 2 ? 'minmax(90px, 34%) 1fr' : 'minmax(80px, 26%) 1fr 1fr';
-    return `grid-template-columns: ${cols} auto;`;
+    return `grid-template-columns: ${cols} ${linky ? 'auto ' : ''}auto;`;
 }
 
-function structRow(fields, row = {}) {
-    return `<div class="palace-row" style="${rowGridStyle(fields.length)}">
+function structRow(fields, row = {}, linky = false) {
+    // The ★ checkbox mirrors the '(important)' text mark — one substrate:
+    // the server renders the mark into canonical text, this just toggles it.
+    return `<div class="palace-row" style="${rowGridStyle(fields.length, linky)}">
         ${fields.map(f => `<input type="text" data-k="${escAttr(f.key)}" placeholder="${escAttr(f.label)}" value="${escAttr(row[f.key] || '')}">`).join('')}
+        ${linky ? `<label class="palace-row-imp" title="important — this row spiders at wake and pulls its memories">
+            <input type="checkbox" data-imp ${row.important ? 'checked' : ''}>★</label>` : ''}
         <button class="mind-btn-sm palace-row-del" title="Remove">✕</button>
     </div>`;
 }
@@ -632,14 +636,16 @@ function structCard(s) {
     const fields = s.fields || [];
     const rows = s.rows?.length ? s.rows : [];
     const atMax = s.max_rows && rows.length >= s.max_rows;
+    const linky = !!(s.link_fields && s.link_fields.length);
     return `
         <div class="mind-mem-card palace-self-card palace-self-struct pal-w-${escAttr(s.width || 'half')}"
              data-section="${escAttr(s.section)}" data-spec="${escAttr(JSON.stringify(fields))}"
-             ${s.max_rows ? `data-max="${s.max_rows}"` : ''} ${s.custom ? 'data-custom="1"' : ''}>
+             ${s.max_rows ? `data-max="${s.max_rows}"` : ''} ${s.custom ? 'data-custom="1"' : ''}
+             ${linky ? 'data-linky="1"' : ''}>
             ${cardHead(s)}
-            ${fields.length > 1 ? `<div class="palace-row palace-row-head" style="${rowGridStyle(fields.length)}">${fields.map(f => `<span>${escHtml(f.label)}</span>`).join('')}<span></span></div>` : ''}
+            ${fields.length > 1 ? `<div class="palace-row palace-row-head" style="${rowGridStyle(fields.length, linky)}">${fields.map(f => `<span>${escHtml(f.label)}</span>`).join('')}${linky ? '<span title="spiders at wake">★</span>' : ''}<span></span></div>` : ''}
             <div class="palace-row-list">
-                ${rows.map(r => structRow(fields, r)).join('')}
+                ${rows.map(r => structRow(fields, r, linky)).join('')}
             </div>
             <button class="mind-btn-sm palace-row-add" ${atMax ? 'hidden' : ''}>+ add</button>
         </div>`;
@@ -683,9 +689,11 @@ async function flushAllSaves() {
 function collectRows(card) {
     return [...card.querySelectorAll('.palace-row:not(.palace-row-head)')].map(r => {
         const row = {};
-        r.querySelectorAll('input').forEach(inp => { row[inp.dataset.k] = inp.value.trim(); });
+        r.querySelectorAll('input[data-k]').forEach(inp => { row[inp.dataset.k] = inp.value.trim(); });
+        if (!Object.values(row).some(v => v)) return null;   // text decides life
+        if (r.querySelector('input[data-imp]')?.checked) row.important = true;
         return row;
-    }).filter(row => Object.values(row).some(v => v));
+    }).filter(Boolean);
 }
 
 function bindCards(el) {
@@ -720,7 +728,8 @@ function bindCards(el) {
         card.addEventListener('input', e => { if (e.target.matches('.palace-row input')) save(); });
         card.addEventListener('click', e => {
             if (e.target.matches('.palace-row-add')) {
-                card.querySelector('.palace-row-list').insertAdjacentHTML('beforeend', structRow(spec));
+                card.querySelector('.palace-row-list').insertAdjacentHTML(
+                    'beforeend', structRow(spec, {}, !!card.dataset.linky));
                 card.querySelector('.palace-row-list .palace-row:last-child input')?.focus();
                 syncAdd();
             } else if (e.target.matches('.palace-row-del')) {

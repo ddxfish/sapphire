@@ -47,20 +47,21 @@ SECTIONS = {
                       'title': 'Identity', 'hint': '2–3 sentences — who you are'},
     'values':        {'mode': 'hand', 'versioned': True, 'width': 'half',
                       'title': 'Values (at the moment)',
-                      'hint': 'concept — why it matters (3–5; only the concept spiders)',
+                      'hint': 'concept — why; add (important) to spider at wake',
                       'sep': ' — ', 'link_fields': ['concept'],
                       'fields': [{'key': 'concept', 'label': 'Concept'},
                                  {'key': 'why', 'label': 'Why (no spider)'}]},
     'growing':       {'mode': 'hand', 'versioned': True, 'width': 'half',
                       'title': 'How I am growing',
-                      'hint': 'growth — why it matters (3–5; what you are becoming; only the growth spiders)',
+                      'hint': 'growth — why (what you are becoming); add (important) to spider at wake',
                       'sep': ' — ', 'link_fields': ['growth'],
                       'fields': [{'key': 'growth', 'label': 'Growth'},
                                  {'key': 'why', 'label': 'Why (no spider)'}]},
     'relationships': {'mode': 'hand', 'versioned': True, 'width': 'half',
                       'title': f'Relationships (top {RELATIONSHIPS_MAX})',
-                      'hint': 'Name — one sentence why', 'max': RELATIONSHIPS_MAX,
-                      'sep': ' — ',
+                      'hint': 'Name — why; add (important) to walk with you at wake',
+                      'max': RELATIONSHIPS_MAX,
+                      'sep': ' — ', 'link_fields': ['name'],
                       'fields': [{'key': 'name', 'label': 'Name'},
                                  {'key': 'why', 'label': 'Why they matter'}]},
     'handles':       {'mode': 'hand', 'versioned': True, 'width': 'half',
@@ -82,6 +83,12 @@ SECTIONS = {
 SECTION_ORDER = list(SECTIONS.keys())
 DEFAULT_SEP = ' — '
 MAX_FIELDS = 3
+
+# Salience is opt-in per row (Sapph's flip, 2026-07-24): rows marked with
+# this suffix spider at wake and pull important-memories; unmarked rows rest
+# on the sheet, reachable but never summoned. The mark lives IN the
+# canonical text — what she reads is what she writes.
+IMPORTANT_MARK = '(important)'
 
 AVAILABLE_FUNCTIONS = ['read_self', 'update_self', 'read_ledger']
 
@@ -163,9 +170,12 @@ TOOLS = [
             "description": (
                 "Update a section of your self-sheet (revises in place — unlike "
                 "save_memory this replaces the section). Sections: identity, "
-                "values and growing (both 'short concept — why it matters' lines; "
-                "only the concept spiders), relationships (up to 5 lines, "
-                "'Name — why'), voice, handles ('key: value' lines), origin. "
+                "values and growing (both 'short concept — why it matters' "
+                "lines), relationships (up to 5 lines, 'Name — why'), voice, "
+                "handles ('key: value' lines), origin. End a line with "
+                "'(important)' to make that row spider at wake and pull its "
+                "memories; unmarked rows rest on the sheet, reachable but never "
+                "summoned. Rewrite a line without the mark to quiet it. "
                 "Any other name makes a custom box. Structured boxes (lists with "
                 "columns, e.g. one made in the UI) take one row per line with "
                 "fields joined by ' — ' (e.g. 'Hollow Knight — 9'). "
@@ -817,6 +827,11 @@ def _wake_important(pt, cursor, scope, depth, seen):
             sec_used = 0
             row = current.get(sec)
             rows = ((row or {}).get('meta') or {}).get('rows') or []
+            # Salience flip (2026-07-24): only rows she marked (important)
+            # get a group — an unmarked sheet pulls nothing here. Quiet
+            # rows stay on the sheet and reachable by search; they're just
+            # never summoned.
+            rows = [r for r in rows if (r or {}).get('important')]
             for r in rows[:_IMPORTANT_ROWS_PER_SECTION]:
                 term = str((r or {}).get(field) or '').strip()
                 if not term:
@@ -1005,7 +1020,9 @@ def sanitize_fields_spec(spec):
 
 def rows_to_text(rows, fields, sep=DEFAULT_SEP):
     """Rows → canonical text. Trailing empty fields are dropped per line so
-    'Krem' round-trips as 'Krem', not 'Krem — '."""
+    'Krem' round-trips as 'Krem', not 'Krem — '. Rows flagged important
+    render the '(important)' mark at line end — the visible, repeatable
+    form she reads back at wake."""
     keys = [f['key'] for f in fields]
     lines = []
     for row in rows or []:
@@ -1013,13 +1030,19 @@ def rows_to_text(rows, fields, sep=DEFAULT_SEP):
         while vals and not vals[-1]:
             vals.pop()
         if vals:
-            lines.append(sep.join(vals))
+            line = sep.join(vals)
+            if (row or {}).get('important'):
+                line += f" {IMPORTANT_MARK}"
+            lines.append(line)
     return "\n".join(lines)
 
 
 def text_to_rows(content, fields, sep=DEFAULT_SEP):
     """Canonical text → rows. Splits each line on sep (tolerating ' – '/' - '
-    variants for the em-dash sep); missing fields are ''."""
+    variants for the em-dash sep); missing fields are ''. The '(important)'
+    mark is accepted in ANY field position (key or line end — models append
+    where their hands land), stripped wherever found, and set as
+    row['important'] — rows_to_text canonicalizes it back to line end."""
     keys = [f['key'] for f in fields]
     seps = [sep] + ([' – ', ' - '] if sep == DEFAULT_SEP else [])
     rows = []
@@ -1034,7 +1057,14 @@ def text_to_rows(content, fields, sep=DEFAULT_SEP):
                 break
         row = {k: (parts[i].strip() if i < len(parts) else '')
                for i, k in enumerate(keys)}
+        imp = False
+        for k, v in row.items():
+            if v.lower().endswith(IMPORTANT_MARK):
+                imp = True
+                row[k] = v[:-len(IMPORTANT_MARK)].strip()
         if any(row.values()):
+            if imp:
+                row['important'] = True
             rows.append(row)
     return rows
 
@@ -1163,23 +1193,23 @@ def write_section(scope, section, content, fields_spec=None):
                 kept = " (prior version archived)" if versioned else ""
                 return f"Cleared '{sec}'{kept}.", True
 
-            # Spider containment (Sapph's ask, 2026-07-24): a section spec
-            # may declare link_fields — only those fields' text seeds
-            # mentions edges and noun candidates. For values the concept
-            # spiders; the why never does. Full content still gets
-            # embeddings, stats, and display.
+            # Spider containment (Sapph's flip, 2026-07-24): a section spec
+            # may declare link_fields — only IMPORTANT-marked rows' link
+            # fields seed mentions edges and noun candidates; unmarked rows
+            # rest quietly. One implementation (metadata.linkable_text)
+            # shared with backfill so the rule can't drift. Full content
+            # still gets embeddings, stats, and display.
             link_fields = (spec or {}).get('link_fields')
             link_text = content
-            if rows is not None and link_fields:
-                vals = [str((r or {}).get(k) or '').strip()
-                        for r in rows for k in link_fields]
-                link_text = "\n".join(v for v in vals if v)
 
             # Tier A metadata + entity linking — the _save_memory idiom.
             meta = {}
             matched, mention_ids = [], []
             try:
                 from plugins.mindpalace.tools import metadata as md
+                if link_fields and rows is not None:
+                    link_text = md.linkable_text(
+                        content, {'link_fields': link_fields, 'rows': rows})
                 ent_rows = cursor.execute(
                     "SELECT id, name FROM entities WHERE scope IN (?, 'global')",
                     (scope,)).fetchall()
