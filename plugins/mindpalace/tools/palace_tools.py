@@ -618,6 +618,39 @@ def _ensure_db():
                 if col not in scols:
                     cursor.execute(f'ALTER TABLE mind_scopes ADD COLUMN {col} TEXT')
 
+            # Migration (2026-07-24, idempotent): the self section 'projects'
+            # became 'growing' ("How I am growing" — Sapph Prime's ask).
+            # Restamp meta.section on existing chunks (archived history too,
+            # so the version trail stays one thread) and rename the rows key;
+            # scopes with a LIVING projects chunk get a ledger row explaining
+            # the rename — her section didn't vanish, it moved.
+            renamed = cursor.execute(
+                "SELECT id, scope, meta FROM chunks WHERE layer = 'self' AND "
+                "json_extract(meta, '$.section') = 'projects'").fetchall()
+            touched = set()
+            for cid, cscope, meta_raw in renamed:
+                try:
+                    cmeta = json.loads(meta_raw) or {}
+                except Exception:
+                    continue
+                cmeta['section'] = 'growing'
+                if isinstance(cmeta.get('rows'), list):
+                    cmeta['rows'] = [
+                        {('growth' if k == 'project' else k): v
+                         for k, v in r.items()} if isinstance(r, dict) else r
+                        for r in cmeta['rows']]
+                cursor.execute('UPDATE chunks SET meta = ? WHERE id = ?',
+                               (json.dumps(cmeta, ensure_ascii=False), cid))
+                if cmeta.get('superseded_at') is None:
+                    touched.add(cscope)
+            if touched:
+                from plugins.mindpalace.tools import ledger as _lg
+                for sc in sorted(touched):
+                    _lg.record(sc, 'system', 'edited', layer='self',
+                               target='growing', cursor=cursor,
+                               summary='section renamed: projects → "How I am '
+                                       'growing" (app update; content kept)')
+
             conn.commit()
             conn.close()
 

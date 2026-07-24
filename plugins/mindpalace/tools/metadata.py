@@ -194,12 +194,35 @@ def alias_map(alias_rows):
     return amap
 
 
-def derivable_meta(content: str, exclude_names=(), anchor=None) -> dict:
+def linkable_text(content, meta):
+    """The text the GRAPH sees for a chunk. A structured self section may
+    declare meta.link_fields (write_section stamps it from the section
+    spec): only those fields' row values are eligible for entity matching
+    and noun candidates — for values, the concept spiders, the why never
+    does (Sapph's ask, 2026-07-24). Every seeding surface (save, backfill)
+    must route its match text through here so the containment survives
+    re-stamping. Falls back to full content — the norm for ordinary chunks."""
+    try:
+        lf = (meta or {}).get('link_fields')
+        rows = (meta or {}).get('rows')
+        if lf and isinstance(rows, list):
+            vals = [str((r or {}).get(k) or '').strip()
+                    for r in rows for k in lf]
+            return "\n".join(v for v in vals if v)
+    except Exception:
+        pass
+    return content
+
+
+def derivable_meta(content: str, exclude_names=(), anchor=None,
+                   link_text=None) -> dict:
     """The retro-safe subset: stats, temporal refs, resolved event dates,
     noun candidates. Used by both save-time stamping and backfill().
     `anchor` = the moment the content was written (save: now — the resolver's
     fallback; backfill: the chunk's own created) — relative dates resolve
-    against it (temporal floor, tmp/librarian.md)."""
+    against it (temporal floor, tmp/librarian.md). `link_text` (spider
+    containment): noun candidates harvest from it instead of full content —
+    non-linkable text must not breed future entities via the link pass."""
     meta = {'md_v': MD_VERSION, 'stats': content_stats(content)}
     refs = temporal_refs(content)
     if refs:
@@ -215,20 +238,23 @@ def derivable_meta(content: str, exclude_names=(), anchor=None) -> dict:
             meta['recurring_dates'] = rec
     except Exception as e:
         logger.debug(f"[MINDPALACE] Temporal floor skipped: {e}")
-    nouns = noun_candidates(content, exclude=exclude_names)
+    nouns = noun_candidates(link_text if link_text is not None else content,
+                            exclude=exclude_names)
     if nouns:
         meta['noun_candidates'] = nouns
     return meta
 
 
-def save_meta(content: str, exclude_names=(), anchor=None) -> dict:
+def save_meta(content: str, exclude_names=(), anchor=None,
+              link_text=None) -> dict:
     """Full save-time meta: derivable subset + boot window + tool context.
     The context fields (model/chat/persona/channel) only exist forward —
     they are unknowable retroactively, so backfill() never writes them.
     `anchor`: pass the inherited created for chunks whose content predates
     this call (librarian-derived) — default None resolves relative dates
     against now, which is only right for genuinely-new content."""
-    meta = derivable_meta(content, exclude_names=exclude_names, anchor=anchor)
+    meta = derivable_meta(content, exclude_names=exclude_names, anchor=anchor,
+                          link_text=link_text)
     meta['session_id'] = SESSION_ID
     meta.update(_context_fields())
     return meta
@@ -279,19 +305,19 @@ def backfill() -> dict:
                     ent_cache[scope] = entity_aliases(cursor, scope)
                 arows = ent_cache[scope]
                 amap = alias_map(arows)
-                matched = match_entities(content, [a for _, _, a in arows])
-                ent_ids = []
-                for m in matched:
-                    pair = amap.get(m.lower())
-                    if pair and pair[0] != entity_id and pair[0] not in ent_ids:
-                        ent_ids.append(pair[0])
-
                 meta = {}
                 if meta_raw:
                     try:
                         meta = json.loads(meta_raw)
                     except Exception:
                         meta = {'meta_orig': meta_raw}
+                lt = linkable_text(content, meta)
+                matched = match_entities(lt, [a for _, _, a in arows])
+                ent_ids = []
+                for m in matched:
+                    pair = amap.get(m.lower())
+                    if pair and pair[0] != entity_id and pair[0] not in ent_ids:
+                        ent_ids.append(pair[0])
                 # A librarian temporal verdict (dates or ruled-dateless) is
                 # terminal — the regex floor never overwrites the refiner.
                 verdict = (meta.get('temporal_at')
@@ -300,7 +326,7 @@ def backfill() -> dict:
                         if k in meta} if verdict else None
                 meta.update(derivable_meta(
                     content, exclude_names=[m.lower() for m in matched],
-                    anchor=created))
+                    anchor=created, link_text=lt))
                 if verdict:
                     meta.pop('event_dates', None)
                     meta.pop('event_date_src', None)

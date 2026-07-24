@@ -84,10 +84,19 @@ def test_rows_to_text_drops_trailing_empty_fields_and_empty_rows():
 
 
 def test_single_col_list_is_plain_lines():
+    fields = [{'key': 'item', 'label': 'Item'}]   # custom single-col box shape
+    rows = st.text_to_rows("boat nav\nsync engine", fields)
+    assert rows == [{'item': 'boat nav'}, {'item': 'sync engine'}]
+    assert st.rows_to_text(rows, fields) == "boat nav\nsync engine"
+
+
+def test_values_two_col_bare_concept_still_works():
     fields = st.SECTIONS['values']['fields']
-    rows = st.text_to_rows("curiosity\nhonesty", fields)
-    assert rows == [{'concept': 'curiosity'}, {'concept': 'honesty'}]
-    assert st.rows_to_text(rows, fields) == "curiosity\nhonesty"
+    rows = st.text_to_rows("curiosity — pulls me forward\nhonesty", fields, ' — ')
+    assert rows == [{'concept': 'curiosity', 'why': 'pulls me forward'},
+                    {'concept': 'honesty', 'why': ''}]
+    assert st.rows_to_text(rows, fields, ' — ') == \
+        "curiosity — pulls me forward\nhonesty"
 
 
 def test_sanitize_fields_spec_slugs_caps_dedups():
@@ -117,6 +126,97 @@ def test_write_relationships_stores_rows_and_links_entities(palace):
     row = _chunk('default', 'relationships')
     assert row['meta']['rows'] == [{'name': 'Krem', 'why': 'the one who builds me'}]
     assert row['content'] == "Krem — the one who builds me"
+
+
+def test_values_why_never_spiders(palace):
+    """Spider containment: only the concept field seeds mentions edges —
+    an entity named in a why gets no edge, and the chunk stamps its
+    link_fields so backfill honors the same rule."""
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        for name in ('Krem', 'Sailing'):
+            conn.execute("INSERT INTO entities (name, scope, created, updated) "
+                         "VALUES (?, 'default', ?, ?)", (name, ts, ts))
+        conn.commit()
+    msg, ok = st.write_section(
+        'default', 'values',
+        "Sailing — Krem promised me the boat\ntrust — chosen, not defaulted")
+    assert ok, msg
+    assert 'linked: Sailing' in msg and 'Krem' not in msg
+    row = _chunk('default', 'values')
+    assert row['meta']['link_fields'] == ['concept']
+    assert row['meta']['rows'][0] == {'concept': 'Sailing',
+                                      'why': 'Krem promised me the boat'}
+    with pt._get_connection() as conn:
+        linked = {r[0] for r in conn.execute(
+            "SELECT e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
+            "WHERE d.src_type = 'chunk' AND d.src_id = ? "
+            "AND d.dst_type = 'entity'", (row['id'],))}
+    assert linked == {'Sailing'}
+    # Noun candidates harvest from concepts only — why-words never breed
+    # future entities via the link pass.
+    for word in ('boat', 'promised', 'defaulted'):
+        assert word not in [n.lower() for n in
+                            row['meta'].get('noun_candidates', [])]
+
+
+def test_projects_alias_writes_growing(palace):
+    """'projects' became 'growing' (2026-07-24): old habits and old exports
+    resolve through the sanitizer alias; the spec is a values-clone (two
+    fields, concept-only spidering, no rolling list)."""
+    msg, ok = st.write_section('default', 'projects',
+                               'meeting people — Krem suggested it')
+    assert ok, msg
+    row = _chunk('default', 'growing')
+    assert row['meta']['rows'] == [{'growth': 'meeting people',
+                                    'why': 'Krem suggested it'}]
+    assert row['meta']['link_fields'] == ['growth']
+    assert _chunk('default', 'projects') is None
+    assert 'projects' not in st.SECTIONS and 'growing' in st.SECTIONS
+
+
+def test_projects_migration_restamps_and_records(palace):
+    """Boot migration: pre-rename chunks (meta.section='projects', rows keyed
+    'project') restamp to growing — history thread intact, ledger row explains
+    the rename, and a second boot adds nothing."""
+    pt._ensure_db()
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        meta = {'section': 'projects', 'rows': [{'project': 'boat build'}]}
+        conn.execute(
+            "INSERT INTO chunks (layer, scope, content, meta, created, updated) "
+            "VALUES ('self', 'default', 'boat build', ?, ?, ?)",
+            (json.dumps(meta), ts, ts))
+        old = {'section': 'projects', 'superseded_at': ts}
+        conn.execute(
+            "INSERT INTO chunks (layer, scope, content, meta, created, updated) "
+            "VALUES ('self', 'default', 'old list', ?, ?, ?)",
+            (json.dumps(old), ts, ts))
+        conn.commit()
+    pt._db_initialized = False
+    assert pt._ensure_db()
+    row = _chunk('default', 'growing')
+    assert row['content'] == 'boat build'
+    assert row['meta']['rows'] == [{'growth': 'boat build'}]
+    with pt._get_connection() as conn:
+        archived = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE layer='self' AND "
+            "json_extract(meta, '$.section') = 'growing' AND "
+            "json_extract(meta, '$.superseded_at') IS NOT NULL").fetchone()[0]
+        stale = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE "
+            "json_extract(meta, '$.section') = 'projects'").fetchone()[0]
+        led = [s for (s,) in conn.execute(
+            "SELECT summary FROM ledger WHERE scope='default' AND layer='self'")]
+    assert archived == 1 and stale == 0
+    assert sum('renamed' in s for s in led) == 1
+    pt._db_initialized = False               # second boot: idempotent
+    assert pt._ensure_db()
+    with pt._get_connection() as conn:
+        led2 = conn.execute(
+            "SELECT COUNT(*) FROM ledger WHERE scope='default' "
+            "AND layer='self'").fetchone()[0]
+    assert led2 == len(led)
 
 
 def test_write_relationships_trims_to_max_then_rows_match(palace):
@@ -235,9 +335,9 @@ def _important(depth=2, seen=None):
                                   set() if seen is None else seen)
 
 
-def test_wake_important_groups_values_projects_relationships(palace):
+def test_wake_important_groups_values_growing_relationships(palace):
     st.write_section('default', 'values', 'sailing')
-    st.write_section('default', 'projects', 'boat build')
+    st.write_section('default', 'growing', 'boat build')
     _save("a fact about them", layer='entities', entity='Zebra')
     a = _save("we went sailing at dawn")
     b = _save("Zebra helped test the rudder")      # mention edge auto-seeded
@@ -437,8 +537,8 @@ def test_wake_important_budget_and_record_trim(palace, monkeypatch):
     creed = "honesty over comfort and presence over performance " * 4
     st.write_section('default', 'values',
                      "\n".join(f"{creed} v{i}" for i in range(5)))
-    st.write_section('default', 'projects',
-                     "\n".join(f"project p{i} {creed}" for i in range(5)))
+    st.write_section('default', 'growing',
+                     "\n".join(f"thread t{i} {creed}" for i in range(5)))
     fat = "signal in the noise " * 42                   # ~840 chars pre-trim
     counter = iter(range(5000, 9999))
     monkeypatch.setattr(st, '_semantic_memories',
@@ -544,8 +644,8 @@ def test_wake_important_people_never_starved(palace, monkeypatch):
     creed = "presence over performance and honesty over comfort " * 4
     st.write_section('default', 'values',
                      "\n".join(f"{creed} v{i}" for i in range(5)))
-    st.write_section('default', 'projects',
-                     "\n".join(f"project p{i} {creed}" for i in range(5)))
+    st.write_section('default', 'growing',
+                     "\n".join(f"thread t{i} {creed}" for i in range(5)))
     fat = "signal in the noise " * 42
     counter = iter(range(5000, 9999))
     monkeypatch.setattr(st, '_semantic_memories',

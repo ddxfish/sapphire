@@ -371,6 +371,50 @@ def _seed_backfill_rows(palace):
     return orig_ts
 
 
+def test_linkable_text_restricts_to_link_fields():
+    meta = {'link_fields': ['concept'],
+            'rows': [{'concept': 'trust', 'why': 'Krem taught me'},
+                     {'concept': 'Sailing', 'why': ''}]}
+    assert md.linkable_text('trust — Krem taught me\nSailing', meta) == \
+        'trust\nSailing'
+    # No declaration → whole content linkable (the norm).
+    assert md.linkable_text('anything at all', {}) == 'anything at all'
+    assert md.linkable_text('anything at all', None) == 'anything at all'
+
+
+def test_backfill_honors_link_fields(palace):
+    """Spider containment survives re-stamping: a chunk declaring
+    meta.link_fields is matched/harvested on those fields only — an entity
+    named in a why gets no edge even on backfill."""
+    palace._ensure_db()
+    conn = sqlite3.connect(palace._get_db_path())
+    ts = "2026-07-01T00:00:00+00:00"
+    try:
+        conn.execute("INSERT INTO entities (name, scope, created, updated) "
+                     "VALUES ('Krem', 'default', ?, ?)", (ts, ts))
+        meta = {'section': 'values', 'link_fields': ['concept'],
+                'rows': [{'concept': 'trust', 'why': 'Krem taught me'}]}
+        conn.execute(
+            "INSERT INTO chunks (layer, scope, content, meta, created, updated) "
+            "VALUES ('self', 'default', 'trust — Krem taught me', ?, ?, ?)",
+            (json.dumps(meta), ts, ts))
+        conn.commit()
+    finally:
+        conn.close()
+    res = md.backfill()
+    assert res.get('stamped') == 1 and res.get('edges') == 0
+    conn = sqlite3.connect(palace._get_db_path())
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE kind = 'mentions'").fetchone()[0] == 0
+        m = json.loads(conn.execute(
+            "SELECT meta FROM chunks WHERE layer = 'self'").fetchone()[0])
+        assert m['link_fields'] == ['concept']   # preserved through merge
+        assert 'taught' not in [n.lower() for n in m.get('noun_candidates', [])]
+    finally:
+        conn.close()
+
+
 def test_backfill_stamps_preserves_import_key_seeds_and_is_idempotent(palace):
     orig_ts = _seed_backfill_rows(palace)
 

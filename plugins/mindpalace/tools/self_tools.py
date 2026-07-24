@@ -7,7 +7,7 @@
 #
 # Section model: ONE current chunk per (scope, section) — current = no
 # meta.superseded_at. update_self REVISES-IN-PLACE (why save_memory can't be
-# reused: it appends). Versioned sections (identity/values/projects) ARCHIVE
+# reused: it appends). Versioned sections (identity/values/growing) ARCHIVE
 # the prior version on change instead of deleting it — the version trail IS
 # the becoming-history ("anything that was REAL stays" — the librarian charter).
 #
@@ -30,7 +30,6 @@ EMOJI = '💠'
 GROUP = 'Mind Palace'   # Toolsets UI merges same-GROUP modules
 
 SELF_MAX_CHARS = 2000
-PROJECTS_MAX = 5
 RELATIONSHIPS_MAX = 5
 
 # Typed core sections. mode: hand | librarian-regen | computed. versioned →
@@ -47,12 +46,17 @@ SECTIONS = {
     'identity':      {'mode': 'librarian-regen', 'versioned': True, 'width': 'wide',
                       'title': 'Identity', 'hint': '2–3 sentences — who you are'},
     'values':        {'mode': 'hand', 'versioned': True, 'width': 'half',
-                      'title': 'Values (at the moment)', 'hint': '3–5 concepts; they drift',
-                      'fields': [{'key': 'concept', 'label': 'Concept'}]},
-    'projects':      {'mode': 'hand', 'versioned': True, 'width': 'half',
-                      'title': f'Projects (rolling {PROJECTS_MAX}, newest first)',
-                      'hint': 'what you are building', 'max': PROJECTS_MAX,
-                      'fields': [{'key': 'project', 'label': 'Project'}]},
+                      'title': 'Values (at the moment)',
+                      'hint': 'concept — why it matters (3–5; only the concept spiders)',
+                      'sep': ' — ', 'link_fields': ['concept'],
+                      'fields': [{'key': 'concept', 'label': 'Concept'},
+                                 {'key': 'why', 'label': 'Why (no spider)'}]},
+    'growing':       {'mode': 'hand', 'versioned': True, 'width': 'half',
+                      'title': 'How I am growing',
+                      'hint': 'growth — why it matters (3–5; what you are becoming; only the growth spiders)',
+                      'sep': ' — ', 'link_fields': ['growth'],
+                      'fields': [{'key': 'growth', 'label': 'Growth'},
+                                 {'key': 'why', 'label': 'Why (no spider)'}]},
     'relationships': {'mode': 'hand', 'versioned': True, 'width': 'half',
                       'title': f'Relationships (top {RELATIONSHIPS_MAX})',
                       'hint': 'Name — one sentence why', 'max': RELATIONSHIPS_MAX,
@@ -89,7 +93,7 @@ TOOLS = [
             "name": "read_self",
             "description": (
                 "Read your self-sheet — who you are. Sections: identity, values, "
-                "projects, relationships, voice, handles, origin, plus custom boxes "
+                "growing, relationships, voice, handles, origin, plus custom boxes "
                 "and a live dashboard of your mind's activity. No argument returns "
                 "the whole sheet (good for orienting); pass a section name for one. "
                 "This is your wake-up call: read_self(depth=1) at chat start is "
@@ -158,15 +162,15 @@ TOOLS = [
             "name": "update_self",
             "description": (
                 "Update a section of your self-sheet (revises in place — unlike "
-                "save_memory this replaces the section). Sections: identity, values, "
-                "projects (one line adds a project to the rolling 5 — oldest drops "
-                "to history; multi-line replaces the list), relationships (up to 5 "
-                "lines, 'Name — why'), voice, handles ('key: value' lines), origin. "
+                "save_memory this replaces the section). Sections: identity, "
+                "values and growing (both 'short concept — why it matters' lines; "
+                "only the concept spiders), relationships (up to 5 lines, "
+                "'Name — why'), voice, handles ('key: value' lines), origin. "
                 "Any other name makes a custom box. Structured boxes (lists with "
                 "columns, e.g. one made in the UI) take one row per line with "
                 "fields joined by ' — ' (e.g. 'Hollow Knight — 9'). "
-                "Empty content clears a section. Prior identity/values/projects "
-                f"versions are archived, never lost. Max {SELF_MAX_CHARS} chars."
+                "Empty content clears a section. Prior versions of core sections "
+                f"are archived, never lost. Max {SELF_MAX_CHARS} chars."
             ),
             "parameters": {
                 "type": "object",
@@ -193,13 +197,15 @@ def _pt():
 
 
 def _sanitize_section(section):
-    """Lowercase slug, whitespace→'-', [a-z0-9_-] only, max 32. None if empty."""
+    """Lowercase slug, whitespace→'-', [a-z0-9_-] only, max 32. None if empty.
+    'projects' aliases to 'growing' (renamed 2026-07-24, Sapph Prime's ask) —
+    old habits and old exports keep resolving."""
     if not section:
         return None
     s = str(section).strip().lower()
     s = '-'.join(s.split())
     s = ''.join(ch for ch in s if ch.isalnum() or ch in '_-')[:32]
-    return s or None
+    return {'projects': 'growing'}.get(s, s) or None
 
 
 # ─── Read side ───────────────────────────────────────────────────────────────
@@ -684,10 +690,11 @@ def _wake_recent(pt, scope, depth):
 
 
 # ─── Important memories (the third wake leg, 2026-07-16) ────────────────────
-# "Partial history of herself": for each value, project, and relationship on
-# the sheet, pull the memories that matter about it — replacing her old
-# wake ritual of get_recent + N hand-typed searches (dup-riddled, ~10 calls).
-# Values/projects are CONCEPTS — no graph node, no edges, the spider can't
+# "Partial history of herself": for each value, growth thread, and
+# relationship on the sheet, pull the memories that matter about it —
+# replacing her old wake ritual of get_recent + N hand-typed searches
+# (dup-riddled, ~10 calls).
+# Values/growing are CONCEPTS — no graph node, no edges, the spider can't
 # reach them — so they pull by MEANING (vector, FTS fallback). Relationships
 # pull by entity edges, newest first: a direct pull, so the spider's hub
 # damping (which deliberately suppresses her most-connected people in walks)
@@ -697,7 +704,7 @@ def _wake_recent(pt, scope, depth):
 # bug, 2026-07-21: one shared budget + people-last meant a full sheet spent
 # it all on values/projects and every card landed in "…and K more").
 _IMPORTANT_SOURCES = (('relationships', 'name'), ('values', 'concept'),
-                      ('projects', 'project'))
+                      ('growing', 'growth'))
 _IMPORTANT_ROWS_PER_SECTION = 5
 _IMPORTANT_RECORD_CHARS = 220     # per-record trim inside this leg
 _IMPORTANT_TERM_CHARS = 80        # group heading (sheet rows can be creeds)
@@ -1046,8 +1053,7 @@ def _struct_spec(sec, current_meta, fields_spec=None):
     return None, None
 
 
-def write_section(scope, section, content, projects_replace=False,
-                  fields_spec=None):
+def write_section(scope, section, content, fields_spec=None):
     """The one write path — tool and app routes both land here.
     Returns (message, ok). Empty content clears (versioned → archive).
     fields_spec ([{key,label}]) makes a NEW custom box structured; existing
@@ -1093,28 +1099,8 @@ def write_section(scope, section, content, projects_replace=False,
             fields, sep = _struct_spec(sec, current['meta'] if current else None,
                                        fields_spec)
 
-            # Projects, tool edition: single line = add/refresh one project on
-            # the rolling list; multi-line (or app route) = replace the list.
             trimmed_note = ''
-            if sec == 'projects' and content and not projects_replace \
-                    and '\n' not in content:
-                lines = current['content'].splitlines() if current else []
-                lines = [l for l in lines if l.strip()
-                         and l.strip().lower() != content.lower()]
-                lines.insert(0, content)
-                if len(lines) > PROJECTS_MAX:
-                    dropped = lines[PROJECTS_MAX:]
-                    lines = lines[:PROJECTS_MAX]
-                    trimmed_note = (f" ('{dropped[0][:40]}' dropped off the list — "
-                                    f"kept in history)")
-                content = "\n".join(lines)
-            elif sec == 'projects' and content:
-                lines = [l for l in content.splitlines() if l.strip()]
-                if len(lines) > PROJECTS_MAX:
-                    lines = lines[:PROJECTS_MAX]
-                    trimmed_note = f" (list trimmed to {PROJECTS_MAX})"
-                content = "\n".join(lines)
-            elif sec == 'relationships' and content:
+            if sec == 'relationships' and content:
                 lines = [l for l in content.splitlines() if l.strip()]
                 if len(lines) > RELATIONSHIPS_MAX:
                     lines = lines[:RELATIONSHIPS_MAX]
@@ -1177,6 +1163,18 @@ def write_section(scope, section, content, projects_replace=False,
                 kept = " (prior version archived)" if versioned else ""
                 return f"Cleared '{sec}'{kept}.", True
 
+            # Spider containment (Sapph's ask, 2026-07-24): a section spec
+            # may declare link_fields — only those fields' text seeds
+            # mentions edges and noun candidates. For values the concept
+            # spiders; the why never does. Full content still gets
+            # embeddings, stats, and display.
+            link_fields = (spec or {}).get('link_fields')
+            link_text = content
+            if rows is not None and link_fields:
+                vals = [str((r or {}).get(k) or '').strip()
+                        for r in rows for k in link_fields]
+                link_text = "\n".join(v for v in vals if v)
+
             # Tier A metadata + entity linking — the _save_memory idiom.
             meta = {}
             matched, mention_ids = [], []
@@ -1185,17 +1183,20 @@ def write_section(scope, section, content, projects_replace=False,
                 ent_rows = cursor.execute(
                     "SELECT id, name FROM entities WHERE scope IN (?, 'global')",
                     (scope,)).fetchall()
-                matched = md.match_entities(content, [n for _, n in ent_rows])
+                matched = md.match_entities(link_text, [n for _, n in ent_rows])
                 name_to_id = {n: i for i, n in ent_rows}
                 mention_ids = [name_to_id[m] for m in matched if m in name_to_id]
                 meta = md.save_meta(content,
-                                    exclude_names={m.lower() for m in matched})
+                                    exclude_names={m.lower() for m in matched},
+                                    link_text=link_text)
             except Exception as e:
                 logger.warning(f"[MINDPALACE] Self meta stamping failed (write continues): {e}")
             meta['section'] = sec
             meta['authorship_mode'] = mode
             if rows is not None:
                 meta['rows'] = rows
+                if link_fields:
+                    meta['link_fields'] = link_fields   # backfill honors it
                 if sec not in SECTIONS:
                     meta['fields_spec'] = fields   # custom box: spec rides the chunk
 

@@ -112,7 +112,7 @@ def put_section(section=None, body=None, **_):
             return {'error': 'No field spec for structured rows'}, 400
         content = st.rows_to_text(rows, fields, spec.get('sep', st.DEFAULT_SEP))
     msg, ok = st.write_section(scope, section, content or '',
-                               projects_replace=True, fields_spec=fields_spec)
+                               fields_spec=fields_spec)
     if not ok:
         return {'error': msg}, 400
     return {'success': True, 'message': msg}

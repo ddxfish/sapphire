@@ -55,7 +55,7 @@ function content() { return container?.querySelector('#pal-self-content'); }
 function render() {
     if (!container) return;
     container.innerHTML = `
-        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'self', help: helpPills('Self', { doc: 'MEMORY.md', inline: true }), status: '\u{1F48D} Mind Palace — the self sheet (L0). Who she is, in her own words. Sections autosave; prior identity/values/projects versions are archived, never lost.' })}
+        ${renderSectionHeader({ tabs: PALACE_TABS, active: 'self', help: helpPills('Self', { doc: 'MEMORY.md', inline: true }), status: '\u{1F48D} Mind Palace — the self sheet (L0). Who she is, in her own words. Sections autosave; prior identity/values/growing versions are archived, never lost.' })}
         <div class="two-panel">
             ${renderScopeSidebar(scopes, scope)}
             <div class="panel-right">
