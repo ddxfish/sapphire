@@ -20,6 +20,7 @@
 # every node the spider touches. The AI never sees budgets/weights/importance.
 
 import heapq
+import json
 import logging
 import math
 
@@ -346,13 +347,16 @@ def spider_block(pt, query, scope, private_key, hit_chunk_ids, depth):
 
 
 def spider_from_chunks(pt, scope, private_key, seed_chunk_ids, depth,
-                       exclude_ids=(), exclude_entity_ids=()):
+                       exclude_ids=(), exclude_entity_ids=(), compact=False):
     """Query-free entry — spider outward from known chunks. The wake path:
     read_self(depth=N) walks from the self sheet, so the sheet is the
     epicenter and the return is 'the self + what it touches'. exclude_ids =
     chunks an earlier wake block already displayed (recents/important);
     exclude_entity_ids = entities already carded above — both are walked
-    (paths through them stay cheap) but not shown twice.
+    (paths through them stay cheap) but not shown twice. compact = when the
+    walk yields ONLY entities, collapse the box to one 'Connected:' line
+    with via-section provenance (a 3-line box for one bare name was the
+    depth-1 norm after composite dedup — Krem, 2026-07-27).
     Same budget math as spider_block, no G4 ladder. Failures degrade to ''."""
     try:
         depth = max(0, min(int(depth), MAX_DEPTH))
@@ -374,10 +378,49 @@ def spider_from_chunks(pt, scope, private_key, seed_chunk_ids, depth,
                             if eid not in set(exclude_entity_ids)}
             if not chunks and not entities and not docs:
                 return ''
+            if compact and not chunks and not docs:
+                return _compact_entities(cursor, entities, seed_chunk_ids)
             return _format_block(pt, cursor, chunks, entities, depth, docs)
     except Exception as e:
         logger.warning(f"[SPIDER] Self-walk failed (sheet unaffected): {e}")
         return ''
+
+
+def _compact_entities(cursor, entities, seed_ids):
+    """One-line entity shorthand: 'Connected: Name (kind, via section) —
+    headline'. The via is the sheet section whose edge reached the entity —
+    it answers 'why is this here' without a box."""
+    seeds = [int(s) for s in seed_ids]
+    ph = ','.join('?' * len(seeds))
+    bits = []
+    for eid, _d in sorted(entities.items(), key=lambda x: x[1])[:MAX_ENTITIES_SHOWN]:
+        row = cursor.execute('SELECT name, kind FROM entities WHERE id = ?',
+                             (eid,)).fetchone()
+        if not row:
+            continue
+        via = None
+        if seeds:
+            for (mraw,) in cursor.execute(
+                    f"SELECT c.meta FROM edges d JOIN chunks c ON "
+                    f"c.id = d.src_id AND d.src_type = 'chunk' "
+                    f"WHERE d.dst_type = 'entity' AND d.dst_id = ? "
+                    f"AND c.id IN ({ph})", [eid, *seeds]):
+                try:
+                    via = (json.loads(mraw) or {}).get('section')
+                except Exception:
+                    via = None
+                if via:
+                    break
+        head = cursor.execute(
+            "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
+            "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
+            "created DESC LIMIT 1", (eid,)).fetchone()
+        label = f"{row[0]} ({row[1] or 'thing'}" \
+                + (f", via {via}" if via else '') + ")"
+        if head:
+            label += f" — {' '.join(head[0].split())[:80]}"
+        bits.append(label)
+    return ("Connected: " + " · ".join(bits)) if bits else ''
 
 
 def _format_block(pt, cursor, chunks, entities, depth, docs=None):

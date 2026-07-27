@@ -36,8 +36,8 @@ def _now():
     return datetime.now(timezone.utc).isoformat(timespec='microseconds')
 
 SUMMARY_MAX = 300
-TAIL_LINES = 10       # read_self tail: last N qualifying lines
-TAIL_CHARS = 768      # ...hard-capped at this many chars
+TAIL_LINES = 8        # read_self tail: last N qualifying lines
+TAIL_CHARS = 640      # ...hard-capped at this many chars
 TAIL_LINE_CHARS = 80  # ...and each line capped too: the tail is an OVERVIEW
                       # (~all 10 lines visible) — read_ledger holds the detail
 
@@ -104,12 +104,15 @@ def last_read_ts(cursor, scope):
         return None
 
 
-def tail_block(cursor, scope):
-    """The read_self tail: last TAIL_LINES qualifying changes, newest first,
-    hard-capped at TAIL_CHARS with an '…and K more' overflow line. Returns ''
-    when nothing qualifies. Degrades to '' on any error — the ledger can
-    never break a working read_self."""
+def tail_block(cursor, scope, depth=2):
+    """The read_self tail: newest first, capped by depth — 4 lines at wake
+    depth ≤1, TAIL_LINES/TAIL_CHARS at depth 2 (Krem's trim, 2026-07-27:
+    the tail is a glance, read_ledger is the stream). Returns '' when
+    nothing qualifies. Degrades to '' on any error — the ledger can never
+    break a working read_self."""
     try:
+        n_lines = TAIL_LINES if depth >= 2 else 4
+        n_chars = TAIL_CHARS if depth >= 2 else 360
         total = cursor.execute(
             f'SELECT COUNT(*) FROM ledger WHERE scope = ? AND {SHEET_WHERE}',
             (scope,)).fetchone()[0]
@@ -120,15 +123,15 @@ def tail_block(cursor, scope):
             f"  (SELECT r.summary FROM ledger r WHERE r.parent_id = l.id "
             f"   AND r.action = 'report' ORDER BY r.id DESC LIMIT 1) "
             f"FROM ledger l WHERE l.scope = ? AND {SHEET_WHERE} "
-            f"ORDER BY l.id DESC LIMIT ?", (scope, TAIL_LINES)).fetchall()
-        head = "◆ Ledger — recent changes to your memory (newest first)"
+            f"ORDER BY l.id DESC LIMIT ?", (scope, n_lines)).fetchall()
+        head = "◆ Ledger (newest first)"
         lines, used = [], len(head)
         shown = 0
         for ts, actor, summary, report in rows:
             line = f"- [{(ts or '')[:10]}] {actor}: {report or summary}"
             if len(line) > TAIL_LINE_CHARS:
                 line = line[:TAIL_LINE_CHARS - 1] + '…'
-            if used + len(line) + 1 > TAIL_CHARS:
+            if used + len(line) + 1 > n_chars:
                 break
             lines.append(line)
             used += len(line) + 1
@@ -136,7 +139,7 @@ def tail_block(cursor, scope):
         if not lines:
             return ''
         if total > shown:
-            lines.append(f"…and {total - shown} more — read_ledger has the full stream")
+            lines.append(f"…and {total - shown} more via read_ledger")
         return "\n".join([head] + lines)
     except Exception as e:
         logger.warning(f"[MINDPALACE] Ledger tail skipped (sheet unaffected): {e}")

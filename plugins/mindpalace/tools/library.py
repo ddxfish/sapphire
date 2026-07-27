@@ -2445,6 +2445,18 @@ NOTE_FULL_MAX = 1500                        # explicit-search whole-note ceiling
 # than text-text — nomic vision measured 0.02-0.08 on this box. Floor at
 # 0.05; ranking does the heavy lifting. TUNING DIAL for real photos.
 VIS_MIN = 0.05
+
+
+def _vis_min():
+    """Vision match floor — Settings → Embedding (VISION_MATCH_THRESHOLD).
+    Cross-modal cosines run lower than text-text in the shared space, so
+    the shipped default stays permissive; raise it when photo hits flood a
+    search (Krem, 2026-07-27). Falls back to VIS_MIN."""
+    try:
+        import config
+        return float(getattr(config, 'VISION_MATCH_THRESHOLD', VIS_MIN))
+    except Exception:
+        return VIS_MIN
 PHOTO_CAP = 5                                # photos shown, explicit search
 PHOTO_CAP_MIXED = 3
 DOC_CAPS = {'high': 5, 'med': 4, 'low': 3}   # explicit layer=knowledge search
@@ -2614,8 +2626,9 @@ def _photo_hits(scope, query, limit):
             f"— same dimension, different space, cosines are noise.")
     scores = (matrix.astype(np.float32) @ q) * (scales / 127.0)
     order = np.argsort(-scores)[:limit]
+    floor = _vis_min()
     return [(int(ids[i]), float(scores[i])) for i in order
-            if scores[i] >= VIS_MIN]
+            if scores[i] >= floor]
 
 
 PHOTO_DESC_MAX = 256   # caption cap on the result LINE (full text stays put)

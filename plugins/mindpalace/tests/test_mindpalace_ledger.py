@@ -180,10 +180,10 @@ def test_tail_excludes_ai_rows_and_caps_with_more_line(palace):
     assert ok and '◆ Ledger' in text
     assert 'her own routine save' not in text
     assert 'user change 11' in text          # newest first
-    assert 'user change 02' in text          # 10 shown
-    assert 'user change 01' not in text      # oldest two are cut
+    assert 'user change 08' in text          # 4 shown at depth ≤1 (2026-07-27)
+    assert 'user change 07' not in text      # the rest wait in read_ledger
     assert 'user change 00' not in text
-    assert '…and 2 more' in text
+    assert '…and 8 more via read_ledger' in text
 
 
 def test_read_self_stamps_watermark_and_unread_window(palace):

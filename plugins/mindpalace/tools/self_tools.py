@@ -579,7 +579,7 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
             # (the connection closes without one).
             try:
                 from plugins.mindpalace.tools import ledger
-                tail = ledger.tail_block(cursor, scope)
+                tail = ledger.tail_block(cursor, scope, depth=depth)
                 if tail:
                     out.append("\n" + tail)
                 if stamp:   # console peeks pass stamp=False — her "while you
@@ -652,7 +652,8 @@ def _self_spider(pt, scope, seed_ids, depth, exclude_ids=(),
         from plugins.mindpalace.tools import spider
         block = spider.spider_from_chunks(pt, scope, None, seed_ids, depth,
                                           exclude_ids=exclude_ids,
-                                          exclude_entity_ids=exclude_entity_ids)
+                                          exclude_entity_ids=exclude_entity_ids,
+                                          compact=(depth <= 1))
         return f"\n\n{block}" if block else ''
     except Exception as e:
         logger.warning(f"[MINDPALACE] read_self spider failed (sheet unaffected): {e}")
@@ -669,6 +670,7 @@ def _wake_goals(cursor, scope, depth):
             return ''
         cap = 10 if depth >= 2 else 5
         lines = [f"\n◆ Active goals ({len(goals)})"]
+        from plugins.mindpalace.tools import palace_tools as ptt
         for g in goals[:cap]:
             m = g['meta']
             bits = [m.get('priority') or 'medium']
@@ -678,6 +680,13 @@ def _wake_goals(cursor, scope, depth):
                 bits.append(f"due {m['due']}")
             if m.get('permanent'):
                 bits.append('permanent')
+            if g.get('created'):   # age tells her which goals have gone stale
+                age = ptt._format_time_ago(g['created'])
+                wk = re.match(r'(\d+)d ago', age or '')
+                if wk and int(wk.group(1)) >= 14:   # old goals read in weeks
+                    age = f"{int(wk.group(1)) // 7}w ago"
+                if age:
+                    bits.append(age)
             lines.append(f"• [{g['id']}] {g['title']} ({', '.join(bits)})")
             if m.get('description'):
                 cut = 240 if depth >= 2 else 120
@@ -691,10 +700,13 @@ def _wake_goals(cursor, scope, depth):
 
 
 def _wake_recent(pt, scope, depth):
-    """The lived recency feed — same rules as get_recent_memories (plugin-
-    mirrored rows stay out). Degrades to ''."""
+    """The lived recency feed — events only (entity-card rows are records,
+    not moments, and the ledger already tells the edit story; Krem's Dominos
+    catch, 2026-07-27), per-record trimmed, counts up 50% for the chars the
+    filtering freed. Degrades to ''."""
     try:
-        text, ok = pt._get_recent_memories(scope, count=10 if depth >= 2 else 5)
+        text, ok = pt._get_recent_memories(scope, count=15 if depth >= 2 else 8,
+                                           layer='events', trim=260)
         if not ok or text.startswith('No memories'):
             return ''
         parts = text.split('\n', 1)   # drop the tool's own "Recent N…" header
@@ -742,7 +754,9 @@ def _trim(text, n):
 
 def _important_per_item(depth):
     """Memories pulled per sheet item. `self_important_per_item` (0-10, 0 =
-    section off) is the depth-2 ceiling; depth 1 stays tight at min(3, N)."""
+    section off) is the depth-2 ceiling; depth 1 stays tight at min(2, N) —
+    wider beats deeper at wake (Krem, 2026-07-27): two records per item
+    lets the budget reach more marked items before the named tail cuts."""
     try:
         from core.plugin_loader import plugin_loader
         n = int(plugin_loader.get_plugin_settings('mindpalace')
@@ -750,7 +764,7 @@ def _important_per_item(depth):
     except Exception:
         n = 5
     n = max(0, min(n, 10))
-    return n if depth >= 2 else min(3, n)
+    return n if depth >= 2 else min(2, n)
 
 
 def _semantic_memories(pt, scope, term, per, seen):
@@ -828,7 +842,7 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
         budget = _IMPORTANT_CHAR_BUDGET[2 if depth >= 2 else 1]
         slice_ = budget // len(_IMPORTANT_SOURCES)
         current = _current_sections(cursor, scope)
-        carry, skipped = 0, 0
+        carry, skipped = 0, []
         blocks = []
         for sec, field in _IMPORTANT_SOURCES:
             sec_budget = slice_ + carry
@@ -840,12 +854,17 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
             # rows stay on the sheet and reachable by search; they're just
             # never summoned.
             rows = [r for r in rows if (r or {}).get('important')]
+            # No silent caps: marked rows past the per-section limit join
+            # the named tail instead of vanishing.
+            skipped += [str((r or {}).get(field) or '').strip()
+                        for r in rows[_IMPORTANT_ROWS_PER_SECTION:]
+                        if str((r or {}).get(field) or '').strip()]
             for r in rows[:_IMPORTANT_ROWS_PER_SECTION]:
                 term = str((r or {}).get(field) or '').strip()
                 if not term:
                     continue
                 if sec_used >= sec_budget:
-                    skipped += 1
+                    skipped.append(term)
                     continue
                 card = []
                 if sec == 'relationships':
@@ -878,8 +897,13 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
             return ''
         out = ["\n◆ Important memories (what your sheet cares about)"] + blocks
         if skipped:
-            out.append(f"…and {skipped} more sheet items — "
-                       f"search_memory reaches them.")
+            # Named, not counted — she should see WHICH marked items didn't
+            # fit tonight's budget (Krem, 2026-07-27: "…and 3 more" told
+            # her nothing).
+            names = ', '.join(_trim(t, 30) for t in skipped[:6])
+            more = f" +{len(skipped) - 6}" if len(skipped) > 6 else ''
+            out.append(f"…and {len(skipped)} more marked items "
+                       f"({names}{more}) — search_memory reaches them.")
         return "\n".join(out)
     except Exception as e:
         logger.warning(f"[MINDPALACE] Wake important skipped (sheet unaffected): {e}")

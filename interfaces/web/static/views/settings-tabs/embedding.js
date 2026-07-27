@@ -223,6 +223,18 @@ export default {
                             value="${ctx.getValue('MEMORY_DEDUP_THRESHOLD') ?? 0.92}" step="0.01" min="0.70" max="0.99">
                     </div>
                 </div>
+                <div class="setting-row" data-key="VISION_MATCH_THRESHOLD">
+                    <div class="setting-label">
+                        <div class="setting-label-row">
+                            <label>Vision Match Threshold</label>
+                            <span class="help-icon" title="Minimum similarity for a photo to match a text search (0.05–0.90). Cross-modal scores run lower than text-vs-text, so raise this gradually if photo results flood searches — too high and photos vanish from search entirely.">?</span>
+                        </div>
+                    </div>
+                    <div class="setting-input">
+                        <input type="number" id="setting-VISION_MATCH_THRESHOLD" data-key="VISION_MATCH_THRESHOLD"
+                            value="${ctx.getValue('VISION_MATCH_THRESHOLD') ?? 0.05}" step="0.01" min="0.05" max="0.90">
+                    </div>
+                </div>
             </div>`;
         return html;
     },

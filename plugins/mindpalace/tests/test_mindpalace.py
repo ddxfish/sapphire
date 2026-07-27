@@ -121,11 +121,12 @@ def test_round_trip_save_search_recent_delete(palace):
     assert m, f"no [N] id marker in search result: {smsg!r}"
     chunk_id = int(m.group(1))
 
-    # get_recent shows [id] bracket + [events] layer tag
+    # get_recent shows the [id] bracket; the default events layer is
+    # untagged since the self retirement (the tag marks exceptions).
     rmsg, rok = palace._get_recent_memories(scope="default")
     assert rok
     assert f"[{chunk_id}]" in rmsg
-    assert "[events]" in rmsg
+    assert "[events]" not in rmsg
 
     # delete by id
     dmsg, dok = palace._delete_memory(chunk_id, scope="default")
@@ -148,7 +149,8 @@ def test_layer_self_and_knowledge(palace):
     assert ok2
     assert "Saved to the library" in kmsg      # v3: knowledge = the Library
     rmsg, _ = palace._get_recent_memories(scope="default")
-    assert "[events]" in rmsg                  # self saves land in events now
+    assert "I decided to keep my name" in rmsg   # self saves land in events
+    assert "[events]" not in rmsg              # ...which renders untagged
     assert "[self]" not in rmsg
     assert "[knowledge]" not in rmsg           # no knowledge chunks anymore
 

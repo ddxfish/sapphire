@@ -240,7 +240,8 @@ def test_mixed_search_shows_tight_library_block(palace):
     assert ok, msg
     out, ok = pt._search_memory("alice wonderland", 'default', limit=10)
     assert ok, out
-    assert '[events]' in out                     # the lived memory leads
+    assert '[events]' not in out                 # default layer untagged
+    assert 'alice wonderland with a friend' in out   # the lived memory leads
     assert '🏛 From the library:' in out         # the shelf rides along
     assert out.count('§') <= 2, out              # MIXED_CAPS med — a taste
 

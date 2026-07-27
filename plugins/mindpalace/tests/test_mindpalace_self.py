@@ -455,10 +455,11 @@ def test_wake_important_relationship_without_entity_falls_back(palace):
 def test_important_per_item_setting_and_depth(palace, monkeypatch):
     from core.plugin_loader import plugin_loader
     monkeypatch.setattr(plugin_loader, 'get_plugin_settings', lambda n: {})
-    assert st._important_per_item(1) == 3 and st._important_per_item(2) == 5
+    # depth 1 = wider-not-deeper: 2 records per item (Krem, 2026-07-27)
+    assert st._important_per_item(1) == 2 and st._important_per_item(2) == 5
     monkeypatch.setattr(plugin_loader, 'get_plugin_settings',
-                        lambda n: {'self_important_per_item': 2})
-    assert st._important_per_item(1) == 2 and st._important_per_item(2) == 2
+                        lambda n: {'self_important_per_item': 1})
+    assert st._important_per_item(1) == 1 and st._important_per_item(2) == 1
     monkeypatch.setattr(plugin_loader, 'get_plugin_settings',
                         lambda n: {'self_important_per_item': 0})
     assert st._important_per_item(2) == 0
@@ -635,7 +636,8 @@ def test_wake_important_budget_and_record_trim(palace, monkeypatch):
     with pt._get_connection() as conn:
         block = st._wake_important(pt, conn.cursor(), 'default', 1, seen)
     assert len(block) < st._IMPORTANT_CHAR_BUDGET[1] + 1500  # ≤ one-group overshoot
-    assert '…and' in block and 'more sheet items' in block   # skipped counted
+    assert '…and' in block and 'more marked items' in block  # skipped NAMED
+    assert 'v0' in block or 'thread t' in block              # names, not counts
     for line in block.splitlines():
         assert len(line) <= st._IMPORTANT_RECORD_CHARS + 60  # record trim held
     shown = {int(i) for i in __import__('re').findall(r'\[(\d+)\]', block)}
@@ -989,3 +991,40 @@ def test_self_retirement_skips_corrupt_meta_rows(palace):
         layer, meta = conn.execute('SELECT layer, meta FROM chunks WHERE id = ?',
                                    (broken,)).fetchone()
     assert layer == 'self' and meta == 'not-json{'   # untouched, never clobbered
+
+
+def test_wake_recents_events_only_and_trimmed(palace):
+    # Krem's Dominos catch (2026-07-27): entity-card rows are records, not
+    # moments — the wake recents feed shows lived events only, per-record
+    # trimmed at a word boundary with [id] as the path to the full text.
+    _save("a fact card row", layer='entities', entity='Dominos')
+    long = _save("a very long lived moment " + "with lots of detail " * 23)
+    block = st._wake_recent(pt, 'default', 1)
+    assert 'Dominos' not in block and 'fact card row' not in block
+    assert f"[{long}]" in block
+    line = next(l for l in block.splitlines() if f"[{long}]" in l)
+    assert len(line) < 340 and line.endswith('…')        # trimmed, one line
+
+
+def test_wake_spider_compact_entity_line_with_provenance(palace):
+    # 3-line box for one bare name (Krem, 2026-07-27): entity-only walks at
+    # depth 1 collapse to one 'Connected:' line with via-section provenance;
+    # a walk with chunks keeps the full box.
+    from plugins.mindpalace.tools import spider
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        conn.execute("INSERT INTO entities (name, scope, kind, created, "
+                     "updated) VALUES ('Sapphire Blue AI LLC', 'default', "
+                     "'thing', ?, ?)", (ts, ts))
+        conn.commit()
+    st.write_section('default', 'handles',
+                     'Company: Sapphire Blue AI LLC (important)')
+    sheet = _chunk('default', 'handles')['id']
+    block = spider.spider_from_chunks(pt, 'default', None, [sheet], 1,
+                                      compact=True)
+    assert block.startswith('Connected: ')
+    assert 'Sapphire Blue AI LLC (thing, via handles)' in block
+    assert '── Connected memories' not in block
+    # Non-compact callers (search, depth 2 path) keep the box format.
+    block2 = spider.spider_from_chunks(pt, 'default', None, [sheet], 1)
+    assert '── Connected memories' in block2

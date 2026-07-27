@@ -38,8 +38,9 @@ def palace(tmp_path, monkeypatch):
 # ─── Ledger tail: overview role ──────────────────────────────────────────────
 
 def test_tail_lines_capped_for_overview(palace):
-    # Before the per-line cap, one 300-char summary ate half the 768 budget
-    # and the tail showed 2-3 lines. Overview means ~all TAIL_LINES visible.
+    # Before the per-line cap, one 300-char summary ate half the char budget
+    # and the tail showed 2-3 lines. Overview means ~all TAIL_LINES visible
+    # (7 of 8 at the 640-char cap — tad-trim, 2026-07-27).
     long = 'x' * 280
     for i in range(10):
         ledger.record('default', 'user', 'edited', summary=f"{i:02d} {long}")
@@ -47,7 +48,7 @@ def test_tail_lines_capped_for_overview(palace):
         block = ledger.tail_block(conn.cursor(), 'default')
     lines = [l for l in block.splitlines() if l.startswith('- ')]
     assert all(len(l) <= ledger.TAIL_LINE_CHARS for l in lines)
-    assert len(lines) >= 8
+    assert len(lines) >= 7
     assert 'read_ledger' in block   # overflow points at the TOOL, not the UI
 
 

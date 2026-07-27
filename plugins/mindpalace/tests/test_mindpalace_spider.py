@@ -575,7 +575,7 @@ def test_E2_chunk_line_standard_format_and_preview_cap(palace):
     block = out.split("Connected memories", 1)[1]
     # standard chunk line marker present
     assert f"[{sib}]" in block
-    assert "[events]" in block
+    assert "[events]" not in block   # default layer untagged (2026-07-27)
     # preview capped: 160 Z's + ellipsis, never the full 250
     assert "Z" * 160 + "…" in block
     assert "Z" * 161 not in block

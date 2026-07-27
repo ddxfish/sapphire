@@ -1139,13 +1139,21 @@ def _format_time_ago(timestamp_str: str) -> str:
 
 
 def _format_chunk(row_id, content, created, label, layer, entity_name=None):
-    """[42] (2d ago) [events] content  /  [7] (1d ago) [entities:Krem] content
-    The [id] marker is part of the conversational contract (delete_memory)."""
+    """[42] (2d ago) content  /  [7] (1d ago) [entities:Krem] content
+    The [id] marker is part of the conversational contract (delete_memory).
+    Events is THE layer since the self retirement — the tag marks the
+    exception, not the norm (it was 4 tokens on every wake line; Krem's
+    trim, 2026-07-27)."""
     time_ago = _format_time_ago(created)
     time_str = f" ({time_ago})" if time_ago else ""
-    layer_tag = f"[{layer}:{entity_name}]" if entity_name else f"[{layer}]"
+    if entity_name:
+        layer_tag = f" [{layer}:{entity_name}]"
+    elif layer and layer != 'events':
+        layer_tag = f" [{layer}]"
+    else:
+        layer_tag = ""
     label_str = f" [{label}]" if label else ""
-    return f"[{row_id}]{time_str} {layer_tag}{label_str} {content}"
+    return f"[{row_id}]{time_str}{layer_tag}{label_str} {content}"
 
 
 def _parse_labels(label) -> list:
@@ -1738,7 +1746,10 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
 
 
 def _get_recent_memories(scope: str, count: int = 10, label: str = None,
-                         layer: str = None, private_key: str = None) -> tuple:
+                         layer: str = None, private_key: str = None,
+                         trim: int = None) -> tuple:
+    # trim: internal callers only (the wake leg) — per-record char cut at a
+    # word boundary, [id] + search_memory reaches the full text.
     try:
         layer, err = _validate_layer(layer)
         if err:
@@ -1769,6 +1780,13 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
         if not rows:
             notes = (f" in layer '{layer}'" if layer else "") + (f" with labels '{label}'" if labels else "")
             return f"No memories stored{notes}.", True
+        if trim:
+            def cut(text):
+                text = ' '.join(str(text).split())
+                if len(text) <= trim:
+                    return text
+                return (text[:trim].rsplit(' ', 1)[0] or text[:trim]) + '…'
+            rows = [(r[0], cut(r[1]), *r[2:]) for r in rows]
         results = [_format_chunk(*r) for r in rows]
         return f"Recent {len(rows)} memories:\n" + "\n".join(results), True
     except Exception as e:
