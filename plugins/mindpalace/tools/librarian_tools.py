@@ -111,16 +111,17 @@ TOOLS = [
         "function": {
             "name": "promote_memory",
             "description": (
-                "Librarian verb: COPY a memory's content up to the self layer "
-                "(who you are) or onto an entity (a fact about a person/place/"
-                "thing). The original event stays where it is — promotion adds, "
-                "never moves. Only works on memories in the current pass."
+                "Librarian verb: COPY a memory's content onto an entity (a "
+                "fact about a person/place/thing). The original event stays "
+                "where it is — promotion adds, never moves. Identity-worthy "
+                "memories belong on your sheet instead: update_self during "
+                "the self pass. Only works on memories in the current pass."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "memory_id": {"type": "integer", "description": "The [id] of the source memory."},
-                    "layer": {"type": "string", "enum": ["self", "entities"],
+                    "layer": {"type": "string", "enum": ["entities"],
                               "description": "Destination layer."},
                     "entity": {"type": "string",
                                "description": "Entity name — required when layer=entities."},
@@ -674,8 +675,15 @@ def _merge(memory_ids, content=None):
 
 def _promote(memory_id, layer, entity=None, content=None, kind=None):
     pt, md = _pt(), _md()
-    if layer not in ('self', 'entities'):
-        return "promote_memory: layer must be 'self' or 'entities'.", False
+    if layer == 'self':
+        # Retired 2026-07-26 with Sapph's consent: promoting to self minted
+        # clone pairs the dedup scans tripped over, and identity lives on
+        # the sheet now. The self pass hands her update_self for that.
+        return ("promote_memory: the self layer retired — identity edits go "
+                "through update_self (your nightly self pass). Promoting to "
+                "'entities' still works."), False
+    if layer != 'entities':
+        return "promote_memory: layer must be 'entities'.", False
     entity = (entity or '').strip() or None
     if layer == 'entities' and not entity:
         return "promote_memory to entities needs an entity name.", False

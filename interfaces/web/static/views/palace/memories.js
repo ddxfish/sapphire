@@ -22,10 +22,9 @@ let unsub = null;
 let _search = '';
 let _offset = 0;
 let _searchTimer = null;
-let _layer = '';           // '' = both streams; 'events' | 'self' filter pills
 let _keyed = false;        // 🔒 only memories carrying a private key
 
-function resetFilters() { _search = ''; _offset = 0; _layer = ''; _keyed = false; }
+function resetFilters() { _search = ''; _offset = 0; _keyed = false; }
 
 export default {
     init(el) { container = el; },
@@ -67,11 +66,10 @@ function render() {
 async function renderList() {
     const el = content();
     if (!el) return;
-    // ONE stream (Krem's ruling, 2026-07-12): events + deliberate self saves,
-    // server-side filtered so the count matches the list. Self-sheet chunks
-    // are excluded — their home is the Self page and the ledger.
+    // ONE stream, for real now (self layer retired 2026-07-26 — free self
+    // notes migrated into events; the sheet's home is the Self page).
     const params = new URLSearchParams({ scope, limit: PAGE, offset: _offset,
-                                         layer: _layer || 'events,self',
+                                         layer: 'events',
                                          exclude_sheet: 1 });
     if (_search) params.set('q', _search);
     if (_keyed) params.set('keyed', 1);
@@ -84,8 +82,6 @@ async function renderList() {
     }
     const chunks = data.chunks || [];
 
-    const pill = (val, label) =>
-        `<button class="ui-pill ${_layer === val ? 'ui-pill-on' : ''}" data-layer-pill="${val}">${label}</button>`;
     el.innerHTML = `
         <div class="ui-rows">
             <div class="ui-row">
@@ -93,7 +89,6 @@ async function renderList() {
                 <span class="palace-count">${data.total} in scope</span>
             </div>
             <div class="ui-row">
-                ${pill('', 'All')}${pill('events', 'Events')}${pill('self', 'Self')}
                 <button class="ui-pill ${_keyed ? 'ui-pill-on' : ''}" id="pal-mem-keyed" title="Only memories saved with a private key">🔒 Keyed</button>
             </div>
             <div class="ui-row">
@@ -109,13 +104,6 @@ async function renderList() {
             : ''}
     `;
 
-    el.querySelectorAll('[data-layer-pill]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            _layer = btn.dataset.layerPill;
-            _offset = 0;
-            renderList();
-        });
-    });
     el.querySelector('#pal-mem-keyed')?.addEventListener('click', () => {
         _keyed = !_keyed;
         _offset = 0;
@@ -156,10 +144,6 @@ function showAddModal() {
             <div class="pr-modal-body">
                 <div class="mind-form">
                     <textarea id="pal-add-content" placeholder="The memory (max 512 chars) *" rows="4" maxlength="512"></textarea>
-                    <select id="pal-add-layer" class="palace-select">
-                        <option value="events" selected>Events — something that happened</option>
-                        <option value="self">Self — who she is</option>
-                    </select>
                     <input type="text" id="pal-add-label" placeholder="Label (optional)">
                     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);cursor:pointer">
                         <input type="checkbox" id="pal-add-fav"> Favorite (never fades)
@@ -177,7 +161,7 @@ function showAddModal() {
         try {
             await palaceSend('chunks', 'POST', {
                 content, scope,
-                layer: overlay.querySelector('#pal-add-layer').value,
+                layer: 'events',
                 label: overlay.querySelector('#pal-add-label').value.trim() || null,
                 favorite: overlay.querySelector('#pal-add-fav').checked,
             });

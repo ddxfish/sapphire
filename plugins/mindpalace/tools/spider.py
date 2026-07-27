@@ -346,12 +346,13 @@ def spider_block(pt, query, scope, private_key, hit_chunk_ids, depth):
 
 
 def spider_from_chunks(pt, scope, private_key, seed_chunk_ids, depth,
-                       exclude_ids=()):
+                       exclude_ids=(), exclude_entity_ids=()):
     """Query-free entry — spider outward from known chunks. The wake path:
     read_self(depth=N) walks from the self sheet, so the sheet is the
     epicenter and the return is 'the self + what it touches'. exclude_ids =
-    chunks an earlier wake block already displayed (recents/important) —
-    they're walked (paths through them stay cheap) but not shown twice.
+    chunks an earlier wake block already displayed (recents/important);
+    exclude_entity_ids = entities already carded above — both are walked
+    (paths through them stay cheap) but not shown twice.
     Same budget math as spider_block, no G4 ladder. Failures degrade to ''."""
     try:
         depth = max(0, min(int(depth), MAX_DEPTH))
@@ -368,6 +369,9 @@ def spider_from_chunks(pt, scope, private_key, seed_chunk_ids, depth,
             if exclude_ids:
                 chunks = {cid: d for cid, d in chunks.items()
                           if cid not in set(exclude_ids)}
+            if exclude_entity_ids:
+                entities = {eid: d for eid, d in entities.items()
+                            if eid not in set(exclude_entity_ids)}
             if not chunks and not entities and not docs:
                 return ''
             return _format_block(pt, cursor, chunks, entities, depth, docs)
@@ -391,7 +395,8 @@ def _format_block(pt, cursor, chunks, entities, depth, docs=None):
         name, kind = row
         head = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
-            "ORDER BY created DESC LIMIT 1", (eid,)).fetchone()
+            "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
+            "created DESC LIMIT 1", (eid,)).fetchone()
         kind_bit = f" ({kind})" if kind else ""
         head_bit = f": {head[0][:MAX_CHUNK_PREVIEW]}" if head else ""
         lines.append(f"• {name}{kind_bit}{head_bit}")

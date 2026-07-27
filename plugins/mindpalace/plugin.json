@@ -478,6 +478,16 @@
         "handler": "routes/browse.py:create_entity"
       },
       {
+        "method": "POST",
+        "path": "entities/merge",
+        "handler": "routes/browse.py:merge_entities"
+      },
+      {
+        "method": "GET",
+        "path": "dedup/candidates",
+        "handler": "routes/browse.py:dedup_candidates"
+      },
+      {
         "method": "GET",
         "path": "entities/{eid}",
         "handler": "routes/browse.py:entity_detail"

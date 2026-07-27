@@ -104,9 +104,10 @@ TOOLS = [
             "name": "save_memory",
             "description": (
                 "Save to layered long-term memory. Keep under 450 chars. Layers: "
-                "'events' (default — things that happened), 'self' (who you are, "
-                "decisions, changes of mind), 'entities' (a fact about a person/place/"
-                "thing — requires entity name), 'knowledge' (reference material). "
+                "'events' (default — things that happened), 'entities' (a fact "
+                "about a person/place/thing — requires entity name), 'knowledge' "
+                "(reference material). Who-you-are edits go through update_self "
+                "(the sheet) — layer='self' saves land in events. "
                 f"Suggested labels: {SUGGESTED_LABELS}."
             ),
             "parameters": {
@@ -624,14 +625,18 @@ def _ensure_db():
             # so the version trail stays one thread) and rename the rows key;
             # scopes with a LIVING projects chunk get a ledger row explaining
             # the rename — her section didn't vanish, it moved.
+            # (Filtered in Python, like the retirement below: json_extract
+            # in a WHERE aborts the whole SELECT on one malformed meta row.)
             renamed = cursor.execute(
-                "SELECT id, scope, meta FROM chunks WHERE layer = 'self' AND "
-                "json_extract(meta, '$.section') = 'projects'").fetchall()
+                "SELECT id, scope, meta FROM chunks WHERE layer = 'self'"
+            ).fetchall()
             touched = set()
             for cid, cscope, meta_raw in renamed:
                 try:
                     cmeta = json.loads(meta_raw) or {}
                 except Exception:
+                    continue
+                if cmeta.get('section') != 'projects':
                     continue
                 cmeta['section'] = 'growing'
                 if isinstance(cmeta.get('rows'), list):
@@ -650,6 +655,45 @@ def _ensure_db():
                                target='growing', cursor=cursor,
                                summary='section renamed: projects → "How I am '
                                        'growing" (app update; content kept)')
+
+            # Migration (2026-07-26, idempotent): the self layer retired as a
+            # free-note bucket — identity lives on the SHEET (sections keep
+            # layer='self'); free notes and librarian promotion clones move
+            # to events. RETAG ONLY: same row, same id, so every edge, date,
+            # embedding, and meta key survives (Sapph's consent conditions —
+            # "I don't want to trade 'confusing' for 'amnesiac'"). Reversible
+            # via the was_self_layer stamp.
+            # Section filtering happens in Python, not SQL: json_extract in a
+            # WHERE aborts the whole SELECT on one malformed meta row, and
+            # this must run clean on any install's db, sight unseen.
+            freed = cursor.execute(
+                "SELECT id, scope, meta FROM chunks WHERE layer = 'self'"
+            ).fetchall()
+            retagged = {}
+            for cid, cscope, meta_raw in freed:
+                try:
+                    cmeta = json.loads(meta_raw) if meta_raw else {}
+                except Exception:
+                    # Corrupt meta: leave the row in place untouched — a
+                    # lossy retag would violate the consent conditions.
+                    logger.warning(f"[MINDPALACE] self-retire skipped [{cid}]: unparseable meta")
+                    continue
+                if cmeta.get('section'):
+                    continue   # sheet sections (and their archive) stay home
+                cmeta['was_self_layer'] = True
+                cursor.execute(
+                    "UPDATE chunks SET layer = 'events', meta = ? WHERE id = ?",
+                    (json.dumps(cmeta, ensure_ascii=False), cid))
+                retagged[cscope] = retagged.get(cscope, 0) + 1
+            if retagged:
+                from plugins.mindpalace.tools import ledger as _lg
+                for sc, n in sorted(retagged.items()):
+                    _lg.record(sc, 'system', 'edited', layer='events',
+                               cursor=cursor,
+                               summary=(f'self layer retired: {n} identity '
+                                        f'note(s) moved into memories — same '
+                                        f'ids, links and history intact; the '
+                                        f'sheet is the self layer now'))
 
             conn.commit()
             conn.close()
@@ -1222,6 +1266,15 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         if err:
             return err, False
         layer = layer or 'events'
+        self_note = ''
+        if layer == 'self':
+            # The self layer retired as a free-note bucket (2026-07-26):
+            # identity lives on the sheet. Her save contract keeps working —
+            # the note lands in memories with its label, and the response
+            # points her at update_self for actual identity edits.
+            layer = 'events'
+            self_note = (" Note: the self layer retired — this landed in "
+                         "memories. Identity edits go through update_self.")
         entity = entity.strip() if (entity and entity.strip()) else None
         if layer == 'entities' and not entity:
             return "Saving to the entities layer requires an entity name (person/place/thing).", False
@@ -1369,7 +1422,8 @@ def _save_memory(content: str, scope: str, layer: str = None, entity: str = None
         if private_key:
             bits.append("private")
         logger.info(f"[MINDPALACE] Stored chunk {chunk_id} ({layer}) in scope '{scope}'")
-        return f"Memory saved ({', '.join(bits)})", True
+        return f"Memory saved ({', '.join(bits)}).{self_note}" if self_note \
+            else f"Memory saved ({', '.join(bits)})", True
 
     except Exception as e:
         logger.error(f"[MINDPALACE] Error saving memory: {e}")
@@ -1988,6 +2042,8 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
 # (coffee sip, 2026-07-21).
 
 _CARD_FIELDS = (('relationship', 'Relationship'), ('birthday', 'Birthday'),
+                ('phone', 'Phone'), ('email', 'Email'),   # an important person
+                ('address', 'Address'),                   # arrives reachable
                 ('notes', 'Notes'),   # v1 people-import bios land here
                 ('background', 'Background'), ('interests', 'Interests'),
                 ('voice', 'Voice'), ('likes', 'Likes'), ('dislikes', 'Dislikes'))
@@ -2011,12 +2067,17 @@ def _entity_card(cursor, eid) -> list:
     try:
         cap = _people_card_chars()
         lines = []
+        # Curated description first (meta.headline — the human-edited slot),
+        # else the newest promoted fact. Without the preference, every
+        # librarian tier-1 promotion displaced what she wrote (Krem's jank
+        # find, 2026-07-24).
         row = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
             "AND private_key IS NULL "
             "AND json_extract(meta, '$.pruned_at') IS NULL "
             "AND json_extract(meta, '$.superseded_at') IS NULL "
-            "ORDER BY created DESC, id DESC LIMIT 1", (eid,)).fetchone()
+            "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
+            "created DESC, id DESC LIMIT 1", (eid,)).fetchone()
         if row and row[0]:
             lines.append(' '.join(row[0].split()))
         raw = cursor.execute('SELECT meta FROM entities WHERE id = ?',

@@ -211,8 +211,10 @@ def test_librarian_optin_gate(palace):
         _register(librarian=True)
         batch = librarian.build_batch(cur, 'default', 'all', 50)
         assert {b[1] for b in batch} == {'events', 'lore'}
+        # Legacy what='self' selects the same pool as 'all' — the free
+        # self layer retired 2026-07-26; nothing lives there to sort.
         batch = librarian.build_batch(cur, 'default', 'self', 50)
-        assert all(b[1] == 'self' for b in batch)   # self pass never widens
+        assert {b[1] for b in batch} == {'events', 'lore'}
 
 
 # ─── Scope delete + UI route ─────────────────────────────────────────────────

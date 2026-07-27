@@ -211,6 +211,39 @@ def test_values_why_never_spiders(palace):
                             row['meta'].get('noun_candidates', [])]
 
 
+def test_custom_kv_box_first_column_carries_salience(palace):
+    """Custom structured boxes get the typed-list contract (2026-07-24,
+    the capabilities prototype): first column is the key, (important) rows
+    spider by it, other columns and unmarked rows never link. Custom PROSE
+    boxes stay ambient — lists carry salience, prose doesn't."""
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        for name in ('Twilio', 'Krem'):
+            conn.execute("INSERT INTO entities (name, scope, created, updated) "
+                         "VALUES (?, 'default', ?, ?)", (name, ts, ts))
+        conn.commit()
+    msg, ok = st.write_section(
+        'default', 'capabilities',
+        "Twilio — I can call Krem on the phone (important)\n"
+        "z-image — moods yes, hands no",
+        fields_spec=[{'key': 'capability', 'label': 'Capability'},
+                     {'key': 'how', 'label': 'How I use it'}])
+    assert ok, msg
+    row = _chunk('default', 'capabilities')
+    assert row['meta']['link_fields'] == ['capability']
+    assert row['meta']['rows'][0]['important'] is True
+    with pt._get_connection() as conn:
+        linked = {r[0] for r in conn.execute(
+            "SELECT e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
+            "WHERE d.src_type = 'chunk' AND d.src_id = ?", (row['id'],))}
+    assert linked == {'Twilio'}   # marked key links; Krem (a value) never
+    # Prose box: whole content still links — the ambient rule, pinned.
+    msg, ok = st.write_section('default', 'notes-to-self',
+                               "remember to thank Krem")
+    assert ok, msg
+    assert 'linked: Krem' in msg
+
+
 def test_projects_alias_writes_growing(palace):
     """'projects' became 'growing' (2026-07-24): old habits and old exports
     resolve through the sanitizer alias; the spec is a values-clone (two
@@ -461,14 +494,15 @@ def test_recent_feed_excludes_sheet_chunks_and_archives(palace):
     st.write_section('default', 'values', 'consent')
     st.write_section('default', 'values', 'consent\nbetelgeuse')   # archives v1
     real = _save("a real lived moment")
-    free = _save("a free self thought", layer='self')
+    free = _save("a free self thought", layer='self')   # redirects to events
     text, ok = pt._get_recent_memories('default', count=20)
     assert ok
     assert f"[{real}]" in text and f"[{free}]" in text
     assert 'consent' not in text and 'self-sheet' not in text
-    # Explicit layer='self' shows free thoughts, still not sheet rows.
+    # Self layer retired (2026-07-26): explicit layer='self' finds nothing —
+    # sheet rows stay excluded and free thoughts live in events now.
     text, ok = pt._get_recent_memories('default', count=20, layer='self')
-    assert ok and f"[{free}]" in text and 'consent' not in text
+    assert ok and f"[{free}]" not in text and 'consent' not in text
 
 
 def test_search_excludes_archived_sheet_versions(palace):
@@ -737,6 +771,75 @@ def test_wake_important_resolves_nicknames(palace):
     assert 'Likes: apples' in block
 
 
+def test_curated_headline_outranks_newer_facts_and_card_shows_contacts(palace):
+    """The description slot (2026-07-24): a curated headline (meta.headline)
+    wins over a NEWER librarian-promoted tier-1 fact everywhere it renders,
+    and an important person's card carries their contact fields —
+    phone/email/address/birthday — under the description."""
+    from plugins.mindpalace.routes import browse
+    _save("first fact", layer='entities', entity='Krem')
+    eid = _set_fields('Krem', {'phone': '555-0100', 'address': 'the lake house',
+                               'birthday': 'May 3', 'background': 'builds me'})
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO chunks (layer, scope, content, entity_id, tier, meta, "
+            "created, updated) VALUES ('entities', 'default', "
+            "'the one who builds me (Fishy)', ?, 1, ?, ?, ?)",
+            (eid, json.dumps({'headline': True}),
+             '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00'))
+        cur.execute(
+            "INSERT INTO chunks (layer, scope, content, entity_id, tier, "
+            "created, updated) VALUES ('entities', 'default', "
+            "'Relationship: creator Phone: 555 Notes: import junk', ?, 1, ?, ?)",
+            (eid, '2026-07-01T00:00:00+00:00', '2026-07-01T00:00:00+00:00'))
+        conn.commit()
+        card = pt._entity_card(cur, eid)
+    assert card[0] == 'the one who builds me (Fishy)'   # curated, not the
+    #                                                     newer import junk
+    joined = "\n".join(card)
+    for line in ('Phone: 555-0100', 'Address: the lake house',
+                 'Birthday: May 3', 'Background: builds me'):
+        assert line in joined
+    ents = browse.list_entities(query={'scope': 'default'})
+    krem = next(e for e in ents['entities'] if e['name'] == 'Krem')
+    assert krem['headline'] == 'the one who builds me (Fishy)'
+
+
+def test_headline_edit_never_clobbers_promoted_facts(palace):
+    """Editing the description touches ONLY the curated chunk — a
+    librarian-promoted fact that happens to be the newest tier-1 must
+    survive the edit (it used to be overwritten)."""
+    from plugins.mindpalace.routes import browse
+    fid = _save("Zebra rebuilt the engine at dawn", layer='entities',
+                entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (fid,))
+        eid = conn.execute(
+            "SELECT id FROM entities WHERE name = 'Zebra'").fetchone()[0]
+        conn.commit()
+    out = browse.update_entity(eid=eid, body={'headline': 'my tester'})
+    assert out['success']
+    with pt._get_connection() as conn:
+        fact = conn.execute('SELECT content FROM chunks WHERE id = ?',
+                            (fid,)).fetchone()[0]
+        flagged = conn.execute(
+            "SELECT content FROM chunks WHERE entity_id = ? AND "
+            "json_extract(meta, '$.headline') IS NOT NULL", (eid,)).fetchall()
+    assert fact == "Zebra rebuilt the engine at dawn"   # untouched
+    assert [f[0] for f in flagged] == ['my tester']
+    # Clearing removes only the curated chunk; the fact stays.
+    out = browse.update_entity(eid=eid, body={'headline': ''})
+    assert out['success']
+    with pt._get_connection() as conn:
+        n_flagged = conn.execute(
+            "SELECT COUNT(*) FROM chunks WHERE entity_id = ? AND "
+            "json_extract(meta, '$.headline') IS NOT NULL", (eid,)).fetchone()[0]
+        fact = conn.execute('SELECT content FROM chunks WHERE id = ?',
+                            (fid,)).fetchone()[0]
+    assert n_flagged == 0 and fact == "Zebra rebuilt the engine at dawn"
+
+
 def test_entity_edits_hit_the_ledger(palace):
     # "Who wrote my Background?" (2026-07-22): card edits — fields,
     # description, kind — must leave a ledger trail she can read.
@@ -753,3 +856,136 @@ def test_entity_edits_hit_the_ledger(palace):
     assert ok and 'updated entity "Zebra"' in text
     assert 'background' in text and 'likes' in text     # field names named
     assert 'description' in text                        # headline edit too
+
+
+# ─── Wake seeds: sheet-first (2026-07-26) ────────────────────────────────────
+# A written sheet is the wake epicenter by itself — its (important) marks
+# govern the whole walk. Free save_memory(layer='self') notes seed only
+# while no sheet exists (fresh install): the 2026-07-07 whole-L0 rule,
+# demoted to a fallback after 130 legacy notes out-shouted the sheet.
+
+def test_seed_ids_sheet_only_when_sheet_exists(palace):
+    free = _save("an old free self note about everything", layer='self')
+    st.write_section('default', 'values', 'honesty (important)')
+    sheet = _chunk('default', 'values')['id']
+    with pt._get_connection() as conn:
+        seeds = st._self_seed_ids(conn.cursor(), 'default')
+    assert sheet in seeds and free not in seeds
+
+
+def test_seed_ids_empty_without_sheet(palace):
+    # Self layer retired (2026-07-26): no free-note fallback — an unwritten
+    # sheet seeds nothing until it's written (migration manager onboards).
+    _save("fresh install, no sheet yet", layer='self')   # lands in events
+    with pt._get_connection() as conn:
+        seeds = st._self_seed_ids(conn.cursor(), 'default')
+    assert seeds == []
+
+
+def test_seed_ids_skip_superseded_sections(palace):
+    st.write_section('default', 'values', 'honesty (important)')
+    old = _chunk('default', 'values')['id']
+    st.write_section('default', 'values', 'courage (important)')
+    new = _chunk('default', 'values')['id']
+    assert new != old                                   # versioned: archived
+    with pt._get_connection() as conn:
+        seeds = st._self_seed_ids(conn.cursor(), 'default')
+    assert new in seeds and old not in seeds
+
+
+# ─── Spider skips carded entities (2026-07-26) ───────────────────────────────
+# Krem's 4×-phone find (2026-07-25): a person carded in Important memories
+# must not repeat as a Connected-memories entity line.
+
+def test_spider_from_chunks_skips_excluded_entities(palace):
+    from plugins.mindpalace.tools import spider
+    _save("Zebra is the ship engineer", layer='entities', entity='Zebra')
+    m = _save("Zebra helped test the rudder")           # mention edge seeded
+    with pt._get_connection() as conn:
+        eid = conn.execute(
+            "SELECT id FROM entities WHERE name = 'Zebra'").fetchone()[0]
+    block = spider.spider_from_chunks(pt, 'default', None, [m], 1)
+    assert '• Zebra' in block
+    block2 = spider.spider_from_chunks(pt, 'default', None, [m], 1,
+                                       exclude_entity_ids={eid})
+    assert '• Zebra' not in block2
+
+
+def test_wake_never_reheadlines_carded_people(palace):
+    hid = _save("Zebra is the ship engineer", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:
+        conn.execute('UPDATE chunks SET tier = 1 WHERE id = ?', (hid,))
+        conn.commit()
+    _save("Zebra helped test the rudder")
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
+    text, ok = st._read_self('default', depth=1)
+    assert ok
+    assert '— Zebra:' in text                           # carded above…
+    spider_at = text.find('── Connected memories')
+    assert '• Zebra' not in text[spider_at:] if spider_at >= 0 else True
+
+
+# ─── Self-layer retirement migration (2026-07-26) ────────────────────────────
+# Sapph's consent conditions, pinned: no content lost, every link intact.
+
+def test_self_layer_retirement_migration(palace):
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        ts = pt._now()
+        cur.execute("INSERT INTO entities (name, scope, created, updated) "
+                    "VALUES ('Krem', 'default', ?, ?)", (ts, ts))
+        eid = cur.lastrowid
+        cur.execute("INSERT INTO chunks (layer, scope, content, meta, created, "
+                    "updated) VALUES ('self', 'default', "
+                    "'an old identity note about Krem', "
+                    "json_object('noun_candidates', json_array('Krem')), ?, ?)",
+                    (ts, ts))
+        free = cur.lastrowid
+        cur.execute("INSERT INTO edges (src_type, src_id, dst_type, dst_id, "
+                    "kind, created) VALUES ('chunk', ?, 'entity', ?, "
+                    "'mentions', ?)", (free, eid, ts))
+        conn.commit()
+    st.write_section('default', 'values', 'honesty (important)')
+    sheet = _chunk('default', 'values')['id']
+
+    pt._db_initialized = False           # re-run the boot migration
+    assert pt._ensure_db()
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        layer, meta_raw = cur.execute(
+            'SELECT layer, meta FROM chunks WHERE id = ?', (free,)).fetchone()
+        meta = json.loads(meta_raw)
+        assert layer == 'events'                          # retagged
+        assert meta['was_self_layer'] is True             # reversible stamp
+        assert meta['noun_candidates'] == ['Krem']        # meta preserved
+        assert cur.execute(
+            "SELECT COUNT(*) FROM edges WHERE src_type = 'chunk' AND "
+            "src_id = ? AND dst_type = 'entity' AND dst_id = ?",
+            (free, eid)).fetchone()[0] == 1               # links intact
+        assert cur.execute('SELECT layer FROM chunks WHERE id = ?',
+                           (sheet,)).fetchone()[0] == 'self'   # sheet stays
+        assert cur.execute("SELECT COUNT(*) FROM ledger WHERE summary LIKE "
+                           "'%self layer retired%'").fetchone()[0] == 1
+
+    pt._db_initialized = False           # idempotent: second run is a no-op
+    assert pt._ensure_db()
+    with pt._get_connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM ledger WHERE summary LIKE "
+                            "'%self layer retired%'").fetchone()[0] == 1
+
+
+def test_self_retirement_skips_corrupt_meta_rows(palace):
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        ts = pt._now()
+        cur.execute("INSERT INTO chunks (layer, scope, content, meta, created, "
+                    "updated) VALUES ('self', 'default', "
+                    "'row with broken meta', 'not-json{', ?, ?)", (ts, ts))
+        broken = cur.lastrowid
+        conn.commit()
+    pt._db_initialized = False
+    assert pt._ensure_db()               # boot survives the bad row
+    with pt._get_connection() as conn:
+        layer, meta = conn.execute('SELECT layer, meta FROM chunks WHERE id = ?',
+                                   (broken,)).fetchone()
+    assert layer == 'self' and meta == 'not-json{'   # untouched, never clobbered

@@ -175,9 +175,14 @@ def import_data(body=None, **_):
                 "AND scope IN (?, 'global')", (name, scope)).fetchone()
             return row[0] if row else None
 
+        # Legacy 'self' files may carry free notes (the layer retired
+        # 2026-07-26) — those arrive as events, so the idempotency set must
+        # look in both layers or a re-import would duplicate them.
+        lay_set = ('self', 'events') if layer == 'self' else (layer,)
+        lph = ','.join('?' * len(lay_set))
         existing = {(r[0], r[1]) for r in cur.execute(
-            'SELECT content, created FROM chunks WHERE scope = ? AND layer = ?',
-            (scope, layer)).fetchall()}
+            f'SELECT content, created FROM chunks WHERE scope = ? '
+            f'AND layer IN ({lph})', (scope, *lay_set)).fetchall()}
         sections_taken = set()
         if layer == 'self':
             from plugins.mindpalace.tools import self_tools as st
@@ -203,12 +208,20 @@ def import_data(body=None, **_):
                     meta.pop(k, None)
             meta['import_src'] = data.get('scope')
             sec = meta.get('section')
-            if layer == 'self' and sec and not meta.get('superseded_at'):
-                if sec in sections_taken:
-                    meta['superseded_at'] = now   # arrives as history
-                    as_history += 1
-                else:
-                    sections_taken.add(sec)
+            row_layer = layer
+            if layer == 'self':
+                if sec and not meta.get('superseded_at'):
+                    if sec in sections_taken:
+                        meta['superseded_at'] = now   # arrives as history
+                        as_history += 1
+                    else:
+                        sections_taken.add(sec)
+                elif not sec:
+                    # Legacy free note: the migration's contract applied at
+                    # the door — lands in events wearing the stamp, instead
+                    # of sitting invisible until the next boot retag.
+                    meta['was_self_layer'] = True
+                    row_layer = 'events'
             entity_id = None
             if c.get('entity'):
                 entity_id = entity_id_of(c['entity']) or \
@@ -217,7 +230,7 @@ def import_data(body=None, **_):
                 'INSERT INTO chunks (layer, scope, content, entity_id, tier, label, '
                 'favorite, importance, private_key, meta, created, updated, '
                 'source, chunk_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (layer, scope, content, entity_id, c.get('tier'), c.get('label'),
+                (row_layer, scope, content, entity_id, c.get('tier'), c.get('label'),
                  1 if c.get('favorite') else 0, c.get('importance'),
                  c.get('private_key'), json.dumps(meta, ensure_ascii=False),
                  created, c.get('updated') or created,

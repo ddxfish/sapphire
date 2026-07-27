@@ -318,3 +318,72 @@ def test_entity_rename_validates_and_ledgers(palace):
         n = conn.execute("SELECT COUNT(*) FROM edges WHERE src_id=? AND dst_id=? "
                          "AND kind='mentions'", (cid, zid)).fetchone()[0]
     assert n == 1
+
+
+# ─── wipe_dates (the danger-zone date reset, 2026-07-24) ─────────────────────
+
+def test_wipe_dates_clears_every_verdict_and_keeps_refers(palace):
+    """Full date reset: regex-dated, librarian-ruled, and recurring all wiped
+    in one pass; refers_to_time survives (it gates the rebuild queue) and
+    content/other meta are untouched. The wipe lands in the ledger."""
+    rx = _save('lunch on 2026-08-01 with Zed')
+    _set(rx, meta={'md_v': 2, 'refers_to_time': ['2026-08-01'],
+                   'event_dates': ['2026-08-01'], 'event_date_src': 'regex'})
+    lib = _save('the regatta is next summer')
+    _set(lib, meta={'md_v': 2, 'refers_to_time': ['next summer'],
+                    'event_dates': ['2027-07-01'], 'event_date_src': 'librarian',
+                    'temporal_at': '2026-07-20T00:00:00+00:00'})
+    rec = _save('coffee every sunday morning')
+    _set(rec, meta={'md_v': 2, 'recurring_dates': ['weekly:sun']})
+    plain = _save('no dates here at all')
+    _set(plain, meta={'md_v': 2, 'stats': {'words': 5}})
+
+    out = browse.maintenance(body={'action': 'wipe_dates', 'scope': 'default',
+                                   'confirm': 'default'})
+    assert out.get('success') and out.get('wiped') == 3
+
+    for cid in (rx, lib, rec):
+        meta = json.loads(_row(cid)[2])
+        for key in ('event_dates', 'event_date_src', 'temporal_at',
+                    'recurring_dates'):
+            assert key not in meta, f'{key} survived on {cid}'
+    assert json.loads(_row(rx)[2])['refers_to_time'] == ['2026-08-01']
+    assert json.loads(_row(plain)[2]) == {'md_v': 2, 'stats': {'words': 5}}
+    with pt._get_connection() as conn:
+        led = conn.execute(
+            "SELECT summary FROM ledger WHERE scope='default' AND "
+            "action='maintenance' ORDER BY id DESC LIMIT 1").fetchone()
+    assert led and 'wiped all derived dates on 3' in led[0]
+
+
+def test_wipe_dates_requires_typed_confirm(palace):
+    cid = _save('dated thing on 2026-08-01')
+    _set(cid, meta={'md_v': 2, 'event_dates': ['2026-08-01'],
+                    'event_date_src': 'regex'})
+    out, code = browse.maintenance(body={'action': 'wipe_dates',
+                                         'scope': 'default'})
+    assert code == 400 and 'confirm' in out['error']
+    out, code = browse.maintenance(body={'action': 'wipe_dates',
+                                         'scope': 'default',
+                                         'confirm': 'wrong'})
+    assert code == 400
+    assert 'event_dates' in json.loads(_row(cid)[2])   # nothing wiped
+
+
+def test_wipe_dates_then_redate_regex_rebuilds_the_floor(palace):
+    """The rebuild path Krem will click: wipe → redate_regex restamps from
+    content, including chunks the librarian had ruled (verdict gone = floor
+    applies again)."""
+    cid = _save('dinner on 2026-09-15 at the lake house')
+    _set(cid, meta={'md_v': 2, 'refers_to_time': ['2026-09-15'],
+                    'event_dates': ['1999-01-01'],       # the poisoned date
+                    'event_date_src': 'librarian',
+                    'temporal_at': '2026-07-20T00:00:00+00:00'})
+    browse.maintenance(body={'action': 'wipe_dates', 'scope': 'default',
+                             'confirm': 'default'})
+    out = browse.maintenance(body={'action': 'redate_regex', 'scope': 'default'})
+    assert out.get('success')
+    meta = json.loads(_row(cid)[2])
+    assert meta.get('event_dates') == ['2026-09-15']     # rebuilt from content
+    assert meta.get('event_date_src') == 'regex'
+    assert 'temporal_at' not in meta                     # verdict stays open

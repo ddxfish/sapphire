@@ -68,6 +68,7 @@ def get_sheet(query=None, **_):
             'section': sec, 'content': row['content'],
             'fields': fields,
             'rows': _rows_of(row, fields, st.DEFAULT_SEP) if fields else None,
+            'link_fields': [fields[0]['key']] if fields else None,
             'width': 'half' if fields else 'third',
             'updated': row['updated'], 'history_count': history.get(sec, 0),
         })

@@ -276,10 +276,11 @@ def _optin_layers():
 # ─── Batch selectors (one per pass kind) ─────────────────────────────────────
 
 def build_batch(cursor, scope, what, limit):
-    """SORT. Oldest unprocessed first. 'self' = free self-layer chunks only
-    (sheet sections are hers to curate directly); 'all' adds the events layer
-    plus any librarian-opted-in plugin layers."""
-    layers = ('self',) if what == 'self' else ('events', 'self') + _optin_layers()
+    """SORT. Oldest unprocessed first: the events layer plus any librarian-
+    opted-in plugin layers. (Free self-layer notes retired into events
+    2026-07-26 — the sheet is hers to curate directly; the legacy what='self'
+    argument now selects the same pool as 'all'.)"""
+    layers = ('events',) + _optin_layers()
     ph = ','.join('?' * len(layers))
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
@@ -298,7 +299,7 @@ def build_temporal_batch(cursor, scope, limit):
     refers_to_time present, no temporal verdict yet (temporal_at), provenance
     regex-or-none. A librarian verdict is terminal — src='librarian' rows
     never requeue. Newest first: upcoming events are where the value lives."""
-    layers = ('events', 'self', 'goals') + _optin_layers()
+    layers = ('events', 'goals') + _optin_layers()
     ph = ','.join('?' * len(layers))
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
@@ -320,7 +321,7 @@ def build_link_batch(cursor, scope, limit):
     by set_links, dates-pass style: the verdict drains the queue). Newest
     first — recent memories name current people. Goals stay out: goal↔entity
     weaving is its own future project, not a side effect here."""
-    layers = ('events', 'self') + _optin_layers()
+    layers = ('events',) + _optin_layers()
     ph = ','.join('?' * len(layers))
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
@@ -339,7 +340,7 @@ def build_dedup_batch(cursor, scope, limit):
     mechanically after a completed pass). Oldest first — the backlog drains
     forward; a NEW duplicate of a checked chunk still surfaces because the
     new row is unchecked and drags its partner into the cluster."""
-    layers = ('events', 'self') + _optin_layers()
+    layers = ('events',) + _optin_layers()
     ph = ','.join('?' * len(layers))
     return cursor.execute(f'''
         SELECT id, layer, content, label, favorite, created, meta FROM chunks
@@ -378,7 +379,7 @@ def find_duplicates(cursor, scope, batch, threshold):
         batch_ids = {b[0] for b in batch}
         if not batch_ids:
             return {}
-        dup_layers = ('events', 'self') + _optin_layers()
+        dup_layers = ('events',) + _optin_layers()
         lph = ','.join('?' * len(dup_layers))
         cand = cursor.execute(f'''
             SELECT id, content, embedding, embedding_provider, embedding_dim
@@ -600,11 +601,14 @@ _FEAST_CHAR_BUDGET = 150_000    # ~37K tokens — far above today's shelf; a
 
 
 def _self_shelf_rows(scope, ids=None):
-    """Free self-layer facts (no section) — the material sort promoted as
-    'this is me'. Oldest first. `ids` narrows to a specific set (delta)."""
+    """The identity corpus — what she (or the old sort pass) filed as 'this
+    is about who I am'. Lives in events since the self-layer retirement
+    (2026-07-26), findable by the was_self_layer stamp, so the FEAST keeps
+    its raw material on installs that migrate before their first tending.
+    Oldest first. `ids` narrows to a specific set (delta)."""
     pt = _pt()
     q = ("SELECT id, created, content FROM chunks WHERE scope = ? "
-         "AND layer = 'self' AND json_extract(meta,'$.section') IS NULL "
+         "AND json_extract(meta,'$.was_self_layer') IS NOT NULL "
          "AND json_extract(meta,'$.pruned_at') IS NULL "
          "AND json_extract(meta,'$.superseded_at') IS NULL ")
     args = [scope]

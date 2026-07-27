@@ -235,12 +235,18 @@ def test_present_self_first_tending_when_sheet_empty(palace, monkeypatch):
 # ─── The Feast + the delta (Krem 2026-07-19) ────────────────────────────────
 
 def _shelf_fact(content, scope='default'):
-    """A free self-layer fact, promote-shaped: layer='self', no section."""
+    """Shelf material, post-retirement shape (2026-07-26): an events chunk
+    carrying the was_self_layer stamp — what the migration leaves behind."""
+    import json as _json
     msg, ok = pt._save_memory(content, scope)
     assert ok, msg
     cid = int(re.search(r'ID: (\d+)', msg).group(1))
     with pt._get_connection() as conn:
-        conn.execute("UPDATE chunks SET layer='self' WHERE id=?", (cid,))
+        raw = conn.execute("SELECT meta FROM chunks WHERE id=?", (cid,)).fetchone()[0]
+        meta = _json.loads(raw) if raw else {}
+        meta['was_self_layer'] = True
+        conn.execute("UPDATE chunks SET meta=? WHERE id=?",
+                     (_json.dumps(meta), cid))
         conn.commit()
     return cid
 

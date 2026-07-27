@@ -7,6 +7,7 @@
 
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -317,7 +318,8 @@ def list_entities(query=None, **_):
             '  (SELECT COUNT(*) FROM chunks c WHERE c.entity_id = e.id) AS chunk_count, '
             "  (SELECT COUNT(*) FROM edges d WHERE d.dst_type = 'entity' AND d.dst_id = e.id) AS edge_count, "
             '  (SELECT content FROM chunks c WHERE c.entity_id = e.id AND c.tier = 1 '
-            '   ORDER BY c.created DESC LIMIT 1) AS headline '
+            "   ORDER BY COALESCE(json_extract(c.meta, '$.headline'), 0) DESC, "
+            '   c.created DESC LIMIT 1) AS headline '
             'FROM entities e WHERE e.scope = ? '
             'ORDER BY edge_count DESC, e.name COLLATE NOCASE', (scope,)).fetchall()
     return {'entities': [
@@ -445,9 +447,15 @@ def update_entity(eid=None, body=None, **_):
         now = pt._now()
         headline_changed = False
         if 'headline' in b:
+            # Only the CURATED chunk (meta.headline) is edit-in-place; a
+            # librarian-promoted fact must never be clobbered by a
+            # description edit — before this guard, editing the description
+            # overwrote whatever tier-1 fact happened to be newest (Krem's
+            # jank find, 2026-07-24). No curated chunk yet → create one.
             text = str(b.get('headline') or '').strip()[:512]
             head = cur.execute(
                 "SELECT id FROM chunks WHERE entity_id = ? AND tier = 1 "
+                "AND json_extract(meta, '$.headline') IS NOT NULL "
                 "ORDER BY created DESC LIMIT 1", (eid,)).fetchone()
             if text:
                 if head:
@@ -689,6 +697,232 @@ def librarian_dedup_preview(query=None, **_):
                 for cl in clusters]}
 
 
+# ─── Human Dedup (Mind → Admin, 2026-07-26) ─────────────────────────────────
+# Mechanical candidate scans + a human-only entity fold. The librarian's
+# dedup pass stays the AI's lane (memories, similarity-gated merges); this
+# is the trusted-surface twin: the human sees each pair and decides.
+
+MAX_DEDUP_PAIRS = 50
+
+
+def _cosine_pairs(rows, thr):
+    """Highest-similarity pairs among embedded chunk rows, grouped by
+    (provider, dim) — cosine only compares like with like. rows carry
+    (id, content, created, layer, label, favorite, embedding, provider,
+    dim). Degrades to []."""
+    try:
+        import numpy as np
+        groups = {}
+        for r in rows:
+            v = np.frombuffer(r[6], dtype=np.float32)
+            if r[8] and v.shape[0] != r[8]:
+                continue
+            groups.setdefault((r[7], r[8]), []).append((r, v))
+        out = []
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            mat = np.stack([v for _r, v in members])
+            sims = mat @ mat.T
+            for i, j in np.argwhere(np.triu(sims >= thr, k=1)):
+                out.append((float(sims[i, j]), members[i][0], members[j][0]))
+        out.sort(key=lambda p: -p[0])
+        return out
+    except Exception as e:
+        logger.warning(f"[MINDPALACE] dedup pair scan failed: {e}")
+        return []
+
+
+def _entity_pairs(cur, scope):
+    """Same-scope entity pairs whose names look like the same thing —
+    the Sky/Skye class the exact-NOCASE door check can't catch. Fuzzy
+    ratio ≥ 0.75, containment (≥3 chars), or one's name already among the
+    other's nicknames. difflib, no model; the human rules on every pair."""
+    import difflib
+    rows = cur.execute(
+        'SELECT id, name, kind, mentions, created, meta FROM entities '
+        'WHERE scope = ? ORDER BY id', (scope,)).fetchall()
+    ents = []
+    for eid, name, kind, mentions, created, meta_raw in rows:
+        fields = (_parse_meta(meta_raw) or {}).get('fields') or {}
+        head = cur.execute(
+            "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
+            "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
+            "created DESC LIMIT 1", (eid,)).fetchone()
+        ents.append({'id': eid, 'name': name, 'kind': kind,
+                     'mentions': mentions or 0, 'created': created,
+                     'headline': (head[0][:200] if head else ''),
+                     'nfields': sum(1 for v in fields.values() if v),
+                     '_nicks': {n.strip().lower() for n in
+                                str(fields.get('nicknames') or '').split(',')
+                                if n.strip()}})
+    pairs = []
+    for i in range(len(ents)):
+        for j in range(i + 1, len(ents)):
+            a, b = ents[i], ents[j]
+            an, bn = a['name'].lower(), b['name'].lower()
+            sim = difflib.SequenceMatcher(None, an, bn).ratio()
+            if an in b['_nicks'] or bn in a['_nicks']:
+                sim = 1.0
+            elif (len(an) >= 3 and an in bn) or (len(bn) >= 3 and bn in an):
+                sim = max(sim, 0.9)
+            if sim >= 0.75:
+                pairs.append((round(sim, 3), a, b))
+    pairs.sort(key=lambda p: -p[0])
+    strip = lambda e: {k: v for k, v in e.items() if k != '_nicks'}
+    return {'what': 'entities', 'scope': scope, 'threshold': 0.75,
+            'scanned': len(ents), 'found': len(pairs),
+            'pairs': [{'sim': s, 'a': strip(a), 'b': strip(b)}
+                      for s, a, b in pairs[:MAX_DEDUP_PAIRS]]}
+
+
+def dedup_candidates(query=None, **_):
+    """GET dedup/candidates?scope=&what= — the Human Dedup scan, mechanical
+    and read-only. what='memories' (events+self+opt-in layers) or
+    'knowledge' pairs by stored-embedding cosine at the librarian merge
+    threshold; 'entities' pairs by name similarity. No LLM, no dedup_at
+    stamps, no cap spend — the human resolves each pair in the modal
+    (memories/knowledge → DELETE chunks/{id}, entities → POST
+    entities/merge). Favorites are shown flagged, never hidden: unlike the
+    librarian, this surface is trusted with them."""
+    q = query or {}
+    scope = (q.get('scope') or '').strip()
+    what = (q.get('what') or 'memories').strip()
+    if not scope:
+        return {'error': 'scope required'}, 400
+    if what not in ('memories', 'knowledge', 'entities'):
+        return {'error': 'what must be memories | knowledge | entities'}, 400
+    pt = _pt()
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        if what == 'entities':
+            return _entity_pairs(cur, scope)
+        from plugins.mindpalace.tools import librarian, librarian_tools as lt
+        layers = (('knowledge',) if what == 'knowledge'
+                  else ('events',) + librarian._optin_layers())
+        thr = lt._merge_threshold()
+        ph = ','.join('?' * len(layers))
+        rows = cur.execute(f'''
+            SELECT id, content, created, layer, label, favorite,
+                   embedding, embedding_provider, embedding_dim, meta
+            FROM chunks WHERE scope = ? AND layer IN ({ph})
+            AND embedding IS NOT NULL
+            AND (meta IS NULL OR (
+                json_extract(meta, '$.pruned_at') IS NULL
+                AND json_extract(meta, '$.section') IS NULL
+                AND json_extract(meta, '$.superseded_at') IS NULL))''',
+            (scope, *layers)).fetchall()
+        pairs = _cosine_pairs(rows, thr)
+    found = len(pairs)                     # no silent caps — say what dropped
+    pairs = pairs[:MAX_DEDUP_PAIRS]
+    def side(r):
+        return {'id': r[0], 'content': r[1][:600], 'created': r[2],
+                'layer': r[3], 'label': r[4], 'favorite': bool(r[5])}
+    out = []
+    for s, a, b in pairs:
+        ma, mb = _parse_meta(a[9]) or {}, _parse_meta(b[9]) or {}
+        # Lineage pairs surface FLAGGED: one side is a promotion/rewording of
+        # the other (often her third→first-person retelling) — the human
+        # should know they're judging her voice, not an accident.
+        lin = (ma.get('derived_from') == b[0] or mb.get('derived_from') == a[0]
+               or b[0] in (ma.get('promoted_to') or [])
+               or a[0] in (mb.get('promoted_to') or []))
+        out.append({'sim': round(s, 3), 'lineage': lin,
+                    'a': side(a), 'b': side(b)})
+    return {'what': what, 'scope': scope, 'threshold': thr,
+            'scanned': len(rows), 'found': found, 'pairs': out}
+
+
+def merge_entities(body=None, **_):
+    """POST entities/merge {keeper, loser} — Human Dedup's fold. Everything
+    the duplicate accumulated moves to the keeper: mention edges (deduped
+    after the repoint — edges has no UNIQUE constraint), tier chunks,
+    mention count, blank template fields. The duplicate's name and
+    nicknames join the keeper's nicknames, so the alias matcher folds
+    future mentions instead of re-minting the split — the merge closes the
+    leak, not just the puddle. If both carry a curated headline the
+    keeper's stays the card line (the loser's flag drops, its text
+    survives as a plain fact). Trusted UI surface; the AI has no
+    entity-merge verb (same rule as delete). Same scope only."""
+    pt = _pt()
+    if not pt._ensure_db():
+        return {'error': 'mind database unavailable'}, 500
+    b = body or {}
+    try:
+        keeper, loser = int(b.get('keeper')), int(b.get('loser'))
+    except (TypeError, ValueError):
+        return {'error': 'keeper and loser entity ids required'}, 400
+    if keeper == loser:
+        return {'error': 'keeper and loser must differ'}, 400
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        rows = {r[0]: r for r in cur.execute(
+            'SELECT id, name, scope, kind, mentions, meta FROM entities '
+            'WHERE id IN (?, ?)', (keeper, loser)).fetchall()}
+        if len(rows) != 2:
+            return {'error': 'Not found'}, 404
+        k, l = rows[keeper], rows[loser]
+        if k[2] != l[2]:
+            return {'error': 'entities live in different scopes'}, 400
+        k_head = cur.execute(
+            "SELECT id FROM chunks WHERE entity_id = ? AND tier = 1 "
+            "AND json_extract(meta, '$.headline') IS NOT NULL",
+            (keeper,)).fetchone()
+        if k_head:
+            cur.execute(
+                "UPDATE chunks SET meta = json_remove(meta, '$.headline') "
+                "WHERE entity_id = ? "
+                "AND json_extract(meta, '$.headline') IS NOT NULL", (loser,))
+        moved_chunks = cur.execute(
+            'UPDATE chunks SET entity_id = ? WHERE entity_id = ?',
+            (keeper, loser)).rowcount
+        moved_edges = 0
+        for col in ('src', 'dst'):
+            moved_edges += cur.execute(
+                f"UPDATE edges SET {col}_id = ? WHERE {col}_type = 'entity' "
+                f"AND {col}_id = ?", (keeper, loser)).rowcount
+        cur.execute('''
+            DELETE FROM edges WHERE id NOT IN (
+                SELECT MIN(id) FROM edges GROUP BY src_type, src_id,
+                dst_type, dst_id, kind)
+            AND ((src_type = 'entity' AND src_id = ?)
+                 OR (dst_type = 'entity' AND dst_id = ?))''',
+            (keeper, keeper))
+        km = _parse_meta(k[5]) or {}
+        lf = (_parse_meta(l[5]) or {}).get('fields') or {}
+        kf = km.get('fields') or {}
+        for key, val in lf.items():
+            if key != 'nicknames' and val and not kf.get(key):
+                kf[key] = val
+        nicks = [n.strip() for n in
+                 str(kf.get('nicknames') or '').split(',') if n.strip()]
+        seen_n = {n.lower() for n in nicks} | {k[1].lower()}
+        for cand in [l[1]] + [n.strip() for n in
+                              str(lf.get('nicknames') or '').split(',')]:
+            if cand and cand.lower() not in seen_n:
+                nicks.append(cand)
+                seen_n.add(cand.lower())
+        if nicks:
+            kf['nicknames'] = ', '.join(nicks)
+        km['fields'] = kf
+        cur.execute(
+            'UPDATE entities SET mentions = COALESCE(mentions, 0) + ?, '
+            'meta = ?, kind = COALESCE(kind, ?), updated = ? WHERE id = ?',
+            (l[4] or 0, json.dumps(km), l[3], pt._now(), keeper))
+        cur.execute('DELETE FROM entities WHERE id = ?', (loser,))
+        pt._ledger(k[2], 'user', 'update', layer='entities', target=keeper,
+                   cursor=cur,
+                   summary=(f'merged duplicate entity "{l[1]}" into "{k[1]}" '
+                            f'— {moved_edges} links + {moved_chunks} facts '
+                            f'moved, "{l[1]}" kept as nickname'))
+        conn.commit()
+    _publish('entities', k[2], 'update')
+    return {'success': True, 'keeper': keeper, 'name': k[1],
+            'moved_edges': moved_edges, 'moved_chunks': moved_chunks}
+
+
 def maintenance(body=None, **_):
     """Self-serve rescue actions (Mind → Admin). Every action is
     an UPDATE on metadata columns/keys — memory content is never touched and
@@ -721,6 +955,92 @@ def maintenance(body=None, **_):
                        summary=f'ledger cleared — {n} entries removed')
             conn.commit()
         return {'success': True, 'cleared': n}
+
+    if action == 'fold_promotion_clones':
+        # TRANSITION SCAFFOLDING (remove after every install has run it once).
+        # The old sort pass copied memories onto the self layer; the
+        # 2026-07-26 retirement moved the copies back beside their originals.
+        # Two clone classes, both proved by meta lineage (was_self_layer +
+        # derived_from), both requiring a live original:
+        #   identical (word-for-word after normalization) → deleted; nothing
+        #     is lost, the original carries the richer meta.
+        #   reworded (her third→first-person retellings) → deleted AND the
+        #     original re-queued for her sort pass (librarian_at cleared) —
+        #     she re-judges those 58 herself under the new architecture
+        #     instead of a human ruling on her voice pair by pair (Krem's
+        #     call 2026-07-26; Sapph pre-agreed to the test window).
+        # Favorited clones are NEVER touched. Typed-confirm, human-only.
+        if (b.get('confirm') or '') != scope:
+            return {'error': 'confirm must equal the scope name exactly'}, 400
+        norm = lambda s: re.sub(r'\s+', ' ', (s or '')).strip().lower()
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            info = {}
+            for cid, content, fav, meta_raw in cur.execute(
+                    "SELECT id, content, favorite, meta FROM chunks "
+                    "WHERE scope = ? AND layer = 'events'", (scope,)).fetchall():
+                info[cid] = (content, fav, _parse_meta(meta_raw) or {})
+            identical, reworded, kept = [], [], 0
+            for cid, (content, fav, m) in info.items():
+                src = m.get('derived_from')
+                if not m.get('was_self_layer') or not isinstance(src, int) \
+                        or src not in info:
+                    continue
+                if m.get('superseded_at') or m.get('pruned_at'):
+                    continue
+                sc, _sf, sm = info[src]
+                if sm.get('superseded_at') or sm.get('pruned_at'):
+                    continue   # original retired → the clone is the live copy
+                if fav:
+                    kept += 1
+                    continue
+                (identical if norm(content) == norm(sc)
+                 else reworded).append(cid)
+            folded = identical + reworded
+            requeue_srcs = {info[c][2]['derived_from'] for c in reworded}
+            if folded:
+                marks = ','.join('?' * len(folded))
+                cur.execute(f"DELETE FROM edges WHERE (src_type = 'chunk' AND "
+                            f"src_id IN ({marks})) OR (dst_type = 'chunk' AND "
+                            f"dst_id IN ({marks}))", folded + folded)
+                cur.execute(f'DELETE FROM chunks WHERE id IN ({marks})', folded)
+                # Scrub dangling promoted_to pointers on every survivor; clear
+                # the sort stamp only where her judgment is being re-asked.
+                gone = set(folded)
+                for cid in {info[c][2]['derived_from'] for c in folded}:
+                    m = dict(info[cid][2])
+                    changed = False
+                    left = [p for p in (m.get('promoted_to') or [])
+                            if p not in gone]
+                    if left != m.get('promoted_to'):
+                        if left:
+                            m['promoted_to'] = left
+                        else:
+                            m.pop('promoted_to', None)
+                        changed = True
+                    if cid in requeue_srcs and 'librarian_at' in m:
+                        m.pop('librarian_at')
+                        changed = True
+                    if changed:
+                        cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
+                                    (json.dumps(m, ensure_ascii=False), cid))
+                pt._ledger(scope, 'user', 'deleted', layer='events', cursor=cur,
+                           detail={'identical_ids': identical,
+                                   'reworded_ids': reworded,
+                                   'requeued_ids': sorted(requeue_srcs)},
+                           summary=(f'folded {len(identical)} identical and '
+                                    f'retired {len(reworded)} reworded '
+                                    f'promotion clone(s); {len(requeue_srcs)} '
+                                    f'original(s) re-queued for your sort '
+                                    f'pass — re-judge them in your own time'
+                                    + (f'; {kept} favorited kept' if kept
+                                       else '')))
+            conn.commit()
+        if folded:
+            _publish('events', scope, 'delete')
+        return {'success': True, 'folded_identical': len(identical),
+                'retired_reworded': len(reworded),
+                'requeued': len(requeue_srcs), 'kept_favorited': kept}
 
     if action == 'reset_importance':
         # Known-good state: favorites and permanent goals at 0.95 (the
@@ -1000,6 +1320,45 @@ def maintenance(body=None, **_):
         msg, ok = librarian.start(scope, kind='dates')
         return {'success': True, 'requeued': requeued,
                 'message': msg if ok else f'pass not started: {msg}'}
+
+    if action == 'wipe_dates':
+        # The danger-zone date reset (Krem, 2026-07-24): wipe EVERY derived
+        # date verdict in the scope — event_dates, src, librarian temporal
+        # stamps, recurring — so the date system can rebuild from zero
+        # (redate_regex → fresh floor, redate_model/nightly → refinement).
+        # Built for the poisoned-dates cleanup: pre-fix passes wrote bad
+        # dates that redate_model keeps as "current-best" and redate_regex
+        # treats as terminal verdicts — only a full wipe clears them.
+        # refers_to_time (the regex "mentions time" detector) survives; it
+        # gates the rebuild queue. Memory content is never touched.
+        if (b.get('confirm') or '') != scope:
+            return {'error': 'confirm must equal the scope name exactly'}, 400
+        wiped = 0
+        with pt._get_connection() as conn:
+            cur = conn.cursor()
+            rows = cur.execute(
+                "SELECT id, meta FROM chunks WHERE scope = ? "
+                "AND json_extract(meta, '$.superseded_at') IS NULL "
+                "AND (json_extract(meta, '$.event_dates') IS NOT NULL "
+                "     OR json_extract(meta, '$.event_date_src') IS NOT NULL "
+                "     OR json_extract(meta, '$.temporal_at') IS NOT NULL "
+                "     OR json_extract(meta, '$.recurring_dates') IS NOT NULL)",
+                (scope,)).fetchall()
+            for cid, raw in rows:
+                meta = _parse_meta(raw) or {}
+                for key in ('event_dates', 'event_date_src', 'temporal_at',
+                            'recurring_dates'):
+                    meta.pop(key, None)
+                cur.execute('UPDATE chunks SET meta = ? WHERE id = ?',
+                            (json.dumps(meta, ensure_ascii=False), cid))
+                wiped += 1
+            if wiped:
+                pt._ledger(scope, 'user', 'maintenance', cursor=cur,
+                           summary=f'wiped all derived dates on {wiped} '
+                                   f'memories — date system reset for rebuild')
+            conn.commit()
+        _publish('events', scope, 'update')
+        return {'success': True, 'wiped': wiped}
 
     return {'error': f'Unknown maintenance action: {action}'}, 400
 

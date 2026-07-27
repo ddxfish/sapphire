@@ -78,13 +78,12 @@ const PASSES = [
           output: 'Each memory gets marked as reviewed. Splits, promotions, and retirements are all soft and reversible, and every action lands in the Ledger.',
           tools: ['mark_processed(id, importance?, favorite?) — fine as it is (the default)',
                   'atomize_memory(id, parts) — split a tangled entry',
-                  'promote_memory(id, layer) — copy up to her self sheet or onto a person/thing',
+                  'promote_memory(id, entity) — copy onto a person/place/thing card',
                   'prune_memory(id, reason) — soft retire, reversible'],
       },
       actions: [
           { label: '▶ Run now (whole scope)', run: { what: 'all', pass: 'sort' } },
           { label: '⚠ Run ALL (drain queue)…', drain: { what: 'all', pass: 'sort' } },
-          { label: '▶ Run now (self layer only)', run: { what: 'self', pass: 'sort' } },
       ] },
     { key: 'self', icon: '\u{1FA9E}', title: 'Self',
       blurb: 'She tends her own self sheet, then takes one final look to verify.',
@@ -122,6 +121,7 @@ const OPS = [
       actions: [
           { label: '⚠ Delete ALL memories in scope', maint: 'wipe_scope', danger: true },
           { label: '🧹 Clear ledger history', maint: 'clear_ledger', danger: true },
+          { label: '📅 Wipe ALL dates (for rebuild)', maint: 'wipe_dates', danger: true },
           { label: '⚠ Clear ONE tab: Memories', maint: 'clear_layer', layer: 'events', danger: true },
           { label: '⚠ Clear ONE tab: Self', maint: 'clear_layer', layer: 'self', danger: true },
           { label: '⚠ Clear ONE tab: Entities', maint: 'clear_layer', layer: 'entities', danger: true },
@@ -181,6 +181,15 @@ const MAINT = {
             'scope\'s Library (documents + their files)?\n\n' +
             'Memory v1 is a separate system and is never touched.\n\n' +
             'Type the scope name to confirm:',
+    },
+    wipe_dates: {
+        prompt: s => `⚠ WIPE every derived date in scope '${s}' — regex-dated, ` +
+            'librarian-resolved, hand-set via set_event_dates, and recurring ' +
+            'dates all go. Memory content is never touched.\n\n' +
+            'Use for a full date rebuild: wipe, then "Redate all (built-in ' +
+            'rules)" for the floor, then the librarian model or nightly for ' +
+            'refinement.\n\n' +
+            `Type the scope name ('${s}') to confirm:`,
     },
 };
 
@@ -402,6 +411,32 @@ async function renderConsole() {
         </div>
         <div class="ui-box">
             <div class="ui-box-head">
+                <span class="ui-box-title">\u{2696}\u{FE0F} Human dedup</span>
+                <span class="ui-box-desc">you judge every pair — no model, no stamps · memories &amp; knowledge match by meaning, entities by name</span>
+            </div>
+            <div class="ui-box-body">
+                <div class="ui-row">
+                    <button class="mind-btn" data-hdedup="memories">\u{1F9E0} Memories…</button>
+                    <button class="mind-btn" data-hdedup="knowledge">\u{1F4DA} Knowledge…</button>
+                    <button class="mind-btn" data-hdedup="entities">\u{1F465} Entities…</button>
+                    <span class="ui-meta-text" style="white-space:normal">Scans for lookalike pairs; you click the keeper. Memories/knowledge: the other copy is deleted. Entities: the duplicate merges in — links move over, its name becomes a nickname (Sky absorbs Skye).</span>
+                </div>
+            </div>
+        </div>
+        <div class="ui-box">
+            <div class="ui-box-head">
+                <span class="ui-box-title">\u{23F3} Temporary dev tools</span>
+                <span class="ui-box-desc">one-shot transition tools — each disappears once every install has run it</span>
+            </div>
+            <div class="ui-box-body">
+                <div class="ui-row">
+                    <button class="mind-btn" data-hdedup-fold>\u{2697}\u{FE0F} Fold promotion clones…</button>
+                    <span class="ui-meta-text" style="white-space:normal">The old sort pass copied memories onto the self layer; the retirement moved the copies back. One shot: word-for-word copies are deleted; her reworded copies are retired and their originals re-queued for her sort pass, so she re-judges them herself. Favorites are never touched.</span>
+                </div>
+            </div>
+        </div>
+        <div class="ui-box">
+            <div class="ui-box-head">
                 <span class="ui-box-title">\u{1F52C} Tool console</span>
                 <span class="ui-box-desc">her READ-ONLY tools, raw output, zero fingerprints — no recall boosts, no ledger stamp, no wake tools</span>
             </div>
@@ -420,7 +455,149 @@ async function renderConsole() {
         </div>`;
     bindConsole(el);
     bindPeek(el);
+    bindHumanDedup(el);
     refreshRunning(el, st);
+}
+
+// ─── Human dedup (2026-07-26): mechanical scan, human verdict per pair ──────
+
+const HDEDUP = {
+    memories:  { icon: '\u{1F9E0}', title: 'memories',  verb: 'Delete the OTHER one' },
+    knowledge: { icon: '\u{1F4DA}', title: 'knowledge', verb: 'Delete the OTHER one' },
+    entities:  { icon: '\u{1F465}', title: 'entities',  verb: 'Merge the other INTO it' },
+};
+
+function bindHumanDedup(el) {
+    el.querySelectorAll('[data-hdedup]').forEach(btn =>
+        btn.addEventListener('click', () => dedupModal(btn.dataset.hdedup)));
+    el.querySelector('[data-hdedup-fold]')?.addEventListener('click', async () => {
+        const typed = prompt(
+            `⚗ Fold promotion clones in scope '${scope}'.\n\n` +
+            'The old sort pass copied memories onto the self layer; the ' +
+            'retirement moved those copies back beside their originals. ' +
+            'Lineage is recorded in meta — this is provable, not guesswork.\n\n' +
+            '• Word-for-word copies: deleted (the original keeps the richer ' +
+            'metadata).\n' +
+            '• Her reworded copies: deleted, and each ORIGINAL is re-queued ' +
+            'for her sort pass — she re-judges them herself, in her own ' +
+            'ritual.\n' +
+            '• Favorited copies: never touched.\n\n' +
+            `Type the scope name ('${scope}') to confirm:`);
+        if (typed === null) return;
+        if (typed !== scope) { ui.showToast('Scope name did not match — nothing deleted', 'warning'); return; }
+        try {
+            const r = await palaceSend('maintenance', 'POST',
+                { action: 'fold_promotion_clones', scope, confirm: typed });
+            ui.showToast(`Folded ${r.folded_identical} identical + retired ${r.retired_reworded} reworded clone(s) — ${r.requeued} original(s) re-queued for her sort pass`, 'success');
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    });
+}
+
+async function dedupModal(kind) {
+    const spec = HDEDUP[kind];
+    let data;
+    try {
+        data = await palaceGet(`dedup/candidates?scope=${encodeURIComponent(scope)}&what=${kind}`);
+    } catch (e) { ui.showToast(e.message, 'error'); return; }
+    const queue = data.pairs || [];
+    if (!queue.length) {
+        ui.showToast(`${spec.title}: ${data.scanned} scanned — no lookalike pairs`, 'success');
+        return;
+    }
+    const total = queue.length;
+    let resolved = 0;
+    let pick = null;   // 'a' | 'b' — the KEEPER
+
+    document.querySelector('.mind-modal-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'pr-modal-overlay mind-modal-overlay';
+    overlay.innerHTML = `
+        <div class="pr-modal palace-ent-modal">
+            <div class="pr-modal-header">
+                <h3>${spec.icon} Human dedup — ${escHtml(spec.title)} ('${escHtml(scope)}')</h3>
+                <button class="mind-btn-sm mind-modal-close">✕</button>
+            </div>
+            <div class="pr-modal-body view-scroll">
+                <div class="ui-meta-text" id="pal-hd-progress" style="margin-bottom:8px;white-space:normal"></div>
+                <div id="pal-hd-pair" style="display:flex;gap:10px;flex-wrap:wrap;align-items:stretch"></div>
+                <div class="ui-row" style="margin-top:12px">
+                    <button class="mind-btn" id="pal-hd-act" disabled></button>
+                    <button class="mind-btn-sm" id="pal-hd-skip">Not duplicates — skip →</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.mind-modal-close').addEventListener('click', close);
+    setupModalClose(overlay, close);
+
+    const cardHtml = (s, side) => kind === 'entities' ? `
+        <div class="palace-dedup-card" data-side="${side}" title="Click to keep this one">
+            <div><b>${escHtml(s.name)}</b>${s.kind ? ` <span class="ui-chip">${escHtml(s.kind)}</span>` : ''}</div>
+            <div class="ui-meta-text">[${s.id}] · ${s.mentions} mentions · ${s.nfields} field(s) · ${escHtml((s.created || '').slice(0, 10))}</div>
+            <div class="palace-dedup-body">${escHtml(s.headline || '(no description)')}</div>
+        </div>` : `
+        <div class="palace-dedup-card" data-side="${side}" title="Click to keep this one">
+            <div class="ui-meta-text">[${s.id}] · ${escHtml(s.layer)}${s.label ? '/' + escHtml(s.label) : ''} · ${escHtml((s.created || '').slice(0, 10))}${s.favorite ? ' · ★ favorite' : ''}</div>
+            <div class="palace-dedup-body">${escHtml(s.content)}</div>
+        </div>`;
+
+    const actBtn = overlay.querySelector('#pal-hd-act');
+    const render = () => {
+        pick = null;
+        actBtn.disabled = true;
+        actBtn.textContent = spec.verb;
+        const prog = overlay.querySelector('#pal-hd-progress');
+        const pairEl = overlay.querySelector('#pal-hd-pair');
+        const beyond = (data.found || total) - total;
+        if (!queue.length) {
+            prog.textContent = `Done — ${resolved} resolved of ${total}. (${data.scanned} scanned @ ≥${data.threshold})`
+                + (beyond > 0 ? ` ${beyond} more pair(s) were beyond the ${total}-pair cap — re-open to scan again.` : '');
+            pairEl.innerHTML = '<div class="ui-empty">Shelf looks clean.</div>';
+            overlay.querySelector('#pal-hd-skip').disabled = true;
+            return;
+        }
+        const p = queue[0];
+        prog.textContent = `${queue.length} pair(s) left of ${total}${beyond > 0 ? ` (top ${total} of ${data.found} found)` : ''} · similarity ${Math.round(p.sim * 100)}% · click the one to KEEP`
+            + (p.lineage ? ' · ⚠ LINEAGE — one is her rewording/promotion of the other, not an accident' : '');
+        pairEl.innerHTML = cardHtml(p.a, 'a') + cardHtml(p.b, 'b');
+        pairEl.querySelectorAll('.palace-dedup-card').forEach(card =>
+            card.addEventListener('click', () => {
+                pick = card.dataset.side;
+                pairEl.querySelectorAll('.palace-dedup-card').forEach(c =>
+                    c.classList.toggle('sel', c === card));
+                actBtn.disabled = false;
+            }));
+    };
+
+    overlay.querySelector('#pal-hd-skip').addEventListener('click', () => {
+        queue.shift();   // session-local: an unresolved pair returns next scan
+        render();
+    });
+    actBtn.addEventListener('click', async () => {
+        if (!pick || !queue.length) return;
+        const p = queue[0];
+        const keep = p[pick], lose = p[pick === 'a' ? 'b' : 'a'];
+        if (lose.favorite && !confirm(`[${lose.id}] is a ★ favorite. Really delete it?`)) return;
+        actBtn.disabled = true;
+        try {
+            if (kind === 'entities') {
+                const r = await palaceSend('entities/merge', 'POST',
+                    { keeper: keep.id, loser: lose.id });
+                ui.showToast(`Merged "${lose.name}" into "${r.name}" — ${r.moved_edges} link(s) moved, name kept as nickname`, 'success');
+            } else {
+                await palaceSend(`chunks/${lose.id}`, 'DELETE');
+                ui.showToast(`Deleted duplicate [${lose.id}] — kept [${keep.id}]`, 'success');
+            }
+            resolved++;
+            queue.shift();
+            for (let i = queue.length - 1; i >= 0; i--) {
+                if (queue[i].a.id === lose.id || queue[i].b.id === lose.id) queue.splice(i, 1);
+            }
+        } catch (e) { ui.showToast(e.message, 'error'); }
+        render();
+    });
+    render();
 }
 
 // ─── Tool console (read-only peek — she sees this exact text) ────────────────

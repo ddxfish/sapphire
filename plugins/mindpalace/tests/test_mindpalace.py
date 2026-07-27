@@ -141,13 +141,15 @@ def test_round_trip_save_search_recent_delete(palace):
 # ─── C. Layers ────────────────────────────────────────────────────────────────
 
 def test_layer_self_and_knowledge(palace):
-    _, ok1 = palace._save_memory("I decided to keep my name", scope="default", layer="self")
+    smsg, ok1 = palace._save_memory("I decided to keep my name", scope="default", layer="self")
     assert ok1
+    assert "the self layer retired" in smsg    # 2026-07-26: redirect, told honestly
     kmsg, ok2 = palace._save_memory("Python released in 1991", scope="default", layer="knowledge")
     assert ok2
     assert "Saved to the library" in kmsg      # v3: knowledge = the Library
     rmsg, _ = palace._get_recent_memories(scope="default")
-    assert "[self]" in rmsg
+    assert "[events]" in rmsg                  # self saves land in events now
+    assert "[self]" not in rmsg
     assert "[knowledge]" not in rmsg           # no knowledge chunks anymore
 
 
@@ -205,28 +207,32 @@ def test_invalid_layer_friendly_error(palace):
 
 def test_layer_filter_on_reads(palace):
     palace._save_memory("event row", scope="default", layer="events")
+    # Self saves land in events since the layer retired (2026-07-26) — the
+    # filter contract is pinned against an entity fact instead.
     palace._save_memory("self row", scope="default", layer="self")
+    palace._save_memory("entity fact row", scope="default", layer="entities",
+                        entity="Zebra")
 
-    # recent restricted to events
+    # recent restricted to events — both saves above landed there
     rmsg, _ = palace._get_recent_memories(scope="default", layer="events")
-    assert "event row" in rmsg
-    assert "self row" not in rmsg
+    assert "event row" in rmsg and "self row" in rmsg
+    assert "entity fact row" not in rmsg
 
-    # recent restricted to self
+    # recent restricted to self: nothing lives there but the sheet
     rmsg2, _ = palace._get_recent_memories(scope="default", layer="self")
-    assert "self row" in rmsg2
-    assert "event row" not in rmsg2
+    assert "self row" not in rmsg2 and "event row" not in rmsg2
 
-    # omitting layer returns both
+    # omitting layer returns everything
     rall, _ = palace._get_recent_memories(scope="default")
     assert "event row" in rall
     assert "self row" in rall
+    assert "entity fact row" in rall
 
-    # search restricted to layer
+    # search restricted to layer — self row lives in events now too
     smsg, sok = palace._search_memory("row", scope="default", layer="events")
     assert sok
-    assert "event row" in smsg
-    assert "self row" not in smsg
+    assert "event row" in smsg and "self row" in smsg
+    assert "entity fact row" not in smsg
 
 
 # ─── E. Scope isolation + global overlay ─────────────────────────────────────

@@ -8970,6 +8970,19 @@ a.gallery-caption:hover {
 }
 .palace-row-imp input { accent-color: #c39df5; margin: 0; }
 .palace-row-imp:has(input:checked) { color: #c39df5; }
+.palace-dedup-card {
+    flex: 1 1 260px; min-width: 220px; cursor: pointer; user-select: none;
+    background: var(--input-bg, #16172a); border: 1px solid var(--border, #2a2b3e);
+    border-radius: 8px; padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 4px;
+}
+.palace-dedup-card:hover { border-color: #c39df5; }
+.palace-dedup-card.sel { border-color: #c39df5; box-shadow: 0 0 0 1px #c39df5; }
+.palace-dedup-card.sel::after { content: '✓ keeping this one'; font-size: 11px; color: #c39df5; }
+.palace-dedup-body {
+    font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
+    max-height: 220px; overflow-y: auto;
+}
 .palace-row-head { margin-bottom: 2px; }
 .palace-row-head span { font-size: 11px; color: var(--text-muted, #888); padding: 0 2px; }
 .palace-addbox-label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--text, #e6e6f0); }

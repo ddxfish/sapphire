@@ -512,9 +512,11 @@ def test_batch_selection_excludes_processed_pruned_and_sheet(palace):
         ids_all = [r[0] for r in eng.build_batch(cur, 'default', 'all', 50)]
         assert a in ids_all and c in ids_all
         assert b not in ids_all and d not in ids_all
-        assert all(r[1] in ('events', 'self') for r in eng.build_batch(cur, 'default', 'all', 50))
+        # Self layer retired (2026-07-26): everything sortable is events, and
+        # the legacy what='self' argument selects the same pool as 'all'.
+        assert all(r[1] == 'events' for r in eng.build_batch(cur, 'default', 'all', 50))
         ids_self = [r[0] for r in eng.build_batch(cur, 'default', 'self', 50)]
-        assert ids_self == [c]
+        assert set(ids_self) == set(ids_all)
 
 
 def test_daily_cap_refuses(palace):

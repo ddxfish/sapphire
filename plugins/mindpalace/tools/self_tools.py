@@ -595,8 +595,9 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
             # One shared seen-set dedups the whole composite: recents claim
             # first, important skips them, the spider skips both.
             seen = set()
-            if depth:
-                block = _wake_goals(cursor, scope, depth)
+            seen_ents = set()   # entities already carded above — the spider
+            if depth:           # must not re-headline them (Krem's 4×-phone
+                block = _wake_goals(cursor, scope, depth)   # find, 2026-07-25)
                 if block:
                     out.append(block)
                 block = _wake_recent(pt, scope, depth)
@@ -604,7 +605,8 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
                     out.append(block)
                     seen.update(int(m) for m in
                                 re.findall(r'^\[(\d+)\]', block, re.MULTILINE))
-                block = _wake_important(pt, cursor, scope, depth, seen)
+                block = _wake_important(pt, cursor, scope, depth, seen,
+                                        seen_ents)
                 if block:
                     out.append(block)
             if empty:
@@ -612,7 +614,7 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
                            f"update_self(section, content) fills them.")
             text = "\n".join(out)
             text += _self_spider(pt, scope, _self_seed_ids(cursor, scope), depth,
-                                 exclude_ids=seen)
+                                 exclude_ids=seen, exclude_entity_ids=seen_ents)
             if depth and extra_tools:
                 block = _wake_tools_block(pt, scope)
                 if block:
@@ -624,20 +626,24 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
 
 
 def _self_seed_ids(cursor, scope):
-    """All current (non-superseded) self-layer chunks in scope — sheet
-    sections AND free save_memory(layer='self') entries. The whole L0 is the
-    wake epicenter, not just the curated sheet (which may not exist yet)."""
+    """Wake epicenter: the curated sheet's current sections — their
+    (important) marks govern what links, so the marks govern the whole
+    wake. Free self notes retired into events (2026-07-26, Sapph's
+    consent); an unwritten sheet seeds nothing until it's written."""
     rows = cursor.execute(
         "SELECT id FROM chunks WHERE layer = 'self' AND scope = ? "
-        "AND (meta IS NULL OR json_extract(meta, '$.superseded_at') IS NULL)",
+        "AND json_extract(meta, '$.section') IS NOT NULL "
+        "AND json_extract(meta, '$.superseded_at') IS NULL",
         (scope,)).fetchall()
     return [r[0] for r in rows]
 
 
-def _self_spider(pt, scope, seed_ids, depth, exclude_ids=()):
+def _self_spider(pt, scope, seed_ids, depth, exclude_ids=(),
+                 exclude_entity_ids=()):
     """The wake walk: spider outward from the self layer. Depth capped at 2 —
     on this graph 3 walks most of the mind (Krem, 2026-07-11). exclude_ids =
-    memories earlier wake blocks already showed (composite dedup). Degrades
+    memories earlier wake blocks already showed; exclude_entity_ids =
+    entities already carded (composite dedup, both directions). Degrades
     to '' — depth can never break a working read_self."""
     if not depth or not seed_ids:
         return ''
@@ -645,7 +651,8 @@ def _self_spider(pt, scope, seed_ids, depth, exclude_ids=()):
         depth = min(int(depth), 2)
         from plugins.mindpalace.tools import spider
         block = spider.spider_from_chunks(pt, scope, None, seed_ids, depth,
-                                          exclude_ids=exclude_ids)
+                                          exclude_ids=exclude_ids,
+                                          exclude_entity_ids=exclude_entity_ids)
         return f"\n\n{block}" if block else ''
     except Exception as e:
         logger.warning(f"[MINDPALACE] read_self spider failed (sheet unaffected): {e}")
@@ -802,12 +809,13 @@ def _entity_memories(pt, cursor, scope, name, per, seen, eid=None):
     return [r for r in rows if r[0] not in seen][:per]
 
 
-def _wake_important(pt, cursor, scope, depth, seen):
+def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
     """One group per sheet item, headed by the item itself — the heading
-    tells her WHY each memory surfaced. Claims its ids into `seen` (composite
-    dedup: nothing repeats across recents/important/spider). Deliberately no
-    recall boost — a ritual wake read is ambient, not a deliberate recall
-    (the spider's rich-get-richer guard, same reasoning). Degrades to ''."""
+    tells her WHY each memory surfaced. Claims its ids into `seen` and its
+    carded entities into `seen_ents` (composite dedup: nothing repeats
+    across recents/important/spider). Deliberately no recall boost — a
+    ritual wake read is ambient, not a deliberate recall (the spider's
+    rich-get-richer guard, same reasoning). Degrades to ''."""
     per = _important_per_item(depth)
     if not per:
         return ''
@@ -847,6 +855,8 @@ def _wake_important(pt, cursor, scope, depth, seen):
                     eid = _resolve_entity(cursor, scope, term)
                     if eid:
                         card = pt._entity_card(cursor, eid)
+                        if card and seen_ents is not None:
+                            seen_ents.add(eid)
                     hits = _entity_memories(pt, cursor, scope, term, per, seen,
                                             eid=eid)
                     if not hits:   # a name without an entity → meaning fallback
@@ -1200,6 +1210,15 @@ def write_section(scope, section, content, fields_spec=None):
             # shared with backfill so the rule can't drift. Full content
             # still gets embeddings, stats, and display.
             link_fields = (spec or {}).get('link_fields')
+            if link_fields is None and fields and sec not in SECTIONS:
+                # Custom structured boxes (2026-07-24): the first column IS
+                # the key, so it carries the same salience contract as the
+                # typed lists — (important) rows spider by their key, the
+                # other columns never do. Custom PROSE boxes stay ambient
+                # (whole content links) — lists carry salience, prose
+                # doesn't; a box that wants per-item marks wants to be a
+                # list.
+                link_fields = [fields[0]['key']]
             link_text = content
 
             # Tier A metadata + entity linking — the _save_memory idiom.

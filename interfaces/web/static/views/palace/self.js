@@ -90,12 +90,13 @@ async function renderSheet() {
 
     const customCard = (c) => {
         const base = { ...c, title: `[${c.section}]`, mode: 'hand', versioned: false, custom: true,
-                       hint: c.fields ? 'custom list' : 'custom box' };
+                       hint: c.fields ? 'custom list — ★ rows spider at wake' : 'custom box' };
         return c.fields ? structCard(base) : sectionCard(base);
     };
     const localCard = (b) => b.fields
         ? structCard({ section: b.section, title: `[${b.section}]`, hint: 'custom list — saves when you add rows',
-                       mode: 'hand', custom: true, fields: b.fields, rows: [], width: 'half', history_count: 0 })
+                       mode: 'hand', custom: true, fields: b.fields, rows: [], width: 'half', history_count: 0,
+                       link_fields: b.fields.length ? [b.fields[0].key] : null })
         : sectionCard({ section: b.section, title: `[${b.section}]`, hint: 'custom box — saves when you write',
                         mode: 'hand', custom: true, content: '', width: 'third', history_count: 0 });
 

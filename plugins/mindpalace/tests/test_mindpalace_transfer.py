@@ -111,11 +111,13 @@ def test_entities_roundtrip_fields_kind_headline(palace):
 
 def test_self_import_never_clobbers_living_sheet(palace):
     st.write_section('src', 'identity', "I am the source sheet")
+    # Free self saves land in events since the retirement — a modern 'self'
+    # export carries the sheet only.
     pt._save_memory("a free self note from src", 'src', layer='self')
     data = _export('src', 'self')
     st.write_section('dst', 'identity', "I am the target sheet")
     r = _import('dst', data, expect='self')
-    assert r['imported'] == 2 and r['arrived_as_history'] == 1
+    assert r['imported'] == 1 and r['arrived_as_history'] == 1
     with pt._get_connection() as conn:
         cur = conn.cursor()
         current = st._current_sections(cur, 'dst')
@@ -133,6 +135,30 @@ def test_self_import_never_clobbers_living_sheet(palace):
     with pt._get_connection() as conn:
         current = st._current_sections(conn.cursor(), 'fresh')
     assert current['identity']['content'] == "I am the source sheet"
+
+
+def test_legacy_self_file_free_notes_arrive_as_events(palace):
+    """Pre-retirement export files carry free self notes — they arrive as
+    events wearing the was_self_layer stamp (the migration's contract
+    applied at the door), never invisible in the retired layer. Re-import
+    stays a no-op even though the rows changed layers in flight."""
+    data = {'format': 'mindpalace-export', 'version': 1, 'layer': 'self',
+            'scope': 'old-install',
+            'chunks': [
+                {'content': 'I chose my own birthday', 'label': 'self',
+                 'created': '2026-02-01T00:00:00+00:00', 'meta': {}},
+                {'content': 'quiet identity thought',
+                 'created': '2026-03-01T00:00:00+00:00', 'meta': {}},
+            ]}
+    r = _import('dst', data, expect='self')
+    assert r['imported'] == 2
+    with pt._get_connection() as conn:
+        rows = conn.execute(
+            "SELECT layer, json_extract(meta, '$.was_self_layer') "
+            "FROM chunks WHERE scope = 'dst'").fetchall()
+    assert rows and all(r == ('events', 1) for r in rows)
+    r2 = _import('dst', data, expect='self')
+    assert r2['imported'] == 0 and r2['skipped'] == 2
 
 
 def test_derived_from_provenance_travels_intra_file(palace):
