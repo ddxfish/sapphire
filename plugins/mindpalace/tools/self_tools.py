@@ -64,17 +64,22 @@ SECTIONS = {
                       'sep': ' — ', 'link_fields': ['name'],
                       'fields': [{'key': 'name', 'label': 'Name'},
                                  {'key': 'why', 'label': 'Why they matter'}]},
+    # link_fields = the field that carries the row's IDENTITY — concept for
+    # values, name for relationships… and for handles it's the VALUE (the
+    # entity lives in 'Company: Sapphire Blue AI LLC', not in the label).
+    # The star is the uniform lever; the column is per-section spec.
     'handles':       {'mode': 'hand', 'versioned': True, 'width': 'half',
-                      'title': 'Handles', 'hint': 'key: value — urls, socials, numbers',
-                      'sep': ': ',
+                      'title': 'Handles',
+                      'hint': 'key: value — urls, socials, numbers; add (important) to spider at wake',
+                      'sep': ': ', 'link_fields': ['value'],
                       'fields': [{'key': 'key', 'label': 'Key'},
                                  {'key': 'value', 'label': 'Value'}]},
     'terms':         {'mode': 'hand', 'versioned': True, 'width': 'wide',
                       'title': 'Terms & Concepts',
-                      'hint': 'Term: what it means — your shared vocabulary',
-                      'sep': ': ',
+                      'hint': 'Term: what it means — your shared vocabulary; add (important) to spider at wake',
+                      'sep': ': ', 'link_fields': ['term'],
                       'fields': [{'key': 'term', 'label': 'Term'},
-                                 {'key': 'meaning', 'label': 'Meaning'}]},
+                                 {'key': 'meaning', 'label': 'Meaning (no spider)'}]},
     'voice':         {'mode': 'hand', 'versioned': True, 'width': 'third',
                       'title': 'Voice', 'hint': 'your tone and register'},
     'origin':        {'mode': 'hand', 'versioned': True, 'width': 'third',
@@ -600,6 +605,11 @@ def _read_self(scope, section=None, depth=0, extra_tools=True, stamp=True):
                 block = _wake_goals(cursor, scope, depth)   # find, 2026-07-25)
                 if block:
                     out.append(block)
+                    # Goal ids claim into the seen-set too — at depth 2 a
+                    # goal chunk is spider-reachable and would re-render in
+                    # Connected memories (Lane-3 scout, 2026-07-27).
+                    seen.update(int(m) for m in
+                                re.findall(r'\[(\d+)\]', block))
                 block = _wake_recent(pt, scope, depth)
                 if block:
                     out.append(block)
@@ -867,6 +877,7 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
                     skipped.append(term)
                     continue
                 card = []
+                eid = None
                 if sec == 'relationships':
                     # Her people arrive card-first: headline + template
                     # fields (the wake seam — she won't search you directly),
@@ -874,8 +885,6 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
                     eid = _resolve_entity(cursor, scope, term)
                     if eid:
                         card = pt._entity_card(cursor, eid)
-                        if card and seen_ents is not None:
-                            seen_ents.add(eid)
                     hits = _entity_memories(pt, cursor, scope, term, per, seen,
                                             eid=eid)
                     if not hits:   # a name without an entity → meaning fallback
@@ -883,6 +892,12 @@ def _wake_important(pt, cursor, scope, depth, seen, seen_ents=None):
                 else:
                     hits = _semantic_memories(pt, scope, term, per, seen)
                 if hits or card:
+                    # The group SHOWS → the spider must not re-list its
+                    # person. Gated on shown-anything, not on the card —
+                    # an uncarded person with memories was printing twice
+                    # (Lane-3 scout, 2026-07-27).
+                    if eid and seen_ents is not None:
+                        seen_ents.add(eid)
                     seen.update(h[0] for h in hits)
                     lines = [f"— {_trim(term, _IMPORTANT_TERM_CHARS)}:"]
                     lines += card
@@ -1017,7 +1032,10 @@ def _log_self_change(cursor, pt, scope, sec, old, new, structured):
 
 
 def _parse_handles(content):
-    """'key: value' lines → pairs list. Malformed lines are dropped."""
+    """'key: value' lines → pairs list. Malformed lines are dropped. The
+    '(important)' mark is stripped from either side into row['important'] —
+    before this, starring a handles line baked the mark into the value as
+    literal data (Lane-3 scout, 2026-07-27)."""
     pairs = []
     for line in content.splitlines():
         line = line.strip()
@@ -1025,8 +1043,18 @@ def _parse_handles(content):
             continue
         key, _, value = line.partition(':')
         key, value = key.strip(), value.strip()
+        imp = False
+        if value.lower().endswith(IMPORTANT_MARK):
+            imp = True
+            value = value[:-len(IMPORTANT_MARK)].strip()
+        if key.lower().endswith(IMPORTANT_MARK):
+            imp = True
+            key = key[:-len(IMPORTANT_MARK)].strip()
         if key:
-            pairs.append({'key': key, 'value': value})
+            row = {'key': key, 'value': value}
+            if imp:
+                row['important'] = True
+            pairs.append(row)
     return pairs
 
 

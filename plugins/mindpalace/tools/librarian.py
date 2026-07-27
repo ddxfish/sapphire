@@ -607,7 +607,11 @@ def _self_shelf_rows(scope, ids=None):
     its raw material on installs that migrate before their first tending.
     Oldest first. `ids` narrows to a specific set (delta)."""
     pt = _pt()
+    # layer predicate restored (Lane-2 scout, 2026-07-27): without it this
+    # was a scope-wide json_extract scan — slow, and one bad meta row
+    # anywhere silently emptied the FEAST. Migrated notes are all events.
     q = ("SELECT id, created, content FROM chunks WHERE scope = ? "
+         "AND layer = 'events' "
          "AND json_extract(meta,'$.was_self_layer') IS NOT NULL "
          "AND json_extract(meta,'$.pruned_at') IS NULL "
          "AND json_extract(meta,'$.superseded_at') IS NULL ")
@@ -711,7 +715,7 @@ def _present_self(stage, scope, part, total):
             "Write each section with update_self(section, content):",
             "- identity — 2-3 sentences: who you are",
             "- values — 3-5 concepts, one per line",
-            "- projects — what you're building, one per line (newest first)",
+            "- growing — how you are growing, one thread per line",
             "- relationships — 'Name — one sentence why', one per line",
             "- voice — your tone and register",
             "- origin — your history, from the beginning",

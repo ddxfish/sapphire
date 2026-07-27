@@ -196,3 +196,52 @@ def test_refusals_wrong_layer_bad_format_bad_version(palace):
     assert _import('dst', {'format': 'nope'})[1] == 400
     assert _import('dst', {**data, 'version': 99})[1] == 400
     assert transfer.export_data(query={'scope': 'src'})[1] == 400   # layer required
+
+
+def test_import_strips_foreign_lineage_ids(palace):
+    """Lane-2 scout (2026-07-27, reproduced): derived_from/promoted_to are
+    per-install ids — carried across, they resolve to unrelated local chunks
+    and fold_promotion_clones deletes the import as a false 'clone'. The
+    door strips them; intra-file provenance travels as derived_from_idx."""
+    pt._save_memory("an innocent local memory", 'dst')
+    data = {'format': 'mindpalace-export', 'version': 1, 'layer': 'self',
+            'scope': 'other-box',
+            'chunks': [{'content': 'imported note with foreign lineage',
+                        'created': '2026-03-01T00:00:00+00:00',
+                        'meta': {'derived_from': 1, 'promoted_to': [2, 3]}}]}
+    r = _import('dst', data, expect='self')
+    assert r['imported'] == 1
+    with pt._get_connection() as conn:
+        meta = json.loads(conn.execute(
+            "SELECT meta FROM chunks WHERE scope = 'dst' AND content LIKE "
+            "'imported note%'").fetchone()[0])
+    assert 'derived_from' not in meta and 'promoted_to' not in meta
+    assert meta['was_self_layer'] is True
+    out = browse.maintenance(body={'action': 'fold_promotion_clones',
+                                   'scope': 'dst', 'confirm': 'dst'})
+    assert out['retired_reworded'] == 0 and out['folded_identical'] == 0
+
+
+def test_import_sanitizes_legacy_section_names(palace):
+    """Lane-2 scout (2026-07-27, reproduced): a pre-rename export carries
+    section='projects' — raw, it resurrects a live projects box beside
+    growing. The door routes it through the sanitizer alias, so it arrives
+    as growing HISTORY."""
+    st.write_section('dst2', 'growing', 'boat build (important)')
+    data = {'format': 'mindpalace-export', 'version': 1, 'layer': 'self',
+            'scope': 'old-box',
+            'chunks': [{'content': 'old projects list',
+                        'created': '2026-02-01T00:00:00+00:00',
+                        'meta': {'section': 'projects'}}]}
+    r = _import('dst2', data, expect='self')
+    assert r['imported'] == 1 and r['arrived_as_history'] == 1
+    with pt._get_connection() as conn:
+        cur = conn.cursor()
+        current = st._current_sections(cur, 'dst2')
+        assert 'projects' not in current                 # never resurrected
+        assert current['growing']['content'] == 'boat build (important)'
+        sec, sup = cur.execute(
+            "SELECT json_extract(meta,'$.section'), "
+            "json_extract(meta,'$.superseded_at') FROM chunks WHERE "
+            "scope='dst2' AND content='old projects list'").fetchone()
+    assert sec == 'growing' and sup is not None          # aliased, history

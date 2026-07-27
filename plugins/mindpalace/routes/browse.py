@@ -44,10 +44,14 @@ def _publish(layer, scope, action):
 
 
 def _parse_meta(raw):
+    """Dict or None, always. Valid-JSON-non-object ('[1,2]', '"x"', '42')
+    gets the same _raw wrap as malformed JSON — every consumer calls .get()
+    on the result, and a parsed list 500'd nine routes (Lane-5 scout)."""
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        d = json.loads(raw)
+        return d if isinstance(d, dict) else {'_raw': raw}
     except Exception:
         return {'_raw': raw}
 
@@ -703,34 +707,39 @@ def librarian_dedup_preview(query=None, **_):
 # is the trusted-surface twin: the human sees each pair and decides.
 
 MAX_DEDUP_PAIRS = 50
+MAX_DEDUP_SCAN = 2000   # newest embedded chunks entering the pairwise scan
 
 
 def _cosine_pairs(rows, thr):
     """Highest-similarity pairs among embedded chunk rows, grouped by
     (provider, dim) — cosine only compares like with like. rows carry
     (id, content, created, layer, label, favorite, embedding, provider,
-    dim). Degrades to []."""
-    try:
-        import numpy as np
-        groups = {}
-        for r in rows:
+    dim). Per-row garbage (short blobs, NULL dim) is SKIPPED; anything
+    bigger RAISES to the caller — a scan that dies must never read as a
+    clean shelf (Lane-4/5 scouts, 2026-07-27). The caller bounds rows at
+    MAX_DEDUP_SCAN, so the sims matrix stays small."""
+    import numpy as np
+    groups = {}
+    for r in rows:
+        if not r[8]:
+            continue          # unverifiable vector space — skip the row
+        try:
             v = np.frombuffer(r[6], dtype=np.float32)
-            if r[8] and v.shape[0] != r[8]:
-                continue
-            groups.setdefault((r[7], r[8]), []).append((r, v))
-        out = []
-        for members in groups.values():
-            if len(members) < 2:
-                continue
-            mat = np.stack([v for _r, v in members])
-            sims = mat @ mat.T
-            for i, j in np.argwhere(np.triu(sims >= thr, k=1)):
-                out.append((float(sims[i, j]), members[i][0], members[j][0]))
-        out.sort(key=lambda p: -p[0])
-        return out
-    except Exception as e:
-        logger.warning(f"[MINDPALACE] dedup pair scan failed: {e}")
-        return []
+        except Exception:
+            continue          # blob length not a multiple of 4 — skip
+        if v.shape[0] != r[8]:
+            continue
+        groups.setdefault((r[7], r[8]), []).append((r, v))
+    out = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        mat = np.stack([v for _r, v in members])
+        sims = mat @ mat.T
+        for i, j in np.argwhere(np.triu(sims >= thr, k=1)):
+            out.append((float(sims[i, j]), members[i][0], members[j][0]))
+    out.sort(key=lambda p: -p[0])
+    return out
 
 
 def _entity_pairs(cur, scope):
@@ -778,7 +787,7 @@ def _entity_pairs(cur, scope):
 
 def dedup_candidates(query=None, **_):
     """GET dedup/candidates?scope=&what= — the Human Dedup scan, mechanical
-    and read-only. what='memories' (events+self+opt-in layers) or
+    and read-only. what='memories' (events + opt-in layers) or
     'knowledge' pairs by stored-embedding cosine at the librarian merge
     threshold; 'entities' pairs by name similarity. No LLM, no dedup_at
     stamps, no cap spend — the human resolves each pair in the modal
@@ -812,9 +821,15 @@ def dedup_candidates(query=None, **_):
             AND (meta IS NULL OR (
                 json_extract(meta, '$.pruned_at') IS NULL
                 AND json_extract(meta, '$.section') IS NULL
-                AND json_extract(meta, '$.superseded_at') IS NULL))''',
-            (scope, *layers)).fetchall()
-        pairs = _cosine_pairs(rows, thr)
+                AND json_extract(meta, '$.superseded_at') IS NULL))
+            ORDER BY created DESC LIMIT ?''',
+            (scope, *layers, MAX_DEDUP_SCAN)).fetchall()
+        try:
+            pairs = _cosine_pairs(rows, thr)
+        except Exception as e:
+            # LOUD: an error is not an empty shelf.
+            logger.error(f"[MINDPALACE] dedup scan failed: {e}")
+            return {'error': f'dedup scan failed: {e}'}, 500
     found = len(pairs)                     # no silent caps — say what dropped
     pairs = pairs[:MAX_DEDUP_PAIRS]
     def side(r):
@@ -825,10 +840,13 @@ def dedup_candidates(query=None, **_):
         ma, mb = _parse_meta(a[9]) or {}, _parse_meta(b[9]) or {}
         # Lineage pairs surface FLAGGED: one side is a promotion/rewording of
         # the other (often her third→first-person retelling) — the human
-        # should know they're judging her voice, not an accident.
+        # should know they're judging her voice, not an accident. Type-guarded:
+        # a stray int/str promoted_to must degrade to unflagged, never 500.
+        pa = ma.get('promoted_to')
+        pb = mb.get('promoted_to')
         lin = (ma.get('derived_from') == b[0] or mb.get('derived_from') == a[0]
-               or b[0] in (ma.get('promoted_to') or [])
-               or a[0] in (mb.get('promoted_to') or []))
+               or (isinstance(pa, list) and b[0] in pa)
+               or (isinstance(pb, list) and a[0] in pb))
         out.append({'sim': round(s, 3), 'lineage': lin,
                     'a': side(a), 'b': side(b)})
     return {'what': what, 'scope': scope, 'threshold': thr,
@@ -893,9 +911,18 @@ def merge_entities(body=None, **_):
         km = _parse_meta(k[5]) or {}
         lf = (_parse_meta(l[5]) or {}).get('fields') or {}
         kf = km.get('fields') or {}
+        absorbed = []
         for key, val in lf.items():
-            if key != 'nicknames' and val and not kf.get(key):
+            # Booleans are PERMISSION gates (allow_call/allow_email feed the
+            # phone/email whitelists), and "unset" is indistinguishable from
+            # "explicitly denied" here — so bools NEVER absorb (Lane-4
+            # scout, 2026-07-27: a merge click must not grant the AI calling
+            # rights the human never set on the keeper).
+            if isinstance(val, bool) or key == 'nicknames' or not val:
+                continue
+            if not kf.get(key):
                 kf[key] = val
+                absorbed.append(key)
         nicks = [n.strip() for n in
                  str(kf.get('nicknames') or '').split(',') if n.strip()]
         seen_n = {n.lower() for n in nicks} | {k[1].lower()}
@@ -914,9 +941,12 @@ def merge_entities(body=None, **_):
         cur.execute('DELETE FROM entities WHERE id = ?', (loser,))
         pt._ledger(k[2], 'user', 'update', layer='entities', target=keeper,
                    cursor=cur,
+                   detail={'absorbed_fields': absorbed} if absorbed else None,
                    summary=(f'merged duplicate entity "{l[1]}" into "{k[1]}" '
                             f'— {moved_edges} links + {moved_chunks} facts '
-                            f'moved, "{l[1]}" kept as nickname'))
+                            f'moved, "{l[1]}" kept as nickname'
+                            + (f', fields absorbed: {", ".join(absorbed)}'
+                               if absorbed else '')))
         conn.commit()
     _publish('entities', k[2], 'update')
     return {'success': True, 'keeper': keeper, 'name': k[1],
@@ -1011,7 +1041,7 @@ def maintenance(body=None, **_):
                     m = dict(info[cid][2])
                     changed = False
                     left = [p for p in (m.get('promoted_to') or [])
-                            if p not in gone]
+                            if p not in gone and p in info]   # live ids only
                     if left != m.get('promoted_to'):
                         if left:
                             m['promoted_to'] = left

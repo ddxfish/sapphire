@@ -196,7 +196,8 @@ def import_data(body=None, **_):
                 skipped += 1
                 continue
             existing.add((content, created))
-            meta = dict(c.get('meta') or {})
+            raw_meta = c.get('meta') or {}
+            meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
             # Librarian verdict stamps are per-install: carried in, they
             # arrive PRE-DRAINED and this install's passes silently skip
             # every imported row (no requeue exists for link/dedup/sort).
@@ -206,8 +207,25 @@ def import_data(body=None, **_):
             if not keep_stamps:
                 for k in ('librarian_at', 'temporal_at', 'link_at', 'dedup_at'):
                     meta.pop(k, None)
+            # Lineage ids are per-install too — a foreign derived_from is a
+            # dense small integer that WILL resolve to an unrelated local
+            # chunk, and fold_promotion_clones would then delete this row as
+            # a "clone" of it (Lane-2 scout, reproduced 2026-07-27). Intra-
+            # file provenance travels as derived_from_idx and is re-minted
+            # below with LOCAL ids; the foreign numbers are meaningless by
+            # construction and dangerous by coincidence.
+            meta.pop('derived_from', None)
+            meta.pop('promoted_to', None)
             meta['import_src'] = data.get('scope')
-            sec = meta.get('section')
+            # Section names pass through the sanitizer so a pre-rename
+            # export ('projects') lands under its living alias ('growing')
+            # as HISTORY — not as a resurrected sibling section beside it.
+            sec = None
+            if layer == 'self' and meta.get('section'):
+                from plugins.mindpalace.tools import self_tools as _st
+                sec = _st._sanitize_section(meta.get('section'))
+                if sec:
+                    meta['section'] = sec
             row_layer = layer
             if layer == 'self':
                 if sec and not meta.get('superseded_at'):

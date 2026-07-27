@@ -411,8 +411,13 @@ def _compact_entities(cursor, entities, seed_ids):
                     via = None
                 if via:
                     break
+        # Same read gates as _entity_card — pruned/private/superseded
+        # headlines never render at wake (Lane-3 scout, 2026-07-27).
         head = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
+            "AND private_key IS NULL "
+            "AND json_extract(meta, '$.pruned_at') IS NULL "
+            "AND json_extract(meta, '$.superseded_at') IS NULL "
             "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
             "created DESC LIMIT 1", (eid,)).fetchone()
         label = f"{row[0]} ({row[1] or 'thing'}" \
@@ -438,6 +443,9 @@ def _format_block(pt, cursor, chunks, entities, depth, docs=None):
         name, kind = row
         head = cursor.execute(
             "SELECT content FROM chunks WHERE entity_id = ? AND tier = 1 "
+            "AND private_key IS NULL "
+            "AND json_extract(meta, '$.pruned_at') IS NULL "
+            "AND json_extract(meta, '$.superseded_at') IS NULL "
             "ORDER BY COALESCE(json_extract(meta, '$.headline'), 0) DESC, "
             "created DESC LIMIT 1", (eid,)).fetchone()
         kind_bit = f" ({kind})" if kind else ""

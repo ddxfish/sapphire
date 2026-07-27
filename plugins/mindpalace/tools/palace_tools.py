@@ -636,6 +636,9 @@ def _ensure_db():
                     cmeta = json.loads(meta_raw) or {}
                 except Exception:
                     continue
+                if not isinstance(cmeta, dict):
+                    continue   # valid-JSON-non-object ('null', '[1,2]') —
+                #              the retirement block below recovery-wraps it
                 if cmeta.get('section') != 'projects':
                     continue
                 cmeta['section'] = 'growing'
@@ -674,11 +677,21 @@ def _ensure_db():
                 try:
                     cmeta = json.loads(meta_raw) if meta_raw else {}
                 except Exception:
-                    # Corrupt meta: leave the row in place untouched — a
-                    # lossy retag would violate the consent conditions.
-                    logger.warning(f"[MINDPALACE] self-retire skipped [{cid}]: unparseable meta")
-                    continue
-                if cmeta.get('section'):
+                    cmeta = None
+                if not isinstance(cmeta, dict):
+                    # Corrupt or valid-JSON-non-object meta. Parking it in
+                    # layer='self' is a landmine — every sheet query uses
+                    # json_extract in its WHERE, and SQLite aborts the WHOLE
+                    # SELECT on one malformed row (read_self dies at every
+                    # wake; Lane-2/Lane-5 scouts, 2026-07-27). Defuse, don't
+                    # skip: preserve the original bytes verbatim under a
+                    # recovery key (nothing lost — consent holds) and retag
+                    # to events with the rest of the free notes.
+                    cmeta = {'meta_recovery': meta_raw}
+                    logger.warning(f"[MINDPALACE] self-retire recovered "
+                                   f"[{cid}]: non-object meta preserved "
+                                   f"under meta_recovery")
+                elif cmeta.get('section'):
                     continue   # sheet sections (and their archive) stay home
                 cmeta['was_self_layer'] = True
                 cursor.execute(
@@ -1605,6 +1618,13 @@ def _search_memory(query: str, scope: str, limit: int = 10, label: str = None,
     layer='knowledge' (or doc=N) reroutes to the Library engine (library.py:
     fused FTS+vector, stitching, doc grouping — the v3 knowledge store)."""
     try:
+        # Clamp: LIMIT -1 = unlimited in SQLite — a stray limit fetched the
+        # whole layer into her context (Lane-5 scout, 2026-07-27).
+        try:
+            limit = int(limit or 10)
+        except (TypeError, ValueError):
+            limit = 10
+        limit = min(max(limit, 1), 50)
         if not query or not query.strip():
             return "Search query cannot be empty.", False
 
@@ -1751,6 +1771,13 @@ def _get_recent_memories(scope: str, count: int = 10, label: str = None,
     # trim: internal callers only (the wake leg) — per-record char cut at a
     # word boundary, [id] + search_memory reaches the full text.
     try:
+        # Clamp: SQLite LIMIT -1 = unlimited — count=-1 poured the whole
+        # scope into her context (Lane-5 scout, 2026-07-27).
+        try:
+            count = int(count or 10)
+        except (TypeError, ValueError):
+            count = 10
+        count = min(max(count, 1), 50)
         layer, err = _validate_layer(layer)
         if err:
             return err, False

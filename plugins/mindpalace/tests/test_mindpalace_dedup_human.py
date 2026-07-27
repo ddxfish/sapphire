@@ -366,3 +366,72 @@ def test_fold_requires_typed_confirm_and_tolerates_bad_lineage(palace):
                                    'scope': 'default', 'confirm': 'default'})
     assert out['success']                                # neither folds, no crash
     assert out['folded_identical'] == 0 and out['retired_reworded'] == 0
+
+
+def test_merge_never_absorbs_permission_booleans(palace):
+    """Lane-4 scout (2026-07-27): allow_call/allow_email are whitelist gates
+    — 'unset' is indistinguishable from 'explicitly denied', so booleans
+    never blank-fill across a merge. Text fields still do."""
+    sky = _entity('Sky', kind='person', fields={'background': 'the navigator'})
+    skye = _entity('Skye', fields={'allow_call': True, 'allow_email': True,
+                                   'phone': '555-0100'})
+    out = browse.merge_entities(body={'keeper': sky, 'loser': skye})
+    assert out['success']
+    fields = json.loads(_ent_row(sky)[2])['fields']
+    assert 'allow_call' not in fields and 'allow_email' not in fields
+    assert fields['phone'] == '555-0100'                # text absorbs
+    with pt._get_connection() as conn:
+        led = conn.execute("SELECT summary FROM ledger WHERE summary LIKE "
+                           "'%fields absorbed%'").fetchone()
+    assert led and 'phone' in led[0] and 'allow_call' not in led[0]
+
+
+def test_import_lock_refuses_concurrent_run(palace):
+    """Lane-1 scout (2026-07-27, reproduced): the idempotency snapshot is
+    read-once — a second import racing the first doubled every row. The
+    module lock turns the race into a clean refusal."""
+    import threading
+    from plugins.mindpalace.tools import import_tools as it
+    held = threading.Lock()
+    held.acquire()
+    orig = it._import_lock
+    it._import_lock = held
+    try:
+        msg = it._run_import('all', object())
+        assert 'already running' in msg
+    finally:
+        it._import_lock = orig
+        held.release()
+
+
+def test_scan_skips_garbage_rows_and_errors_loudly(palace):
+    """Lane-4/5 scouts (2026-07-27): per-row garbage (short blob, NULL dim)
+    is skipped — the good pair still surfaces; a scan-level failure returns
+    a 500, never an empty 'shelf looks clean'."""
+    a = _save("twin one about the mast")
+    b = _save("twin two about the mast")
+    bad = _save("row with a torn embedding")
+    nodim = _save("row with no dim stamp")
+    _embed(a, [1, 0])
+    _embed(b, [1, 0])
+    with pt._get_connection() as conn:
+        conn.execute("UPDATE chunks SET embedding = X'0102030405', "
+                     "embedding_provider = 'fake', embedding_dim = 2 "
+                     "WHERE id = ?", (bad,))     # 5 bytes: not float32-aligned
+        conn.execute("UPDATE chunks SET embedding = X'01020304', "
+                     "embedding_provider = 'fake', embedding_dim = NULL "
+                     "WHERE id = ?", (nodim,))
+        conn.commit()
+    out = browse.dedup_candidates(query={'scope': 'default', 'what': 'memories'})
+    assert 'error' not in out
+    assert [{out['pairs'][0]['a']['id'], out['pairs'][0]['b']['id']}] == [{a, b}]
+
+    import plugins.mindpalace.routes.browse as br
+    orig = br._cosine_pairs
+    br._cosine_pairs = lambda rows, thr: (_ for _ in ()).throw(MemoryError('boom'))
+    try:
+        out, code = browse.dedup_candidates(query={'scope': 'default',
+                                                   'what': 'memories'})
+        assert code == 500 and 'scan failed' in out['error']
+    finally:
+        br._cosine_pairs = orig

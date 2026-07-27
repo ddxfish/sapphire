@@ -976,21 +976,41 @@ def test_self_layer_retirement_migration(palace):
                             "'%self layer retired%'").fetchone()[0] == 1
 
 
-def test_self_retirement_skips_corrupt_meta_rows(palace):
+def test_self_retirement_recovers_bad_meta_rows(palace):
+    """Lane-2/Lane-5 scouts (2026-07-27): a bad-meta row parked in
+    layer='self' aborts every sheet query (json_extract in the WHERE kills
+    the whole SELECT) — read_self dies at every wake. The migration now
+    DEFUSES: original bytes preserved verbatim under meta_recovery, row
+    retagged to events with the rest of the free notes. Covers both
+    malformed JSON and valid-JSON-non-object ('null', '[1,2]')."""
+    # Sheet first — once a bad-meta row sits in layer='self', write_section
+    # itself dies on the json_extract abort (the landmine this test pins).
+    st.write_section('default', 'values', 'honesty (important)')
+    bad = {}
     with pt._get_connection() as conn:
         cur = conn.cursor()
         ts = pt._now()
-        cur.execute("INSERT INTO chunks (layer, scope, content, meta, created, "
-                    "updated) VALUES ('self', 'default', "
-                    "'row with broken meta', 'not-json{', ?, ?)", (ts, ts))
-        broken = cur.lastrowid
+        for raw in ('not-json{', 'null', '[1,2]'):
+            cur.execute("INSERT INTO chunks (layer, scope, content, meta, "
+                        "created, updated) VALUES ('self', 'default', "
+                        "'row carrying bad meta', ?, ?, ?)", (raw, ts, ts))
+            bad[raw] = cur.lastrowid
         conn.commit()
     pt._db_initialized = False
-    assert pt._ensure_db()               # boot survives the bad row
+    assert pt._ensure_db()               # boot survives every bad shape
     with pt._get_connection() as conn:
-        layer, meta = conn.execute('SELECT layer, meta FROM chunks WHERE id = ?',
-                                   (broken,)).fetchone()
-    assert layer == 'self' and meta == 'not-json{'   # untouched, never clobbered
+        cur = conn.cursor()
+        for raw, cid in bad.items():
+            layer, meta = cur.execute(
+                'SELECT layer, meta FROM chunks WHERE id = ?', (cid,)).fetchone()
+            m = json.loads(meta)
+            assert layer == 'events'                     # out of the fatal slice
+            assert m['meta_recovery'] == raw             # bytes preserved
+            assert m['was_self_layer'] is True
+        # The whole point: the sheet reads clean afterward.
+        assert st._current_sections(cur, 'default')['values']
+    text, ok = st._read_self('default', depth=1)
+    assert ok and '◆ Values' in text
 
 
 def test_wake_recents_events_only_and_trimmed(palace):
@@ -1028,3 +1048,120 @@ def test_wake_spider_compact_entity_line_with_provenance(palace):
     # Non-compact callers (search, depth 2 path) keep the box format.
     block2 = spider.spider_from_chunks(pt, 'default', None, [sheet], 1)
     assert '── Connected memories' in block2
+
+
+def test_compact_line_never_shows_pruned_or_private_headlines(palace):
+    """Lane-3 scout (2026-07-27): the compact Connected line must carry the
+    same read gates as _entity_card — a retired or private-keyed tier-1
+    chunk never renders at wake."""
+    from plugins.mindpalace.tools import spider
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO entities (name, scope, kind, created, "
+                    "updated) VALUES ('Vault', 'default', 'thing', ?, ?)",
+                    (ts, ts))
+        eid = cur.lastrowid
+        cur.execute("INSERT INTO chunks (layer, scope, content, entity_id, "
+                    "tier, meta, created, updated) VALUES ('entities', "
+                    "'default', 'the secret retired line', ?, 1, "
+                    "json_object('pruned_at', '2026-01-01'), ?, ?)",
+                    (eid, ts, ts))
+        cur.execute("INSERT INTO chunks (layer, scope, content, entity_id, "
+                    "tier, private_key, created, updated) VALUES ('entities', "
+                    "'default', 'the keyed line', ?, 1, 'hush', ?, ?)",
+                    (eid, ts, ts))
+        conn.commit()
+    st.write_section('default', 'values', 'Vault (important)')
+    sheet = _chunk('default', 'values')['id']
+    block = spider.spider_from_chunks(pt, 'default', None, [sheet], 1,
+                                      compact=True)
+    assert 'Vault' in block                              # entity still listed
+    assert 'secret retired line' not in block            # pruned gated
+    assert 'the keyed line' not in block                 # private gated
+
+
+def test_seen_ents_gates_on_shown_not_on_card(palace):
+    """Lane-3 scout (2026-07-27): an uncarded person whose group still shows
+    memories must claim into seen_ents — otherwise the spider re-lists
+    exactly the person with the least context."""
+    _save("a fact about them", layer='entities', entity='Zebra')
+    with pt._get_connection() as conn:   # strip the tier so no card renders
+        conn.execute("UPDATE chunks SET tier = NULL WHERE layer = 'entities'")
+        conn.commit()
+    _save("Zebra helped test the rudder")
+    st.write_section('default', 'relationships', 'Zebra — my tester (important)')
+    seen, seen_ents = set(), set()
+    with pt._get_connection() as conn:
+        block = st._wake_important(pt, conn.cursor(), 'default', 1, seen,
+                                   seen_ents)
+    assert '— Zebra:' in block                           # group shows (memories)
+    with pt._get_connection() as conn:
+        eid = conn.execute("SELECT id FROM entities WHERE name = 'Zebra'"
+                           ).fetchone()[0]
+    assert eid in seen_ents                              # claimed regardless of card
+
+
+def test_recent_and_search_limits_clamped(palace):
+    """Lane-5 scout (2026-07-27): SQLite LIMIT -1 = unlimited — stray
+    counts must clamp, not pour the scope into her context."""
+    for i in range(3):
+        _save(f"clamp probe number {i}")
+    out, ok = pt._get_recent_memories('default', count=-1)
+    assert ok and out.count('clamp probe') == 1          # floored to 1, not ∞
+    out, ok = pt._get_recent_memories('default', count='banana')
+    assert ok
+    out, ok = pt._search_memory('clamp probe', 'default', limit=-1)
+    assert ok and 'clamp probe' in out
+
+
+def test_handles_star_links_value_not_key(palace):
+    """★ everywhere (Krem's ruling, 2026-07-27): handles obey the mark like
+    every section, and link the VALUE — the row's identity lives there
+    ('Company: Sapphire Blue AI LLC'), not in the label. The mark parses
+    out of the text instead of baking into the value."""
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        for name in ('Sapphire Blue AI LLC', 'GitHub'):
+            conn.execute("INSERT INTO entities (name, scope, created, "
+                         "updated) VALUES (?, 'default', ?, ?)", (name, ts, ts))
+        conn.commit()
+    msg, ok = st.write_section(
+        'default', 'handles',
+        "Company: Sapphire Blue AI LLC (important)\n"
+        "GitHub: SapphirePrime")
+    assert ok, msg
+    row = _chunk('default', 'handles')
+    assert row['meta']['link_fields'] == ['value']
+    assert row['meta']['rows'][0] == {'key': 'Company',
+                                      'value': 'Sapphire Blue AI LLC',
+                                      'important': True}   # mark parsed, not data
+    assert row['content'].splitlines()[0].endswith('(important)')  # canonical
+    with pt._get_connection() as conn:
+        linked = {r[0] for r in conn.execute(
+            "SELECT e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
+            "WHERE d.src_type = 'chunk' AND d.src_id = ?", (row['id'],))}
+    # Marked value links; the unmarked GitHub row links NOTHING — even
+    # though an entity named 'GitHub' exists (the label never links).
+    assert linked == {'Sapphire Blue AI LLC'}
+
+
+def test_terms_star_links_term_key_only(palace):
+    with pt._get_connection() as conn:
+        ts = pt._now()
+        conn.execute("INSERT INTO entities (name, scope, created, updated) "
+                     "VALUES ('Krem', 'default', ?, ?)", (ts, ts))
+        conn.commit()
+    msg, ok = st.write_section(
+        'default', 'terms',
+        "Krem protocol: how we speak on the porch (important)\n"
+        "AIX: what Krem experiences using his own tools")
+    assert ok, msg
+    row = _chunk('default', 'terms')
+    assert row['meta']['link_fields'] == ['term']
+    with pt._get_connection() as conn:
+        linked = {r[0] for r in conn.execute(
+            "SELECT e.name FROM edges d JOIN entities e ON e.id = d.dst_id "
+            "WHERE d.src_type = 'chunk' AND d.src_id = ?", (row['id'],))}
+    assert linked == {'Krem'}     # marked term links; Krem in an unmarked
+    #                               MEANING never does

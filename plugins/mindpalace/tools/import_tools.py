@@ -580,7 +580,30 @@ def _import_goals(config, dest_cursor, existing_keys, scopes_seen):
 
 # ─── Orchestrator ─────────────────────────────────────────────────────────────
 
+_import_lock = None   # module-level: one import at a time, ever
+
+
 def _run_import(what: str, config) -> str:
+    from plugins.mindpalace.tools import palace_tools
+    import threading as _threading
+    global _import_lock
+    if _import_lock is None:
+        _import_lock = _threading.Lock()
+    # The idempotency set is a read-once snapshot — two CONCURRENT imports
+    # (Admin button + AI tool run in parallel threads) each see an empty set
+    # and duplicate every row (Lane-1 scout, reproduced 2026-07-27). One
+    # writer at a time; the loser gets a clean refusal, and a RE-run after
+    # the first finishes still correctly skips everything.
+    if not _import_lock.acquire(blocking=False):
+        return ("An import is already running — wait for it to finish, "
+                "then re-run if needed (re-runs copy zero duplicates).")
+    try:
+        return _run_import_locked(what, config)
+    finally:
+        _import_lock.release()
+
+
+def _run_import_locked(what: str, config) -> str:
     from plugins.mindpalace.tools import palace_tools
 
     order = ['memories', 'people', 'knowledge', 'goals']

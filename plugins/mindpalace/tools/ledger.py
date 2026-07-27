@@ -111,6 +111,7 @@ def tail_block(cursor, scope, depth=2):
     nothing qualifies. Degrades to '' on any error — the ledger can never
     break a working read_self."""
     try:
+        depth = depth or 0   # {"depth": null} must read like depth 0
         n_lines = TAIL_LINES if depth >= 2 else 4
         n_chars = TAIL_CHARS if depth >= 2 else 360
         total = cursor.execute(

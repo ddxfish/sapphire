@@ -488,7 +488,7 @@ function bindHumanDedup(el) {
         try {
             const r = await palaceSend('maintenance', 'POST',
                 { action: 'fold_promotion_clones', scope, confirm: typed });
-            ui.showToast(`Folded ${r.folded_identical} identical + retired ${r.retired_reworded} reworded clone(s) — ${r.requeued} original(s) re-queued for her sort pass`, 'success');
+            ui.showToast(`Folded ${r.folded_identical} identical + retired ${r.retired_reworded} reworded clone(s) — ${r.requeued} original(s) re-queued for her sort pass${r.kept_favorited ? ` · ${r.kept_favorited} ★ favorited kept` : ''}`, 'success');
         } catch (e) { ui.showToast(e.message, 'error'); }
     });
 }
