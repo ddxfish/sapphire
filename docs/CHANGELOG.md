@@ -1,3 +1,16 @@
+# 2.9.1 - Mind adjustments
+- Reduced spidering and duplicates from read_self
+- Vision RAG threshold added to Settings > Embeddings
+- Removed old "self" layer from Memories
+# 2.9.0 - Mind v2 
+- Mind (memory v2) launches in core
+- Switch back and forth memory v1 v2
+- Self sheet added to wake up and spider from
+- Visual RAG added for Knowledge images
+- Mind tools combined into one small set
+- Librarian launched, does nightly re-arranging, sorting, dedup
+- Imports memory v1 data
+# 2.8.8 - Bug hunt for Mind v2
 # 2.8.7 - Plugin prompts + Twilio
 - Plugins can hot-load prompt packs
 - Twilio respects engine at first message, select model
