@@ -1,3 +1,8 @@
+# 2.9.3 - Google Calendar
+- Added oauth relay for easy Google Calendar setup
+# 2.9.2 - Pip conflict resolution
+- Resolve old pip and new pip deps (remove, add, replace)
+- Prep for new Discord plugin
 # 2.9.1 - Mind adjustments
 - Reduced spidering and duplicates from read_self
 - Vision RAG threshold added to Settings > Embeddings

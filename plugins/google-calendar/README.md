@@ -2,9 +2,48 @@
 
 View your schedule, add events, and delete events — all through voice or chat.
 
-## Google Cloud Setup
+## Easy Connect (recommended)
 
-This plugin uses Google's OAuth2 to access your calendar. The setup is a one-time thing, but Google's console is a maze. Follow these steps exactly.
+No Google Cloud Console needed:
+
+1. Open **Settings > Google Calendar** and leave Client ID / Client Secret **blank**
+2. Click **Connect Google Calendar**
+3. Sign into the Google account whose calendar you want, and approve
+4. If Google shows a "Google hasn't verified this app" warning, click
+   **Advanced > Go to Sapphire** — expected while the shared app awaits
+   Google's verification review
+5. You're bounced back to Sapphire showing "Connected ✓"
+
+Works per-calendar too: in the calendar accounts editor, leave a calendar's
+Client ID blank, Save, then hit its Connect button.
+
+### Which calendar does it use?
+
+Every connection defaults to `primary` — the main calendar of the Google
+account you approved. To point a connection at a different calendar:
+
+1. In [Google Calendar](https://calendar.google.com), hover the calendar in
+   the left sidebar, click the **three dots** > **Settings and sharing**
+2. Scroll to **Integrate calendar** and copy the **Calendar ID** — it looks
+   like `abc123@group.calendar.google.com` (the display name will NOT work)
+3. Paste it into that connection's **Calendar ID** field in Sapphire and Save
+
+The calendar must belong to — or be shared with edit rights to — the Google
+account you connected.
+
+Easy Connect routes the one-time authorization and token refreshes through
+`oauth.sapphireblue.dev`, which holds the shared Google client. Your calendar
+data never touches that server — Sapphire talks to Google directly; only
+OAuth tokens pass through the relay in transit, and nothing is stored there.
+Prefer zero third parties? Use the Advanced setup below — it behaves exactly
+as before.
+
+## Advanced: Bring Your Own Google Client
+
+Use your own Google Cloud OAuth client instead of the shared one. The setup
+is a one-time thing, but Google's console is a maze. Follow these steps
+exactly. Once your Client ID/Secret are filled in, the Connect button uses
+them automatically instead of Easy Connect.
 
 ### 1. Create a Google Cloud Project (if you don't have one)
 

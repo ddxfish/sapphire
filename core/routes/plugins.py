@@ -2036,8 +2036,9 @@ async def set_gcal_account(scope: str, request: Request, _=Depends(require_login
         existing = credentials.get_gcal_account(scope)
         client_secret = existing.get('client_secret', '')
 
-    if not client_id:
-        raise HTTPException(status_code=400, detail="Client ID is required")
+    # Empty client_id is legal since easy connect (2026-07-30): a credential-
+    # less row is "use the relay" intent — the Connect button's easy path
+    # creates the relay account at claim time.
 
     # Preserve existing refresh token if present — strict-decrypt to detect
     # the same wipe scenario as above. Refresh tokens are EVEN more painful
@@ -2056,8 +2057,15 @@ async def set_gcal_account(scope: str, request: Request, _=Depends(require_login
         )
     existing = credentials.get_gcal_account(scope)
     refresh_token = existing.get('refresh_token', '')
+    # Preserve easy-connect (relay) accounts across routine edits (e.g. the
+    # user changing calendar_id) — otherwise the default would silently
+    # demote them to 'byo' and refreshes would break. Entering a client_id
+    # IS an explicit switch to byo.
+    auth_mode = 'byo' if client_id else existing.get('auth_mode', 'byo')
+    relay_url = '' if client_id else existing.get('relay_url', '')
 
-    if credentials.set_gcal_account(scope, client_id, client_secret, calendar_id, refresh_token, label):
+    if credentials.set_gcal_account(scope, client_id, client_secret, calendar_id, refresh_token, label,
+                                    auth_mode=auth_mode, relay_url=relay_url):
         from core.event_bus import publish, Events
         publish(Events.SCOPE_CHANGED, {"kind": "gcal", "action": "saved", "name": scope})
         return {"success": True}

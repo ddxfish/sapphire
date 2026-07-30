@@ -1143,12 +1143,20 @@ class CredentialsManager:
             'refresh_token': self._unscramble(acct.get('refresh_token', '')),
             'calendar_id': acct.get('calendar_id', 'primary'),
             'label': acct.get('label', scope),
+            'auth_mode': acct.get('auth_mode', 'byo'),
+            'relay_url': acct.get('relay_url', ''),
         }
 
     def set_gcal_account(self, scope: str, client_id: str, client_secret: str,
                          calendar_id: str = 'primary', refresh_token: str = '',
-                         label: str = '') -> bool:
-        """Set Google Calendar account for a scope. Secrets are scrambled before save."""
+                         label: str = '', auth_mode: str = 'byo',
+                         relay_url: str = '') -> bool:
+        """Set Google Calendar account for a scope. Secrets are scrambled before save.
+
+        auth_mode 'byo' = user's own Google client (client_id/secret stored
+        here); 'relay' = easy connect — no local client creds, token exchange
+        and refresh go through relay_url (frozen at connect time, same as
+        client creds are for byo)."""
         with self._lock:
             try:
                 if 'gcal_accounts' not in self._credentials:
@@ -1160,6 +1168,8 @@ class CredentialsManager:
                     'refresh_token': self._scramble(refresh_token) if refresh_token else '',
                     'calendar_id': calendar_id or 'primary',
                     'label': label or scope,
+                    'auth_mode': auth_mode or 'byo',
+                    'relay_url': relay_url,
                 }
 
                 if not self._save():
@@ -1247,9 +1257,12 @@ class CredentialsManager:
         return result
 
     def has_gcal_account(self, scope: str = 'default') -> bool:
-        """Check if gcal account exists and has a refresh token."""
+        """Check if gcal account exists and has a refresh token.
+        Relay (easy-connect) accounts have no local client_id by design."""
         acct = self.get_gcal_account(scope)
-        return bool(acct['client_id'] and acct['refresh_token'])
+        if not acct['refresh_token']:
+            return False
+        return bool(acct['client_id']) or acct['auth_mode'] == 'relay'
 
     # =========================================================================
     # GitHub

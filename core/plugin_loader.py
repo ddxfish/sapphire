@@ -263,6 +263,12 @@ class PluginLoader:
             except Exception:
                 manifest_mtime = 0
 
+            prev = self._plugins.get(name)
+            if prev is not None and prev.get("band") != band:
+                logger.warning(
+                    f"[PLUGINS] '{name}' ({band} band) shadows the {prev.get('band')} copy "
+                    f"at {prev.get('path')} — only the {band} copy will load"
+                )
             self._plugins[name] = {
                 "manifest": manifest,
                 "path": child,
@@ -348,7 +354,12 @@ class PluginLoader:
         alias = f"plugins.{name}"
         if alias in sys.modules:
             return
-        if (SYSTEM_PLUGINS_DIR / name).is_dir():
+        # A system plugins/<name>/ on disk normally wins (genuine namespace
+        # package) — unless the registry winner is this user-band plugin
+        # (user shadows system by name). Then imports must follow the registry,
+        # or the shadowed system copy's code would execute instead.
+        reg = self._plugins.get(name)
+        if (SYSTEM_PLUGINS_DIR / name).is_dir() and not (reg and reg.get("band") == "user"):
             return
         try:
             pkg = importlib.import_module("plugins")
@@ -697,7 +708,8 @@ class PluginLoader:
             daemon_entry = daemon_config.get("entry")
             if daemon_entry:
                 try:
-                    daemon_mod = self._load_daemon_module(plugin_dir, daemon_entry)
+                    pkg_base = f"plugins.{name}" if band == "user" else None
+                    daemon_mod = self._load_daemon_module(plugin_dir, daemon_entry, pkg_base)
                     if daemon_mod and hasattr(daemon_mod, "start"):
                         info["daemon_module"] = daemon_mod
                         if self._scheduler:
@@ -748,7 +760,7 @@ class PluginLoader:
         logger.info(f"[PLUGINS] Loaded: {name} (priority {base_priority}, {band})")
         return True
 
-    def _load_daemon_module(self, plugin_dir: Path, entry_path: str):
+    def _load_daemon_module(self, plugin_dir: Path, entry_path: str, pkg_base: str = None):
         """Load a daemon module from a plugin. Returns the module namespace."""
         full_path = plugin_dir / entry_path
         try:
@@ -767,11 +779,19 @@ class PluginLoader:
             # Derive the natural package import path so that tools doing
             # "from plugins.telegram.daemon import X" find this same module
             # instead of importing a second copy with separate state.
-            try:
-                rel = full_path.resolve().relative_to(Path.cwd())
-                pkg_name = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")
-            except ValueError:
-                pkg_name = f"plugin_daemon_{plugin_dir.name}"
+            if pkg_base:
+                # User-band plugins import themselves as plugins.<name>.* via
+                # the package alias — the daemon must register under that same
+                # path or "from plugins.<name>.daemon import X" execs a second
+                # copy with separate state.
+                entry_dotted = str(Path(entry_path).with_suffix("")).replace("/", ".").replace("\\", ".")
+                pkg_name = f"{pkg_base}.{entry_dotted}"
+            else:
+                try:
+                    rel = full_path.resolve().relative_to(Path.cwd())
+                    pkg_name = str(rel.with_suffix("")).replace("/", ".").replace("\\", ".")
+                except ValueError:
+                    pkg_name = f"plugin_daemon_{plugin_dir.name}"
 
             spec = importlib.util.spec_from_file_location(pkg_name, str(full_path))
             mod = importlib.util.module_from_spec(spec)

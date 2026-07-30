@@ -132,8 +132,20 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
     /plugin-web/{name}/foo.js     → {plugin}/web/foo.js  (existing behavior)
     /plugin-web/{name}/app/foo.js → {plugin}/app/foo.js  (app pages)
     """
-    for base_dir in [SYSTEM_PLUGINS_DIR, USER_PLUGINS_DIR_WEB]:
-        plugin_dir = (base_dir / plugin_name).resolve()
+    # Registry first: a user-band plugin can shadow a same-named system plugin,
+    # and the dir scan below (system first) would serve the shadowed copy's
+    # assets. The registry knows which copy actually loaded.
+    candidates = []
+    try:
+        from core.plugin_loader import plugin_loader
+        info = plugin_loader.get_plugin_info(plugin_name)
+        if info and info.get("path"):
+            candidates.append(Path(info["path"]))
+    except Exception:
+        pass
+    candidates += [SYSTEM_PLUGINS_DIR / plugin_name, USER_PLUGINS_DIR_WEB / plugin_name]
+    for plugin_dir in candidates:
+        plugin_dir = plugin_dir.resolve()
 
         # If path starts with app/, serve from app/ directory directly
         if path.startswith("app/"):

@@ -93,12 +93,15 @@ def test_delete_gcal_account_publishes_scope_changed(client, event_bus_capture, 
     "plugins/google-calendar/routes/oauth.py",
     "plugins/telegram/routes/auth.py",
     "plugins/discord/routes/accounts.py",
+    "user/plugins/discord/api/accounts.py",
 ])
 def test_signed_plugin_account_routes_publish_scope_changed(rel_path):
     """These plugin routes add/remove account-backed scopes but aren't mounted
     on the core TestClient app, so guard the publish statically — catches a
     regression where someone removes the SCOPE_CHANGED publish."""
     root = pathlib.Path(__file__).resolve().parent.parent
+    if not (root / rel_path).exists():
+        pytest.skip(f"{rel_path} not installed on this box (user-band plugin)")
     text = (root / rel_path).read_text(encoding="utf-8")
     assert "Events.SCOPE_CHANGED" in text, \
         f"{rel_path} no longer publishes SCOPE_CHANGED — sidebar scope dropdowns will go stale"

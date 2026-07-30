@@ -176,9 +176,10 @@ def _get_access_token(force_refresh: bool = False):
     if not refresh_token:
         return None, None, "Google Calendar not connected. Go to Settings > Google Calendar and click Connect."
 
+    auth_mode = creds.get('auth_mode', 'byo')
     client_id = creds.get('client_id', '')
     client_secret = creds.get('client_secret', '')
-    if not client_id or not client_secret:
+    if auth_mode != 'relay' and (not client_id or not client_secret):
         return None, None, "Google Client ID/Secret not configured in Settings."
 
     calendar_id = creds.get('calendar_id', 'primary') or 'primary'
@@ -195,18 +196,27 @@ def _get_access_token(force_refresh: bool = False):
         if not force_refresh and cached_token and expires_at > time.time() + 60:
             return cached_token, calendar_id, None
 
-        # Actually hit Google. Catch network errors separately from HTTP
-        # errors so the user gets a useful message.
+        # Actually refresh. Relay (easy-connect) accounts have no local
+        # client creds — the relay adds the shared client's secret and
+        # returns Google's response verbatim, so the handling below is
+        # identical for both modes. Catch network errors separately from
+        # HTTP errors so the user gets a useful message.
         try:
-            resp = requests.post(GOOGLE_TOKEN_URL, data={
-                'refresh_token': refresh_token,
-                'client_id': client_id,
-                'client_secret': client_secret,
-                'grant_type': 'refresh_token',
-            }, timeout=15)
+            if auth_mode == 'relay':
+                relay = (creds.get('relay_url') or 'https://oauth.sapphireblue.dev').rstrip('/')
+                resp = requests.post(f"{relay}/refresh",
+                                     json={'refresh_token': refresh_token}, timeout=15)
+            else:
+                resp = requests.post(GOOGLE_TOKEN_URL, data={
+                    'refresh_token': refresh_token,
+                    'client_id': client_id,
+                    'client_secret': client_secret,
+                    'grant_type': 'refresh_token',
+                }, timeout=15)
         except requests.RequestException as e:
+            endpoint = "the Sapphire connect relay" if auth_mode == 'relay' else "Google's token endpoint"
             logger.warning(f"[GCAL] Network error during token refresh: {e}")
-            return None, None, ("Couldn't reach Google's token endpoint "
+            return None, None, (f"Couldn't reach {endpoint} "
                                 f"({type(e).__name__}). Try again in a moment.")
 
         if resp.status_code == 200:
@@ -327,8 +337,31 @@ def _format_time(dt_str):
 
 
 # Short ID map — maps #1, #2 etc to real Google event IDs, scoped per-request
-from contextvars import ContextVar
-_id_map_var: ContextVar[dict] = ContextVar('gcal_id_map', default={})
+# Display-number -> Google event ID, per scope. Module-global on purpose:
+# a ContextVar dies with the tool call's execution context, so the map
+# written by calendar_today was never visible to a later calendar_delete
+# (found live 2026-07-30 — delete sent the raw "#3" to Google, 404).
+# Restart wipes it; delete's error message says to re-list, which rebuilds.
+_id_maps_guard = threading.Lock()
+_id_maps: dict = {}  # scope -> {display_num_str: google_event_id}
+
+
+def _resolve_event_id(raw: str):
+    """Resolve a display number ('3' / '#3') to the real Google event ID via
+    the current scope's last listing. Returns (event_id, err). Non-numeric
+    input is assumed to already be a Google event ID and passes through."""
+    raw = (raw or '').strip().lstrip('#')
+    if not raw:
+        return None, "Event ID is required. Use calendar_today or calendar_range to find event numbers."
+    scope = _get_gcal_scope()
+    with _id_maps_guard:
+        mapped = _id_maps.get(scope, {}).get(raw)
+    if mapped:
+        return mapped, None
+    if raw.isdigit():
+        return None, (f"No current event listing to resolve #{raw} against. "
+                      "Run calendar_today or calendar_range first, then delete using the fresh number.")
+    return raw, None
 
 
 def _format_events(events, title_line, now=None):
@@ -375,7 +408,8 @@ def _format_events(events, title_line, now=None):
     hours_busy = total_minutes / 60
     lines.append(f"\n{len(events)} event{'s' if len(events) != 1 else ''}, ~{hours_busy:.1f} hours scheduled")
 
-    _id_map_var.set(id_map)
+    with _id_maps_guard:
+        _id_maps[_get_gcal_scope()] = id_map
     return '\n'.join(lines)
 
 
@@ -570,11 +604,9 @@ def execute(function_name, arguments, config, plugin_settings=None):
             return f"Added: \"{title}\" — all day event\n(id: {data.get('id', '')})", True
 
     elif function_name == 'calendar_delete':
-        event_id = arguments.get('event_id', '').strip().lstrip('#')
-        if not event_id:
-            return "Event ID is required. Use calendar_today or calendar_range to find IDs.", False
-        # Resolve short ID (#1, #2) to real Google ID
-        event_id = _id_map_var.get({}).get(event_id, event_id)
+        event_id, err = _resolve_event_id(arguments.get('event_id', ''))
+        if err:
+            return err, False
 
         _, err = _api_delete('/calendars/{calendar_id}/events/' + event_id)
         if err:

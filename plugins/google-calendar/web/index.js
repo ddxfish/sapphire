@@ -26,14 +26,14 @@ function renderCalendarEditor(body, scope, item, helpers) {
 
     body.innerHTML = `
         <div class="am-group">
-            <label for="gcal-client-id">Google Client ID</label>
-            <input type="text" id="gcal-client-id" value="${s.client_id || ''}" placeholder="From Google Cloud Console > Credentials">
-            <div class="am-hint">OAuth2 Client ID from APIs & Services > Credentials</div>
+            <label for="gcal-client-id">Google Client ID (advanced)</label>
+            <input type="text" id="gcal-client-id" value="${s.client_id || ''}" placeholder="Leave blank for Easy Connect">
+            <div class="am-hint">Blank = Easy Connect, no Google Console needed. Or paste your own OAuth2 Client ID to use your own Google client.</div>
         </div>
 
         <div class="am-group">
-            <label for="gcal-client-secret">Google Client Secret</label>
-            <input type="password" id="gcal-client-secret" value="" placeholder="${item ? 'Leave blank to keep existing...' : 'Enter client secret'}">
+            <label for="gcal-client-secret">Google Client Secret (advanced)</label>
+            <input type="password" id="gcal-client-secret" value="" placeholder="${item ? 'Leave blank to keep existing...' : 'Only needed with your own Client ID'}">
         </div>
 
         <div class="am-group">
@@ -58,11 +58,6 @@ function renderCalendarEditor(body, scope, item, helpers) {
         const client_id = body.querySelector('#gcal-client-id').value.trim();
         const client_secret = body.querySelector('#gcal-client-secret').value.trim();
         const calendar_id = body.querySelector('#gcal-calendar-id').value.trim() || 'primary';
-
-        if (!client_id) {
-            helpers.showResult(false, 'Client ID is required');
-            return;
-        }
 
         btn.disabled = true;
         btn.textContent = 'Saving...';

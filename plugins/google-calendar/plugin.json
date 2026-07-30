@@ -1,7 +1,7 @@
 {
   "name": "google-calendar",
   "short_display_name": "Google Calendar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Google Calendar — view schedule, add and remove events",
   "author": "sapphire",
   "url": "https://sapphireblue.dev",
@@ -48,16 +48,23 @@
       {
         "key": "GCAL_CLIENT_ID",
         "type": "string",
-        "label": "Google Client ID",
+        "label": "Google Client ID (advanced)",
         "default": "",
-        "help": "OAuth2 Client ID from Google Cloud Console (APIs & Services > Credentials)"
+        "help": "Leave blank for Easy Connect (no Google Console needed). Advanced: paste your own OAuth2 Client ID to use your own Google Cloud client instead."
       },
       {
         "key": "GCAL_CLIENT_SECRET",
         "type": "string",
-        "label": "Google Client Secret",
+        "label": "Google Client Secret (advanced)",
         "default": "",
-        "help": "OAuth2 Client Secret from Google Cloud Console"
+        "help": "Only needed with your own Client ID above. Leave blank for Easy Connect."
+      },
+      {
+        "key": "GCAL_RELAY_URL",
+        "type": "string",
+        "label": "Easy Connect relay",
+        "default": "https://oauth.sapphireblue.dev",
+        "help": "Relay used for Easy Connect. Change only if you run your own relay."
       },
       {
         "key": "GCAL_CALENDAR_ID",
@@ -76,7 +83,7 @@
         "action": "/api/plugin/google-calendar/auth",
         "status": "/api/plugin/google-calendar/status",
         "disconnect": "/api/plugin/google-calendar/disconnect",
-        "help": "Authorize Sapphire to access your Google Calendar. Add your redirect URI in Google Console first."
+        "help": "Authorize Sapphire to access your Google Calendar. With no Client ID set this uses Easy Connect — just click and approve. (Google may show an 'unverified app' warning: Advanced > Continue.)"
       }
     ]
   }
