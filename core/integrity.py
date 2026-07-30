@@ -30,11 +30,10 @@ EXCLUDE_FILES = {"core_manifest.json"}
 
 
 def _hash_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    # CRLF-normalized like plugin signing (plugin_verify.py) — Windows checkouts
+    # with autocrlf=true would otherwise mismatch every text file.
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def _tracked_files():
