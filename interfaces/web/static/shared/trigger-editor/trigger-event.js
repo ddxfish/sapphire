@@ -133,8 +133,10 @@ export function wireEventTrigger(modal, opts = {}) {
         if (tfContainer && triggerConfig) {
             tfContainer.dataset.triggerConfig = JSON.stringify(triggerConfig);
         }
-        _loadEventSources(modal, triggerConfig?.filter);
+        // Wire BEFORE load — _loadEventSources synchronously builds filter rows,
+        // and _updateFilterPreview needs the preview selector _wireFilterRows stamps.
         _wireFilterRows(modal, '#ed-filter-rows', '#ed-filter-add', '#ed-filter-preview');
+        _loadEventSources(modal, triggerConfig?.filter);
 
         // Rebuild filter key dropdowns + task fields when source changes
         modal.querySelector('#ed-event-source')?.addEventListener('change', e => {
@@ -210,16 +212,16 @@ async function _loadEventSources(modal, initialFilter) {
     // flight was silently wiping both (saved filter -> null, source -> '').
     // Free-text rows now; upgraded to dropdowns when sources arrive.
     const savedSource = select.dataset.currentValue;
-    if (savedSource && !Array.from(select.options).some(o => o.value === savedSource)) {
-        const opt = document.createElement('option');
-        opt.value = savedSource;
-        opt.textContent = savedSource;
-        opt.selected = true;
-        select.appendChild(opt);
-    }
-    _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
-
     try {
+        if (savedSource && !Array.from(select.options).some(o => o.value === savedSource)) {
+            const opt = document.createElement('option');
+            opt.value = savedSource;
+            opt.textContent = savedSource;
+            opt.selected = true;
+            select.appendChild(opt);
+        }
+        _buildFilterRows(modal, '#ed-filter-rows', initialFilter, null);
+
         const res = await fetch('/api/events/sources', { signal: AbortSignal.timeout(10000) });
         if (!res.ok) throw new Error('Failed to fetch event sources');
         const data = await res.json();
@@ -263,8 +265,9 @@ async function _loadEventSources(modal, initialFilter) {
                          Object.keys(live).length ? live : initialFilter,
                          _fieldsFor(select.value));
         _renderTaskFields(modal);
-    } catch {
-        select.innerHTML = '<option value="">Select event source...</option><option value="" disabled>Could not load sources</option>';
+    } catch (e) {
+        console.error('[trigger-editor] event sources load failed:', e);
+        select.innerHTML = `<option value="">Select event source...</option><option value="" disabled>Could not load sources — ${_esc(e?.message || 'unknown error')}</option>`;
         if (savedSource) {
             const opt = document.createElement('option');
             opt.value = savedSource;
@@ -342,7 +345,9 @@ function _readFilterRows(modal, containerSel) {
 
 function _updateFilterPreview(modal, containerSel) {
     const container = modal.querySelector(containerSel);
-    const preview = modal.querySelector(container?.dataset.preview || '');
+    const previewSel = container?.dataset.preview;
+    if (!previewSel) return;   // preview not wired yet — querySelector('') throws
+    const preview = modal.querySelector(previewSel);
     if (!preview) return;
     const n = Object.keys(_readFilterRows(modal, containerSel)).length;
     preview.textContent = n ? `${n} active` : '';

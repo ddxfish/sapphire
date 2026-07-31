@@ -310,7 +310,7 @@
     "interfaces/web/static/shared/trigger-editor/ai-config.js": "9b70b751968e2fddea340d5afb939490711c44365d6ad48af97ca73bdd80ad9f",
     "interfaces/web/static/shared/trigger-editor/editor.js": "63aab9e0d2bd164d3ed4a21b59bae961372ebc8c217034e55ed191f6a41083f8",
     "interfaces/web/static/shared/trigger-editor/trigger-cron.js": "3ff39580eea8c28414d730be7135c719dafb4e8a48572c2d6dc0ef849387a2b4",
-    "interfaces/web/static/shared/trigger-editor/trigger-event.js": "473948cc8c1dc732fc4c2539ca0a112b30692e40cd5237553598646e3d3d57a5",
+    "interfaces/web/static/shared/trigger-editor/trigger-event.js": "162ee7df30a6efb37635a14a1cf722e43d734e12d96fe9d3a02b490556857705",
     "interfaces/web/static/shared/trigger-realtime.js": "d8d3462794ed936ce54ff47af2b20915df884accc6f1795d8d616d6dc21fb0d5",
     "interfaces/web/static/shared/url-safety.js": "9408ae9f4c382d16b20b67d2fff62f89190a8980a40fb8a984596580e701cb8b",
     "interfaces/web/static/style.css": "c821811ad5139696c42c87f338bd65c11459d1687aa151b2201a0512e6c2425b",
