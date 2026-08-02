@@ -60,7 +60,6 @@ export default {
                     <div class="setting-input">
                         <label class="setting-toggle">
                             <input type="checkbox" id="setting-AVATARS_IN_CHAT" data-key="AVATARS_IN_CHAT" ${avatars ? 'checked' : ''}>
-                            <span>${avatars ? 'Enabled' : 'Disabled'}</span>
                         </label>
                     </div>
                 </div>

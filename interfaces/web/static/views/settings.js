@@ -509,7 +509,6 @@ function renderInput(key, value, type) {
     if (type === 'checkbox') {
         return `<label class="setting-toggle">
             <input type="checkbox" id="${id}" data-key="${key}" ${value ? 'checked' : ''}>
-            <span>${value ? 'Enabled' : 'Disabled'}</span>
         </label>`;
     }
     if (type === 'json') {
@@ -657,11 +656,6 @@ function attachGenericListeners(el) {
         const row = e.target.closest('.setting-row');
         if (row) row.classList.add('modified');
 
-        // Update toggle label
-        if (e.target.type === 'checkbox') {
-            const span = e.target.parentElement?.querySelector('span');
-            if (span) span.textContent = e.target.checked ? 'Enabled' : 'Disabled';
-        }
     });
 
     // Reset + Help clicks

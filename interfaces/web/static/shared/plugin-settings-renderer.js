@@ -267,7 +267,6 @@ function renderWidget(field, value) {
         case 'toggle':
             return `<label class="setting-toggle">
                 <input type="checkbox" id="${id}" ${value ? 'checked' : ''}>
-                <span>${value ? 'Enabled' : 'Disabled'}</span>
             </label>`;
 
         case 'number':
@@ -413,8 +412,6 @@ function attachConfirmGate(container, field, managed) {
                 e.target.value = previousValue;
             } else if (widget === 'toggle') {
                 e.target.checked = previousValue === 'true';
-                const span = e.target.parentElement?.querySelector('span');
-                if (span) span.textContent = e.target.checked ? 'Enabled' : 'Disabled';
             } else if (widget === 'radio') {
                 const prev = container.querySelector(`input[name="${id}"][value="${previousValue}"]`);
                 if (prev) prev.checked = true;

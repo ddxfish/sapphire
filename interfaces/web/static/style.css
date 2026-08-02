@@ -2654,8 +2654,37 @@ div.hb-response-summary {
 .setting-row:has(.setting-json) { grid-column: 1 / -1; }
 
 .setting-toggle { display: flex; align-items: center; gap: 8px; font-size: var(--font-sm); cursor: pointer; }
+/* Slider switch — state shown by knob position + color, so no Enabled/Disabled
+   text is needed (stamped state-words went stale; removed 2026-08-01). */
 .setting-toggle input[type="checkbox"] {
-    width: 16px; height: 16px; accent-color: var(--trim, var(--accent));
+    appearance: none;
+    -webkit-appearance: none;
+    width: 36px; height: 20px;
+    border-radius: 10px;
+    background: var(--bg-secondary, #2a2b3e);
+    border: 1px solid var(--border, #444);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    flex: none;
+    margin: 0;
+}
+.setting-toggle input[type="checkbox"]::before {
+    content: '';
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    background: var(--text-muted, #888);
+    transition: transform 0.15s, background 0.15s;
+}
+.setting-toggle input[type="checkbox"]:checked {
+    background: var(--trim, var(--accent));
+    border-color: var(--trim, var(--accent));
+}
+.setting-toggle input[type="checkbox"]:checked::before {
+    transform: translateX(16px);
+    background: #fff;
 }
 .setting-toggle span { color: var(--text-secondary); }
 

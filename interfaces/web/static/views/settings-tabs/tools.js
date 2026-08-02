@@ -54,7 +54,6 @@ function gateRow(id, label, help, checked) {
             <div class="setting-input">
                 <label class="setting-toggle">
                     <input type="checkbox" id="${id}" ${checked ? 'checked' : ''}>
-                    <span>${checked ? 'Enabled' : 'Disabled'}</span>
                 </label>
             </div>
         </div>`;
