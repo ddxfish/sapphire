@@ -1,3 +1,5 @@
+# 2.9.4 - Game Room
+- Added a game room to Chat > Game Room
 # 2.9.3 - Google Calendar
 - Added oauth relay for easy Google Calendar setup
 # 2.9.2 - Pip conflict resolution
