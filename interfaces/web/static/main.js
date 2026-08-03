@@ -230,34 +230,18 @@ async function init() {
                     const navApps = allApps.filter(a => a.nav);
                     const gridApps = allApps.filter(a => !a.nav);
 
-                    // Inject nav-promoted plugin apps into the navrail
-                    const MAX_NAV_APPS = 3;
-                    const rail = document.getElementById('nav-rail');
-                    const navAppsBtn = document.getElementById('nav-apps');
-                    for (const app of navApps.slice(0, MAX_NAV_APPS)) {
-                        // Create nav item — use DOM API for icon/label since
-                        // they originate from plugin manifest data which is
-                        // user-supplied and shouldn't reach innerHTML.
-                        // Day-ruiner scout 2026-05-07 #A.
-                        const btn = document.createElement('button');
-                        btn.className = 'nav-item';
-                        btn.dataset.view = `app-${app.name}`;
-                        const iconSpan = document.createElement('span');
-                        iconSpan.className = 'nav-icon';
-                        iconSpan.textContent = app.icon || '📦';
-                        const labelSpan = document.createElement('span');
-                        labelSpan.className = 'nav-label';
-                        labelSpan.textContent = app.label || '';
-                        btn.appendChild(iconSpan);
-                        btn.appendChild(labelSpan);
-                        if (navAppsBtn) rail.insertBefore(btn, navAppsBtn);
-                        else {
-                            const spacer = rail.querySelector('.nav-spacer');
-                            if (spacer) rail.insertBefore(btn, spacer);
-                            else rail.appendChild(btn);
-                        }
+                    // nav: true → own rail slot (capped). nav: "<group>" → item
+                    // in that group's flyout (no rail cost, uncapped) — same
+                    // mechanism the Mind flyout uses for plugin memory layers.
+                    // Unknown/malformed group falls back to a rail slot.
+                    const flyoutFor = a => (typeof a.nav === 'string' && /^[a-z][a-z0-9-]*$/.test(a.nav))
+                        ? document.querySelector(`.nav-item.nav-group-parent[data-view="${a.nav}"] .nav-flyout`)
+                        : null;
+                    const flyoutApps = navApps.filter(a => flyoutFor(a));
+                    const railApps = navApps.filter(a => !flyoutFor(a));
 
-                        // Create view container
+                    // View container + router registration — shared by both paths
+                    const promoteAppView = (app, group) => {
                         const appContent = document.getElementById('app-content');
                         if (appContent) {
                             const viewDiv = document.createElement('div');
@@ -266,8 +250,6 @@ async function init() {
                             viewDiv.style.display = 'none';
                             appContent.appendChild(viewDiv);
                         }
-
-                        // Register router view
                         const appName = app.name;
                         registerView(`app-${appName}`, {
                             init(el) {},
@@ -293,12 +275,53 @@ async function init() {
                                     el.dataset.loaded = '';
                                 }
                             }
-                        });
+                        }, group ? { group } : {});
+                    };
+
+                    // Inject nav-promoted plugin apps into the navrail
+                    const MAX_NAV_APPS = 3;
+                    const rail = document.getElementById('nav-rail');
+                    const navAppsBtn = document.getElementById('nav-apps');
+                    for (const app of railApps.slice(0, MAX_NAV_APPS)) {
+                        // Create nav item — use DOM API for icon/label since
+                        // they originate from plugin manifest data which is
+                        // user-supplied and shouldn't reach innerHTML.
+                        // Day-ruiner scout 2026-05-07 #A.
+                        const btn = document.createElement('button');
+                        btn.className = 'nav-item';
+                        btn.dataset.view = `app-${app.name}`;
+                        const iconSpan = document.createElement('span');
+                        iconSpan.className = 'nav-icon';
+                        iconSpan.textContent = app.icon || '📦';
+                        const labelSpan = document.createElement('span');
+                        labelSpan.className = 'nav-label';
+                        labelSpan.textContent = app.label || '';
+                        btn.appendChild(iconSpan);
+                        btn.appendChild(labelSpan);
+                        if (navAppsBtn) rail.insertBefore(btn, navAppsBtn);
+                        else {
+                            const spacer = rail.querySelector('.nav-spacer');
+                            if (spacer) rail.insertBefore(btn, spacer);
+                            else rail.appendChild(btn);
+                        }
+                        promoteAppView(app);
+                    }
+
+                    // Flyout-promoted apps: item inside the group's flyout
+                    for (const app of flyoutApps) {
+                        const item = document.createElement('div');
+                        item.className = 'nav-flyout-item';
+                        item.dataset.view = `app-${app.name}`;
+                        item.setAttribute('role', 'button');
+                        item.setAttribute('tabindex', '0');
+                        item.textContent = `${app.icon || '📦'} ${app.label || app.name}`;
+                        flyoutFor(app).appendChild(item);
+                        promoteAppView(app, app.nav);
                     }
 
                     // Show Apps grid nav if there are non-nav apps (or overflow nav apps)
                     const appsNavBtn = document.getElementById('nav-apps');
-                    const hasGridApps = gridApps.length > 0 || navApps.length > MAX_NAV_APPS;
+                    const hasGridApps = gridApps.length > 0 || railApps.length > MAX_NAV_APPS;
                     if (appsNavBtn && hasGridApps) appsNavBtn.style.display = '';
                 }
             } catch {}

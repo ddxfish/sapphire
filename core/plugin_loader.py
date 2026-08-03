@@ -651,6 +651,19 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: memory layer registration failed: {e}")
 
+        # Register games (declarations consumed by a game HOST plugin, e.g.
+        # game-room; harmless when no host is loaded — the registry just holds)
+        game_defs = capabilities.get("games", [])
+        if game_defs:
+            try:
+                from core.games_registry import register_game
+                accepted = [gd.get("id") for gd in game_defs
+                            if isinstance(gd, dict) and register_game(gd.get("id"), gd, name)]
+                if accepted:
+                    info["registered_games"] = accepted
+            except Exception as e:
+                logger.error(f"[PLUGINS] {name}: game registration failed: {e}")
+
         # Register prompt pack (mirror-only — merged into the prompt system
         # at read time, never written to user/prompts; user wins collisions)
         prompts_decl = capabilities.get("prompts", {})
@@ -941,6 +954,15 @@ class PluginLoader:
                 _unreg_layers(name)
             except Exception as e:
                 logger.warning(f"[PLUGINS] {name}: failed to unregister memory layers: {e}")
+
+        # Unregister games (they go dark in the host; plugin-owned state and
+        # saves survive until re-enable)
+        if info.get("registered_games"):
+            try:
+                from core.games_registry import unregister_plugin as _unreg_games
+                _unreg_games(name)
+            except Exception as e:
+                logger.warning(f"[PLUGINS] {name}: failed to unregister games: {e}")
 
         # Unregister prompt pack (pack prompts go dark; if one was the active
         # prompt and no user entry shadows it, the registry hands off to

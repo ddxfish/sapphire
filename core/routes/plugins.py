@@ -505,6 +505,15 @@ async def list_apps(_=Depends(require_login)):
     return {"apps": apps}
 
 
+@router.get("/api/games")
+async def list_registered_games(_=Depends(require_login)):
+    """List games registered via capabilities.games (see core/games_registry).
+    Consumed by game HOST plugins (game-room library tiles); empty when no
+    game plugins are enabled — core stays game-agnostic."""
+    from core.games_registry import list_games, generation
+    return {"games": list_games(), "generation": generation()}
+
+
 @router.get("/api/themes")
 async def list_themes(_=Depends(require_login)):
     """List all available themes — core + plugin manifest themes."""

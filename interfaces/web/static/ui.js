@@ -566,6 +566,16 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     // Combine all chats for the hidden select (needs all chats for switching)
     const allChats = [...chats, ...privateChats];
 
+    // Mode-tagged chats (game/story sessions — plugin surfaces own them) stay
+    // out of the VISIBLE picker, active chat excepted (same rule as archived).
+    // The hidden select above keeps everything — it's switching infrastructure.
+    const _visible = c => {
+        const m = c.mode ?? c.settings?.mode;
+        return !m || m === 'chat' || c.name === activeChat;
+    };
+    chats = chats.filter(_visible);
+    privateChats = privateChats.filter(_visible);
+
     // Update hidden select (state holder used throughout the app)
     const select = document.getElementById('chat-select');
     if (select) {

@@ -1133,13 +1133,24 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
         session_manager = system.llm_chat.session_manager
         new_settings = data["settings"]
 
-        if chat_name != session_manager.get_active_chat_name():
-            raise HTTPException(status_code=400, detail="Can only update settings for active chat")
-
         if new_settings.get('private_chat'):
             from core.settings_manager import settings as sm_settings
             if sm_settings.is_managed():
                 raise HTTPException(status_code=403, detail="Private chats are disabled in managed mode")
+
+        if chat_name != session_manager.get_active_chat_name():
+            # Non-active chats write straight to storage — same path the Twilio
+            # daemon uses to configure call chats it never activates. No live
+            # apply / toolset sync: the chat isn't driving the brain. (The old
+            # 400 guard predated set_named_chat_settings; game/story sessions
+            # tag themselves at creation through here — mode-tagged chats,
+            # tmp/chat-surface-plan.md.)
+            if not session_manager.set_named_chat_settings(chat_name, new_settings):
+                raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+            origin = request.headers.get('X-Session-ID')
+            publish(Events.CHAT_SETTINGS_CHANGED, {"chat": chat_name, "settings": new_settings, "origin": origin})
+            return {"status": "success", "message": f"Settings updated for '{chat_name}'",
+                    "toolset": None, "functions": [], "state_tools": []}
 
         if not session_manager.update_chat_settings(new_settings):
             raise HTTPException(status_code=500, detail="Failed to update settings")

@@ -1841,6 +1841,10 @@ class ChatSessionManager:
                         "created": row["created_at"],
                         "private_chat": bool(settings.get("private_chat")),
                         "archived": bool(settings.get("archived")),
+                        # Mode-tagged chats (game/story sessions) belong to their
+                        # plugin surface; core surfaces them like private/archived
+                        # and stays agnostic about what the modes mean.
+                        "mode": settings.get("mode") or "",
                         "settings": settings
                     }
                     if stats:

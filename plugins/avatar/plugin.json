@@ -15,6 +15,16 @@
       "content": "sidebar.html",
       "script": "sidebar.js"
     },
+    "games": [
+      {
+        "id": "missile-command",
+        "title": "Missile Command",
+        "genre": "arcade",
+        "desc": "Protect Sapphire from incoming missiles \u2014 click to shoot, waves get harder.",
+        "icon": "\ud83d\ude80",
+        "surfaces": ["chat_sidebar"]
+      }
+    ],
     "hooks": {
       "prompt_inject": "hooks/prompt_inject.py"
     },
