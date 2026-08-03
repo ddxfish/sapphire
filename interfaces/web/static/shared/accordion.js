@@ -39,13 +39,17 @@ export function accordionHtml({ id, title, icon = '', desc = '', content = '', o
 }
 
 export function initAccordions(root, ns) {
+    // Restore: only touch sections with a stored preference or an explicit
+    // default — sections opened transiently by code are left as they are
+    // (matches the old chat-sidebar restore, which only ever OPENED).
     const state = _load(ns);
     root.querySelectorAll('.sidebar-accordion[data-acc]').forEach(sec => {
         const header = sec.querySelector('.sidebar-accordion-header');
         const content = sec.querySelector('.sidebar-accordion-content');
         if (!header || !content) return;
         const id = sec.dataset.acc;
-        const open = (id in state) ? !!state[id] : sec.dataset.accOpen === '1';
+        if (!(id in state) && sec.dataset.accOpen !== '1') return;
+        const open = (id in state) ? !!state[id] : true;
         header.classList.toggle('open', open);
         content.style.display = open ? 'block' : 'none';
     });
@@ -57,12 +61,13 @@ export function initAccordions(root, ns) {
         if (e.target.closest('a, button, input, select, label')) return;
         const header = e.target.closest('.sidebar-accordion-header');
         if (!header || !root.contains(header)) return;
-        const sec = header.closest('.sidebar-accordion[data-acc]');
+        const sec = header.closest('.sidebar-accordion');
         if (!sec) return;
         const open = !header.classList.contains('open');
         header.classList.toggle('open', open);
         const content = sec.querySelector('.sidebar-accordion-content');
         if (content) content.style.display = open ? 'block' : 'none';
+        if (!sec.dataset.acc) return;    // toggles without an id don't persist
         const st = _load(ns);
         st[sec.dataset.acc] = open;
         _save(ns, st);

@@ -19,6 +19,8 @@ import { getInitData } from './shared/init-data.js';
 // New architecture
 import { registerView, initRouter } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
+import { renderSurface } from './surface/surface.js';
+import { chatMode } from './surface/chat-mode.js';
 
 // View modules loaded dynamically — a broken view cannot kill the app
 const _v = window.__v ? `?v=${window.__v}` : '';
@@ -147,6 +149,11 @@ async function init() {
     const t0 = performance.now();
 
     try {
+        // Render the chat Surface skeleton FIRST — ui.bindChatDom() and
+        // initElements() cache refs from inside it. The skeleton lived in
+        // index.html until Phase 1 of tmp/chat-surface-plan.md.
+        renderSurface(document.getElementById('view-chat'), chatMode);
+        ui.bindChatDom();
         initAppearance();
         initElements();
 

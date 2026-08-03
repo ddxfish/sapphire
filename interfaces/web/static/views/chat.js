@@ -12,6 +12,7 @@ import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } fro
 import { initAgentStatus } from '../features/agent-status.js';
 import { mountScenePicker } from '../shared/scene-picker.js';
 import { setupModalClose } from '../shared/modal.js';
+import { initAccordions } from '../shared/accordion.js';
 import {
     renderScopeDropdowns,
     fetchScopeData,
@@ -137,19 +138,21 @@ export default {
             loadSidebar();
         });
 
-        // Accordion headers in sidebar (event delegation — handles core + plugin accordions)
-        // Persists open/closed state to localStorage so the user's choices
-        // (especially "Avatar always open") survive across reloads. 2026-04-30.
-        const sbFull = container.querySelector('.sb-full-content');
-        if (sbFull) sbFull.addEventListener('click', e => {
-            const header = e.target.closest('.sidebar-accordion-header');
-            if (!header) return;
-            const content = header.nextElementSibling;
-            const open = header.classList.toggle('open');
-            content.style.display = open ? 'block' : 'none';
-            const section = header.closest('.sidebar-accordion');
-            if (section) _persistAccordionOpen(section, open);
-        });
+        // Accordion behavior + persisted open-state — shared/accordion.js
+        // (Phase 1 extraction; replaces the local delegate + persistence).
+        // One-time migration: the old storage key's entries ("core:<title>" /
+        // "plugin:<name>") match the data-acc ids exactly, so state carries.
+        try {
+            const old = localStorage.getItem('sapphire_sb_accordion_state');
+            if (old) {
+                if (!localStorage.getItem('accordion-state:chat-sidebar')) {
+                    localStorage.setItem('accordion-state:chat-sidebar', old);
+                }
+                localStorage.removeItem('sapphire_sb_accordion_state');
+            }
+        } catch { /* localStorage unavailable — persistence is a nicety */ }
+        const sbRoot = container.querySelector('.chat-sidebar');
+        if (sbRoot) initAccordions(sbRoot, 'chat-sidebar');
 
         // Sidebar chat picker
         const sbPicker = container.querySelector('#sb-chat-picker');
@@ -543,59 +546,8 @@ async function loadDocuments(container, chatName) {
 // stored map (smaller storage, default-closed for new accordions).
 // 2026-04-30 — addresses "I keep forgetting to open the avatar."
 
-const _ACCORDION_STATE_KEY = 'sapphire_sb_accordion_state';
-
-function _accordionKey(section) {
-    if (section.dataset.pluginAccordion) {
-        return `plugin:${section.dataset.pluginAccordion}`;
-    }
-    const header = section.querySelector('.sidebar-accordion-header');
-    if (!header) return '';
-    // First non-arrow span carries the human-readable label
-    const titleSpan = header.querySelector('span:not(.accordion-arrow)');
-    const text = (titleSpan?.textContent || header.textContent || '').trim();
-    return text ? `core:${text}` : '';
-}
-
-function _loadAccordionState() {
-    try {
-        return JSON.parse(localStorage.getItem(_ACCORDION_STATE_KEY) || '{}') || {};
-    } catch {
-        return {};
-    }
-}
-
-function _saveAccordionState(state) {
-    try {
-        localStorage.setItem(_ACCORDION_STATE_KEY, JSON.stringify(state));
-    } catch {
-        // localStorage full / disabled — silently skip; failure is harmless.
-    }
-}
-
-function _persistAccordionOpen(section, open) {
-    const key = _accordionKey(section);
-    if (!key) return;
-    const state = _loadAccordionState();
-    if (open) state[key] = true;
-    else delete state[key];  // closed = absence
-    _saveAccordionState(state);
-}
-
-function _restoreAccordionStates(container) {
-    const state = _loadAccordionState();
-    const sections = container.querySelectorAll('.sidebar-accordion');
-    sections.forEach(section => {
-        const key = _accordionKey(section);
-        if (!key || !state[key]) return;
-        const header = section.querySelector('.sidebar-accordion-header');
-        const content = section.querySelector('.sidebar-accordion-content');
-        if (header && content) {
-            header.classList.add('open');
-            content.style.display = 'block';
-        }
-    });
-}
+// Accordion open-state persistence moved to shared/accordion.js (Phase 1,
+// tmp/chat-surface-plan.md) — data-acc ids preserve the old key format.
 
 async function _loadPluginAccordions(container, init) {
     const slot = container.querySelector('#sb-plugin-accordions');
@@ -626,6 +578,7 @@ async function _loadPluginAccordions(container, init) {
         const section = document.createElement('div');
         section.className = 'sidebar-section sidebar-accordion';
         section.dataset.pluginAccordion = plugin.name;
+        section.dataset.acc = `plugin:${plugin.name}`;   // accordion.js persistence id
 
         const header = document.createElement('div');
         header.className = 'sidebar-accordion-header';
@@ -884,9 +837,10 @@ async function loadSidebar() {
 
         // Restore each accordion's open/closed state from localStorage.
         // Runs after plugin accordions are in the DOM so it covers core
-        // AND plugin sections in one pass. The user's "Avatar open"
-        // preference now survives reloads. 2026-04-30.
-        _restoreAccordionStates(container);
+        // AND plugin sections in one pass (initAccordions restores every
+        // call; its click delegate binds once). 2026-04-30 / 2026-08-02.
+        const sbRootNow = container.querySelector('.chat-sidebar');
+        if (sbRootNow) initAccordions(sbRootNow, 'chat-sidebar');
 
         sidebarLoaded = true;
     } catch (e) {

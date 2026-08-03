@@ -5,11 +5,19 @@ import * as Parsing from './ui-parsing.js';
 import * as Streaming from './ui-streaming.js';
 import * as api from './api.js';
 
-// DOM references
-const chat = document.getElementById('chat-container');
-const chatbgOverlay = document.getElementById('chatbg-overlay');
+// DOM references. The chat surface is JS-rendered at boot (surface/surface.js)
+// so #chat-container / #chatbg-overlay don't exist at module-eval time —
+// main.js calls bindChatDom() right after renderSurface(), before any paint.
+// The <template> elements live in static HTML and are safe to grab here.
+let chat = document.getElementById('chat-container');
+let chatbgOverlay = document.getElementById('chatbg-overlay');
 const msgTpl = document.getElementById('message-template');
 const statusTpl = document.getElementById('status-template');
+
+export function bindChatDom() {
+    chat = document.getElementById('chat-container');
+    chatbgOverlay = document.getElementById('chatbg-overlay');
+}
 
 // Avatar display setting (loaded from /api/init)
 let avatarsInChat = true;
