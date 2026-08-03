@@ -671,7 +671,7 @@ class ClaudeProvider(BaseProvider):
         try:
             from core.ghost_messages import _ENVELOPE_HEADER as _GHOST_PREFIX
         except Exception:
-            _GHOST_PREFIX = "[Sapphire turn-context"
+            _GHOST_PREFIX = "[System context from Sapphire's own app"
         second_to_last = claude_messages[-2]
         _content = second_to_last.get("content") if isinstance(second_to_last.get("content"), str) else ""
         is_ghost = (

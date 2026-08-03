@@ -28,7 +28,7 @@ Design:
         - Runner attributes each contribution to the plugin name in the envelope
 
     Envelope (visible to the assistant, INVISIBLE to the user):
-        [Sapphire turn-context — operator-injected, not user voice]
+        [System context from Sapphire's own app — not written by the user]
         - Time: Tuesday, May 8, 8:55 PM
         - Spice: Speak more urgently in this reply.
         - weather: Light rain in user's area.
@@ -73,7 +73,13 @@ logger = logging.getLogger(__name__)
 # emits its own "System Note:" or context line inside its contribution so
 # the AI gets actionable per-plugin guidance instead of generic boilerplate.
 # 2026-05-14.
-_ENVELOPE_HEADER = "[Sapphire turn-context — operator-injected, not user voice]"
+#
+# Reworded 2026-08-03: the old header said "operator-injected" — the literal
+# vocabulary of a prompt-injection attack, self-asserting authority from
+# inside a user-role message. Models (correctly) flagged it as suspicious,
+# especially next to images. Plain words now: what it is, who wrote it.
+# Same consent design — attribution per line, nothing hidden.
+_ENVELOPE_HEADER = "[System context from Sapphire's own app — not written by the user]"
 
 
 def _datetime_contribution() -> Optional[str]:
