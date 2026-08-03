@@ -567,11 +567,13 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     const allChats = [...chats, ...privateChats];
 
     // Mode-tagged chats (game/story sessions — plugin surfaces own them) stay
-    // out of the VISIBLE picker, active chat excepted (same rule as archived).
-    // The hidden select above keeps everything — it's switching infrastructure.
+    // out of the VISIBLE picker entirely — no active-chat exception (Krem's
+    // isolation ruling 2026-08-03: games/stories are totally separate from
+    // Chats; chat-manage stays the one admin surface that lists everything).
+    // The hidden select above keeps all chats — it's switching infrastructure.
     const _visible = c => {
         const m = c.mode ?? c.settings?.mode;
-        return !m || m === 'chat' || c.name === activeChat;
+        return !m || m === 'chat';
     };
     chats = chats.filter(_visible);
     privateChats = privateChats.filter(_visible);

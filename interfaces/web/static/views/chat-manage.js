@@ -109,7 +109,7 @@ function render() {
         const checked = selected.has(c.name) ? 'checked' : '';
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name">${esc(c.display_name)}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${c.archived ? ' <span class="cm-badge cm-badge-arch">archived</span>' : ''}</td>
+            <td class="cm-name">${esc(c.display_name)}${(c.mode ?? c.settings?.mode) === 'game' ? ' <span class="cm-badge">\u{1F3B2} game</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${c.archived ? ' <span class="cm-badge cm-badge-arch">archived</span>' : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>

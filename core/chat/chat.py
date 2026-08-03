@@ -462,32 +462,47 @@ class LLMChat:
             from core import prompts
             pdata = prompts.get_prompt(settings.get("prompt", "default"))
             system_prompt = (pdata.get("content", "") if isinstance(pdata, dict) else "") or ""
-            tools = self._resolve_toolset_tools(settings.get("toolset", "all"))
+            tools = self._resolve_toolset_tools(settings.get("toolset", "all"),
+                                                settings.get("extra_toolsets"))
             return {"chat": chat_name, "settings": settings,
                     "system_prompt": system_prompt, "tools": tools}
         except Exception as e:
             logger.warning(f"resolve_stream_brain('{chat_name}') failed: {e}")
             return None
 
-    def _resolve_toolset_tools(self, toolset_name):
+    def _resolve_toolset_tools(self, toolset_name, extra_toolsets=None):
         """Toolset name -> tool-schema list, READ-ONLY (mirrors
-        ExecutionContext._resolve_tools; no function_manager mutation)."""
+        ExecutionContext._resolve_tools; no function_manager mutation).
+        extra_toolsets unions module/toolset function sets on top — same
+        semantics as update_enabled_functions (chat setting `extra_toolsets`;
+        'none' + extras is the story engine's default)."""
         fm = self.function_manager
-        if not toolset_name or toolset_name == "none":
+        if (not toolset_name or toolset_name == "none") and not extra_toolsets:
             return None
         try:
-            if toolset_name == "all":
+            from core.toolsets import toolset_manager
+
+            def _fn_names(name):
+                if name in getattr(fm, "function_modules", {}):
+                    return fm.function_modules[name]["available_functions"]
+                if toolset_manager.toolset_exists(name):
+                    return toolset_manager.get_toolset_functions(name)
+                return [name]
+
+            if not toolset_name or toolset_name == "none":
+                tools = []
+            elif toolset_name == "all":
                 tools = list(fm.all_possible_tools)
             else:
-                from core.toolsets import toolset_manager
-                if toolset_name in getattr(fm, "function_modules", {}):
-                    fn_names = fm.function_modules[toolset_name]["available_functions"]
-                elif toolset_manager.toolset_exists(toolset_name):
-                    fn_names = toolset_manager.get_toolset_functions(toolset_name)
-                else:
-                    fn_names = [toolset_name]
-                fn_set = set(fn_names)
+                fn_set = set(_fn_names(toolset_name))
                 tools = [t for t in fm.all_possible_tools if t["function"]["name"] in fn_set]
+            if extra_toolsets:
+                have = {t["function"]["name"] for t in tools}
+                extra_set = set()
+                for name in extra_toolsets:
+                    extra_set |= set(_fn_names(name))
+                extra_set -= have
+                tools += [t for t in fm.all_possible_tools if t["function"]["name"] in extra_set]
             if hasattr(fm, "_apply_mode_filter"):
                 tools = fm._apply_mode_filter(tools)
             return tools or None
@@ -1201,6 +1216,12 @@ class LLMChat:
         task_settings = task_settings or {}
         logger.info(f"[ISOLATED] Starting isolated chat with settings: {list(task_settings.keys())}")
         original_toolset = self.function_manager.current_toolset_name
+        # Capture the active chat's extras too — restoring by name only
+        # strips them from the enabled set (story-tools decay, 2026-08-03)
+        try:
+            original_extras = (self.session_manager.get_chat_settings() or {}).get('extra_toolsets') or None
+        except Exception:
+            original_extras = None
 
         try:
             # Build system prompt from task settings
@@ -1366,4 +1387,4 @@ class LLMChat:
             logger.error(f"[ISOLATED] Chat failed: {e}", exc_info=True)
             return f"Error: {e}"
         finally:
-            self.function_manager.update_enabled_functions([original_toolset])
+            self.function_manager.update_enabled_functions([original_toolset], extra_toolsets=original_extras)

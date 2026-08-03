@@ -14,6 +14,9 @@
 // hooks are gs- classes scoped to the section element — no document ids.
 
 import { getInitData } from '/static/shared/init-data.js';
+import {
+    renderScopeDropdowns, fetchScopeData, populateScopeOptions, readScopeSettings,
+} from '/static/shared/scope-dropdowns.js';
 
 const esc = s => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -194,6 +197,40 @@ export const sysPromptSection = {
     },
 };
 
+// ------------------------------------------------------------------ mind (scopes)
+
+export const mindSection = {
+    key: 'mind', title: '\u{1F9E0} Mind', icon: '',
+    html() {
+        return `<div class="gs-scope-dropdowns"></div>`;
+    },
+    async init(el, ctx) {
+        const init = await getInitData().catch(() => null);
+        const decls = init?.scope_declarations || [];
+        const box = el.querySelector('.gs-scope-dropdowns');
+        if (!decls.length || !box) {
+            el.innerHTML = `<span style="color:var(--text-muted)">No scopes declared.</span>`;
+            return;
+        }
+        const options = {
+            idPrefix: 'gs-',
+            enabledPlugins: new Set(init?.plugins_config?.enabled || []),
+            onNavigate: async (navTarget, scopeValue) => {
+                const [group, tab] = navTarget.split(':');
+                if (scopeValue && scopeValue !== 'none') window._mindScope = scopeValue;
+                const { switchView } = await import('/static/core/router.js');
+                switchView(tab || group);
+            },
+        };
+        renderScopeDropdowns(box, decls, ctx.settings, options);
+        const data = await fetchScopeData(decls);
+        await populateScopeOptions(box, decls, data, ctx.settings, options);
+        box.addEventListener('change', () => {
+            ctx.save(readScopeSettings(box, decls, { idPrefix: 'gs-' }));
+        });
+    },
+};
+
 // ------------------------------------------------------------------ toolset
 
 export const toolsetSection = {
@@ -217,5 +254,5 @@ export const toolsetSection = {
 };
 
 // Order matters: bare fields render in chat's top-of-sidebar order
-// (prompt, toolset, provider+model), accordions follow.
-export const coreSections = [promptSection, toolsetSection, brainSection, voiceSection, sysPromptSection];
+// (prompt, toolset, provider+model), accordions follow (Mind first, like chat).
+export const coreSections = [promptSection, toolsetSection, brainSection, mindSection, voiceSection, sysPromptSection];

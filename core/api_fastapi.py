@@ -155,6 +155,18 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
                 return FileResponse(file_path, media_type=content_type)
             continue
 
+        # Story-pack art: stories/<slug>/backdrops/*.jpg — packs are plugins
+        # with a stories/ dir, and their scene art is web-facing by design.
+        # IMAGES ONLY: the room JSONs beside them carry puzzle solutions and
+        # stay engine-side. 2026-08-03.
+        if path.startswith("stories/"):
+            file_path = (plugin_dir / path).resolve()
+            if (str(file_path).startswith(str(plugin_dir)) and file_path.is_file()
+                    and file_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+                return FileResponse(file_path, media_type=content_type)
+            continue
+
         # Otherwise serve from web/ subdirectory (existing behavior)
         web_dir = (plugin_dir / "web").resolve()
         file_path = (web_dir / path).resolve()
@@ -771,8 +783,9 @@ def _apply_chat_settings(system, settings: dict):
         toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
         if toolset_key:
             toolset_name = settings[toolset_key]
-            system.llm_chat.function_manager.update_enabled_functions([toolset_name])
-            logger.info(f"Applied toolset: {toolset_name}")
+            extras = settings.get("extra_toolsets") or None
+            system.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
+            logger.info(f"Applied toolset: {toolset_name}" + (f" + extras {extras}" if extras else ""))
             publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
     except Exception as e:
         logger.error(f"Error applying toolset: {e}")
@@ -799,7 +812,8 @@ def reapply_if_active(system, domain: str, name: str):
         if chat_settings.get(domain) != name:
             return
         if domain == 'toolset':
-            system.llm_chat.function_manager.update_enabled_functions([name])
+            system.llm_chat.function_manager.update_enabled_functions(
+                [name], extra_toolsets=chat_settings.get('extra_toolsets') or None)
             publish(Events.TOOLSET_CHANGED, {"name": name})
         elif domain == 'prompt':
             data = prompts.get_prompt(name)

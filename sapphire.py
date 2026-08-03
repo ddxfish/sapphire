@@ -118,6 +118,23 @@ class VoiceChatSystem:
             logger.critical(f"Plugin loader failed — ALL plugins unavailable: {e}", exc_info=True)
             self._plugin_load_error = str(e)
 
+        # Re-prime the prompt if the active chat wears a PACK-owned one
+        # (story prompts like 'rose', pack monoliths): _prime_default_prompt
+        # ran before the scan, so those names couldn't resolve yet and boot
+        # fell to the hardcoded fallback until the next chat activation.
+        # Mirrors the toolset resync plugin_loader already does. 2026-08-03.
+        try:
+            from core import prompts as _prompts
+            _want = (self.llm_chat.session_manager.get_chat_settings() or {}).get('prompt')
+            if _want and _prompts.get_active_preset_name() != _want:
+                _pd = _prompts.get_prompt(_want)
+                if isinstance(_pd, dict):
+                    self.llm_chat.set_system_prompt(_pd.get('content', '') or '')
+                    _prompts.set_active_preset_name(_want)
+                    logger.info(f"Re-primed prompt '{_want}' after plugin scan (pack prompt)")
+        except Exception as e:
+            logger.warning(f"Post-scan prompt re-prime failed: {e}")
+
         # Essential-plugin boot assertion — a plugin with manifest.essential=true
         # MUST be loaded or we scream loud. essential can also be a GROUP STRING
         # (e.g. "memory" on both the classic memory plugin and mindpalace): the
@@ -280,7 +297,15 @@ class VoiceChatSystem:
                 prompts.apply_scenario(prompt_name)
             logger.info(f"System primed with '{prompt_name}' prompt.")
         except Exception as e:
-            logger.error(f"FATAL: Could not prime default prompt: {e}")
+            # A missing NAME may be a plugin-pack prompt (story 'rose',
+            # pack monoliths) that registers during the scan a moment from
+            # now — the post-scan re-prime picks it up. Only that case is
+            # routine; anything else is still a real error. 2026-08-03.
+            if isinstance(e, ValueError) and "not found" in str(e):
+                logger.warning(f"Prompt not primed yet ({e}) — pack prompts register "
+                               f"during plugin scan; re-prime follows. Fallback until then.")
+            else:
+                logger.error(f"FATAL: Could not prime default prompt: {e}")
             fallback_prompt = (
                 "You are Sapphire! You have a sparkling personality. \n"
                 "Call me Human Protagonist. You trust me. \n"
@@ -310,8 +335,9 @@ class VoiceChatSystem:
             toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
             if toolset_key:
                 toolset_name = settings[toolset_key]
-                self.llm_chat.function_manager.update_enabled_functions([toolset_name])
-                logger.info(f"Applied toolset on startup: {toolset_name}")
+                extras = settings.get("extra_toolsets") or None
+                self.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
+                logger.info(f"Applied toolset on startup: {toolset_name}" + (f" + extras {extras}" if extras else ""))
             
             logger.info(f"Applied chat settings on startup")
         except Exception as e:

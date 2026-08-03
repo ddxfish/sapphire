@@ -311,8 +311,10 @@ async def get_current_toolset(request: Request, _=Depends(require_login), system
 
 @router.post("/api/toolsets/{toolset_name}/activate")
 async def activate_toolset(toolset_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Activate a toolset."""
-    system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+    """Activate a toolset. The active chat's extra_toolsets ride along —
+    a by-name-only re-apply strips them from the enabled set (2026-08-03)."""
+    extras = (system.llm_chat.session_manager.get_chat_settings() or {}).get('extra_toolsets') or None
+    system.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
     publish(Events.TOOLSET_CHANGED, {"name": toolset_name})
     # Persist to chat settings so it survives restart
     system.llm_chat.session_manager.update_chat_settings({"toolset": toolset_name})

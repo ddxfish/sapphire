@@ -1015,7 +1015,41 @@ class FunctionManager:
         with self._tools_lock:
             return dict(self.execution_map)
 
-    def update_enabled_functions(self, enabled_names: list):
+    def update_enabled_functions(self, enabled_names: list, extra_toolsets: list = None):
+        """Update enabled tools from a toolset/ability name, optionally
+        unioning extra module/toolset function sets on top WITHOUT changing
+        current_toolset_name — the "toolset + extras" primitive. Driven by
+        the per-chat `extra_toolsets` settings list (first customer: the
+        story engine's "include story tools" checkbox; 'none' + extras is
+        the story default). Read-only mirrors (_resolve_toolset_tools,
+        ExecutionContext._resolve_tools) implement the same union."""
+        self._update_enabled_base(enabled_names)
+        if extra_toolsets:
+            self._union_extra_toolsets(extra_toolsets)
+
+    def _union_extra_toolsets(self, extras: list):
+        from core.toolsets import toolset_manager
+        with self._tools_lock:
+            have = {t['function']['name'] for t in self._enabled_tools}
+            for name in extras:
+                try:
+                    if name in self.function_modules:
+                        fn_names = self.function_modules[name]['available_functions']
+                    elif toolset_manager.toolset_exists(name):
+                        fn_names = toolset_manager.get_toolset_functions(name)
+                    else:
+                        logger.warning(f"extra_toolsets: '{name}' is no known module/toolset — skipped")
+                        continue
+                    fn_set = set(fn_names) - have
+                    if fn_set:
+                        self._enabled_tools.extend(
+                            t for t in self.all_possible_tools
+                            if t['function']['name'] in fn_set)
+                        have |= fn_set
+                except Exception as e:
+                    logger.warning(f"extra_toolsets '{name}' union failed: {e}")
+
+    def _update_enabled_base(self, enabled_names: list):
         """Update enabled tools based on function names from config or ability name."""
         with self._tools_lock:
             # "custom" is a sentinel for "ad-hoc selection", not a real

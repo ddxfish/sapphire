@@ -170,7 +170,8 @@ class StreamingChat:
                         _pd = _prompts.get_prompt(_pn)
                         sess["system_prompt"] = (_pd.get("content", "") if isinstance(_pd, dict) else "") or ""
                         sess["tools"] = self.main_chat._resolve_toolset_tools(
-                            sess["settings"].get("toolset", "all"))
+                            sess["settings"].get("toolset", "all"),
+                            sess["settings"].get("extra_toolsets"))
                         _brain_token = stream_brain.set_override(sess)
                         logger.info(f"[A1] stream brain override → chat '{_tgt}' "
                                     f"(provider={sess['settings'].get('llm_primary')}, "

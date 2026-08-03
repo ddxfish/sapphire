@@ -1118,7 +1118,20 @@ class PluginLoader:
                         with fm._tools_lock:
                             current = fm.current_toolset_name
                         if current:
-                            fm.update_enabled_functions([current])
+                            # Carry the active chat's extra_toolsets through the
+                            # resync — a by-name-only re-apply silently strips
+                            # them from the enabled set (story-tools decay bug,
+                            # 2026-08-03). Settings survive; runtime must too.
+                            extras = None
+                            try:
+                                from core.api_fastapi import get_system
+                                _sys = get_system()
+                                if _sys is not None:
+                                    extras = (_sys.llm_chat.session_manager.get_chat_settings()
+                                              or {}).get('extra_toolsets') or None
+                            except Exception:
+                                pass
+                            fm.update_enabled_functions([current], extra_toolsets=extras)
                     logger.info(f"[PLUGINS] Reloaded: {name}")
                     from core.event_bus import publish, Events
                     publish(Events.PLUGIN_RELOADED, {"plugin": name})
