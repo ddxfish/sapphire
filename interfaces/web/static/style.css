@@ -1032,6 +1032,17 @@ body {
     margin-left: auto;
 }
 
+/* Shared surface sections (surface/sections/) — resolved-brain readout */
+.gs-resolved {
+    color: var(--text-muted);
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    padding: 2px 4px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .sb-upload-btn {
     font-size: var(--font-xs);
     color: var(--trim);

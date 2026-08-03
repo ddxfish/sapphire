@@ -229,9 +229,39 @@ export const processMarkdown = (text) => {
             const listLines = [];
             while (i < lines.length) {
                 const lm = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
-                if (!lm) break;
-                listLines.push({ indent: lm[1].length, marker: lm[2], content: lm[3] });
-                i++;
+                if (lm) {
+                    listLines.push({ indent: lm[1].length, marker: lm[2], content: lm[3] });
+                    i++;
+                    continue;
+                }
+                const prev = listLines[listLines.length - 1];
+                const cur = lines[i];
+                // Continuation line: indented past the item's marker column
+                if (cur.trim() && cur.match(/^\s*/)[0].length >= prev.indent + 2) {
+                    prev.content += ' ' + cur.trim();
+                    i++;
+                    continue;
+                }
+                // Loose list: bridge blank lines when the next non-blank line is a
+                // same-kind list item (ordered stays ordered, bullet stays bullet)
+                if (!cur.trim()) {
+                    let j = i;
+                    while (j < lines.length && !lines[j].trim()) j++;
+                    const nm = j < lines.length ? lines[j].match(/^(\s*)([-*+]|\d+\.)\s+/) : null;
+                    if (nm) {
+                        // Compare kind against the last item at the resuming depth,
+                        // not the last item overall (may be a nested sublist)
+                        let ref = prev;
+                        for (let k = listLines.length - 1; k >= 0; k--) {
+                            if (listLines[k].indent <= nm[1].length) { ref = listLines[k]; break; }
+                        }
+                        if (/^\d+\.$/.test(nm[2]) === /^\d+\.$/.test(ref.marker)) {
+                            i = j;
+                            continue;
+                        }
+                    }
+                }
+                break;
             }
             output.push({ type: 'block', html: parseList(listLines) });
             continue;
@@ -362,7 +392,10 @@ const parseList = (items) => {
         
         const isOrdered = /^\d+\.$/.test(items[startIdx].marker);
         const tag = isOrdered ? 'ol' : 'ul';
-        let html = `<${tag}>`;
+        // Preserve source numbering — a list fragmented by upstream splitting
+        // must not restart at 1
+        const startNum = isOrdered ? parseInt(items[startIdx].marker) : 1;
+        let html = startNum > 1 ? `<ol start="${startNum}">` : `<${tag}>`;
         let i = startIdx;
         
         while (i < items.length) {

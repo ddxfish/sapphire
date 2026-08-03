@@ -17,7 +17,7 @@ import * as eventBus from './core/event-bus.js';
 import { getInitData } from './shared/init-data.js';
 
 // New architecture
-import { registerView, initRouter } from './core/router.js';
+import { registerView, initRouter, getCurrentView } from './core/router.js';
 import { initNavRail, setChatHeaderName } from './core/nav-rail.js';
 import { renderSurface } from './surface/surface.js';
 import { chatMode } from './surface/chat-mode.js';
@@ -240,7 +240,10 @@ async function init() {
                     const flyoutApps = navApps.filter(a => flyoutFor(a));
                     const railApps = navApps.filter(a => !flyoutFor(a));
 
-                    // View container + router registration — shared by both paths
+                    // View container + router registration — shared by both paths.
+                    // Returns the view module so nav items can "reset to app
+                    // home": clicking the app's nav entry while already inside
+                    // one of its sub-routes (#app-x/...) re-renders at the base.
                     const promoteAppView = (app, group) => {
                         const appContent = document.getElementById('app-content');
                         if (appContent) {
@@ -251,7 +254,7 @@ async function init() {
                             appContent.appendChild(viewDiv);
                         }
                         const appName = app.name;
-                        registerView(`app-${appName}`, {
+                        const mod = {
                             init(el) {},
                             async show() {
                                 const el = document.getElementById(`view-app-${appName}`);
@@ -275,7 +278,21 @@ async function init() {
                                     el.dataset.loaded = '';
                                 }
                             }
-                        }, group ? { group } : {});
+                        };
+                        registerView(`app-${appName}`, mod, group ? { group } : {});
+                        return mod;
+                    };
+
+                    // Clicking an app's nav entry while already deep inside it
+                    // (#app-x/<sub>) returns to the app's home. switchView
+                    // no-ops on same-view clicks, so this is the only way back
+                    // to an app's landing page from the rail.
+                    const resetToAppHome = (appName, mod) => {
+                        if (getCurrentView() !== `app-${appName}`) return;
+                        if (!location.hash.startsWith(`#app-${appName}/`)) return;
+                        mod.hide();
+                        history.replaceState(null, '', `#app-${appName}`);
+                        mod.show();
                     };
 
                     // Inject nav-promoted plugin apps into the navrail
@@ -304,7 +321,8 @@ async function init() {
                             if (spacer) rail.insertBefore(btn, spacer);
                             else rail.appendChild(btn);
                         }
-                        promoteAppView(app);
+                        const mod = promoteAppView(app);
+                        btn.addEventListener('click', () => resetToAppHome(app.name, mod));
                     }
 
                     // Flyout-promoted apps: item inside the group's flyout
@@ -316,7 +334,8 @@ async function init() {
                         item.setAttribute('tabindex', '0');
                         item.textContent = `${app.icon || '📦'} ${app.label || app.name}`;
                         flyoutFor(app).appendChild(item);
-                        promoteAppView(app, app.nav);
+                        const mod = promoteAppView(app, app.nav);
+                        item.addEventListener('click', () => resetToAppHome(app.name, mod));
                     }
 
                     // Show Apps grid nav if there are non-nav apps (or overflow nav apps)
