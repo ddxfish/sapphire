@@ -64,6 +64,13 @@ def register_game(game_id, spec, plugin_name):
                 'surfaces': surfaces,
                 'entry_js': str(spec.get('entry_js') or ''),
                 'plugin_name': plugin_name,
+                # Tile metadata (2026-08-04): one-liner + expandable facts for
+                # the library's detail accordion. Typed + capped defensively.
+                'players': str(spec.get('players') or '')[:80],
+                'facts': [str(f)[:200] for f in (spec.get('facts') or [])
+                          if isinstance(f, (str, int, float))][:8],
+                # Tile art: plugin-web-relative path (web/<tile> or app/...)
+                'tile': str(spec.get('tile') or '')[:200],
             }
             _generation += 1
         logger.info(f"[GAMES] Game registered: '{game_id}' from '{plugin_name}'")
