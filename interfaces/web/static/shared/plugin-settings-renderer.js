@@ -13,19 +13,29 @@ function escapeHtml(s) {
     return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// Manifest keys may contain dots (voice.join_targets) — a raw `#ps-{key}`
+// selector parses the dot as a class boundary and matches nothing, so the
+// field renders fine but reads back as its default (silent settings wipe).
+// Every id lookup must go through this.
+const psSel = key => '#' + CSS.escape('ps-' + key);
+
 /**
  * Render a settings form from a manifest schema array.
  * @param {HTMLElement} container - Where to render
  * @param {Array} schema - [{key, type, label, default, help?, widget?, options?, placeholder?, confirm?, tab?}]
  * @param {Object} values - Current setting values (merged with defaults by backend)
- * @param {Object} [opts] - {onChange: (key, value) => void}
+ * @param {Object} [opts] - {onChange: (key, value) => void, managed, slots}
+ *   slots: [{tab, mount(el)}] — caller-rendered widget sections (dynamic
+ *   pickers, dependent dropdowns, anything the schema can't express) placed
+ *   inside the named tab's pane after that tab's fields. A slot naming a tab
+ *   no field uses creates the tab. Opt-in: without slots, output is unchanged.
  */
-export function renderSettingsForm(container, schema, values = {}, { onChange, managed } = {}) {
+export function renderSettingsForm(container, schema, values = {}, { onChange, managed, slots = [] } = {}) {
     // hidden:true fields never render here — they belong to a dedicated UI
     // (e.g. Mind → Admin) and are skipped by readSettingsForm too, so a
     // Settings-page save can't clobber them with defaults.
     schema = (schema || []).filter(f => !f.hidden);
-    if (!schema?.length) {
+    if (!schema?.length && !slots.length) {
         container.innerHTML = '<p style="color:var(--text-muted)">No settings available.</p>';
         return;
     }
@@ -54,10 +64,27 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         groups.get(tab).push(field);
     }
 
-    if (groups.size < 2) {
-        container.innerHTML = `<div class="settings-grid">${schema.map(rowHTML).join('')}</div>`;
+    // Slot sections render as full-width children after their tab's fields.
+    // The wrapper div is renderer-owned; the caller only ever touches the
+    // element handed to mount() — no reaching into pane markup from outside.
+    const slotsByTab = new Map();
+    slots.forEach((slot, i) => {
+        const tab = String(slot.tab || 'General').trim() || 'General';
+        if (!slotsByTab.has(tab)) slotsByTab.set(tab, []);
+        slotsByTab.get(tab).push(i);
+    });
+    const slotHTML = i => `<div class="ps-slot" data-ps-slot="${i}" style="grid-column:1/-1"></div>`;
+    const paneHTML = n => (groups.get(n) || []).map(rowHTML).join('')
+        + (slotsByTab.get(n) || []).map(slotHTML).join('');
+
+    const names = [...groups.keys()];
+    for (const tab of slotsByTab.keys()) {
+        if (!names.includes(tab)) names.push(tab);
+    }
+
+    if (names.length < 2) {
+        container.innerHTML = `<div class="settings-grid">${paneHTML(names[0])}</div>`;
     } else {
-        const names = [...groups.keys()];
         if (names.includes('General')) {
             names.splice(names.indexOf('General'), 1);
             names.unshift('General');
@@ -69,7 +96,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         // widget wiring below scan the whole container by #ps-{key}, so
         // inactive panes are CSS-hidden, never removed.
         const panes = names.map((n, i) =>
-            `<div class="settings-grid" data-ps-pane="${escapeHtml(n)}"${i === 0 ? '' : ' hidden'}>${groups.get(n).map(rowHTML).join('')}</div>`
+            `<div class="settings-grid" data-ps-pane="${escapeHtml(n)}"${i === 0 ? '' : ' hidden'}>${paneHTML(n)}</div>`
         ).join('');
         container.innerHTML = strip + panes;
         container.querySelector('.ps-tabs').addEventListener('click', e => {
@@ -81,6 +108,16 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
         });
     }
 
+    // Mount slots synchronously so callers can wire events right after this
+    // function returns. One broken widget must not take down the whole form.
+    container.querySelectorAll('[data-ps-slot]').forEach(el => {
+        try {
+            slots[Number(el.dataset.psSlot)].mount(el);
+        } catch (err) {
+            console.error('[plugin-settings] slot mount failed:', err);
+        }
+    });
+
     // Attach confirm gates and onChange handlers
     for (const field of schema) {
         if (field.confirm) attachConfirmGate(container, field, managed);
@@ -90,7 +127,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
     container.querySelectorAll('.ps-clear-key').forEach(link => {
         link.addEventListener('click', e => {
             e.preventDefault();
-            const input = container.querySelector(`#${link.dataset.field}`);
+            const input = container.querySelector('#' + CSS.escape(link.dataset.field));
             if (input) {
                 input.value = '__CLEAR__';
                 input.placeholder = 'Key cleared — save to apply';
@@ -103,7 +140,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
     // Wire up action buttons
     for (const field of schema) {
         if ((field.widget || inferWidget(field)) !== 'button') continue;
-        const btn = container.querySelector(`#ps-${field.key}`);
+        const btn = container.querySelector(psSel(field.key));
         if (!btn) continue;
 
         // Check status on render if status URL provided
@@ -184,7 +221,7 @@ export function renderSettingsForm(container, schema, values = {}, { onChange, m
 function wireListField(container, field) {
     const wrap = container.querySelector(`.ps-list[data-list-key="${field.key}"]`);
     if (!wrap) return;
-    const hidden = wrap.querySelector(`#ps-${field.key}`);
+    const hidden = wrap.querySelector(psSel(field.key));
     const chipsEl = wrap.querySelector('.ps-list-chips');
     const srcEl = wrap.querySelector('.ps-list-src');
 
@@ -341,14 +378,14 @@ function getFieldValue(container, key, field) {
     const widget = field?.widget || inferWidget(field || {});
 
     if (widget === 'toggle') {
-        const el = container.querySelector(`#${id}`);
+        const el = container.querySelector(psSel(key));
         return el ? el.checked : false;
     }
     if (widget === 'radio') {
         const checked = container.querySelector(`input[name="${id}"]:checked`);
         return coerce(checked?.value ?? field?.default ?? '', field);
     }
-    const el = container.querySelector(`#${id}`);
+    const el = container.querySelector(psSel(key));
     if (!el) return field?.default ?? '';
     return coerce(el.value, field);
 }
@@ -371,7 +408,7 @@ function attachConfirmGate(container, field, managed) {
     const widget = field.widget || inferWidget(field);
     const el = widget === 'radio'
         ? container.querySelectorAll(`input[name="${id}"]`)
-        : container.querySelector(`#${id}`);
+        : container.querySelector(psSel(field.key));
 
     if (!el) return;
     const conf = field.confirm;

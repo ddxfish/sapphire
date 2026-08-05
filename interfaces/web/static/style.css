@@ -2559,6 +2559,10 @@ div.hb-response-summary {
    layout dependencies. */
 .ps-tabs {
     display: inline-flex;
+    /* Wrap instead of forcing a horizontal scrollbar — plugin strips can
+       carry 10+ tabs (Discord) and phones need a second line. */
+    flex-wrap: wrap;
+    max-width: 100%;
     gap: 4px;
     background: var(--bg-tertiary);
     border-radius: var(--radius-md);
