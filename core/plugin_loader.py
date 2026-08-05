@@ -221,6 +221,16 @@ class PluginLoader:
 
         logger.info(f"[PLUGINS] Scan complete: {len(self._plugins)} found, {loaded} loaded")
 
+        # plugins_ready: fires once per scan, after every enabled plugin has
+        # registered (tools, hooks, prompt packs, games). The "after my own
+        # pack registered" moment plugins had no way to reach — e.g. game-room
+        # re-merging its runtime-rendered story prompts so names like 'rose'
+        # resolve before sapphire.py's post-scan re-prime reads them.
+        # (Sapph-not-Rose reboot bug, 2026-08-05.)
+        if hook_runner.has_handlers("plugins_ready"):
+            from core.hooks import HookEvent
+            hook_runner.fire("plugins_ready", HookEvent(metadata={"loaded": loaded}))
+
     def _scan_dir(self, directory: Path, band: str, enabled_list: list, disabled_list: list = None):
         """Scan a directory for plugin.json manifests."""
         if not directory.exists():

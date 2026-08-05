@@ -132,6 +132,13 @@ class VoiceChatSystem:
                     self.llm_chat.set_system_prompt(_pd.get('content', '') or '')
                     _prompts.set_active_preset_name(_want)
                     logger.info(f"Re-primed prompt '{_want}' after plugin scan (pack prompt)")
+                else:
+                    # Never silent (Sapph-not-Rose bug, 2026-08-05): the chat
+                    # wants a name no pack registered — she wears the boot
+                    # fallback until something re-activates a real prompt.
+                    logger.warning(f"Post-scan re-prime: chat wants prompt '{_want}' "
+                                   f"but no such name is registered — wearing the "
+                                   f"boot fallback until re-activation")
         except Exception as e:
             logger.warning(f"Post-scan prompt re-prime failed: {e}")
 

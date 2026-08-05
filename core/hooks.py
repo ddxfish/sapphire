@@ -43,6 +43,10 @@ class HookEvent:
         pre_tts:           Before speech — mutate `tts_text`, cancel with `skip_tts`. metadata['tts_client'] = calling TTSClient
         post_tts:          After playback — observational (`tts_text`, metadata has `duration`)
         provider_switched: After TTS/STT/embed provider hot-swap. metadata: `kind` (tts|stt|embed), `provider` (new key). Observational — plugins warm caches / reset state.
+        plugins_ready:     Once per plugin scan, after ALL enabled plugins have
+                           registered (tools, packs, games). The "after my own
+                           registration" moment — e.g. re-merging runtime-rendered
+                           prompt-pack entries so they resolve at boot. 2026-08-05.
 
     Fields:
         input: User's message / STT transcription (mutable in post_stt, pre_chat)
