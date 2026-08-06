@@ -5,6 +5,7 @@
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 
 from . import rooms, state as st, referee, render
@@ -435,6 +436,132 @@ def _start(system, slug, character, mode, local, session):
             f"Open the scene from the room details in your turn context.{warn}"), True
 
 
+# ── Live seal wait (Krem 2026-08-06) ────────────────────────────────────────
+# Tool calls are a pause BETWEEN provider API calls — nothing upstream waits.
+# When she opens an UNFILLED seal with the player actually in the story room,
+# act() blocks its threadpool thread until the player writes (or skips) the
+# blank, then re-resolves and returns the REVEAL as the tool result: she opens
+# the sketchbook and discovers the drawings in the same breath. Timeout or an
+# empty room degrades to the shipped hold-and-retry, verbatim.
+# The event loop stays free (SSE tool exec runs on an AnyIO worker), act()
+# holds no locks across the wait, and the fill route lands on another thread.
+
+_seal_waits = {}          # (chat, key) → {"event", "deadline", "cap"}
+_waits_lock = threading.Lock()
+_presence = {}            # chat → monotonic ts of last story-room poll
+_PRESENCE_WINDOW = 30     # 2.5 ticks of the 12s poll (hidden tabs stop polling)
+_WAIT_EXTEND = 60         # seconds per "More time" click
+_WAIT_CAP = 600           # hard ceiling per wait, extensions included
+
+
+def _stamp_presence(chat):
+    if chat:
+        _presence[chat] = time.monotonic()
+
+
+def _present(chat):
+    """True while the story room UI has polled recently. /api/cancel cannot
+    reach a blocked tool, so we never block for a room nobody is watching —
+    cron, ghost turns, and ask-sapphire runs all fall through to the hold."""
+    return time.monotonic() - _presence.get(chat, float("-inf")) < _PRESENCE_WINDOW
+
+
+def _wait_secs(story, held):
+    """sealed.wait → meta.seal_wait → 120, clamped sane."""
+    for v in (held.get("wait"), story["meta"].get("seal_wait")):
+        try:
+            if v is not None:
+                return max(5, min(_WAIT_CAP, int(v)))
+        except (TypeError, ValueError):
+            pass
+    return 120
+
+
+def _wait_for_fill(slug, chat, room, target, verb, key, timeout):
+    """Block until the player fills/skips this seal, the story pauses/ends,
+    or the deadline passes. 1s slices; every slice replays the journal and
+    asks 'is MY seal resolved?' — so a fill that landed between resolve and
+    registration wakes us on the first slice, and a fill for a DIFFERENT
+    seal (event set, state unchanged) just keeps waiting. The Event is only
+    a hurry-up; the journal is the truth. Deadline re-read each slice so
+    extend_seal_wait bumps a wait already in flight."""
+    ev = threading.Event()
+    now = time.monotonic()
+    entry = {"event": ev, "deadline": now + timeout, "cap": now + _WAIT_CAP}
+    with _waits_lock:
+        _seal_waits[(chat, key)] = entry
+    try:
+        while True:
+            state = st.replay(slug, chat)
+            skipped = state.get("seal_skipped") or []
+            if (referee.seal_state(state.get("seals"), room, target, verb) is not None
+                    or key in skipped
+                    or referee.legacy_seal_key(target, verb) in skipped):
+                return True
+            active = st.get_active().get(chat)
+            if not active or active.get("paused"):
+                return False
+            with _waits_lock:
+                remaining = entry["deadline"] - time.monotonic()
+            if remaining <= 0:
+                return False
+            ev.wait(min(1.0, remaining))
+            ev.clear()
+    finally:
+        with _waits_lock:
+            _seal_waits.pop((chat, key), None)
+
+
+def _signal_seals(chat):
+    """fill_seal landed something for this chat — wake every wait on it.
+    The woken loop re-checks its own seal against the journal, so waking
+    broadly is safe and spares fill_seal any canonical/legacy key algebra."""
+    with _waits_lock:
+        for (c, _k), entry in _seal_waits.items():
+            if c == chat:
+                entry["event"].set()
+
+
+def extend_seal_wait(system, key, session=None):
+    """+60s on a live wait, capped at its start+600s. Returns remaining
+    seconds, or None when no wait is live (the moment already passed)."""
+    chat = _chat_name(system, session)
+    key = str(key or "").strip().lower()
+    with _waits_lock:
+        entry = _seal_waits.get((chat, key))
+        if not entry:
+            return None
+        entry["deadline"] = min(entry["deadline"] + _WAIT_EXTEND, entry["cap"])
+        return max(0, int(entry["deadline"] - time.monotonic()))
+
+
+def _seal_wait_payload(chat):
+    """{key, remaining} for the room's live wait, or None. Drives the popup's
+    countdown; the seals list already carries ask/has_fallback per key."""
+    with _waits_lock:
+        for (c, key), entry in _seal_waits.items():
+            if c == chat:
+                return {"key": key,
+                        "remaining": max(0, int(entry["deadline"] - time.monotonic()))}
+    return None
+
+
+def _commit(system, story, slug, chat, state, events):
+    """Journal a resolve's events; re-register the prompt if any of them
+    touched it. Extracted from act() so the live-wait path can commit the
+    held attempt and, after the wake, the reveal."""
+    prompt_dirty = False
+    for ev in events:
+        ev["turn"] = state["turn"]
+        st.append(slug, chat, ev)
+        if ev["event"] in ("emotions", "extras"):
+            prompt_dirty = True
+    if prompt_dirty:
+        fresh = st.replay(slug, chat)
+        prompt_name = _register_prompt(story, fresh, st.get_active().get(chat, {}), chat)
+        _activate_prompt_for(system, chat, prompt_name)
+
+
 def act(system, verb, target=None, answer=None, session=None):
     chat = _chat_name(system, session)
     story, state = load_active(chat)
@@ -450,17 +577,22 @@ def act(system, verb, target=None, answer=None, session=None):
 
     slug = story["meta"]["slug"]
     events, message, ok = referee.resolve(story, state, room, story["rooms"], verb, target, answer)
-    prompt_dirty = False
-    for ev in events:
-        ev["turn"] = state["turn"]
-        st.append(slug, chat, ev)
-        if ev["event"] in ("emotions", "extras"):
-            prompt_dirty = True
+    _commit(system, story, slug, chat, state, events)
 
-    if prompt_dirty:
-        fresh = st.replay(slug, chat)
-        prompt_name = _register_prompt(story, fresh, st.get_active().get(chat, {}), chat)
-        _activate_prompt_for(system, chat, prompt_name)
+    # Held seal + player in the room → wait for their words, then re-resolve:
+    # the reveal replaces the hold as this very tool call's result. The held
+    # event is already journaled, so the popup machinery sees the reach even
+    # while we block. Timeout returns the hold message untouched.
+    held = next((e for e in events if e.get("event") == "seal_held"), None)
+    if held and held.get("target") and _present(chat):
+        if _wait_for_fill(slug, chat, room, held["target"], held["verb"],
+                          held["key"], _wait_secs(story, held)):
+            story, state = load_active(chat)
+            room = story["rooms"].get(state["room"]) if story else None
+            if room:
+                events, message, ok = referee.resolve(
+                    story, state, room, story["rooms"], verb, target, answer)
+                _commit(system, story, slug, chat, state, events)
 
     return message, ok
 
@@ -715,12 +847,14 @@ def fill_seal(system, key, text=None, skip=False, session=None):
             return ("You've already written this one — clear it from the ✍ chip if you "
                     "want the author's line instead."), False
         st.append(slug, chat, {"event": "seal_skipped", "key": key, "turn": state["turn"]})
+        _signal_seals(chat)
         return "Skipped — the author's line will fire instead.", True
     text = str(text or "").strip()
     if not text:
         return "Write something — the blank is the whole point.", False
     st.append(slug, chat, {"event": "sealed", "key": key, "text": text[:2000],
                            "turn": state["turn"]})
+    _signal_seals(chat)
     return "Sealed in. She'll find it when she gets there.", True
 
 
@@ -751,6 +885,10 @@ def _ending_card_url(story, state, room):
 def full_state(system, session=None):
     """Everything stored, for the Inspect modal — including False/None."""
     chat = _chat_name(system, session)
+    # The 12s story-room poll funnels here (and stops when the tab hides) —
+    # that makes this call the honest "a player is watching" signal the live
+    # seal wait gates on. Browser-only path; server code never polls this.
+    _stamp_presence(chat)
     story, state = load_active(chat)
     if not story:
         return None
@@ -793,6 +931,9 @@ def full_state(system, session=None):
         "player_hints": _due_hints(room, state["turns_in_room"]) if room else [],
         # Sealed blanks in THIS room — the popup + ✍ chip run on these.
         "seals": _room_seals(room, state) if room else [],
+        # Live wait (she's blocked inside story_act right now): drives the
+        # popup's countdown bar. ask/has_fallback come from seals[] by key.
+        "seal_wait": _seal_wait_payload(chat),
         "room_id": state["room"],
         "turn": state["turn"],
         "turns_in_room": state["turns_in_room"],

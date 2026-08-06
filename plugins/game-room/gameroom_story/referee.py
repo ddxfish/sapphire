@@ -310,7 +310,13 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                 else:
                     origin = "written by the player just now, outside your knowledge — "
                 if filled is None:
-                    return ([{"event": "seal_held", "key": key}],
+                    # target/verb/wait ride the event so session.act can run
+                    # the live wait (Krem 2026-08-06) without re-walking the
+                    # room for the spec — the fold ignores extra fields, and
+                    # all three are already journal-public.
+                    return ([{"event": "seal_held", "key": key,
+                              "target": target_n, "verb": canon,
+                              "wait": sealed.get("wait")}],
                             sealed.get("hold_message",
                                        f"The {target} holds something the player hasn't "
                                        f"written yet — this reveal is theirs to author, and "

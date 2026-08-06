@@ -109,6 +109,15 @@ def fill_seal(body=None, **_):
     return {"success": ok, "detail": msg}
 
 
+def extend_wait(body=None, **_):
+    """+60s on a live seal wait (she's blocked inside story_act, the player
+    clicked ⏳ More time). remaining=None → the moment already passed."""
+    body = body or {}
+    remaining = _session().extend_seal_wait(_system(), body.get("key"),
+                                            session=_sess_arg(body))
+    return {"success": remaining is not None, "remaining": remaining}
+
+
 def pause(body=None, **_):
     paused = bool((body or {}).get("paused", True))
     msg, ok = _session().set_paused(_system(), paused, session=_sess_arg(body))

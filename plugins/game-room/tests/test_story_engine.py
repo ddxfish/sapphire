@@ -191,7 +191,10 @@ def test_sealed_holds_until_player_writes(story):
     room = _sealed_room()
     state = _fresh(story)
     events, msg, ok = referee.resolve(story, state, room, {}, "open", "chest")
-    assert not ok and events == [{"event": "seal_held", "key": "98:chest:open"}]
+    # target/verb/wait ride the event since the live wait (2026-08-06) —
+    # session.act needs them to block-and-re-resolve without a spec re-walk.
+    assert not ok and events == [{"event": "seal_held", "key": "98:chest:open",
+                                  "target": "chest", "verb": "open", "wait": None}]
     assert "player" in msg and "charts" not in msg      # honest, never the content
 
 

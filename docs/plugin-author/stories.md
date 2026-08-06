@@ -118,7 +118,8 @@ The rolled value is journaled at roll time — replay never re-rolls, revert kee
   "sealed": {
     "ask": "You reached the chest first. What's inside?",
     "fallback": "old charts and a dead man's boots",
-    "hold_message": "optional custom hold line"
+    "hold_message": "optional custom hold line",
+    "wait": 180
   },
   "adjust": {"her_trust": 1}
 }
@@ -126,8 +127,9 @@ The rolled value is journaled at roll time — replay never re-rolls, revert kee
 
 The author leaves the reveal **blank**; the player types it mid-run in a popup; the AI discovers it verbatim when she performs the verb. The text never passes through her on the way in — the player surprises the storyteller.
 
-- Unfilled = the act **holds** (honest: she learns a surprise exists, never what). Her early attempt re-raises the player's popup with urgency.
-- `fallback` fires only on the player's explicit **Skip** — omit it to make the blank mandatory.
+- **Live moment**: if the player is in the story room when she performs the verb on an *unfilled* blank, her tool call waits — the popup raises instantly with a countdown (default 120s; per-seal `wait` or story-level `meta.seal_wait` override, clamped 5–600), and the player's words come back as the reveal in that very turn. The player can extend (+60s per click, 600s ceiling) or take the author's line.
+- Unfilled with nobody in the room, or the countdown expiring = the act **holds** (honest: she learns a surprise exists, never what). Her early attempt re-raises the player's popup with urgency.
+- `fallback` fires only on the player's explicit choice — omit it to make the blank mandatory.
 - Fills are journal events: replay never re-prompts; revert re-opens the blank. Declared effects fire once, on first reveal.
 - Player text fills the *fiction*, not the mechanics — tracked items and flags stay author-declared.
 

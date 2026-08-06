@@ -17,6 +17,7 @@ import { getInitData } from '/static/shared/init-data.js';
 import * as coreApi from '/static/api.js';
 import * as ui from '/static/ui.js';
 import { getIsProc } from '/static/core/state.js';
+import { on as busOn, Events as BusEvents } from '/static/core/event-bus.js';
 
 const OWNER = 'story-room';
 const PLUGIN_API = '/api/plugin/game-room/';
@@ -36,6 +37,22 @@ let _root = null, _story = null, _session = null, _back = null, _stories = [];
 let _chatSettings = {};
 let _status = null;              // last story/status payload (.active)
 let _timer = null;
+let _tickNow = null;             // current open()'s tick, for the bus nudge
+let _liveShown = {};             // seal key → live popup already raised this wait
+
+// Live seal wait nudge (Krem 2026-08-06): the server publishes tool_executing
+// the instant story_act begins — if she's reaching for an unfilled seal, a
+// wait registers within milliseconds. Poll now (and once more past the
+// registration race) so the popup raises the moment she reaches, not up to
+// 12s later. Registered once at module load; _tickNow carries the current
+// room's tick closure, so every liveness rule of the 12s poll applies.
+busOn(BusEvents.TOOL_EXECUTING, (d) => {
+    if (!_tickNow || document.hidden) return;
+    if (!d || d.name !== 'story_act') return;
+    _tickNow();
+    const t = _tickNow;
+    setTimeout(() => { if (_tickNow === t) _tickNow(); }, 1200);
+});
 
 function csrf() {
     const m = document.querySelector('meta[name="csrf-token"]');
@@ -152,7 +169,7 @@ export async function openStoryRoom(root, story, sessionName, opts) {
     room.activateSession(sessionName).catch(() => {});
 
     paintPanel();
-    const myTimer = setInterval(async () => {
+    const tick = async (myTimer) => {
         // A tick in flight when close() runs used to land afterwards and
         // paint story art onto the normal chat, then raise the seal modal
         // over a storyless view (finding 4.4). The timer identity IS the
@@ -174,16 +191,22 @@ export async function openStoryRoom(root, story, sessionName, opts) {
             if (_timer !== myTimer) return;
             paintPanel();
         } catch (e) { /* offline tick */ }
-    }, 12000);
+    };
+    const myTimer = setInterval(() => tick(myTimer), 12000);
     _timer = myTimer;
+    // The bus nudge borrows this closure's tick, so an instant poll obeys
+    // exactly the same liveness rules as the scheduled one.
+    _tickNow = () => tick(myTimer);
 }
 
 export function close() {
     if (_timer) { clearInterval(_timer); _timer = null; }
+    _tickNow = null;
     restoreBackdrop();                       // chat's own scene back on the rail
     releaseOrgans(OWNER);                    // organs home BEFORE any other view shows
     _root = null; _story = null; _session = null; _status = null;
     _hintShown = {}; _lastActive = null; _sealPrompted = {}; _sealHeld = {};
+    _liveShown = {};
 }
 
 // ------------------------------------------------------------------ layout
@@ -826,6 +849,33 @@ function paintStatus(a) {
 
 function checkSeals(a) {
     const seals = (a && a.seals) || [];
+    // Live wait (Krem 2026-08-06): she is blocked inside story_act RIGHT NOW,
+    // waiting for this seal. Raise the popup with a countdown, bypassing the
+    // prompted-once suppression — but only once per wait (_liveShown), so a
+    // deliberate "Later" isn't fought every tick. A modal already open for
+    // the same key is upgraded in place (countdown injected), never recreated
+    // — recreating would eat the player's typing mid-sentence.
+    const live = (a && a.seal_wait) || null;   // {key, remaining}
+    const openModal = document.getElementById('st-seal-modal');
+    if (live) {
+        if (openModal && openModal.dataset.key === live.key) {
+            syncCountdown(openModal, live.remaining);
+        } else if (!openModal && !_liveShown[live.key]) {
+            const s = seals.find(x => x.key === live.key && !x.revealed);
+            if (s) {
+                _liveShown[live.key] = true;
+                _sealHeld[s.key] = s.held || 0;
+                _sealPrompted[s.key] = true;
+                sealModal(s, true, live);
+                return;
+            }
+        }
+        // A DIFFERENT seal's modal is open: leave their typing alone — the
+        // wait degrades honestly to the hold, and the ✍ chip still stands.
+    } else {
+        _liveShown = {};
+        if (openModal && openModal.dataset.live === '1') expireCountdown(openModal);
+    }
     // Never steal focus from someone mid-sentence, and never mark a blank
     // "prompted" unless its popup actually opened — marking first meant a
     // room's SECOND open blank was recorded as shown while the first held
@@ -848,21 +898,72 @@ function checkSeals(a) {
     }
 }
 
-function sealModal(seal, urgent) {
+// ── countdown (live wait) ──
+// wrap._count = {remaining, total, timer}; the 1s tick self-clears when the
+// modal leaves the DOM, and each 12s/nudge poll resyncs remaining from the
+// server so extensions and drift both heal.
+
+function paintCount(wrap) {
+    const c = wrap._count;
+    if (!c) return;
+    const bar = wrap.querySelector('#st-seal-bar');
+    const secs = wrap.querySelector('#st-seal-secs');
+    if (bar) bar.style.width = Math.max(0, Math.min(100, (c.remaining / c.total) * 100)) + '%';
+    if (secs) secs.textContent = c.remaining + 's';
+}
+
+function startCountdown(wrap, remaining) {
+    wrap.dataset.live = '1';
+    const row = wrap.querySelector('#st-seal-count');
+    if (row) row.style.display = 'flex';
+    wrap._count = { remaining: Math.max(0, remaining), total: Math.max(remaining, 1) };
+    paintCount(wrap);
+    wrap._count.timer = setInterval(() => {
+        if (!document.body.contains(wrap)) { clearInterval(wrap._count?.timer); return; }
+        if (!wrap._count) return;
+        wrap._count.remaining -= 1;
+        if (wrap._count.remaining <= 0) { expireCountdown(wrap); return; }
+        paintCount(wrap);
+    }, 1000);
+}
+
+function syncCountdown(wrap, remaining) {
+    if (!wrap._count) { startCountdown(wrap, remaining); return; }   // upgrade in place
+    if (remaining <= 0) { expireCountdown(wrap); return; }
+    wrap._count.remaining = remaining;
+    wrap._count.total = Math.max(wrap._count.total, remaining);
+    paintCount(wrap);
+}
+
+function expireCountdown(wrap) {
+    if (wrap._count?.timer) clearInterval(wrap._count.timer);
+    wrap._count = null;
+    wrap.dataset.live = '';
+    const row = wrap.querySelector('#st-seal-count');
+    if (row) row.innerHTML = `<span class="st-card-note" style="margin:0">the moment passed — she moved on; seal it anyway and she finds it on her next try</span>`;
+}
+
+function sealModal(seal, urgent, live) {
     const esc = room.esc;
     document.getElementById('st-seal-modal')?.remove();
     const wrap = document.createElement('div');
     wrap.id = 'st-seal-modal';
+    wrap.dataset.key = seal.key;
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:10000';
     wrap.innerHTML = `
         <div class="st-card" style="max-width:min(560px,92vw)">
             <div class="st-card-title">&#x270D; The story left this blank for you</div>
-            ${urgent ? `<div class="st-card-desc" style="color:var(--warning,#e8b339)">She's reaching for it right now — she holds off until you write it.</div>` : ''}
+            ${urgent ? `<div class="st-card-desc" style="color:var(--warning,#e8b339)">${live ? "She's reaching for it RIGHT NOW — she waits while you write." : "She's reaching for it right now — she holds off until you write it."}</div>` : ''}
             <div class="st-card-desc">${esc(seal.ask || '')}</div>
+            <div id="st-seal-count" style="display:none;align-items:center;gap:8px;margin:2px 0 6px">
+                <div style="flex:1;height:6px;background:var(--bg-secondary,#161b26);border-radius:3px;overflow:hidden"><div id="st-seal-bar" style="height:100%;width:100%;background:var(--warning,#e8b339);transition:width 1s linear"></div></div>
+                <span id="st-seal-secs" style="font-variant-numeric:tabular-nums;color:var(--text-muted,#999);min-width:3.5ch;text-align:right"></span>
+                <button type="button" class="btn-sm" id="st-seal-more" title="+60 seconds">&#x23F3; More time</button>
+            </div>
             <textarea id="st-seal-text" rows="4" style="width:100%;box-sizing:border-box;margin:8px 0;background:var(--bg-secondary,#161b26);color:var(--text,#e1e1e6);border:1px solid var(--border,#333);border-radius:6px;padding:8px">${esc(seal.text || '')}</textarea>
             <div class="st-card-verbs">
                 <button type="button" class="btn-sm" id="st-seal-save">&#x1F512; Seal it in</button>
-                ${seal.has_fallback && !seal.filled ? `<button type="button" class="btn-sm" id="st-seal-skip" title="Use the author's line instead">Skip</button>` : ''}
+                ${seal.has_fallback && !seal.filled ? `<button type="button" class="btn-sm" id="st-seal-skip" title="Use the author's line instead">${live ? "Use author's line" : 'Skip'}</button>` : ''}
                 <button type="button" class="btn-sm" id="st-seal-later">Later</button>
             </div>
             <div class="st-card-note">what you write never passes through her — she discovers it in play</div>
@@ -885,9 +986,17 @@ function sealModal(seal, urgent) {
     };
     const skipBtn = wrap.querySelector('#st-seal-skip');
     if (skipBtn) skipBtn.onclick = () => post({ key: seal.key, skip: true }, 'skip failed');
+    wrap.querySelector('#st-seal-more').onclick = async () => {
+        try {
+            const r = await api('story/wait', 'POST', { key: seal.key });
+            if (r.success && r.remaining != null) syncCountdown(wrap, r.remaining);
+            else expireCountdown(wrap);           // the moment already passed
+        } catch (e) { /* poll heals */ }
+    };
     wrap.querySelector('#st-seal-later').onclick = () => wrap.remove();
     wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
     document.body.appendChild(wrap);
+    if (live) startCountdown(wrap, live.remaining);
     wrap.querySelector('#st-seal-text').focus();
 }
 

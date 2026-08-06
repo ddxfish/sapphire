@@ -111,6 +111,11 @@
       },
       {
         "method": "POST",
+        "path": "story/wait",
+        "handler": "routes/story_routes.py:extend_wait"
+      },
+      {
+        "method": "POST",
         "path": "story/reassert",
         "handler": "routes/story_routes.py:reassert"
       },
