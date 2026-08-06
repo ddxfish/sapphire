@@ -99,6 +99,7 @@ class VoiceChatSystem:
         self._init_tts_provider(tts_provider, base_dir)
 
         self.llm_chat = LLMChat(self.history, system=self)
+        self._hand_back_game_chat()
         self._prime_default_prompt()
         self._apply_initial_chat_settings()
         self.init_components()
@@ -208,8 +209,18 @@ class VoiceChatSystem:
         with fm._tools_lock:
             current = fm.current_toolset_name
         if current:
-            fm.update_enabled_functions([current])
-            logger.info(f"Toolset '{current}' re-applied after plugin scan")
+            # Carry extra_toolsets: a by-name-only re-apply drops them, so a
+            # reboot mid-story left her without story_act — narrating while
+            # nothing advanced (extras-decay site #5, 2026-08-05).
+            extras = None
+            try:
+                extras = (self.llm_chat.session_manager.get_chat_settings()
+                          or {}).get('extra_toolsets') or None
+            except Exception:
+                pass
+            fm.update_enabled_functions([current], extra_toolsets=extras)
+            logger.info(f"Toolset '{current}' re-applied after plugin scan"
+                        + (f" + extras {extras}" if extras else ""))
 
         # RAG orphan cleanup runs AFTER plugin_loader.scan() (Phase 4 reorder).
         # Previously this ran at line 100, BEFORE plugin loading, which meant it
@@ -266,6 +277,35 @@ class VoiceChatSystem:
             knowledge.cleanup_orphaned_rag_scopes(chat_names)
         except Exception as e:
             logger.warning(f"RAG orphan cleanup failed: {e}", exc_info=True)
+
+    def _hand_back_game_chat(self):
+        """Boot with a game/story chat still active → hand Chat back to a
+        normal chat first.
+
+        The Game Room hands back when you leave it deliberately, but a closed
+        tab never runs that cleanup — so the game chat stayed active and the
+        NEXT boot primed her in-costume (a story role) with the story's
+        empty toolset, and wakeword/voice landed in the story transcript
+        (finding 4.6). Runs before the prompt/toolset prime so both read the
+        chat we actually want."""
+        try:
+            sm = self.llm_chat.session_manager
+            active = sm.get_active_chat_name()
+            if not active:
+                return
+            chats = sm.list_chat_files()          # newest first
+            here = next((c for c in chats if c["name"] == active), None)
+            if not here or here.get("mode") != "game":
+                return
+            target = next((c["name"] for c in chats
+                           if c["name"] != active and not c.get("mode")
+                           and not c.get("archived") and not c.get("private_chat")),
+                          "default")
+            if sm.set_active_chat(target):
+                logger.info(f"Boot: game chat '{active}' was still active "
+                            f"(tab closed mid-game) — handed Chat back to '{target}'")
+        except Exception as e:
+            logger.warning(f"Boot game-chat handback skipped: {e}")
 
     def _prime_default_prompt(self):
         try:

@@ -107,8 +107,10 @@ def test_apply_chat_settings_full_bundle_hits_every_subsystem(monkeypatch):
     # 2. Prompt subsystem received the loaded content
     system.llm_chat.set_system_prompt.assert_called_with('You are Anita.')
 
-    # 3. Toolset subsystem received the toolset name
-    fm.update_enabled_functions.assert_called_with(['anita-tools'])
+    # 3. Toolset subsystem received the toolset name. Positional args only —
+    # the call also carries extra_toolsets (the union primitive, 2026-08-03)
+    # and pinning the full signature made this fail on an unrelated change.
+    assert fm.update_enabled_functions.call_args[0] == (['anita-tools'],)
 
     # 4. Spice subsystem set the active name
     assert spice_set_manager.active_name == 'anita-spice'
@@ -155,6 +157,6 @@ def test_apply_chat_settings_skips_silent_failure_is_caught(monkeypatch):
 
     api_fastapi._apply_chat_settings(system, settings)
 
-    # TTS failed but the rest still ran
+    # TTS failed but the rest still ran (positional args only — see above)
     system.llm_chat.set_system_prompt.assert_called_with('You are P.')
-    fm.update_enabled_functions.assert_called_with(['minimal'])
+    assert fm.update_enabled_functions.call_args[0] == (['minimal'],)

@@ -1,0 +1,33 @@
+{
+  "name": "game-holdem",
+  "short_display_name": "Hold'em",
+  "display_name": "Game: Hold'em",
+  "description": "Heads-up Texas Hold'em for the Game Room. Sealed seat — her hole cards never touch the chat; the engine referees, she talks every hand. Pure engine, 34KB, zero images.",
+  "version": "1.0.0",
+  "emoji": "♠",
+  "author": "Krem & Claude",
+  "default_enabled": true,
+  "capabilities": {
+    "games": [
+      {
+        "id": "poker",
+        "title": "Heads-Up Hold'em",
+        "genre": "card",
+        "desc": "1000 chips each, blinds 10/20. She talks every move — needle back or play in silence.",
+        "icon": "♠",
+        "surfaces": [
+          "room"
+        ],
+        "entry_js": "app/poker.js",
+        "players": "heads-up — you vs her",
+        "facts": [
+          "Sealed seat: her hole cards never touch the chat — the engine referees, she can't peek",
+          "Table talk is a weapon — bluff her, needle her, she answers every move",
+          "Stacks and blinds live in ⚙ Game Settings (default 1000 chips, blinds 10/20)",
+          "Pure engine: 34KB, zero images"
+        ],
+        "tile": "poker-tile.webp"
+      }
+    ]
+  }
+}

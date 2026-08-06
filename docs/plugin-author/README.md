@@ -40,6 +40,8 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Daemons](daemons.md) | Background event listeners — Telegram, Discord, Email, custom sources |
 | [Subprocesses](subprocesses.md) | Running & supervising external programs — ProcessManager lifecycle, process-group cleanup, advanced async helper |
 | [Widgets](widgets.md) | Dashboard panels — manifest, render contract, settings schema, sample plugin |
+| [Games](games.md) | Game Room games — engine contract, sealed seat, board modules, sessions-are-chats |
+| [Stories](stories.md) | Story packs — rooms, referee, dice, sealed blanks, identity modes, backdrops |
 | [Apps](APPS.md) | Full-page plugin UIs in the Apps nav — render/cleanup contract, navrail promotion |
 | [Settings](settings.md) | Manifest-declared settings, custom web UI, settings API, danger confirms |
 | [Web UI](web-ui.md) | Shared JS modules, CSS variables, modals, CSRF, style injection |

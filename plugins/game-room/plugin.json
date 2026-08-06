@@ -1,0 +1,139 @@
+{
+  "name": "game-room",
+  "short_display_name": "Game Room",
+  "display_name": "Game Room",
+  "description": "The Game Room host: Surface rooms, sealed-seat rails, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
+  "version": "0.8.0",
+  "emoji": "🎲",
+  "author": "Krem & Claude",
+  "default_enabled": true,
+  "capabilities": {
+    "app": {
+      "label": "Game Room",
+      "icon": "🎲",
+      "nav": "chat",
+      "description": "Games and stories vs Sapphire — sessions are chats, the chat is the save"
+    },
+    "prompts": {
+      "monoliths": "prompts/monoliths.json",
+      "pieces": "prompts/pieces.json"
+    },
+    "tools": [
+      "tools/story_tools.py",
+      "tools/story_info.py"
+    ],
+    "hooks": {
+      "ghost_inject": "hooks/ghost.py",
+      "plugins_ready": "hooks/boot.py",
+      "chat_renamed": "hooks/lifecycle.py",
+      "chat_deleted": "hooks/lifecycle.py"
+    },
+    "routes": [
+      {
+        "method": "GET",
+        "path": "play/games",
+        "handler": "routes/play.py:list_games"
+      },
+      {
+        "method": "GET",
+        "path": "play/{game}/state",
+        "handler": "routes/play.py:get_state"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/new-session",
+        "handler": "routes/play.py:new_session"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/start",
+        "handler": "routes/play.py:start"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/act",
+        "handler": "routes/play.py:act"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/banter",
+        "handler": "routes/play.py:banter"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/forget",
+        "handler": "routes/play.py:forget"
+      },
+      {
+        "method": "GET",
+        "path": "play/{game}/settings",
+        "handler": "routes/play.py:get_game_settings"
+      },
+      {
+        "method": "POST",
+        "path": "play/{game}/settings",
+        "handler": "routes/play.py:set_game_settings"
+      },
+      {
+        "method": "GET",
+        "path": "room/config",
+        "handler": "routes/play.py:get_room_config"
+      },
+      {
+        "method": "POST",
+        "path": "room/config",
+        "handler": "routes/play.py:set_room_config"
+      },
+      {
+        "method": "GET",
+        "path": "story/status",
+        "handler": "routes/story_routes.py:status"
+      },
+      {
+        "method": "POST",
+        "path": "story/start",
+        "handler": "routes/story_routes.py:start"
+      },
+      {
+        "method": "POST",
+        "path": "story/mode",
+        "handler": "routes/story_routes.py:set_mode"
+      },
+      {
+        "method": "POST",
+        "path": "story/pause",
+        "handler": "routes/story_routes.py:pause"
+      },
+      {
+        "method": "POST",
+        "path": "story/fill",
+        "handler": "routes/story_routes.py:fill_seal"
+      },
+      {
+        "method": "POST",
+        "path": "story/reassert",
+        "handler": "routes/story_routes.py:reassert"
+      },
+      {
+        "method": "POST",
+        "path": "story/end",
+        "handler": "routes/story_routes.py:end"
+      },
+      {
+        "method": "GET",
+        "path": "story/inspect",
+        "handler": "routes/story_routes.py:inspect"
+      },
+      {
+        "method": "GET",
+        "path": "story/{slug}/settings",
+        "handler": "routes/story_routes.py:get_story_settings"
+      },
+      {
+        "method": "POST",
+        "path": "story/{slug}/settings",
+        "handler": "routes/story_routes.py:set_story_settings"
+      }
+    ]
+  }
+}

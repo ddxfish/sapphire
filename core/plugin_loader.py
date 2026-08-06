@@ -227,9 +227,23 @@ class PluginLoader:
         # re-merging its runtime-rendered story prompts so names like 'rose'
         # resolve before sapphire.py's post-scan re-prime reads them.
         # (Sapph-not-Rose reboot bug, 2026-08-05.)
-        if hook_runner.has_handlers("plugins_ready"):
-            from core.hooks import HookEvent
-            hook_runner.fire("plugins_ready", HookEvent(metadata={"loaded": loaded}))
+        self._fire_plugins_ready("scan", loaded)
+
+    def _fire_plugins_ready(self, reason: str, loaded: int = 1):
+        """The "registration finished, re-assert anything runtime-owned" moment.
+        Fires after the boot scan AND after every out-of-scan (re)load — reload,
+        enable-toggle, dep-install, dev-watcher, rescan. Manifest-only
+        re-registration wipes runtime-rendered entries (a story costume the
+        pack files don't contain), and core's missing-prompt fallback then
+        permanently rewrites the chat's prompt to 'default' — so this must
+        fire on EVERY path, not just boot (Sapph-not-Rose reload leg, 2026-08-05)."""
+        try:
+            if hook_runner.has_handlers("plugins_ready"):
+                from core.hooks import HookEvent
+                hook_runner.fire("plugins_ready",
+                                 HookEvent(metadata={"loaded": loaded, "reason": reason}))
+        except Exception as e:
+            logger.warning(f"[PLUGINS] plugins_ready ({reason}) dispatch failed: {e}")
 
     def _scan_dir(self, directory: Path, band: str, enabled_list: list, disabled_list: list = None):
         """Scan a directory for plugin.json manifests."""
@@ -1143,6 +1157,7 @@ class PluginLoader:
                                 pass
                             fm.update_enabled_functions([current], extra_toolsets=extras)
                     logger.info(f"[PLUGINS] Reloaded: {name}")
+                    self._fire_plugins_ready("reload")
                     from core.event_bus import publish, Events
                     publish(Events.PLUGIN_RELOADED, {"plugin": name})
                 except Exception as e:
@@ -1718,6 +1733,7 @@ class PluginLoader:
 
                 if is_enabled:
                     if self._load_plugin(name):
+                        self._fire_plugins_ready("rescan")
                         logger.info(f"[PLUGINS] Rescan: loaded new plugin '{name}'")
                     else:
                         # Failed verification — mark in-memory False but preserve

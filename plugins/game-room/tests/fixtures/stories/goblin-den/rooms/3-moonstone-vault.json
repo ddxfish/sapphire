@@ -1,0 +1,57 @@
+{
+  "id": 3,
+  "slug": "moonstone-vault",
+  "title": "The Moonstone Vault",
+  "template": "A round chamber cut with more care than goblins own. In its center, a stone pedestal holds a sealed casket chased in silver. Runes ring its lid — a riddle, worn but legible, waiting to be read aloud. There is no other door. Whatever made this room meant the riddle to be the only key.",
+  "on_enter": {
+    "emotions_remove": [
+      "dread"
+    ],
+    "emotions": [
+      "wary"
+    ]
+  },
+  "exits": [
+    {
+      "to": 2,
+      "label": "back through the iron door",
+      "desc": "the way you came"
+    }
+  ],
+  "objects": {
+    "casket": {
+      "desc": "a silver-chased casket sealed by rune-work",
+      "puzzle": {
+        "riddle": "I have cities, but no houses. I have mountains, but no trees. I have water, but no fish. What am I?",
+        "solution": "map"
+      },
+      "on_solve": {
+        "set": {
+          "amulet_taken": true
+        },
+        "gives": "moonstone_amulet",
+        "emotions": [
+          "triumphant"
+        ],
+        "emotions_remove": [
+          "wary"
+        ],
+        "message": "The runes flare cold-white and the casket unseals. Inside, on goblin-stitched velvet, lies the moonstone amulet — the player takes it. The tunnels feel it leave."
+      }
+    }
+  },
+  "ghost_hints": [
+    {
+      "after_turns": 5,
+      "whisper": "The riddle answers to a single common word — if the player is circling it, let the runes glimmer over the carved coastlines and peaks."
+    }
+  ],
+  "player_desc": "A round chamber cut too carefully for goblin work. A sealed casket on a pedestal, ringed with runes — a riddle is the only key.",
+  "player_hints": [
+    {
+      "after_turns": 5,
+      "text": "Cities without houses, mountains without trees — you'd unfold the answer to find your way."
+    }
+  ],
+  "backdrop": "moonstone-vault.jpg"
+}

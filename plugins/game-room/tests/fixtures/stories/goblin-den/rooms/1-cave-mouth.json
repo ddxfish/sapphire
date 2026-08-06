@@ -1,0 +1,60 @@
+{
+  "id": 1,
+  "slug": "cave-mouth",
+  "title": "Cave Mouth",
+  "template": "Rain hammers the hillside behind you. The cave narrows fast — daylight gives up a few strides in, and the walls carry old tool marks that were never made by human hands. Wind moans through a crack low on the east wall. A crude straw pallet slumps against the north wall, goblin-sized but serviceable.",
+  "on_enter": {
+    "emotions": [
+      "wary"
+    ]
+  },
+  "exits": [
+    {
+      "to": 2,
+      "label": "down the tunnel",
+      "desc": "a stooped passage descending into dark"
+    },
+    {
+      "to": null,
+      "label": "the crack in the east wall",
+      "desc": "too dark to read",
+      "generate": true
+    }
+  ],
+  "objects": {
+    "pallet": {
+      "desc": "a straw sleeping pallet, filthy but dry",
+      "interactions": {
+        "sleep": {
+          "set": {
+            "rested": true
+          },
+          "emotions_remove": [
+            "tired"
+          ],
+          "message": "The player sleeps rough but deep. They wake rested; the storm outside has faded to a drizzle."
+        }
+      }
+    },
+    "loose_stone": {
+      "hidden": true,
+      "found_by": "search",
+      "desc": "a flat stone that rocks underfoot — something glints in the hollow beneath",
+      "gives": "rusty_key"
+    }
+  },
+  "ghost_hints": [
+    {
+      "after_turns": 4,
+      "whisper": "The player hasn't noticed the floor — one stone near the pallet sits proud of the rest. Let their torchlight catch it."
+    }
+  ],
+  "player_desc": "A storm chased you into a hillside cave that turns out to be goblin tunnels. Somewhere below, they hoard a moonstone amulet. Get it, get out.",
+  "player_hints": [
+    {
+      "after_turns": 5,
+      "text": "Old hideouts keep their secrets in the walls — a careful search here pays."
+    }
+  ],
+  "backdrop": "cave-mouth.jpg"
+}

@@ -27,7 +27,12 @@ def test_toolset_save_hot_reloads_active_chat():
     system = _make_system({"toolset": "my-dnd"})
     with patch("core.api_fastapi.publish") as mock_publish:
         reapply_if_active(system, "toolset", "my-dnd")
-    system.llm_chat.function_manager.update_enabled_functions.assert_called_once_with(["my-dnd"])
+    # Positional args only: the call also carries extra_toolsets (the union
+    # primitive, 2026-08-03) and pinning the full signature made this fail on
+    # an unrelated change.
+    fm = system.llm_chat.function_manager
+    assert fm.update_enabled_functions.call_count == 1
+    assert fm.update_enabled_functions.call_args[0] == (["my-dnd"],)
     # TOOLSET_CHANGED must fire so sidebars + listeners refresh
     assert any(
         call.args and call.args[1].get("name") == "my-dnd"

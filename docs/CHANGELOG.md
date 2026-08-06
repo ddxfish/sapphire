@@ -1,5 +1,10 @@
-# 2.9.4 - Game Room
-- Added a game room to Chat > Game Room
+# 2.10.0 - Game Room
+- Game Room replaces story engine
+- Story mode is text adventures with illustrations per room
+- Game mode has the AI as a player or watcher
+- Games and Stories are both plugins
+- Demo game Texas Hold Em and demo story Titanic
+# 2.9.4 - Game Room Prep
 # 2.9.3 - Google Calendar
 - Added oauth relay for easy Google Calendar setup
 # 2.9.2 - Pip conflict resolution

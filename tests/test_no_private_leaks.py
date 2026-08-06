@@ -48,6 +48,38 @@ def _gitignored_dirs():
     return out
 
 
+# Plugins that are wiring to THIS machine's own hardware/LAN and are not
+# distribution units — a home path in them is configuration, not a leak.
+# Deliberately a short, visible list: adding a name here is a claim that the
+# plugin never leaves this box. If one of these ever ships, remove it here
+# FIRST and scrub what the sweep then reports.
+LOCAL_ONLY_PLUGINS = {
+    'body',    # SSHes to the author's own Pi (sapph-body)
+    'nova',    # SSHes to the author's own LAN host + key path
+}
+
+
+def _shipped_outside_git():
+    """Plugin dirs that SHIP publicly but live under a gitignored path.
+
+    user/ is gitignored, so user/plugins/* fell entirely outside this sweep —
+    yet most of those plugins ship: each carries its own git repo or goes to
+    the plugin store, taking any leaked absolute path with it. A plugin is a
+    distribution unit if it has a plugin.json and isn't declared local-only.
+    (Tier 5 blind spot, war campaign 2026-08-05 — the same gap was flagged
+    for the Discord plugin, and story-titanic ships from right here.)"""
+    out = []
+    for band in (REPO / 'user' / 'plugins',):
+        if not band.is_dir():
+            continue
+        for child in sorted(band.iterdir()):
+            if child.name in LOCAL_ONLY_PLUGINS:
+                continue
+            if child.is_dir() and (child / 'plugin.json').exists():
+                out.append(child)
+    return out
+
+
 def test_no_developer_environment_leaks():
     needles = []
     home = str(Path.home())
@@ -66,28 +98,42 @@ def test_no_developer_environment_leaks():
 
     skip = ALWAYS_SKIP | _gitignored_dirs()
     hits = []
-    for path in sorted(REPO.rglob('*')):
-        rel = path.relative_to(REPO)
-        if any(part in skip for part in rel.parts):
-            continue
-        if not path.is_file() or path.suffix.lower() not in SCAN_EXT:
-            continue
-        try:
-            if path.stat().st_size > MAX_BYTES:
+    roots = [REPO] + _shipped_outside_git()
+    seen = set()
+    for root in roots:
+        for path in sorted(root.rglob('*')):
+            rel = path.relative_to(REPO)
+            # Plugins under a gitignored dir ship on their OWN (their own git
+            # repo, the plugin store) — they are outside .gitignore's net but
+            # very much public, so they get scanned explicitly.
+            if root is REPO and any(part in skip for part in rel.parts):
                 continue
-            text = path.read_text(encoding='utf-8', errors='ignore')
-        except OSError:
-            continue
-        for needle, kind, rx in needles:
-            if rx is not None:
-                m = rx.search(text)
-                pos = m.start() if m else -1
-            else:
-                pos = text.find(needle)
-            if pos < 0:
+            if not path.is_file() or path.suffix.lower() not in SCAN_EXT:
                 continue
-            line_no = text.count('\n', 0, pos) + 1
-            hits.append(f"{rel}:{line_no} — {kind}")
+            if any(part in ALWAYS_SKIP for part in rel.parts):
+                continue
+            # Dedup AFTER the skip decision: marking a path seen while the
+            # REPO pass was skipping it would make the extra roots skip it
+            # too, silently scanning nothing (caught by a planted beacon).
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                if path.stat().st_size > MAX_BYTES:
+                    continue
+                text = path.read_text(encoding='utf-8', errors='ignore')
+            except OSError:
+                continue
+            for needle, kind, rx in needles:
+                if rx is not None:
+                    m = rx.search(text)
+                    pos = m.start() if m else -1
+                else:
+                    pos = text.find(needle)
+                if pos < 0:
+                    continue
+                line_no = text.count('\n', 0, pos) + 1
+                hits.append(f"{rel}:{line_no} — {kind}")
     assert not hits, (
         "Developer-environment strings found in shippable files — scrub "
         "before pushing:\n  " + "\n  ".join(hits))

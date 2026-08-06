@@ -363,7 +363,16 @@ def execute(function_name, arguments, config):
                     if system and hasattr(system, 'llm_chat'):
                         toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
                         toolset_name = toolset_info.get("name", "custom")
-                        system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+                        # reload_plugin carried extras; a bare re-apply here
+                        # negated it (extras-decay site #10, 2026-08-05)
+                        extras = None
+                        try:
+                            extras = (system.llm_chat.session_manager.get_chat_settings()
+                                      or {}).get('extra_toolsets') or None
+                        except Exception:
+                            pass
+                        system.llm_chat.function_manager.update_enabled_functions(
+                            [toolset_name], extra_toolsets=extras)
                         # Notify frontend so toolset count refreshes
                         from core.event_bus import publish, Events
                         publish(Events.TOOLSET_CHANGED, {"name": toolset_name})

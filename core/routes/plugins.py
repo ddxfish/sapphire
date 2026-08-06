@@ -418,6 +418,11 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                         except Exception as _verr:
                             logger.warning(f"[PLUGINS] toggle re-verify failed for {plugin_name}: {_verr}")
                         loaded = plugin_loader._load_plugin(plugin_name)
+                        if loaded:
+                            # Manifest-only registration just replaced whatever
+                            # the plugin had rendered at runtime — let it
+                            # re-assert (Sapph-not-Rose toggle leg, 2026-08-05).
+                            plugin_loader._fire_plugins_ready("toggle")
                         if not loaded:
                             # Load failed (verification/deps). Leave plugins.json
                             # alone — user intent (enabled) survives so a fix +
@@ -445,7 +450,18 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
                     if system and hasattr(system, 'llm_chat'):
                         toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
                         toolset_name = toolset_info.get("name", "custom")
-                        system.llm_chat.function_manager.update_enabled_functions([toolset_name])
+                        # Carry extra_toolsets through — a by-name-only re-apply
+                        # strips them from the enabled set, so toggling ANY
+                        # plugin mid-story cost her story_act: she narrates but
+                        # nothing advances (extras-decay site #6, 2026-08-05).
+                        extras = None
+                        try:
+                            extras = (system.llm_chat.session_manager.get_chat_settings()
+                                      or {}).get('extra_toolsets') or None
+                        except Exception:
+                            pass
+                        system.llm_chat.function_manager.update_enabled_functions(
+                            [toolset_name], extra_toolsets=extras)
                         from core.event_bus import publish, Events
                         publish(Events.TOOLSET_CHANGED, {
                             "name": toolset_name,
@@ -930,7 +946,15 @@ async def install_plugin(
             fm = system.llm_chat.function_manager
             current = fm.current_toolset_name
             if current:
-                fm.update_enabled_functions([current])
+                # Active chat's extra_toolsets ride along — a by-name-only
+                # re-apply strips them (extras-decay sites #7/#8, 2026-08-05).
+                extras = None
+                try:
+                    extras = (system.llm_chat.session_manager.get_chat_settings()
+                              or {}).get('extra_toolsets') or None
+                except Exception:
+                    pass
+                fm.update_enabled_functions([current], extra_toolsets=extras)
             try:
                 from core.event_bus import publish, Events
                 toolset_info = fm.get_current_toolset_info()
@@ -987,7 +1011,13 @@ async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
                 fm = system.llm_chat.function_manager
                 current = fm.current_toolset_name
                 if current:
-                    fm.update_enabled_functions([current])
+                    extras = None
+                    try:
+                        extras = (system.llm_chat.session_manager.get_chat_settings()
+                                  or {}).get('extra_toolsets') or None
+                    except Exception:
+                        pass
+                    fm.update_enabled_functions([current], extra_toolsets=extras)
                 from core.event_bus import publish, Events
                 toolset_info = fm.get_current_toolset_info()
                 publish(Events.TOOLSET_CHANGED, {

@@ -1,0 +1,408 @@
+/* Game Room — Library (Choose Game) + room-on-the-Surface (Phase 2c).
+   The Surface frame (.chat-body/.chat-main/.chat-sidebar/.form-wrapper) and
+   the sidebar look (.sb-*, .sidebar-accordion, .chat-picker-item) come from
+   core style.css — this file styles only what's ours. */
+
+/* ---------------- library ---------------- */
+.gr-lib { max-width: 900px; margin: 0 auto; padding: 24px 16px; width: 100%; overflow-y: auto; box-sizing: border-box; flex: 1 1 auto; min-height: 0; }
+.gr-header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.gr-header h1 { margin: 0 0 4px; font-size: 1.6em; }
+.gr-sub { color: var(--text-secondary, #8a8fa3); font-size: 0.95em; }
+.gr-shelf { display: flex; flex-direction: column; gap: 14px; margin-top: 24px; }
+.gr-card {
+    display: flex; align-items: center; gap: 18px;
+    background: var(--bg-secondary, #1a1f2b); border: 1px solid var(--border, #2a3040);
+    border-radius: 14px; padding: 18px 20px; cursor: pointer;
+    transition: transform .12s ease, border-color .12s ease;
+}
+.gr-card:hover { transform: translateY(-2px); border-color: var(--trim, var(--accent, #5ab0ff)); }
+.gr-card-icon {
+    font-size: 2.4em; width: 72px; height: 72px; flex: 0 0 72px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg, #10141d); border: 1px solid var(--border, #2a3040); border-radius: 12px;
+}
+.gr-card-body { flex: 1 1 auto; min-width: 0; }
+.gr-card-title { font-weight: 700; font-size: 1.15em; margin-bottom: 4px; }
+.gr-card-genre {
+    margin-left: 8px; font-size: 0.65em; font-weight: 600; vertical-align: 2px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-secondary, #8a8fa3); border: 1px solid var(--border, #2a3040);
+    border-radius: 10px; padding: 2px 8px;
+}
+.gr-card-desc { color: var(--text-secondary, #8a8fa3); font-size: 0.9em; }
+.gr-card-side { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 0 0 auto; }
+.gr-card-count { color: var(--text-secondary, #8a8fa3); font-size: 0.75em; }
+.gr-empty { color: var(--text-secondary, #8a8fa3); padding: 30px 4px; }
+
+/* Library-as-Surface: no composer in the library — hide the empty form bar */
+.surface-library .form-wrapper { display: none; }
+.gr-lib-sb-title { font-weight: 700; flex: 1; padding: 6px 4px; }
+.gr-genre-chips { flex-wrap: wrap; }
+
+/* ---------------- room: stage + talk rail in the Surface main pane ---------------- */
+.gr-stage-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px 0; min-height: 30px; }
+.gr-stage-title { font-weight: 700; white-space: nowrap; }
+.gr-stage-info {
+    color: var(--text-secondary, #8a8fa3); font-size: 0.85em; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gr-room { display: flex; gap: 12px; flex: 1 1 auto; min-height: 0; padding: 10px 12px; position: relative; }
+.gr-room.talk-collapsed .gr-talk { display: none; }
+/* Talk expand tab — sits BELOW the sidebar's expand tab slot (top 12px,
+   ~62px tall) so both rails can be collapsed without the tabs overlapping. */
+.gr-talk-expand {
+    display: none; position: absolute; right: 0; top: 84px;
+    padding: 12px 9px; border: 1px solid var(--trim, var(--border, #2a3040)); border-right: none;
+    border-radius: var(--radius-sm, 6px) 0 0 var(--radius-sm, 6px);
+    background: var(--bg-secondary, #161b26); color: var(--trim, var(--text-muted, #8a8fa3));
+    cursor: pointer; font-size: 15px; z-index: 10;
+}
+.gr-talk-expand:hover { color: var(--text, #e6e6ef); background: var(--trim-light, var(--bg-hover, #1c2230)); }
+.gr-room.talk-collapsed .gr-talk-expand { display: block; }
+.gr-stage { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
+.gr-talk {
+    flex: 0 0 300px; display: flex; flex-direction: column;
+    background: var(--bg-secondary, #161b26); border: 1px solid var(--border, #2a3040);
+    border-radius: 12px; overflow: hidden; min-height: 0;
+}
+.gr-talk-head {
+    display: flex; align-items: center; justify-content: flex-start; gap: 8px;
+    padding: 4px 14px 4px 6px; font-size: 0.75em; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-secondary, #8a8fa3); border-bottom: 1px solid var(--border, #2a3040);
+}
+.gr-talk-log { padding: 10px 14px; overflow-y: auto; flex: 1 1 auto; display: flex; flex-direction: column; gap: 7px; }
+.gr-typing { animation: gr-fade 1.1s ease-in-out infinite alternate; }
+
+/* ---------------- room: composer + action strip (inside .form-wrapper) ---------------- */
+.gr-botrow { display: flex; align-items: center; gap: 8px; width: 100%; }
+.gr-composer {
+    flex: 1 1 auto; min-width: 0; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--border, #2a3040); background: var(--bg, #0f131c);
+    color: var(--text, #e6e6ef); font-size: 0.95em;
+}
+.gr-composer:focus { outline: none; border-color: var(--trim, var(--accent, #5ab0ff)); }
+.gr-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; min-height: 34px; }
+
+/* ---------------- room: sidebar bits ---------------- */
+.gr-settings-btn { margin: 8px 10px 0; width: calc(100% - 20px); }
+.gr-game-title { padding: 8px 12px 2px; font-weight: 700; }
+.gr-card-btns { display: flex; gap: 6px; align-items: center; }
+.gr-seat-info { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px; }
+.gr-seat-row { display: flex; gap: 8px; font-size: 0.88em; }
+.gr-seat-row label {
+    flex: 0 0 44px; color: var(--text-secondary, #8a8fa3);
+    text-transform: uppercase; font-size: 0.78em; letter-spacing: 0.06em; line-height: 1.7;
+}
+.gr-seat-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gr-seat-note { color: var(--text-secondary, #8a8fa3); font-size: 0.78em; margin-top: 4px; }
+.gr-dd-empty { color: var(--text-secondary, #8a8fa3); font-size: 0.85em; padding: 8px 12px; }
+
+/* ---------------- game settings modal (spacious on purpose) ---------------- */
+.grs-modal {
+    max-width: 980px; width: 94%; height: 84vh; max-height: 84vh;
+    display: flex; flex-direction: column;
+}
+.grs-tabs { padding: 8px 24px 0; border-bottom: 1px solid var(--border, #2a3040); flex-shrink: 0; }
+.grs-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 26px 30px; }
+.grs-pane .sb-field { margin-bottom: 18px; }
+.grs-pane textarea.grs-field {
+    width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace;
+    font-size: 0.9em; line-height: 1.5; min-height: 220px;
+}
+.grs-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+
+/* ---------------- stage / felt ---------------- */
+.pk-stage { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; }
+.pk-stageinfo { color: var(--text-secondary, #8a8fa3); font-size: 0.85em; padding-left: 6px; }
+.pk-loading, .pk-wait { color: var(--text-secondary, #8a8fa3); padding: 8px; }
+.pk-splash { text-align: center; padding: 60px 20px; }
+.pk-splash p { color: var(--text-secondary, #8a8fa3); max-width: 460px; margin: 12px auto 0; }
+.pk-felt {
+    position: relative; border-radius: 130px; padding: 20px 34px;
+    background: radial-gradient(ellipse at 50% 40%, #1d4e89 0%, #143a6b 55%, #0e2a4d 100%);
+    border: 10px solid #232733; box-shadow: inset 0 0 60px rgba(0,0,0,.45), 0 4px 18px rgba(0,0,0,.4);
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    gap: 14px; flex: 1 1 auto; min-height: 380px;
+}
+.pk-seat { display: flex; align-items: center; gap: 12px; position: relative; padding: 6px 10px; }
+.pk-seat-ai.pk-thinking .pk-avatar { animation: pk-pulse 1.2s ease-in-out infinite; }
+.pk-avatar {
+    width: 58px; height: 58px; border-radius: 50%; background: #0d2036;
+    display: flex; align-items: center; justify-content: center; font-size: 1.7em;
+    border: 2px solid #5ab0ff55;
+}
+.pk-name { font-weight: 600; }
+.pk-chips { color: #ffd66b; font-weight: 600; font-size: 0.95em; }
+.pk-dbtn {
+    display: inline-block; background: #f4f4f4; color: #222; border-radius: 50%;
+    width: 18px; height: 18px; line-height: 18px; text-align: center;
+    font-size: 11px; font-weight: 800; vertical-align: 2px;
+}
+.pk-betchip {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    background: #0d2036cc; border: 1px solid #5ab0ff66; color: #ffd66b;
+    padding: 2px 10px; border-radius: 12px; font-size: 0.85em; font-weight: 600;
+}
+.pk-seat-ai .pk-betchip { bottom: -26px; }
+.pk-seat-me .pk-betchip { top: -26px; }
+.pk-center { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 8px 0; }
+.pk-board { display: flex; gap: 8px; }
+.pk-pot {
+    background: #0d2036cc; border: 1px solid #5ab0ff44; border-radius: 14px;
+    padding: 3px 14px; color: #ffd66b; font-weight: 700; font-size: 0.9em;
+}
+
+/* ---------------- cards (sized relative to viewport ≈ 20% of board) ---------------- */
+.pk-stage { --card-h: clamp(96px, 17vh, 160px); }
+.pk-card {
+    height: var(--card-h); width: calc(var(--card-h) * 0.71);
+    border-radius: calc(var(--card-h) * 0.085); background: #fafafa; color: #1b1b22;
+    position: relative; box-shadow: 0 2px 6px rgba(0,0,0,.35); flex: 0 0 auto;
+    font-family: Georgia, 'Times New Roman', serif;
+}
+.pk-hole { display: flex; gap: 6px; }
+.pk-card.pk-red { color: #c8283c; }
+.pk-corner {
+    position: absolute; top: 5%; left: 7%; font-size: calc(var(--card-h) * 0.17);
+    font-weight: 700; line-height: 1; text-align: center;
+}
+.pk-corner i { display: block; font-style: normal; font-size: calc(var(--card-h) * 0.15); }
+.pk-corner-b { top: auto; left: auto; bottom: 5%; right: 7%; transform: rotate(180deg); }
+.pk-pip { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: calc(var(--card-h) * 0.36); }
+.pk-card.pk-down {
+    background: repeating-linear-gradient(45deg, #2b5b96 0 6px, #234b7d 6px 12px);
+    border: 3px solid #e8e8e8; box-sizing: border-box;
+}
+.pk-card.pk-slot { background: transparent; border: 1.5px dashed #5ab0ff44; box-shadow: none; }
+
+/* ---------------- results / buttons / inputs ---------------- */
+.pk-result {
+    background: var(--bg-secondary, #161b26); border: 1px solid #5ab0ff55;
+    border-radius: 10px; padding: 10px 14px; font-weight: 600;
+}
+.pk-final { border-color: #ffd66b88; }
+.pk-btn {
+    padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border, #2a3040);
+    background: var(--bg-secondary, #1c2230); color: var(--text, #e6e6ef);
+    cursor: pointer; font-size: 0.95em; font-weight: 600;
+}
+.pk-btn:hover:not(:disabled) { border-color: var(--accent, #5ab0ff); }
+.pk-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pk-btn-primary { background: #1d4e89; border-color: #5ab0ff88; }
+.pk-btn-sm { padding: 5px 10px; font-size: 0.85em; }
+.pk-sizer { display: flex; gap: 6px; align-items: center; }
+.pk-amt {
+    width: 90px; padding: 8px; border-radius: 8px; border: 1px solid var(--border, #2a3040);
+    background: var(--bg, #0f131c); color: var(--text, #e6e6ef); font-size: 0.95em;
+}
+.pk-preset { color: var(--text-secondary, #9aa2b8); }
+.pk-select {
+    padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border, #2a3040);
+    background: var(--bg, #12161f); color: var(--text, #e6e6ef); font-size: 0.88em;
+    max-width: 150px;
+}
+.pk-select:focus { outline: none; border-color: var(--accent, #5ab0ff); }
+
+/* ---------------- talk entries ---------------- */
+.pk-t { font-size: 0.92em; line-height: 1.35; }
+.pk-t-me b { color: var(--accent, #7ee787); }
+.pk-t-ai b { color: #5ab0ff; }
+.pk-t-dealer { color: var(--text-secondary, #8a8fa3); font-style: italic; font-size: 0.85em; }
+.pk-code { font-weight: 700; font-style: normal; color: var(--text, #e6e6ef); }
+.pk-code.pk-red { color: #ff6b7d; }
+
+/* ---------------- misc ---------------- */
+@keyframes pk-pulse { 0%,100% { box-shadow: 0 0 0 0 #5ab0ff44; } 50% { box-shadow: 0 0 0 12px #5ab0ff00; } }
+@keyframes gr-fade { from { opacity: 0.45; } to { opacity: 1; } }
+
+@media (max-width: 1000px) {
+    .gr-room { flex-direction: column; }             /* talk rail drops below the board */
+    .gr-talk { flex: 0 0 auto; max-height: 240px; }
+    .pk-felt { border-radius: 60px; padding: 14px 10px; min-height: 320px; }
+    .pk-stage { --card-h: clamp(64px, 10vh, 96px); }
+    .gr-card { flex-wrap: wrap; }
+}
+
+/* ---------------- story room: the transplanted rail over the stage ---------------- */
+/* The REAL #chatbg (flex:1, backdrop pipe intact) lands inside .st-rail-slot —
+   the slot just has to be a flex column with room to give. Rounded frame is
+   the v1 "you're in a story" cue; the per-room backdrop lands in step 4. */
+.surface-story .st-stage {
+    flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+    padding: 10px 12px 0;
+}
+.surface-story .st-rail-slot {
+    flex: 1 1 auto; min-height: 0; min-width: 0;
+    display: flex; flex-direction: column;
+    border: 1px solid var(--trim, var(--border, #2a3040));
+    border-radius: 12px; overflow: hidden;
+}
+.st-tools-check {
+    display: flex; align-items: center; gap: 7px; margin: 2px 0 10px;
+    font-size: 0.85em; color: var(--text-secondary, #8a8fa3); cursor: pointer;
+}
+.st-tools-check input { accent-color: var(--trim, #4a9eff); }
+
+/* ---------------- story scene strip: the player's establishing shot ---------------- */
+.st-scene {
+    margin: 0 0 8px; padding: 10px 14px;
+    background: var(--bg-secondary, #161b26);
+    border: 1px solid var(--trim, var(--border, #2a3040));
+    border-radius: 12px;
+}
+.st-scene-title {
+    font-weight: 700; font-size: 0.8em; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--trim, #8ab8ff); margin-bottom: 3px;
+}
+.st-scene-desc { font-size: 0.92em; line-height: 1.45; }
+.st-scene-exits {
+    margin-top: 6px; font-size: 0.8em; color: var(--text-secondary, #8a8fa3);
+    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.st-exit {
+    padding: 2px 9px; border: 1px solid var(--border, #2a3040);
+    border-radius: 999px; background: var(--bg-primary, #0f1020); cursor: help;
+}
+.st-obj { border-style: dashed; }
+.st-hint-btn {
+    padding: 1px 9px; border: 1px solid var(--trim, var(--border, #2a3040));
+    border-radius: 999px; background: transparent; cursor: pointer;
+    color: var(--trim, #8ab8ff); font-size: 1em;
+}
+.st-hint-btn:hover { background: var(--trim-light, var(--bg-hover, #1c2230)); }
+.st-hint {
+    margin-top: 6px; font-size: 0.88em; line-height: 1.4;
+    color: var(--trim, #8ab8ff); font-style: italic;
+}
+
+/* ---------------- story status panel (sidebar) — Krem's layout 2026-08-03 ----------------
+   The old .st-scene stage strip is retired; its inner classes (st-scene-title/
+   desc/exits, st-exit, st-obj, st-hint) live on inside this panel. */
+.st-status {
+    border: 1px solid var(--trim, var(--border, #2a3040));
+    border-radius: 10px; overflow: hidden;
+    padding: 8px 10px 9px; margin: 4px 0 8px;
+    background: var(--bg-primary, #0f1020);
+}
+.st-status-img { margin: -8px -10px 8px; }
+.st-status-img img { width: 100%; display: block; aspect-ratio: 16 / 9; object-fit: cover; }
+.st-ctl-row { display: flex; gap: 6px; }
+.st-ctl-row .btn-sm { flex: 1 1 auto; white-space: nowrap; }
+.st-ctl-row .st-ctl-wide { flex: 3 1 auto; }   /* ▶ Start Story next to ⚙ */
+
+/* ---------------- tap-to-draft cards ---------------- */
+.st-tap { cursor: pointer; }
+.st-tap:hover { border-color: var(--trim, #4a9eff); color: var(--text, #e6e6ef); }
+.st-card {
+    background: var(--bg-primary, #0f1020); color: var(--text, #e1e1e6);
+    border: 1px solid var(--border, #333); border-radius: 12px;
+    padding: 16px 18px; width: min(360px, 88vw);
+}
+.st-card-title { font-weight: 700; text-transform: capitalize; margin-bottom: 4px; }
+.st-card-desc { font-size: 0.9em; line-height: 1.45; color: var(--text-secondary, #b8bcc8); margin-bottom: 10px; }
+.st-card-verbs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.st-card-note { font-size: 0.75em; color: var(--text-muted, #8a8fa3); }
+
+/* ---------------- tile stats line + expandable details ---------------- */
+.gr-card-stats {
+    margin-top: 6px; font-size: 0.78em; color: var(--text-secondary, #8a8fa3);
+    letter-spacing: 0.02em;
+}
+.gr-card-more {
+    flex-basis: 100%; margin-top: 12px; padding-top: 10px;
+    border-top: 1px dashed var(--border, #2a3040); cursor: default;
+    font-size: 0.88em;
+}
+.gr-card { flex-wrap: wrap; }
+.gr-more-row { display: flex; gap: 10px; padding: 2px 0; }
+.gr-more-row span {
+    flex: 0 0 90px; color: var(--text-secondary, #8a8fa3);
+    text-transform: uppercase; font-size: 0.78em; letter-spacing: 0.06em; line-height: 1.8;
+}
+.gr-more-facts { margin: 8px 0 0; padding-left: 20px; }
+.gr-more-facts li { margin: 3px 0; color: var(--text-secondary, #b8bcc8); }
+
+/* ---------------- 3-column tiles: art | words | control stack ---------------- */
+.gr-card-icon { width: 96px; height: 96px; flex: 0 0 96px; }
+.gr-card-art { padding: 0; overflow: hidden; }
+.gr-card-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gr-card-side { align-items: stretch; width: 122px; flex: 0 0 122px; }
+.gr-card-btns { flex-direction: column; align-items: stretch; }
+.gr-card-btns .pk-btn { width: 100%; }
+.gr-card-count { text-align: center; }
+
+/* Fix (2026-08-04): with flex-wrap on, line-breaking uses BASE sizes — an
+   auto-basis body wraps whole columns when text runs long (story tiles
+   stacked to 1-per-line). Basis 0 = body only grows, never trips the wrap;
+   only .gr-card-more (basis 100%) intentionally takes its own line.
+   And the control stack is a COLUMN of [button ROW, count] — Krem's spec. */
+.gr-card-body { flex: 1 1 0; }
+.gr-card-btns { flex-direction: row; align-items: center; }
+.gr-card-btns .pk-btn { width: auto; }
+.gr-card-side { align-items: center; }
+
+/* ---------------- Dark Horse Tower (towerd) ---------------- */
+.td-wrap { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; }
+.td-hud { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.td-stat { font-size: 0.92em; color: var(--text-secondary, #8a8fa3); }
+.td-stat b { color: var(--text, #e6e6ef); }
+.td-flex { flex: 1 1 auto; }
+.td-auto { display: flex; align-items: center; gap: 5px; font-size: 0.85em; color: var(--text-secondary, #8a8fa3); cursor: pointer; }
+.td-next { font-size: 0.8em; color: var(--text-secondary, #8a8fa3); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; min-height: 22px; }
+.td-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid var(--border, #2a3040); border-radius: 999px; background: var(--bg-primary, #0f1020); }
+.td-chip i, .td-menu button i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.td-canvas-wrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+#td-canvas { max-width: 100%; max-height: 100%; border-radius: 12px; border: 1px solid var(--border, #2a3040); }
+.td-menu {
+    position: absolute; z-index: 40; min-width: 180px;
+    background: var(--bg-primary, #0f1020); border: 1px solid var(--trim, var(--border, #2a3040));
+    border-radius: 10px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.td-menu-title { font-weight: 700; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.08em; padding: 4px 8px 6px; color: var(--text-secondary, #8a8fa3); }
+.td-menu-note { padding: 4px 8px; font-size: 0.85em; color: var(--text-muted, #8a8fa3); }
+.td-menu button {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 7px 9px; border: none; background: transparent; color: var(--text, #e6e6ef);
+    border-radius: 7px; cursor: pointer; font-size: 0.9em;
+}
+.td-menu button:hover:not(:disabled) { background: var(--bg-hover, #1c2230); }
+.td-menu button:disabled { opacity: 0.4; cursor: default; }
+.td-banner {
+    position: absolute; top: 42%; left: 50%; transform: translate(-50%, -50%);
+    padding: 14px 30px; border-radius: 12px; font-weight: 700; font-size: 1.25em;
+    background: rgba(10, 12, 22, 0.88); border: 1px solid var(--trim, #4a9eff);
+    pointer-events: none; text-align: center;
+}
+.td-banner-lost { border-color: #ff6b7d; color: #ff6b7d; }
+.td-banner-won { border-color: #7ee787; color: #7ee787; }
+.td-banner-won, .td-banner-lost { pointer-events: auto; }
+.td-banner .pk-btn { margin-top: 12px; }
+.td-final { font-size: 0.85em; margin-top: 6px; color: var(--text-secondary, #b8bcc8); }
+
+/* ---------------- towerd hover card ---------------- */
+.td-menu { min-width: 214px; }
+.td-lvl { font-size: 0.72em; padding: 1px 7px; border-radius: 999px; border: 1px solid; vertical-align: 2px; margin-left: 4px; }
+.td-lvl-0 { color: #7ee787; border-color: #7ee787; }
+.td-lvl-1 { color: #e8c547; border-color: #e8c547; }
+.td-lvl-2 { color: #ff6b7d; border-color: #ff6b7d; }
+.td-card-rows { padding: 2px 8px 6px; }
+.td-card-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.85em; padding: 1.5px 0; }
+.td-card-row span { color: var(--text-secondary, #8a8fa3); }
+.td-card-row em { color: #c792ea; font-style: normal; }
+.td-card-life { padding: 4px 8px 6px; font-size: 0.78em; color: var(--text-secondary, #8a8fa3); border-top: 1px dashed var(--border, #2a3040); }
+.td-card-sec { padding: 5px 8px 1px; font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary, #8a8fa3); }
+.td-card-delta { padding: 0 8px 5px; font-size: 0.83em; color: #7ee787; }
+.td-ticker-label { text-transform: uppercase; font-size: 0.85em; letter-spacing: 0.08em; margin-right: 2px; }
+.td-col { display: inline-flex; flex-direction: column; gap: 3px; vertical-align: top; }
+.td-arrow { color: var(--text-muted, #565b6e); padding: 0 2px; }
+.td-next { align-items: flex-start; }
+
+/* targeting priority dial + see-through card */
+.td-menu { background: rgba(13, 15, 28, 0.82); backdrop-filter: blur(2.5px); }
+.td-pri { display: flex; gap: 5px; padding: 2px 8px 8px; }
+.td-pri button {
+    flex: 1; padding: 4px 0; border: 1px solid var(--border, #2a3040);
+    background: transparent; color: var(--text-secondary, #8a8fa3);
+    border-radius: 7px; cursor: pointer; font-size: 0.85em;
+}
+.td-pri button.on { border-color: var(--trim, #4a9eff); color: var(--text, #e6e6ef); background: var(--bg-hover, #1c2230); }

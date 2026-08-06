@@ -171,19 +171,92 @@ def test_put_chat_settings_response_includes_toolset_state(chat_client):
     assert 'state_tools' in body
 
 
-# ─── 2.15 PUT to inactive chat returns 400 ───────────────────────────────────
+# ─── 2.15 PUT to inactive chat writes by name, never touches the live chat ───
 
-def test_put_chat_settings_on_inactive_chat_returns_400(chat_client):
-    """Only the active chat can have its settings updated via this route."""
+def test_put_chat_settings_on_inactive_chat_writes_by_name_without_live_apply(chat_client):
+    """[CONTRACT — replaces the pre-2026-08-02 400 guard] A PUT for a chat
+    that is NOT active writes that chat's settings BY NAME — the Twilio
+    daemon and mode-tagged game/story sessions are load-bearing on this —
+    and must NEVER touch the live chat's runtime: no settings apply, no
+    scope apply, no toolset sync. The old 400 was never the point;
+    CONTAINMENT is (a call naming a session must not restamp the live
+    chat's brain — finding 1.1's bug class, asserted at the core layer)."""
+    from unittest.mock import MagicMock
     c, csrf, mock_system, fm, captured = chat_client
-    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'trinity'
+    sm = mock_system.llm_chat.session_manager
+    sm.get_active_chat_name.return_value = 'trinity'
+    sm.set_named_chat_settings.return_value = True
+    fm.update_enabled_functions = MagicMock()
 
     r = c.put(
         '/api/chats/other_chat/settings',
         headers={'X-CSRF-Token': csrf},
         json={'settings': {'memory_scope': 'x'}},
     )
-    assert r.status_code == 400
+    assert r.status_code == 200
+    body = r.json()
+    # 1. The write landed in storage under the RIGHT name.
+    sm.set_named_chat_settings.assert_called_once_with('other_chat', {'memory_scope': 'x'})
+    # 2. The live legs did NOT fire.
+    sm.update_chat_settings.assert_not_called()
+    fm.update_enabled_functions.assert_not_called()
+    assert captured == {}       # apply_scopes_from_settings / set_rag_scope never ran
+    # 3. Response shape tells the UI not to repaint tool pills from a write
+    #    that never touched the live runtime.
+    assert body['toolset'] is None
+    assert body['functions'] == []
+    assert body['state_tools'] == []
+
+
+def test_put_chat_settings_missing_prompt_falls_back_with_real_content(chat_client):
+    """[REGRESSION_GUARD — post-fix review 2026-08-05] A chat whose configured
+    prompt doesn't resolve must run on the assembled DEFAULT this turn.
+    'default' is the assembled-mode sentinel, not a prompt name: the first
+    version of this fallback called get_prompt('default'), got None, and was
+    dead code — she silently kept the PREVIOUS chat's prompt. Assert the
+    fallback applies NON-EMPTY content, and that the chat's own setting is
+    never rewritten (the original Sapph-not-Rose data-loss mechanism)."""
+    from core import prompts
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    payload = {'prompt': 'no-such-prompt-xyz'}
+    sm.get_chat_settings.return_value = payload
+    prev = prompts.get_active_preset_name()
+    try:
+        r = c.put(
+            '/api/chats/trinity/settings',
+            headers={'X-CSRF-Token': csrf},
+            json={'settings': payload},
+        )
+        assert r.status_code == 200
+        mock_system.llm_chat.set_system_prompt.assert_called()
+        content = mock_system.llm_chat.set_system_prompt.call_args[0][0]
+        assert isinstance(content, str) and content.strip(), \
+            "fallback must apply non-empty assembled-default content"
+        # The runtime fell back; the SETTING stays the user's.
+        for call in sm.update_chat_settings.call_args_list:
+            args = call[0]
+            if args and isinstance(args[0], dict):
+                assert args[0].get('prompt') != 'default', \
+                    "missing-prompt fallback must never persist 'default'"
+    finally:
+        prompts.set_active_preset_name(prev)
+
+
+def test_put_chat_settings_on_unknown_chat_returns_404(chat_client):
+    """The negative case the old 400 test actually protected: an unknown
+    chat name refuses instead of silently succeeding."""
+    c, csrf, mock_system, fm, captured = chat_client
+    sm = mock_system.llm_chat.session_manager
+    sm.get_active_chat_name.return_value = 'trinity'
+    sm.set_named_chat_settings.return_value = False
+
+    r = c.put(
+        '/api/chats/no_such_chat/settings',
+        headers={'X-CSRF-Token': csrf},
+        json={'settings': {'memory_scope': 'x'}},
+    )
+    assert r.status_code == 404
 
 
 def test_put_chat_settings_missing_settings_key_returns_400(chat_client):

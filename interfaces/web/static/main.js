@@ -254,23 +254,57 @@ async function init() {
                             appContent.appendChild(viewDiv);
                         }
                         const appName = app.name;
+                        // Visibility epoch: an app's render is async, so a
+                        // click-away can land between show() starting and the
+                        // module resolving. Without this, hide() found no
+                        // _appCleanup yet and no-oped, then render finished
+                        // into a display:none view — and apps that claim
+                        // shared DOM (the Game Room's rail + composer) left
+                        // Chat with no rail, no composer, and no error.
+                        // Every app inherits this contract.
+                        let epoch = 0;
                         const mod = {
                             init(el) {},
                             async show() {
                                 const el = document.getElementById(`view-app-${appName}`);
                                 if (!el) return;
                                 if (el.dataset.loaded) return;
+                                const mine = ++epoch;
                                 const v = document.querySelector('meta[name="boot-version"]')?.content || '';
+                                let imported = null;
                                 try {
-                                    const mod = await import(`/plugin-web/${appName}/app/index.js?v=${v}`);
-                                    if (mod.render) await mod.render(el);
-                                    if (mod.cleanup) el._appCleanup = mod.cleanup;
+                                    imported = await import(`/plugin-web/${appName}/app/index.js?v=${v}`);
+                                    if (mine !== epoch) return;         // hidden while importing
+                                    // Per-RENDER cleanup: render() may return its own
+                                    // teardown closure. The module-level cleanup export
+                                    // is only a fallback — the module is memoized, so on
+                                    // a superseded render that export acts on state the
+                                    // NEWER render now owns (post-fix review 2026-08-05:
+                                    // the loser's teardown killed the winner).
+                                    let ret = null;
+                                    if (imported.render) ret = await imported.render(el);
+                                    const fin = (typeof ret === 'function') ? ret : (imported.cleanup || null);
+                                    if (mine !== epoch) {
+                                        // Hidden mid-render: the app may have
+                                        // claimed shared DOM by now. Tear THIS
+                                        // render down instead of stranding it.
+                                        try { fin?.(); } catch {}
+                                        el.dataset.loaded = '';
+                                        return;
+                                    }
+                                    if (fin) el._appCleanup = fin;
                                     el.dataset.loaded = 'true';
                                 } catch (e) {
+                                    if (mine !== epoch) return;
+                                    // Render threw after possibly claiming shared DOM
+                                    // (rail/composer/#chatbg) — release it before
+                                    // painting the error, or Chat is left with no rail.
+                                    try { imported?.cleanup?.(); } catch {}
                                     el.innerHTML = `<div class="view-placeholder"><h2>Failed to load ${appName}</h2><p style="color:var(--text-muted)">${e.message}</p></div>`;
                                 }
                             },
                             hide() {
+                                epoch++;                                 // cancels any in-flight show()
                                 const el = document.getElementById(`view-app-${appName}`);
                                 if (el?._appCleanup) {
                                     try { el._appCleanup(); } catch {}

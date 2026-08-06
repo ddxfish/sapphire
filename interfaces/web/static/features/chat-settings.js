@@ -34,9 +34,35 @@ export function applyTrimColor(color) {
 
 // Scene background: set #chatbg's image from a scene name (or clear to default CSS).
 // `name` is a sanitized library stem; anything not matching is treated as "none".
+//
+// Ownership: a view that has borrowed the chat surface (the Game Room's story
+// rooms paint per-room backdrops onto this same element) marks it via
+// claimBackground(). While claimed, chat-settings paints are RECORDED, not
+// applied — otherwise loadSidebar overpainted the story's scene about half a
+// second after every room entry and only the 12s poll healed it (finding 4.3).
+export function claimBackground(owner) {
+    const bg = document.getElementById('chatbg');
+    if (bg) bg.dataset.bgOwner = owner;
+}
+
+export function releaseBackground(owner) {
+    const bg = document.getElementById('chatbg');
+    if (!bg || bg.dataset.bgOwner !== owner) return;
+    delete bg.dataset.bgOwner;
+    const pending = bg.dataset.bgPending;
+    if (pending !== undefined) {
+        delete bg.dataset.bgPending;
+        applyBackground(pending);
+    }
+}
+
 export function applyBackground(name) {
     const bg = document.getElementById('chatbg');
     if (!bg) return;
+    if (bg.dataset.bgOwner) {
+        bg.dataset.bgPending = name || '';
+        return;
+    }
     if (name && /^[a-z0-9_-]{1,50}$/.test(name)) {
         bg.style.backgroundImage = `url('/api/backgrounds/${encodeURIComponent(name)}')`;
         bg.classList.add('has-bg');

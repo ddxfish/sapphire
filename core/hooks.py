@@ -47,6 +47,14 @@ class HookEvent:
                            registered (tools, packs, games). The "after my own
                            registration" moment — e.g. re-merging runtime-rendered
                            prompt-pack entries so they resolve at boot. 2026-08-05.
+        chat_renamed:      A chat was renamed. metadata: `old`, `new`. Any plugin
+                           keying data by chat name MUST carry it across, or that
+                           data strands and a later chat recycling the old name
+                           inherits a ghost. Fires after the rename succeeds.
+        chat_deleted:      A chat was deleted. metadata: `name`. Plugins drop the
+                           chat's per-chat state here — otherwise recreating the
+                           name resurrects it. Fires after the delete succeeds,
+                           on EVERY path (single, bulk, manage). 2026-08-05.
 
     Fields:
         input: User's message / STT transcription (mutable in post_stt, pre_chat)

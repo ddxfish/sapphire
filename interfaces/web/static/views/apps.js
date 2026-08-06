@@ -5,6 +5,11 @@ import { registerView, switchView } from '../core/router.js';
 let appsData = [];
 let activeApp = null;
 let activeCleanup = null;
+// Visibility epoch — same contract as main.js's app host: a click-away can
+// land between openApp starting and the module resolving; without this the
+// render finished into a stale view and a late cleanup fired against the
+// next app's state (post-fix review 2026-08-05, finding 1.3's sibling).
+let openEpoch = 0;
 
 function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
@@ -59,6 +64,7 @@ async function openApp(appName, container) {
         activeCleanup = null;
     }
 
+    const mine = ++openEpoch;
     activeApp = appName;
     const v = document.querySelector('meta[name="boot-version"]')?.content || '';
 
@@ -77,15 +83,28 @@ async function openApp(appName, container) {
 
     // Load the app's JS module
     const appContent = container.querySelector(`#app-content-${appName}`);
+    let imported = null;
     try {
-        const mod = await import(`/plugin-web/${appName}/app/index.js?v=${v}`);
-        if (mod.render) {
-            await mod.render(appContent);
+        imported = await import(`/plugin-web/${appName}/app/index.js?v=${v}`);
+        if (mine !== openEpoch) return;          // navigated away while importing
+        // Per-render cleanup closure preferred over the module-level export —
+        // same reasoning as main.js: the module is memoized, so a superseded
+        // render's module cleanup would act on the newer render's state.
+        let ret = null;
+        if (imported.render) {
+            ret = await imported.render(appContent);
         }
-        if (mod.cleanup) {
-            activeCleanup = mod.cleanup;
+        const fin = (typeof ret === 'function') ? ret : (imported.cleanup || null);
+        if (mine !== openEpoch) {
+            // Superseded mid-render: tear THIS render down, don't strand it.
+            try { fin?.(); } catch (e) { console.warn('[Apps] Cleanup error:', e); }
+            return;
         }
+        if (fin) activeCleanup = fin;
     } catch (e) {
+        if (mine !== openEpoch) return;
+        // Render threw after possibly claiming shared DOM — release it.
+        try { imported?.cleanup?.(); } catch {}
         console.error(`[Apps] Failed to load app '${appName}':`, e);
         appContent.innerHTML = `
             <div class="view-placeholder">
@@ -98,6 +117,7 @@ async function openApp(appName, container) {
 }
 
 function closeApp(container) {
+    openEpoch++;                       // cancels any in-flight openApp
     if (activeCleanup) {
         try { activeCleanup(); } catch (e) { console.warn('[Apps] Cleanup error:', e); }
         activeCleanup = null;
@@ -135,6 +155,7 @@ export default {
     },
 
     hide() {
+        openEpoch++;                   // cancels any in-flight openApp
         if (activeCleanup) {
             try { activeCleanup(); } catch (e) { console.warn('[Apps] Cleanup error:', e); }
             activeCleanup = null;

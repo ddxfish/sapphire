@@ -760,6 +760,19 @@ def _live_call_chats(system) -> set:
         return set()
 
 
+def _fire_chat_hook(hook_name: str, meta: dict):
+    """Notify plugins that a chat's identity changed. Plugins key per-chat
+    data (story journals, game saves, room state) by chat NAME; without this
+    a rename strands it and a delete leaves a ghost that the next chat of the
+    same name inherits. Best-effort — a plugin fault never fails the op."""
+    try:
+        from core.hooks import hook_runner, HookEvent
+        if hook_runner.has_handlers(hook_name):
+            hook_runner.fire(hook_name, HookEvent(metadata=dict(meta)))
+    except Exception as e:
+        logger.warning(f"{hook_name} hook dispatch failed: {e}")
+
+
 def _delete_one_chat(system, chat_name: str, origin=None):
     """Single-chat delete with the FULL cleanup chain — the one true path,
     shared by the single route and bulk-delete. Returns (ok, message).
@@ -789,6 +802,7 @@ def _delete_one_chat(system, chat_name: str, origin=None):
                 system.agent_manager.dismiss(agent['id'])
     except Exception:
         pass
+    _fire_chat_hook("chat_deleted", {"name": chat_name})
     publish(Events.CHAT_DELETED, {"name": chat_name, "origin": origin})
     return True, f"Deleted: {chat_name}"
 
@@ -933,6 +947,7 @@ async def rename_chat(chat_name: str, request: Request, _=Depends(require_login)
     except Exception:
         pass
     origin = request.headers.get('X-Session-ID')
+    _fire_chat_hook("chat_renamed", {"old": chat_name, "new": result})
     publish(Events.CHAT_RENAMED, {"old": chat_name, "new": result, "origin": origin})
     return {"status": "success", "old": chat_name, "new": result}
 

@@ -108,10 +108,13 @@ def test_sapphire_post_scan_reapply_unguarded_on_none_state():
     """
     src = (ROOT / "sapphire.py").read_text(encoding="utf-8")
 
-    # Find the post-scan reapply block — anchored to the comment
+    # Find the post-scan reapply block — anchored to the comment. The call's
+    # ARGUMENTS are not this test's business (it also carries extra_toolsets
+    # since 2026-08-05, the extras-decay fix); only the absence of the
+    # `!= "none"` guard is.
     m = re.search(
         r'#\s*Re-apply toolset now that plugin tools are registered[\s\S]+?'
-        r'fm\.update_enabled_functions\(\[current\]\)',
+        r'fm\.update_enabled_functions\(\[current\][^)]*\)',
         src,
     )
     assert m, "Couldn't find post-scan reapply block in sapphire.py"

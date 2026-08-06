@@ -1,5 +1,6 @@
 # api_fastapi.py - FastAPI app setup, middleware, page routes, and router includes
 import os
+import re
 import json
 import time
 import secrets
@@ -126,12 +127,46 @@ SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
 USER_PLUGINS_DIR_WEB = PROJECT_ROOT / "user" / "plugins"
 
 import mimetypes
+
+# Windows reads MIME types from the registry (HKCR), and common installers
+# rewrite .js to text/plain there — browsers hard-refuse ES modules served
+# that way, blanking every module page with zero server errors. Pin the
+# types the web UI ships; add_type overrides whatever the registry said.
+for _ext, _mt in (('.js', 'text/javascript'), ('.mjs', 'text/javascript'),
+                  ('.css', 'text/css'), ('.json', 'application/json'),
+                  ('.svg', 'image/svg+xml'), ('.wasm', 'application/wasm'),
+                  ('.woff2', 'font/woff2'), ('.html', 'text/html')):
+    mimetypes.add_type(_mt, _ext)
+
+_PLUGIN_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,64}')
+_STORY_ART_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _serve_contained(file_path: Path, base: Path):
+    """FileResponse for file_path only if it is truly inside base — real path
+    containment, not string prefix (which lets sibling dirs sharing a name
+    prefix, and any `..` that lands back under the prefix, through)."""
+    try:
+        if file_path.is_relative_to(base) and file_path.is_file():
+            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            return FileResponse(file_path, media_type=content_type)
+    except (OSError, ValueError):
+        # ValueError: embedded null byte (%00 in the path) — refuse, not 500
+        pass
+    return None
+
+
 @app.get("/plugin-web/{plugin_name}/{path:path}")
 async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)):
     """Serve web assets from plugin web/ and app/ directories.
     /plugin-web/{name}/foo.js     → {plugin}/web/foo.js  (existing behavior)
     /plugin-web/{name}/app/foo.js → {plugin}/app/foo.js  (app pages)
+    /plugin-web/{name}/stories/…  → story-pack scene art (IMAGES ONLY)
     """
+    # Plugin names are flat slugs — no dots, no separators. Anything else
+    # (`..`, absolute paths) re-roots the candidate walk; refuse pre-disk.
+    if not _PLUGIN_NAME_RE.fullmatch(plugin_name):
+        return JSONResponse({"error": "Not found"}, status_code=404)
     # Registry first: a user-band plugin can shadow a same-named system plugin,
     # and the dir scan below (system first) would serve the shadowed copy's
     # assets. The registry knows which copy actually loaded.
@@ -145,36 +180,40 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
         pass
     candidates += [SYSTEM_PLUGINS_DIR / plugin_name, USER_PLUGINS_DIR_WEB / plugin_name]
     for plugin_dir in candidates:
-        plugin_dir = plugin_dir.resolve()
+        try:
+            plugin_dir = plugin_dir.resolve()
 
-        # If path starts with app/, serve from app/ directory directly
-        if path.startswith("app/"):
-            file_path = (plugin_dir / path).resolve()
-            if str(file_path).startswith(str(plugin_dir)) and file_path.exists() and file_path.is_file():
-                content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-                return FileResponse(file_path, media_type=content_type)
-            continue
+            # Each lane is contained to ITS OWN subtree — `app/../` must not
+            # reach the plugin root (room JSONs, engine code, keys live there).
+            # Lane bases are RESOLVED like the candidate, or a symlinked lane
+            # dir can never match its own base (post-fix review 2026-08-05).
+            if path.startswith("app/"):
+                resp = _serve_contained((plugin_dir / path).resolve(),
+                                        (plugin_dir / "app").resolve())
+                if resp:
+                    return resp
+                continue
 
-        # Story-pack art: stories/<slug>/backdrops/*.jpg — packs are plugins
-        # with a stories/ dir, and their scene art is web-facing by design.
-        # IMAGES ONLY: the room JSONs beside them carry puzzle solutions and
-        # stay engine-side. 2026-08-03.
-        if path.startswith("stories/"):
-            file_path = (plugin_dir / path).resolve()
-            if (str(file_path).startswith(str(plugin_dir)) and file_path.is_file()
-                    and file_path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif")):
-                content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-                return FileResponse(file_path, media_type=content_type)
-            continue
+            # Story-pack art: stories/<slug>/backdrops/*.jpg — packs are plugins
+            # with a stories/ dir, and their scene art is web-facing by design.
+            # IMAGES ONLY: the room JSONs beside them carry puzzle solutions and
+            # stay engine-side. 2026-08-03.
+            if path.startswith("stories/"):
+                file_path = (plugin_dir / path).resolve()
+                if file_path.suffix.lower() in _STORY_ART_SUFFIXES:
+                    resp = _serve_contained(file_path, (plugin_dir / "stories").resolve())
+                    if resp:
+                        return resp
+                continue
 
-        # Otherwise serve from web/ subdirectory (existing behavior)
-        web_dir = (plugin_dir / "web").resolve()
-        file_path = (web_dir / path).resolve()
-        if not str(file_path).startswith(str(web_dir)):
+            # Otherwise serve from web/ subdirectory (existing behavior)
+            web_dir = (plugin_dir / "web").resolve()
+            resp = _serve_contained((web_dir / path).resolve(), web_dir)
+            if resp:
+                return resp
+        except (OSError, ValueError):
+            # embedded null byte / unreadable candidate — try the next one
             continue
-        if file_path.exists() and file_path.is_file():
-            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-            return FileResponse(file_path, media_type=content_type)
     return JSONResponse({"error": "Not found"}, status_code=404)
 
 # ── CDN cache proxy ─────────────────────────────────────────────────────────
@@ -332,16 +371,22 @@ async def serve_workspace(project: str, path: str, _=Depends(require_login)):
         ws_dir = settings.get('workspace_dir', '~/claude-workspaces')
     except Exception:
         ws_dir = '~/claude-workspaces'
-    workspace_base = Path(os.path.expanduser(ws_dir)).resolve()
-    project_dir = (workspace_base / project).resolve()
-    if not str(project_dir).startswith(str(workspace_base)):
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    file_path = (project_dir / path).resolve()
-    if not str(file_path).startswith(str(project_dir)):
-        return JSONResponse({"error": "Not found"}, status_code=404)
-    if file_path.exists() and file_path.is_file():
-        content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-        return FileResponse(file_path, media_type=content_type)
+    # Real path containment, not string prefix — the same sibling-prefix bug
+    # fixed in /plugin-web lived on here (verified live: %2e%2e reached a
+    # sibling of the project dir; post-fix review 2026-08-05).
+    try:
+        workspace_base = Path(os.path.expanduser(ws_dir)).resolve()
+        project_dir = (workspace_base / project).resolve()
+        if not project_dir.is_relative_to(workspace_base):
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        file_path = (project_dir / path).resolve()
+        if not file_path.is_relative_to(project_dir):
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        if file_path.is_file():
+            content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            return FileResponse(file_path, media_type=content_type)
+    except (OSError, ValueError):
+        pass
     return JSONResponse({"error": "Not found"}, status_code=404)
 
 # Templates
@@ -708,31 +753,31 @@ def _apply_chat_settings(system, settings: dict):
 
                 logger.info(f"Applied prompt: {prompt_name}{' (empty content — blank mode)' if not content else ''}")
             else:
-                # Prompt genuinely missing — fall back to 'default' if it
-                # exists, and rewrite chat settings so the next activation
-                # doesn't take the same wrong turn. H3 fix 2026-04-22.
+                # Prompt not registered right now — run on 'default' for THIS
+                # turn, but never rewrite the chat's setting. "Missing" is
+                # usually transient: a plugin-provided prompt (a story costume
+                # rendered at runtime) is absent for the window between a
+                # reload and its re-registration. The old H3 behavior
+                # (2026-04-22) persisted the fallback, which turned that
+                # window into permanent loss of user intent — Sapphire woke up
+                # as 'default' mid-story and the costume could never come back
+                # (Sapph-not-Rose, 2026-08-05). Runtime falls back; the
+                # setting is the user's, and it stays.
                 logger.warning(
-                    f"Chat references unknown prompt '{prompt_name}' "
-                    f"— falling back to 'default' and rewriting chat settings."
+                    f"Chat references unknown prompt '{prompt_name}' — running on "
+                    f"'default' this turn; the chat's setting is left intact so it "
+                    f"heals if the prompt re-registers."
                 )
-                default_data = prompts.get_prompt('default')
-                if isinstance(default_data, dict):
-                    default_content = default_data.get('content', '') or ''
-                    system.llm_chat.set_system_prompt(default_content)
-                    prompts.set_active_preset_name('default')
-                try:
-                    chat_name = system.llm_chat.session_manager.get_active_chat_name()
-                    if chat_name:
-                        # update_chat_settings takes ONE dict arg, not two
-                        # (it operates on the active chat). Old 2-arg call
-                        # raised TypeError silently inside the try/except,
-                        # so the chat's prompt setting kept pointing at the
-                        # missing name. 2026-04-27 fix.
-                        system.llm_chat.session_manager.update_chat_settings(
-                            {"prompt": "default"}
-                        )
-                except Exception as e:
-                    logger.debug(f"Could not rewrite chat.prompt after fallback: {e}")
+                # 'default' is the assembled-mode SENTINEL, not a prompt name —
+                # get_prompt('default') returns None on every stock install, which
+                # made this fallback dead code (post-fix review 2026-08-05: she
+                # silently kept the PREVIOUS chat's prompt). get_current_prompt()
+                # is the one API that resolves the sentinel; set the preset name
+                # first because it reads it.
+                prompts.set_active_preset_name('default')
+                _fb = prompts.get_current_prompt()
+                _fb_content = (_fb or {}).get('content') if isinstance(_fb, dict) else ''
+                system.llm_chat.set_system_prompt(_fb_content or '')
                 try:
                     publish(Events.SETTINGS_CHANGED, {
                         "key": "chat_prompt_fallback",

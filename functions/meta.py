@@ -922,7 +922,16 @@ def _switch_toolset(args):
     if not match:
         return f"Toolset '{name}' not found. Available: {', '.join(available)}", False
 
-    fm.update_enabled_functions([match])
+    # The chat's extra_toolsets stay on across a deliberate toolset switch —
+    # settings still claim them (the "include story tools" checkbox), so the
+    # runtime must keep matching (extras-decay site #9, 2026-08-05).
+    extras = None
+    try:
+        extras = (system.llm_chat.session_manager.get_chat_settings()
+                  or {}).get('extra_toolsets') or None
+    except Exception:
+        pass
+    fm.update_enabled_functions([match], extra_toolsets=extras)
     system.llm_chat.session_manager.update_chat_settings({"toolset": match})
     publish(Events.TOOLSET_CHANGED, {"name": match})
     logger.info(f"AI switched toolset to: {match}")

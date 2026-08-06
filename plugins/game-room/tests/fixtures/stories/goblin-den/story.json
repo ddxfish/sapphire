@@ -1,0 +1,8 @@
+{
+  "slug": "goblin-den",
+  "title": "The Goblin Den",
+  "description": "A short demo delve — three chambers, one riddle, one nap. Proves every room dynamic.",
+  "premise": "The player is a traveler who ducked into a hillside cave to escape a storm and found goblin tunnels instead. Somewhere below, the goblins hoard a moonstone amulet. Get it, get out.",
+  "start": 1,
+  "dm_guide": "Lamplit adventure, a little wry. Goblins are dangerous the way weather is — respect, not horror. Make searching feel rewarding, and when the riddle stalls, let the runes glimmer over their carvings."
+}

@@ -356,7 +356,11 @@ async def enable_functions(request: Request, _=Depends(require_login), system=De
     """Enable specific functions."""
     data = await request.json()
     functions = data.get('functions', [])
-    system.llm_chat.function_manager.update_enabled_functions(functions)
+    # Custom picks replace the base set, but the chat's extra_toolsets are a
+    # separate union primitive (their own checkbox) — they ride along here
+    # too, or the checkbox state lies mid-story (2026-08-05).
+    extras = (system.llm_chat.session_manager.get_chat_settings() or {}).get('extra_toolsets') or None
+    system.llm_chat.function_manager.update_enabled_functions(functions, extra_toolsets=extras)
     publish(Events.TOOLSET_CHANGED, {"name": "custom", "functions": functions})
     return {"status": "success", "enabled": functions}
 
