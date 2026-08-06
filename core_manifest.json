@@ -9,7 +9,7 @@
     "Dockerfile": "c59d556368c60e582e078f092f6c74d4c698fe9021df3b4d0a171137606c6a2b",
     "LICENSE": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
     "README.md": "2ee87eb1e5f8421d38bc895775498c21bf3e4da5c2f8477704735e5b67034b6b",
-    "VERSION": "2cbbce812ed57942f72bc8a6a4c410218aa56ea12ca01872f5fcfc66a797d649",
+    "VERSION": "e375378ac20f0b4b6a564d46b372e8371d4993df228a1604d2d8cd9903b1df9f",
     "config.py": "6bfc07eef0b8e33805cbf177587e087e4eb7a2459c13e0401d9f1821e8c1facb",
     "core/agents/__init__.py": "423d4b6f51e3573e3d381923a27376a1e27c746c0ac8b18125246ca7573b495c",
     "core/agents/base_worker.py": "ea803aef0414c2317866aa1203aa6361fa9e950abdcf459e396110405ea80645",
@@ -107,7 +107,7 @@
     "core/routes/docs.py": "b89d61e559bc62230682abf3c29505d24309a17bce10b68f4c5bec60be8728eb",
     "core/routes/knowledge.py": "0668e53c414c3f24a5a41758876c1da2c45d931b41e424fa3161f68d779ae4ce",
     "core/routes/media.py": "02b09df58ef4a04db9c60d7f0af2e0c6ea148be8905b3232a71616f39e26e3ba",
-    "core/routes/plugins.py": "e472cc50095f3eaf478161ef475c7e70d38551bbae585c4fd14446dad9d3b2f1",
+    "core/routes/plugins.py": "48933a7de45c14670ac89e1df2300df8ee6afaff7e6812f0b0c99e136d5d4359",
     "core/routes/settings.py": "3c7226bad7c5a2a9fb1536f0e8c7c929fccbbaae958db1e3ce15e2be9827fa00",
     "core/routes/store.py": "b81247bdf4e227647a0a9b7b101bc3770e62f6ef07397804161539304c1485b6",
     "core/routes/system.py": "e932a5e1130c9f51a1bcf64a36b9edd17a878675ff5e3354c3f0b634be5a0d22",
@@ -163,7 +163,7 @@
     "docs/AGENTS.md": "a262656224d518ec46ad7fbe4dae822618e48e43a4192c85356c4d101a081956",
     "docs/API.md": "05ab65283d5b2fc18051f6416e420260696bae70338c317dfca399ad0363e496",
     "docs/BACKUPS.md": "2347037e7cbb78447a8de1830b7cb5292d519606e61b2402aca6272d2ae526f8",
-    "docs/CHANGELOG.md": "e0c153e2566aad9928cb25875cd6ced31a0b326252e7fe2b89b2688737681120",
+    "docs/CHANGELOG.md": "0dcf209ca279068923cf5956b0e5f7410ba101237e9f5ee5d2cb36a109c6b700",
     "docs/CONTINUITY.md": "dcb5f404b4d6e13a5e334dbabd7dec2293bc4ded30c854b5dcbef159e5a54766",
     "docs/COSTS.md": "2d23cd40a11419bfef2abf2c5e41869ab62b86675a6d011fe475dff2ba26fa32",
     "docs/DAEMONS-WEBHOOKS.md": "2cdb547b02770805fc35924275c3841a6df3e182464c1ba4b62c3bbb2f2a0552",
@@ -317,7 +317,7 @@
     "interfaces/web/static/shared/trigger-editor/trigger-event.js": "162ee7df30a6efb37635a14a1cf722e43d734e12d96fe9d3a02b490556857705",
     "interfaces/web/static/shared/trigger-realtime.js": "d8d3462794ed936ce54ff47af2b20915df884accc6f1795d8d616d6dc21fb0d5",
     "interfaces/web/static/shared/url-safety.js": "9408ae9f4c382d16b20b67d2fff62f89190a8980a40fb8a984596580e701cb8b",
-    "interfaces/web/static/style.css": "0ab27bcbdb072ef33d2949bc8edd8042753614c13f1a6d5aa8732d6f4e72affb",
+    "interfaces/web/static/style.css": "b7ce11d00a53667ca081b7c63e760cfa0f515f0655f3926f6a812ba349583210",
     "interfaces/web/static/surface/chat-mode.js": "c6f2754742e7d531903e5acf4c4a06fe1db58037a0258f4c49945b00a96b13da",
     "interfaces/web/static/surface/organs.js": "b16484ebae786d5bab3e8005c6a40ddd75b44d987c8e9687fd541c23b2ff5b5e",
     "interfaces/web/static/surface/sections/core-sections.js": "b868d007072b197287fadc7556c5a49db2649869caaea3fe26987f5688b8cdcf",
@@ -383,7 +383,7 @@
     "interfaces/web/static/views/settings-tabs/help-tab.js": "a4d4462f2420f00ed00f54e9bd6fd01bb0e273eff9d05a8df5b9a2cf56bf7a8b",
     "interfaces/web/static/views/settings-tabs/llm.js": "b954127377ba866d2382b6f65982b3b412863202d9396579f7549a275ac8c4b7",
     "interfaces/web/static/views/settings-tabs/network.js": "8ead6153171a6bc4b0d3cab43e637c6aa6ed7db99674e7bb75807624b6d0c778",
-    "interfaces/web/static/views/settings-tabs/plugins.js": "3f2b9690b3a3b2c90ee09a8b669fd86e2babd44388f1cbe87b61281e940612ec",
+    "interfaces/web/static/views/settings-tabs/plugins.js": "cc12cf6c42ae1298add01d7d1b35a8ad65fd121b73540f49b2af83c44abeba5a",
     "interfaces/web/static/views/settings-tabs/store-tab.js": "4172728ef82f908a7295871093afc696d8fd7495976b96706e60878d2cdb80ed",
     "interfaces/web/static/views/settings-tabs/stt.js": "10d655f0d6c5704e0bcd6b4dc179fa79ad1937c16c73afc60144f90d4f7abe24",
     "interfaces/web/static/views/settings-tabs/system.js": "1ee72abbaa880a5398ee062a3fe091525ac9f01035e730eded353a4a7551a848",
@@ -917,5 +917,5 @@
     "tools/tts_benchmark.py": "991e395a4d093362da854dbb69610823bb54d0be295cfaf6e8bd6d3bb889d625",
     "tools/verify_chat_storage.py": "092f72020d34cd560e51fdb6cb18290baecd8b662d38fd1f47dd89690dc686a9"
   },
-  "version": "2.10.1"
+  "version": "2.10.2"
 }

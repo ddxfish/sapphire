@@ -1,3 +1,5 @@
+# 2.10.2 - Plugin UI
+- Made rows instead of tiles, added search filter
 # 2.10.1 - Chat manager
 - Tabs for chat, librarian, games
 - Search full chats

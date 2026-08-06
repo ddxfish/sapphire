@@ -90,8 +90,9 @@ const PLUGIN_NAV_MAP = { continuity: 'triggers' };
 // Prevent double-click race condition on toggles
 const toggling = new Set();
 
-// Active filter
+// Active filter + search term (persist across re-renders within the session)
 let activeFilter = 'all';
+let searchTerm = '';
 
 function _esc(s) {
     if (!s) return '';
@@ -119,10 +120,9 @@ function _trustClass(p, locked) {
     return 'pm-trust-unsigned';
 }
 
-// ── In-place tile update — avoids the full grid re-render (and the
-// staggered fade-in animation flash) on every toggle. The toggle handler
-// at the bottom of attachListeners calls these instead of refreshTab().
-// 2026-04-30.
+// ── In-place row update — avoids the full list re-render on every toggle.
+// The toggle handler at the bottom of attachListeners calls these instead
+// of refreshTab(). 2026-04-30 (tiles), 2026-08-06 (rows).
 
 function _bindGearClick(el, gearBtn, name) {
     gearBtn.addEventListener('click', () => {
@@ -158,28 +158,28 @@ function _bindReloadClick(el, ctx, reloadBtn, name) {
     });
 }
 
-function _updateTileInPlace(el, ctx, name, locked) {
+function _updateRowInPlace(el, ctx, name, locked) {
     const cached = (ctx.pluginList || []).find(p => p.name === name);
     if (!cached) return;
     const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);
     if (!card) return;
 
-    // Visual state — opacity, border tint via .pm-enabled.
+    // Visual state — opacity, accent tint via .pm-enabled.
     card.classList.toggle('pm-enabled', !!cached.enabled);
     // Sync the toggle input in case it drifted.
     const toggleInput = card.querySelector('input[data-plugin-toggle]');
     if (toggleInput) toggleInput.checked = !!cached.enabled;
 
     // Gear button (visible only when enabled + has settingsUI).
-    const controlsRight = card.querySelector('.pm-tile-controls-right');
-    if (controlsRight) {
-        const existingGear = controlsRight.querySelector('.pm-gear');
+    const actions = card.querySelector('.pm-row-actions');
+    if (actions) {
+        const existingGear = actions.querySelector('.pm-gear');
         const wantGear = cached.enabled && cached.settingsUI;
         if (wantGear && !existingGear) {
             const tmpl = document.createElement('div');
             tmpl.innerHTML = `<button class="pm-gear" data-settings-tab="${_esc(name)}" title="Plugin settings" type="button">⚙️</button>`;
             const newGear = tmpl.firstElementChild;
-            controlsRight.insertBefore(newGear, controlsRight.firstChild);
+            actions.insertBefore(newGear, actions.querySelector('.pm-toggle'));
             _bindGearClick(el, newGear, name);
         } else if (!wantGear && existingGear) {
             existingGear.remove();
@@ -241,6 +241,28 @@ function _fadeOutAndRemove(card) {
     setTimeout(() => card.remove(), 260);
 }
 
+function _matchesSearch(p, term) {
+    if (!term) return true;
+    const t = term.toLowerCase();
+    return [p.name, p.title, p.description, p.author]
+        .some(f => (f || '').toLowerCase().includes(t));
+}
+
+// Search narrows by show/hide — no re-render, so every bound listener
+// (gear, kebab, materialized update buttons) survives typing.
+function _applySearch(el, ctx) {
+    const rows = el.querySelectorAll('.pm-row[data-plugin]');
+    let shown = 0;
+    rows.forEach(row => {
+        const p = (ctx.pluginList || []).find(x => x.name === row.dataset.plugin);
+        const match = !p || _matchesSearch(p, searchTerm);
+        row.style.display = match ? '' : 'none';
+        if (match) shown++;
+    });
+    const empty = el.querySelector('.pm-search-empty');
+    if (empty) empty.style.display = (rows.length && !shown) ? '' : 'none';
+}
+
 function _filterPlugins(plugins, filter) {
     if (filter === 'all') return plugins;
     if (filter === 'enabled') return plugins.filter(p => p.enabled);
@@ -274,10 +296,9 @@ function _badgeHTML(p, locked) {
     return '';
 }
 
-function _renderCard(p, locked) {
-    // 2026-04-30 redesign: square-ish tiles, kebab menu for less-frequent
-    // actions, gear stays prominent for plugin settings, trust signaled
-    // by tile border color + a chip near the bottom.
+function _renderRow(p, locked) {
+    // 2026-08-06 redesign: compact WordPress-style rows. Trust signaled by a
+    // left accent border, kebab keeps less-frequent actions, toggle unchanged.
     const hasSettings = p.settingsUI && p.enabled;
     const isUser = p.band === 'user';
     // Icon is server-sanitized to emoji-class chars only, but escape here
@@ -324,35 +345,46 @@ function _renderCard(p, locked) {
         ? `<button class="pm-gear" data-settings-tab="${p.name}" title="Plugin settings" type="button">\u2699\uFE0F</button>`
         : '';
 
-    // Update button stays on the tile for user plugins as a primary
-    // visible affordance. The existing handler transitions it to
-    // "Update to vX.Y" when an update is found.
+    // Update button is hidden until a check finds an update: the check flow
+    // strips .plugin-update-btn (and adds .btn-primary) on hit, which releases
+    // the CSS hide rule keyed on that class. Until then, Check Updates and the
+    // kebab item are the affordances.
     const updateBtn = isUser
-        ? `<button class="btn btn-sm plugin-update-btn pm-tile-update-btn" data-plugin="${_esc(p.name)}">Update</button>`
+        ? `<button class="btn btn-sm plugin-update-btn pm-row-update" data-plugin="${_esc(p.name)}">Update</button>`
         : '';
 
     const titleText = _esc(p.title || p.name);
-    const verLine = p.version ? `<div class="pm-tile-version">v${_esc(p.version)}</div>` : '';
+    const ver = p.version ? `<span class="pm-version">v${_esc(p.version)}</span>` : '';
+    const desc = p.description
+        ? `<div class="pm-row-desc" title="${_esc(p.description)}">${_esc(p.description)}</div>` : '';
+    const authorName = _esc(p.author || '');
+    const authorLine = authorName
+        ? `<div class="pm-row-author">by ${p.url
+            ? `<a href="${_esc(p.url)}" target="_blank" rel="noopener">${authorName}</a>`
+            : authorName}</div>`
+        : '';
 
     return `
-        <div class="pm-card pm-tile ${trustClass}${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
-            ${kebab}
-            <div class="pm-tile-content">
-                <div class="pm-tile-icon">${icon}</div>
-                <div class="pm-tile-title" title="${titleText}">${titleText}</div>
-                ${verLine}
-                <div class="pm-tile-badge-row">${_badgeHTML(p, locked)}</div>
-            </div>
-            <div class="pm-tile-controls">
-                <div class="pm-tile-controls-left">${updateBtn}</div>
-                <div class="pm-tile-controls-right">
-                    ${gearBtn}
-                    <label class="pm-toggle">
-                        <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
-                               ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
-                        <span class="pm-slider"></span>
-                    </label>
+        <div class="pm-card pm-row ${trustClass}${p.enabled ? ' pm-enabled' : ''}" data-plugin="${_esc(p.name)}">
+            <div class="pm-row-main">
+                <div class="pm-row-head">
+                    <span class="pm-row-icon">${icon}</span>
+                    <span class="pm-row-title" title="${titleText}">${titleText}</span>
+                    ${ver}
+                    ${_badgeHTML(p, locked)}
                 </div>
+                ${desc}
+                ${authorLine}
+            </div>
+            <div class="pm-row-actions">
+                ${updateBtn}
+                ${gearBtn}
+                <label class="pm-toggle">
+                    <input type="checkbox" data-plugin-toggle="${_esc(p.name)}"
+                           ${p.enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+                    <span class="pm-slider"></span>
+                </label>
+                ${kebab}
             </div>
             ${p.missing_deps?.length ? `
             <div class="pm-deps-warning" data-plugin-deps="${_esc(p.name)}">
@@ -576,6 +608,8 @@ export default {
                     <button class="pm-filter${activeFilter === 'disabled' ? ' active' : ''}" data-filter="disabled">Disabled <span class="pm-filter-count">${counts.disabled}</span></button>
                     <button class="pm-filter${activeFilter === 'official' ? ' active' : ''}" data-filter="official">Official <span class="pm-filter-count">${counts.official}</span></button>
                     <button class="pm-filter${activeFilter === 'user' ? ' active' : ''}" data-filter="user">User <span class="pm-filter-count">${counts.user}</span></button>
+                    <input type="search" class="pm-search" id="pm-search" placeholder="Search plugins…"
+                           value="${_esc(searchTerm)}" autocomplete="off">
                 </div>
             </div>
             <div class="pm-install-section" id="pm-install-section" style="display:none">
@@ -589,9 +623,10 @@ export default {
                     <button class="btn btn-sm" id="plugin-install-file-btn">Upload</button>
                 </div>
             </div>
-            <div class="pm-grid">
-                ${sorted.length ? sorted.map(p => _renderCard(p, ctx.lockedPlugins.includes(p.name))).join('')
-                    : '<p class="text-muted" style="grid-column:1/-1;text-align:center;padding:24px 0;">No plugins match this filter.</p>'}
+            <div class="pm-list">
+                ${sorted.length ? sorted.map(p => _renderRow(p, ctx.lockedPlugins.includes(p.name))).join('')
+                    : '<p class="text-muted" style="text-align:center;padding:24px 0;">No plugins match this filter.</p>'}
+                <p class="pm-search-empty text-muted" style="display:none;text-align:center;padding:24px 0;">No plugins match this search.</p>
             </div>
         `;
     },
@@ -730,6 +765,17 @@ export default {
                 ctx.refreshTab();
             });
         });
+
+        // Search — show/hide rows, never re-render (bound handlers survive).
+        const searchInput = el.querySelector('#pm-search');
+        if (searchInput) {
+            searchInput.addEventListener('input', () => {
+                searchTerm = searchInput.value.trim();
+                _applySearch(el, ctx);
+            });
+            // Re-apply a persisted term after any full re-render.
+            if (searchTerm) _applySearch(el, ctx);
+        }
 
         // Gear → navigate to plugin settings tab via custom event
         el.querySelectorAll('.pm-gear[data-settings-tab]').forEach(btn => {
@@ -1146,16 +1192,15 @@ export default {
                         : [];
                 }
 
-                // In-place tile + counts update — avoids the full grid
-                // re-render (and the staggered fade-in animation flash)
-                // that ctx.refreshTab() previously triggered. 2026-04-30.
+                // In-place row + counts update — avoids the full list
+                // re-render that ctx.refreshTab() previously triggered.
                 const visible = (ctx.pluginList || []).filter(p => !_isHidden(p));
-                _updateTileInPlace(el, ctx, name, ctx.lockedPlugins.includes(name));
+                _updateRowInPlace(el, ctx, name, ctx.lockedPlugins.includes(name));
                 _updateFilterCountsInPlace(el, visible);
 
                 // If the active filter would now hide this plugin (e.g.
                 // user is on "Enabled" and just disabled it), fade the
-                // tile out and remove it. Otherwise leave it in place.
+                // row out and remove it. Otherwise leave it in place.
                 const stillMatchesFilter = _filterPlugins([cached], activeFilter).length > 0;
                 if (!stillMatchesFilter) {
                     const card = el.querySelector(`.pm-card[data-plugin="${CSS.escape(name)}"]`);

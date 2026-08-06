@@ -285,6 +285,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "url": _safe_http_url(manifest.get("url")),
                     "version": manifest.get("version"),
                     "author": manifest.get("author"),
+                    "description": (manifest.get("description") or ""),
                     "icon": _safe_emoji_icon(manifest.get("icon")),
                     "band": info.get("band"),
                     "has_script": has_script,
