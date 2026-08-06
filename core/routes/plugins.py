@@ -1054,53 +1054,65 @@ async def check_plugin_update(plugin_name: str, _=Depends(require_login)):
     _src_parsed = urlparse(source_url_stripped)
     _src_for_match = f"{_src_parsed.scheme}://{_src_parsed.netloc}{_src_parsed.path}"
 
-    # Build the list of raw-manifest URLs to try (main + master, GitHub or
-    # GitLab). 2026-04-26 — GitLab support added alongside GitHub.
-    manifest_urls = []
     m_gh = re.match(r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$', _src_for_match)
     m_gl = re.match(r'https?://gitlab\.com/(.+?)/([^/]+?)(?:\.git)?/?$', _src_for_match)
-    if m_gh:
-        owner, repo = m_gh.group(1), m_gh.group(2)
-        for branch in ("main", "master"):
-            manifest_urls.append(f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/plugin.json")
-    elif m_gl:
-        gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
-        full_path = f"{gl_path}/{gl_repo}"
-        for branch in ("main", "master"):
-            manifest_urls.append(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json")
-    else:
-        return {"update_available": False, "reason": "unsupported_source"}
 
     current_version = info.get("manifest", {}).get("version", "0.0.0")
 
-    import requests as req
+    # Fetch the remote manifest (root plugin.json, main then master).
+    # 2026-04-26 — GitLab support added alongside GitHub.
     remote_manifest = None
-    for url in manifest_urls:
-        try:
-            r = req.get(url, timeout=10)
-            if r.status_code == 200:
-                remote_manifest = r.json()
+    if m_gh:
+        # Contents-API-first — raw.githubusercontent lags pushes by ~5 min,
+        # which read as "no updates available" right after a release.
+        from core.github_files import fetch_github_file
+        owner, repo = m_gh.group(1), m_gh.group(2)
+        for branch in ("main", "master"):
+            text = fetch_github_file(f"{owner}/{repo}", branch, "plugin.json")
+            if text is not None:
+                try:
+                    remote_manifest = json.loads(text)
+                except Exception:
+                    remote_manifest = None
                 break
-        except Exception:
-            continue
+    elif m_gl:
+        import requests as req
+        gl_path, gl_repo = m_gl.group(1), m_gl.group(2)
+        full_path = f"{gl_path}/{gl_repo}"
+        for branch in ("main", "master"):
+            try:
+                r = req.get(f"https://gitlab.com/{full_path}/-/raw/{branch}/plugin.json", timeout=10)
+                if r.status_code == 200:
+                    remote_manifest = r.json()
+                    break
+            except Exception:
+                continue
+    else:
+        return {"update_available": False, "reason": "unsupported_source"}
 
+    if not isinstance(remote_manifest, dict):
+        remote_manifest = None
     if not remote_manifest:
-        return {"update_available": False, "reason": "fetch_failed"}
+        return {"update_available": False, "reason": "fetch_failed",
+                "current_version": current_version}
 
-    remote_version = remote_manifest.get("version", "0.0.0")
+    from core.versions import parse_version, is_newer
+    remote_version = str(remote_manifest.get("version", "") or "")
     remote_author = remote_manifest.get("author", "unknown")
 
-    def _ver_tuple(v):
-        """Parse version string into comparable tuple (e.g. '1.2.3' → (1, 2, 3))."""
-        try:
-            return tuple(int(x) for x in v.split('.'))
-        except (ValueError, AttributeError):
-            return (0,)
-
-    update = _ver_tuple(remote_version) > _ver_tuple(current_version)
+    if parse_version(remote_version) is None or parse_version(current_version) is None:
+        # Never guess from garbage — report it instead of "Up to date".
+        return {
+            "update_available": False,
+            "reason": "version_unparseable",
+            "current_version": current_version,
+            "remote_version": remote_version,
+            "remote_author": remote_author,
+            "source_url": source_url,
+        }
 
     return {
-        "update_available": update,
+        "update_available": is_newer(remote_version, current_version),
         "current_version": current_version,
         "remote_version": remote_version,
         "remote_author": remote_author,

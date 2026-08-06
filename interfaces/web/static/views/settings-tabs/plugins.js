@@ -296,6 +296,28 @@ function _badgeHTML(p, locked) {
     return '';
 }
 
+// Shared by the per-row and Check-All update flows. Toasts the version that
+// actually LANDED (install response), not the check's advertised version —
+// GitHub's archive CDN can lag the check by minutes (2026-08-06 incident).
+async function _runPluginUpdate(btn, name, result, ctx) {
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+    try {
+        const inst = await pluginsAPI.installPlugin({ url: result.source_url, force: true });
+        if (inst?.conflict) throw new Error('plugin already exists (force not honored)');
+        const newV = inst?.version || result.remote_version;
+        ui.showToast(`Updated ${name}: v${inst?.old_version || '?'} → v${newV}`, 'success');
+        if (inst?.version && result.remote_version && inst.version !== result.remote_version) {
+            ui.showToast(`Check advertised v${result.remote_version} but the download contained v${inst.version} — GitHub's CDN may still be syncing. Re-check in a few minutes.`, 'warning', 8000);
+        }
+        await ctx.refreshTab();
+    } catch (err) {
+        ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
+        btn.disabled = false;
+        btn.textContent = `Update to v${result.remote_version}`;
+    }
+}
+
 function _renderRow(p, locked) {
     // 2026-08-06 redesign: compact WordPress-style rows. Trust signaled by a
     // left accent border, kebab keeps less-frequent actions, toggle unchanged.
@@ -712,44 +734,44 @@ export default {
         const checkAllBtn = el.querySelector('#check-all-updates-btn');
         if (checkAllBtn) {
             checkAllBtn.addEventListener('click', async () => {
-                // Find all user-installed plugins (they have Update buttons)
-                const updateBtns = el.querySelectorAll('.plugin-update-btn');
-                if (!updateBtns.length) {
+                // Row button + kebab item share .plugin-update-btn — dedupe by
+                // plugin name so each plugin is checked ONCE, then mutate every
+                // button for it (double-fire read "2 updates" for one, H7).
+                const allBtns = Array.from(el.querySelectorAll('.plugin-update-btn'));
+                const names = [...new Set(allBtns.map(b => b.dataset.plugin))];
+                if (!names.length) {
                     ui.showToast('No user-installed plugins to check', 'info');
                     return;
                 }
                 checkAllBtn.disabled = true;
                 checkAllBtn.textContent = 'Checking...';
-                let updatesFound = 0;
-                const results = await Promise.allSettled(
-                    Array.from(updateBtns).map(async (btn) => {
-                        const name = btn.dataset.plugin;
-                        try {
-                            const result = await pluginsAPI.checkUpdate(name);
-                            if (result.update_available) {
-                                updatesFound++;
-                                btn.textContent = `Update to v${result.remote_version}`;
-                                btn.classList.add('btn-primary');
-                                btn.classList.remove('plugin-update-btn');
-                                btn.addEventListener('click', async () => {
-                                    btn.disabled = true;
-                                    btn.textContent = 'Updating...';
-                                    try {
-                                        await pluginsAPI.installPlugin({ url: result.source_url, force: true });
-                                        ui.showToast(`Updated ${name} → v${result.remote_version}`, 'success');
-                                        await ctx.refreshTab();
-                                    } catch (err) {
-                                        ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
-                                        btn.disabled = false;
-                                        btn.textContent = `Update to v${result.remote_version}`;
-                                    }
-                                }, { once: true });
-                            }
-                        } catch { /* skip failed checks */ }
-                    })
-                );
-                if (updatesFound > 0) {
-                    ui.showToast(`${updatesFound} update${updatesFound > 1 ? 's' : ''} available`, 'success');
+                let updatesFound = 0, failed = 0, uncheckable = 0;
+                await Promise.allSettled(names.map(async (name) => {
+                    const btns = allBtns.filter(b => b.dataset.plugin === name);
+                    try {
+                        const result = await pluginsAPI.checkUpdate(name);
+                        if (result.update_available) {
+                            updatesFound++;
+                            btns.forEach(b => {
+                                b.textContent = `Update to v${result.remote_version}`;
+                                b.classList.add('btn-primary');
+                                b.classList.remove('plugin-update-btn');
+                                b.addEventListener('click', () => _runPluginUpdate(b, name, result, ctx), { once: true });
+                            });
+                        } else if (result.reason === 'no_source' || result.reason === 'unsupported_source') {
+                            uncheckable++;
+                        } else if (result.reason) {
+                            failed++;   // fetch_failed / version_unparseable
+                        }
+                    } catch { failed++; }
+                }));
+                // A failed check is NOT "up to date" — say so.
+                if (failed > 0) {
+                    ui.showToast(`${updatesFound} update${updatesFound === 1 ? '' : 's'} found · ${failed} check${failed === 1 ? '' : 's'} FAILED`, 'warning', 6000);
+                } else if (updatesFound > 0) {
+                    ui.showToast(`${updatesFound} update${updatesFound === 1 ? '' : 's'} available`, 'success');
+                } else if (uncheckable > 0) {
+                    ui.showToast(`Checkable plugins up to date · ${uncheckable} can't be checked (no update source)`, 'success');
                 } else {
                     ui.showToast('All plugins up to date', 'success');
                 }
@@ -981,6 +1003,10 @@ export default {
 
             btn.disabled = true;
             btn.textContent = 'Checking...';
+            const resetBtn = (label) => {
+                btn.textContent = label;
+                setTimeout(() => { btn.textContent = 'Check Update'; btn.disabled = false; }, 2500);
+            };
             try {
                 const result = await pluginsAPI.checkUpdate(name);
                 if (result.update_available) {
@@ -988,22 +1014,24 @@ export default {
                     btn.disabled = false;
                     btn.classList.add('btn-primary');
                     btn.classList.remove('plugin-update-btn');
-                    btn.addEventListener('click', async () => {
-                        btn.disabled = true;
-                        btn.textContent = 'Updating...';
-                        try {
-                            await pluginsAPI.installPlugin({ url: result.source_url, force: true });
-                            ui.showToast(`Updated ${name} \u2192 v${result.remote_version}`, 'success');
-                            await ctx.refreshTab();
-                        } catch (err) {
-                            ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
-                            btn.disabled = false;
-                            btn.textContent = `Update to v${result.remote_version}`;
-                        }
-                    }, { once: true });
+                    btn.addEventListener('click', () => _runPluginUpdate(btn, name, result, ctx), { once: true });
+                } else if (result.reason === 'no_source') {
+                    // "Up to date" here would be a lie \u2014 we never checked.
+                    ui.showToast(`${name}: installed manually \u2014 no update source on record`, 'info');
+                    resetBtn('No source');
+                } else if (result.reason === 'unsupported_source') {
+                    ui.showToast(`${name}: update source isn't GitHub or GitLab \u2014 can't check`, 'info');
+                    resetBtn('Not checkable');
+                } else if (result.reason === 'fetch_failed') {
+                    ui.showToast(`${name}: couldn't fetch the remote manifest \u2014 source unreachable or moved`, 'error');
+                    btn.textContent = 'Check Update';
+                    btn.disabled = false;
+                } else if (result.reason === 'version_unparseable') {
+                    ui.showToast(`${name}: can't compare versions (local "${result.current_version}", remote "${result.remote_version}")`, 'warning', 6000);
+                    btn.textContent = 'Check Update';
+                    btn.disabled = false;
                 } else {
-                    btn.textContent = 'Up to date';
-                    setTimeout(() => { btn.textContent = 'Check Update'; btn.disabled = false; }, 2000);
+                    resetBtn(`Up to date (v${result.remote_version || result.current_version})`);
                 }
             } catch (err) {
                 ui.showToast(`Update check failed: ${err.message}`, 'error');

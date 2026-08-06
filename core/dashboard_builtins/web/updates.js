@@ -23,21 +23,31 @@ export async function render(container, ctx) {
             container.querySelector('.upd-line1').innerHTML = '<span class="dim">checking...</span>';
             return;
         }
-        const ago = updateStatus.last_check ? _agoStr(updateStatus.last_check) : 'just now';
         const line1 = container.querySelector('.upd-line1');
         if (updateStatus.available) {
+            const ago = updateStatus.last_check ? _agoStr(updateStatus.last_check) : 'just now';
             line1.innerHTML = `<span class="dash-pill warn" data-attention="warn">v${_esc(updateStatus.latest)} available</span> <span class="dim">· running v${_esc(updateStatus.current)} · ${_esc(ago)}</span>`;
+        } else if (!updateStatus.last_check) {
+            // No successful check yet — "✓ current" here would be a guess.
+            line1.innerHTML = `<span class="dash-pill">not checked yet</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· use Check now</span>`;
         } else {
-            line1.innerHTML = `<span class="dash-pill success">✓ current</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· ${_esc(ago)}</span>`;
+            line1.innerHTML = `<span class="dash-pill success">✓ current</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· ${_esc(_agoStr(updateStatus.last_check))}</span>`;
         }
     }
 
-    async function check(force = false) {
+    async function check(force = false, retry = 0) {
         try {
             const res = await ctx.api.fetch('/api/system/update-check' + (force ? '?force=1' : ''));
             if (!res.ok) throw new Error('Check failed');
             updateStatus = await res.json();
             if (aborted) return;
+            // Cold boot: the endpoint fires its first GitHub check async and
+            // returns last_check=0 meanwhile — poll briefly before painting
+            // "not checked yet" (same pattern as dashboard.js checkForUpdate).
+            if (!force && !updateStatus.last_check && retry < 3) {
+                setTimeout(() => { if (!aborted) check(false, retry + 1); }, 2000);
+                return;
+            }
             paintLine1();
             if (updateStatus.available) {
                 window.dispatchEvent(new CustomEvent('update-available', { detail: updateStatus }));

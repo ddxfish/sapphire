@@ -22,12 +22,14 @@ from urllib.parse import urlparse
 
 import requests
 
+from core.github_files import fetch_github_file
+from core.versions import is_newer
+
 logger = logging.getLogger(__name__)
 
 VERSION_FILE = Path(__file__).parent.parent / 'VERSION'
 REPO_DIR = VERSION_FILE.parent
 GITHUB_REPO = 'ddxfish/sapphire'
-GITHUB_RAW_URL = f'https://raw.githubusercontent.com/{GITHUB_REPO}'
 CHECK_INTERVAL = 86400  # 24 hours
 
 PENDING_UPDATE_FILE = REPO_DIR / 'user' / 'pending_update.json'
@@ -84,22 +86,6 @@ def _clear_index_lock():
             lock.unlink()
     except Exception:
         pass
-
-
-# ─── Version parsing ────────────────────────────────────────────────────────
-
-def _parse_version(v):
-    """Parse version string to tuple, tolerant of suffixes like -rc1 / .dev."""
-    parts = []
-    for x in (v or '').split('.'):
-        num = ''
-        for ch in x:
-            if ch.isdigit():
-                num += ch
-            else:
-                break
-        parts.append(int(num) if num else 0)
-    return tuple(parts)
 
 
 # ─── Fork detection ─────────────────────────────────────────────────────────
@@ -383,28 +369,23 @@ class Updater:
             if self.branch != 'main':
                 candidate_branches.append('main')  # fall back if branch not on official
             for br in candidate_branches:
-                try:
-                    resp = requests.get(f'{GITHUB_RAW_URL}/{br}/VERSION', timeout=10)
-                except Exception as e:
-                    logger.warning(f"Version check failed for branch '{br}': {e}")
+                # Contents-API-first fetch — raw.githubusercontent lags pushes
+                # by ~5 min, which read as "no updates" right after a release.
+                text = fetch_github_file(GITHUB_REPO, br, 'VERSION')
+                if text is None or not text.strip():
+                    logger.warning(f"Version check failed for branch '{br}'")
                     continue
-                if resp.status_code == 200:
-                    self.latest_version = resp.text.strip()
-                    self.update_available = (
-                        _parse_version(self.latest_version) > _parse_version(self.current_version)
-                    )
-                    self.last_check = now
-                    # Record the target SHA at check time so pre-flight can
-                    # refuse if upstream moves before the user clicks Update.
-                    if self.update_available:
-                        self._target_sha = self._fetch_remote_sha(br)
-                        logger.info(f"Update available: {self.current_version} -> {self.latest_version}")
-                    else:
-                        self._target_sha = None
-                    break
-                elif resp.status_code != 404:
-                    logger.warning(f"Version check returned HTTP {resp.status_code} for branch '{br}'")
-                    break
+                self.latest_version = text.strip()
+                self.update_available = is_newer(self.latest_version, self.current_version)
+                self.last_check = now
+                # Record the target SHA at check time so pre-flight can
+                # refuse if upstream moves before the user clicks Update.
+                if self.update_available:
+                    self._target_sha = self._fetch_remote_sha(br)
+                    logger.info(f"Update available: {self.current_version} -> {self.latest_version}")
+                else:
+                    self._target_sha = None
+                break
         finally:
             self.checking = False
 

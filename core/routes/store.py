@@ -160,26 +160,13 @@ def _build_install_index() -> dict[str, dict]:
 
 # ── Semver compare ───────────────────────────────────────────────────
 # Conservative — when in doubt, return "current". Never falsely tell
-# the user there's an update.
-
-def _parse_version(v: str) -> Optional[tuple[int, ...]]:
-    if not v:
-        return None
-    parts = v.split("-", 1)[0].split(".")
-    try:
-        return tuple(int(p) for p in parts)
-    except (ValueError, TypeError):
-        return None
-
+# the user there's an update. Shared parser: core/versions.py (M1).
 
 def _install_state(store_version: str, local_version: str) -> str:
     if not local_version:
         return "current"
-    sv = _parse_version(store_version)
-    lv = _parse_version(local_version)
-    if sv is None or lv is None:
-        return "current"
-    return "update_available" if sv > lv else "current"
+    from core.versions import is_newer
+    return "update_available" if is_newer(store_version, local_version) else "current"
 
 
 def _annotate_item(item: dict, install_index: dict[str, dict]) -> dict:

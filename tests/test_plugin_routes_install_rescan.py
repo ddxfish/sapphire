@@ -230,14 +230,15 @@ def test_check_update_newer_version_returns_true(client, temp_user_dir, monkeypa
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
-    # Patch requests.get — the route does `import requests as req` inside
-    # the function, so we patch the module-level attr.
+    # Patch requests.get at module level — the GitHub path now goes through
+    # core.github_files (contents API + raw fallback), which reads resp.text.
+    import json as _json
     import requests as req_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
-    fake_resp.json.return_value = {'name': 'pm', 'version': '1.1.0',
-                                   'author': 'user'}
-    monkeypatch.setattr(req_mod, 'get', lambda url, timeout=10: fake_resp)
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.1.0', 'author': 'user'})
+    monkeypatch.setattr(req_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
     r = c.get('/api/plugins/pm/check-update')
@@ -257,11 +258,13 @@ def test_check_update_same_version_returns_false(client, temp_user_dir, monkeypa
     mock_pl.get_plugin_state.return_value = fake_state
     monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
 
+    import json as _json
     import requests as req_mod
     fake_resp = MagicMock()
     fake_resp.status_code = 200
-    fake_resp.json.return_value = {'name': 'pm', 'version': '1.0.0', 'author': 'user'}
-    monkeypatch.setattr(req_mod, 'get', lambda url, timeout=10: fake_resp)
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.0.0', 'author': 'user'})
+    monkeypatch.setattr(req_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
 
     c, csrf = client
     r = c.get('/api/plugins/pm/check-update')
@@ -346,6 +349,94 @@ def test_check_update_gitlab_source_attempts_fetch(client, temp_user_dir, monkey
         f"Expected GitLab raw URL with subgroup path, fetched: {fetched}"
     assert any('gitlab.com/group/subgroup/repo/-/raw/master/plugin.json' in u for u in fetched), \
         f"Expected fallback to master branch, fetched: {fetched}"
+
+
+def test_check_update_v_prefixed_remote_version_is_offered(client, temp_user_dir, monkeypatch):
+    """[REGRESSION — 2026-08-06 hunt M1] The old inline _ver_tuple returned
+    (0,) for 'v1.1.0', so a v-prefixed remote release was NEVER offered.
+    The shared core/versions.py parser strips the prefix."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('pm', version='1.0.0')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import json as _json
+    import requests as req_mod
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': 'v1.1.0', 'author': 'user'})
+    monkeypatch.setattr(req_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
+
+    c, csrf = client
+    r = c.get('/api/plugins/pm/check-update')
+    assert r.status_code == 200
+    assert r.json()['update_available'] is True
+
+
+def test_check_update_unparseable_local_reports_reason(client, temp_user_dir, monkeypatch):
+    """[REGRESSION — 2026-08-06 hunt M1] Garbage local version used to parse
+    as (0,) and make EVERYTHING look like an update. Now: no update offered,
+    honest reason=version_unparseable so the UI can say why."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('pm', version='garbage')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import json as _json
+    import requests as req_mod
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.text = _json.dumps({'name': 'pm', 'version': '1.1.0', 'author': 'user'})
+    monkeypatch.setattr(req_mod, 'get',
+                        lambda url, timeout=10, headers=None: fake_resp)
+
+    c, csrf = client
+    r = c.get('/api/plugins/pm/check-update')
+    assert r.status_code == 200
+    body = r.json()
+    assert body['update_available'] is False
+    assert body['reason'] == 'version_unparseable'
+    assert body['remote_version'] == '1.1.0'
+
+
+def test_check_update_github_tries_contents_api_first(client, temp_user_dir, monkeypatch):
+    """[REGRESSION — 2026-08-06 hunt H1] raw.githubusercontent lags pushes
+    ~5 min ("no updates" right after a release). The GitHub path must hit the
+    contents API before falling back to the raw CDN."""
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info('pm', version='1.0.0')
+    fake_state = MagicMock()
+    fake_state.get.return_value = 'https://github.com/user/repo'
+    mock_pl.get_plugin_state.return_value = fake_state
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+
+    import requests
+    fetched = []
+
+    def _fake_get(url, *_, **__):
+        fetched.append(url)
+        resp = MagicMock()
+        resp.status_code = 404
+        return resp
+
+    monkeypatch.setattr(requests, 'get', _fake_get)
+
+    c, csrf = client
+    r = c.get('/api/plugins/pm/check-update')
+    assert r.status_code == 200
+    assert r.json()['reason'] == 'fetch_failed'
+    assert 'api.github.com/repos/user/repo/contents/plugin.json' in fetched[0], \
+        f"Contents API must be tried first, fetched: {fetched}"
+    assert any('raw.githubusercontent.com/user/repo' in u for u in fetched), \
+        f"Raw CDN must remain the fallback, fetched: {fetched}"
 
 
 def test_check_update_url_with_query_params_still_matches(client, temp_user_dir, monkeypatch):
