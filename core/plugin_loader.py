@@ -60,6 +60,17 @@ def _time_to_cron(value, fallback: str) -> str:
     return fallback
 
 
+def _version_tuple(text) -> Optional[tuple]:
+    """'2.10.1' → (2, 10, 1). Trailing non-numeric parts drop; None if nothing parses."""
+    parts = []
+    for piece in str(text).strip().split('.'):
+        digits = re.match(r'\d+', piece)
+        if not digits:
+            break
+        parts.append(int(digits.group()))
+    return tuple(parts) if parts else None
+
+
 class PluginState:
     """Simple JSON key-value store for plugin data.
 
@@ -339,6 +350,30 @@ class PluginLoader:
                 missing.append(spec)
         return missing
 
+    @staticmethod
+    def _warn_min_core_version(name: str, manifest: dict):
+        """Shout when a plugin declares min_core_version newer than this core.
+
+        A newer plugin on an older core fails at runtime with zero explanation
+        (missing renderer features, absent routes). This turns that mystery
+        into one loud log line. Never blocks the load."""
+        want_raw = str(manifest.get("min_core_version") or "").strip()
+        if not want_raw:
+            return
+        try:
+            have_raw = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        except Exception:
+            return
+        want, have = _version_tuple(want_raw), _version_tuple(have_raw)
+        if want is None or have is None:
+            return
+        if have < want:
+            logger.warning(
+                f"[PLUGINS] VERSION MISMATCH: '{name}' wants Sapphire core >= {want_raw} "
+                f"but this install is {have_raw}. Loading anyway — expect broken settings "
+                f"pages or missing features until the core is updated (git pull)."
+            )
+
     def _get_enabled_list(self) -> list:
         """Read enabled plugins from user/webui/plugins.json."""
         for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
@@ -457,6 +492,9 @@ class PluginLoader:
         plugin_dir = info["path"]
         band = info["band"]
         base_priority = manifest.get("priority", 50)
+
+        # Version-skew shout — warns loudly, never blocks
+        self._warn_min_core_version(name, manifest)
 
         # Pre-flight dependency check — before any code loads
         missing = self._check_dependencies(manifest)
