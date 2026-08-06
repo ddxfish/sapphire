@@ -306,15 +306,39 @@ def get_full_status_sync():
             "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
-        # Active session
+        # Active session. Two context-awareness layers (2026-08-06 — a Discord
+        # get_self_info reported the operator's web chat + model as its own):
+        # 1) stream_brain override (daemon/phone runs): get_chat_settings()
+        #    already resolves it; the chat NAME must match or the block mixes
+        #    the stream's settings with the web chat's name.
+        # 2) tool_context (continuity runs): carries the RESOLVED provider /
+        #    model / toolset of the run — authoritative over per-chat settings,
+        #    which say 'auto' while the run's provider came from task/event
+        #    routing. Web-path calls have neither set → byte-identical output.
         chat_settings = session.get_chat_settings()
+        chat_name = session.get_active_chat_name()
+        try:
+            from core.chat.stream_brain import get_override
+            _o = get_override()
+            if _o and _o.get("chat"):
+                chat_name = _o["chat"]
+        except Exception:
+            pass
+        _tc = {}
+        try:
+            from core.chat.function_manager import tool_context
+            _c = tool_context.get() or {}
+            if _c.get("channel") == "continuity":
+                _tc = _c
+        except Exception:
+            pass
         active_session = {
-            "chat": session.get_active_chat_name(),
+            "chat": chat_name,
             "prompt": chat_settings.get("prompt", ""),
             "persona": chat_settings.get("persona", ""),
-            "llm_primary": chat_settings.get("llm_primary", "auto"),
-            "llm_model": chat_settings.get("llm_model", ""),
-            "toolset": fm.current_toolset_name,
+            "llm_primary": _tc.get("provider") or chat_settings.get("llm_primary", "auto"),
+            "llm_model": _tc.get("model") or chat_settings.get("llm_model", ""),
+            "toolset": _tc.get("toolset") or fm.current_toolset_name,
             "function_count": len(fm._enabled_tools),
             "tool_names": sorted(t['function']['name'] for t in fm._enabled_tools),
             "memory_scope": chat_settings.get("memory_scope", "default"),

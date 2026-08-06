@@ -1995,8 +1995,18 @@ class PluginLoader:
         if path.exists():
             try:
                 stored = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+            except Exception as e:
+                # Shout — a corrupt settings file silently reverting EVERY
+                # setting of this plugin to manifest defaults is invisible
+                # otherwise (daemon quietly switches models, gates flip, etc.)
+                # Once per file: this is a hot path (re-read per resolve).
+                warned = getattr(self, "_warned_corrupt_settings", None)
+                if warned is None:
+                    warned = self._warned_corrupt_settings = set()
+                if name not in warned:
+                    warned.add(name)
+                    logger.error(f"[PLUGINS] Corrupt settings file {path} — "
+                                 f"'{name}' is running on manifest DEFAULTS: {e}")
         return {**defaults, **stored}
 
     # ── Query methods ──

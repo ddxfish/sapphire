@@ -822,6 +822,7 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
         if provider_key not in providers_config:
             return {"status": "error", "error": f"Unknown provider: {provider_key}"}
 
+        was_enabled = bool(providers_config[provider_key].get('enabled'))
         test_config = dict(providers_config[provider_key])
         test_config['enabled'] = True
 
@@ -833,16 +834,50 @@ async def test_llm_provider(provider_key: str, request: Request, _=Depends(requi
             if body.get(field):
                 test_config[field] = body[field]
 
+        # Probe budget: is_local providers default to a 0.3s health timeout —
+        # right for boot fallback scans, wrong for a human-clicked Test against
+        # a LAN box with a big model loaded (models.list can take seconds while
+        # completions work fine). Floor it at 5s for the test only. 2026-08-06.
+        try:
+            test_config['timeout'] = max(float(test_config.get('timeout') or 0), 5.0)
+        except (TypeError, ValueError):
+            test_config['timeout'] = 5.0
+
         providers_config[provider_key] = test_config
 
         def _test_provider():
-            provider = get_provider_by_key(provider_key, providers_config, getattr(config, 'LLM_REQUEST_TIMEOUT', 30))
+            # Bounded request timeout — a button press shouldn't hang for the
+            # full 240s reply budget on a dead-but-accepting endpoint.
+            _t = float(getattr(config, 'LLM_REQUEST_TIMEOUT', 30) or 30)
+            provider = get_provider_by_key(provider_key, providers_config, min(30.0, _t))
             if not provider:
                 return {"status": "error", "error": f"Could not create provider '{provider_key}' — check API key and settings"}
-            result = provider.test_connection()
-            if result.get('ok'):
-                return {"status": "success", "response": result.get("response")}
-            return {"status": "error", "error": result.get("error", "Connection failed")}
+
+            health = provider.test_connection()
+            disabled_note = "" if was_enabled else " — note: provider is DISABLED in settings, enable it before use"
+
+            # Real-path probe: replies never call models.list — they call
+            # chat_completion with the reply-path generation params. Test what
+            # a reply actually does whenever a model is known; the health probe
+            # alone passed boxes that couldn't complete and failed boxes that
+            # could (0.3s models.list vs working completions). 2026-08-06.
+            model = str(test_config.get('model') or getattr(provider, 'model', '') or '').strip()
+            if model:
+                try:
+                    from core.chat.llm_providers import get_generation_params
+                    gen = get_generation_params(provider_key, model, providers_config)
+                    gen['model'] = model
+                    provider.chat_completion(
+                        [{"role": "user", "content": "Reply with the single word: OK"}],
+                        generation_params=gen)
+                    quirk = "" if health.get('ok') else " (models.list probe failed — endpoint quirk, completions work)"
+                    return {"status": "success", "response": f"Completion OK ({model}){quirk}{disabled_note}"}
+                except Exception as e:
+                    return {"status": "error", "error": f"Completion failed — this is the call replies use: {str(e)[:160]}"}
+
+            if health.get('ok'):
+                return {"status": "success", "response": f"Endpoint reachable (no model set — completion untested){disabled_note}"}
+            return {"status": "error", "error": health.get("error", "Connection failed")}
 
         return await asyncio.to_thread(_test_provider)
     except Exception as e:

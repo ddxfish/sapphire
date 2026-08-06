@@ -130,7 +130,23 @@ class ContinuityExecutor:
 
         text = obj.get("text") or obj.get("content") or None
         if not text:
-            return event_data
+            # Messaging-shaped payloads (daemon events with routing fields) must
+            # never fall through to raw JSON: the payload carries routing
+            # metadata — llm_primary/llm_model, attachment URLs, author ids —
+            # that would enter the prompt AND persist into chat history as the
+            # user turn, where the AI later quotes it as fact ("I'm on <old
+            # model>"). Format normally with a placeholder trigger instead.
+            if any(obj.get(k) for k in ("channel_id", "chat_id", "account")):
+                text = "(message has no text — likely an attachment, sticker, or embed)"
+            else:
+                # Generic non-message events keep raw-JSON visibility, minus
+                # the LLM routing keys, which are never content.
+                redacted = {k: v for k, v in obj.items()
+                            if k not in ("llm_primary", "llm_model")}
+                try:
+                    return json.dumps(redacted, ensure_ascii=False, default=str)
+                except Exception:
+                    return event_data
 
         # Build clean message from common fields
         sender = obj.get("display_name") or obj.get("first_name") or obj.get("username") or obj.get("sender") or ""
@@ -220,6 +236,7 @@ class ContinuityExecutor:
         task = copy.deepcopy(task)
 
         # For event-triggered tasks, build message from instructions + event data
+        _ev_token = None
         if event_data is not None:
             event_display = self._format_event_data(event_data)
             instructions = task.get("initial_message", "").strip()
@@ -275,7 +292,7 @@ class ContinuityExecutor:
             try:
                 event_obj = json.loads(event_data) if isinstance(event_data, str) else (event_data or {})
                 if isinstance(event_obj, dict):
-                    current_event_data.set(event_obj)
+                    _ev_token = current_event_data.set(event_obj)
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -294,22 +311,30 @@ class ContinuityExecutor:
             "errors": []
         }
         try:
-            task = self._resolve_persona(task)
-        except Exception as e:
-            err = f"Persona resolution failed: {e}"
-            logger.error(f"[Continuity] {err}", exc_info=True)
-            result["errors"].append(err)
-            result["completed_at"] = datetime.now().isoformat()
-            return result
+            try:
+                task = self._resolve_persona(task)
+            except Exception as e:
+                err = f"Persona resolution failed: {e}"
+                logger.error(f"[Continuity] {err}", exc_info=True)
+                result["errors"].append(err)
+                result["completed_at"] = datetime.now().isoformat()
+                return result
 
-        chat_target = task.get("chat_target", "").strip()
+            chat_target = task.get("chat_target", "").strip()
 
-        # Blank chat_target = ephemeral: isolated, no chat creation, no UI impact
-        if not chat_target:
-            return self._run_background(task, result, progress_callback, response_callback)
+            # Blank chat_target = ephemeral: isolated, no chat creation, no UI impact
+            if not chat_target:
+                return self._run_background(task, result, progress_callback, response_callback)
 
-        # Named chat_target = foreground: switches to that chat, runs, restores
-        return self._run_foreground(task, result, progress_callback, response_callback)
+            # Named chat_target = foreground: switches to that chat, runs, restores
+            return self._run_foreground(task, result, progress_callback, response_callback)
+        finally:
+            # Reset the event ContextVar. Harmless on today's fresh-thread-per-task
+            # scheduler; load-bearing the day any pooled thread calls run() —
+            # without it the next run on that thread inherits a stale event's
+            # llm_primary and routing ids.
+            if _ev_token is not None:
+                current_event_data.reset(_ev_token)
     
     @staticmethod
     def _extract_task_settings(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -610,8 +635,28 @@ class ContinuityExecutor:
             )
 
             try:
-                # Run through isolated ExecutionContext — no singleton contact
-                response = ctx.run(msg, history_messages=history_messages, images=_ev_images)
+                # Per-stream brain override: for the duration of the run, any
+                # tool that reads/writes "this chat's" state via session_manager
+                # (get_self_info, switch_model, reset_chat, set_voice, …)
+                # resolves the task's own chat_target — NOT the operator's
+                # active web chat. Same primitive the phone-call stream uses
+                # (chat_streaming.py:175). Span is ctx.run only; the
+                # persistence + TTS below never consult it. 2026-08-06 —
+                # closes the daemon↔web state-leak family (a Discord reply
+                # reported the web chat's model as its own).
+                from core.chat import stream_brain
+                _cc = session_manager.read_chat_settings(target_chat)
+                _brain_token = stream_brain.set_override({
+                    "chat": target_chat,
+                    "settings": _cc if isinstance(_cc, dict) else {},
+                    "system_prompt": ctx.system_prompt,
+                    "tools": None,
+                })
+                try:
+                    # Run through isolated ExecutionContext — no singleton contact
+                    response = ctx.run(msg, history_messages=history_messages, images=_ev_images)
+                finally:
+                    stream_brain.reset_override(_brain_token)
 
                 # If the run ended degraded (context overflow, tool exhaustion,
                 # empty LLM, hallucinated tools), the empty assistant message

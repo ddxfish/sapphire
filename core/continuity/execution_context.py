@@ -203,8 +203,12 @@ class ExecutionContext:
             tools += [t for t in self.fm.all_possible_tools
                       if t['function']['name'] in extra_set]
 
-        # Apply mode filter (read-only)
-        tools = self.fm._apply_mode_filter(tools)
+        # Apply mode filter + settings gate (both read-only) — same pair the
+        # web path applies. Skipping the gate here exposed gated tools
+        # (switch_model et al) to daemon runs even with their Settings > Tools
+        # toggles OFF; execution was still refused in-handler, but the AI saw
+        # a tool it could never use. Silent-default class.
+        tools = self.fm._apply_settings_gate(self.fm._apply_mode_filter(tools))
         logger.info(f"[ExecCtx] Toolset '{toolset_name}': {len(tools)} tools")
         return tools if tools else None
 
@@ -267,13 +271,19 @@ class ExecutionContext:
         self.fm.set_rag_scope(None)
         self.fm.set_private_chat(False)
 
-        # Provenance for tool executors (mindpalace metadata). Set before the
-        # snapshot so it rides along. model may be '' here (resolved later by
-        # _resolve_provider) — set_tool_context drops falsy fields.
+        # Provenance for tool executors (mindpalace metadata, get_self_info).
+        # Set before the snapshot so it rides along. provider/model are the
+        # RESOLVED values — the constructor already ran _resolve_provider,
+        # including the event-payload override — so tools report what this
+        # run actually executes on, not the task's pre-override fields.
         from core.chat.function_manager import set_tool_context
         set_tool_context(None, chat=self.task_settings.get('chat_target'),
                          persona=self.task_settings.get('prompt'),
-                         model=self.task_settings.get('model'),
+                         model=(getattr(self, 'model_override', None)
+                                or getattr(getattr(self, 'provider', None), 'model', '')
+                                or self.task_settings.get('model')),
+                         provider=getattr(self, 'provider_key', None),
+                         toolset=self.task_settings.get('toolset'),
                          channel='continuity')
 
         return snapshot_all_scopes()
