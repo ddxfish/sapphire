@@ -107,12 +107,12 @@ def _extract_ai_section(filepath: Path, full: bool = False) -> tuple[str, str]:
     
     # Section mode - behavior depends on full param
     if AI_SECTION_MARKER not in content:
-        if full:
-            # No AI section, return entire file
-            first_line = content.split('\n')[0].strip().lstrip('#').strip()
-            summary = first_line[:100] if first_line else "Full document"
-            return (summary, content)
-        return ("No AI reference section", "")
+        # No AI marker anywhere → the whole doc IS the reference, for both
+        # full modes. Returning empty here turned direct reads of unmarked
+        # docs into errors — the read-path half of the invisible-docs bug.
+        first_line = content.split('\n')[0].strip().lstrip('#').strip()
+        summary = first_line[:100] if first_line else "Full document"
+        return (summary, content)
     
     # Split on marker
     parts = content.split(AI_SECTION_MARKER, 1)
@@ -149,22 +149,26 @@ def _extract_ai_section(filepath: Path, full: bool = False) -> tuple[str, str]:
 
 def _search_across_docs(query: str, available: dict, max_results: int = 6,
                         snippet_chars: int = 180) -> list:
-    """Case-insensitive substring search across every doc's AI section.
+    """Case-insensitive substring search across every doc's FULL text.
 
     Returns list of (doc_name, match_count, snippet) tuples, highest count
     first. Snippet centers on the first match with surrounding context so
     the caller sees enough to judge relevance.
 
-    Used when an AI doesn't know which doc to pull — schema-cited pattern
-    (e.g. spawn_agent → search_help_docs('agents')) breaks down when the
-    AI has a vague topic rather than a known doc name.
+    Search is a router, so it scans raw files — human prose included. The
+    old AI-section-only scan made every unmarked doc invisible: searching
+    'ghost message' whiffed while GHOST_MESSAGES.md sat in the corpus
+    (the "search has no search" AIX bug, 2026-08-05).
     """
     if not query:
         return []
     q = query.lower().strip()
     results = []
     for name, filepath in available.items():
-        _, content = _extract_ai_section(filepath)
+        try:
+            content = filepath.read_text(encoding='utf-8')
+        except Exception:
+            continue
         if not content:
             continue
         lower = content.lower()

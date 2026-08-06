@@ -1853,8 +1853,43 @@ class ChatSessionManager:
                     chats.append(entry)
         except Exception as e:
             logger.error(f"Error listing chats: {e}")
-        
+
         return chats
+
+    def search_chat_content(self, query: str) -> Dict[str, int]:
+        """Deep content search across every chat (Chat Manager).
+
+        Returns {chat_name: matching_message_count}. Matches message CONTENT
+        only — never role keys or metadata, so searching "user" doesn't hit
+        every message in the store. LIKE semantics (ASCII case-insensitive),
+        wildcards escaped so "100%" means a literal percent. Format-aware
+        like list_chat_files: role sidecar for rows chats, json_each for
+        blobs — never parse JSON in Python on a whole-store scan."""
+        q = (query or "").strip()
+        if not q:
+            return {}
+        esc = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{esc}%"
+        self._ensure_db()
+        hits: Dict[str, int] = {}
+        try:
+            with self._lock, self._get_connection() as conn:
+                for name, n in conn.execute(
+                    r"""SELECT cm.chat_name, COUNT(*) FROM chat_messages cm
+                        WHERE json_extract(cm.message_json, '$.content') LIKE ? ESCAPE '\'
+                        GROUP BY cm.chat_name""", (pattern,)):
+                    hits[name] = n
+                for name, n in conn.execute(
+                    r"""SELECT chats.name, COUNT(*)
+                        FROM chats, json_each(chats.messages)
+                        WHERE COALESCE(chats.storage_format, '') != 'rows'
+                          AND chats.messages IS NOT NULL
+                          AND json_extract(json_each.value, '$.content') LIKE ? ESCAPE '\'
+                        GROUP BY chats.name""", (pattern,)):
+                    hits[name] = hits.get(name, 0) + n
+        except Exception as e:
+            logger.error(f"Chat content search failed: {e}")
+        return hits
 
     def create_chat(self, chat_name: str) -> bool:
         """Create new chat with default settings."""

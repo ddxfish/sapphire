@@ -733,6 +733,22 @@ async def list_chats(request: Request, type: str = None, stats: int = 0,
         raise HTTPException(status_code=500, detail="Failed to list chats")
 
 
+@router.get("/api/chats/search")
+async def search_chats(q: str = "", _=Depends(require_login), system=Depends(get_system)):
+    """Deep content search for the Chat Manager: which chats mention q, and
+    in how many messages. Content-only; name filtering is the frontend's job.
+    (Registered before the /api/chats/{chat_name} routes on purpose.)"""
+    q = (q or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Search query required")
+    try:
+        hits = system.llm_chat.session_manager.search_chat_content(q)
+        return {"query": q, "hits": hits,
+                "chats": len(hits), "messages": sum(hits.values())}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Search failed")
+
+
 @router.post("/api/chats")
 async def create_chat(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Create a new chat."""

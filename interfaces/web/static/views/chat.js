@@ -167,6 +167,13 @@ export default {
                 sbDropdown.addEventListener('click', async e => {
                     const item = e.target.closest('.chat-picker-item');
                     if (!item) return;
+                    // "See more" tail item → Chat Manager (the full list)
+                    if (item.classList.contains('chat-picker-more')) {
+                        sbPicker.classList.remove('open');
+                        const { switchView } = await import('../core/router.js');
+                        switchView('chat-manage');
+                        return;
+                    }
                     const chatName = item.dataset.chat;
                     if (!chatName) return;
 

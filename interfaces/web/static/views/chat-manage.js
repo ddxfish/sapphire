@@ -10,17 +10,55 @@
 import * as api from '../api.js';
 import * as ui from '../ui.js';
 import * as eventBus from '../core/event-bus.js';
+import { handleChatChange, populateChatDropdown } from '../features/chat-manager.js';
+import { getIsProc } from '../core/state.js';
+import { switchView } from '../core/router.js';
 
 let container = null;
 let chats = [];
 let selected = new Set();
 let sortKey = 'modified';
 let sortDir = -1; // -1 desc, 1 asc
+let tab = 'chat';        // 'chat' | 'game' | 'librarian'
+let query = '';          // live name filter (as-you-type)
+let deepHits = null;     // Map(name → matching msg count) after Enter, else null
+let deepQuery = '';      // the query deepHits answers
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* Tab classification. Game Room = mode-tagged chats (game sessions AND story
+   playthroughs — room.js stamps both). Librarian = the mint_session_chat
+   naming convention: 'librarian' or 'librarian-YYYYMMDD-HHMM[-scope]' — the
+   date shape keeps a user chat like "librarian-notes" out of that tab. */
+const LIB_RE = /^librarian(-\d{8}-\d{4}(-.*)?)?$/;
+// One chat, one tab — and archived trumps everything (Krem's ruling
+// 2026-08-05: a real archive tucks away, it doesn't badge). The living
+// tabs never show archived chats; the Archive tab shows only them.
+const chatTab = c => {
+    if (c.archived) return 'archive';
+    const m = c.mode || c.settings?.mode;
+    if (m === 'game') return 'game';
+    // mode stamp = new plumbing (librarian stamps at claim since 2026-08-05);
+    // the name regex stays for the pre-stamp generations.
+    if (m === 'librarian' || LIB_RE.test(c.name)) return 'librarian';
+    return 'chat';
+};
+const isStory = c => ((c.settings?.game_id) || '').startsWith('story:');
+const TAB_LABELS = { chat: '\u{1F4AC} Chats', game: '\u{1F3B2} Game Room',
+                     librarian: '\u{1F4DA} Librarian', archive: '\u{1F4E6} Archive' };
+
+function matchesSearch(c) {
+    if (deepHits) return deepHits.has(c.name);
+    if (!query) return true;
+    const q = query.toLowerCase();
+    return c.name.toLowerCase().includes(q)
+        || (c.display_name || '').toLowerCase().includes(q);
+}
+
+const visibleChats = () => chats.filter(c => chatTab(c) === tab && matchesSearch(c));
 
 function humanSize(bytes) {
     if (!bytes) return '0 B';
@@ -89,7 +127,7 @@ async function refresh() {
 
 function sortedChats() {
     const key = sortKey;
-    return [...chats].sort((a, b) => {
+    return visibleChats().sort((a, b) => {
         let va = a[key], vb = b[key];
         if (key === 'display_name') { va = (va || '').toLowerCase(); vb = (vb || '').toLowerCase(); }
         if (va == null) va = 0;
@@ -105,33 +143,68 @@ function render() {
         th.textContent = th.dataset.label + arrow(th.dataset.sort);
     });
 
-    list.innerHTML = sortedChats().map(c => {
+    // Per-tab totals (and match counts while a search is narrowing things)
+    const counts = { chat: 0, game: 0, librarian: 0, archive: 0 };
+    const matched = { chat: 0, game: 0, librarian: 0, archive: 0 };
+    for (const c of chats) {
+        const t = chatTab(c);
+        counts[t]++;
+        if (matchesSearch(c)) matched[t]++;
+    }
+    const searching = !!(query || deepHits);
+    container.querySelectorAll('.cm-tab').forEach(b => {
+        const t = b.dataset.tab;
+        b.textContent = `${TAB_LABELS[t]} (${searching ? `${matched[t]}/${counts[t]}` : counts[t]})`;
+        b.classList.toggle('active', t === tab);
+    });
+
+    const vis = sortedChats();
+    // Selection is always a subset of what's on screen — one rule that makes
+    // tab switches and search narrowing safe (no invisible chats in a bulk op).
+    const visNames = new Set(vis.map(c => c.name));
+    for (const s of [...selected]) if (!visNames.has(s)) selected.delete(s);
+
+    list.innerHTML = vis.map(c => {
         const checked = selected.has(c.name) ? 'checked' : '';
+        // Game/story chats: the transcript is the tale and journal msg_index
+        // anchors point into it — trim/compress/clear stay off the menu.
+        // Keyed off MODE, not tab: an archived story chat is still a story.
+        const gated = (c.mode ?? c.settings?.mode) === 'game';
+        const hits = deepHits?.get(c.name);
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name">${esc(c.display_name)}${(c.mode ?? c.settings?.mode) === 'game' ? ' <span class="cm-badge">\u{1F3B2} game</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${c.archived ? ' <span class="cm-badge cm-badge-arch">archived</span>' : ''}</td>
+            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>
             <td>${fmtDate(c.modified)}</td>
             <td>${fmtDate(c.created)}</td>
             <td class="cm-actions">
-                <button class="cm-act" data-act="archive" title="${c.archived ? 'Unarchive (show in sidebar again)' : 'Archive (hide from sidebar dropdown)'}">${c.archived ? '\u{1F4C2}' : '\u{1F4E6}'}</button>
+                <button class="cm-act" data-act="archive" title="${c.archived ? 'Unarchive (back to its tab + sidebar)' : 'Archive (tuck away in the Archive tab)'}">${c.archived ? '\u{1F4C2}' : '\u{1F4E6}'}</button>
                 <button class="cm-act" data-act="rename" title="Rename">✏️</button>
                 <button class="cm-act" data-act="export" title="Export JSON">⬇️</button>
-                <button class="cm-act" data-act="trim" title="Trim (keep first/last turns)">✂️</button>
-                <button class="cm-act" data-act="compress" title="Compress (summarize history)">\u{1F5DC}️</button>
+                ${gated ? '' : `<button class="cm-act" data-act="trim" title="Trim (keep first/last turns)">✂️</button>
+                <button class="cm-act" data-act="compress" title="Compress (summarize history)">\u{1F5DC}️</button>`}
                 <button class="cm-act" data-act="delete" title="Delete">\u{1F5D1}️</button>
             </td>
         </tr>`;
     }).join('');
+    if (!vis.length) {
+        list.innerHTML = `<tr><td colspan="8" class="cm-hint" style="text-align:center; padding:24px">${searching ? 'No chats match' : 'Nothing here yet'}</td></tr>`;
+    }
 
     const bar = container.querySelector('#cm-bulkbar');
     const n = selected.size;
     bar.style.display = n ? '' : 'none';
     if (n) bar.querySelector('#cm-selcount').textContent = `${n} selected`;
+    // Clear on a game/story chat leaves a zombie (journal at turn N, empty
+    // transcript), and clearing something you shelved to KEEP is nonsense —
+    // both tabs lose the button.
+    bar.querySelector('#cm-bulk-clear').style.display =
+        (tab === 'game' || tab === 'archive') ? 'none' : '';
     container.querySelector('#cm-summary').textContent =
-        `${chats.length} chats · ${humanSize(chats.reduce((s, c) => s + (c.size_bytes || 0), 0))} total`;
+        (deepHits ? `"${deepQuery}" in messages · ` : '')
+        + `${vis.length} chat${vis.length === 1 ? '' : 's'} · ${humanSize(vis.reduce((s, c) => s + (c.size_bytes || 0), 0))}`;
 }
 
 /* ── actions ─────────────────────────────────────────────────────────── */
@@ -189,6 +262,32 @@ async function doBulkExport() {
     }
 }
 
+// Name click → activate the chat and land in the Chat view. Rides the one
+// true switch path (handleChatChange: pending-save flush, activate, repaint,
+// chat-activated event) — all of it targets persistent DOM, so it runs fine
+// from this view; then we navigate to the freshly painted transcript.
+async function openChat(name) {
+    if (getIsProc()) {
+        ui.showToast('Cannot switch chats while generating', 'error');
+        return;
+    }
+    const sel = document.getElementById('chat-select');
+    if (!sel) return;
+    if (![...sel.options].some(o => o.value === name)) {
+        // Archived chats aren't in the picker's hidden select — seed a
+        // temporary option; the post-activate repopulate makes it permanent
+        // (the active chat is exempt from the archived filter).
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        sel.appendChild(opt);
+    }
+    sel.value = name;
+    await handleChatChange();
+    await populateChatDropdown();
+    switchView('chat');
+}
+
 async function doRowAction(act, name) {
     if (act === 'rename') {
         const chat = chats.find(c => c.name === name);
@@ -215,8 +314,8 @@ async function doRowAction(act, name) {
         try {
             await api.setChatArchived(name, toArchived);
             ui.showToast(toArchived
-                ? `Archived ${name} — hidden from the sidebar dropdown`
-                : `Unarchived ${name} — back in the sidebar`, 'success');
+                ? `Archived ${name} — tucked away in the Archive tab`
+                : `Unarchived ${name} — back in its tab`, 'success');
             // Local dispatch: the dropdown refreshes without the SSE echo
             eventBus.dispatch('chat_archived', { chat_name: name, archived: toArchived });
         } catch (e) {
@@ -475,6 +574,22 @@ export default {
             #cm-wrap { padding: 20px; max-width: 1100px; margin: 0 auto;
                        flex: 1; min-height: 0; overflow-y: auto; width: 100%;
                        box-sizing: border-box; }
+            #cm-tabs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+                       margin-bottom: 14px; border-bottom: 1px solid var(--border-color, #333);
+                       padding-bottom: 0; }
+            .cm-tab { padding: 7px 14px; border: 1px solid transparent; border-bottom: none;
+                      border-radius: 8px 8px 0 0; background: transparent; cursor: pointer;
+                      color: var(--text-muted, #999); font-size: var(--font-sm); }
+            .cm-tab:hover { color: var(--text-primary, #ddd); }
+            .cm-tab.active { color: var(--accent, #4a9eff); border-color: var(--border-color, #333);
+                             background: rgba(74,158,255,0.08); }
+            #cm-searchrow { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+            #cm-search { background: var(--bg-secondary, #26262e); color: var(--text-primary, #ddd);
+                         border: 1px solid var(--border-color, #444); border-radius: 6px;
+                         padding: 6px 10px; flex: 1; min-width: 0; }
+            .cm-hits { font-size: 0.78em; color: var(--accent, #4a9eff); font-weight: 600; }
+            .cm-open { cursor: pointer; }
+            .cm-open:hover { color: var(--accent, #4a9eff); text-decoration: underline; }
             #cm-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
             #cm-toolbar .cm-spacer { flex: 1; }
             #cm-summary { color: var(--text-muted); font-size: var(--font-sm); }
@@ -489,7 +604,6 @@ export default {
             .cm-num { text-align: right; font-variant-numeric: tabular-nums; }
             .cm-badge { font-size: 0.72em; padding: 1px 7px; border-radius: 9px;
                         background: var(--accent, #4a9eff); color: #fff; vertical-align: 1px; }
-            .cm-badge-arch { background: var(--text-muted, #777); }
             .cm-act { background: none; border: none; cursor: pointer; font-size: 1em;
                       opacity: 0.55; padding: 2px 4px; }
             .cm-act:hover { opacity: 1; }
@@ -512,6 +626,16 @@ export default {
             .cm-modal-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
         </style>
         <div id="cm-wrap">
+            <div id="cm-tabs">
+                <button class="cm-tab" data-tab="chat"></button>
+                <button class="cm-tab" data-tab="game"></button>
+                <button class="cm-tab" data-tab="librarian"></button>
+                <button class="cm-tab" data-tab="archive"></button>
+            </div>
+            <div id="cm-searchrow">
+                <input id="cm-search" type="search" placeholder="Filter by name…">
+                <button class="cm-btn" id="cm-deep">\u{1F50D} Search all messages</button>
+            </div>
             <div id="cm-toolbar">
                 <button class="cm-btn" id="cm-sel-all">All</button>
                 <button class="cm-btn" id="cm-sel-none">None</button>
@@ -554,8 +678,44 @@ export default {
 
         // ALL handlers bound ONCE here via delegation (never per-render —
         // the stacked-handler class bug).
+        el.querySelector('#cm-tabs').addEventListener('click', e => {
+            const b = e.target.closest('.cm-tab');
+            if (!b || b.dataset.tab === tab) return;
+            tab = b.dataset.tab;
+            render();   // the subset-of-visible rule empties the selection
+        });
+        const searchBox = el.querySelector('#cm-search');
+        const runDeepSearch = async () => {
+            const q = searchBox.value.trim();
+            if (!q) { ui.showToast('Type something to search for first', 'warning'); return; }
+            try {
+                const res = await api.searchChats(q);
+                deepHits = new Map(Object.entries(res.hits || {}));
+                deepQuery = q;
+                ui.showToast(`"${q}": ${res.chats} chat(s), ${res.messages} message(s)`,
+                    res.chats ? 'success' : 'warning');
+            } catch (err) {
+                ui.showToast(`Search failed: ${err.message}`, 'error');
+                return;
+            }
+            render();
+        };
+        searchBox.addEventListener('input', () => {
+            query = searchBox.value;
+            deepHits = null; deepQuery = '';   // typing reverts to name mode
+            render();
+        });
+        searchBox.addEventListener('keydown', e => {
+            if (e.key === 'Escape') {
+                searchBox.value = ''; query = ''; deepHits = null; deepQuery = '';
+                render();
+            } else if (e.key === 'Enter') {
+                runDeepSearch();
+            }
+        });
+        el.querySelector('#cm-deep').addEventListener('click', runDeepSearch);
         el.querySelector('#cm-sel-all').addEventListener('click', () => {
-            chats.forEach(c => selected.add(c.name));
+            visibleChats().forEach(c => selected.add(c.name));
             render();
         });
         el.querySelector('#cm-sel-none').addEventListener('click', () => {
@@ -565,7 +725,7 @@ export default {
         el.querySelector('#cm-sel-older').addEventListener('change', e => {
             const days = parseInt(e.target.value, 10);
             if (days) {
-                chats.forEach(c => { if (daysOld(c.modified) > days) selected.add(c.name); });
+                visibleChats().forEach(c => { if (daysOld(c.modified) > days) selected.add(c.name); });
                 render();
             }
             e.target.value = '';
@@ -590,6 +750,10 @@ export default {
             const actBtn = e.target.closest('.cm-act');
             if (actBtn) {
                 doRowAction(actBtn.dataset.act, name);
+                return;
+            }
+            if (e.target.closest('.cm-open')) {
+                openChat(name);
                 return;
             }
             // Row / checkbox click toggles selection

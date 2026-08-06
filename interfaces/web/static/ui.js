@@ -592,7 +592,22 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     }
 
     // Build picker items — regular chats, then private
-    let itemsHtml = chats.map(c => `
+    // Cap the visible picker at 10 — the list arrives updated_at DESC, so
+    // the cap keeps the freshest. The active chat always survives the cut.
+    // Everything else lives one click away in Chat Manager (the "See more"
+    // item below). The hidden select above stays uncapped on purpose.
+    const MAX_PICKER = 10;
+    let regShow = chats.slice(0, MAX_PICKER);
+    let privShow = privateChats.slice(0, Math.max(0, MAX_PICKER - regShow.length));
+    if (activeChat && ![...regShow, ...privShow].some(c => c.name === activeChat)) {
+        const a = chats.find(c => c.name === activeChat);
+        const p = a ? null : privateChats.find(c => c.name === activeChat);
+        if (a) regShow = [...regShow.slice(0, MAX_PICKER - 1), a];
+        else if (p) privShow = [...privShow, p].slice(-Math.max(1, MAX_PICKER - regShow.length));
+    }
+    const hiddenCount = (chats.length + privateChats.length) - (regShow.length + privShow.length);
+
+    let itemsHtml = regShow.map(c => `
         <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
                 data-chat="${c.name}">
             <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
@@ -600,15 +615,25 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
         </button>
     `).join('');
 
-    if (privateChats.length > 0) {
+    if (privShow.length > 0) {
         itemsHtml += '<div class="chat-picker-divider"></div>';
-        itemsHtml += privateChats.map(c => `
+        itemsHtml += privShow.map(c => `
             <button class="chat-picker-item chat-picker-private ${c.name === activeChat ? 'active' : ''}"
                     data-chat="${c.name}">
                 <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
                 <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
             </button>
         `).join('');
+    }
+
+    if (hiddenCount > 0) {
+        // No data-chat: the chat-switch path ignores it; chat.js routes it
+        // to Chat Manager. Empty check span keeps the active-update loop safe.
+        itemsHtml += `<div class="chat-picker-divider"></div>
+            <button class="chat-picker-item chat-picker-more">
+                <span class="chat-picker-item-check"></span>
+                <span class="chat-picker-item-name">See more \u2014 ${hiddenCount} older chat${hiddenCount === 1 ? '' : 's'}\u2026</span>
+            </button>`;
     }
 
     // Update sidebar chat picker dropdown

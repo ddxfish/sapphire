@@ -896,7 +896,26 @@ def _claim(scope, what, kind='sort', chat=None):
         _state.update(running=True, scope=scope, what=what, kind=kind,
                       started=_now(), messages_done=0, messages_total=0,
                       last_message=None, chat=chat)
+    _ensure_session_chat(chat)
     return '', True
+
+
+def _ensure_session_chat(chat):
+    """Create + source-stamp the session chat up front (every pass funnels
+    through _claim, so this is the one gate). mode='librarian' rides the
+    same channel game chats use: the sidebar picker hides any non-chat
+    mode, Chat Manager tabs it, core stays agnostic. The executor's
+    chat_target path finds the chat already existing and reuses it.
+    Best-effort — a stamp failure never blocks a pass."""
+    if not chat:
+        return
+    try:
+        sm = _session_manager()
+        if not any(c["name"] == chat for c in sm.list_chat_files()):
+            sm.create_chat(chat)
+        sm.set_named_chat_settings(chat, {'mode': 'librarian'})
+    except Exception as e:
+        logger.debug(f"[LIBRARIAN] session chat stamp skipped: {e}")
 
 
 def _normalize_kind(kind):

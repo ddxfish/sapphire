@@ -96,6 +96,8 @@ export const importChat = (messages) => fetchWithTimeout('/api/history/import', 
 
 // Chat Manager (views/chat-manage.js)
 export const fetchChatListStats = () => fetchWithTimeout('/api/chats?stats=1', {}, 15000);
+export const searchChats = (q) => fetchWithTimeout(
+    '/api/chats/search?q=' + encodeURIComponent(q), {}, 15000);
 export const bulkDeleteChats = (names) => fetchWithTimeout('/api/chats/bulk-delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
