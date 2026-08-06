@@ -424,9 +424,9 @@ def test_blockers_derived_from_locked_exits(story):
 def test_declared_blockers_until_condition():
     room = {"id": 9, "title": "t", "template": "x", "exits": [],
             "blockers": [{"until": {"flags": {"chose_partner": True}},
-                          "text": "choose Jack or Cal"}]}
+                          "text": "choose a dance partner first"}]}
     state = st.initial_state()
-    assert referee.blockers(room, state) == ["choose Jack or Cal"]
+    assert referee.blockers(room, state) == ["choose a dance partner first"]
     state["flags"]["chose_partner"] = True
     assert referee.blockers(room, state) == []
 

@@ -30,10 +30,10 @@
     "tests/test_chat_lifecycle_hooks.py": "sha256:fe1e06a2f5c091b137a0aeac3de4837ee5ebc22b7817a5de3b9db4e50fa00781",
     "tests/test_save_paths.py": "sha256:c2a15440a0fb3f836988bbbea2d039c7189559f14cd7f39818e330abb07b4fce",
     "tests/test_seal_wait.py": "sha256:cffa5f7d6e6cc4ed68c7374ae8a76f6d86fd3d9bbb18f84ab1d6efe7c65cbb14",
-    "tests/test_story_engine.py": "sha256:ca0888f05d7a20cec16277846160ef94e27dadaca5f1b41d7a2eb202c64c7c6b",
+    "tests/test_story_engine.py": "sha256:83aaad1199e5f9de722dd3c4f38ca5da9eff9355bb586bd5e5c0a1e2cf6eb23f",
     "tests/test_story_lifecycle.py": "sha256:35cd5001ae0535704ac26df72f7886cd29a5f75d6eee1bf0ca8bff1aa1db9431",
     "tools/story_info.py": "sha256:100af6481eed63323bc23611b63418af96b7b9d94bae2b1ff701733b02053992",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "pxTcPtACm1u4tOIGhWfZV4Ye38NicagdW0H45MY6V3Agj5dqpH4vWhV82fEtWe7BaiXc3MpWKIGB773mzkJ9Dw=="
+  "signature": "Mw5lRM3g151I+KCTpTJ1+l3cOIwce2k+zRZuWN4Jbg1dHEKvSTEDtHfX8bwkkuIfCoPAu2WGpL+hs/YOEpVECw=="
 }

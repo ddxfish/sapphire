@@ -31,8 +31,8 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 | `title`, `description` | Yes | Library tile |
 | `start` | Yes | Room id the story opens in |
 | `premise` | No | Scenario text woven into her prompt |
-| `role` | No | `{"name": "Rose", "text": "…full persona…"}` — enables **story mode**: a total identity swap; the prompt dropdown shows the role's name |
-| `player_role` | No | Who the PLAYER is ("Jack") — shown on the tile |
+| `role` | No | `{"name": "Lucretia", "text": "…full persona…"}` — enables **story mode**: a total identity swap; the prompt dropdown shows the role's name |
+| `player_role` | No | Who the PLAYER is ("Giuseppe") — shown on the tile |
 | `dm_guide` | No | Per-story GM guidance (user-editable in ⚙ GM Settings; your text is the shipped default) |
 | `initial_flags` | No | `{"jack_hp": 10}` — starting stats, seeded as replayable events |
 | `tags`, `facts`, `tile` | No | Library tile metadata; `tile` is a filename in `backdrops/` |
@@ -41,7 +41,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 
 ```json
 {
-  "id": 1, "slug": "stern-rail", "title": "The Stern Rail at Dusk",
+  "id": 1, "slug": "promenade-rail", "title": "The Promenade Rail at Dusk",
   "template": "AI-side scene: rich, spoiler-bearing prose she narrates from.",
   "player_desc": "Player-side scene: short and spoiler-free.",
   "player_hints": [{"after_turns": 6, "text": "Shown behind a 💡 click."}],
@@ -65,8 +65,8 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 ## Objects
 
 ```json
-"sketchbook": {
-  "desc": "Jack's sketchbook, corners soft from salt air",
+"journal": {
+  "desc": "Giuseppe's journal, corners soft from salt air",
   "hidden": false,
   "gives": "sketchbook",
   "puzzle": {"riddle": "…", "solutions": ["map", "an atlas"],
@@ -74,7 +74,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
   "interactions": {
     "show": {
       "aliases": ["share", "open"],
-      "condition": {"flag": "met_rose"},
+      "condition": {"flag": "met_her"},
       "blocked_message": "Not yet.",
       "message": "What she says when it works.",
       "adjust": {"her_trust": 1},
