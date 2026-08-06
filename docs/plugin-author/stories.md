@@ -127,6 +127,8 @@ The rolled value is journaled at roll time — replay never re-rolls, revert kee
 
 The author leaves the reveal **blank**; the player types it mid-run in a popup; the AI discovers it verbatim when she performs the verb. The text never passes through her on the way in — the player surprises the storyteller.
 
+One trigger rule: the popup only ever raises because **she reached for the blank** — live (with a countdown) if the player is watching, as an urgent catch-up on their next visit if not. Nothing prompts at room entry; the ✍ chip in the scene strip is the player's volitional early-fill.
+
 - **Live moment**: if the player is in the story room when she performs the verb on an *unfilled* blank, her tool call waits — the popup raises instantly with a countdown (default 120s; per-seal `wait` or story-level `meta.seal_wait` override, clamped 5–600), and the player's words come back as the reveal in that very turn. The player can extend (+60s per click, 600s ceiling) or take the author's line.
 - Unfilled with nobody in the room, or the countdown expiring = the act **holds** (honest: she learns a surprise exists, never what). Her early attempt re-raises the player's popup with urgency.
 - `fallback` fires only on the player's explicit choice — omit it to make the blank mandatory.

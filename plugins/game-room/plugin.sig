@@ -6,7 +6,7 @@
     "app/index.js": "sha256:cef731f764c62924e26b164a76d810076e566291c1c40dd62b71043014f9c34f",
     "app/room.js": "sha256:d5895d6bb5bdc0329d6de87528e0eb200764f653be15734cd88d095579f9109b",
     "app/settings-modal.js": "sha256:39a70ec7b44dd9e1625034659808f2cacd38a96336f7ad5ec1e78190ddaf31f2",
-    "app/story-room.js": "sha256:ab58aaa7970d5c883ed5550e1d9cf957e4d0c0cefa90775faf21492c829e4175",
+    "app/story-room.js": "sha256:1c3c5b23a2228bba2230d48d3f96ff7aaf4cf02073ab1fd465b534888b3acf2a",
     "gameroom_core.py": "sha256:f30037d55037524c2f6c51ebce5f0f9ba1f8aca9e0aa0142f1e2b53e55496d8f",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/referee.py": "sha256:d2e5657aa03f1c3fffa47e384af8bb82283ca712d0933982d5cd80ed2024986f",
@@ -35,5 +35,5 @@
     "tools/story_info.py": "sha256:100af6481eed63323bc23611b63418af96b7b9d94bae2b1ff701733b02053992",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "Mw5lRM3g151I+KCTpTJ1+l3cOIwce2k+zRZuWN4Jbg1dHEKvSTEDtHfX8bwkkuIfCoPAu2WGpL+hs/YOEpVECw=="
+  "signature": "s36PsrihnaTA5QZ/u+vN0+xS0AbgCg5xK8S9niWax2z6ze5+52pr0U/3uHzCrAMAzpjF8/wO3D6f0nU8o5GFBw=="
 }

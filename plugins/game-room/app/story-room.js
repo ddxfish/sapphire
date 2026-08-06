@@ -886,6 +886,11 @@ function checkSeals(a) {
     for (const s of seals) {
         const heldBump = (s.held || 0) > (_sealHeld[s.key] || 0);
         if (s.revealed || s.filled || s.skipped) { _sealHeld[s.key] = s.held || 0; continue; }
+        // Single trigger (Krem 2026-08-06): a popup only ever raises because
+        // she reached for the blank — the live countdown when you're here,
+        // this urgent catch-up when you weren't. Entry never ambushes; the
+        // ✍ chip is the player's volitional early-fill.
+        if (!(s.held > 0)) { _sealHeld[s.key] = s.held || 0; continue; }
         if (_sealPrompted[s.key] && !heldBump) { _sealHeld[s.key] = s.held || 0; continue; }
         // busy: leave the bump UNconsumed so the next tick still sees it —
         // recording it here meant an urgent popup suppressed once (composer
@@ -893,7 +898,7 @@ function checkSeals(a) {
         if (busy) continue;
         _sealHeld[s.key] = s.held || 0;
         _sealPrompted[s.key] = true;
-        sealModal(s, heldBump);
+        sealModal(s, true);
         return;                                  // one popup at a time
     }
 }
