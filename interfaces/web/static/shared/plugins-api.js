@@ -84,11 +84,14 @@ const pluginsAPI = {
    * Install a plugin from GitHub URL or zip file.
    * Returns 409 with existing info if plugin exists and force=false.
    */
-  async installPlugin({ url, file, force = false }) {
+  async installPlugin({ url, file, force = false, expectedName = null }) {
     const form = new FormData();
     if (url) form.append('url', url);
     if (file) form.append('file', file);
     if (force) form.append('force', 'true');
+    // Update flows pass the plugin they think they're updating — the server
+    // 409s if the downloaded manifest names a different plugin (C4).
+    if (expectedName) form.append('expected_name', expectedName);
     const res = await fetch('/api/plugins/install', {
       method: 'POST',
       headers: csrfHeaders(),
@@ -114,6 +117,21 @@ const pluginsAPI = {
     if (!res.ok) {
       const e = await res.json().catch(() => ({}));
       throw new Error(e.detail || `Uninstall failed: ${res.status}`);
+    }
+    return res.json();
+  },
+
+  /**
+   * Swap a plugin back to the version retained by its last update.
+   */
+  async revertPlugin(name) {
+    const res = await fetch(`/api/plugins/${name}/revert`, {
+      method: 'POST',
+      headers: csrfHeaders(),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.detail || `Revert failed: ${res.status}`);
     }
     return res.json();
   },

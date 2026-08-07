@@ -182,28 +182,105 @@ def apply_pending_update():
 
     branch = data.get('branch') or 'main'
     from_version = data.get('from_version')
+    from_sha = data.get('from_sha')
+    target_sha = data.get('target_sha')
 
-    # Run pull. On Windows, timeouts can leave index.lock behind — clean up.
+    # Markers can be days old (crashed restart, manual boot much later). A
+    # stale marker fast-forwarding through releases nobody reviewed is worse
+    # than asking again — refuse and let the user re-run the check.
+    requested_at = data.get('requested_at') or 0
+    if requested_at and (time.time() - requested_at) > 86400:
+        _write_result(False, "Pending update expired (scheduled more than 24h ago). "
+                             "Kept previous version — run the update check again.")
+        _clear_pending()
+        return
+
+    # Slim re-preflight: the full check ran at schedule time, but the tree can
+    # change between then and this boot. A merge over local edits half-applies
+    # — the one outcome worse than not updating.
     try:
-        pull = _run_git(['pull', '--ff-only', 'origin', branch], timeout=180)
+        status = _run_git(['status', '--porcelain'], timeout=15)
+        if status.returncode == 0 and status.stdout.strip():
+            _write_result(False, "Working tree changed while the update was pending. "
+                                 "Kept previous version.")
+            _clear_pending()
+            return
+    except FileNotFoundError:
+        _write_result(False, "git is not installed. Update skipped.")
+        _clear_pending()
+        return
+    except Exception:
+        pass  # advisory probe — fetch/merge below still gate hard
+
+    # Fetch + ff-only merge to the EXACT SHA advertised at check time. A bare
+    # `git pull` lands whatever origin HEAD is at restart time — target_sha
+    # was written-but-never-read before the 2026-08-06 hunt (H5). No SHA in
+    # the marker (older format) → merge the fetched branch head instead.
+    try:
+        fetch = _run_git(['fetch', 'origin', branch], timeout=180)
     except subprocess.TimeoutExpired:
         _clear_index_lock()
-        _write_result(False, "git pull timed out after 180s. Kept previous version.")
+        _write_result(False, "git fetch timed out after 180s. Kept previous version.")
         _clear_pending()
         return
     except FileNotFoundError:
         _write_result(False, "git is not installed. Update skipped.")
         _clear_pending()
         return
+    if fetch.returncode != 0:
+        err = (fetch.stderr or '').strip() or (fetch.stdout or '').strip() or 'unknown error'
+        _write_result(False, f"git fetch failed: {err}. Kept previous version.")
+        _clear_pending()
+        return
 
-    if pull.returncode != 0:
-        err = (pull.stderr or '').strip() or (pull.stdout or '').strip() or 'unknown error'
-        _write_result(False, f"git pull failed: {err}")
+    merge_ref = target_sha or f'origin/{branch}'
+    try:
+        merge = _run_git(['merge', '--ff-only', merge_ref], timeout=120)
+    except subprocess.TimeoutExpired:
+        _clear_index_lock()
+        _write_result(False, "git merge timed out. Kept previous version.")
+        _clear_pending()
+        return
+    if merge.returncode != 0:
+        err = (merge.stderr or '').strip() or (merge.stdout or '').strip() or 'unknown error'
+        _write_result(False, f"Could not fast-forward to the advertised release: {err}. "
+                             "Kept previous version.")
         _clear_pending()
         return
 
     # Pip sync — new deps are a silent-brick risk if skipped.
     req_file = REPO_DIR / 'requirements.txt'
+
+    def _rollback_after_pip(reason):
+        """The merge landed but deps didn't — put the code back (C1). Without
+        this, new code + old deps died at import and systemd looped forever,
+        with the explanation in a file only the dead web UI rendered."""
+        if not from_sha:
+            _write_result(False, f"{reason} Code is updated but dependencies are not — "
+                                 "run pip install -r requirements.txt manually.")
+            return
+        try:
+            reset = _run_git(['reset', '--hard', from_sha], timeout=60)
+        except Exception:
+            reset = None
+        if reset is None or reset.returncode != 0:
+            _write_result(False, f"{reason} Automatic rollback ALSO failed — run "
+                                 f"`git reset --hard {from_sha}` then "
+                                 "pip install -r requirements.txt manually.")
+            return
+        # Old code restored. Best-effort re-sync in case pip half-upgraded
+        # packages before failing; the old env usually still satisfies it.
+        try:
+            subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '-r', str(req_file), '--quiet'],
+                cwd=str(REPO_DIR), capture_output=True, stdin=subprocess.DEVNULL,
+                timeout=120,
+            )
+        except Exception:
+            pass
+        _write_result(False, f"{reason} Rolled back to "
+                             f"{from_version or 'the previous version'} — old code intact and running.")
+
     if req_file.exists():
         try:
             pip_env = dict(os.environ)
@@ -221,17 +298,15 @@ def apply_pending_update():
             )
             if pip.returncode != 0:
                 err = (pip.stderr or '').strip() or (pip.stdout or '').strip() or 'unknown'
-                # Pull already landed, so the old code is gone. We surface the
-                # pip failure prominently; user may need to run pip manually.
-                _write_result(False, f"Code updated but pip install failed: {err}")
+                _rollback_after_pip(f"Update failed at dependency install: {err}.")
                 _clear_pending()
                 return
         except subprocess.TimeoutExpired:
-            _write_result(False, "pip install timed out after 300s. Dependencies may be stale.")
+            _rollback_after_pip("pip install timed out after 300s.")
             _clear_pending()
             return
         except Exception as e:
-            _write_result(False, f"pip install raised: {e}. Dependencies may be stale.")
+            _rollback_after_pip(f"pip install raised: {e}.")
             _clear_pending()
             return
 
@@ -569,12 +644,23 @@ class Updater:
             except Exception:
                 pass
 
+            # Pre-update SHA — the rollback anchor if pip fails after the
+            # merge lands (C1, 2026-08-06 hunt).
+            from_sha = None
+            try:
+                head = _run_git(['rev-parse', 'HEAD'], timeout=5)
+                if head.returncode == 0:
+                    from_sha = head.stdout.strip().lower()
+            except Exception:
+                pass
+
             try:
                 PENDING_UPDATE_FILE.parent.mkdir(parents=True, exist_ok=True)
                 tmp = PENDING_UPDATE_FILE.with_suffix('.json.tmp')
                 tmp.write_text(json.dumps({
                     'branch': self.branch,
                     'target_sha': target_sha,
+                    'from_sha': from_sha,
                     'requested_at': time.time(),
                     'from_version': self.current_version,
                     'to_version': self.latest_version,
@@ -587,6 +673,15 @@ class Updater:
                           "Restarting to apply.")
         finally:
             self._update_lock.release()
+
+    def cancel_pending_update(self):
+        """Clear a scheduled-but-not-applied update marker. Returns True if
+        one existed. (H4, 2026-08-06 hunt — a stranded marker used to lock
+        out updates forever with no recourse in the UI.)"""
+        if not PENDING_UPDATE_FILE.exists():
+            return False
+        _clear_pending()
+        return True
 
     # ─── Background checker ─────────────────────────────────────────────
 

@@ -37,6 +37,80 @@ STATIC_DIR = PROJECT_ROOT / "interfaces" / "web" / "static"
 _install_lock = threading.Lock()
 
 
+def _move_dir(src, dst):
+    """Directory move for the install swap: rename when possible, copy-move
+    when user/ spans filesystems (symlinked setups)."""
+    try:
+        os.rename(src, dst)
+    except OSError:
+        import shutil
+        shutil.move(str(src), str(dst))
+
+
+def _staging_signature_gate(staging_dir):
+    """(ok, message) — would this plugin tree be allowed to LOAD?
+
+    Mirrors the loader's gate (plugin_loader.py _load_plugin): failed
+    signature always blocks; unsigned blocks unless ALLOW_UNSIGNED_PLUGINS,
+    except managed mode which strict-validates the code instead. Run against
+    the staged replacement BEFORE the working copy is touched (C2, 2026-08-06
+    hunt) — the old flow deleted first and let rescan discover the corpse:
+    "Updated ✓" toast, plugin silently dark, old copy gone.
+    """
+    from core.plugin_verify import verify_plugin
+    verified, verify_msg, _meta = verify_plugin(staging_dir)
+    if verified:
+        return True, "verified"
+    if verify_msg != "unsigned":
+        return False, f"signature verification failed ({verify_msg})"
+    try:
+        allow_unsigned = bool(config.ALLOW_UNSIGNED_PLUGINS)
+    except Exception:
+        allow_unsigned = False
+    if allow_unsigned:
+        return True, "unsigned (sideloading enabled)"
+    from core.settings_manager import settings
+    if settings.is_managed():
+        from core.code_validator import validate_plugin_files
+        ok, err = validate_plugin_files(staging_dir, strictness='strict')
+        if ok:
+            return True, "unsigned but passed strict validation"
+        return False, f"failed code validation ({err})"
+    return False, ("unsigned and sideloading is disabled — the plugin would be "
+                   "blocked at load (sign it, or enable ALLOW_UNSIGNED_PLUGINS)")
+
+
+def _sync_toolset_after_change(action):
+    """Re-apply the active toolset + notify the frontend after a plugin
+    install/uninstall/revert. Active chat's extra_toolsets ride along — a
+    by-name-only re-apply strips them (extras-decay class, 2026-08-05).
+    Best-effort: files already changed; a sync hiccup shouldn't fail the call.
+    """
+    try:
+        system = get_system()
+        if not (system and system.llm_chat):
+            return
+        fm = system.llm_chat.function_manager
+        current = fm.current_toolset_name
+        if current:
+            extras = None
+            try:
+                extras = (system.llm_chat.session_manager.get_chat_settings()
+                          or {}).get('extra_toolsets') or None
+            except Exception:
+                pass
+            fm.update_enabled_functions([current], extra_toolsets=extras)
+        from core.event_bus import publish, Events
+        toolset_info = fm.get_current_toolset_info()
+        publish(Events.TOOLSET_CHANGED, {
+            "name": current or "custom",
+            "action": action,
+            "function_count": toolset_info.get("function_count", 0)
+        })
+    except Exception:
+        pass
+
+
 def _safe_emoji_icon(icon):
     """Sanitize a plugin manifest 'icon' field for safe rendering.
 
@@ -249,7 +323,7 @@ async def list_plugins(request: Request, _=Depends(require_login)):
 
     # Include backend plugins discovered by plugin_loader
     try:
-        from core.plugin_loader import plugin_loader
+        from core.plugin_loader import plugin_loader, PLUGIN_PREV_DIR
         for info in plugin_loader.get_all_plugin_info():
             if info["name"] not in seen:
                 manifest = info.get("manifest", {})
@@ -293,6 +367,8 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "missing_deps": info.get("missing_deps", []),
                     "essential": manifest.get("essential", False),
                     "env": info.get("env"),
+                    "has_prev": (info.get("band") == "user"
+                                 and (PLUGIN_PREV_DIR / info["name"] / "plugin.json").exists()),
                 })
     except Exception:
         pass
@@ -646,6 +722,7 @@ async def install_plugin(
     force: bool = Form(False),
     source: Optional[str] = Form(None),
     store_slug: Optional[str] = Form(None),
+    expected_name: Optional[str] = Form(None),
     _=Depends(require_login),
 ):
     """Install a plugin from GitHub URL or zip upload.
@@ -654,6 +731,10 @@ async def install_plugin(
     - source: free-form origin tag, e.g. "store"
     - store_slug: catalog slug for cross-reference on update checks
     Both are persisted to plugin_state when provided; absence is fine.
+
+    expected_name: update flows pass the plugin they think they're updating —
+    409 if the downloaded manifest names a different plugin (C4: a renamed
+    repo manifest used to install as a NEW plugin under the update toast).
     """
     from core.settings_manager import settings
     # Block zip uploads in managed mode (GitHub installs OK — signing gate handles security)
@@ -870,9 +951,17 @@ async def install_plugin(
         if total_size > MAX_EXTRACTED_SIZE:
             raise HTTPException(status_code=400, detail=f"Extracted content too large ({total_size // 1024 // 1024}MB, max 100MB)")
 
+        # ── C4: refuse a bait-and-switch manifest ──
+        if expected_name and name != expected_name:
+            raise HTTPException(status_code=409, detail=(
+                f"Repository now contains plugin '{name}' but this update targeted "
+                f"'{expected_name}'. Nothing was changed — reinstall deliberately "
+                "if the rename is intentional."))
+
         # ── Check for existing plugin (replace flow) ──
         # Lock prevents two concurrent installs from corrupting the same plugin
         with _install_lock:
+            from core.plugin_loader import PLUGIN_PREV_DIR, _rmtree_robust
             dest = USER_PLUGINS_DIR / name
             is_update = dest.exists()
             old_version = None
@@ -899,6 +988,25 @@ async def install_plugin(
                         "existing_author": old_author,
                     })
 
+            # ── C2: stage + verify BEFORE the working copy is touched ──
+            # Stage under user/ (same filesystem as user/plugins, outside the
+            # scanner's reach) so activation is a rename, then gate the staged
+            # tree exactly as the loader would at load time.
+            PLUGIN_PREV_DIR.mkdir(parents=True, exist_ok=True)
+            staging = PLUGIN_PREV_DIR / f".staging-{name}"
+            if staging.exists():
+                _rmtree_robust(staging)
+            shutil.copytree(plugin_root, staging, symlinks=False)
+
+            gate_ok, gate_msg = _staging_signature_gate(staging)
+            if not gate_ok:
+                _rmtree_robust(staging)
+                raise HTTPException(status_code=400, detail=(
+                    f"Refusing to {'update' if is_update else 'install'} {name}: {gate_msg}."
+                    + (" The existing version was left untouched." if is_update else "")))
+
+            prev = PLUGIN_PREV_DIR / name
+            if is_update:
                 # Unload before replacing
                 info = plugin_loader.get_plugin_info(name)
                 if info and info.get("loaded"):
@@ -908,14 +1016,21 @@ async def install_plugin(
                 with plugin_loader._lock:
                     plugin_loader._plugins.pop(name, None)
 
-                # Delete old plugin dir (state preserved separately).
-                # Uses the plugin_loader helper for Windows read-only tolerance.
-                from core.plugin_loader import _rmtree_robust
-                _rmtree_robust(dest)
-
-            # ── Install ──
-            USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(plugin_root, dest, symlinks=False)
+                # Swap: live → plugin_prev/<name> (one generation retained =
+                # per-plugin Revert), staging → live. The working copy is
+                # never deleted before its verified replacement is in place.
+                if prev.exists():
+                    _rmtree_robust(prev)
+                _move_dir(dest, prev)
+                try:
+                    _move_dir(staging, dest)
+                except Exception:
+                    _move_dir(prev, dest)  # restore the working copy
+                    raise
+            else:
+                # ── Install ──
+                USER_PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
+                _move_dir(staging, dest)
 
         # ── Write install metadata to plugin state ──
         from datetime import datetime
@@ -942,30 +1057,7 @@ async def install_plugin(
         plugin_loader.rescan()
 
         # ── Sync active toolset so new tools are immediately available ──
-        system = get_system()
-        if system and system.llm_chat:
-            fm = system.llm_chat.function_manager
-            current = fm.current_toolset_name
-            if current:
-                # Active chat's extra_toolsets ride along — a by-name-only
-                # re-apply strips them (extras-decay sites #7/#8, 2026-08-05).
-                extras = None
-                try:
-                    extras = (system.llm_chat.session_manager.get_chat_settings()
-                              or {}).get('extra_toolsets') or None
-                except Exception:
-                    pass
-                fm.update_enabled_functions([current], extra_toolsets=extras)
-            try:
-                from core.event_bus import publish, Events
-                toolset_info = fm.get_current_toolset_info()
-                publish(Events.TOOLSET_CHANGED, {
-                    "name": current or "custom",
-                    "action": "plugin_install",
-                    "function_count": toolset_info.get("function_count", 0)
-                })
-            except Exception:
-                pass
+        _sync_toolset_after_change("plugin_install")
 
         return {
             "status": "ok",
@@ -974,6 +1066,7 @@ async def install_plugin(
             "author": author,
             "is_update": is_update,
             "old_version": old_version,
+            "prev_kept": is_update,
         }
 
     except HTTPException:
@@ -1005,32 +1098,61 @@ async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
                             detail="Environment build in progress — wait for it to finish before uninstalling")
     try:
         plugin_loader.uninstall_plugin(plugin_name)
-        # Sync toolset and notify frontend
-        try:
-            system = get_system()
-            if system and system.llm_chat:
-                fm = system.llm_chat.function_manager
-                current = fm.current_toolset_name
-                if current:
-                    extras = None
-                    try:
-                        extras = (system.llm_chat.session_manager.get_chat_settings()
-                                  or {}).get('extra_toolsets') or None
-                    except Exception:
-                        pass
-                    fm.update_enabled_functions([current], extra_toolsets=extras)
-                from core.event_bus import publish, Events
-                toolset_info = fm.get_current_toolset_info()
-                publish(Events.TOOLSET_CHANGED, {
-                    "name": current or "custom",
-                    "action": "plugin_uninstall",
-                    "function_count": toolset_info.get("function_count", 0)
-                })
-        except Exception:
-            pass
+        _sync_toolset_after_change("plugin_uninstall")
         return {"status": "ok", "plugin": plugin_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/plugins/{plugin_name}/revert")
+async def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
+    """Swap a plugin back to the version retained by its last update.
+
+    Updates keep one generation in user/plugin_prev/<name> (C2, 2026-08-06
+    hunt). Revert swaps live and retained copies, so reverting again toggles
+    back — nothing is destroyed either way.
+    """
+    from core.plugin_loader import (plugin_loader, USER_PLUGINS_DIR,
+                                    PLUGIN_PREV_DIR, _rmtree_robust)
+    info = plugin_loader.get_plugin_info(plugin_name)
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_name}")
+    if info.get("band") != "user":
+        raise HTTPException(status_code=403, detail="Only user plugins can be reverted")
+    prev = PLUGIN_PREV_DIR / plugin_name
+    if not (prev / "plugin.json").exists():
+        raise HTTPException(status_code=404, detail="No previous version retained for this plugin")
+
+    dest = USER_PLUGINS_DIR / plugin_name
+    with _install_lock:
+        if info.get("loaded"):
+            plugin_loader.unload_plugin(plugin_name)
+        with plugin_loader._lock:
+            plugin_loader._plugins.pop(plugin_name, None)
+
+        if not dest.exists():
+            # Live copy missing (mangled by something outside us) — restore is
+            # a plain move, nothing to park.
+            _move_dir(prev, dest)
+        else:
+            parked = PLUGIN_PREV_DIR / f".reverting-{plugin_name}"
+            if parked.exists():
+                _rmtree_robust(parked)
+            _move_dir(dest, parked)
+            try:
+                _move_dir(prev, dest)
+            except Exception:
+                _move_dir(parked, dest)  # put the live copy back
+                raise HTTPException(status_code=500,
+                                    detail="Revert failed — current version restored")
+            _move_dir(parked, prev)  # live copy becomes the new retained one
+
+        plugin_loader.rescan()
+        _sync_toolset_after_change("plugin_revert")
+
+    new_info = plugin_loader.get_plugin_info(plugin_name)
+    version = (new_info or {}).get("manifest", {}).get("version")
+    return {"status": "ok", "plugin": plugin_name, "version": version}
 
 
 @router.get("/api/plugins/{plugin_name}/check-update")

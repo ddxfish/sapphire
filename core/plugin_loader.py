@@ -41,6 +41,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 SYSTEM_PLUGINS_DIR = PROJECT_ROOT / "plugins"
 USER_PLUGINS_DIR = PROJECT_ROOT / "user" / "plugins"
 PLUGIN_STATE_DIR = PROJECT_ROOT / "user" / "plugin_state"
+# Previous versions retained by plugin updates (one generation, = Revert).
+# MUST live outside user/plugins — the scanner registers any subdir with a
+# plugin.json under its manifest name, so a retained copy inside the scan
+# path would shadow-fight the live one. Same filesystem keeps swaps rename-fast.
+PLUGIN_PREV_DIR = PROJECT_ROOT / "user" / "plugin_prev"
 
 # Where enabled/disabled state is stored
 USER_PLUGINS_JSON = PROJECT_ROOT / "user" / "webui" / "plugins.json"
@@ -1238,6 +1243,12 @@ class PluginLoader:
         plugin_dir = info["path"] if info else USER_PLUGINS_DIR / name
         if plugin_dir.exists():
             _rmtree_robust(plugin_dir)
+
+        # Retained previous version (update-revert copy) goes too — a later
+        # revert must never resurrect an uninstalled plugin.
+        prev_dir = PLUGIN_PREV_DIR / name
+        if prev_dir.exists():
+            _rmtree_robust(prev_dir)
 
         # Delete settings
         settings_file = PROJECT_ROOT / "user" / "webui" / "plugins" / f"{name}.json"

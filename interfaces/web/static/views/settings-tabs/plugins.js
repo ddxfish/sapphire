@@ -303,7 +303,7 @@ async function _runPluginUpdate(btn, name, result, ctx) {
     btn.disabled = true;
     btn.textContent = 'Updating...';
     try {
-        const inst = await pluginsAPI.installPlugin({ url: result.source_url, force: true });
+        const inst = await pluginsAPI.installPlugin({ url: result.source_url, force: true, expectedName: name });
         if (inst?.conflict) throw new Error('plugin already exists (force not honored)');
         const newV = inst?.version || result.remote_version;
         ui.showToast(`Updated ${name}: v${inst?.old_version || '?'} → v${newV}`, 'success');
@@ -342,6 +342,11 @@ function _renderRow(p, locked) {
     if (isUser) {
         kebabItems.push(
             `<button class="pm-kebab-item plugin-update-btn" data-plugin="${_esc(p.name)}">Check for updates</button>`
+        );
+    }
+    if (isUser && p.has_prev) {
+        kebabItems.push(
+            `<button class="pm-kebab-item plugin-revert-btn" data-plugin="${_esc(p.name)}">Revert last update</button>`
         );
     }
     if (p.enabled && !locked) {
@@ -991,6 +996,37 @@ export default {
                 ui.showToast(`Uninstall failed: ${err.message}`, 'error', 5000);
                 btn.disabled = false;
                 btn.textContent = 'Uninstall';
+            }
+        });
+
+        // ── Revert last update (delegated) ──
+        el.addEventListener('click', async e => {
+            const btn = e.target.closest('.plugin-revert-btn');
+            if (!btn) return;
+            const name = btn.dataset.plugin;
+            const ctx = el._pluginCtx;
+
+            const confirmed = await showDangerConfirm({
+                title: `Revert ${name} to previous version`,
+                warnings: [
+                    'Swaps back to the copy retained by the last update',
+                    'The current version stays retained — revert again to toggle back',
+                ],
+                buttonLabel: 'Revert',
+            });
+            if (!confirmed) return;
+
+            btn.disabled = true;
+            btn.textContent = 'Reverting...';
+            try {
+                const r = await pluginsAPI.revertPlugin(name);
+                ui.showToast(`Reverted ${name} to v${r.version || '?'}`, 'success');
+                window.dispatchEvent(new CustomEvent('functions-changed'));
+                await ctx.refreshTab();
+            } catch (err) {
+                ui.showToast(`Revert failed: ${err.message}`, 'error', 5000);
+                btn.disabled = false;
+                btn.textContent = 'Revert last update';
             }
         });
 

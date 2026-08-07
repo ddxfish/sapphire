@@ -104,6 +104,166 @@ def test_install_without_force_returns_409_with_existing_meta(
     assert body.get('author') == 'new_author'
 
 
+# ─── Wave 2 (2026-08-06 hunt): staged install, expected_name, revert ─────────
+
+def _setup_dirs(temp_user_dir, monkeypatch):
+    import core.routes.plugins as rp
+    import core.plugin_loader as pl
+    plugins_dir = temp_user_dir / 'plugins'
+    prev_dir = temp_user_dir / 'plugin_prev'
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(rp, 'USER_PLUGINS_DIR', plugins_dir, raising=False)
+    monkeypatch.setattr(pl, 'USER_PLUGINS_DIR', plugins_dir)
+    monkeypatch.setattr(pl, 'PLUGIN_PREV_DIR', prev_dir)
+    return plugins_dir, prev_dir
+
+
+def _mock_loader(monkeypatch, name, loaded=True, version='1.0.0'):
+    import core.plugin_loader as pl
+    mock_pl = MagicMock()
+    mock_pl.get_plugin_info.return_value = _mock_info(name, loaded=loaded, version=version)
+    mock_pl._lock = threading.RLock()
+    mock_pl._plugins = {}
+    monkeypatch.setattr(pl, 'plugin_loader', mock_pl)
+    return mock_pl
+
+
+def _existing_plugin(plugins_dir, name='my_plugin', version='1.0.0'):
+    d = plugins_dir / name
+    d.mkdir(parents=True)
+    (d / 'plugin.json').write_text(json.dumps({
+        'name': name, 'version': version, 'author': 'orig_author', 'description': 'test',
+    }))
+    return d
+
+
+def _plugin_zip(name, version='2.0.0'):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as zf:
+        zf.writestr(f'{name}/plugin.json', json.dumps({
+            'name': name, 'version': version, 'author': 'new_author',
+            'description': 'replacement',
+        }))
+    buf.seek(0)
+    return buf
+
+
+def test_install_expected_name_mismatch_409_changes_nothing(
+    client, temp_user_dir, monkeypatch,
+):
+    """[C4] A repo that renamed its plugin.json name used to install as a NEW
+    plugin (or force-replace the wrong one) under an 'update' toast. With
+    expected_name the server refuses and nothing on disk moves."""
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    _mock_loader(monkeypatch, 'my_plugin')
+    buf = _plugin_zip('renamed_plugin')
+
+    c, csrf = client
+    r = c.post(
+        '/api/plugins/install',
+        headers={'X-CSRF-Token': csrf},
+        files={'file': ('renamed.zip', buf.getvalue(), 'application/zip')},
+        data={'force': 'true', 'expected_name': 'my_plugin'},
+    )
+    assert r.status_code == 409, r.text
+    assert 'renamed_plugin' in r.json()['detail']
+    assert (plugins_dir / 'my_plugin' / 'plugin.json').exists()
+    assert not (plugins_dir / 'renamed_plugin').exists()
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+
+
+def test_force_update_unsigned_refused_keeps_working_copy(
+    client, temp_user_dir, monkeypatch,
+):
+    """[C2] Old flow: rmtree the working plugin, copy the replacement, let
+    rescan discover the unsigned corpse — 'Updated ✓' toast, plugin dark, old
+    copy gone. New flow verifies in staging FIRST and refuses with the
+    working copy untouched."""
+    import config
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    _mock_loader(monkeypatch, 'my_plugin')
+    monkeypatch.setattr(config, 'ALLOW_UNSIGNED_PLUGINS', False, raising=False)
+    buf = _plugin_zip('my_plugin')
+
+    c, csrf = client
+    r = c.post(
+        '/api/plugins/install',
+        headers={'X-CSRF-Token': csrf},
+        files={'file': ('my_plugin.zip', buf.getvalue(), 'application/zip')},
+        data={'force': 'true'},
+    )
+    assert r.status_code == 400, r.text
+    assert 'untouched' in r.json()['detail']
+    # Working copy intact, no prev created, staging cleaned up
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+    assert not (prev_dir / 'my_plugin').exists()
+    assert not (prev_dir / '.staging-my_plugin').exists()
+
+
+def test_force_update_retains_previous_version(
+    client, temp_user_dir, monkeypatch,
+):
+    """[C2] A successful update keeps one generation in plugin_prev/<name>
+    (= per-plugin Revert) and reports prev_kept."""
+    import config
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    mock_pl = _mock_loader(monkeypatch, 'my_plugin')
+    monkeypatch.setattr(config, 'ALLOW_UNSIGNED_PLUGINS', True, raising=False)
+    buf = _plugin_zip('my_plugin')
+
+    c, csrf = client
+    r = c.post(
+        '/api/plugins/install',
+        headers={'X-CSRF-Token': csrf},
+        files={'file': ('my_plugin.zip', buf.getvalue(), 'application/zip')},
+        data={'force': 'true', 'expected_name': 'my_plugin'},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body['version'] == '2.0.0'
+    assert body['old_version'] == '1.0.0'
+    assert body['prev_kept'] is True
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '2.0.0'
+    assert json.loads((prev_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+    mock_pl.unload_plugin.assert_called_once_with('my_plugin')
+    mock_pl.rescan.assert_called()
+
+
+def test_revert_swaps_live_and_retained(client, temp_user_dir, monkeypatch):
+    """[C2 payoff] Revert swaps live ↔ retained, so reverting again toggles
+    back — nothing destroyed in either direction."""
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin', version='2.0.0')
+    (prev_dir / 'my_plugin').mkdir(parents=True)
+    (prev_dir / 'my_plugin' / 'plugin.json').write_text(json.dumps({
+        'name': 'my_plugin', 'version': '1.0.0', 'author': 'orig_author',
+        'description': 'test',
+    }))
+    mock_pl = _mock_loader(monkeypatch, 'my_plugin', loaded=False, version='1.0.0')
+
+    c, csrf = client
+    r = c.post('/api/plugins/my_plugin/revert', headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 200, r.text
+    assert r.json()['version'] == '1.0.0'
+    assert json.loads((plugins_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '1.0.0'
+    assert json.loads((prev_dir / 'my_plugin' / 'plugin.json').read_text())['version'] == '2.0.0'
+    mock_pl.rescan.assert_called()
+
+
+def test_revert_without_retained_copy_404(client, temp_user_dir, monkeypatch):
+    plugins_dir, prev_dir = _setup_dirs(temp_user_dir, monkeypatch)
+    _existing_plugin(plugins_dir, 'my_plugin')
+    _mock_loader(monkeypatch, 'my_plugin', loaded=False)
+
+    c, csrf = client
+    r = c.post('/api/plugins/my_plugin/revert', headers={'X-CSRF-Token': csrf})
+    assert r.status_code == 404
+    assert 'No previous version' in r.json()['detail']
+
+
 # ─── 1.33 Uninstall publishes TOOLSET_CHANGED with action=plugin_uninstall ───
 
 def test_uninstall_publishes_toolset_event_with_uninstall_action(

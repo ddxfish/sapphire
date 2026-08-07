@@ -703,6 +703,15 @@ async def do_update(request: Request, _=Depends(require_login)):
     if settings.is_docker() or settings.is_managed():
         raise HTTPException(status_code=403, detail="Use docker compose pull to update Docker installations")
 
+    # No restart callback = the marker would sit until some future manual
+    # restart, while the UI promises "Restarting to apply" — the stranded-
+    # marker hazard (H4). Refuse up front instead of scheduling a lie.
+    from core.api_fastapi import get_restart_callback
+    callback = get_restart_callback()
+    if not callback:
+        raise HTTPException(status_code=503,
+                            detail="Restart isn't available in this run mode — can't apply an update automatically")
+
     success, message = updater.do_update()
     if not success:
         raise HTTPException(status_code=400, detail=message)
@@ -711,18 +720,25 @@ async def do_update(request: Request, _=Depends(require_login)):
     # socket can be torn down mid-response and the client sees "update failed"
     # when it actually scheduled fine. Schedule restart on a short delay so
     # the response has time to flush.
-    from core.api_fastapi import get_restart_callback
-    callback = get_restart_callback()
-    if callback:
-        async def _delayed_restart():
-            await asyncio.sleep(0.5)
-            try:
-                callback()
-            except Exception:
-                pass
-        asyncio.create_task(_delayed_restart())
+    async def _delayed_restart():
+        await asyncio.sleep(0.5)
+        try:
+            callback()
+        except Exception:
+            pass
+    asyncio.create_task(_delayed_restart())
 
     return {"status": "scheduled", "message": message}
+
+
+@router.delete("/api/system/update")
+async def cancel_pending_update(request: Request, _=Depends(require_login)):
+    """Cancel a scheduled update that hasn't applied yet (H4 — a stranded
+    marker used to block all future updates with no recourse in the UI)."""
+    from core.updater import updater
+    if not updater.cancel_pending_update():
+        raise HTTPException(status_code=404, detail="No update is pending")
+    return {"status": "cancelled"}
 
 
 @router.get("/api/system/last-update-result")
