@@ -146,7 +146,8 @@ class Backup:
             self.rotate_backups()
         return f"Scheduled backup complete: {', '.join(results)}"
 
-    def create_backup(self, backup_type="manual", extra_patterns=None, dest_dir=None):
+    def create_backup(self, backup_type="manual", extra_patterns=None, dest_dir=None,
+                      require_complete=False):
         """Create a plain .tar.gz backup of the user/ directory.
 
         Writes to `<filename>.partial` first, atomic-renames to final name on
@@ -164,7 +165,14 @@ class Backup:
         Optional (offsite path; defaults reproduce the local behavior exactly):
           extra_patterns — extra exclude globs merged with the page settings.
           dest_dir       — write the tarball here instead of user_backups/.
+          require_complete — refuse instead of shipping a backup that had to
+            skip WAL-busy databases. Scheduled backups keep the partial-is-
+            better-than-none default; the pre-update backup passes True — an
+            "insurance" snapshot missing her chat/knowledge DBs isn't
+            insurance (2026-08-06 hunt, H6). Refusal reason lands in
+            self.last_backup_error for the caller's message.
         """
+        self.last_backup_error = None
         if not self.user_dir.exists():
             logger.error(f"User directory not found: {self.user_dir}")
             return None
@@ -183,6 +191,12 @@ class Backup:
             # torn state that won't restore cleanly. The next scheduled
             # backup will retry. Day-ruiner scout 2026-05-07 #K.
             failed_checkpoints = self._checkpoint_databases()
+            if require_complete and failed_checkpoints:
+                names = ', '.join(sorted(p.name for p in failed_checkpoints))
+                self.last_backup_error = (
+                    f"{len(failed_checkpoints)} database(s) busy mid-write: {names}")
+                logger.error(f"Backup refused (require_complete): {self.last_backup_error}")
+                return None
             # Exclusions = page patterns + any caller extras (offsite-only excludes).
             merged_patterns = _exclude_patterns_setting() + (extra_patterns or [])
             def _patterns_filter(tarinfo):

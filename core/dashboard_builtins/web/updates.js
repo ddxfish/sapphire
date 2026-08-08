@@ -52,8 +52,23 @@ export async function render(container, ctx) {
             // No successful check yet — "✓ current" here would be a guess.
             line1.innerHTML = `<span class="dash-pill">not checked yet</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· use Check now</span>`;
         } else {
-            line1.innerHTML = `<span class="dash-pill success">✓ current</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· ${_esc(_agoStr(updateStatus.last_check))}</span>`;
+            const branchNote = updateStatus.blocked_branch
+                ? ` · ${_esc(updateStatus.branch)} (manual pull only)` : '';
+            line1.innerHTML = `<span class="dash-pill success">✓ current</span> <strong>v${_esc(updateStatus.current)}</strong> <span class="dim">· ${_esc(_agoStr(updateStatus.last_check))}${branchNote}</span>`;
         }
+    }
+
+    // Why Force pull won't work right now, or null if it would. Rendered as
+    // an immediate toast instead of the old advertise-then-400 round trip.
+    function _pullBlockedReason() {
+        const s = updateStatus;
+        if (!s) return null;
+        if (s.docker) return 'Docker install — update with docker compose pull';
+        if (s.managed) return 'Managed install — updates are handled for you';
+        if (s.has_git === false) return 'Not a git install — download a release from GitHub';
+        if (s.is_fork) return 'Fork detected — pull from upstream manually';
+        if (s.blocked_branch) return `You're on '${s.branch}' — auto-update only runs on main. Pull manually.`;
+        return null;
     }
 
     async function check(force = false, retry = 0) {
@@ -118,6 +133,8 @@ export async function render(container, ctx) {
             {
                 icon: '⤴', label: 'Force pull (git)',
                 onClick: async () => {
+                    const blocked = _pullBlockedReason();
+                    if (blocked) { ctx.api.toast(blocked, 'warning', 6000); return; }
                     if (!confirm('Schedule an update? Sapphire will pre-flight the git state, take a backup, then restart to pull and install dependencies.')) return;
                     try {
                         const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';

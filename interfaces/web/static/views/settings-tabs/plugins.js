@@ -310,6 +310,9 @@ async function _runPluginUpdate(btn, name, result, ctx) {
         if (inst?.version && result.remote_version && inst.version !== result.remote_version) {
             ui.showToast(`Check advertised v${result.remote_version} but the download contained v${inst.version} — GitHub's CDN may still be syncing. Re-check in a few minutes.`, 'warning', 8000);
         }
+        // Tell main.js to drop the module-cache entry — without this the
+        // plugin's BROWSER script stays on the old version (H8).
+        document.dispatchEvent(new CustomEvent('sapphire:plugin_updated', { detail: { plugin: name } }));
         await ctx.refreshTab();
     } catch (err) {
         ui.showToast(`Update failed: ${err.message}`, 'error', 5000);
@@ -1022,6 +1025,7 @@ export default {
                 const r = await pluginsAPI.revertPlugin(name);
                 ui.showToast(`Reverted ${name} to v${r.version || '?'}`, 'success');
                 window.dispatchEvent(new CustomEvent('functions-changed'));
+                document.dispatchEvent(new CustomEvent('sapphire:plugin_updated', { detail: { plugin: name } }));
                 await ctx.refreshTab();
             } catch (err) {
                 ui.showToast(`Revert failed: ${err.message}`, 'error', 5000);

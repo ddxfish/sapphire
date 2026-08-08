@@ -678,9 +678,12 @@ async def check_for_update(request: Request, _=Depends(require_login)):
     Users who want a fresh check can call ?force=1 (or POST /api/system/update-check-now)."""
     from core.updater import updater
     from core.settings_manager import settings
+    import asyncio
     force = request.query_params.get('force') in ('1', 'true', 'yes')
     if force:
-        status = updater.check_for_update(force=True)
+        # Blocking GitHub round-trip — off the event loop, or one slow check
+        # freezes chat/voice WS for its duration (2026-08-06 hunt, C3).
+        status = await asyncio.to_thread(updater.check_for_update, True)
     else:
         updater.check_for_update_async()
         status = updater.status()
@@ -712,7 +715,9 @@ async def do_update(request: Request, _=Depends(require_login)):
         raise HTTPException(status_code=503,
                             detail="Restart isn't available in this run mode — can't apply an update automatically")
 
-    success, message = updater.do_update()
+    # Preflight (git fetch) + full user/ backup — seconds to tens of seconds
+    # of blocking work. Off the loop (C3).
+    success, message = await asyncio.to_thread(updater.do_update)
     if not success:
         raise HTTPException(status_code=400, detail=message)
 

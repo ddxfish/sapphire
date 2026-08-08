@@ -35,9 +35,11 @@ CHECK_INTERVAL = 86400  # 24 hours
 PENDING_UPDATE_FILE = REPO_DIR / 'user' / 'pending_update.json'
 UPDATE_RESULT_FILE = REPO_DIR / 'user' / 'last_update_result.json'
 
-# Branches that refuse the auto-update button. "dev" builds pull manually
-# because the UI shouldn't surface work-in-progress commits to users.
-_BLOCKED_BRANCHES = {'dev'}
+# Branches the auto-update button will pull. Allowlist, not blocklist —
+# the check compares against main's VERSION, so pulling any OTHER branch
+# would apply commits nobody advertised (2026-08-06 hunt, M5). Dev/feature
+# builds pull manually.
+_ALLOWED_BRANCHES = {'main'}
 
 # Minimum free disk for a safe update (backup + pull headroom).
 _MIN_FREE_MB = 200
@@ -497,7 +499,7 @@ class Updater:
             'last_check': self.last_check,
             'branch': self.branch,
             'is_fork': self.is_fork,
-            'blocked_branch': self.branch in _BLOCKED_BRANCHES,
+            'blocked_branch': self.branch not in _ALLOWED_BRANCHES,
             'pending_update': PENDING_UPDATE_FILE.exists(),
         }
 
@@ -516,9 +518,9 @@ class Updater:
             return False, "This install isn't a git repository. Download the latest release from GitHub."
         if self.is_fork:
             return False, "Fork detected — pull updates from upstream manually."
-        if self.branch in _BLOCKED_BRANCHES:
-            return False, (f"You're on the '{self.branch}' branch. Dev-like branches don't "
-                           "auto-update; use `git pull` manually when you're ready.")
+        if self.branch not in _ALLOWED_BRANCHES:
+            return False, (f"Auto-update only runs on 'main' (you're on '{self.branch}'). "
+                           "Use `git pull` manually when you're ready.")
 
         # Working-tree state: uncommitted changes + mid-operation markers
         try:
@@ -625,14 +627,18 @@ class Updater:
             if not ok:
                 return False, msg
 
-            # Backup must succeed — if we can't back up, we don't update.
+            # Backup must succeed COMPLETELY — a pre-update snapshot that had
+            # to skip WAL-busy databases isn't insurance (H6). If we can't
+            # capture everything, we don't update.
             try:
                 from core.backup import backup_manager
-                result = backup_manager.create_backup('pre_update')
+                result = backup_manager.create_backup('pre_update', require_complete=True)
             except Exception as e:
                 return False, f"Pre-update backup raised: {e}. Refusing to update."
             if not result:
-                return False, "Pre-update backup failed. Refusing to update."
+                why = getattr(backup_manager, 'last_backup_error', None)
+                detail = f" ({why} — try again in a moment)" if isinstance(why, str) and why else ""
+                return False, f"Pre-update backup failed{detail}. Refusing to update."
 
             # Resolve target SHA once more, right before writing the marker, so
             # the deferred pull lands on the exact commit we advertised.

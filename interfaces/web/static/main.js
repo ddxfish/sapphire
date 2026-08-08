@@ -694,6 +694,17 @@ function initEventBus() {
     });
     document.addEventListener('sapphire:plugin_toggled', () => { refreshInitData(); reloadPluginScripts(); });
 
+    // In-place plugin update/revert — the plugin stays enabled throughout, so
+    // the Map entry never drops and the OLD ES module survives until a hard
+    // refresh: Python new, JS stale (2026-08-06 hunt, H8). Force a fresh
+    // loadId so the cache-busted import picks up the new main.js.
+    document.addEventListener('sapphire:plugin_updated', (e) => {
+        const name = e.detail?.plugin;
+        if (name) _loadedPluginScripts.delete(name);
+        refreshInitData();
+        reloadPluginScripts();
+    });
+
     // Plugin load errors — sticky toast for missing deps, timed for other errors
     eventBus.on(eventBus.Events.PLUGIN_LOAD_ERROR, (data) => {
         const hint = data?.hint ? ` — ${data.hint}` : '';

@@ -715,7 +715,7 @@ async def reload_plugin(plugin_name: str, _=Depends(require_login)):
 
 
 @router.post("/api/plugins/install")
-async def install_plugin(
+def install_plugin(
     request: Request,
     url: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
@@ -726,6 +726,10 @@ async def install_plugin(
     _=Depends(require_login),
 ):
     """Install a plugin from GitHub URL or zip upload.
+
+    Plain `def` on purpose — download + extract + copy + rescan is seconds of
+    blocking work; FastAPI runs sync handlers in its threadpool so the event
+    loop (chat/voice WS) stays live (2026-08-06 hunt, C3).
 
     Optional store-provenance fields (used by the in-app Plugin Store):
     - source: free-form origin tag, e.g. "store"
@@ -854,7 +858,10 @@ async def install_plugin(
                         raise HTTPException(status_code=400, detail=f"Failed to download from GitLab (HTTP {r.status_code})")
                 else:
                     raise HTTPException(status_code=400, detail="Invalid URL format. Supported: github.com/<owner>/<repo>, gitlab.com/<path>/<repo>, or a direct https:// .zip URL")
-            content_length = int(r.headers.get("Content-Length", 0))
+            try:
+                content_length = int(r.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                content_length = 0  # garbage header — the streamed cap below still guards
             if content_length > MAX_ZIP_SIZE:
                 raise HTTPException(status_code=400, detail=f"Zip too large ({content_length // 1024 // 1024}MB, max 50MB)")
             fd, tmp_path = tempfile.mkstemp(suffix=".zip")
@@ -867,14 +874,23 @@ async def install_plugin(
                         raise HTTPException(status_code=400, detail="Zip exceeds 50MB limit")
                     f.write(chunk)
         else:
-            # File upload
+            # File upload — streamed in chunks with a running cap. The old
+            # `await file.read()` pulled the ENTIRE upload into one bytes
+            # object before the size check: a fat-fingered 4GB zip = OOM
+            # (2026-08-06 hunt, H9).
             fd, tmp_path = tempfile.mkstemp(suffix=".zip")
-            os.close(fd)
             tmp_zip = Path(tmp_path)
-            content = await file.read()
-            if len(content) > MAX_ZIP_SIZE:
-                raise HTTPException(status_code=400, detail=f"Zip too large ({len(content) // 1024 // 1024}MB, max 50MB)")
-            tmp_zip.write_bytes(content)
+            written = 0
+            with os.fdopen(fd, "wb") as out:
+                while True:
+                    chunk = file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_ZIP_SIZE:
+                        raise HTTPException(status_code=400,
+                                            detail="Zip too large (max 50MB)")
+                    out.write(chunk)
 
         # ── Extract ──
         if not zipfile.is_zipfile(tmp_zip):
@@ -1105,7 +1121,7 @@ async def uninstall_plugin_endpoint(plugin_name: str, _=Depends(require_login)):
 
 
 @router.post("/api/plugins/{plugin_name}/revert")
-async def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
+def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
     """Swap a plugin back to the version retained by its last update.
 
     Updates keep one generation in user/plugin_prev/<name> (C2, 2026-08-06
@@ -1156,8 +1172,11 @@ async def revert_plugin_update(plugin_name: str, _=Depends(require_login)):
 
 
 @router.get("/api/plugins/{plugin_name}/check-update")
-async def check_plugin_update(plugin_name: str, _=Depends(require_login)):
-    """Check if a newer version is available on GitHub or GitLab."""
+def check_plugin_update(plugin_name: str, _=Depends(require_login)):
+    """Check if a newer version is available on GitHub or GitLab.
+
+    Plain `def` — up to four sequential 10s network fetches; threadpool keeps
+    the event loop live (C3)."""
     import re
     from core.plugin_loader import plugin_loader
 
@@ -1277,7 +1296,7 @@ async def check_plugin_deps(plugin_name: str, _=Depends(require_login)):
 
 
 @router.post("/api/plugins/{plugin_name}/install-deps")
-async def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
+def install_plugin_deps(plugin_name: str, _=Depends(require_login)):
     """Install missing pip dependencies for a plugin.
 
     Only runs inside conda or venv — refuses on bare system Python.
