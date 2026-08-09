@@ -225,18 +225,18 @@
       "trim_color": "#ff4500"
     }
   },
-  "yuki": {
-    "name": "yuki",
-    "tagline": "It's not like I care or anything",
-    "avatar": "yuki.webp",
+  "marcus": {
+    "name": "marcus",
+    "tagline": "The waves decide",
+    "avatar": "marcus.webp",
     "avatar_full": null,
     "settings": {
-      "prompt": "yuki",
+      "prompt": "marcus",
       "toolset": "personality",
-      "spice_set": "companion",
-      "voice": "af_sky",
-      "pitch": 1.02,
-      "speed": 1,
+      "spice_set": "default",
+      "voice": "am_michael",
+      "pitch": 0.95,
+      "speed": 1.0,
       "spice_enabled": true,
       "spice_turns": 4,
       "inject_datetime": false,
@@ -247,7 +247,7 @@
       "goal_scope": "default",
       "knowledge_scope": "default",
       "people_scope": "default",
-      "trim_color": "#ff69b4"
+      "trim_color": "#2ec4b6"
     }
   },
   "eddie": {
@@ -277,7 +277,7 @@
   },
   "agent": {
     "name": "agent",
-    "tagline": "Background worker \u2014 lean, focused, no personality layer",
+    "tagline": "Background worker — lean, focused, no personality layer",
     "avatar": null,
     "avatar_full": null,
     "settings": {

@@ -136,7 +136,6 @@ class StreamingChat:
         _brain_token = None   # A1: declared before the try so the finally is always safe
 
         try:
-            self.main_chat.refresh_spice_if_needed()
             self.cancel_flag = False
             self.tts_stopped = False
             self.current_stream = None
@@ -179,6 +178,12 @@ class StreamingChat:
                 except Exception as _e:
                     logger.warning(f"[A1] stream brain override failed for '{_tgt}': {_e}")
                     _brain_token = None
+            # Spice rail AFTER the A1 override install: before this, a phone
+            # turn's spice cadence read the OPERATOR'S chat settings and turn
+            # count (the ContextVar wasn't set yet) and could rewrite the
+            # global prompt from a foreign stream.
+            self.main_chat.refresh_spice_if_needed()
+
             # H4 follow-up 2026-04-22: was `_is_streaming = True` (single bool).
             # Two concurrent streams on same chat had the first finisher set
             # False while the second was still running → append_messages_to_chat

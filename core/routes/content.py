@@ -156,12 +156,21 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     edit path (user wins the merge)."""
     data = await request.json()
     value = data.get('value', '')
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Component value must be a string")
     reason = (data.get('reason') or '').strip() or None
-    user_components = prompts.prompt_manager._components
-    if comp_type not in user_components:
-        user_components[comp_type] = {}
-    user_components[comp_type][key] = value
-    prompts.prompt_manager.save_components(reason=reason)
+    # Mutate + save under the manager lock (watcher-reload rebind race), and
+    # surface a refused save instead of toasting success over a dead write.
+    with prompts.prompt_manager._lock:
+        user_components = prompts.prompt_manager._components
+        if comp_type not in user_components:
+            user_components[comp_type] = {}
+        user_components[comp_type][key] = value
+        saved = prompts.prompt_manager.save_components(reason=reason)
+    if not saved:
+        raise HTTPException(status_code=500,
+                            detail="Save refused — the prompt store failed to load "
+                                   "earlier. Fix user/prompts/prompt_pieces.json and reload.")
     publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
     if reason:
         # Reason-only delivery — see save_prompt: no diff means no saver
@@ -183,9 +192,14 @@ async def delete_prompt_component(comp_type: str, key: str, request: Request,
     Optional ?reason= lands in the prompt ledger."""
     user_components = prompts.prompt_manager._components
     if comp_type in user_components and key in user_components[comp_type]:
-        del user_components[comp_type][key]
-        prompts.prompt_manager.save_components(
-            reason=(reason or '').strip() or None)
+        with prompts.prompt_manager._lock:
+            del user_components[comp_type][key]
+            saved = prompts.prompt_manager.save_components(
+                reason=(reason or '').strip() or None)
+        if not saved:
+            raise HTTPException(status_code=500,
+                                detail="Delete not persisted — the prompt store failed to "
+                                       "load earlier. Fix user/prompts/prompt_pieces.json and reload.")
         publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
         return {"status": "success", "components": prompts.prompt_manager.components}
     from core import prompt_packs
@@ -956,6 +970,12 @@ async def _import_persona_from_bundle(data):
                     if not isinstance(defs, dict):
                         continue
                     for key, value in defs.items():
+                        if not isinstance(value, str):
+                            # Card bundles are third-party data — a non-string
+                            # piece persisted here detonates the renderer later.
+                            logger.warning(f"[IMPORT] Skipping non-string piece "
+                                           f"{comp_type}/{key} from card")
+                            continue
                         if (comp_type, key) in _keep:
                             continue  # user unchecked this piece — keep local value
                         existing_piece = prompt_manager.components.get(comp_type, {}).get(key)

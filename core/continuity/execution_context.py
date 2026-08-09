@@ -99,12 +99,16 @@ class ExecutionContext:
         self.tool_engine = tool_engine
         self.task_settings = task_settings
 
-        # Resolve everything upfront — all read-only operations
+        # Resolve everything upfront — all read-only operations.
+        # Provider BEFORE scopes: _build_scopes stamps tool provenance
+        # (set_tool_context) with the RESOLVED provider/model — the old
+        # order left provider always-None and model stale in every
+        # continuity run's mindpalace metadata.
         self.system_prompt = self._build_prompt()
         self.tools = self._resolve_tools()
         self._allowed_tool_names = {t["function"]["name"] for t in self.tools if "function" in t} if self.tools else None
-        self.scopes = self._build_scopes()
         self.provider_key, self.provider, self.model_override = self._resolve_provider()
+        self.scopes = self._build_scopes()
         self.gen_params = self._build_gen_params()
         self.tool_log = []  # List of tool names called during run()
         # Populated by run() when the LLM loop didn't produce a real reply

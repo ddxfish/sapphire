@@ -122,13 +122,34 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
                 logger.warning(msg)
                 return False, msg
 
-        # Proceed with save
+        # Shape guards — a persisted content:null once took the whole UI
+        # down (/api/init 500 on len(None)); non-string/dict shapes detonate
+        # in the renderer later. Reject at the write door.
+        if prompt_type == 'monolith' and not isinstance(data.get('content'), str):
+            return False, "Prompt content must be a string"
+        if prompt_type == 'assembled':
+            comps = data.get('components')
+            if not isinstance(comps, dict):
+                return False, "Assembled prompt requires a components dict"
+            bad = [k for k, v in comps.items() if not isinstance(v, (str, list))]
+            if bad:
+                return False, f"Component values must be strings or lists (bad: {', '.join(bad)})"
+
+        # Mutate + save inside the manager lock: unlocked mutation raced the
+        # file watcher's reload() dict REBIND — the write landed in an
+        # abandoned dict and the save persisted the reloaded one (silent
+        # loss with a success response). Savers propagate refusal (the
+        # load-failed latch) instead of returning None.
         if prompt_type == 'monolith':
-            prompt_manager._monoliths[name] = {
-                'content': data['content'],
-                'privacy_required': data.get('privacy_required', False)
-            }
-            prompt_manager.save_monoliths(reason=reason, audit=audit)
+            with prompt_manager._lock:
+                prompt_manager._monoliths[name] = {
+                    'content': data['content'],
+                    'privacy_required': data.get('privacy_required', False)
+                }
+                saved = prompt_manager.save_monoliths(reason=reason, audit=audit)
+            if not saved:
+                return False, ("Save refused — the prompt store failed to load earlier. "
+                               "Fix user/prompts/prompt_monoliths.json and reload.")
             logger.info(f"Saved monolith '{name}'")
             return True, f"Saved monolith '{name}'"
 
@@ -136,11 +157,15 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
             components = data['components'].copy()
             # Store privacy_required at top level of preset
             components['_privacy_required'] = data.get('privacy_required', False)
-            prompt_manager._scenario_presets[name] = components
-            prompt_manager.save_scenario_presets(reason=reason, audit=audit)
+            with prompt_manager._lock:
+                prompt_manager._scenario_presets[name] = components
+                saved = prompt_manager.save_scenario_presets(reason=reason, audit=audit)
+            if not saved:
+                return False, ("Save refused — the prompt store failed to load earlier. "
+                               "Fix user/prompts/prompt_pieces.json and reload.")
             logger.info(f"Saved assembled prompt '{name}'")
             return True, f"Saved assembled '{name}'"
-        
+
         else:
             msg = f"Unknown prompt type: {prompt_type}"
             logger.error(msg)
@@ -181,15 +206,17 @@ def delete_prompt(name: str, reason: str = None) -> bool:
         # rule). Deleting a user entry that shadows a pack prompt makes the
         # pack version show through again — intended.
         if name in prompt_manager._monoliths:
-            del prompt_manager._monoliths[name]
-            prompt_manager.save_monoliths(reason=reason)
+            with prompt_manager._lock:
+                del prompt_manager._monoliths[name]
+                prompt_manager.save_monoliths(reason=reason)
             logger.info(f"Deleted monolith '{name}'")
             deleted = True
 
         # Delete from scenario_presets if present
         if name in prompt_manager._scenario_presets:
-            del prompt_manager._scenario_presets[name]
-            prompt_manager.save_scenario_presets(reason=reason)
+            with prompt_manager._lock:
+                del prompt_manager._scenario_presets[name]
+                prompt_manager.save_scenario_presets(reason=reason)
             logger.info(f"Deleted assembled prompt '{name}'")
             deleted = True
 
@@ -286,8 +313,13 @@ def revalidate_active(system=None, reason: str = "") -> bool:
     """
     try:
         if system is None:
-            from core.api_fastapi import get_system
-            system = get_system()
+            # get_system RAISES (503) before the system is up — quiet no-op,
+            # not an error: a file save during the boot window is normal.
+            try:
+                from core.api_fastapi import get_system
+                system = get_system()
+            except Exception:
+                return False
         if system is None or not getattr(system, 'llm_chat', None):
             return False
 

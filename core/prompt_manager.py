@@ -1,5 +1,6 @@
 import logging
 import json
+import os
 import shutil
 import threading
 import time
@@ -23,7 +24,10 @@ class PromptManager:
         self._spice_meta = {}
         self._disabled_categories = set()
         
-        self._lock = threading.Lock()
+        # RLock: mutation sites (prompt_crud, routes, meta tools) wrap
+        # "mutate private dict + call saver" in one critical section, and the
+        # saver acquires the same lock inside — a plain Lock would deadlock.
+        self._lock = threading.RLock()
         self._watcher_thread = None
         self._watcher_running = False
         self._last_mtimes = {}
@@ -56,15 +60,25 @@ class PromptManager:
     def _load_pieces(self):
         """Load prompt pieces from user/prompts/."""
         path = self.USER_DIR / "prompt_pieces.json"
-        
+
         if not path.exists():
-            logger.warning(f"prompt_pieces.json not found at {path} - using empty defaults")
+            # Missing file is a FAILURE, same as corrupt: without the flag,
+            # a file briefly absent (sync/rename in flight) wiped the dicts
+            # clean and the next save persisted an EMPTY library over the
+            # recreated file. bootstrap creates the files before this loads.
+            logger.error(f"prompt_pieces.json not found at {path} — refusing saves until it returns")
             self._components = {}
             self._scenario_presets = {}
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['pieces'] = True
             return
-        
+
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            # utf-8-sig: PowerShell's `-Encoding utf8` and old Notepad write
+            # a BOM; plain utf-8 rejects it and the store looks corrupt.
+            # No-op for BOM-less files.
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             self._components = data.get("components", {})
@@ -89,12 +103,15 @@ class PromptManager:
         path = self.USER_DIR / "prompt_monoliths.json"
 
         if not path.exists():
-            logger.warning(f"prompt_monoliths.json not found at {path} - using empty defaults")
+            logger.error(f"prompt_monoliths.json not found at {path} — refusing saves until it returns")
             self._monoliths = {}
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['monoliths'] = True
             return
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 raw_data = json.load(f)
 
             # Normalize format: support both old (string) and new (object) formats.
@@ -128,14 +145,17 @@ class PromptManager:
         path = self.USER_DIR / "prompt_spices.json"
 
         if not path.exists():
-            logger.warning(f"prompt_spices.json not found at {path} - using empty defaults")
+            logger.error(f"prompt_spices.json not found at {path} — refusing saves until it returns")
             self._spices = {}
             self._spice_meta = {}
             self._disabled_categories = set()
+            if not hasattr(self, '_load_failed'):
+                self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+            self._load_failed['spices'] = True
             return
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 raw_data = json.load(f)
 
             self._disabled_categories = set(raw_data.get('_disabled_categories', []))
@@ -169,6 +189,29 @@ class PromptManager:
             logger.error(f"Template replacement failed: {e}")
             return text
     
+    def _write_json_atomic(self, target_path, data, **dump_kwargs):
+        """fsync'd atomic JSON write + watcher-echo suppression.
+
+        fsync: without it a torn rename (OOM-kill, power loss) leaves a
+        0-byte store and the next boot runs the hardcoded fallback.
+        Echo suppression: record the mtime we wrote in _last_mtimes so the
+        file watcher doesn't treat our own save as an external edit and
+        reload 2.5s later — that echo sat behind a whole class of
+        lost-edit races (watcher rebind swallowing in-flight saves,
+        reverting pieces set between polls). The tmp file's mtime survives
+        the rename, so recording it BEFORE replace leaves zero window.
+        """
+        tmp_path = target_path.with_suffix('.tmp')
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, **dump_kwargs)
+            f.flush()
+            os.fsync(f.fileno())
+        mtime = tmp_path.stat().st_mtime
+        tmp_path.replace(target_path)
+        if not hasattr(self, '_last_mtimes'):
+            self._last_mtimes = {}
+        self._last_mtimes[str(target_path)] = mtime
+
     def reload(self, audit_reason='file reload'):
         """Reload all prompt data from disk. Diffs the reloaded state against
         the audit snapshot — an out-of-band edit (vim, factory reset, restored
@@ -291,8 +334,11 @@ class PromptManager:
 
         return "\n".join(p for p in parts if p and p.strip())
     
-    def save_scenario_presets(self, reason=None, audit=True):
-        """Save scenario presets to user/prompts/prompt_pieces.json"""
+    def save_scenario_presets(self, reason=None, audit=True) -> bool:
+        """Save scenario presets to user/prompts/prompt_pieces.json.
+        Returns False on refusal (load-failed latch) — callers surface it;
+        a silent None here meant every save after one bad load reported
+        success while writing nothing."""
         with self._lock:
             # Scenario presets live in prompt_pieces.json. If its load failed
             # we gate on the 'pieces' flag. Fix E2 2026-04-22.
@@ -302,12 +348,12 @@ class PromptManager:
                     "of prompt_pieces.json failed. Persisting would overwrite "
                     "a potentially recoverable disk file."
                 )
-                return
+                return False
             target_path = self.USER_DIR / "prompt_pieces.json"
 
             # Load existing data
             try:
-                with open(target_path, 'r', encoding='utf-8') as f:
+                with open(target_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
             except Exception:
                 data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
@@ -315,16 +361,14 @@ class PromptManager:
             # Update scenario_presets section
             data['scenario_presets'] = self._scenario_presets
 
-            # Save back
-            tmp_path = target_path.with_suffix('.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            tmp_path.replace(target_path)
+            self._write_json_atomic(target_path, data)
             logger.info(f"Saved scenario presets to {target_path}")
         self._audit_diff(('presets',), reason, audit)
+        return True
 
-    def save_monoliths(self, reason=None, audit=True):
-        """Save monoliths to user/prompts/prompt_monoliths.json"""
+    def save_monoliths(self, reason=None, audit=True) -> bool:
+        """Save monoliths to user/prompts/prompt_monoliths.json.
+        Returns False on refusal (load-failed latch)."""
         with self._lock:
             # 2026-04-22 fix E2 — refuse to save if the last load failed.
             # Pre-fix, a failed load left self._monoliths = {} and the next
@@ -339,12 +383,12 @@ class PromptManager:
                     "user/prompts/prompt_monoliths.json and call reload() "
                     "after the file is valid JSON again."
                 )
-                return
+                return False
             target_path = self.USER_DIR / "prompt_monoliths.json"
 
             # Load existing to preserve _comment
             try:
-                with open(target_path, 'r', encoding='utf-8') as f:
+                with open(target_path, 'r', encoding='utf-8-sig') as f:
                     old_data = json.load(f)
                 comment = old_data.get('_comment')
             except Exception:
@@ -362,13 +406,10 @@ class PromptManager:
                     # Shouldn't happen, but handle gracefully
                     data[name] = {'content': str(mono), 'privacy_required': False}
 
-            # Save
-            tmp_path = target_path.with_suffix('.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            tmp_path.replace(target_path)
+            self._write_json_atomic(target_path, data)
             logger.info(f"Saved monoliths to {target_path}")
         self._audit_diff(('monoliths',), reason, audit)
+        return True
 
     # ── Audit snapshots (prompt ledger, 2026-07-22) ──────────────────────────
     # The savers diff persisted state against these snapshots and emit one
@@ -426,8 +467,9 @@ class PromptManager:
         except Exception as e:
             logger.warning(f"[PROMPTS] audit diff skipped: {e}")
 
-    def save_components(self, reason=None, audit=True):
-        """Save components to user/prompts/prompt_pieces.json"""
+    def save_components(self, reason=None, audit=True) -> bool:
+        """Save components to user/prompts/prompt_pieces.json.
+        Returns False on refusal (load-failed latch)."""
         with self._lock:
             if getattr(self, '_load_failed', {}).get('pieces'):
                 logger.error(
@@ -436,12 +478,12 @@ class PromptManager:
                     "potentially recoverable disk file. Fix the JSON and "
                     "reload() before saving."
                 )
-                return
+                return False
             target_path = self.USER_DIR / "prompt_pieces.json"
 
             # Load existing data
             try:
-                with open(target_path, 'r', encoding='utf-8') as f:
+                with open(target_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
             except Exception:
                 data = {"_comment": "User prompt pieces", "components": {}, "scenario_presets": {}}
@@ -449,16 +491,14 @@ class PromptManager:
             # Update components section
             data['components'] = self._components
 
-            # Save back
-            tmp_path = target_path.with_suffix('.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
-            tmp_path.replace(target_path)
+            self._write_json_atomic(target_path, data)
             logger.info(f"Saved components to {target_path}")
         self._audit_diff(('components',), reason, audit)
+        return True
 
-    def save_spices(self):
-        """Save spices to user/prompts/prompt_spices.json"""
+    def save_spices(self) -> bool:
+        """Save spices to user/prompts/prompt_spices.json.
+        Returns False on refusal (load-failed latch)."""
         with self._lock:
             if getattr(self, '_load_failed', {}).get('spices'):
                 logger.error(
@@ -467,7 +507,7 @@ class PromptManager:
                     "potentially recoverable disk file. Fix the JSON and "
                     "reload() before saving."
                 )
-                return
+                return False
             target_path = self.USER_DIR / "prompt_spices.json"
 
             # Build data with metadata
@@ -478,11 +518,9 @@ class PromptManager:
                 data["_disabled_categories"] = sorted(list(self._disabled_categories))
             data.update(self._spices)
 
-            tmp_path = target_path.with_suffix('.tmp')
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            tmp_path.replace(target_path)
+            self._write_json_atomic(target_path, data, ensure_ascii=False)
             logger.info(f"Saved spices to {target_path}")
+        return True
     
     def is_category_enabled(self, category: str) -> bool:
         """Check if a spice category is enabled."""
@@ -553,19 +591,24 @@ class PromptManager:
     # === Merge / Reset ===
 
     def _backup_user_files(self, backup_dir=None):
-        """Backup user prompt files to timestamped directory. Returns backup path."""
+        """Backup user prompt files to timestamped directory. Returns backup path.
+        Holds _lock so a concurrent save can't swap a file mid-copy."""
         if backup_dir:
             dest = Path(backup_dir) / "prompts"
         else:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            dest = self.USER_DIR.parent.parent / "backups" / ts / "prompts"
+            # user/backups — NOT repo root. The old <root>/backups/ default
+            # wasn't gitignored, so a prompts reset dropped the user's
+            # private prompt library where `git add -A` would commit it.
+            dest = self.USER_DIR.parent / "backups" / ts / "prompts"
 
         dest.mkdir(parents=True, exist_ok=True)
 
-        for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
-            src = self.USER_DIR / fname
-            if src.exists():
-                shutil.copy2(src, dest / fname)
+        with self._lock:
+            for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
+                src = self.USER_DIR / fname
+                if src.exists():
+                    shutil.copy2(src, dest / fname)
 
         logger.info(f"Backed up prompt files to {dest}")
         return str(dest.parent)  # return the timestamped dir, not /prompts
@@ -573,12 +616,13 @@ class PromptManager:
     def reset_to_defaults(self):
         """Backup user prompts then overwrite with core defaults. Returns True on success."""
         try:
-            self._backup_user_files()
-            for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
-                src = self.CORE_DIR / fname
-                if src.exists():
-                    shutil.copy2(src, self.USER_DIR / fname)
-            self.reload(audit_reason='reset to factory defaults')
+            with self._lock:
+                self._backup_user_files()
+                for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
+                    src = self.CORE_DIR / fname
+                    if src.exists():
+                        shutil.copy2(src, self.USER_DIR / fname)
+                self.reload(audit_reason='reset to factory defaults')
             logger.info("Prompts reset to factory defaults")
             return True
         except Exception as e:
@@ -586,7 +630,14 @@ class PromptManager:
             return False
 
     def merge_defaults(self, backup_dir=None):
-        """Additive merge: add missing items from core defaults without touching existing ones."""
+        """Additive merge: add missing items from core defaults without touching existing ones.
+        Holds _lock for the whole merge — the mid-merge saves used to re-arm
+        the file watcher, whose reload rebound the dicts while later merge
+        phases were still writing into the abandoned ones."""
+        with self._lock:
+            return self._merge_defaults_locked(backup_dir)
+
+    def _merge_defaults_locked(self, backup_dir=None):
         try:
             backup_path = self._backup_user_files(backup_dir)
             added = {"components": 0, "presets": 0, "monoliths": 0, "spice_categories": 0}

@@ -27,33 +27,62 @@ def migrate_loose_prompt_files():
     into prompt_monoliths.json / prompt_pieces.json and are renamed
     .imported; a name collision keeps the store version and renames the
     file .duplicate (nothing loads either — rename is bookkeeping).
+
+    Armored (scout findings, same day): whole body try-wrapped — this runs
+    at import time ABOVE the boot try/except, so an exception here was a
+    no-boot with no log. Renames use replace() (Path.rename raises
+    FileExistsError on Windows when the target exists — re-dropping an
+    already-imported file bricked every subsequent boot). System-file guard
+    is case-insensitive AND prefix-based so backup copies like
+    prompt_pieces-backup.json can't be folded as garbage presets.
     """
+    try:
+        _migrate_loose_prompt_files_inner()
+    except Exception as e:
+        logger.error(f"Loose-prompt fold failed — skipped this boot: {e}")
+
+
+def _migrate_loose_prompt_files_inner():
     prompts_dir = USER_PROMPTS_DIR
     if not prompts_dir.exists():
         return
-    system_files = {"prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"}
+    system_stems = ("prompt_pieces", "prompt_monoliths", "prompt_spices")
 
-    loose = [p for p in prompts_dir.glob("*.json") if p.name not in system_files]
+    loose = [p for p in prompts_dir.glob("*.json")
+             if not p.name.lower().startswith(system_stems)]
     if not loose:
         return
 
     mono_path = prompts_dir / "prompt_monoliths.json"
     pieces_path = prompts_dir / "prompt_pieces.json"
     try:
-        monoliths = json.loads(mono_path.read_text(encoding='utf-8')) if mono_path.exists() else {}
-        pieces = json.loads(pieces_path.read_text(encoding='utf-8')) if pieces_path.exists() else {
+        monoliths = json.loads(mono_path.read_text(encoding='utf-8-sig')) if mono_path.exists() else {}
+        pieces = json.loads(pieces_path.read_text(encoding='utf-8-sig')) if pieces_path.exists() else {
             "components": {}, "scenario_presets": {}}
     except Exception as e:
         logger.error(f"Loose-prompt fold skipped — store files unreadable: {e}")
         return
+    if not isinstance(monoliths, dict) or not isinstance(pieces, dict) \
+            or not isinstance(pieces.get("scenario_presets", {}), dict):
+        logger.error("Loose-prompt fold skipped — store files have unexpected shape")
+        return
     presets = pieces.setdefault("scenario_presets", {})
+
+    def _preset_shaped(components):
+        """Preset components are {type: str-or-list}. A store-backup copy
+        (components = {type: {key: text}}) must NOT fold — its dict values
+        would poison every list-all-prompts route."""
+        return all(isinstance(v, (str, list)) for v in components.values())
 
     def _fold_one(name, entry):
         """Insert one legacy prompt into the right store. Returns True if inserted."""
+        if not isinstance(name, str) or not name or name.startswith('_'):
+            return False
         if name in monoliths or name in presets:
             return False
-        if isinstance(entry.get('components'), dict):
-            preset = {k: v for k, v in entry['components'].items() if not k.startswith('_')}
+        comps = entry.get('components')
+        if isinstance(comps, dict) and _preset_shaped(comps):
+            preset = {k: v for k, v in comps.items() if not k.startswith('_')}
             preset['_privacy_required'] = bool(entry.get('privacy_required', False))
             presets[name] = preset
         elif isinstance(entry.get('content'), str):
@@ -63,10 +92,16 @@ def migrate_loose_prompt_files():
             return False
         return True
 
+    def _set_aside(path, suffix):
+        # replace(), not rename(): rename raises on Windows if a previous
+        # run already left the target behind.
+        target = path.with_suffix(suffix)
+        path.replace(target)
+
     changed = False
     for path in loose:
         try:
-            data = json.loads(path.read_text(encoding='utf-8'))
+            data = json.loads(path.read_text(encoding='utf-8-sig'))
         except Exception as e:
             logger.warning(f"Loose prompt {path.name} unreadable — left in place: {e}")
             continue
@@ -84,10 +119,10 @@ def migrate_loose_prompt_files():
         folded = any([_fold_one(n, e) for n, e in entries.items()])
         if folded:
             changed = True
-            path.rename(path.with_suffix('.json.imported'))
+            _set_aside(path, '.json.imported')
             logger.info(f"Folded legacy prompt file {path.name} into store ({', '.join(entries)})")
         elif entries:
-            path.rename(path.with_suffix('.json.duplicate'))
+            _set_aside(path, '.json.duplicate')
             logger.warning(f"Legacy prompt file {path.name} collides with existing "
                            f"store names — kept store version, file set aside")
         else:
@@ -115,7 +150,7 @@ def migrate_misfiled_preset_pieces():
     if not path.exists():
         return
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
 
         comps = data.get("components", {})
@@ -165,7 +200,7 @@ def _migrate_prompt_pieces():
         return
 
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
 
         changed = False
@@ -203,7 +238,7 @@ def _migrate_user_prompts():
             continue
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
             changed = False
@@ -247,7 +282,7 @@ def migrate_stt_to_provider():
         return
 
     try:
-        with open(settings_path, 'r', encoding='utf-8') as f:
+        with open(settings_path, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
 
         stt = data.get('stt', {})
@@ -305,7 +340,7 @@ def migrate_tts_to_provider():
         return
 
     try:
-        with open(settings_path, 'r', encoding='utf-8') as f:
+        with open(settings_path, 'r', encoding='utf-8-sig') as f:
             data = json.load(f)
 
         tts = data.get('tts', {})

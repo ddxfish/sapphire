@@ -320,9 +320,18 @@ def assemble_prompt():
 
 
 def is_assembled_mode():
-    """Check if currently using piece-based assembly."""
+    """Check if currently using piece-based assembly.
+
+    'default' IS assembled mode — it's the sentinel for "current assembled
+    state", where delete-active / missing-prompt / pack-unregister handoffs
+    land. Before 2026-08-09 it fell through to monolith mode there: spice
+    never rotated again, expired transient pieces stuck in the live prompt,
+    and the piece tools were mode-filtered away while prompt_edit refused
+    with "use prompt_pieces" — a lockout with contradictory errors.
+    """
     preset = _assembled_state.get("active_preset", "default")
-    return preset == "assembled" or preset in prompt_manager.scenario_presets
+    return (preset in ("assembled", "default")
+            or preset in prompt_manager.scenario_presets)
 
 
 def get_prompt_mode() -> str:

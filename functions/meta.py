@@ -673,9 +673,14 @@ def _prompt_pieces(args):
         # Write the PRIVATE dict — `.components` is a merged COPY when plugin
         # prompt-packs are registered; mutating it is silently lost (same trap
         # as the web routes, see content.py). Shadowing a pack piece is the
-        # intended edit path (user wins the merge).
-        prompts.prompt_manager._components.setdefault(component, {})[key] = value
-        prompts.prompt_manager.save_components(reason=_reason(args))
+        # intended edit path (user wins the merge). Mutate+save under the
+        # manager lock; surface a refused save instead of claiming success.
+        with prompts.prompt_manager._lock:
+            prompts.prompt_manager._components.setdefault(component, {})[key] = value
+            saved = prompts.prompt_manager.save_components(reason=_reason(args))
+        if not saved:
+            return ("Save refused — the prompt store failed to load earlier "
+                    "(check user/prompts/prompt_pieces.json)."), False
         publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key})
         return (f"Created {component}/'{key}' in the library. Not active — "
                 f"prompt_pieces(action='set', component='{component}', key='{key}') to wear it."), True
@@ -703,8 +708,12 @@ def _prompt_pieces(args):
             owner = prompt_packs.piece_source(component, key)
             return (f"'{component}/{key}' is shipped by plugin '{owner or 'a plugin'}' — "
                     f"read-only. Disable the plugin to remove it.", False)
-        del user_comps[component][key]
-        prompts.prompt_manager.save_components(reason=_reason(args))
+        with prompts.prompt_manager._lock:
+            del user_comps[component][key]
+            saved = prompts.prompt_manager.save_components(reason=_reason(args))
+        if not saved:
+            return ("Delete not persisted — the prompt store failed to load earlier "
+                    "(check user/prompts/prompt_pieces.json)."), False
         publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key, "action": "deleted"})
         return f"Deleted {component}/{key} from the library.", True
 

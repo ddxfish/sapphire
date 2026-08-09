@@ -1119,10 +1119,19 @@ class LLMChat:
             try:
                 from core import prompts as _prompts
                 _pname = chat_settings.get('prompt')
-                _pdata = _prompts.get_prompt(_pname) if _pname else None
-                if isinstance(_pdata, dict):
-                    _priv_required = bool(_pdata.get('privacy_required', False))
+                if _pname:
+                    _pdata = _prompts.get_prompt(_pname)
+                    # Unresolvable name → the runtime falls back to the
+                    # assembled default (never privacy_required), so the
+                    # gate follows suit. Falling back to the GLOBAL active
+                    # prompt here re-created the wrong-chat read this gate
+                    # exists to prevent (false-blocked calls when the UI
+                    # chat wore a private prompt).
+                    _priv_required = bool(isinstance(_pdata, dict)
+                                          and _pdata.get('privacy_required', False))
                 else:
+                    # No prompt setting at all → this chat runs whatever is
+                    # globally active, so the global flag IS the right one.
                     _priv_required = _prompts.is_current_prompt_private()
                 if _priv_required and not chat_settings.get('private_chat', False):
                     raise ConnectionError(

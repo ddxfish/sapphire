@@ -29,6 +29,7 @@ user/sapphire-3d/*
 */prompts-backup/*
 user_backups/
 user_backups/*
+backups/
 user/
 user/*
 user/history/*

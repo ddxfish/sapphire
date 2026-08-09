@@ -21,7 +21,7 @@ Sapphire ships with 11 pre-made personas:
 | **Einstein** | George (M, British) | Curiosity is its own reward |
 | **Nexus** | Onyx (M) | The house that thinks |
 | **Cantos** | Fable (M, British) | Every word has weight |
-| **Yuki** | Sky (F) | It's not like I care... |
+| **Marcus** | Michael (M) | The waves decide |
 | **Eddie** | Puck (M) | Heart over horsepower |
 
 These are starting points. Edit them freely — your changes are saved separately from the defaults.
@@ -198,4 +198,4 @@ API:
 - PUT /api/personas/default — set default for new chats
 
 BUILT-IN PERSONAS:
-sapphire, cobalt, anita, claude, alfred, ada, einstein, nexus, cantos, yuki, eddie
+sapphire, cobalt, anita, claude, alfred, ada, einstein, nexus, cantos, marcus, eddie
