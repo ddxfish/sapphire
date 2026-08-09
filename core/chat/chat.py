@@ -417,7 +417,7 @@ class LLMChat:
                 prompt_template = _o["system_prompt"] or "System prompt not loaded."
         except Exception:
             pass
-        prompt = prompt_template.replace("{user_name}", username).replace("{ai_name}", ai_name)
+        prompt = prompt_template
 
         # Build context parts from chat settings
         context_parts = []
@@ -456,6 +456,11 @@ class LLMChat:
         if context_parts:
             prompt = f"{prompt}\n\n{chr(10).join(context_parts)}"
 
+        # Template replacement runs AFTER the appends so {user_name} in
+        # custom_context, spice, or plugin prompt_inject text renders too —
+        # replacing first left those reaching the model as literal braces.
+        prompt = prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
+
         return prompt, username, None
 
     def resolve_stream_brain(self, chat_name):
@@ -473,6 +478,12 @@ class LLMChat:
                 return None
             from core import prompts
             pdata = prompts.get_prompt(settings.get("prompt", "default"))
+            if not isinstance(pdata, dict):
+                # Missing name (deleted prompt, pack not yet re-registered):
+                # run on the assembled default this turn — same heals-later
+                # stance as _apply_chat_settings. Before this, streams on such
+                # chats ran with the literal text "System prompt not loaded."
+                pdata = prompts.get_prompt("default")
             system_prompt = (pdata.get("content", "") if isinstance(pdata, dict) else "") or ""
             tools = self._resolve_toolset_tools(settings.get("toolset", "all"),
                                                 settings.get("extra_toolsets"))
@@ -1096,7 +1107,33 @@ class LLMChat:
             chat_settings = self.session_manager.get_chat_settings()
             chat_primary = chat_settings.get('llm_primary', 'auto')
             chat_model = chat_settings.get('llm_model', '')  # Per-chat model override
-            
+
+            # Prompt-privacy gate — server-side, ALL doors. A prompt flagged
+            # privacy_required refuses to run unless this chat has private_chat
+            # on (which then forces a local provider below). Lives here because
+            # every turn path converges on provider selection: web streaming,
+            # /api/chat, voice/wakeword, phone target-chats. The old pre-flight
+            # in chat_stream() covered only the web door and read the GLOBAL
+            # active prompt (wrong chat for phone streams). get_chat_settings
+            # is stream-override aware, so this reads the TARGET chat.
+            try:
+                from core import prompts as _prompts
+                _pname = chat_settings.get('prompt')
+                _pdata = _prompts.get_prompt(_pname) if _pname else None
+                if isinstance(_pdata, dict):
+                    _priv_required = bool(_pdata.get('privacy_required', False))
+                else:
+                    _priv_required = _prompts.is_current_prompt_private()
+                if _priv_required and not chat_settings.get('private_chat', False):
+                    raise ConnectionError(
+                        "This prompt is marked private — toggle the eyeball "
+                        "(private chat) on this chat to use it.")
+            except ConnectionError:
+                raise
+            except Exception as e:
+                logger.error(f"Prompt-privacy check failed (defaulting to BLOCK): {e}")
+                raise ConnectionError("Prompt-privacy check encountered an error — blocking for safety. Check logs.")
+
             # Handle "none" - explicitly disabled
             if chat_primary == 'none':
                 raise ConnectionError("LLM disabled for this chat (llm_primary=none)")
@@ -1210,193 +1247,3 @@ class LLMChat:
     def get_active_chat(self) -> str:
         return self.session_manager.get_active_chat_name()
 
-    def isolated_chat(self, user_input: str, task_settings: Dict[str, Any] = None) -> str:
-        """
-        Run a chat in complete isolation - no session state changes.
-        Used for background continuity tasks that shouldn't affect UI.
-        
-        Args:
-            user_input: The user message
-            task_settings: Dict with prompt, toolset, provider, model, inject_datetime, memory_scope
-            
-        Returns:
-            The assistant's response text
-        """
-        import time
-        from datetime import datetime
-        
-        task_settings = task_settings or {}
-        logger.info(f"[ISOLATED] Starting isolated chat with settings: {list(task_settings.keys())}")
-        original_toolset = self.function_manager.current_toolset_name
-        # Capture the active chat's extras too — restoring by name only
-        # strips them from the enabled set (story-tools decay, 2026-08-03)
-        try:
-            original_extras = (self.session_manager.get_chat_settings() or {}).get('extra_toolsets') or None
-        except Exception:
-            original_extras = None
-
-        try:
-            # Build system prompt from task settings
-            prompt_name = task_settings.get("prompt", "sapphire")
-            from core import prompts
-            prompt_data = prompts.get_prompt(prompt_name)
-            if prompt_data:
-                system_prompt = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
-            else:
-                system_prompt = "You are a helpful assistant."
-            
-            # Apply name substitutions
-            username = getattr(config, 'DEFAULT_USERNAME', 'Human')
-            ai_name = 'Sapphire'
-            system_prompt = system_prompt.replace("{user_name}", username).replace("{ai_name}", ai_name)
-            
-            # Inject datetime if enabled (user's timezone)
-            if task_settings.get("inject_datetime"):
-                try:
-                    from zoneinfo import ZoneInfo
-                    tz_name = getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
-                    now = datetime.now(ZoneInfo(tz_name))
-                    tz_label = f" ({tz_name})"
-                except Exception:
-                    now = datetime.now()
-                    tz_label = ""
-                system_prompt = f"{system_prompt}\n\nCurrent date/time: {now.strftime('%A, %B %d, %Y at %I:%M %p')}{tz_label}"
-            
-            # Build messages - just system + user, no history for ephemeral
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input}
-            ]
-            
-            # Get tools if toolset specified
-            tools = None
-            toolset = task_settings.get("toolset")
-            if toolset and toolset not in ("none", ""):
-                # Temporarily set scopes for tool execution
-                # First reset all to defaults so stale chat state doesn't leak into tasks,
-                # then apply task-specific overrides on top
-                from core.chat.function_manager import reset_scopes
-                reset_scopes()
-                self.function_manager.apply_scopes(task_settings)
-                self.function_manager.set_rag_scope(None)
-                self.function_manager.set_private_chat(False)
-                self.function_manager.update_enabled_functions([toolset])
-                tools = self.function_manager.enabled_tools
-                _allowed_tool_names = {t["function"]["name"] for t in tools if "function" in t}
-                _scopes = self.function_manager.snapshot_scopes()
-                logger.info(f"[ISOLATED] Using toolset '{toolset}' with {len(tools)} tools")
-            else:
-                _scopes = None
-                _allowed_tool_names = None
-
-            # Select provider
-            provider_key = task_settings.get("provider", "auto")
-            model_override = task_settings.get("model", "")
-            
-            if provider_key and provider_key not in ("auto", ""):
-                providers_config = {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
-                provider = get_provider_by_key(provider_key, providers_config, config.LLM_REQUEST_TIMEOUT, model_override=model_override)
-                if not provider:
-                    raise ConnectionError(f"Provider '{provider_key}' not available")
-            else:
-                provider_key, provider, model_override = self._select_provider()
-            
-            effective_model = model_override if model_override else provider.model
-            gen_params = get_generation_params(
-                provider_key, 
-                effective_model, 
-                {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
-            )
-            if model_override:
-                gen_params['model'] = model_override
-            
-            logger.info(f"[ISOLATED] Using provider '{provider_key}', model '{effective_model}'")
-            
-            # Agentic tool loop — call LLM, execute tools, feed results back
-            max_iterations = task_settings.get("max_tool_rounds") or config.MAX_TOOL_ITERATIONS
-            max_parallel = task_settings.get("max_parallel_tools") or config.MAX_PARALLEL_TOOLS
-            context_limit = task_settings.get("context_limit") or getattr(config, 'CONTEXT_LIMIT', 0)
-
-            logger.info(f"[ISOLATED] Limits: max_iterations={max_iterations}, max_parallel={max_parallel}, context_limit={context_limit}")
-
-            final_content = None
-            response_msg = None
-            tool_call_count = 0
-            loop_counts = {}  # per-turn per-tool call counts (loop guard); turn-local by design
-
-            for i in range(max_iterations):
-                # Context limit check — bail if messages are getting too large
-                if context_limit > 0:
-                    total_tokens = sum(count_tokens(str(m.get("content", ""))) for m in messages)
-                    if total_tokens > context_limit * 0.9:  # 90% threshold
-                        logger.warning(f"[ISOLATED] Context limit approaching ({total_tokens}/{context_limit} tokens). Forcing final answer.")
-                        break
-
-                response_msg = self.tool_engine.call_llm_with_metrics(
-                    provider, messages, gen_params, tools=tools
-                )
-
-                if response_msg.has_tool_calls:
-                    filtered = filter_to_thinking_only(response_msg.content or "")
-                    tool_calls = response_msg.get_tool_calls_as_dicts()[:max_parallel]
-                    messages.append({
-                        "role": "assistant", "content": filtered,
-                        "tool_calls": tool_calls
-                    })
-                    tools_executed, tool_images = self.tool_engine.execute_tool_calls(
-                        tool_calls, messages, None, provider, scopes=_scopes,
-                        allowed_tools=_allowed_tool_names, loop_counts=loop_counts
-                    )
-                    tool_call_count += tools_executed
-                    if tool_images:
-                        _inject_tool_images(messages, tool_images)
-                    logger.info(f"[ISOLATED] Loop {i+1}: executed {tools_executed} tools (total: {tool_call_count})")
-                    continue
-
-                elif response_msg.content:
-                    fn_data = self.tool_engine.extract_function_call_from_text(response_msg.content)
-                    if fn_data:
-                        filtered = filter_to_thinking_only(response_msg.content)
-                        _, tool_images = self.tool_engine.execute_text_based_tool_call(
-                            fn_data, filtered, messages, None, provider, scopes=_scopes, loop_counts=loop_counts
-                        )
-                        if tool_images:
-                            _inject_tool_images(messages, tool_images)
-                        tool_call_count += 1
-                        logger.info(f"[ISOLATED] Loop {i+1}: text-based tool call (total: {tool_call_count})")
-                        continue
-
-                final_content = response_msg.content
-                break
-
-            # Hit max iterations without a prose response — force one
-            if final_content is None and tool_call_count > 0:
-                logger.warning(f"[ISOLATED] Max iterations ({max_iterations}) hit. Forcing final answer.")
-                messages.append({
-                    "role": "user",
-                    "content": "You've used tools multiple times. Stop using tools now and provide your final answer based on the information you gathered."
-                })
-                try:
-                    forced = self.tool_engine.call_llm_with_metrics(
-                        provider, messages, gen_params, tools=None
-                    )
-                    final_content = forced.content or f"I used {tool_call_count} tools and gathered information, but couldn't formulate a final answer."
-                except Exception as e:
-                    logger.error(f"[ISOLATED] Forced final response failed: {e}")
-                    final_content = f"I used {tool_call_count} tools but encountered technical difficulties."
-            elif final_content is None:
-                final_content = response_msg.content if response_msg else None
-
-            if final_content:
-                content = re.sub(r'<think>.*?</think>\s*', '', final_content, flags=re.DOTALL).strip()
-                logger.info(f"[ISOLATED] Done: {tool_call_count} tool calls, {len(content)} chars content")
-                return content if content else final_content
-            else:
-                logger.warning("[ISOLATED] Empty response from provider")
-                return "No response received."
-                
-        except Exception as e:
-            logger.error(f"[ISOLATED] Chat failed: {e}", exc_info=True)
-            return f"Error: {e}"
-        finally:
-            self.function_manager.update_enabled_functions([original_toolset], extra_toolsets=original_extras)

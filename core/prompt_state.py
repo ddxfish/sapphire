@@ -6,12 +6,6 @@ from .prompt_manager import prompt_manager
 
 logger = logging.getLogger(__name__)
 
-# Expose for backward compatibility
-PROMPT_COMPONENTS = prompt_manager.components
-SCENARIO_PRESETS = prompt_manager.scenario_presets
-MONOLITHS = prompt_manager.monoliths
-SPICE_POOL = prompt_manager.spices
-
 # Runtime state (not in JSON) — guarded by _state_lock for thread safety
 _state_lock = threading.Lock()
 _assembled_state = {
@@ -26,9 +20,6 @@ _assembled_state = {
     "spice": "",
     "active_preset": "default"
 }
-
-# User prompts cache (used by prompt_crud)
-_user_prompts = {}
 
 # Transient piece overlay — try-on pieces with a TTL. Shadows _assembled_state
 # during assembly but never mutates it or the preset files: expiry just deletes
@@ -120,35 +111,18 @@ def get_current_state():
     active_name = get_active_preset_name()
     if not active_name or active_name == 'unknown':
         return {}
-    
-    # Look up the prompt
-    prompt_data = None
-    
-    # Check user prompts
-    if active_name in _user_prompts:
-        prompt_data = _user_prompts[active_name]
-    # Check scenario presets
-    elif hasattr(prompt_manager, 'scenario_presets') and active_name in prompt_manager.scenario_presets:
-        prompt_data = {
-            'type': 'assembled',
-            'components': prompt_manager.scenario_presets[active_name]
-        }
-    # Check monoliths
-    elif hasattr(prompt_manager, 'monoliths') and active_name in prompt_manager.monoliths:
-        prompt_data = {'type': 'monolith'}
-    
-    if not prompt_data:
-        return {}
-    
-    if prompt_data.get('type') == 'assembled':
-        return prompt_data.get('components', {})
-    elif prompt_data.get('type') == 'monolith':
+
+    if active_name in prompt_manager.scenario_presets:
+        # Underscore keys (_privacy_required) are preset metadata, not
+        # components — don't ship them as phantom pieces in status payloads.
+        return {k: v for k, v in prompt_manager.scenario_presets[active_name].items()
+                if not k.startswith('_')}
+    if active_name in prompt_manager.monoliths:
         return {
             'character': 'monolith',
             'location': 'n/a',
             'goals': 'n/a'
         }
-    
     return {}
 
 
@@ -232,40 +206,23 @@ def get_current_prompt():
     return assemble_prompt()
 
 
-def generate_random_assembled():
-    """Generate random assembled prompt configuration."""
-    components = prompt_manager.components
-    location_choices = [k for k in components.get("location", {}).keys() if k != "default"]
-    scenario_choices = [k for k in components.get("scenario", {}).keys() if k != "default"]
-    
-    return {
-        "character": random.choice(list(components.get("character", {}).keys())),
-        "location": random.choice(location_choices) if location_choices else "default",
-        "relationship": random.choice(list(components.get("relationship", {}).keys())),
-        "format": random.choice(list(components.get("format", {}).keys())),
-        "goals": random.choice(list(components.get("goals", {}).keys())),
-        "scenario": random.choice(scenario_choices) if scenario_choices else "default",
-        "extras": random.sample(list(components.get("extras", {}).keys()), k=random.randint(0, 2)),
-        "emotions": random.sample(list(components.get("emotions", {}).keys()), k=random.randint(0, 2))
-    }
-
-
 def reset_to_defaults():
     """Reset to default assembled state."""
     global _assembled_state
-    _assembled_state = {
-        "character": "sapphire",
-        "location": "default",
-        "relationship": "friend",
-        "goals": "none",
-        "format": "conversational",
-        "scenario": "default",
-        "extras": [],
-        "emotions": [],
-        "spice": "",
-        "next_spice": "",
-        "active_preset": "default"
-    }
+    with _state_lock:
+        _assembled_state = {
+            "character": "sapphire",
+            "location": "default",
+            "relationship": "friend",
+            "goals": "none",
+            "format": "conversational",
+            "scenario": "default",
+            "extras": [],
+            "emotions": [],
+            "spice": "",
+            "next_spice": "",
+            "active_preset": "default"
+        }
     return "Reset to default state"
 
 
@@ -330,9 +287,19 @@ def get_next_spice():
 
 
 def assemble_prompt():
-    """Assemble prompt from pieces. Thread-safe via snapshot."""
-    components = prompt_manager.components
+    """Assemble the live prompt from current state + transient overlay.
 
+    Rendering itself lives in prompt_manager.assemble_from_components — the
+    single renderer shared with every CRUD/preview path. This function only
+    contributes the runtime pieces: the state snapshot (thread-safe), the
+    transient overlay, and template replacement for going live.
+
+    Spice DOES NOT go into the assembled system prompt. Pre-2026-05-08 this
+    appended `URGENT ALERT: {spice}`, which mutated the system prompt every
+    rotation and broke Claude's prompt cache. Spice rides the ghost-message
+    rail (core/ghost_messages.py) or, with SPICE_DELIVERY='system', is woven
+    in by _get_system_prompt — never here. The prompt stays cacheable.
+    """
     # Snapshot mutable state under lock to prevent iteration crash
     with _state_lock:
         state = {k: (list(v) if isinstance(v, list) else v) for k, v in _assembled_state.items()}
@@ -348,38 +315,7 @@ def assemble_prompt():
             elif entry[1] > now:
                 state[comp] = entry[0]
 
-    parts = [
-        components.get("character", {}).get(state["character"], ""),
-        f"You are currently {components.get('location', {}).get(state['location'], '')}.",
-        components.get("relationship", {}).get(state["relationship"], ""),
-        components.get("goals", {}).get(state["goals"], ""),
-        components.get("format", {}).get(state["format"], "")
-    ]
-
-    if state["scenario"] != "default":
-        scenario_text = components.get("scenario", {}).get(state["scenario"], "")
-        if scenario_text:
-            parts.append(scenario_text)
-
-    extras = components.get("extras", {})
-    for extra in state["extras"]:
-        if extra in extras:
-            parts.append(extras[extra])
-
-    emotions = components.get("emotions", {})
-    for emotion in state["emotions"]:
-        if emotion in emotions:
-            parts.append(emotions[emotion])
-    
-    # Spice DOES NOT go into the assembled system prompt anymore. Pre-2026-05-08
-    # this appended `URGENT ALERT: {spice}` here, which mutated the system
-    # prompt every spice rotation and broke Claude's prompt cache. Spice now
-    # rides on the ghost-message rail (core/ghost_messages.py) — same per-turn
-    # delivery, recency-amplified, cache-friendly. `_assembled_state["spice"]`
-    # still rotates here; `get_current_spice()` still surfaces it; ghost rail
-    # picks it up and labels it. The prompt itself stays cacheable.
-
-    assembled = "\n".join(filter(None, parts))
+    assembled = prompt_manager.assemble_from_components(state)
     return {"role": "system", "content": prompt_manager._replace_templates(assembled)}
 
 
@@ -394,132 +330,19 @@ def get_prompt_mode() -> str:
     return "assembled" if is_assembled_mode() else "monolith"
 
 
-def set_component(component_type, value):
-    """Set a component - only works in assembled mode."""
-    global _assembled_state
-
-    if not is_assembled_mode():
-        return f"Component changes only work in assembled mode. Current mode: {_assembled_state['active_preset']} (monolith)"
-
-    components = prompt_manager.components
-    if component_type not in components:
-        return f"Unknown component: {component_type}"
-
-    if component_type in ["extras", "emotions"]:
-        if value in components[component_type]:
-            with _state_lock:
-                if value not in _assembled_state[component_type]:
-                    _assembled_state[component_type].append(value)
-                    _assembled_state["active_preset"] = "assembled"
-                    return f"Added {component_type[:-1]}: {value}"
-            return f"{component_type[:-1].title()} '{value}' already active"
-        available = list(components[component_type].keys())
-        return f"Unknown {component_type[:-1]}: {value}. Available: {', '.join(available)}"
-
-    with _state_lock:
-        if value in components[component_type]:
-            _assembled_state[component_type] = value
-            _assembled_state["active_preset"] = "assembled"
-            return f"Set {component_type}: {value}"
-
-    available = list(components[component_type].keys())
-    return f"Unknown {component_type}: {value}. Available: {', '.join(available)}"
-
-
-def remove_extra(value):
-    """Remove an extra from assembled state."""
-    global _assembled_state
-    if not is_assembled_mode():
-        return f"Component changes only work in assembled mode"
-
-    with _state_lock:
-        if value in _assembled_state["extras"]:
-            _assembled_state["extras"].remove(value)
-            _assembled_state["active_preset"] = "assembled"
-            return f"Removed extra: {value}"
-    return f"Extra '{value}' not active"
-
-
-def remove_emotion(value):
-    """Remove an emotion from assembled state."""
-    global _assembled_state
-    if not is_assembled_mode():
-        return f"Component changes only work in assembled mode"
-
-    with _state_lock:
-        if value in _assembled_state["emotions"]:
-            _assembled_state["emotions"].remove(value)
-            _assembled_state["active_preset"] = "assembled"
-            return f"Removed emotion: {value}"
-    return f"Emotion '{value}' not active"
-
-
-def clear_extras():
-    """Clear all extras from assembled state."""
-    global _assembled_state
-    if not is_assembled_mode():
-        return f"Component changes only work in assembled mode"
-
-    with _state_lock:
-        count = len(_assembled_state["extras"])
-        _assembled_state["extras"] = []
-        _assembled_state["active_preset"] = "assembled"
-    return f"Cleared {count} extras"
-
-
-def clear_emotions():
-    """Clear all emotions from assembled state."""
-    global _assembled_state
-    if not is_assembled_mode():
-        return f"Component changes only work in assembled mode"
-    
-    count = len(_assembled_state["emotions"])
-    _assembled_state["emotions"] = []
-    _assembled_state["active_preset"] = "assembled"
-    return f"Cleared {count} emotions"
-
-
-def get_assembled_state():
-    """Get info about current prompt state."""
-    preset = _assembled_state.get("active_preset", "default")
-    
-    if preset in prompt_manager.monoliths:
-        return f"Current prompt: {preset} (monolith)\nUse 'system prompt status' to see full text"
-    
-    info = [f"Current prompt: {preset} (assembled from pieces)"]
-    for key, value in _assembled_state.items():
-        if key == "active_preset":
-            continue
-        if key in ["extras", "emotions"]:
-            info.append(f"  {key}: {', '.join(value) if value else 'none'}")
-        else:
-            info.append(f"  {key}: {value}")
-    return "\n".join(info)
-
-
 def apply_scenario(scenario_name):
     """Apply a scenario preset (piece-based)."""
     global _assembled_state
     if scenario_name not in prompt_manager.scenario_presets:
         return f"Unknown scenario: {scenario_name}"
-    
+
     scenario = prompt_manager.scenario_presets[scenario_name]
-    for component_type, value in scenario.items():
-        _assembled_state[component_type] = value.copy() if component_type in ["extras", "emotions"] else value
-    
-    _assembled_state["active_preset"] = scenario_name
+    with _state_lock:
+        for component_type, value in scenario.items():
+            # Underscore keys (_privacy_required) are preset metadata, not
+            # components — keep them out of runtime state.
+            if component_type.startswith('_'):
+                continue
+            _assembled_state[component_type] = value.copy() if component_type in ["extras", "emotions"] else value
+        _assembled_state["active_preset"] = scenario_name
     return f"Applied scenario: {scenario_name}"
-
-
-def apply_random_assembled():
-    """Apply a random assembled configuration."""
-    global _assembled_state
-    random_config = generate_random_assembled()
-    
-    for component_type, value in random_config.items():
-        _assembled_state[component_type] = value
-    
-    _assembled_state["active_preset"] = "random"
-    extras = ", ".join(_assembled_state["extras"]) if _assembled_state["extras"] else "none"
-    emotions = ", ".join(_assembled_state["emotions"]) if _assembled_state["emotions"] else "none"
-    return f"Random: {_assembled_state['character']} in {_assembled_state['location']}, {_assembled_state['goals']} goals, {_assembled_state['scenario']} scenario, extras: {extras}, emotions: {emotions}"

@@ -122,9 +122,16 @@ class ExecutionContext:
         from core import prompts
 
         prompt_data = prompts.get_prompt(prompt_name)
+        # Stashed for _build_scopes/_resolve_provider: a privacy_required
+        # prompt must not run on a non-local provider in this lane (there is
+        # no private_chat toggle here — local-only IS the guarantee).
+        self._prompt_privacy_required = bool(
+            isinstance(prompt_data, dict) and prompt_data.get('privacy_required'))
         if prompt_data:
             system_prompt = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
         else:
+            logger.warning(f"[ExecCtx] Prompt '{prompt_name}' not found — "
+                           f"running as generic assistant")
             system_prompt = "You are a helpful assistant."
 
         # Name substitutions
@@ -267,9 +274,12 @@ class ExecutionContext:
                     reg['var'].set(disabled_val)
                 except Exception as e:
                     logger.warning(f"[ExecCtx] Could not force-disable scope {name}: {e}")
-        # Also clear rag/private since tasks don't use those
+        # Also clear rag since tasks don't use it. private_chat follows the
+        # prompt: a privacy_required prompt keeps its network-tool gating even
+        # in this lane (the old unconditional False actively STRIPPED privacy
+        # from cron/heartbeat/agent runs).
         self.fm.set_rag_scope(None)
-        self.fm.set_private_chat(False)
+        self.fm.set_private_chat(getattr(self, '_prompt_privacy_required', False))
 
         # Provenance for tool executors (mindpalace metadata, get_self_info).
         # Set before the snapshot so it rides along. provider/model are the
@@ -304,8 +314,22 @@ class ExecutionContext:
             model_override = str(event.get("llm_model") or "").strip()
 
         providers_config = {**getattr(config, 'LLM_PROVIDERS', {}), **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
+        requires_privacy = getattr(self, '_prompt_privacy_required', False)
 
         if provider_key and provider_key not in ("auto", ""):
+            # Prompt-privacy gate: a privacy_required prompt never runs on a
+            # non-local provider in the continuity lane (cron/heartbeat/
+            # agents/daemons). Before 2026-08-09 this lane had NO privacy
+            # check at all — a private persona on a cloud-pinned task shipped
+            # its prompt straight out.
+            if requires_privacy:
+                from core.chat.llm_providers import PROVIDER_METADATA
+                pconf = providers_config.get(provider_key, {})
+                meta = PROVIDER_METADATA.get(provider_key, {})
+                if not pconf.get('is_local', meta.get('is_local', False)):
+                    raise ConnectionError(
+                        f"Prompt '{self.task_settings.get('prompt')}' requires privacy; "
+                        f"provider '{provider_key}' is not marked local — task refused.")
             provider = get_provider_by_key(
                 provider_key, providers_config,
                 config.LLM_REQUEST_TIMEOUT,
@@ -315,10 +339,12 @@ class ExecutionContext:
                 raise ConnectionError(f"Provider '{provider_key}' not available")
             return provider_key, provider, model_override
 
-        # Auto mode — fallback order
+        # Auto mode — fallback order (force_privacy filters to local providers
+        # when the prompt demands it)
         fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
         result = get_first_available_provider(
-            providers_config, fallback_order, config.LLM_REQUEST_TIMEOUT
+            providers_config, fallback_order, config.LLM_REQUEST_TIMEOUT,
+            force_privacy=requires_privacy
         )
         if result:
             pk, prov = result

@@ -127,16 +127,11 @@ class StreamingChat:
         )
         self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 
-        # Check if current prompt requires a private chat
-        try:
-            from core.prompt_state import is_current_prompt_private
-            if is_current_prompt_private():
-                chat_settings = self.main_chat.session_manager.get_chat_settings()
-                if not chat_settings.get('private_chat', False):
-                    yield {"type": "error", "text": "This prompt is marked private — toggle the eyeball (private chat) to use it."}
-                    return
-        except ImportError:
-            pass
+        # Prompt-privacy enforcement moved to _select_provider (2026-08-09) —
+        # one server-side gate covering ALL doors (web, /api/chat, voice,
+        # phone target-chats), target-chat aware. The old pre-flight here
+        # checked only this door, read the GLOBAL active prompt (wrong chat
+        # for phone streams), and silently self-disabled on ImportError.
 
         _brain_token = None   # A1: declared before the try so the finally is always safe
 
@@ -168,6 +163,11 @@ class StreamingChat:
                     if sess:
                         _pn = sess["settings"].get("prompt", "default")
                         _pd = _prompts.get_prompt(_pn)
+                        if not isinstance(_pd, dict):
+                            # Missing name — run on assembled default this turn
+                            # (heals when the prompt re-registers), never the
+                            # literal "System prompt not loaded."
+                            _pd = _prompts.get_prompt("default")
                         sess["system_prompt"] = (_pd.get("content", "") if isinstance(_pd, dict) else "") or ""
                         sess["tools"] = self.main_chat._resolve_toolset_tools(
                             sess["settings"].get("toolset", "all"),

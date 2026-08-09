@@ -1,83 +1,40 @@
 import logging
-import json
-from pathlib import Path
 from .prompt_manager import prompt_manager
 from . import prompt_state
 
 logger = logging.getLogger(__name__)
 
 
-def _get_prompts_dir():
-    """Get user prompts directory (same as prompt_manager uses)."""
-    return prompt_manager.USER_DIR
-
-
-def prompt_name_exists(name: str, exclude_type: str = None) -> tuple[bool, str]:
-    """
-    Check if prompt name exists in any storage.
-    
-    Args:
-        name: Prompt name to check
-        exclude_type: Optional type to exclude from check ('monolith' or 'assembled')
-    
-    Returns:
-        (exists: bool, existing_type: str or None)
-    """
-    # Check monoliths
-    if exclude_type != 'monolith':
-        if name in prompt_manager.monoliths:
-            return True, 'monolith'
-    
-    # Check scenario presets (assembled)
-    if exclude_type != 'assembled':
-        if name in prompt_manager.scenario_presets:
-            return True, 'assembled'
-    
-    # Check user prompts cache
-    if name in prompt_state._user_prompts:
-        user_type = prompt_state._user_prompts[name].get('type', 'unknown')
-        if exclude_type != user_type:
-            return True, user_type
-    
-    return False, None
-
-
 def list_prompts():
-    """List all available prompts (monoliths + scenario presets + user-created)."""
+    """List all available prompts (monoliths + scenario presets)."""
     all_prompts = []
-    
+
     # Get monolith prompts
     if prompt_manager.monoliths:
         all_prompts.extend(list(prompt_manager.monoliths.keys()))
-    
+
     # Get scenario presets (assembled prompts)
     if prompt_manager.scenario_presets:
         all_prompts.extend(list(prompt_manager.scenario_presets.keys()))
-    
-    # Get user-created prompts
-    all_prompts.extend(list(prompt_state._user_prompts.keys()))
-    
+
     # Remove duplicates and filter out internal keys
     all_prompts = [p for p in set(all_prompts) if not p.startswith('_')]
-    
+
     return sorted(all_prompts)
 
 
 def get_prompt(name: str):
-    """Get a prompt by name and return it with 'content' always present."""
-    # Check user prompts first
-    if name in prompt_state._user_prompts:
-        prompt_data = prompt_state._user_prompts[name]
-        if prompt_data.get('type') == 'assembled':
-            assembled_text = prompt_manager.assemble_from_components(prompt_data['components'])
-            return {
-                'name': name,
-                'type': 'assembled',
-                'components': prompt_data['components'],
-                'content': assembled_text
-            }
-        return prompt_data
-    
+    """Resolve a prompt name to {name, type, content, privacy_required, ...}.
+
+    THE single resolver — every consumer (activation, boot prime, stream
+    brains, continuity tasks, previews, char counts, exports) resolves
+    through here. Handles the 'default' sentinel that five consumers used
+    to each fumble their own way (stream brains ran with the literal text
+    "System prompt not loaded.", boot wore a hardcoded fallback all
+    session). Content is un-templated except for the sentinel (which
+    renders through the live assembler); live paths apply
+    _replace_templates / the chat-layer replace, which is idempotent.
+    """
     # Check monoliths
     if name in prompt_manager.monoliths:
         mono = prompt_manager.monoliths[name]
@@ -102,7 +59,23 @@ def get_prompt(name: str):
             'content': assembled_text,
             'privacy_required': privacy_required
         }
-    
+
+    if name == 'default':
+        # 'default' is the assembled-mode SENTINEL, not a stored name — it
+        # means "run the current assembled state". Resolving it here (instead
+        # of returning None) is what keeps stream brains, boot prime, and
+        # continuity tasks on the same text the main chat runs.
+        components = {k: (list(v) if isinstance(v, list) else v)
+                      for k, v in prompt_state._assembled_state.items()
+                      if k not in ('spice', 'next_spice', 'active_preset')}
+        return {
+            'name': 'default',
+            'type': 'assembled',
+            'components': components,
+            'content': prompt_state.assemble_prompt()['content'],
+            'privacy_required': False
+        }
+
     return None
 
 
@@ -114,7 +87,10 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
     Args:
         name: Prompt name
         data: Prompt data with 'type' and 'content'/'components'
-        allow_overwrite: If True, allows overwriting same-type prompts
+        allow_overwrite: False refuses to replace an existing same-type USER
+            prompt (pack prompts don't count — shadowing them is the intended
+            edit path). Accepted-but-ignored until 2026-08-09; persona import
+            passed it believing it worked and silently overwrote.
         reason: optional why — rides the prompt-ledger audit event
         audit: False when a higher-level event already describes this save
             (piece activations) — the audit snapshot still refreshes
@@ -124,20 +100,28 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
     """
     try:
         prompt_type = data.get('type', 'monolith')
-        
+
         # Check for name collision with opposite type
         if prompt_type == 'monolith':
             if name in prompt_manager.scenario_presets:
                 msg = f"Name '{name}' already exists as assembled prompt"
                 logger.warning(msg)
                 return False, msg
-        
+
         elif prompt_type == 'assembled':
             if name in prompt_manager.monoliths:
                 msg = f"Name '{name}' already exists as monolith prompt"
                 logger.warning(msg)
                 return False, msg
-        
+
+        if not allow_overwrite:
+            existing = (name in prompt_manager._monoliths if prompt_type == 'monolith'
+                        else name in prompt_manager._scenario_presets)
+            if existing:
+                msg = f"Prompt '{name}' already exists (overwrite not allowed)"
+                logger.warning(msg)
+                return False, msg
+
         # Proceed with save
         if prompt_type == 'monolith':
             prompt_manager._monoliths[name] = {
@@ -209,19 +193,6 @@ def delete_prompt(name: str, reason: str = None) -> bool:
             logger.info(f"Deleted assembled prompt '{name}'")
             deleted = True
 
-        # Delete from user_prompts cache if present
-        if name in prompt_state._user_prompts:
-            del prompt_state._user_prompts[name]
-            deleted = True
-
-        # Delete individual file if it exists (legacy support)
-        prompts_dir = _get_prompts_dir()
-        file_path = prompts_dir / f"{name}.json"
-        if file_path.exists():
-            file_path.unlink()
-            logger.info(f"Deleted prompt file '{name}.json'")
-            deleted = True
-
         # Hand off active state loudly if we just deleted the active prompt.
         if deleted and was_active:
             try:
@@ -231,6 +202,10 @@ def delete_prompt(name: str, reason: str = None) -> bool:
                     f"reset to 'default'. Chats still pointing at '{name}' "
                     f"will fall back to default on next activation."
                 )
+                # Re-render the live prompt too — before this, the running
+                # chat kept SPEAKING with the deleted prompt's text until the
+                # next activation (storage was updated, the brain wasn't).
+                revalidate_active(reason=f"deleted active prompt '{name}'")
                 try:
                     from core.event_bus import publish, Events
                     publish(Events.SETTINGS_CHANGED, {
@@ -263,43 +238,6 @@ def delete_prompt(name: str, reason: str = None) -> bool:
         return False
 
 
-def load_user_prompts():
-    """Load all user-created prompts from disk (legacy individual files)."""
-    prompt_state._user_prompts = {}
-    
-    # System JSON files to skip
-    SYSTEM_FILES = {
-        'prompt_monoliths.json', 
-        'prompt_pieces.json', 
-        'prompt_spices.json'
-    }
-    
-    try:
-        prompts_dir = _get_prompts_dir()
-        
-        for file_path in prompts_dir.glob('*.json'):
-            if file_path.name in SYSTEM_FILES:
-                continue
-                
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    name = data.get('name', file_path.stem)
-                    prompt_state._user_prompts[name] = data
-                    logger.info(f"Loaded user prompt: {name}")
-            except Exception as e:
-                logger.error(f"Failed to load prompt from {file_path}: {e}")
-    except Exception as e:
-        logger.error(f"Error loading user prompts: {e}")
-
-
-def reload():
-    """Reload all prompts from disk."""
-    load_user_prompts()
-    prompt_manager.reload()
-    logger.info("Prompts reloaded")
-
-
 def activate_prompt(name: str, system) -> tuple[bool, str]:
     """Activate a prompt: snapshot into the live chat, track the active
     preset, apply scenario pieces, persist to chat settings.
@@ -308,10 +246,27 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
     the meta tools (which previously duplicated this via loopback HTTP).
     Preserves the route's original operation order. set_active_preset_name
     publishes PROMPT_CHANGED for UI consumers.
+
+    Stream-aware: during a phone/driver stream (brain override installed for
+    a non-active chat) a prompt switch stamps THAT chat's settings only —
+    the global live prompt belongs to the UI's active chat and stays put.
+    Before this, a mid-call prompt_switch costumed the operator's web chat.
     """
     data = get_prompt(name)
     if not data:
         return False, f"Prompt '{name}' not found"
+
+    try:
+        from core.chat.stream_brain import get_override
+        _o = get_override()
+        stream_chat = _o.get('chat') if _o else None
+    except Exception:
+        stream_chat = None
+    if stream_chat and stream_chat != system.llm_chat.session_manager.get_active_chat_name():
+        # update_chat_settings routes to the effective (stream) chat.
+        system.llm_chat.session_manager.update_chat_settings({"prompt": name})
+        return True, f"Activated '{name}' for chat '{stream_chat}' (takes effect next turn)"
+
     content = data.get('content') if isinstance(data, dict) else str(data)
     system.llm_chat.set_system_prompt(content)
     prompt_state.set_active_preset_name(name)
@@ -319,3 +274,43 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
         prompt_state.apply_scenario(name)
     system.llm_chat.session_manager.update_chat_settings({"prompt": name})
     return True, f"Activated '{name}'"
+
+
+def revalidate_active(system=None, reason: str = "") -> bool:
+    """Re-render the ACTIVE prompt into the live chat after storage changed
+    underneath it: file-watcher reload, pack unregister, delete-active,
+    active-preset edit. One function closes the whole staleness class —
+    before it, an edit to the active assembled preset went live then was
+    silently REVERTED by the next spice rotation (apply_scenario was never
+    re-run, so _assembled_state kept the old pieces).
+    """
+    try:
+        if system is None:
+            from core.api_fastapi import get_system
+            system = get_system()
+        if system is None or not getattr(system, 'llm_chat', None):
+            return False
+
+        name = prompt_state.get_active_preset_name()
+        if not name or name == 'unknown':
+            return False
+
+        if name in prompt_manager.scenario_presets:
+            prompt_state.apply_scenario(name)
+
+        data = get_prompt(name)
+        if not isinstance(data, dict):
+            # Active name vanished from storage — loud handoff to default
+            # (same H3 discipline as delete_prompt).
+            logger.warning(f"[PROMPTS] Active prompt '{name}' no longer resolves — "
+                           f"re-rendering as assembled default")
+            prompt_state.set_active_preset_name('default')
+            data = get_prompt('default')
+
+        system.llm_chat.set_system_prompt((data or {}).get('content', '') or '')
+        logger.info(f"[PROMPTS] Revalidated active prompt '{name}'"
+                    + (f" — {reason}" if reason else ""))
+        return True
+    except Exception as e:
+        logger.warning(f"[PROMPTS] revalidate_active failed: {e}")
+        return False

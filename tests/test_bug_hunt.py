@@ -756,61 +756,11 @@ class TestUpdateChatSettingsPartialMerge:
 
 
 # =============================================================================
-# Tier 2: isolated_chat sets all 6 scope types
+# Tier 2: isolated_chat sets all 6 scope types — RETIRED 2026-08-09.
+# isolated_chat was deleted (zero production callers; continuity moved to
+# ExecutionContext, whose _build_scopes carries this invariant with the
+# stronger force-None closure — see TestExecutionContext scope tests).
 # =============================================================================
-
-class TestIsolatedChatSetsAllScopes:
-    """isolated_chat must apply all scope types from task_settings."""
-
-    def test_isolated_chat_sets_all_scopes(self):
-        """All scope setters must be called when isolated_chat has a toolset."""
-        from core.chat.chat import LLMChat
-        from core.chat.function_manager import FunctionManager
-
-        mock_fm = MagicMock(spec=FunctionManager)
-        mock_fm.current_toolset_name = "original"
-        mock_fm._tools_lock = threading.Lock()
-        mock_fm.enabled_tools = [{"function": {"name": "test_func"}}]
-        mock_fm.snapshot_scopes.return_value = {}
-
-        task_settings = {
-            "toolset": "test_tools",
-            "memory_scope": "shared",
-            "goal_scope": "work",
-            "knowledge_scope": "research",
-            "people_scope": "team",
-            "email_scope": "work_email",
-            "bitcoin_scope": "wallet_a",
-        }
-
-        with patch.object(LLMChat, '__init__', lambda self: None):
-            chat_obj = LLMChat()
-            chat_obj.function_manager = mock_fm
-            chat_obj.tool_engine = MagicMock()
-
-            mock_response = MagicMock()
-            mock_response.has_tool_calls = False
-            mock_response.content = "Response"
-            chat_obj.tool_engine.call_llm_with_metrics.return_value = mock_response
-            chat_obj.tool_engine.extract_function_call_from_text.return_value = None
-            chat_obj._use_new_config = False
-            chat_obj.provider_primary = MagicMock()
-            chat_obj.provider_primary.health_check.return_value = True
-            chat_obj.provider_primary.provider_name = "test"
-            chat_obj.provider_primary.model = "test-model"
-            chat_obj.provider_fallback = None
-
-            with patch('core.prompts.get_prompt', return_value={"content": "system prompt"}):
-                with patch('core.chat.chat.get_generation_params', return_value={}):
-                    chat_obj.isolated_chat("hello", task_settings)
-
-        # apply_scopes must have been called with the task settings
-        mock_fm.apply_scopes.assert_called_once_with(task_settings)
-
-        # Toolset must have been restored in finally block
-        mock_fm.update_enabled_functions.assert_called()
-        last_call = mock_fm.update_enabled_functions.call_args_list[-1]
-        assert last_call[0][0] == ["original"]
 
 
 # =============================================================================

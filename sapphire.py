@@ -132,6 +132,11 @@ class VoiceChatSystem:
                 if isinstance(_pd, dict):
                     self.llm_chat.set_system_prompt(_pd.get('content', '') or '')
                     _prompts.set_active_preset_name(_want)
+                    # Pack-shipped assembled presets need their pieces in
+                    # _assembled_state too — without this the first spice
+                    # rotation reassembled from boot defaults.
+                    if _want in _prompts.prompt_manager.scenario_presets:
+                        _prompts.apply_scenario(_want)
                     logger.info(f"Re-primed prompt '{_want}' after plugin scan (pack prompt)")
                 else:
                     # Never silent (Sapph-not-Rose bug, 2026-08-05): the chat

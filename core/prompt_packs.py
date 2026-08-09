@@ -81,6 +81,11 @@ def unregister_plugin(plugin_name):
                 f"[PROMPT-PACKS] Active prompt '{active}' came from disabled "
                 f"plugin '{plugin_name}' — active preset reset to 'default'."
             )
+            # Re-render the live prompt — without this the running chat kept
+            # speaking with the unregistered pack's text until the next
+            # activation (ghost-costume window).
+            from core.prompt_crud import revalidate_active
+            revalidate_active(reason=f"pack '{plugin_name}' unregistered")
     except Exception as e:
         logger.warning(f"[PROMPT-PACKS] active-preset handoff failed: {e}")
     _publish_changed()

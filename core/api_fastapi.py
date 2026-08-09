@@ -867,8 +867,13 @@ def reapply_if_active(system, domain: str, name: str):
             # 'blank' prompt) must hot-reload correctly when edited.
             # 2026-04-27 fix.
             if isinstance(data, dict):
-                content = data.get('content', '') or ''
-                system.llm_chat.set_system_prompt(content)
+                # Re-run apply_scenario for assembled presets — setting
+                # content alone left _assembled_state on the OLD pieces, and
+                # the next spice rotation reassembled from them, silently
+                # reverting the edit.
+                if name in prompts.prompt_manager.scenario_presets:
+                    prompts.apply_scenario(name)
+                system.llm_chat.set_system_prompt(data.get('content', '') or '')
                 publish(Events.PROMPT_CHANGED, {"name": name, "action": "reapplied"})
         elif domain == 'persona':
             # Persona is a bundle; rerun the full apply so prompt/toolset/

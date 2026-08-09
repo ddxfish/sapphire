@@ -180,6 +180,14 @@ class PromptManager:
             logger.info("Prompt data reloaded")
         self._audit_diff(('monoliths', 'presets', 'components'),
                          reason=audit_reason)
+        # A disk edit under the ACTIVE prompt must reach the running chat —
+        # before this, a vim edit to the active monolith stayed invisible
+        # until re-activation. No-op when the system isn't up yet.
+        try:
+            from .prompt_crud import revalidate_active
+            revalidate_active(reason=audit_reason)
+        except Exception as e:
+            logger.warning(f"[PROMPTS] post-reload revalidate skipped: {e}")
     
     def start_file_watcher(self):
         """Start background file watcher for user prompts."""
@@ -241,56 +249,47 @@ class PromptManager:
                 time.sleep(5)
     
     def assemble_from_components(self, components):
-        """Assemble prompt text from component structure."""
-        prompt_parts = []
+        """Render prompt text from a component-key dict. THE single renderer.
+
+        Until 2026-08-09 there were two: this one emitted labeled lines
+        ("Goals: ...") for the editor/CRUD paths while prompt_state's
+        assemble_prompt() emitted unlabeled prose for the runtime — so the
+        live prompt silently changed format at the first spice rotation
+        after every activation. Now prompt_state.assemble_prompt() delegates
+        here; previews, char counts, and the live prompt are byte-identical.
+        Format is the runtime's (the one chats actually marinated in):
+        prose parts, location as a sentence, scenario skipped when
+        'default', extras/emotions as their own parts, newline-joined.
+        No template replacement here — callers that go live apply
+        _replace_templates; export paths keep the placeholders."""
         # Merged view — pack pieces resolve here too (user wins collisions)
         comps = self.components
 
-        # Add character (main character description)
-        character_key = components.get('character', 'sapphire')
-        if 'character' in comps:
-            if character_key in comps['character']:
-                prompt_parts.append(comps['character'][character_key])
+        def _text(comp_type, key):
+            return comps.get(comp_type, {}).get(key, "") if key else ""
 
-        # Add structured components
-        components_text = []
+        parts = [_text('character', components.get('character', 'sapphire'))]
 
-        component_types = ['goals', 'location', 'relationship', 'format', 'scenario']
-        for comp_type in component_types:
-            key = components.get(comp_type)
-            if key and comp_type in comps:
-                if key in comps[comp_type]:
-                    value = comps[comp_type][key]
-                    if value and value.strip():
-                        components_text.append(f"{comp_type.capitalize()}: {value}")
+        location = _text('location', components.get('location'))
+        if location and location.strip():
+            parts.append(f"You are currently {location}.")
 
-        # Extras (multiple allowed)
-        extras = components.get('extras', [])
-        if extras:
-            extras_list = []
-            if 'extras' in comps:
-                for extra_key in extras:
-                    if extra_key in comps['extras']:
-                        extras_list.append(comps['extras'][extra_key])
-            if extras_list:
-                components_text.append(f"Extras: {', '.join(extras_list)}")
+        parts.append(_text('relationship', components.get('relationship')))
+        parts.append(_text('goals', components.get('goals')))
+        parts.append(_text('format', components.get('format')))
 
-        # Emotions (multiple allowed)
-        emotions = components.get('emotions', [])
-        if emotions:
-            emotions_list = []
-            if 'emotions' in comps:
-                for emotion_key in emotions:
-                    if emotion_key in comps['emotions']:
-                        emotions_list.append(comps['emotions'][emotion_key])
-            if emotions_list:
-                components_text.append(f"Emotions: {', '.join(emotions_list)}")
-        
-        # Combine all parts
-        if components_text:
-            prompt_parts.append("\n".join(components_text))
-        
-        return "\n\n".join(prompt_parts)
+        # The 'default' scenario is deliberately silent — matches what the
+        # runtime renderer always did.
+        scenario_key = components.get('scenario')
+        if scenario_key and scenario_key != 'default':
+            parts.append(_text('scenario', scenario_key))
+
+        for extra in components.get('extras', []) or []:
+            parts.append(_text('extras', extra))
+        for emotion in components.get('emotions', []) or []:
+            parts.append(_text('emotions', emotion))
+
+        return "\n".join(p for p in parts if p and p.strip())
     
     def save_scenario_presets(self, reason=None, audit=True):
         """Save scenario presets to user/prompts/prompt_pieces.json"""

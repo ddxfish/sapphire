@@ -1,3 +1,7 @@
+# 2.10.3 - Prompt refactor
+- Old prompt system yeeted for new one
+- Reduced code paths for prompt and privacy
+- Improved metrics per message in UI
 # 2.10.2 - Plugin UI
 - Made rows instead of tiles, added search filter
 # 2.10.1 - Chat manager

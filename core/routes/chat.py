@@ -894,14 +894,20 @@ async def bulk_export_chats(request: Request, _=Depends(require_login), system=D
     if not names or not isinstance(names, list):
         raise HTTPException(status_code=400, detail="names list required")
     sm = system.llm_chat.session_manager
-    chats, missing = {}, []
+    chats, missing, private_skipped = {}, [], []
     for name in names:
         d = sm.export_chat(str(name))
         if d is None:
             missing.append(str(name))
+        elif (d.get('settings') or {}).get('private_chat'):
+            # Fork 2A stance: nothing readable leaves the DB for private
+            # chats. Compress-backup already honors this; bulk export now
+            # does too. Single-chat export stays available as the explicit
+            # per-chat escape hatch.
+            private_skipped.append(str(name))
         else:
             chats[str(name)] = d
-    return {"chats": chats, "missing": missing}
+    return {"chats": chats, "missing": missing, "private_skipped": private_skipped}
 
 
 @router.post("/api/chats/bulk-export-zip")
@@ -923,6 +929,8 @@ async def bulk_export_chats_zip(request: Request, _=Depends(require_login), syst
             d = sm.export_chat(str(name))
             if d is None:
                 continue
+            if (d.get('settings') or {}).get('private_chat'):
+                continue  # Fork 2A: private chats don't ride bulk exports
             zf.writestr(f"{name}.json", json.dumps({"name": str(name), **d}, indent=2))
             exported += 1
     if not exported:
@@ -1171,6 +1179,26 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
             from core.settings_manager import settings as sm_settings
             if sm_settings.is_managed():
                 raise HTTPException(status_code=403, detail="Private chats are disabled in managed mode")
+
+        if 'private_chat' in new_settings and not new_settings.get('private_chat'):
+            # Turning the eyeball OFF while this chat's prompt demands privacy
+            # would let the next turn run the private prompt on a cloud
+            # provider. Switch prompts first, then disable private chat.
+            try:
+                from core import prompts as _prompts
+                _current = (system.llm_chat.session_manager.read_chat_settings(chat_name)
+                            or {})
+                _pname = new_settings.get('prompt', _current.get('prompt'))
+                _pdata = _prompts.get_prompt(_pname) if _pname else None
+                if isinstance(_pdata, dict) and _pdata.get('privacy_required'):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Prompt '{_pname}' requires private chat — switch "
+                               f"prompts before disabling private mode")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"privacy-required check on settings PUT skipped: {e}")
 
         if chat_name != session_manager.get_active_chat_name():
             # Non-active chats write straight to storage — same path the Twilio

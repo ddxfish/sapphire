@@ -412,11 +412,18 @@ def _save_and_activate_assembled(system) -> str:
         if _assembled_state.get(k):
             components[k] = list(_assembled_state[k])
 
+    # Carry the preset's privacy flag through the rebuild — omitting it
+    # defaulted privacy_required to False, so her wearing/removing any piece
+    # on a privacy-flagged preset silently stripped its privacy gate.
+    prev = prompts.get_prompt(preset_name)
+    privacy_required = bool(isinstance(prev, dict) and prev.get('privacy_required'))
+
     # audit=False: the caller's activation event already describes this
     # change ("piece X added to Y") — a preset-diff row would double-log it.
     # The audit snapshot still refreshes so nothing shows up as a phantom
     # change on the next diff.
-    ok, msg = prompts.save_prompt(preset_name, {"type": "assembled", "components": components},
+    ok, msg = prompts.save_prompt(preset_name, {"type": "assembled", "components": components,
+                                                "privacy_required": privacy_required},
                                   audit=False)
     if not ok:
         raise MetaError(f"Failed to save preset: {msg}")

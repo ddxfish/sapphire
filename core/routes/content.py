@@ -836,6 +836,14 @@ async def export_persona_card(name: str, request: Request, _=Depends(require_log
     prompt_name = settings.get("prompt", "")
     if prompt_name and prompt_name != "__story__":
         prompt_data = get_prompt(prompt_name)
+        if isinstance(prompt_data, dict) and prompt_data.get('privacy_required'):
+            # The card embeds the full prompt text — a privacy_required
+            # prompt exporting byte-complete into a shareable PNG defeats
+            # the flag entirely.
+            raise HTTPException(
+                status_code=403,
+                detail=f"Prompt '{prompt_name}' is marked privacy-required — "
+                       f"persona export is blocked to keep it local")
         if prompt_data:
             prompt_export = dict(prompt_data)
             for k in ("content", "compiled", "char_count", "token_count"):

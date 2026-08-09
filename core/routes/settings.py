@@ -68,18 +68,10 @@ async def get_system_prompt(request: Request, prompt_name: str = None, _=Depends
         return {"prompt": prompt_template, "source": "active_memory_template"}
 
 
-@router.post("/api/system/prompt")
-async def set_system_prompt(request: Request, _=Depends(require_login), system=Depends(get_system)):
-    """Set system prompt."""
-    data = await request.json()
-    new_prompt = data.get('new_prompt')
-    if not new_prompt:
-        raise HTTPException(status_code=400, detail="A 'new_prompt' key must be provided")
-    success = system.llm_chat.set_system_prompt(new_prompt)
-    if success:
-        return {"status": "success", "message": "System prompt updated."}
-    else:
-        raise HTTPException(status_code=500, detail="Error setting prompt")
+# POST /api/system/prompt (raw transient prompt setter) removed 2026-08-09:
+# no frontend or tool caller; it bypassed preset tracking, and in assembled
+# mode the next spice rotation silently clobbered the injected text anyway.
+# Use /api/prompts (save + activate) instead.
 
 
 # =============================================================================

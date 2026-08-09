@@ -173,8 +173,8 @@
       "goals": "welcome",
       "format": "conversational",
       "scenario": "default",
-      "extras": ["system_knowledge"],
-      "emotions": ["curious", "warm", "memory_use"]
+      "extras": ["system_knowledge", "memory_use"],
+      "emotions": ["curious", "warm"]
     },
     "cobalt": {
       "character": "cobalt",
