@@ -6,6 +6,7 @@ import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
 import { populateChatDropdown } from './features/chat-manager.js';
+import { hasPendingActivate } from './api.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
 import { refreshInitData } from './shared/init-data.js';
@@ -396,12 +397,10 @@ async function init() {
 
         setHistLen(historyLen);
 
-        // Populate chat dropdown + picker (before router so chat.show() has real chat name)
-        if (status?.chats) {
-            ui.renderChatDropdown(status.chats, status.active_chat);
-        } else {
-            try { await populateChatDropdown(); } catch (e) { console.warn('[Init] Chat dropdown failed:', e); }
-        }
+        // Populate chat dropdown + picker (before router so chat.show() has real chat name).
+        // Always via populateChatDropdown — the old status.chats fast-path skipped its
+        // archived/private filters, leaking both into the picker on every boot.
+        try { await populateChatDropdown(); } catch (e) { console.warn('[Init] Chat dropdown failed:', e); }
 
         // Apply chat settings
         const settings = status?.chat_settings || {};
@@ -675,7 +674,29 @@ function initEventBus() {
     eventBus.on(eventBus.Events.SETTINGS_CHANGED, refreshAndUpdateScene);
     eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, () => debouncedUpdateScene());
 
-    eventBus.on(eventBus.Events.CHAT_SWITCHED, () => {
+    eventBus.on(eventBus.Events.CHAT_SWITCHED, async (data) => {
+        // Remote switch (phone / other tab) — this tab's own switches are
+        // self-origin-dropped by the bus. Adopt the payload name DIRECTLY:
+        // a list refetch may predate the switch, the event cannot. Skipped
+        // while a local activate is in flight (last local intent wins — if
+        // the remote switch was truly last, its event lands after ours
+        // settles and this handler adopts it then).
+        const name = data?.name;
+        const sel = document.getElementById('chat-select');
+        if (name && sel && !hasPendingActivate()) {
+            if (![...sel.options].some(o => o.value === name)) {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            }
+            sel.value = name;
+            sel.dispatchEvent(new CustomEvent('chat-activated', { detail: { chat: name } }));
+            // Transcript + scene never refreshed on remote switches before —
+            // the old chat stayed on screen until the next message event.
+            await refresh(false);
+            await updateScene();
+        }
         populateChatDropdown();
     });
 

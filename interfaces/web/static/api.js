@@ -80,9 +80,26 @@ export const createChat = (name) => fetchWithTimeout('/api/chats', {
 export const deleteChat = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}`, { 
     method: 'DELETE' 
 }, 10000);
-export const activateChat = (name) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/activate`, { 
-    method: 'POST' 
-}, 10000);
+// Chat-switch epoch: bumped when an activate STARTS. A chat-list response
+// captured before the bump is stale truth — populateChatDropdown must not
+// adopt its active_chat into #chat-select (the GLM-sidebar race, 2026-08-08).
+// High-water counter, not a boolean: story entry fires two overlapping
+// activates and the Game Room exit handback is un-awaited.
+let _switchEpoch = 0;
+let _pendingActivates = 0;
+export const getSwitchEpoch = () => _switchEpoch;
+export const hasPendingActivate = () => _pendingActivates > 0;
+export const activateChat = async (name) => {
+    _switchEpoch++;
+    _pendingActivates++;
+    try {
+        return await fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/activate`, {
+            method: 'POST'
+        }, 10000);
+    } finally {
+        _pendingActivates--;
+    }
+};
 export const clearChat = () => fetchWithTimeout('/api/history/messages', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },

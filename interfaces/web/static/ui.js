@@ -562,7 +562,7 @@ export const hasVisibleContent = () => {
 // CHAT MANAGEMENT
 // =============================================================================
 
-export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], privateChats = []) => {
+export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], privateChats = [], { adopt = true } = {}) => {
     // Combine all chats for the hidden select (needs all chats for switching)
     const allChats = [...chats, ...privateChats];
 
@@ -578,18 +578,37 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     chats = chats.filter(_visible);
     privateChats = privateChats.filter(_visible);
 
-    // Update hidden select (state holder used throughout the app)
+    // Update hidden select (state holder used throughout the app).
+    // `adopt=false` means this render rides a chat-list response that is
+    // stale truth (a switch started while it was in flight) — rebuild the
+    // option list but keep the user's selection. The innerHTML wipe is
+    // itself a writer: with no selected option a single-line select snaps
+    // to index 0, so the previous value must be restored explicitly and
+    // synthesized if the stale list lacks it (fresh create, archived).
     const select = document.getElementById('chat-select');
+    const prev = select?.value || '';
     if (select) {
         select.innerHTML = '';
         allChats.forEach(chat => {
             const opt = document.createElement('option');
             opt.value = chat.name;
             opt.textContent = chat.display_name;
-            if (chat.name === activeChat) opt.selected = true;
+            if (adopt ? chat.name === activeChat : chat.name === prev) opt.selected = true;
             select.appendChild(opt);
         });
+        if (!adopt && prev && ![...select.options].some(o => o.value === prev)) {
+            const opt = document.createElement('option');
+            opt.value = prev;
+            opt.textContent = prev;
+            opt.selected = true;
+            select.appendChild(opt);
+        }
     }
+
+    // All display surfaces below (picker checks, cap survival, header/sidebar
+    // names) key off the EFFECTIVE selection, never raw activeChat — under a
+    // suppressed adoption they must agree with the select, not the stale list.
+    const effectiveActive = (adopt || !prev) ? activeChat : prev;
 
     // Build picker items — regular chats, then private
     // Cap the visible picker at 10 — the list arrives updated_at DESC, so
@@ -599,18 +618,18 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     const MAX_PICKER = 10;
     let regShow = chats.slice(0, MAX_PICKER);
     let privShow = privateChats.slice(0, Math.max(0, MAX_PICKER - regShow.length));
-    if (activeChat && ![...regShow, ...privShow].some(c => c.name === activeChat)) {
-        const a = chats.find(c => c.name === activeChat);
-        const p = a ? null : privateChats.find(c => c.name === activeChat);
+    if (effectiveActive && ![...regShow, ...privShow].some(c => c.name === effectiveActive)) {
+        const a = chats.find(c => c.name === effectiveActive);
+        const p = a ? null : privateChats.find(c => c.name === effectiveActive);
         if (a) regShow = [...regShow.slice(0, MAX_PICKER - 1), a];
         else if (p) privShow = [...privShow, p].slice(-Math.max(1, MAX_PICKER - regShow.length));
     }
     const hiddenCount = (chats.length + privateChats.length) - (regShow.length + privShow.length);
 
     let itemsHtml = regShow.map(c => `
-        <button class="chat-picker-item ${c.name === activeChat ? 'active' : ''}"
+        <button class="chat-picker-item ${c.name === effectiveActive ? 'active' : ''}"
                 data-chat="${c.name}">
-            <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+            <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
             <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
         </button>
     `).join('');
@@ -618,9 +637,9 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     if (privShow.length > 0) {
         itemsHtml += '<div class="chat-picker-divider"></div>';
         itemsHtml += privShow.map(c => `
-            <button class="chat-picker-item chat-picker-private ${c.name === activeChat ? 'active' : ''}"
+            <button class="chat-picker-item chat-picker-private ${c.name === effectiveActive ? 'active' : ''}"
                     data-chat="${c.name}">
-                <span class="chat-picker-item-check">${c.name === activeChat ? '\u2713' : ''}</span>
+                <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
                 <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
             </button>
         `).join('');
@@ -641,8 +660,8 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     if (sbDropdown) sbDropdown.innerHTML = itemsHtml;
 
     // Update header names (check all chats)
-    const active = allChats.find(c => c.name === activeChat);
-    const displayName = active?.display_name || activeChat || 'Chat';
+    const active = allChats.find(c => c.name === effectiveActive);
+    const displayName = active?.display_name || effectiveActive || 'Chat';
 
     const headerName = document.getElementById('chat-header-name');
     if (headerName) headerName.textContent = displayName;
@@ -650,8 +669,10 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     const sbName = document.getElementById('sb-chat-name');
     if (sbName) sbName.textContent = displayName;
 
-    // Notify sidebar to reload with correct chat settings
-    if (select) select.dispatchEvent(new Event('chat-list-ready'));
+    // Notify sidebar to reload — ONLY when the selection actually moved.
+    // Every render used to fire this, dragging a full sidebar reload behind
+    // any list refresh (archive, create, privacy toggle, reconnect resync).
+    if (select && select.value !== prev) select.dispatchEvent(new Event('chat-list-ready'));
 };
 
 const escapeHtml = (str) => {

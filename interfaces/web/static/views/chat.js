@@ -56,7 +56,12 @@ export default {
         // file-lookup path which 404s because chats live in SQLite, not JSON files.
         const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
         if (chatSelect) {
-            chatSelect.addEventListener('chat-activated', () => loadSidebar());
+            // chat-activated carries {chat, settings} from the activate
+            // response — paint straight from that truth (fix C); a re-GET
+            // can lose a race it doesn't need to run. chat-list-ready has
+            // no settings; it stays on the fetch path.
+            chatSelect.addEventListener('chat-activated',
+                (e) => loadSidebar(e.detail?.settings || null, e.detail?.chat || null));
             chatSelect.addEventListener('chat-list-ready', () => loadSidebar());
         }
 
@@ -201,16 +206,17 @@ export default {
                     // Sync hidden select and trigger change
                     const chatSelect = getElements().chatSelect;
                     if (chatSelect) chatSelect.value = chatName;
+                    // handleChatChange dispatches chat-activated → the
+                    // override paint. A second loadSidebar here would
+                    // supersede it and turn fix C into a no-op.
                     await handleChatChange();
-                    await loadSidebar();
                 });
             }
         }
 
         // Sidebar new/delete chat
         container.querySelector('#sb-new-chat')?.addEventListener('click', async () => {
-            await handleNewChat();
-            await loadSidebar();
+            await handleNewChat();  // chat-activated inside paints the sidebar
         });
         container.querySelector('#sb-delete-chat')?.addEventListener('click', async () => {
             await handleDeleteChat();
@@ -629,13 +635,24 @@ async function _loadPluginAccordions(container, init) {
     await Promise.all(pending);
 }
 
-async function loadSidebar() {
+let _sbPaintSeq = 0;
+
+async function loadSidebar(overrideSettings = null, overrideChat = null) {
     const container = document.getElementById('view-chat');
     if (!container) return;
 
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
     const chatName = chatSelect?.value;
     if (!chatName) return;
+    const mySeq = ++_sbPaintSeq;
+
+    // Paint VALUES straight from the caller's settings (the activate
+    // response) when offered. Guard hard: an empty or mismatched override
+    // falls through to the fetch path — a malformed activate response
+    // (`result?.settings || {}`) would otherwise paint pure defaults that
+    // the next debouncedSave WRITES to the chat (silent-default class).
+    const useOverride = !!(overrideSettings && typeof overrideSettings === 'object'
+        && Object.keys(overrideSettings).length && overrideChat === chatName);
 
     try {
         // Get init data first so we know which scope_declarations to fetch.
@@ -644,18 +661,21 @@ async function loadSidebar() {
         const initEarly = await initDataPromise;
         const scopeDeclarations = initEarly?.scope_declarations || [];
 
-        const [settingsResp, initData, llmResp, scopeDataResp, spiceSetsResp, personasResp, ttsVoicesResp, toolsetCurrentResp] = await Promise.allSettled([
-            api.getChatSettings(chatName),
+        const [settingsResp, initData, llmResp, scopeDataResp, spiceSetsResp, personasResp, ttsVoicesResp] = await Promise.allSettled([
+            useOverride ? Promise.resolve({ settings: overrideSettings }) : api.getChatSettings(chatName),
             initDataPromise,
             fetch('/api/llm/providers').then(r => r.ok ? r.json() : null),
             fetchScopeData(scopeDeclarations),
             fetch('/api/spice-sets').then(r => r.ok ? r.json() : null),
             fetch('/api/personas').then(r => r.ok ? r.json() : null),
-            fetch('/api/tts/voices').then(r => r.ok ? r.json() : null),
-            fetch('/api/toolsets/current').then(r => r.ok ? r.json() : null)
+            fetch('/api/tts/voices').then(r => r.ok ? r.json() : null)
         ]);
 
-        // Guard: if chat changed while fetching, discard stale results
+        // Discard stale paints. The seq is the real guard — monotonic, so a
+        // newer load always supersedes an older one even across A→B→A or two
+        // concurrent loads for the SAME chat (the old name-only check was
+        // blind to both). The name check stays as a belt.
+        if (mySeq !== _sbPaintSeq) return;
         const chatNow = chatSelect?.value;
         if (chatNow !== chatName) {
             console.log(`[SIDEBAR] Chat changed during load (${chatName} → ${chatNow}), discarding`);

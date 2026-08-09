@@ -7,17 +7,24 @@ import { updateScene, updateSendButtonLLM } from './scene.js';
 import { applyTrimColor } from './chat-settings.js';
 import { cancelPendingSave, flushPendingSave } from '../views/chat.js';
 
-export async function populateChatDropdown() {
+export async function populateChatDropdown({ forceAdopt = false } = {}) {
     const { chatSelect } = getElements();
+    const epochAtFetch = api.getSwitchEpoch();
     try {
         const data = await api.fetchChatList();
+        // Adopt the server's active_chat into #chat-select only if no chat
+        // switch STARTED while this list was in flight — a stale response
+        // must not clobber the user's in-flight selection (the GLM-sidebar
+        // race, 2026-08-08). forceAdopt is the deliberate exception: after a
+        // REJECTED activate the select must roll back to server truth.
+        const adopt = forceAdopt || api.getSwitchEpoch() === epochAtFetch;
         // Archived chats are hidden from the dropdown — a UI shade, not a
         // freeze. The ACTIVE chat always shows even if archived, so the
         // select never loses its selection; it drops out after switching away.
         const visible = data.chats.filter(c => !c.archived || c.name === data.active_chat);
         const regularChats = visible.filter(c => !c.private_chat);
         const privateChats = visible.filter(c => c.private_chat);
-        ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats);
+        ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats, { adopt });
     } catch (e) {
         console.error('Failed to load chat list:', e);
         if (chatSelect && chatSelect.options.length === 0) {
@@ -68,7 +75,10 @@ export async function handleChatChange() {
     } catch (e) {
         console.error('Failed to switch chat:', e);
         ui.showToast(`Failed to switch chat: ${e.message}`, 'error');
-        await populateChatDropdown();
+        // The activate was REJECTED (400/409-while-streaming) but it still
+        // bumped the switch epoch — force adoption so the select rolls back
+        // to the chat the server actually kept.
+        await populateChatDropdown({ forceAdopt: true });
     }
 }
 

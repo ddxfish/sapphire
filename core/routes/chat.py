@@ -1088,7 +1088,10 @@ async def activate_chat(chat_name: str, request: Request, _=Depends(require_logi
             _apply_chat_settings(system, settings)
             origin = request.headers.get('X-Session-ID')
             publish(Events.CHAT_SWITCHED, {"name": chat_name, "origin": origin})
-            return {"status": "success", "active_chat": chat_name, "settings": settings}
+            # Same backfill as GET /settings — the frontend paints the sidebar
+            # straight from this response, so the two payloads must match.
+            return {"status": "success", "active_chat": chat_name,
+                    "settings": _backfill_persona_visuals(settings)}
         else:
             raise HTTPException(status_code=400, detail=f"Cannot switch to: {chat_name}")
     except HTTPException:
