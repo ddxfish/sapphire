@@ -215,12 +215,13 @@ def _extract_tool_images(result, history=None, provider=None):
                 text = f"<<IMG::tool:{img_id}>>\n{text}"
             if not img.get("display_only") and supports_vision:
                 llm_images.append(img)
-            elif (not supports_vision) or img.get("vibe_when_hidden"):
-                # No vision support at all, OR the tool opted in to a text
-                # description when it deliberately hides the full image from the
-                # model (e.g. z-image view=false: the user sees the image, the
-                # model gets the gist WITHOUT the full image — which avoids the
-                # phantom-user-message re-generation loop). 2026-06-14.
+            elif img.get("vibe_when_hidden") or (not supports_vision and not img.get("display_only")):
+                # CLIP describe fires only as a FALLBACK: the model was meant to
+                # see this image (not display_only) but the provider has no
+                # vision — or the tool explicitly opted in (vibe_when_hidden).
+                # display_only images are deliberately hidden; describing them
+                # defeats the point, and CLIP's subject-blind guesses read as
+                # "wrong image" to literal models → regeneration loops. 2026-08-09.
                 hidden_to_vibe.append(img)
         if hidden_to_vibe:
             # Generate a CLIP-based atmospheric description so the model still

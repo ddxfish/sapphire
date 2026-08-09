@@ -502,7 +502,15 @@ class ConversationHistory:
             else:
                 # System or other - pass through
                 llm_msg = {"role": role, "content": msg.get("content", "")}
-            
+
+            # <<TYPE::data>> markers (tool/event images, files) are UI-only.
+            # The live tool cycle strips them from its wire copy, but history
+            # replay didn't — every later turn re-sent them to the LLM as
+            # literal text. Same pattern as strip_ui_markers. 2026-08-09.
+            c = llm_msg.get("content")
+            if isinstance(c, str) and '<<' in c:
+                llm_msg["content"] = re.sub(r'<<[A-Z]+::[^>]+>>\s*', '', c).strip()
+
             msgs.append(llm_msg)
         
         # TRIMMING STEP 1: Turn-based trimming (skip if max_history is 0)
