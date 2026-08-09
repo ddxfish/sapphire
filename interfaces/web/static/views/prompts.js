@@ -144,6 +144,8 @@ async function loadAll() {
 // ── Main Render ──
 function render() {
     if (!container) return;
+    // Full re-render resets the left roster's scroll to the top — carry it over.
+    const listScroll = container.querySelector('.panel-list-items')?.scrollTop || 0;
 
     container.innerHTML = `
         ${renderSectionTabs(PERSONA_TABS, 'prompts', helpPills('Prompts', { video: 'JxgNAk4Y2qI', doc: 'PROMPTS.md', inline: true }))}
@@ -189,6 +191,8 @@ function render() {
         </div>
     `;
     bindEvents();
+    const listEl = container.querySelector('.panel-list-items');
+    if (listEl) listEl.scrollTop = listScroll;
 }
 
 
@@ -542,11 +546,7 @@ function bindEvents() {
 
     // --- Accordion headers ---
     layout.querySelectorAll('.pr-accordion-header').forEach(hdr => {
-        hdr.addEventListener('click', () => {
-            const type = hdr.dataset.type;
-            openAccordion = openAccordion === type ? null : type;
-            render();
-        });
+        hdr.addEventListener('click', () => toggleAccordion(hdr.dataset.type));
     });
 
     // --- Preview accordion toggle ---
@@ -668,6 +668,15 @@ function bindAccordionBodyEvents(body, type) {
     });
 }
 
+// Open/close without a full render() — rebuilding the whole view for a purely
+// local toggle resets the left roster's scroll and DOM state.
+function toggleAccordion(type) {
+    const prev = openAccordion;
+    openAccordion = openAccordion === type ? null : type;
+    renderAccordionBody(type);
+    if (prev && prev !== type) renderAccordionBody(prev);
+}
+
 // Re-render just one accordion without full page re-render
 function renderAccordionBody(type) {
     const acc = container.querySelector(`.pr-accordion[data-type="${type}"]`);
@@ -683,10 +692,7 @@ function renderAccordionBody(type) {
     acc.replaceWith(newAcc);
 
     // Re-bind events
-    newAcc.querySelector('.pr-accordion-header')?.addEventListener('click', () => {
-        openAccordion = openAccordion === type ? null : type;
-        render();
-    });
+    newAcc.querySelector('.pr-accordion-header')?.addEventListener('click', () => toggleAccordion(type));
     const body = newAcc.querySelector('.pr-accordion-body');
     if (body) bindAccordionBodyEvents(body, type);
 }

@@ -68,7 +68,9 @@ export async function handleEdit(idx) {
         try {
             console.log('[EDIT DEBUG] Editing message with timestamp:', timestamp);
             await api.editMessage(msg.role, timestamp, newText);
-            // refresh() rebuilds DOM, so exitEditMode not needed - new elements won't have edit state
+            // Clear .editing BEFORE refreshing — fetchAndRender holds renders
+            // while an edit is open, so refresh() would no-op otherwise.
+            ui.exitEditMode(msgEl, false);
             await refresh(false);
         } catch (e) {
             console.error('Edit failed:', e);
@@ -76,8 +78,11 @@ export async function handleEdit(idx) {
             ui.exitEditMode(msgEl, true);  // Restore on error (element still exists)
         }
     };
-    
-    document.getElementById('cancel-edit').onclick = () => ui.exitEditMode(msgEl, true);
+
+    document.getElementById('cancel-edit').onclick = () => {
+        ui.exitEditMode(msgEl, true);
+        refresh(false);  // catch up on refreshes held back during the edit
+    };
 }
 
 export async function handleContinue(idx) {

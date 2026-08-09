@@ -10,6 +10,13 @@ const handleError = (e, action) => {
 };
 
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
+    // Hold the render while a message edit is open — renderHistory rebuilds the
+    // whole transcript, so a background refresh (SSE event, autoRefresh poll)
+    // would destroy the edit textarea and the unsaved text in it. Save/cancel
+    // exit edit mode first and refresh explicitly.
+    if (document.querySelector('#chat-container .message.editing')) {
+        return { hist: null, len: lastLen };
+    }
     try {
         const hist = await api.fetchHistory();
 
