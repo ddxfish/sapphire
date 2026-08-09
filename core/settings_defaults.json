@@ -248,6 +248,7 @@
     "FORCE_THINKING": false,
     "THINKING_PREFILL": "<think>Okay, let me see. I need to act like a duck and only speak in 'quack's so that",
     "CLAUDE_THINKING_ENABLED": true,
+    "SPICE_DELIVERY": "ghost",
     "IMAGE_UPLOAD_MAX_WIDTH": 1920
   },
   

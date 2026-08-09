@@ -460,6 +460,15 @@ function renderInput(key, value, type) {
     if (key === 'CONVERSATION_START_WORD') {
         return `<input type="text" id="${id}" data-key="${key}" value="${escapeAttr(String(value))}" placeholder="hey sapphire">`;
     }
+    if (key === 'SPICE_DELIVERY') {
+        const opts = [
+            ['ghost',  'Ghost message — labeled app context, cache-friendly (default)'],
+            ['system', 'System prompt — unattributed, feels self-chosen; re-caches on rotation'],
+        ];
+        return `<select id="${id}" data-key="${key}">
+            ${opts.map(([v, l]) => `<option value="${v}" ${value === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>`;
+    }
     if (key === 'LOG_LEVEL') {
         const opts = [
             ['DEBUG',   'DEBUG (verbose, dev only)'],

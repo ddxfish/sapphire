@@ -344,6 +344,10 @@
     "short": "Default parameters for text generation",
     "long": "JSON object with default generation settings: max_tokens (response length limit), temperature (randomness/creativity, 0-2), top_p (nucleus sampling, 0-1), presence_penalty (topic diversity, -2 to 2), frequency_penalty (repetition reduction, -2 to 2). These can be overridden per-request."
   },
+  "SPICE_DELIVERY": {
+    "short": "How the rotating spice reaches the AI",
+    "long": "Ghost message (default): spice arrives in a per-turn app-context message labeled as coming from Sapphire's own app - prompt-cache friendly on cloud models, but the AI knows it's injected and may mention that. System prompt: spice is woven unattributed into the system prompt, so the AI wears it as its own inclination - feels most natural, but the prompt changes on every spice rotation, which re-tokenizes history on cache-billed cloud models (fine and free on local models)."
+  },
   "FORCE_THINKING": {
     "short": "Override the AI's initial think tags to force it to think a certain way",
     "long": "When enabled, prepends THINKING_PREFILL to every prompt to encourage the model to think a certain way. Useful for debugging or understanding decision-making. May make responses longer and slower. Most modern models don't need this."

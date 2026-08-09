@@ -17,7 +17,7 @@ export default {
     name: 'LLM',
     icon: '\uD83E\uDDE0',
     description: 'Language model providers and fallback order',
-    generalKeys: ['LLM_MAX_HISTORY', 'CONTEXT_LIMIT', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL', 'IMAGE_UPLOAD_MAX_WIDTH'],
+    generalKeys: ['LLM_MAX_HISTORY', 'CONTEXT_LIMIT', 'LLM_REQUEST_TIMEOUT', 'FORCE_THINKING', 'THINKING_PREFILL', 'SPICE_DELIVERY', 'IMAGE_UPLOAD_MAX_WIDTH'],
 
     render(ctx) {
         const coreProviders = ctx.getValue('LLM_PROVIDERS') || {};

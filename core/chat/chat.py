@@ -435,6 +435,18 @@ class LLMChat:
         if custom_ctx:
             context_parts.append(custom_ctx)
 
+        # Spice in system-prompt mode (SPICE_DELIVERY='system'): woven in
+        # unattributed so the AI wears it as its own inclination. Ghost mode
+        # (default) delivers it as labeled app context instead — cache-friendly
+        # but third-person. Rebuilt every call, so rotation lands immediately;
+        # the prompt mutating on rotation turns is this mode's documented cost.
+        if (getattr(config, 'SPICE_DELIVERY', 'ghost') == 'system'
+                and chat_settings.get('spice_enabled', True)):
+            from core import prompts
+            sp = (prompts.get_current_spice() or '').strip()
+            if sp:
+                context_parts.append(sp)
+
         # Plugin prompt_inject hook — append to context_parts
         if hook_runner.has_handlers("prompt_inject"):
             inject_event = HookEvent(context_parts=context_parts, config=config)

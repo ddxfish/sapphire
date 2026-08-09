@@ -138,8 +138,11 @@ def build_ghost_message(
         if dt_line:
             contributions.append(("(core)", dt_line))
 
-    # Built-in: spice
-    if chat_settings.get('spice_enabled', True):
+    # Built-in: spice — unless SPICE_DELIVERY routes it into the system prompt
+    # instead (unattributed there; here it's labeled app context, which some
+    # models narrate as "my app told me to"). See _get_system_prompt.
+    if (chat_settings.get('spice_enabled', True)
+            and getattr(config, 'SPICE_DELIVERY', 'ghost') != 'system'):
         sp_line = _spice_contribution()
         if sp_line:
             contributions.append(("(core)", sp_line))
