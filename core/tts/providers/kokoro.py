@@ -68,6 +68,7 @@ class KokoroTTSProvider(BaseTTSProvider):
     SPEED_MIN = 0.5
     SPEED_MAX = 2.0
     supports_streaming = True
+    supports_pitch = True  # server resamples PCM pre-encode (pitch in payload)
 
     def __init__(self):
         self.primary_server = config.TTS_PRIMARY_SERVER
@@ -91,6 +92,7 @@ class KokoroTTSProvider(BaseTTSProvider):
                     'text': text.replace("*", ""),
                     'voice': voice,
                     'speed': clamped_speed,
+                    'pitch': float(kwargs.get('pitch') or 1.0),
                 }, timeout=60)
                 if response.status_code == 200:
                     return response.content
@@ -131,6 +133,7 @@ class KokoroTTSProvider(BaseTTSProvider):
                     'text': text.replace("*", ""),
                     'voice': voice,
                     'speed': clamped_speed,
+                    'pitch': float(kwargs.get('pitch') or 1.0),
                 },
                 stream=True,
                 timeout=60,

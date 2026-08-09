@@ -94,6 +94,14 @@ class StreamingTTSPump:
             and hasattr(self.provider, "generate_stream")
             and getattr(self.provider, "supports_streaming", False)
         )
+        # Voice/speed/pitch SNAPSHOT — bound ONCE at stream start. Chunks used
+        # to read live client state at synth time, so a chat switch, a
+        # continuity task's set→restore, or a second concurrent stream retuned
+        # the remaining chunks of THIS stream mid-speech (2026-08-08).
+        self._speed = getattr(self.tts, "speed", None) or 1.0
+        self._pitch = getattr(self.tts, "pitch_shift", None) or 1.0
+        self._default_voice = getattr(self.tts, "voice_name", None) or "af_heart"
+        self._provider_pitch = getattr(self.provider, "supports_pitch", False)
         # Chunker bounds — user-tunable via Settings → TTS. Sensible
         # clamps so a typo in settings can't yield zero-size chunks or
         # unbounded buffers.
@@ -457,8 +465,8 @@ class StreamingTTSPump:
                     voice = (_o.get("settings") or {}).get("tts_voice") or None
             except Exception:
                 pass
-        voice = voice or getattr(self.tts, "voice_name", None) or "af_heart"
-        speed = getattr(self.tts, "speed", None) or 1.0
+        voice = voice or self._default_voice
+        speed = self._speed
         logger.info(
             f"[TTS-STREAM] submit chunk {chunk['index']} "
             f"({chunk['boundary']}, {len(text_to_synth)} chars, "
@@ -492,14 +500,15 @@ class StreamingTTSPump:
 
         def _run(v):
             nonlocal n_segments, total_bytes
+            kw = {"pitch": self._pitch} if self._provider_pitch else {}
             if self._provider_streams:
-                for segment in self.provider.generate_stream(text, v, speed):
+                for segment in self.provider.generate_stream(text, v, speed, **kw):
                     if segment:
                         seg_queue.put(segment)
                         n_segments += 1
                         total_bytes += len(segment)
             else:
-                audio = self.provider.generate(text, v, speed)
+                audio = self.provider.generate(text, v, speed, **kw)
                 if audio:
                     seg_queue.put(audio)
                     n_segments += 1
@@ -512,10 +521,21 @@ class StreamingTTSPump:
                 logger.warning(
                     f"[TTS-STREAM] chunk {chunk_index} voice '{voice}' synth failed: {e!r}"
                 )
+            # Transient failure ≠ bad voice: retry the stream's OWN voice once
+            # before degrading, so a hiccup doesn't swap the speaker for one
+            # chunk mid-reply (2026-08-08 — "retries being weird").
+            if n_segments == 0:
+                try:
+                    _run(voice)
+                except Exception as e:
+                    logger.warning(
+                        f"[TTS-STREAM] chunk {chunk_index} same-voice retry failed: {e!r}"
+                    )
             # A bad per-stream voice (wrong id, other provider's id, undownloaded
             # model) must degrade to the DEFAULT voice, not to silence — a muted
             # call reads as a dead line (2026-07-03: 'Eric' vs 'am_eric').
-            default_voice = getattr(self.tts, "voice_name", None) or "af_heart"
+            # Default from the stream snapshot, not live state.
+            default_voice = self._default_voice
             if n_segments == 0 and voice != default_voice:
                 logger.warning(
                     f"[TTS-STREAM] chunk {chunk_index} produced nothing with "

@@ -21,6 +21,10 @@ class BaseTTSProvider(ABC):
     # default wrap-generate fallback). Used by TTSClient to decide whether
     # to expect chunked semantics or just one-shot bytes.
     supports_streaming: bool = False
+    # True when the provider applies pitch at synthesis time (pass pitch= as a
+    # kwarg). When False, callers that want pitch fall back to the legacy
+    # client-side decode→resample→re-encode — never both (double-shift).
+    supports_pitch: bool = False
 
     @abstractmethod
     def generate(self, text: str, voice: str, speed: float, **kwargs) -> Optional[bytes]:

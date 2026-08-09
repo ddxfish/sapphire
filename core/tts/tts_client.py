@@ -361,7 +361,8 @@ class TTSClient:
         """Fetch audio from provider. Returns (audio_data, samplerate) or (None, None)."""
         temp_path = None
         try:
-            audio_bytes = self._provider.generate(text, self.voice_name, self.speed)
+            kw = {"pitch": self.pitch_shift} if getattr(self._provider, "supports_pitch", False) else {}
+            audio_bytes = self._provider.generate(text, self.voice_name, self.speed, **kw)
             if not audio_bytes:
                 return None, None
 
@@ -380,8 +381,10 @@ class TTSClient:
             # Load audio data
             audio_data, samplerate = sf.read(temp_path)
 
-            # Apply pitch shift if needed (Kokoro supports this; cloud providers may not benefit)
-            if self.pitch_shift != 1.0:
+            # Legacy client-side pitch — ONLY for providers that can't shift at
+            # synthesis time; supports_pitch providers already applied it
+            # server-side (double-shift guard, 2026-08-08).
+            if self.pitch_shift != 1.0 and not getattr(self._provider, "supports_pitch", False):
                 audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
 
             return audio_data, samplerate
@@ -698,12 +701,15 @@ class TTSClient:
         use_pitch = pitch if pitch is not None else self.pitch_shift
         temp_path = None
         try:
-            audio_bytes = self._provider.generate(text, use_voice, use_speed)
+            provider_pitch = getattr(self._provider, "supports_pitch", False)
+            kw = {"pitch": use_pitch} if provider_pitch else {}
+            audio_bytes = self._provider.generate(text, use_voice, use_speed, **kw)
             if not audio_bytes:
                 return None
 
-            # Apply pitch shift if needed (requires decode → re-encode)
-            if use_pitch != 1.0:
+            # Legacy decode → shift → re-encode — only when the provider
+            # couldn't apply pitch at synthesis time (double-shift guard).
+            if use_pitch != 1.0 and not provider_pitch:
                 ext_map = {'audio/mp3': '.mp3', 'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/ogg': '.ogg'}
                 ext = ext_map.get(self._provider.audio_content_type, '.ogg')
                 fd, temp_path = tempfile.mkstemp(suffix=ext, dir=self.temp_dir)

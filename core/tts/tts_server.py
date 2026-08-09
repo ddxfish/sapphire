@@ -197,6 +197,26 @@ def clean_text(text):
     return cleaned_text.strip()
 
 
+def _apply_pitch(audio, pitch):
+    """Resample-shift PCM before encoding. Same math as the legacy client-side
+    shift (np.interp to length/pitch, played at the original rate) so the two
+    paths sound identical. pitch=1.0 or bad input → unchanged."""
+    try:
+        pitch = float(pitch)
+    except (TypeError, ValueError):
+        return audio
+    if pitch == 1.0 or pitch <= 0:
+        return audio
+    pitch = max(0.5, min(2.0, pitch))
+    try:
+        n = len(audio)
+        indices = np.linspace(0, n - 1, int(n / pitch))
+        return np.interp(indices, np.arange(n), audio).astype(audio.dtype)
+    except Exception as e:
+        logger.error(f"Pitch shift failed (pitch={pitch}): {e}")
+        return audio
+
+
 def _json_response(handler, data, status=200):
     """Send a JSON response."""
     body = json.dumps(data).encode()
@@ -304,6 +324,7 @@ class TTSHandler(BaseHTTPRequestHandler):
             speed = float(data.get('speed', DEFAULT_SPEED))
         except (ValueError, TypeError):
             speed = DEFAULT_SPEED
+        pitch = data.get('pitch', 1.0)
 
         generation_start = time.time()
         with pipeline_lock:
@@ -319,6 +340,7 @@ class TTSHandler(BaseHTTPRequestHandler):
             return
 
         audio = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
+        audio = _apply_pitch(audio, pitch)
         del audio_segments  # Free segment list
         generation_time = time.time() - generation_start
         logger.info(f"Audio generated in {generation_time:.2f}s — shape={audio.shape} dtype={audio.dtype} (req #{request_count})")
@@ -404,6 +426,7 @@ class TTSHandler(BaseHTTPRequestHandler):
             speed = float(data.get('speed', DEFAULT_SPEED))
         except (ValueError, TypeError):
             speed = DEFAULT_SPEED
+        pitch = data.get('pitch', 1.0)
 
         # Headers committed — past this point we can't return JSON errors,
         # only chunks or a close.
@@ -449,7 +472,7 @@ class TTSHandler(BaseHTTPRequestHandler):
                         write_queue.put(b"0\r\n\r\n")
                         write_queue.put(None)
                         return
-                    audio = item
+                    audio = _apply_pitch(item, pitch)
                     buf = io.BytesIO()
                     sf.write(buf, audio, AUDIO_SAMPLE_RATE,
                              format='OGG', subtype='OPUS')
