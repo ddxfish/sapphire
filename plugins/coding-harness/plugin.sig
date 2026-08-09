@@ -1,9 +1,10 @@
 {
   "plugin": "coding-harness",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "files": {
-    "plugin.json": "sha256:ca0060bb1cb91b9d776d39b5dca74576045d5ee62816dc39f094bfd3d1338b79",
-    "tools/harness.py": "sha256:e04942104ce8c9cc5e281bab05350824fef83fb58589bb6736e25f80215ac6ca"
+    "plugin.json": "sha256:8a5fd79b46817e9d3256caf0ef9361cad5ab0b0043e9bcb9a0b2f58c295c62c2",
+    "tests/test_harness.py": "sha256:487f0e5b6ec310a68543dcbbb93e50a3dbe368aa41071a36b1b356c49baffcdf",
+    "tools/harness.py": "sha256:2384dc1f53c9195c6dcde1f37ed7ec0897dff4202eed6c393a67efe83cd918ea"
   },
-  "signature": "9V5tQMsmwoHLtnDUYF5q1/pohelrF4zTpx3TBstCpJGnd4jBpRNySn/EBlSxX10FwUJiYPylgLRsfN+qPR7ZAg=="
+  "signature": "8phnfI+fsfmUZAfgnPp1z9l8ILTmVUItxBFzuKkr4EzouTgb1wMF0dWdcFfJRUTU/STDXx068TPf/pPb5JqGBw=="
 }

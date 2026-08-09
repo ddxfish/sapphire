@@ -119,6 +119,7 @@ async function loadPluginTab(name, source) {
                 load: () => pluginsAPI.getSettings(name),
                 save: (s) => pluginsAPI.saveSettings(name, s),
                 getSettings: (box) => readSettingsForm(box, plugin.settings_schema),
+                reset: () => pluginsAPI.resetSettings(name),
             });
             syncDynamicTabs();
             return;
@@ -286,6 +287,7 @@ function render() {
                         <span class="view-subtitle" id="stab-desc">${meta.description || ''}</span>
                     </div>
                     <div class="view-header-actions">
+                        <button class="btn-sm" id="settings-plugin-reset" style="display:none" title="Delete this plugin's stored settings — defaults take over">Reset to Defaults</button>
                         <button class="btn-sm" id="settings-reload">Reload</button>
                         <button class="btn-primary" id="settings-save">Save Changes</button>
                     </div>
@@ -331,6 +333,8 @@ function updateSaveButtonForTab(tab) {
     if (!saveBtn) return;
     const selfSaving = !!(tab.isPlugin && tab._reg && !tab._reg.getSettings);
     saveBtn.style.display = selfSaving ? 'none' : '';
+    const resetBtn = container?.querySelector('#settings-plugin-reset');
+    if (resetBtn) resetBtn.style.display = (tab.isPlugin && tab._reg?.reset) ? '' : 'none';
     let hint = container.querySelector('#settings-selfsave-hint');
     if (selfSaving && !hint) {
         hint = document.createElement('span');
@@ -638,6 +642,21 @@ function bindShellEvents() {
             await loadData();
             renderTabContent();
         } catch { ui.showToast('Reload failed', 'error'); }
+    });
+
+    container.querySelector('#settings-plugin-reset')?.addEventListener('click', async () => {
+        const tab = getTabMeta();
+        const reg = tab._reg;
+        if (!reg?.reset) return;
+        if (!confirm(`Reset all ${reg.name} settings to their defaults? ` +
+                     `Your customizations for this plugin will be cleared.`)) return;
+        try {
+            await reg.reset();
+            ui.showToast(`${reg.name} settings reset to defaults`, 'success');
+            renderTabContent();
+        } catch (e) {
+            ui.showToast(`Reset failed: ${e.message}`, 'error');
+        }
     });
 }
 

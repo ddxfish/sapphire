@@ -14,6 +14,10 @@ const settingsTabs = new Map();
  * @param {Function} config.load - async () => settings - Load current settings
  * @param {Function} config.save - async (settings) => void - Save settings
  * @param {Function} [config.getSettings] - () => settings - Get current form values
+ * @param {Function} [config.reset] - async () => void - Delete stored settings so
+ *   manifest defaults take over (shows a Reset to Defaults button in the header).
+ *   Omit on tabs with side-channel stored state (e.g. MCP's servers) — the reset
+ *   endpoint removes the whole stored file.
  */
 export function registerPluginSettings(config) {
   if (!config.id || !config.name || !config.render) {
@@ -29,7 +33,8 @@ export function registerPluginSettings(config) {
     render: config.render,
     load: config.load || (() => Promise.resolve({})),
     save: config.save || (() => Promise.resolve()),
-    getSettings: config.getSettings || null
+    getSettings: config.getSettings || null,
+    reset: config.reset || null
   });
 
   console.log(`[PluginRegistry] Registered settings tab: ${config.name}`);

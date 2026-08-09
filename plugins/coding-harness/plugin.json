@@ -1,7 +1,7 @@
 {
   "name": "coding-harness",
   "short_display_name": "Coding Harness",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Coding Harness — file read/write/edit, search, and shell commands, with file tools and command cwd scoped to a working directory",
   "author": "sapphire",
   "icon": "🧰",
@@ -44,7 +44,7 @@
         "type": "string",
         "widget": "textarea",
         "label": "Command Blacklist",
-        "default": "rm -rf /\n--no-preserve-root\nmkfs\ndd if=/dev\n:(){ :|:& };:\n> /dev/sda\nchmod -R 777 /\ninit 0\ninit 6",
+        "default": "rm -rf /\n--no-preserve-root\nmkfs\ndd if=/dev\n:(){ :|:& };:\n> /dev/sda\nchmod -R 777 /\ninit 0\ninit 6\nrm -rf ~\nrm -rf $HOME\nrm -rf \"$HOME\"",
         "help": "Blocked substrings for run_command, one per line"
       }
     ]

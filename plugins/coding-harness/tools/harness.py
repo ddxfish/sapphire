@@ -14,6 +14,7 @@ import signal
 import subprocess
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ DEFAULTS = {
     'sandbox': True,
     'output_limit': 6000,
     'max_timeout': 300,
-    'blacklist': "rm -rf /\n--no-preserve-root\nmkfs\ndd if=/dev\n:(){ :|:& };:\n> /dev/sda\nchmod -R 777 /\ninit 0\ninit 6",
+    'blacklist': "rm -rf /\n--no-preserve-root\nmkfs\ndd if=/dev\n:(){ :|:& };:\n> /dev/sda\nchmod -R 777 /\ninit 0\ninit 6\nrm -rf ~\nrm -rf $HOME\nrm -rf \"$HOME\"",
 }
 
 READ_WINDOW = 500            # default lines per read_file call
@@ -135,13 +136,13 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "run_command",
-            "description": "Run a shell command in your working directory (or cwd). Long output keeps the start and the tail, where errors usually are.",
+            "description": "Run a shell command. Fresh shell each call — cd doesn't persist, use the cwd param. Prefer $HOME over ~ (quoted ~ goes literal). Every process the command starts is terminated when the call returns — backgrounding with & cannot outlive the call. grep/diff exit 1 = no match, not an error. Long output keeps start + tail.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "Shell command"},
                     "cwd": {"type": "string", "description": "Directory to run in (default working directory)"},
-                    "timeout": {"type": "integer", "description": "Seconds (default 30)"},
+                    "timeout": {"type": "integer", "description": "Seconds (default 120)"},
                     "max_output": {"type": "integer", "description": "Override output char limit for this call"}
                 },
                 "required": ["command"]
@@ -246,15 +247,42 @@ def _read_file(args, settings):
     return header + '\n' + '\n'.join(out) + footer, True
 
 
+def _atomic_write(p, text):
+    """Temp file + rename so a crash or full disk can't destroy the original.
+    A plain open('w') truncates first — any failure after that leaves 0 bytes."""
+    tmp = p.with_name(p.name + '.harness-tmp')
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        if p.exists():
+            os.chmod(tmp, p.stat().st_mode)
+        os.replace(tmp, p)
+    except Exception:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+        raise
+
+
 def _write_file(args, settings):
     p, wd = _resolve(settings, args.get('path'))
     if p.is_dir():
         raise HarnessError(f"{_rel(p, wd)} is a directory.")
     content = args.get('content', '')
+    if not isinstance(content, str):
+        raise HarnessError(
+            f"content must be a string, got {type(content).__name__} — "
+            f"file left untouched. Serialize objects yourself (e.g. JSON text).")
     append = bool(args.get('append'))
     p.parent.mkdir(parents=True, exist_ok=True)
-    with open(p, 'a' if append else 'w', encoding='utf-8', newline='') as f:
-        f.write(content)
+    if append:
+        with open(p, 'a', encoding='utf-8', newline='') as f:
+            f.write(content)
+    else:
+        _atomic_write(p, content)
     n = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
     verb = 'Appended' if append else 'Wrote'
     return f"{verb} {n} lines ({len(content.encode('utf-8'))} bytes) to {_rel(p, wd)}", True
@@ -270,8 +298,24 @@ def _edit_file(args, settings):
         raise HarnessError("old_text is required.")
     if old == new:
         raise HarnessError("old_text and new_text are identical.")
-    text = p.read_text(encoding='utf-8', errors='replace')
+    raw = p.read_bytes()
+    if b'\0' in raw:
+        raise HarnessError(
+            f"{_rel(p, wd)} is a binary file (contains NUL bytes) — refusing "
+            f"to edit; a text edit would corrupt it.")
+    try:
+        text = raw.decode('utf-8')
+    except UnicodeDecodeError as e:
+        raise HarnessError(
+            f"{_rel(p, wd)} is not valid UTF-8 ({e}) — refusing to edit; "
+            f"writing it back would corrupt the original encoding.")
     count = text.count(old)
+    if count == 0 and '\r\n' in text and '\r' not in old:
+        # CRLF file, LF-normalized old_text from the model — retry translated.
+        old_crlf = old.replace('\n', '\r\n')
+        if old_crlf in text:
+            old, new = old_crlf, new.replace('\n', '\r\n')
+            count = text.count(old)
     if count == 0:
         raise HarnessError(
             f"old_text not found in {_rel(p, wd)} — whitespace must match "
@@ -282,8 +326,7 @@ def _edit_file(args, settings):
             f"old_text appears {count} times in {_rel(p, wd)} — include "
             f"surrounding lines to make it unique, or set replace_all=true.")
     text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
-    with open(p, 'w', encoding='utf-8', newline='') as f:
-        f.write(text)
+    _atomic_write(p, text)
     return f"Replaced {count if replace_all else 1} occurrence(s) in {_rel(p, wd)}", True
 
 
@@ -356,17 +399,32 @@ def _search_files(args, settings):
 _MAX_CAPTURE_FLOOR = 2_000_000
 
 
-def _kill_tree(proc):
+_SECRET_MARKERS = ('API_KEY', 'ACCESS_KEY', 'TOKEN', 'SECRET', 'PASSWORD', 'CREDENTIAL')
+
+
+def _scrubbed_env():
+    """Child env minus credentials — command output lands in chat history,
+    and SSH_AUTH_SOCK would let any ssh command authenticate as the user."""
+    return {k: v for k, v in os.environ.items()
+            if k != 'SSH_AUTH_SOCK'
+            and not any(m in k for m in _SECRET_MARKERS)}
+
+
+def _kill_tree(proc, graceful=False):
     """Kill the command AND every descendant, not just the direct shell child.
     subprocess only ever signals `/bin/sh -c`; a pipeline or backgrounded job
     would leave grandchildren running (holding ports/CPU) after a timeout.
-    POSIX: signal the whole session process group. Windows: taskkill /T."""
+    POSIX: signal the whole process group — start_new_session makes the child
+    its own group leader, so pgid == proc.pid, and that stays valid even after
+    the leader is reaped as long as any group member survives (a pgid can't be
+    reused while the group exists). graceful=True sends SIGTERM so package
+    managers can finish their transaction; Windows taskkill is always forced."""
     try:
         if os.name == 'nt':
             subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                           capture_output=True)
+                           capture_output=True, timeout=10)
         else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGTERM if graceful else signal.SIGKILL)
     except Exception:
         try:
             proc.kill()
@@ -374,10 +432,47 @@ def _kill_tree(proc):
             pass
 
 
+# Code-level gate, deliberately NOT part of the editable blacklist: these
+# commands permanently discard uncommitted work, and working trees on this
+# machine hold uncommitted changes that must never be lost.
+_GIT_GATE = [
+    (re.compile(r'\bgit\b[^|&;]*\breset\b[^|&;]*--(hard|merge)\b'), 'git reset --hard/--merge'),
+    (re.compile(r'\bgit\b[^|&;]*\bcheckout\b'), 'git checkout'),
+    (re.compile(r'\bgit\b[^|&;]*\brestore\b'), 'git restore'),
+    (re.compile(r'\bgit\b[^|&;]*\bswitch\b[^|&;]*(--discard-changes\b|\s-\w*f|--force\b)'), 'git switch --force'),
+    (re.compile(r'\bgit\b[^|&;]*\bclean\b[^|&;]*(\s-\w*f|\s--force\b)'), 'git clean -f'),
+    (re.compile(r'\bgit\b[^|&;]*\bstash\b[^|&;]*\b(drop|clear)\b'), 'git stash drop/clear'),
+    (re.compile(r'\bgit\b[^|&;]*\bpush\b[^|&;]*(\s--force\b|\s-f\b)'), 'git push --force'),
+    (re.compile(r'\bcrontab\b[^|&;]*\s-\w*r'), 'crontab -r'),
+]
+
+_GIT_GATE_MSG = (
+    "Blocked ({what}): destructive git/cron commands are disabled at code level "
+    "in this harness. They permanently discard uncommitted work, and working "
+    "trees on this machine hold uncommitted changes that must never be lost — "
+    "this is not the editable blacklist and cannot be turned off in settings. "
+    "To undo your own changes, edit the files back with edit_file/write_file. "
+    "To change branches, use 'git switch <branch>' (it refuses to overwrite "
+    "dirty files).")
+
+# Hard ceiling on bytes flowing through the reader. Head+tail are kept in a
+# bounded ring (middle discarded), so a chatty build can't OOM us — but a
+# firehose like `yes` shouldn't get to spin for the whole timeout either.
+_RUNAWAY_CAP = 100_000_000
+
+
 def _run_command(args, settings):
     command = args.get('command')
+    if command is not None and not isinstance(command, str):
+        raise HarnessError(
+            f"command must be a single shell-command string, got "
+            f"{type(command).__name__} — join arguments into one string.")
     if not command:
         raise HarnessError("command is required.")
+    for rx, what in _GIT_GATE:
+        if rx.search(command):
+            logger.warning(f"Command blocked by git gate ({what}): {command!r}")
+            return _GIT_GATE_MSG.format(what=what), False
     bl = _setting(settings, 'blacklist')
     patterns = [l.strip() for l in bl.split('\n') if l.strip()] if isinstance(bl, str) else [str(x) for x in (bl or [])]
     for pattern in patterns:
@@ -388,17 +483,18 @@ def _run_command(args, settings):
     cwd, wd = _resolve(settings, args.get('cwd'))
     if not cwd.is_dir():
         raise HarnessError(f"cwd does not exist: {_rel(cwd, wd)}")
-    max_timeout = int(_setting(settings, 'max_timeout'))
-    timeout = min(max(5, int(args.get('timeout') or 30)), max_timeout)
+    max_timeout = max(5, int(_setting(settings, 'max_timeout')))
+    timeout = min(max(5, int(args.get('timeout') or 120)), max_timeout)
     limit = int(args.get('max_output') or _setting(settings, 'output_limit'))
+    limit = max(200, min(limit, 1_000_000))
 
     logger.info(f"HARNESS [{cwd}] $ {command[:100]}")
     # Own process group so a timeout can kill the whole tree (see _kill_tree),
     # and stderr merged into stdout so a single byte cap bounds RAM. Read in a
-    # thread that stops at capture_cap; the main loop enforces the wall clock.
+    # thread keeping a bounded head+tail ring; the main loop is the wall clock.
     capture_cap = max(limit * 4, _MAX_CAPTURE_FLOOR)
     popen_kw = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    shell=True, cwd=str(cwd))
+                    shell=True, cwd=str(cwd), env=_scrubbed_env())
     if os.name == 'nt':
         popen_kw['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
@@ -408,7 +504,13 @@ def _run_command(args, settings):
     except Exception as e:
         raise HarnessError(f"Failed to launch command: {e}")
 
-    chunks, total, overflow = [], [0], [False]
+    # Head + rolling tail, both bounded — a chatty pip/npm/pytest run keeps
+    # draining (never blocks the child, never kills its transaction); only the
+    # middle of oversized output is discarded. Errors print at the end, so the
+    # tail is the part worth keeping.
+    head_cap = capture_cap // 2
+    head, tail = [], deque()
+    state = {'head': 0, 'tail': 0, 'discarded': 0}
 
     def _drain():
         try:
@@ -416,58 +518,88 @@ def _run_command(args, settings):
                 b = proc.stdout.read(65536)
                 if not b:
                     break
-                room = capture_cap - total[0]
-                if room > 0:
-                    chunks.append(b[:room])
-                    total[0] += min(len(b), room)
-                if total[0] >= capture_cap:
-                    overflow[0] = True   # stop draining; kill below
-                    break
+                if state['head'] < head_cap:
+                    take = min(len(b), head_cap - state['head'])
+                    head.append(b[:take])
+                    state['head'] += take
+                    b = b[take:]
+                if b:
+                    tail.append(b)
+                    state['tail'] += len(b)
+                    while state['tail'] > capture_cap - head_cap:
+                        dropped = tail.popleft()
+                        state['tail'] -= len(dropped)
+                        state['discarded'] += len(dropped)
         except Exception:
-            pass
+            logger.warning(f"Output reader died for: {command[:100]}", exc_info=True)
 
     reader = threading.Thread(target=_drain, daemon=True)
     reader.start()
 
     end = time.monotonic() + timeout
-    timed_out = False
+    timed_out = runaway = False
     while True:
         try:
             proc.wait(timeout=0.2)
             break                        # exited on its own
         except subprocess.TimeoutExpired:
-            if overflow[0]:
-                break                    # output cap hit → kill below
+            if state['discarded'] > _RUNAWAY_CAP:
+                runaway = True
+                break
             if time.monotonic() >= end:
                 timed_out = True
                 break
     if proc.poll() is None:
-        _kill_tree(proc)
+        _kill_tree(proc, graceful=True)  # SIGTERM first — let pip/npm land their transaction
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+    # Reap the group UNCONDITIONALLY, even after a clean exit: `cmd &` returns
+    # rc=0 immediately but its orphan keeps the pipe write-end open — left
+    # alive, the blocked reader wedges stdout.close() below (BufferedReader
+    # lock) and the calling worker thread with it, forever.
+    _kill_tree(proc)
+    if proc.poll() is None:
         try:
             proc.wait(timeout=5)
         except Exception:
             pass
     reader.join(timeout=2)
-    try:
-        proc.stdout.close()
-    except Exception:
-        pass
+    if reader.is_alive():
+        # A setsid/systemd-run escapee we can't kill still holds the pipe and
+        # the reader holds the buffer lock — closing here would block forever.
+        # Leak the fd (freed at GC when the escapee exits) instead of wedging.
+        logger.warning(f"Unkillable pipe holder survived (setsid child?): {command[:100]}")
+    else:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
 
-    raw = b''.join(chunks)
-    try:
-        full = raw.decode('utf-8')
-    except UnicodeDecodeError:
-        # Windows console tools emit the OEM codepage (cp850/cp437), not UTF-8 —
-        # the 'oem' codec keeps their output readable instead of mojibake.
-        full = raw.decode('oem' if os.name == 'nt' else 'utf-8', 'replace')
+    def _dec(b):
+        try:
+            return b.decode('utf-8')
+        except UnicodeDecodeError:
+            # Windows console tools emit the OEM codepage (cp850/cp437), not
+            # UTF-8 — the 'oem' codec keeps their output readable.
+            return b.decode('oem' if os.name == 'nt' else 'utf-8', 'replace')
+
+    full = _dec(b''.join(head))
+    if state['discarded']:
+        full += f"\n[... {_size(state['discarded'])} of output discarded (middle) ...]\n"
+    if tail:
+        full += _dec(b''.join(tail))
     full = full or '(no output)'
     full, note = _truncate_tail(full, limit)
+    if state['discarded']:
+        note += f" ({_size(state['discarded'])} of middle output discarded)"
     if timed_out:
         extra, ok = f" — TIMED OUT after {timeout}s (process tree killed)", False
         logger.warning(f"Command timed out after {timeout}s: {command[:100]}")
-    elif overflow[0]:
-        extra, ok = f" — OUTPUT CAPPED at {capture_cap} bytes (process tree killed)", False
-        logger.warning(f"Command output exceeded {capture_cap} bytes: {command[:100]}")
+    elif runaway:
+        extra, ok = f" — RUNAWAY OUTPUT (>{_size(_RUNAWAY_CAP)} discarded, process tree killed)", False
+        logger.warning(f"Command produced runaway output: {command[:100]}")
     else:
         extra, ok = "", proc.returncode == 0
     header = f"[{_rel(cwd, wd)}] $ {command}\nExit code: {proc.returncode}{extra}{note}"

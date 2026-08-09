@@ -1517,9 +1517,18 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
                 try: tmp_path.unlink()
                 except Exception: pass
 
+    _propagate_settings_change(plugin_name, merged)
+
+    return {"status": "success", "plugin": plugin_name, "settings": merged}
+
+
+def _propagate_settings_change(plugin_name: str, effective: dict):
+    """Push a just-changed settings state to every live consumer, without a
+    restart. Shared by save (PUT) and reset (DELETE) — a reset that skipped
+    this would leave stale tool schemas/schedules live until reboot."""
     # Rebuild any settings-aware tool schemas (e.g. dynamic tool descriptions)
-    # so the plugin's tools reflect the just-saved settings immediately, without
-    # a reload. No-op for plugins whose tool modules don't define get_tools().
+    # so the plugin's tools reflect the change immediately, without a reload.
+    # No-op for plugins whose tool modules don't define get_tools().
     try:
         system = get_system()
         if system and getattr(system, 'llm_chat', None):
@@ -1539,8 +1548,8 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
     # its own settings change (e.g. pre-download a newly selected model off the
     # request path). Opt-in + generic — only providers that define
     # on_settings_saved(plugin_name, settings) react; all others are a no-op.
-    # Runs AFTER the atomic save above and is fully isolated, so a provider bug
-    # can never lose the just-persisted settings. (Added 2026-06-16.)
+    # Runs AFTER the atomic write/unlink and is fully isolated, so a provider
+    # bug can never lose the just-persisted settings. (Added 2026-06-16.)
     try:
         system = get_system()
         # The three swappable providers are NOT addressed the same way:
@@ -1561,23 +1570,30 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
         for prov in targets:
             if prov is not None and hasattr(prov, "on_settings_saved"):
                 try:
-                    # dict(merged) — a provider can't mutate the response/persisted dict.
-                    prov.on_settings_saved(plugin_name, dict(merged))
+                    # dict(effective) — a provider can't mutate the caller's dict.
+                    prov.on_settings_saved(plugin_name, dict(effective))
                 except Exception as e:
                     logger.warning(f"[{plugin_name}] provider on_settings_saved failed: {e}")
     except Exception as e:
         logger.debug(f"settings-saved provider notify skipped: {e}")
 
-    return {"status": "success", "plugin": plugin_name, "settings": merged}
-
 
 @router.delete("/api/webui/plugins/{plugin_name}/settings")
 async def reset_plugin_settings(plugin_name: str, request: Request, _=Depends(require_login)):
-    """Reset plugin settings."""
+    """Reset plugin settings to manifest defaults (delete the stored file)."""
     _require_known_plugin(plugin_name)
     settings_file = USER_PLUGIN_SETTINGS_DIR / f"{plugin_name}.json"
-    if settings_file.exists():
-        settings_file.unlink()
+    # Same lock as PUT — otherwise a concurrent save can resurrect the file
+    # mid-reset and the reset silently loses.
+    with _get_settings_lock(plugin_name):
+        if settings_file.exists():
+            settings_file.unlink()
+    try:
+        from core.plugin_loader import plugin_loader
+        effective = plugin_loader.get_plugin_settings(plugin_name)
+    except Exception:
+        effective = {}
+    _propagate_settings_change(plugin_name, effective)
     return {"status": "success", "plugin": plugin_name, "message": "Settings reset"}
 
 
