@@ -4051,6 +4051,33 @@ div.hb-response-summary {
     opacity: 0.7;
 }
 
+.message-metadata-line {
+    cursor: pointer;
+    user-select: none;
+}
+
+.message-metadata-line .mm-chev {
+    display: inline-block;
+    margin-right: 0.35em;
+    font-size: 0.9em;
+    transition: transform 0.15s ease;
+}
+
+.message-metadata.open .mm-chev {
+    transform: rotate(90deg);
+}
+
+.message-metadata-detail {
+    display: none;
+    margin-top: 0.4em;
+    padding-left: 1.1em;
+    line-height: 1.5;
+}
+
+.message-metadata.open .message-metadata-detail {
+    display: block;
+}
+
 .message-degraded {
     font-style: italic;
     color: var(--text-muted);

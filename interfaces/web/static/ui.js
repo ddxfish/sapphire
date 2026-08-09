@@ -259,12 +259,25 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
         contentDiv.appendChild(note);
     }
 
-    // Add metadata footer for assistant messages
+    // Add metadata footer for assistant messages — compact line + click-to-
+    // expand detail accordion (metrics v2, 2026-08-08).
     if (role === 'assistant' && msg.metadata) {
         const meta = msg.metadata;
         const parts = [];
         const tok = meta.tokens || {};
         const cumTok = meta.cumulative_tokens || null;
+        const fmt = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n;
+
+        // Timestamp — the message's own DB time (every message has one, so
+        // this works retroactively on pre-metrics history). Time-only today,
+        // "Aug 7 14:32" otherwise.
+        const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const ts = msg.timestamp ? new Date(msg.timestamp) : null;
+        if (ts && !isNaN(ts)) {
+            const hm = ts.toTimeString().slice(0, 5);
+            parts.push(ts.toDateString() === new Date().toDateString()
+                ? hm : `${MONTHS[ts.getMonth()]} ${ts.getDate()} ${hm}`);
+        }
 
         if (meta.duration_seconds) {
             parts.push(`${meta.duration_seconds}s`);
@@ -274,47 +287,64 @@ const createMessage = (msg, idx = null, total = null, isHistoryRender = false) =
             parts.push(`${meta.tokens_per_second} ${label}`);
         }
         if (meta.model) {
-            const provider = meta.provider || '';
-            const model = meta.model;
-            const modelLower = model.toLowerCase();
-            const providerInModel = provider && (
-                modelLower.startsWith(provider.toLowerCase()) ||
-                modelLower.includes(provider.toLowerCase())
-            );
-            parts.push(provider && !providerInModel ? `${provider} / ${model}` : model);
+            // Basename only — fireworks models are full paths
+            // (accounts/fireworks/models/x). Full string lives in the detail.
+            parts.push(String(meta.model).split('/').pop());
         }
 
-        // Token counts: in / out
+        // "in" = TOTAL input: uncached prompt + cache reads. The raw provider
+        // `prompt` field is NON-cached input only (both providers normalize
+        // to that convention) — displaying it raw made "in" collapse on cache
+        // hits and balloon after edits invalidated the prefix (2026-08-08).
+        // "out" = cumulative completion across the tool loop when >1 call.
         const prompt = tok.prompt || 0;
-        const content = tok.content || 0;
-        if (prompt || content) {
-            const fmt = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n;
-            parts.push(`${fmt(prompt)} in / ${fmt(content)} out`);
-        }
-
-        // Cache indicator. Anthropic reports `prompt` as the NON-cached
-        // input tokens, with cached tokens reported separately. Total
-        // input = prompt + cache_read. Old formula divided cache_read
-        // by the leftover non-cached portion and gave 5000%+ readings
-        // on near-full cache hits. Fixed 2026-04-30.
         const cacheRead = tok.cache_read_tokens || 0;
         const cacheWrite = tok.cache_write_tokens || 0;
+        const totalIn = prompt + cacheRead;
+        const out = (cumTok && cumTok.iterations > 1) ? (cumTok.completion || 0) : (tok.content || 0);
+        if (totalIn || out) {
+            parts.push(`${fmt(totalIn)} in / ${fmt(out)} out`);
+        }
         if (cacheRead > 0) {
-            const totalPrompt = prompt + cacheRead;
-            const pct = totalPrompt > 0 ? Math.round((cacheRead / totalPrompt) * 100) : 0;
+            const pct = totalIn > 0 ? Math.round((cacheRead / totalIn) * 100) : 0;
             parts.push(`cache ${pct}%`);
         } else if (cacheWrite > 0) {
             parts.push('cache miss');
         }
-
-        // Cumulative (multi-tool) summary
         if (cumTok && cumTok.iterations > 1) {
-            const fmt = n => n >= 1000 ? `${(n/1000).toFixed(1)}k` : n;
-            parts.push(`${cumTok.iterations} calls · ${fmt(cumTok.total)} total`);
+            parts.push(`${cumTok.iterations} calls`);
         }
 
         if (parts.length > 0) {
-            const metaDiv = createElem('div', { class: 'message-metadata' }, parts.join(' · '));
+            const metaDiv = createElem('div', { class: 'message-metadata' });
+            const line = createElem('div', { class: 'message-metadata-line' });
+            line.appendChild(createElem('span', { class: 'mm-chev' }, '▸'));
+            line.appendChild(document.createTextNode(parts.join(' · ')));
+            metaDiv.appendChild(line);
+
+            // Detail accordion — raw numbers, full identifiers. Thinking is
+            // always a chars/4 approximation (providers fold it into
+            // completion), hence the tilde.
+            const rows = [];
+            rows.push(`${meta.provider || '?'} · ${meta.model || '?'}`);
+            if (meta.start_time && meta.end_time) {
+                rows.push(`${String(meta.start_time).slice(0, 10)} ${String(meta.start_time).slice(11, 19)} → ${String(meta.end_time).slice(11, 19)}`);
+            }
+            rows.push(`in: ${totalIn} total (${prompt} prompt + ${cacheRead} cached)`
+                + (cacheWrite ? ` · ${cacheWrite} cache-written` : ''));
+            rows.push(`out: ${tok.content || 0} content`
+                + (tok.thinking ? ` · ~${tok.thinking} thinking` : ''));
+            if (cumTok && cumTok.iterations > 1) {
+                rows.push(`${cumTok.iterations} calls · Σ ${fmt(cumTok.prompt + (cumTok.cache_read || 0))} in / ${fmt(cumTok.completion || 0)} out / ${fmt(cumTok.total || 0)} total`);
+            }
+            if (tok.estimated) {
+                rows.push('counts estimated — provider sent no usage');
+            }
+            const detail = createElem('div', { class: 'message-metadata-detail' });
+            rows.forEach(r => detail.appendChild(createElem('div', {}, r)));
+            metaDiv.appendChild(detail);
+
+            line.addEventListener('click', () => metaDiv.classList.toggle('open'));
             contentDiv.appendChild(metaDiv);
         }
     }
