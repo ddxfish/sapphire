@@ -351,6 +351,7 @@ class ContinuityExecutor:
         from core.chat.function_manager import scope_setting_keys
         settings = {
             "prompt": task.get("prompt", "default"),
+            "privacy_required": task.get("privacy_required", False),
             "toolset": task.get("toolset", "none"),
             "provider": task.get("provider", "auto"),
             "model": task.get("model", ""),

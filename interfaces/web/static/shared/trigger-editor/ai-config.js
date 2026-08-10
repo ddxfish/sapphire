@@ -147,6 +147,9 @@ export function renderAIConfig(t, data, opts = {}) {
                         <input type="text" id="ed-model-custom" value="${_esc(t.model || '')}" placeholder="Model name">
                     </div>
                 </div>
+                <div class="sched-checkbox">
+                    <label><input type="checkbox" id="ed-privacy" ${t.privacy_required ? 'checked' : ''}> Private (local providers only) <span class="help-tip" data-tip="Force this task onto local providers only. Auto-checked when the pinned prompt requires privacy — the server keeps it on while the prompt demands it.">?</span></label>
+                </div>
             </div></div>
         </details>
 
@@ -510,6 +513,7 @@ export function readAIConfig(modal) {
         prompt: modal.querySelector('#ed-prompt')?.value || 'default',
         toolset: modal.querySelector('#ed-toolset')?.value || 'none',
         provider: modal.querySelector('#ed-provider')?.value || 'auto',
+        privacy_required: modal.querySelector('#ed-privacy')?.checked || false,
         model: modelValue,
         chat_target: modal.querySelector('#ed-chat')?.value?.trim() || '',
         inject_datetime: modal.querySelector('#ed-datetime')?.checked || false,

@@ -332,6 +332,19 @@ class ContinuityScheduler:
     MAX_DAEMONS = 10
     MAX_WEBHOOKS = 10
 
+    @staticmethod
+    def _prompt_requires_privacy(name: str) -> bool:
+        """Resolve a prompt name and report its privacy_required flag.
+        Unresolvable (or any error) → False: the carrier this feeds is
+        OR-ed with the LIVE derivation at run time, so a miss here can
+        only under-stamp at edit time, never weaken an existing True."""
+        try:
+            from core import prompts
+            p = prompts.get_prompt(name)
+            return bool(isinstance(p, dict) and p.get('privacy_required'))
+        except Exception:
+            return False
+
     def create_task(self, data: Dict) -> Dict:
         """Create new task, returns the created task."""
         task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
@@ -388,6 +401,15 @@ class ContinuityScheduler:
             "created": _user_now().isoformat()
         }
 
+        # Privacy carrier (2026-08-09, vault phase 0c): privacy is part of the
+        # task's CONTRACT, not a lookup side-effect. Stamped here from the
+        # resolved prompt, OR-ed with the live derivation at run time
+        # (ExecutionContext._build_prompt) — the carrier is what survives the
+        # pinned prompt becoming unresolvable (deleted, or asleep in a locked
+        # vault), which used to silently drop the task onto cloud providers.
+        task["privacy_required"] = (bool(data.get("privacy_required"))
+                                    or self._prompt_requires_privacy(task["prompt"]))
+
         # Dynamically include all scope keys from SCOPE_REGISTRY so plugin scopes
         # propagate without code changes. Default 'none' for new tasks (disabled by default).
         from core.chat.function_manager import scope_setting_keys
@@ -441,12 +463,23 @@ class ContinuityScheduler:
                 "heartbeat", "emoji",
                 "context_limit", "max_parallel_tools", "max_tool_rounds",
                 "active_hours_start", "active_hours_end",
-                "max_runs", "delete_after_run"
+                "max_runs", "delete_after_run", "privacy_required"
             }
             allowed.update(scope_setting_keys())
             for key in allowed:
                 if key in data:
                     task[key] = data[key]
+
+            # Re-stamp the privacy carrier whenever the prompt or the flag
+            # changed: stored value OR derived-from-prompt. A user can't
+            # un-flag a task whose pinned prompt demands privacy (same rule
+            # as the chat-settings 409 guard: switch prompts first). Stale
+            # directions are fail-CLOSED only — a True left behind by a
+            # since-public prompt stays until explicitly cleared.
+            if "prompt" in data or "privacy_required" in data:
+                task["privacy_required"] = (
+                    bool(task.get("privacy_required"))
+                    or self._prompt_requires_privacy(task.get("prompt", "default")))
             
             # Reset run count when re-enabling a completed task
             if data.get("enabled") and task.get("max_runs", 0) > 0:

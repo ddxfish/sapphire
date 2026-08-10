@@ -129,13 +129,24 @@ class ExecutionContext:
         # Stashed for _build_scopes/_resolve_provider: a privacy_required
         # prompt must not run on a non-local provider in this lane (there is
         # no private_chat toggle here — local-only IS the guarantee).
-        self._prompt_privacy_required = bool(
-            isinstance(prompt_data, dict) and prompt_data.get('privacy_required'))
+        # OR of the task's persisted carrier and the live prompt-derived flag
+        # (vault phase 0c): the live half catches prompts that BECAME private
+        # after the task was saved; the carrier half survives the prompt not
+        # resolving at all (deleted, or asleep in a locked vault) — before
+        # this, an unresolvable prompt silently dropped privacy and the task
+        # ran on whatever provider it was pinned to, cloud included.
+        self._prompt_privacy_required = (
+            bool(self.task_settings.get("privacy_required"))
+            or bool(isinstance(prompt_data, dict)
+                    and prompt_data.get('privacy_required')))
         if prompt_data:
             system_prompt = prompt_data.get("content") if isinstance(prompt_data, dict) else str(prompt_data)
         else:
-            logger.warning(f"[ExecCtx] Prompt '{prompt_name}' not found — "
-                           f"running as generic assistant")
+            logger.warning(
+                f"[ExecCtx] Prompt '{prompt_name}' not found — running as "
+                f"generic assistant"
+                + (" (task carries privacy_required — local-only still enforced)"
+                   if self._prompt_privacy_required else ""))
             system_prompt = "You are a helpful assistant."
 
         # Name substitutions

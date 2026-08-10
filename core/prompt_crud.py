@@ -291,6 +291,107 @@ def delete_prompt(name: str, reason: str = None) -> bool:
         return False
 
 
+def save_component(comp_type: str, key: str, value: str,
+                   reason: str = None) -> tuple[bool, str]:
+    """Item-level save funnel for a single prompt piece (create or update).
+
+    THE single write path for pieces — the web route and the AI meta tool
+    both land here (phase 0 of the prompt vault: per-item write routing
+    needs item identity, which save_components() doesn't have). Writes the
+    PRIVATE dict under the manager lock (watcher-reload rebind race),
+    propagates a refused save, publishes COMPONENTS_CHANGED.
+    """
+    if not isinstance(value, str):
+        return False, "Component value must be a string"
+    with prompt_manager._lock:
+        prompt_manager._components.setdefault(comp_type, {})[key] = value
+        saved = prompt_manager.save_components(reason=reason)
+    if not saved:
+        return False, ("Save refused — the prompt store failed to load earlier. "
+                       "Fix user/prompts/prompt_pieces.json and reload.")
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
+    except Exception:
+        pass
+    return True, f"Saved {comp_type}/{key}"
+
+
+def delete_component(comp_type: str, key: str,
+                     reason: str = None) -> tuple[bool, str]:
+    """Item-level delete funnel for a prompt piece (user entries only).
+
+    Returns (ok, code): code is '' on success, else one of
+    'not_found' | 'pack_owned' | 'store_latch' — callers keep their own
+    HTTP-status mapping / tool wording. Membership is checked UNDER the
+    lock (the old route grabbed the dict reference before locking — a
+    watcher reload between check and lock could rebind it and the delete
+    landed in an abandoned dict).
+    """
+    with prompt_manager._lock:
+        user_components = prompt_manager._components
+        present = comp_type in user_components and key in user_components[comp_type]
+        if present:
+            del user_components[comp_type][key]
+            saved = prompt_manager.save_components(reason=reason)
+    if not present:
+        from core import prompt_packs
+        if prompt_packs.piece_source(comp_type, key):
+            return False, 'pack_owned'
+        return False, 'not_found'
+    if not saved:
+        return False, 'store_latch'
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.COMPONENTS_CHANGED,
+                {"type": comp_type, "key": key, "action": "deleted"})
+    except Exception:
+        pass
+    return True, ''
+
+
+def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
+                          reason: str = None) -> tuple[bool, str]:
+    """Bulk piece writer (persona-card import): one lock, one disk save,
+    one COMPONENTS_CHANGED — not N of each.
+
+    items: {comp_type: {key: value}}. Non-dict groups and non-string values
+    are skipped with a warning (card bundles are third-party data — a
+    persisted non-string detonates the renderer later). keep: set of
+    (comp_type, key) tuples the user chose to keep local. overwrite False
+    skips keys already present in the MERGED view (pack pieces count —
+    matches the import UI's "existing" notion).
+    """
+    wrote = 0
+    with prompt_manager._lock:
+        for comp_type, defs in (items or {}).items():
+            if not isinstance(defs, dict):
+                continue
+            for key, value in defs.items():
+                if not isinstance(value, str):
+                    logger.warning(f"Skipping non-string piece {comp_type}/{key} in batch")
+                    continue
+                if (comp_type, key) in keep:
+                    continue
+                if not overwrite and prompt_manager.components.get(comp_type, {}).get(key):
+                    continue
+                prompt_manager._components.setdefault(comp_type, {})[key] = value
+                wrote += 1
+        saved = prompt_manager.save_components(reason=reason) if wrote else True
+    if not saved:
+        return False, ("Save refused — the prompt store failed to load earlier. "
+                       "Fix user/prompts/prompt_pieces.json and reload.")
+    if wrote:
+        # The old import loop published nothing — imported pieces sat stale
+        # in every open tab until a manual refresh.
+        try:
+            from core.event_bus import publish, Events
+            publish(Events.COMPONENTS_CHANGED, {"action": "imported", "count": wrote})
+        except Exception:
+            pass
+    return True, f"Wrote {wrote} pieces"
+
+
 def activate_prompt(name: str, system) -> tuple[bool, str]:
     """Activate a prompt: snapshot into the live chat, track the active
     preset, apply scenario pieces, persist to chat settings.

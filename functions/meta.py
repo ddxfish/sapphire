@@ -697,18 +697,12 @@ def _prompt_pieces(args):
         value = args.get('value', '')
         if not key or not value:
             return "Both key and value are required for create.", False
-        # Write the PRIVATE dict — `.components` is a merged COPY when plugin
-        # prompt-packs are registered; mutating it is silently lost (same trap
-        # as the web routes, see content.py). Shadowing a pack piece is the
-        # intended edit path (user wins the merge). Mutate+save under the
-        # manager lock; surface a refused save instead of claiming success.
-        with prompts.prompt_manager._lock:
-            prompts.prompt_manager._components.setdefault(component, {})[key] = value
-            saved = prompts.prompt_manager.save_components(reason=_reason(args))
-        if not saved:
-            return ("Save refused — the prompt store failed to load earlier "
-                    "(check user/prompts/prompt_pieces.json)."), False
-        publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key})
+        # Item-level funnel (phase 0 of the vault): lock discipline, private-
+        # dict write, refusal propagation, and the COMPONENTS_CHANGED publish
+        # all live in prompt_crud.save_component now.
+        ok, msg = prompts.save_component(component, key, value, reason=_reason(args))
+        if not ok:
+            return msg, False
         return (f"Created {component}/'{key}' in the library. Not active — "
                 f"prompt_pieces(action='set', component='{component}', key='{key}') to wear it."), True
 
@@ -727,21 +721,19 @@ def _prompt_pieces(args):
         active = active or any(k == key for k, _ in get_transients().get(component, []))
         if active:
             return f"'{key}' is currently active — remove it first, then delete.", False
-        # Delete from the PRIVATE dict — pack pieces are read-only (deleting
-        # from the merged copy would claim success while changing nothing).
-        user_comps = prompts.prompt_manager._components
-        if key not in user_comps.get(component, {}):
-            from core import prompt_packs
-            owner = prompt_packs.piece_source(component, key)
-            return (f"'{component}/{key}' is shipped by plugin '{owner or 'a plugin'}' — "
-                    f"read-only. Disable the plugin to remove it.", False)
-        with prompts.prompt_manager._lock:
-            del user_comps[component][key]
-            saved = prompts.prompt_manager.save_components(reason=_reason(args))
-        if not saved:
-            return ("Delete not persisted — the prompt store failed to load earlier "
-                    "(check user/prompts/prompt_pieces.json)."), False
-        publish(Events.COMPONENTS_CHANGED, {"type": component, "key": key, "action": "deleted"})
+        # Item-level funnel (phase 0 of the vault) — pack-owned and store-latch
+        # refusals come back as codes; wording stays here.
+        ok, code = prompts.delete_component(component, key, reason=_reason(args))
+        if not ok:
+            if code == 'pack_owned':
+                from core import prompt_packs
+                owner = prompt_packs.piece_source(component, key)
+                return (f"'{component}/{key}' is shipped by plugin '{owner or 'a plugin'}' — "
+                        f"read-only. Disable the plugin to remove it.", False)
+            if code == 'store_latch':
+                return ("Delete not persisted — the prompt store failed to load earlier "
+                        "(check user/prompts/prompt_pieces.json)."), False
+            return _unknown_key_msg(component, key), False
         return f"Deleted {component}/{key} from the library.", True
 
     return f"Unknown action '{action}'. Valid: list, view, set, remove, create, delete.", False

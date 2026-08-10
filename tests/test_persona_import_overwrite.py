@@ -91,10 +91,13 @@ def test_keep_components_skips_unchecked(pm, monkeypatch):
         @property
         def components(self):
             return self._components
-        def save_components(self):
+        def save_components(self, reason=None):
             return True
     fake = FakePM()
     monkeypatch.setattr(pmmod, "prompt_manager", fake)
+    # Piece writes flow through prompt_crud.save_components_batch (phase 0
+    # funnel), which uses prompt_crud's module-level manager binding.
+    monkeypatch.setattr(pc, "prompt_manager", fake)
 
     r = _run({
         "sapphire_export": True, "type": "persona", "name": "p",

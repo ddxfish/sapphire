@@ -1198,6 +1198,13 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
             except HTTPException:
                 raise
             except Exception as e:
+                # Deliberately fail-OPEN: this is a courtesy guard, not the
+                # enforcement gate. If it skips and privacy goes off anyway,
+                # _select_provider (fail-closed) refuses the next turn loudly
+                # — nothing leaks. Vault note (phase 0b contract): a prompt
+                # name that no longer RESOLVES passes this guard by design;
+                # that is what lets "lock vault, THEN PUT private_chat:false"
+                # succeed — the eyeball client must sequence in that order.
                 logger.warning(f"privacy-required check on settings PUT skipped: {e}")
 
         if chat_name != session_manager.get_active_chat_name():

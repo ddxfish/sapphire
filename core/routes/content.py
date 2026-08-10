@@ -159,19 +159,9 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     if not isinstance(value, str):
         raise HTTPException(status_code=400, detail="Component value must be a string")
     reason = (data.get('reason') or '').strip() or None
-    # Mutate + save under the manager lock (watcher-reload rebind race), and
-    # surface a refused save instead of toasting success over a dead write.
-    with prompts.prompt_manager._lock:
-        user_components = prompts.prompt_manager._components
-        if comp_type not in user_components:
-            user_components[comp_type] = {}
-        user_components[comp_type][key] = value
-        saved = prompts.prompt_manager.save_components(reason=reason)
-    if not saved:
-        raise HTTPException(status_code=500,
-                            detail="Save refused — the prompt store failed to load "
-                                   "earlier. Fix user/prompts/prompt_pieces.json and reload.")
-    publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key})
+    ok, msg = prompts.save_component(comp_type, key, value, reason=reason)
+    if not ok:
+        raise HTTPException(status_code=500, detail=msg)
     if reason:
         # Reason-only delivery — see save_prompt: no diff means no saver
         # event, and the why must still reach the ledger.
@@ -190,21 +180,17 @@ async def delete_prompt_component(comp_type: str, key: str, request: Request,
     """Delete a prompt component (user entries only — pack pieces are
     read-only; deleting a user shadow makes the pack piece show through).
     Optional ?reason= lands in the prompt ledger."""
-    user_components = prompts.prompt_manager._components
-    if comp_type in user_components and key in user_components[comp_type]:
-        with prompts.prompt_manager._lock:
-            del user_components[comp_type][key]
-            saved = prompts.prompt_manager.save_components(
-                reason=(reason or '').strip() or None)
-        if not saved:
-            raise HTTPException(status_code=500,
-                                detail="Delete not persisted — the prompt store failed to "
-                                       "load earlier. Fix user/prompts/prompt_pieces.json and reload.")
-        publish(Events.COMPONENTS_CHANGED, {"type": comp_type, "key": key, "action": "deleted"})
+    ok, code = prompts.delete_component(comp_type, key,
+                                        reason=(reason or '').strip() or None)
+    if ok:
         return {"status": "success", "components": prompts.prompt_manager.components}
-    from core import prompt_packs
-    owner = prompt_packs.piece_source(comp_type, key)
-    if owner:
+    if code == 'store_latch':
+        raise HTTPException(status_code=500,
+                            detail="Delete not persisted — the prompt store failed to "
+                                   "load earlier. Fix user/prompts/prompt_pieces.json and reload.")
+    if code == 'pack_owned':
+        from core import prompt_packs
+        owner = prompt_packs.piece_source(comp_type, key)
         raise HTTPException(status_code=403,
                             detail=f"'{comp_type}/{key}' is shipped by plugin '{owner}' — "
                                    f"read-only. Disable the plugin to remove it.")
@@ -918,8 +904,7 @@ async def _import_persona_from_bundle(data):
     `avatar` (if present) is stored as the persona's avatar (→ webp)."""
     import base64
     from core.personas import persona_manager
-    from core.prompt_crud import get_prompt, save_prompt
-    from core.prompt_manager import prompt_manager
+    from core.prompt_crud import get_prompt, save_prompt, save_components_batch
 
     # Validate
     if not data.get("sapphire_export") or data.get("type") != "persona":
@@ -983,36 +968,11 @@ async def _import_persona_from_bundle(data):
                 components = data["components"]
                 if not isinstance(components, dict):
                     raise HTTPException(status_code=400, detail="Invalid components format")
-                # Mutate + save under the manager lock like every other
-                # writer — unlocked mutation races the watcher's reload
-                # rebind (the write lands in an abandoned dict).
-                with prompt_manager._lock:
-                    for comp_type, defs in components.items():
-                        if not isinstance(defs, dict):
-                            continue
-                        for key, value in defs.items():
-                            if not isinstance(value, str):
-                                # Card bundles are third-party data — a non-string
-                                # piece persisted here detonates the renderer later.
-                                logger.warning(f"[IMPORT] Skipping non-string piece "
-                                               f"{comp_type}/{key} from card")
-                                continue
-                            if (comp_type, key) in _keep:
-                                continue  # user unchecked this piece — keep local value
-                            existing_piece = prompt_manager.components.get(comp_type, {}).get(key)
-                            if existing_piece and not overwrite_prompt:
-                                continue
-                            # Write the PRIVATE dict — `.components` is a merged
-                            # COPY when prompt-packs are registered; writing to it
-                            # silently drops every imported piece (see PUT
-                            # /api/prompts/components above for the same rule).
-                            prompt_manager._components.setdefault(comp_type, {})[key] = value
-                    saved = prompt_manager.save_components()
-                if not saved:
+                ok, msg = save_components_batch(components, keep=_keep,
+                                                overwrite=overwrite_prompt)
+                if not ok:
                     raise HTTPException(status_code=409,
-                                        detail="Component save refused — the prompt "
-                                               "store failed to load earlier; fix "
-                                               "user/prompts/prompt_pieces.json and reload")
+                                        detail=f"Component save refused: {msg}")
 
     # Build persona settings
     voice_data = data.get("voice", {})

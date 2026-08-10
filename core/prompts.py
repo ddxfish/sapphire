@@ -47,6 +47,9 @@ from .prompt_crud import (
     get_prompt,
     save_prompt,
     delete_prompt,
+    save_component,
+    delete_component,
+    save_components_batch,
     activate_prompt,
     revalidate_active,
 )
@@ -91,6 +94,9 @@ __all__ = [
     'get_prompt',
     'save_prompt',
     'delete_prompt',
+    'save_component',
+    'delete_component',
+    'save_components_batch',
     'activate_prompt',
     'revalidate_active',
 ]
