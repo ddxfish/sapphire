@@ -93,10 +93,15 @@ def get_prompt(name: str):
     return None
 
 
+VAULT_LOCKED_MSG = "Vault is locked — unlock the vault to save this item."
+
+
 def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
-                reason: str = None, audit: bool = True) -> tuple[bool, str]:
+                reason: str = None, audit: bool = True,
+                origin: str = None) -> tuple[bool, str]:
     """
-    Save a prompt - updates user JSON files (monoliths or scenario_presets).
+    Save a prompt - updates user JSON files (monoliths or scenario_presets)
+    or the vault, per the write-routing rule below.
 
     Args:
         name: Prompt name
@@ -104,10 +109,25 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
         allow_overwrite: False refuses to replace an existing same-type USER
             prompt (pack prompts don't count — shadowing them is the intended
             edit path). Accepted-but-ignored until 2026-08-09; persona import
-            passed it believing it worked and silently overwrote.
+            passed it believing it worked and silently overwrote. Vault
+            entries DO count as existing while unlocked.
         reason: optional why — rides the prompt-ledger audit event
         audit: False when a higher-level event already describes this save
             (piece activations) — the audit snapshot still refreshes
+        origin: 'vault' when the CLIENT knows the content came from the vault
+            (editor origin stamp). While locked that save is REFUSED with
+            VAULT_LOCKED_MSG — the stale-editor guard (recon finding 6): an
+            editor holding decrypted vault content must never splash it into
+            the regular plaintext store after an idle-lock. 'regular' forces
+            the user store (import lanes: installing shared content must not
+            depend on invisible lock state). None = natural routing.
+
+    Vault write routing (v1, no per-item toggle):
+        exists in USER store → regular (user wins the merge, so the user
+        copy is what you see and therefore what you edit); exists in VAULT
+        (unlocked) → vault; pack-shadow edit → regular (customizing shipped
+        prompts keeps identical semantics regardless of vault state); truly
+        NEW: vault unlocked → vault, locked → regular.
 
     Returns:
         (success: bool, message: str)
@@ -140,9 +160,11 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
                 logger.warning(msg)
                 return False, msg
 
+        from core import prompt_vault
         if not allow_overwrite:
             existing = (name in prompt_manager._monoliths if prompt_type == 'monolith'
-                        else name in prompt_manager._scenario_presets)
+                        else name in prompt_manager._scenario_presets) \
+                or prompt_vault.vault_has_prompt(name)
             if existing:
                 msg = f"Prompt '{name}' already exists (overwrite not allowed)"
                 logger.warning(msg)
@@ -160,6 +182,29 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
             bad = [k for k, v in comps.items() if not isinstance(v, (str, list))]
             if bad:
                 return False, f"Component values must be strings or lists (bad: {', '.join(bad)})"
+
+        # ── Vault write routing (see docstring) ──
+        if origin == 'vault' and not prompt_vault.vault_unlocked():
+            logger.warning(f"Refused vault-origin save of '{name}' while locked")
+            return False, VAULT_LOCKED_MSG
+        in_user = (name in prompt_manager._monoliths
+                   or name in prompt_manager._scenario_presets)
+        if not in_user and prompt_vault.vault_unlocked() and origin != 'regular':
+            from core import prompt_packs
+            pack_shadow_edit = (name in prompt_packs.get_sources()
+                                and not prompt_vault.vault_has_prompt(name))
+            if origin == 'vault' or not pack_shadow_edit:
+                if prompt_type == 'monolith':
+                    ok, code = prompt_vault.set_monolith(name, data['content'])
+                else:
+                    ok, code = prompt_vault.set_preset(name, data['components'].copy())
+                if not ok:
+                    if code == 'cross_type':
+                        return False, (f"Name '{name}' already exists as the other "
+                                       f"prompt type in the vault")
+                    return False, f"Vault save refused ({code})"
+                logger.info(f"Saved {prompt_type} '{name}' (vault)")
+                return True, f"Saved {'monolith' if prompt_type == 'monolith' else 'assembled'} '{name}' (vault)"
 
         # Mutate + save inside the manager lock: unlocked mutation raced the
         # file watcher's reload() dict REBIND — the write landed in an
@@ -246,6 +291,21 @@ def delete_prompt(name: str, reason: str = None) -> bool:
             logger.info(f"Deleted assembled prompt '{name}'")
             deleted = True
 
+        # Vault entries (only visible — and deletable — while unlocked).
+        # Only when no user entry was deleted: removing a user shadow
+        # reveals the vault version underneath, same shadow-reveal
+        # semantics as packs. Sealed names fall through to not-found.
+        if not deleted:
+            from core import prompt_vault
+            if prompt_vault.vault_unlocked():
+                for _deleter, _kind in ((prompt_vault.delete_monolith, 'monolith'),
+                                        (prompt_vault.delete_preset, 'assembled')):
+                    ok, _code = _deleter(name)
+                    if ok:
+                        logger.info(f"Deleted {_kind} '{name}' (vault)")
+                        deleted = True
+                        break
+
         # Hand off active state loudly if we just deleted the active prompt.
         if deleted and was_active:
             try:
@@ -292,7 +352,7 @@ def delete_prompt(name: str, reason: str = None) -> bool:
 
 
 def save_component(comp_type: str, key: str, value: str,
-                   reason: str = None) -> tuple[bool, str]:
+                   reason: str = None, origin: str = None) -> tuple[bool, str]:
     """Item-level save funnel for a single prompt piece (create or update).
 
     THE single write path for pieces — the web route and the AI meta tool
@@ -300,9 +360,35 @@ def save_component(comp_type: str, key: str, value: str,
     needs item identity, which save_components() doesn't have). Writes the
     PRIVATE dict under the manager lock (watcher-reload rebind race),
     propagates a refused save, publishes COMPONENTS_CHANGED.
+
+    Vault routing mirrors save_prompt: existing user piece stays regular,
+    existing vault piece stays vault, pack-shadow edits stay regular, NEW
+    pieces follow the lock state (unlocked → vault). origin='vault' while
+    locked is refused with VAULT_LOCKED_MSG (stale-editor guard, finding 6).
+    Vault-routed events are NAME-FREE — SSE replays recent events to every
+    new tab, across a later lock.
     """
     if not isinstance(value, str):
         return False, "Component value must be a string"
+    from core import prompt_vault
+    if origin == 'vault' and not prompt_vault.vault_unlocked():
+        logger.warning(f"Refused vault-origin piece save '{comp_type}/{key}' while locked")
+        return False, VAULT_LOCKED_MSG
+    in_user = key in prompt_manager._components.get(comp_type, {})
+    if not in_user and prompt_vault.vault_unlocked():
+        from core import prompt_packs
+        pack_shadow_edit = (prompt_packs.piece_source(comp_type, key) is not None
+                            and not prompt_vault.vault_has_piece(comp_type, key))
+        if origin == 'vault' or not pack_shadow_edit:
+            ok, code = prompt_vault.set_piece(comp_type, key, value)
+            if not ok:
+                return False, f"Vault save refused ({code})"
+            try:
+                from core.event_bus import publish, Events
+                publish(Events.COMPONENTS_CHANGED, {"action": "vault_changed"})
+            except Exception:
+                pass
+            return True, f"Saved {comp_type}/{key} (vault)"
     with prompt_manager._lock:
         prompt_manager._components.setdefault(comp_type, {})[key] = value
         saved = prompt_manager.save_components(reason=reason)
@@ -335,6 +421,18 @@ def delete_component(comp_type: str, key: str,
             del user_components[comp_type][key]
             saved = prompt_manager.save_components(reason=reason)
     if not present:
+        # Vault piece? (Only reachable while unlocked — delete_piece answers
+        # 'locked'/'not_found' otherwise and we fall through.) User-shadow
+        # deletes stay in the branch above and reveal the vault version.
+        from core import prompt_vault
+        ok_vault, _vcode = prompt_vault.delete_piece(comp_type, key)
+        if ok_vault:
+            try:
+                from core.event_bus import publish, Events
+                publish(Events.COMPONENTS_CHANGED, {"action": "vault_changed"})
+            except Exception:
+                pass
+            return True, ''
         from core import prompt_packs
         if prompt_packs.piece_source(comp_type, key):
             return False, 'pack_owned'
@@ -350,10 +448,26 @@ def delete_component(comp_type: str, key: str,
     return True, ''
 
 
+def is_vault_prompt(name: str) -> bool:
+    """True when NAME currently resolves from the vault (present in the
+    unlocked vault and not shadowed by a user entry). Routes use this for
+    event hygiene: vault-resolved names never ride the event bus."""
+    from core import prompt_vault
+    return (prompt_vault.vault_has_prompt(name)
+            and name not in prompt_manager._monoliths
+            and name not in prompt_manager._scenario_presets)
+
+
 def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
                           reason: str = None) -> tuple[bool, str]:
     """Bulk piece writer (persona-card import): one lock, one disk save,
     one COMPONENTS_CHANGED — not N of each.
+
+    Deliberately NOT vault-routed: importing a shared persona card is
+    "install shipped content", not "create private material" — routing it
+    by invisible global lock state would be a many-worlds surprise, and
+    vaulted pieces would break the card's own re-export. Vault entries are
+    created via the item-level funnels or a future per-item toggle (v1.1).
 
     items: {comp_type: {key: value}}. Non-dict groups and non-string values
     are skipped with a warning (card bundles are third-party data — a

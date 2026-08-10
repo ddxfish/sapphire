@@ -186,6 +186,12 @@ def vault_has_prompt(name) -> bool:
                                 or name in _data['scenario_presets'])
 
 
+def vault_has_piece(ctype, key) -> bool:
+    """Is this piece a vault entry right now (unlocked and present)?"""
+    with _lock:
+        return bool(_data) and key in _data['components'].get(ctype, {})
+
+
 # ── lifecycle ──
 
 def setup(passphrase) -> tuple:
@@ -455,8 +461,13 @@ def set_monolith(name, content) -> tuple:
         return False, 'bad_name'
     if not isinstance(content, str):
         return False, 'bad_value'
-    return _mutate(lambda d: d['monoliths'].__setitem__(
-        name, {'content': content, 'privacy_required': True}) or '')
+
+    def fn(d):
+        if name in d['scenario_presets']:
+            return 'cross_type'   # same-store ambiguity — mirror the user-store rule
+        d['monoliths'][name] = {'content': content, 'privacy_required': True}
+        return ''
+    return _mutate(fn)
 
 
 def delete_monolith(name) -> tuple:
@@ -494,8 +505,13 @@ def set_preset(name, preset) -> tuple:
     if not isinstance(preset, dict) or not all(
             isinstance(v, (str, list, bool)) for v in preset.values()):
         return False, 'bad_value'
-    return _mutate(lambda d: d['scenario_presets'].__setitem__(
-        name, {**preset, '_privacy_required': True}) or '')
+
+    def fn(d):
+        if name in d['monoliths']:
+            return 'cross_type'
+        d['scenario_presets'][name] = {**preset, '_privacy_required': True}
+        return ''
+    return _mutate(fn)
 
 
 def delete_preset(name) -> tuple:

@@ -596,3 +596,252 @@ class TestVaultWarmth:
         pv._last_activity = 0.0
         self._run_turn("vlt_warm")
         assert pv._last_activity == 0.0
+
+
+# ═══ STEP 3: write routing at the funnels ═══
+
+class TestPromptWriteRouting:
+    """The one behavioral rule: exists-in-user → regular; exists-in-vault →
+    vault; pack-shadow edit → regular; NEW: unlocked → vault, locked →
+    regular. origin='vault' refused while locked (stale-editor guard);
+    origin='regular' pins the user store (import lanes)."""
+
+    PACK = "vault-routing-test-pack"
+
+    @pytest.fixture
+    def routed(self, vault, tmp_path, monkeypatch):
+        """Unlocked vault + real singleton with stores redirected to tmp."""
+        from core import prompt_packs
+        from core.prompt_manager import prompt_manager
+        store_dir = tmp_path / "user_prompts"
+        store_dir.mkdir()
+        monkeypatch.setattr(prompt_manager, "USER_DIR", store_dir)
+        pv.setup("key")
+        yield prompt_manager
+        prompt_packs.unregister_plugin(self.PACK)
+        for n in list(prompt_manager._monoliths):
+            if n.startswith("vlt_"):
+                del prompt_manager._monoliths[n]
+        for n in list(prompt_manager._scenario_presets):
+            if n.startswith("vlt_"):
+                del prompt_manager._scenario_presets[n]
+        for ctype in list(prompt_manager._components):
+            for k in list(prompt_manager._components[ctype]):
+                if k.startswith("vlt_"):
+                    del prompt_manager._components[ctype][k]
+
+    def test_new_monolith_while_unlocked_routes_to_vault(self, routed):
+        from core import prompt_crud
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_new", {"type": "monolith", "content": "secret"})
+        assert ok and msg.endswith("(vault)")
+        assert pv.vault_has_prompt("vlt_new")
+        assert "vlt_new" not in routed._monoliths
+
+    def test_new_monolith_while_locked_routes_regular(self, routed):
+        from core import prompt_crud
+        pv.lock()
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_plain", {"type": "monolith", "content": "public"})
+        assert ok and "(vault)" not in msg
+        assert "vlt_plain" in routed._monoliths
+        pv.unlock("key")
+        assert not pv.vault_has_prompt("vlt_plain")
+
+    def test_existing_user_prompt_stays_regular_while_unlocked(self, routed):
+        from core import prompt_crud
+        routed._monoliths["vlt_mine"] = {"content": "v1", "privacy_required": False}
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_mine", {"type": "monolith", "content": "v2"})
+        assert ok and "(vault)" not in msg
+        assert routed._monoliths["vlt_mine"]["content"] == "v2"
+        assert not pv.vault_has_prompt("vlt_mine")
+
+    def test_existing_vault_prompt_stays_vault(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_prompt("vlt_v", {"type": "monolith", "content": "v1"})
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_v", {"type": "monolith", "content": "v2"})
+        assert ok and msg.endswith("(vault)")
+        assert pv.overlay_monoliths()["vlt_v"]["content"] == "v2"
+        assert "vlt_v" not in routed._monoliths
+
+    def test_pack_shadow_edit_stays_regular(self, routed):
+        from core import prompt_crud, prompt_packs
+        prompt_packs.register_pack(self.PACK, monoliths={"vlt_shipped": "Pack text"})
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_shipped", {"type": "monolith", "content": "My custom edit"})
+        assert ok and "(vault)" not in msg
+        assert routed._monoliths["vlt_shipped"]["content"] == "My custom edit"
+        assert not pv.vault_has_prompt("vlt_shipped")
+
+    def test_origin_vault_while_locked_refused(self, routed):
+        from core import prompt_crud
+        pv.lock()
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_stale", {"type": "monolith", "content": "decrypted text"},
+            origin="vault")
+        assert not ok and msg == prompt_crud.VAULT_LOCKED_MSG
+        assert "vlt_stale" not in routed._monoliths   # nothing splashed to disk
+
+    def test_origin_regular_forces_user_store(self, routed):
+        from core import prompt_crud
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_import", {"type": "monolith", "content": "card content"},
+            origin="regular")
+        assert ok and "(vault)" not in msg
+        assert "vlt_import" in routed._monoliths
+        assert not pv.vault_has_prompt("vlt_import")
+
+    def test_reserved_names_blocked_before_routing(self, routed):
+        from core import prompt_crud
+        ok, msg = prompt_crud.save_prompt(
+            "default", {"type": "monolith", "content": "x"})
+        assert not ok and "reserved" in msg
+        assert not pv.vault_has_prompt("default")
+
+    def test_allow_overwrite_false_counts_vault_entries(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_prompt("vlt_dup", {"type": "monolith", "content": "a"})
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_dup", {"type": "monolith", "content": "b"}, allow_overwrite=False)
+        assert not ok and "already exists" in msg
+
+    def test_vault_cross_type_refused(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_prompt("vlt_x", {"type": "assembled",
+                                          "components": {"character": "a"}})
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_x", {"type": "monolith", "content": "b"})
+        assert not ok and "other prompt type" in msg
+
+    def test_assembled_routes_to_vault_privacy_forced(self, routed):
+        from core import prompt_crud
+        ok, msg = prompt_crud.save_prompt(
+            "vlt_scene", {"type": "assembled",
+                          "components": {"character": "rose"},
+                          "privacy_required": False})
+        assert ok and msg.endswith("(vault)")
+        assert pv.overlay_presets()["vlt_scene"]["_privacy_required"] is True
+
+    def test_delete_vault_prompt(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_prompt("vlt_gone", {"type": "monolith", "content": "x"})
+        assert prompt_crud.delete_prompt("vlt_gone") is True
+        assert not pv.vault_has_prompt("vlt_gone")
+
+    def test_delete_user_shadow_reveals_vault(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_prompt("vlt_pair", {"type": "monolith", "content": "vault v"})
+        routed._monoliths["vlt_pair"] = {"content": "user v", "privacy_required": False}
+        assert prompt_crud.delete_prompt("vlt_pair") is True
+        assert "vlt_pair" not in routed._monoliths
+        assert pv.overlay_monoliths()["vlt_pair"]["content"] == "vault v"
+
+    def test_delete_sealed_name_not_found(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_prompt("vlt_sealed", {"type": "monolith", "content": "x"})
+        pv.lock()
+        assert prompt_crud.delete_prompt("vlt_sealed") is False
+        pv.unlock("key")
+        assert pv.vault_has_prompt("vlt_sealed")   # untouched behind the seal
+
+
+class TestPieceWriteRouting:
+    """Same routing rule at piece granularity, through save_component /
+    delete_component."""
+
+    @pytest.fixture
+    def routed(self, vault, tmp_path, monkeypatch):
+        from core.prompt_manager import prompt_manager
+        store_dir = tmp_path / "user_prompts"
+        store_dir.mkdir()
+        monkeypatch.setattr(prompt_manager, "USER_DIR", store_dir)
+        pv.setup("key")
+        yield prompt_manager
+        for ctype in list(prompt_manager._components):
+            for k in list(prompt_manager._components[ctype]):
+                if k.startswith("vlt_"):
+                    del prompt_manager._components[ctype][k]
+
+    def test_new_piece_routes_to_vault(self, routed):
+        from core import prompt_crud
+        ok, msg = prompt_crud.save_component("character", "vlt_rose", "Rose.")
+        assert ok and msg.endswith("(vault)")
+        assert pv.vault_has_piece("character", "vlt_rose")
+        assert "vlt_rose" not in routed._components.get("character", {})
+
+    def test_existing_user_piece_stays_regular(self, routed):
+        from core import prompt_crud
+        routed._components.setdefault("character", {})["vlt_old"] = "v1"
+        ok, msg = prompt_crud.save_component("character", "vlt_old", "v2")
+        assert ok and "(vault)" not in msg
+        assert routed._components["character"]["vlt_old"] == "v2"
+        assert not pv.vault_has_piece("character", "vlt_old")
+
+    def test_pack_shadow_piece_stays_regular(self, routed, monkeypatch):
+        from core import prompt_crud, prompt_packs
+        monkeypatch.setattr(prompt_packs, "piece_source",
+                            lambda t, k: "some-plugin" if k == "vlt_shipped" else None)
+        ok, msg = prompt_crud.save_component("character", "vlt_shipped", "edit")
+        assert ok and "(vault)" not in msg
+        assert routed._components["character"]["vlt_shipped"] == "edit"
+
+    def test_origin_vault_while_locked_refused(self, routed):
+        from core import prompt_crud
+        pv.lock()
+        ok, msg = prompt_crud.save_component("character", "vlt_leak",
+                                             "decrypted", origin="vault")
+        assert not ok and msg == prompt_crud.VAULT_LOCKED_MSG
+        assert "vlt_leak" not in routed._components.get("character", {})
+
+    def test_vault_piece_event_is_name_free(self, routed, monkeypatch):
+        import core.event_bus as eb
+        seen = []
+        monkeypatch.setattr(eb, "publish", lambda ev, data: seen.append(data))
+        from core import prompt_crud
+        prompt_crud.save_component("character", "vlt_quiet", "text")
+        assert seen and all("vlt_quiet" not in str(d) for d in seen)
+
+    def test_delete_routes_to_vault(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_component("character", "vlt_del", "x")
+        ok, code = prompt_crud.delete_component("character", "vlt_del")
+        assert ok and code == ''
+        assert not pv.vault_has_piece("character", "vlt_del")
+
+    def test_delete_sealed_piece_not_found(self, routed):
+        from core import prompt_crud
+        prompt_crud.save_component("character", "vlt_hidden", "x")
+        pv.lock()
+        ok, code = prompt_crud.delete_component("character", "vlt_hidden")
+        assert not ok and code == 'not_found'
+
+    def test_batch_import_never_routes_to_vault(self, routed):
+        from core import prompt_crud
+        ok, _ = prompt_crud.save_components_batch(
+            {"character": {"vlt_card": "imported text"}})
+        assert ok
+        assert routed._components["character"]["vlt_card"] == "imported text"
+        assert not pv.vault_has_piece("character", "vlt_card")
+
+
+class TestRouteStatusMapping:
+    """The web route maps VAULT_LOCKED_MSG → 409 (not the generic 500/400)."""
+
+    def test_component_put_locked_vault_is_409(self, vault, monkeypatch):
+        import asyncio
+        from fastapi import HTTPException
+        import core.api_fastapi  # noqa: F401  (route modules trip circular imports alone)
+        from core.routes.content import save_prompt_component
+
+        class _Req:
+            headers = {}
+            async def json(self):
+                return {"value": "decrypted text", "origin": "vault"}
+
+        pv.setup("key")
+        pv.lock()
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(save_prompt_component("character", "vlt_stale", _Req(), None))
+        assert ei.value.status_code == 409

@@ -108,9 +108,15 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
     (the mutation layer emits the audit event — prompt_manager saver diffs)."""
     data = await request.json()
     reason = (data.pop('reason', None) or '').strip() or None
-    success, msg = prompts.save_prompt(name, data, reason=reason)
+    origin = (data.pop('origin', None) or '').strip() or None
+    success, msg = prompts.save_prompt(name, data, reason=reason, origin=origin)
     if success:
-        publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
+        if prompts.is_vault_prompt(name):
+            # Name-free on purpose: SSE replays recent events to every new
+            # tab — across a later vault lock.
+            publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+        else:
+            publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
         if reason:
             # Reason-only delivery: with no content diff the saver emits
             # nothing, so a why typed after the last keystroke needs its own
@@ -124,6 +130,8 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
         reapply_if_active(system, 'prompt', name)
         return {"status": "success", "name": name}
     else:
+        if msg == prompts.VAULT_LOCKED_MSG:
+            raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=400, detail=msg or "Failed to save prompt")
 
 
@@ -131,8 +139,9 @@ async def save_prompt(name: str, request: Request, _=Depends(require_login), sys
 async def delete_prompt(name: str, request: Request, _=Depends(require_login),
                         reason: str = None):
     """Delete a prompt. Optional ?reason= lands in the prompt ledger."""
+    was_vault = prompts.is_vault_prompt(name)   # membership gone after delete
     if prompts.delete_prompt(name, reason=(reason or '').strip() or None):
-        publish(Events.PROMPT_DELETED, {"name": name})
+        publish(Events.PROMPT_DELETED, {"name": "" if was_vault else name})
         return {"status": "success", "name": name}
     # delete_prompt returns False for pack-shipped prompts (read-only) and
     # for unknown names — surface the real reason instead of a generic 500.
@@ -159,8 +168,12 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     if not isinstance(value, str):
         raise HTTPException(status_code=400, detail="Component value must be a string")
     reason = (data.get('reason') or '').strip() or None
-    ok, msg = prompts.save_component(comp_type, key, value, reason=reason)
+    origin = (data.get('origin') or '').strip() or None
+    ok, msg = prompts.save_component(comp_type, key, value, reason=reason,
+                                     origin=origin)
     if not ok:
+        if msg == prompts.VAULT_LOCKED_MSG:
+            raise HTTPException(status_code=409, detail=msg)
         raise HTTPException(status_code=500, detail=msg)
     if reason:
         # Reason-only delivery — see save_prompt: no diff means no saver
@@ -957,7 +970,11 @@ async def _import_persona_from_bundle(data):
             # Refusing before any component commit keeps a failed import
             # side-effect-free — the old order persisted the pieces, then
             # ignored save_prompt's return entirely.
-            ok, msg = save_prompt(prompt_name, prompt_data, allow_overwrite=overwrite_prompt)
+            # origin='regular': installing a shared card must never route by
+            # invisible vault lock state (and vaulted imports would break
+            # the card's own re-export).
+            ok, msg = save_prompt(prompt_name, prompt_data,
+                                  allow_overwrite=overwrite_prompt, origin='regular')
             if not ok:
                 raise HTTPException(status_code=409,
                                     detail=f"Prompt import refused: {msg}")

@@ -537,7 +537,11 @@ def _prompt_edit(args):
                                   reason=_reason(args))
     if not ok:
         return f"Failed to save: {msg}", False
-    publish(Events.PROMPT_CHANGED, {"name": current, "action": "saved"})
+    # Vault-resolved names stay off the event bus (SSE replays to new tabs).
+    if prompts.is_vault_prompt(current):
+        publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+    else:
+        publish(Events.PROMPT_CHANGED, {"name": current, "action": "saved"})
 
     ok, msg = prompts.activate_prompt(current, _system())
     if not ok:
@@ -561,8 +565,12 @@ def _prompt_create(args):
                                   reason=_reason(args))
     if not ok:
         return f"Failed to create: {msg}", False
-    publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
-    return f"Created prompt '{name}' ({len(content)} chars). Not active — use prompt_switch('{name}') when ready.", True
+    if prompts.is_vault_prompt(name):
+        publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+    else:
+        publish(Events.PROMPT_CHANGED, {"name": name, "action": "saved"})
+    where = " (vault)" if msg.endswith("(vault)") else ""
+    return f"Created prompt '{name}'{where} ({len(content)} chars). Not active — use prompt_switch('{name}') when ready.", True
 
 
 def _prompt_pieces(args):
@@ -703,7 +711,10 @@ def _prompt_pieces(args):
         ok, msg = prompts.save_component(component, key, value, reason=_reason(args))
         if not ok:
             return msg, False
-        return (f"Created {component}/'{key}' in the library. Not active — "
+        # Routing note so she knows where it landed (vault-routed while the
+        # vault is unlocked — the funnel's message carries the marker).
+        where = " (vault)" if msg.endswith("(vault)") else ""
+        return (f"Created {component}/'{key}' in the library{where}. Not active — "
                 f"prompt_pieces(action='set', component='{component}', key='{key}') to wear it."), True
 
     if action == 'delete':

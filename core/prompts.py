@@ -50,6 +50,8 @@ from .prompt_crud import (
     save_component,
     delete_component,
     save_components_batch,
+    is_vault_prompt,
+    VAULT_LOCKED_MSG,
     activate_prompt,
     revalidate_active,
 )
@@ -97,6 +99,8 @@ __all__ = [
     'save_component',
     'delete_component',
     'save_components_batch',
+    'is_vault_prompt',
+    'VAULT_LOCKED_MSG',
     'activate_prompt',
     'revalidate_active',
 ]

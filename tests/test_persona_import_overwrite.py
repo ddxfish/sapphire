@@ -77,7 +77,8 @@ def test_keep_components_skips_unchecked(pm, monkeypatch):
     import core.prompt_crud as pc
     import core.prompt_manager as pmmod
     monkeypatch.setattr(pc, "get_prompt", lambda name: None)
-    monkeypatch.setattr(pc, "save_prompt", lambda name, data, allow_overwrite=False: (True, "ok"))
+    monkeypatch.setattr(pc, "save_prompt",
+                        lambda name, data, allow_overwrite=False, origin=None: (True, "ok"))
 
     class FakePM:
         """Mirrors the real PromptManager contract: reads via the merged
