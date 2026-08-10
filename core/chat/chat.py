@@ -423,6 +423,19 @@ class LLMChat:
         context_parts = []
         chat_settings = self.session_manager.get_chat_settings()
 
+        # Vault warmth: a turn actually WEARING a vault prompt is vault
+        # activity — idle-lock is for walking away, not for chatting.
+        # Listing/browsing reads of the merged views deliberately never
+        # touch (an open Prompts page must not keep the vault warm).
+        try:
+            from core import prompt_vault, prompt_state
+            if prompt_vault.vault_has_prompt(chat_settings.get('prompt')) \
+                    or prompt_vault.vault_has_prompt(
+                        prompt_state.get_active_preset_name()):
+                prompt_vault.touch()
+        except Exception:
+            pass
+
         # Datetime moved to the ghost-message rail (core/ghost_messages.py)
         # 2026-05-08 — same per-turn freshness, but injected as a separate
         # operator-metadata message right before the new user input. Keeps

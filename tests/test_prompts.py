@@ -470,34 +470,40 @@ class TestPromptManagerProperties:
     """Test property accessors."""
     
     def test_components_property(self):
-        """components property should return _components."""
+        """components property returns the user entries merged into a FRESH
+        dict — never the live _components (fast path killed 2026-08-10 for
+        the vault merge; group values are dicts by loader normalization)."""
         from core.prompt_manager import PromptManager
-        
+
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
-            mgr._components = {"test": "value"}
-            
-            assert mgr.components == {"test": "value"}
-    
+            mgr._components = {"emotions": {"warm": "Warm text"}}
+
+            assert mgr.components == {"emotions": {"warm": "Warm text"}}
+            assert mgr.components is not mgr._components
+
     def test_scenario_presets_property(self):
-        """scenario_presets property should return _scenario_presets."""
+        """scenario_presets property returns _scenario_presets content as a
+        fresh merged dict."""
         from core.prompt_manager import PromptManager
-        
+
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
             mgr._scenario_presets = {"preset1": {}}
-            
+
             assert mgr.scenario_presets == {"preset1": {}}
-    
+            assert mgr.scenario_presets is not mgr._scenario_presets
+
     def test_monoliths_property(self):
-        """monoliths property should return _monoliths."""
+        """monoliths property returns _monoliths content as a fresh merged dict."""
         from core.prompt_manager import PromptManager
-        
+
         with patch.object(PromptManager, '__init__', lambda self: None):
             mgr = PromptManager()
             mgr._monoliths = {"mono1": "text"}
-            
+
             assert mgr.monoliths == {"mono1": "text"}
+            assert mgr.monoliths is not mgr._monoliths
     
     def test_spices_property(self):
         """spices property should return _spices."""

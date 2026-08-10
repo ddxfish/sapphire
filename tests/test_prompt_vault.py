@@ -411,3 +411,188 @@ class TestMigrationGuard:
         migration.migrate_loose_prompt_files()
         migration._migrate_user_prompts()
         assert (tmp_path / 'prompt_vault.enc').read_bytes() == b'\x00binary'
+
+
+# ═══ STEP 2: merge into prompt_manager properties (packs < vault < user) ═══
+
+class TestMergeIntoManager:
+    """Vault overlay rides the read properties. Locked = names exist nowhere;
+    unlocked = merged under user entries; precedence packs < vault < user."""
+
+    PACK = "vault-test-pack"
+
+    @pytest.fixture
+    def merged(self, vault):
+        from core import prompt_packs
+        from core.prompt_manager import prompt_manager
+        pv.setup("key")
+        pv.set_monolith("vlt_mono", "Vault monolith text")
+        pv.set_piece("emotions", "vlt_piece", "Vault piece text")
+        pv.set_preset("vlt_preset", {"character": "vlt"})
+        yield prompt_manager
+        prompt_packs.unregister_plugin(self.PACK)
+        prompt_manager._monoliths.pop("vlt_mono", None)
+        prompt_manager._components.get("emotions", {}).pop("vlt_piece", None)
+
+    def test_unlocked_names_visible(self, merged):
+        assert merged.monoliths["vlt_mono"]["content"] == "Vault monolith text"
+        assert merged.monoliths["vlt_mono"]["privacy_required"] is True
+        assert merged.components["emotions"]["vlt_piece"] == "Vault piece text"
+        assert merged.scenario_presets["vlt_preset"]["_privacy_required"] is True
+
+    def test_locked_names_absent(self, merged):
+        pv.lock()
+        assert "vlt_mono" not in merged.monoliths
+        assert "vlt_piece" not in merged.components.get("emotions", {})
+        assert "vlt_preset" not in merged.scenario_presets
+
+    def test_resolver_sees_vault_only_while_unlocked(self, merged):
+        from core import prompt_crud
+        got = prompt_crud.get_prompt("vlt_mono")
+        assert got["type"] == "monolith"
+        assert got["content"] == "Vault monolith text"
+        assert got["privacy_required"] is True
+        pv.lock()
+        assert prompt_crud.get_prompt("vlt_mono") is None
+
+    def test_user_wins_over_vault(self, merged):
+        merged._monoliths["vlt_mono"] = {"content": "User version",
+                                         "privacy_required": False}
+        try:
+            assert merged.monoliths["vlt_mono"]["content"] == "User version"
+            from core import prompt_crud
+            assert prompt_crud.get_prompt("vlt_mono")["content"] == "User version"
+        finally:
+            del merged._monoliths["vlt_mono"]
+        assert merged.monoliths["vlt_mono"]["content"] == "Vault monolith text"
+
+    def test_vault_wins_over_pack(self, merged):
+        from core import prompt_packs
+        prompt_packs.register_pack(self.PACK,
+                                   monoliths={"vlt_mono": "Pack version"})
+        assert merged.monoliths["vlt_mono"]["content"] == "Vault monolith text"
+        pv.lock()
+        # Vault sealed — the pack layer shows through underneath
+        assert merged.monoliths["vlt_mono"]["content"] == "Pack version"
+
+    def test_shadow_warning_logged_at_unlock(self, merged, caplog):
+        import logging
+        pv.lock()
+        merged._monoliths["vlt_mono"] = {"content": "User version",
+                                         "privacy_required": False}
+        try:
+            with caplog.at_level(logging.WARNING, logger="core.prompt_vault"):
+                pv.unlock("key")
+            assert any("vlt_mono" in r.message and "shadowed" in r.message
+                       for r in caplog.records)
+        finally:
+            del merged._monoliths["vlt_mono"]
+
+
+class TestFastPathKilled:
+    """Recon finding 2 + aliasing trap E-N6: with NO overlays at all, the old
+    properties returned the LIVE private dicts — a mutation through the view
+    silently persisted, and a vault unlock would never merge. Views must be
+    fresh copies in every overlay state."""
+
+    def test_properties_never_return_live_dicts(self, vault):
+        from core.prompt_manager import prompt_manager
+        assert not pv.vault_unlocked()   # vault locked, packs whatever's loaded
+        view = prompt_manager.components
+        assert view is not prompt_manager._components
+        view.setdefault("zz_vault_test_type", {})["zz"] = "mutation"
+        assert "zz_vault_test_type" not in prompt_manager._components
+        mono_view = prompt_manager.monoliths
+        assert mono_view is not prompt_manager._monoliths
+        mono_view["zz_vault_test"] = {"content": "x"}
+        assert "zz_vault_test" not in prompt_manager._monoliths
+        preset_view = prompt_manager.scenario_presets
+        assert preset_view is not prompt_manager._scenario_presets
+
+    def test_no_packs_no_vault_still_merges_user(self, vault):
+        """The kill must not LOSE user entries in the both-empty case."""
+        from core.prompt_manager import prompt_manager
+        prompt_manager._monoliths["zz_vault_user_mono"] = {
+            "content": "User text", "privacy_required": False}
+        try:
+            assert prompt_manager.monoliths["zz_vault_user_mono"]["content"] == "User text"
+        finally:
+            del prompt_manager._monoliths["zz_vault_user_mono"]
+
+
+class TestDegradedTurn:
+    """Locked vault + active preset pinned to a vault name → loud fallback to
+    assembled default (the standing H3 machinery, now covering the vault)."""
+
+    def test_get_current_prompt_falls_back_loudly(self, vault, caplog):
+        import logging
+        from core import prompt_state
+        pv.setup("key")
+        pv.set_monolith("vlt_active", "Vault text")
+        pv.lock()
+        old = prompt_state._assembled_state.get("active_preset", "default")
+        prompt_state._assembled_state["active_preset"] = "vlt_active"
+        try:
+            with caplog.at_level(logging.WARNING, logger="core.prompt_state"):
+                msg = prompt_state.get_current_prompt()
+            assert msg["role"] == "system"
+            assert "Vault text" not in msg["content"]
+            assert any("vlt_active" in r.message for r in caplog.records)
+        finally:
+            prompt_state._assembled_state["active_preset"] = old
+
+    def test_heals_on_unlock(self, vault):
+        from core import prompt_state
+        pv.setup("key")
+        pv.set_monolith("vlt_active", "Vault text")
+        pv.lock()
+        pv.unlock("key")
+        old = prompt_state._assembled_state.get("active_preset", "default")
+        prompt_state._assembled_state["active_preset"] = "vlt_active"
+        try:
+            msg = prompt_state.get_current_prompt()
+            assert msg["content"] == "Vault text"
+        finally:
+            prompt_state._assembled_state["active_preset"] = old
+
+
+class TestVaultWarmth:
+    """Turn-time touch wiring: a turn wearing a vault prompt keeps the vault
+    warm; a public turn does not (idle-lock is for walking away)."""
+
+    def _run_turn(self, chat_prompt_name):
+        from unittest.mock import MagicMock, patch
+        import config
+        from core.chat.chat import LLMChat
+        obj = LLMChat.__new__(LLMChat)
+        obj.current_system_prompt = 'Base.'
+        obj.session_manager = MagicMock()
+        obj.session_manager.get_chat_settings.return_value = {
+            'prompt': chat_prompt_name, 'spice_enabled': False}
+        with patch.object(config, 'DEFAULT_USERNAME', 'T', create=True), \
+             patch('core.chat.chat.hook_runner') as mock_hooks, \
+             patch('core.chat.stream_brain.get_override', return_value=None):
+            mock_hooks.has_handlers.return_value = False
+            obj._get_system_prompt()
+
+    def test_vault_prompt_turn_touches(self, vault):
+        pv.setup("key")
+        pv.set_monolith("vlt_warm", "text")
+        pv._last_activity = 0.0
+        self._run_turn("vlt_warm")
+        assert pv._last_activity > 0.0
+
+    def test_public_turn_does_not_touch(self, vault):
+        pv.setup("key")
+        pv.set_monolith("vlt_warm", "text")
+        pv._last_activity = 0.0
+        self._run_turn("zz_not_a_vault_name")
+        assert pv._last_activity == 0.0
+
+    def test_locked_vault_turn_does_not_touch(self, vault):
+        pv.setup("key")
+        pv.set_monolith("vlt_warm", "text")
+        pv.lock()
+        pv._last_activity = 0.0
+        self._run_turn("vlt_warm")
+        assert pv._last_activity == 0.0

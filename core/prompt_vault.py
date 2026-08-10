@@ -175,6 +175,17 @@ def vault_status() -> dict:
     return {"exists": vault_exists(), "unlocked": vault_unlocked()}
 
 
+def vault_has_prompt(name) -> bool:
+    """Is this name a vault monolith/preset right now (i.e. unlocked and
+    present)? Cheap membership check — no copies. Turn-time touch wiring
+    keys on this; locked always answers False."""
+    if not isinstance(name, str) or not name:
+        return False
+    with _lock:
+        return bool(_data) and (name in _data['monoliths']
+                                or name in _data['scenario_presets'])
+
+
 # ── lifecycle ──
 
 def setup(passphrase) -> tuple:
@@ -239,6 +250,7 @@ def unlock(passphrase) -> tuple:
                   'components': sum(len(v) for v in _data['components'].values()),
                   'scenario_presets': len(_data['scenario_presets'])}
     logger.info(f"[VAULT] unlocked: {counts}")
+    _warn_user_shadows()   # outside _lock — reads prompt_manager dicts
     _publish("vault_changed")
     return True, ''
 
@@ -282,6 +294,30 @@ def _handoff_active(gone_names):
             revalidate_active(reason="vault locked")
     except Exception as e:
         logger.warning(f"[VAULT] active-preset handoff failed: {e}")
+
+
+def _warn_user_shadows():
+    """User entries shadow same-named vault entries (packs < vault < user).
+    Logged ONCE at unlock, never per property read — the merge itself stays
+    silent. Names go to the local log only (never the event bus)."""
+    try:
+        from core.prompt_manager import prompt_manager
+        with _lock:
+            if not _data:
+                return
+            names = {**{n: 'monolith' for n in _data['monoliths']},
+                     **{n: 'preset' for n in _data['scenario_presets']}}
+            pieces = [(t, k) for t, e in _data['components'].items() for k in e]
+        for n, kind in names.items():
+            if n in prompt_manager._monoliths or n in prompt_manager._scenario_presets:
+                logger.warning(f"[VAULT] {kind} '{n}' is shadowed by a "
+                               f"same-named user entry — user wins")
+        for t, k in pieces:
+            if k in prompt_manager._components.get(t, {}):
+                logger.warning(f"[VAULT] piece '{t}/{k}' is shadowed by a "
+                               f"same-named user piece — user wins")
+    except Exception:
+        pass  # advisory only — never let a warning block an unlock
 
 
 def stop():

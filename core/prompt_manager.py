@@ -608,37 +608,40 @@ class PromptManager:
     def disabled_categories(self):
         return self._disabled_categories
     
-    # Read properties merge plugin prompt-packs (core/prompt_packs.py) under
-    # the user entries — USER WINS name collisions. Merged views are fresh
-    # dicts; ALL mutation paths must write the private attrs (_components,
-    # _monoliths, _scenario_presets) — the save_* methods persist only those,
-    # so pack content can never leak into user/prompts/*.json.
+    # Read properties merge plugin prompt-packs (core/prompt_packs.py) and
+    # the prompt vault (core/prompt_vault.py) under the user entries —
+    # precedence packs < vault < user, USER WINS all name collisions.
+    # Merged views are ALWAYS fresh dicts (the empty-overlay fast path was
+    # killed 2026-08-10: it returned the LIVE dict, so mutability depended
+    # on whether a pack happened to be loaded, and a no-pack boot would
+    # never merge a vault unlock). ALL mutation paths must write the
+    # private attrs (_components, _monoliths, _scenario_presets) — the
+    # save_* methods persist only those, so pack/vault content can never
+    # leak into user/prompts/*.json.
     @property
     def components(self):
-        from core import prompt_packs
-        overlay = prompt_packs.overlay_components()
-        if not overlay:
-            return self._components
+        from core import prompt_packs, prompt_vault
+        pack = prompt_packs.overlay_components()
+        vault = prompt_vault.overlay_components()
         merged = {}
-        for ctype in set(overlay) | set(self._components):
-            merged[ctype] = {**overlay.get(ctype, {}), **self._components.get(ctype, {})}
+        for ctype in set(pack) | set(vault) | set(self._components):
+            merged[ctype] = {**pack.get(ctype, {}), **vault.get(ctype, {}),
+                             **self._components.get(ctype, {})}
         return merged
 
     @property
     def scenario_presets(self):
-        from core import prompt_packs
-        overlay = prompt_packs.overlay_presets()
-        if not overlay:
-            return self._scenario_presets
-        return {**overlay, **self._scenario_presets}
+        from core import prompt_packs, prompt_vault
+        return {**prompt_packs.overlay_presets(),
+                **prompt_vault.overlay_presets(),
+                **self._scenario_presets}
 
     @property
     def monoliths(self):
-        from core import prompt_packs
-        overlay = prompt_packs.overlay_monoliths()
-        if not overlay:
-            return self._monoliths
-        return {**overlay, **self._monoliths}
+        from core import prompt_packs, prompt_vault
+        return {**prompt_packs.overlay_monoliths(),
+                **prompt_vault.overlay_monoliths(),
+                **self._monoliths}
     
     @property
     def spices(self):
