@@ -48,7 +48,8 @@ def _migrate_loose_prompt_files_inner():
     prompts_dir = USER_PROMPTS_DIR
     if not prompts_dir.exists():
         return
-    system_stems = ("prompt_pieces", "prompt_monoliths", "prompt_spices")
+    system_stems = ("prompt_pieces", "prompt_monoliths", "prompt_spices",
+                    "vault_refs")
 
     loose = [p for p in prompts_dir.glob("*.json")
              if not p.name.lower().startswith(system_stems)]
@@ -237,7 +238,8 @@ def _migrate_user_prompts():
         return
 
     for path in prompts_dir.glob("*.json"):
-        if path.name in ("prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"):
+        if path.name in ("prompt_pieces.json", "prompt_monoliths.json",
+                         "prompt_spices.json", "vault_refs.json"):
             continue
 
         try:

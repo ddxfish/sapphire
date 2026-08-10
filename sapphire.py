@@ -1072,6 +1072,7 @@ class VoiceChatSystem:
             ("backup scheduler", lambda: __import__('core.backup', fromlist=['backup_manager']).backup_manager.stop()),
             ("settings watcher", settings.stop_file_watcher),
             ("prompt watcher", lambda: prompts.prompt_manager.stop_file_watcher()),
+            ("prompt vault timer", lambda: __import__('core.prompt_vault', fromlist=['stop']).stop()),
             ("toolset watcher", toolset_manager.stop_file_watcher),
             ("spice set watcher", lambda: __import__('core.spice_sets', fromlist=['spice_set_manager']).spice_set_manager.stop_file_watcher()),
             ("plugin watcher", _pl.stop_watcher),
