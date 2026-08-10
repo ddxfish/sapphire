@@ -6,9 +6,10 @@ from .prompt_manager import prompt_manager
 
 logger = logging.getLogger(__name__)
 
-# Runtime state (not in JSON) — guarded by _state_lock for thread safety
-_state_lock = threading.Lock()
-_assembled_state = {
+# Runtime state (not in JSON) — guarded by _state_lock for thread safety.
+# NEVER rebind _assembled_state: meta.py (and others) import the dict object
+# directly, so replacement is always clear()+update() in place under the lock.
+_STATE_DEFAULTS = {
     "character": "sapphire",
     "location": "default",
     "relationship": "friend",
@@ -17,6 +18,10 @@ _assembled_state = {
     "scenario": "default",
     "extras": [],
     "emotions": [],
+}
+_state_lock = threading.Lock()
+_assembled_state = {
+    **{k: (list(v) if isinstance(v, list) else v) for k, v in _STATE_DEFAULTS.items()},
     "spice": "",
     "active_preset": "default"
 }
@@ -207,22 +212,12 @@ def get_current_prompt():
 
 
 def reset_to_defaults():
-    """Reset to default assembled state."""
-    global _assembled_state
+    """Reset to default assembled state (in place — see _assembled_state note)."""
     with _state_lock:
-        _assembled_state = {
-            "character": "sapphire",
-            "location": "default",
-            "relationship": "friend",
-            "goals": "none",
-            "format": "conversational",
-            "scenario": "default",
-            "extras": [],
-            "emotions": [],
-            "spice": "",
-            "next_spice": "",
-            "active_preset": "default"
-        }
+        _assembled_state.clear()
+        _assembled_state.update(
+            {k: (list(v) if isinstance(v, list) else v) for k, v in _STATE_DEFAULTS.items()})
+        _assembled_state.update({"spice": "", "next_spice": "", "active_preset": "default"})
     return "Reset to default state"
 
 
@@ -339,19 +334,58 @@ def get_prompt_mode() -> str:
     return "assembled" if is_assembled_mode() else "monolith"
 
 
-def apply_scenario(scenario_name):
-    """Apply a scenario preset (piece-based)."""
-    global _assembled_state
-    if scenario_name not in prompt_manager.scenario_presets:
-        return f"Unknown scenario: {scenario_name}"
+def apply_scenario(scenario_name) -> bool:
+    """Apply a scenario preset (piece-based). All-or-nothing.
 
-    scenario = prompt_manager.scenario_presets[scenario_name]
+    Validates the preset's shape FIRST and builds a complete replacement
+    state, then swaps it in under the lock — a bad value can no longer
+    abort mid-loop and leave a chimera of old and new pieces (C-4).
+
+    Complete-outfit semantics (Krem's ruling 2026-08-09): a preset IS the
+    whole outfit. Components it omits reset to defaults (extras/emotions
+    to []) instead of bleeding through from the previous preset.
+
+    Stamps BOTH active-name trackers (_assembled_state['active_preset']
+    and prompt_manager._active_preset_name) so they can't drift (R-8).
+    No event publish here — set_active_preset_name owns PROMPT_CHANGED.
+
+    Returns True on success, False on unknown name / bad shape — callers
+    abort activation cleanly on False, keeping the previous prompt live.
+    """
+    scenario = prompt_manager.scenario_presets.get(scenario_name)
+    if not isinstance(scenario, dict):
+        logger.error(f"apply_scenario: unknown scenario '{scenario_name}'")
+        return False
+
+    new_state = {k: (list(v) if isinstance(v, list) else v) for k, v in _STATE_DEFAULTS.items()}
+    for component_type, value in scenario.items():
+        # Underscore keys (_privacy_required) are preset metadata, not
+        # components — keep them out of runtime state.
+        if component_type.startswith('_'):
+            continue
+        if component_type in ("extras", "emotions"):
+            if not isinstance(value, list):
+                logger.error(f"apply_scenario: preset '{scenario_name}' has non-list "
+                             f"{component_type} ({type(value).__name__}) — not applied")
+                return False
+            keys = [v for v in value if isinstance(v, str)]
+            if len(keys) != len(value):
+                logger.warning(f"apply_scenario: preset '{scenario_name}' {component_type} "
+                               f"contains non-string keys — skipped")
+            new_state[component_type] = keys
+        else:
+            if not isinstance(value, str):
+                logger.error(f"apply_scenario: preset '{scenario_name}' has non-string "
+                             f"{component_type} ({type(value).__name__}) — not applied")
+                return False
+            new_state[component_type] = value
+
     with _state_lock:
-        for component_type, value in scenario.items():
-            # Underscore keys (_privacy_required) are preset metadata, not
-            # components — keep them out of runtime state.
-            if component_type.startswith('_'):
-                continue
-            _assembled_state[component_type] = value.copy() if component_type in ["extras", "emotions"] else value
-        _assembled_state["active_preset"] = scenario_name
-    return f"Applied scenario: {scenario_name}"
+        # Runtime-only keys survive the swap (spice rotation state).
+        new_state["spice"] = _assembled_state.get("spice", "")
+        new_state["next_spice"] = _assembled_state.get("next_spice", "")
+        new_state["active_preset"] = scenario_name
+        _assembled_state.clear()
+        _assembled_state.update(new_state)
+    prompt_manager._active_preset_name = scenario_name
+    return True

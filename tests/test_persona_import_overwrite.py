@@ -82,14 +82,17 @@ def test_keep_components_skips_unchecked(pm, monkeypatch):
     class FakePM:
         """Mirrors the real PromptManager contract: reads via the merged
         `.components` property, writes via `._components` (with no packs
-        registered the property returns the private dict directly)."""
+        registered the property returns the private dict directly), mutations
+        under `._lock`, savers return bool."""
         def __init__(self):
+            import threading
             self._components = {}
+            self._lock = threading.RLock()
         @property
         def components(self):
             return self._components
         def save_components(self):
-            pass
+            return True
     fake = FakePM()
     monkeypatch.setattr(pmmod, "prompt_manager", fake)
 

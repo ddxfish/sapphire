@@ -76,7 +76,9 @@ def get_password_hash() -> str | None:
         if not SECRET_KEY_FILE.exists():
             return None
         
-        hash_value = SECRET_KEY_FILE.read_text().strip()
+        # utf-8-sig: strips a PowerShell/Notepad BOM that would fail the
+        # '$2' bcrypt prefix check below and lock the user out.
+        hash_value = SECRET_KEY_FILE.read_text(encoding='utf-8-sig').strip()
         
         # Validate it looks like a bcrypt hash
         if not hash_value or len(hash_value) < 50:
@@ -115,7 +117,7 @@ def save_password_hash(password: str) -> str | None:
         hash_str = hash_bytes.decode('utf-8')
         
         # Write to file with restrictive permissions (Unix only)
-        SECRET_KEY_FILE.write_text(hash_str)
+        SECRET_KEY_FILE.write_text(hash_str, encoding='utf-8')
         if sys.platform != 'win32':
             os.chmod(SECRET_KEY_FILE, 0o600)
         
@@ -196,7 +198,7 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
     # 3. Legacy: platform config directory file
     if SOCKS_CONFIG_FILE.exists():
         try:
-            lines = SOCKS_CONFIG_FILE.read_text().splitlines()
+            lines = SOCKS_CONFIG_FILE.read_text(encoding='utf-8-sig').splitlines()
             if len(lines) >= 2:
                 username = _parse_legacy_line(lines[0])
                 password = _parse_legacy_line(lines[1])
@@ -210,7 +212,7 @@ def get_socks_credentials() -> tuple[str | None, str | None]:
     project_config = Path(__file__).parent.parent / 'user' / '.socks_config'
     if project_config.exists():
         try:
-            lines = project_config.read_text().splitlines()
+            lines = project_config.read_text(encoding='utf-8-sig').splitlines()
             if len(lines) >= 2:
                 username = _parse_legacy_line(lines[0])
                 password = _parse_legacy_line(lines[1])
@@ -259,7 +261,7 @@ def get_claude_api_key() -> str | None:
     # 3. Legacy: config file
     if CLAUDE_API_KEY_FILE.exists():
         try:
-            api_key = CLAUDE_API_KEY_FILE.read_text().strip()
+            api_key = CLAUDE_API_KEY_FILE.read_text(encoding='utf-8-sig').strip()
             if api_key:
                 logger.info(f"Using Claude API key from {CLAUDE_API_KEY_FILE}")
                 return api_key
@@ -346,8 +348,12 @@ def ensure_prompt_files() -> bool:
             if not source.exists():
                 logger.warning(f"Template missing: {source}")
                 continue
-            
-            shutil.copy2(source, target)
+
+            # copyfile, not copy2: copy2 preserves source metadata — a
+            # read-only attr from the install dir (Windows) makes the
+            # provisioned file unwritable, and the stale mtime confuses
+            # the prompt file watcher.
+            shutil.copyfile(source, target)
             logger.info(f"Bootstrapped {filename} to user/prompts/")
         
         return True
@@ -375,7 +381,7 @@ def ensure_chat_defaults() -> bool:
             return False
         
         target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        shutil.copyfile(source, target)  # copyfile: don't inherit install-dir metadata
         logger.info(f"Bootstrapped chat_defaults.json to user/settings/")
         return True
     except Exception as e:
@@ -398,7 +404,7 @@ def reset_chat_defaults() -> bool:
             return False
         
         target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        shutil.copyfile(source, target)  # copyfile: don't inherit install-dir metadata
         logger.info("Reset chat_defaults.json to factory defaults")
         return True
     except Exception as e:

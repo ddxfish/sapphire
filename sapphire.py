@@ -136,7 +136,9 @@ class VoiceChatSystem:
                     # _assembled_state too — without this the first spice
                     # rotation reassembled from boot defaults.
                     if _want in _prompts.prompt_manager.scenario_presets:
-                        _prompts.apply_scenario(_want)
+                        if not _prompts.apply_scenario(_want):
+                            logger.warning(f"Pack preset '{_want}' failed to apply "
+                                           f"cleanly — pieces may be stale")
                     logger.info(f"Re-primed prompt '{_want}' after plugin scan (pack prompt)")
                 else:
                     # Never silent (Sapph-not-Rose bug, 2026-08-05): the chat
@@ -346,7 +348,9 @@ class VoiceChatSystem:
             self.llm_chat.set_system_prompt(content)
             prompts.set_active_preset_name(prompt_name)
             if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
-                prompts.apply_scenario(prompt_name)
+                if not prompts.apply_scenario(prompt_name):
+                    logger.warning(f"Preset '{prompt_name}' failed to apply cleanly "
+                                   f"at boot — pieces may be stale")
             logger.info(f"System primed with '{prompt_name}' prompt.")
         except Exception as e:
             # A missing NAME may be a plugin-pack prompt (story 'rose',

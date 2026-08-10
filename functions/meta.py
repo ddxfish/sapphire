@@ -334,16 +334,20 @@ def _exact_replace(text, old, new, what):
     return text.replace(old, new, 1)
 
 
-def _get_current_preset_name() -> str:
-    """Get current preset name, preferring existing non-generic names."""
+def _get_current_preset_name(state=None) -> str:
+    """Get current preset name, preferring existing non-generic names.
+    `state` (candidate dict) supplies the character fallback when given."""
     from core import prompts
     from core.prompt_state import _assembled_state
 
+    # 'default' is the sentinel (reserved — save_prompt refuses it): wearing
+    # pieces while on it forks the state into a preset named after the
+    # character, same as the other generic names.
     current = prompts.get_active_preset_name()
-    if current and current not in ['assembled', 'unknown', 'random', '']:
+    if current and current not in ['assembled', 'unknown', 'random', 'default', '']:
         return current
 
-    return _assembled_state.get('character', 'custom')
+    return (state if state is not None else _assembled_state).get('character', 'custom')
 
 
 def _pieces_summary() -> str:
@@ -398,19 +402,32 @@ def _resnapshot(system):
     system.llm_chat.set_system_prompt(content)
 
 
-def _save_and_activate_assembled(system) -> str:
-    """Persist current _assembled_state as the active preset and re-activate."""
-    from core import prompts
-    from core.prompt_state import _assembled_state
+def _save_and_activate_assembled(system, state=None) -> str:
+    """Persist an assembled state as the active preset and re-activate.
 
-    preset_name = _get_current_preset_name()
+    `state` is a CANDIDATE dict (DR-7: save first, mutate on success) —
+    callers snapshot _assembled_state, apply their change to the copy, and
+    pass it here. The save persists the candidate; the activation's
+    apply_scenario then installs it as the live state atomically. If the
+    save refuses, the live state was never touched. state=None falls back
+    to a snapshot of the current live state.
+    """
+    from core import prompts
+    from core.prompt_state import _assembled_state, _state_lock
+
+    if state is None:
+        with _state_lock:
+            state = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in _assembled_state.items()}
+
+    preset_name = _get_current_preset_name(state)
     components = {}
     for k in ['character', 'location', 'relationship', 'goals', 'format', 'scenario']:
-        if _assembled_state.get(k):
-            components[k] = _assembled_state[k]
+        if state.get(k):
+            components[k] = state[k]
     for k in LIST_COMPONENTS:
-        if _assembled_state.get(k):
-            components[k] = list(_assembled_state[k])
+        if state.get(k):
+            components[k] = list(state[k])
 
     # Carry the preset's privacy flag through the rebuild — omitting it
     # defaulted privacy_required to False, so her wearing/removing any piece
@@ -616,14 +633,19 @@ def _prompt_pieces(args):
             _resnapshot(system)
             _act(key, True, ttl=minutes)
             return f"Set {component}='{key}' for {minutes}m (temporary — reverts automatically). {_status_string()}", True
+        # Candidate-state pattern (DR-7): snapshot, mutate the COPY, save
+        # first — the activation installs it as live state only on success.
+        # A refused save leaves _assembled_state exactly as it was.
         with _state_lock:
-            if component in LIST_COMPONENTS:
-                if key in _assembled_state.get(component, []):
-                    return f"'{key}' already in {component}.", True
-                _assembled_state.setdefault(component, []).append(key)
-            else:
-                _assembled_state[component] = key
-        _save_and_activate_assembled(system)
+            state = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in _assembled_state.items()}
+        if component in LIST_COMPONENTS:
+            if key in state.get(component, []):
+                return f"'{key}' already in {component}.", True
+            state.setdefault(component, []).append(key)
+        else:
+            state[component] = key
+        _save_and_activate_assembled(system, state)
         _act(key, True)
         verb = "Added" if component in LIST_COMPONENTS else "Set"
         return f"{verb} {component}='{key}'. {_status_string()}", True
@@ -639,11 +661,14 @@ def _prompt_pieces(args):
         if component in LIST_COMPONENTS:
             if not key:
                 return "key is required to remove from emotions/extras.", False
+            # Candidate-state pattern (DR-7) — see 'set' above.
             with _state_lock:
-                if key not in _assembled_state.get(component, []):
-                    return f"'{key}' not in current {component}.", False
-                _assembled_state[component].remove(key)
-            _save_and_activate_assembled(system)
+                state = {k: (list(v) if isinstance(v, list) else v)
+                         for k, v in _assembled_state.items()}
+            if key not in state.get(component, []):
+                return f"'{key}' not in current {component}.", False
+            state[component].remove(key)
+            _save_and_activate_assembled(system, state)
             _act(key, False)
             return f"Removed '{key}' from {component}. {_status_string()}", True
         # Single-value component: clear any transient shadow, reset to default
@@ -653,14 +678,16 @@ def _prompt_pieces(args):
             prompts.remove_transient_piece(component, trans[component][0][0])
         default = STATE_DEFAULTS.get(component, 'default')
         with _state_lock:
-            prev = _assembled_state.get(component)
-            _assembled_state[component] = default
+            state = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in _assembled_state.items()}
+        prev = state.get(component)
+        state[component] = default
         # No-op guard (scout find 2026-07-22): already at default and no
         # transient to clear → nothing changed; a save + "piece removed"
         # ledger row here was ghost evidence.
         if not had_transient and prev in (None, default):
             return f"{component} is already '{default}'.", True
-        _save_and_activate_assembled(system)
+        _save_and_activate_assembled(system, state)
         if prev not in (None, default):
             _act(prev, False)
         return f"Reset {component} to '{default}'. {_status_string()}", True

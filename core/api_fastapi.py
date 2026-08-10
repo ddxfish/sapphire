@@ -745,13 +745,17 @@ def _apply_chat_settings(system, settings: dict):
             # (Sapphire) and made `blank` a no-op. 2026-04-27 fix.
             if isinstance(prompt_data, dict):
                 content = prompt_data.get('content', '') or ''
-                system.llm_chat.set_system_prompt(content)
-                prompts.set_active_preset_name(prompt_name)
-
+                # Pieces BEFORE the live snapshot (C-5): a preset failing
+                # validation keeps the previous prompt and trackers intact.
+                ok = True
                 if hasattr(prompts.prompt_manager, 'scenario_presets') and prompt_name in prompts.prompt_manager.scenario_presets:
-                    prompts.apply_scenario(prompt_name)
-
-                logger.info(f"Applied prompt: {prompt_name}{' (empty content — blank mode)' if not content else ''}")
+                    ok = prompts.apply_scenario(prompt_name)
+                if ok:
+                    system.llm_chat.set_system_prompt(content)
+                    prompts.set_active_preset_name(prompt_name)
+                    logger.info(f"Applied prompt: {prompt_name}{' (empty content — blank mode)' if not content else ''}")
+                else:
+                    logger.error(f"Preset '{prompt_name}' failed to apply — keeping previous prompt")
             else:
                 # Prompt not registered right now — run on 'default' for THIS
                 # turn, but never rewrite the chat's setting. "Missing" is
@@ -870,9 +874,14 @@ def reapply_if_active(system, domain: str, name: str):
                 # Re-run apply_scenario for assembled presets — setting
                 # content alone left _assembled_state on the OLD pieces, and
                 # the next spice rotation reassembled from them, silently
-                # reverting the edit.
+                # reverting the edit. Runs BEFORE set_system_prompt (C-5):
+                # a bad edit keeps the previous prompt live instead of
+                # half-applying.
                 if name in prompts.prompt_manager.scenario_presets:
-                    prompts.apply_scenario(name)
+                    if not prompts.apply_scenario(name):
+                        logger.error(f"Hot-reload: edited preset '{name}' failed "
+                                     f"validation — previous prompt kept")
+                        return
                 system.llm_chat.set_system_prompt(data.get('content', '') or '')
                 publish(Events.PROMPT_CHANGED, {"name": name, "action": "reapplied"})
         elif domain == 'persona':

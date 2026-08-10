@@ -81,8 +81,40 @@ class PromptManager:
             with open(path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
 
-            self._components = data.get("components", {})
-            self._scenario_presets = data.get("scenario_presets", {})
+            # Normalize like _load_monoliths: build into locals, drop+warn
+            # non-conforming entries. A hand-edited piece with a dict/list
+            # value used to load fine and detonate later in the renderer,
+            # audit snapshot, and list routes.
+            raw_components = data.get("components", {})
+            new_components = {}
+            if isinstance(raw_components, dict):
+                for ctype, entries in raw_components.items():
+                    if not isinstance(entries, dict):
+                        logger.warning(f"Skipping component type '{ctype}' with "
+                                       f"unexpected shape: {type(entries).__name__}")
+                        continue
+                    clean = {}
+                    for k, v in entries.items():
+                        if isinstance(v, str):
+                            clean[k] = v
+                        else:
+                            logger.warning(f"Skipping piece {ctype}/{k} with "
+                                           f"non-string value ({type(v).__name__})")
+                    new_components[ctype] = clean
+
+            raw_presets = data.get("scenario_presets", {})
+            new_presets = {}
+            if isinstance(raw_presets, dict):
+                for pname, preset in raw_presets.items():
+                    # Component values are str/list; _privacy_required is bool.
+                    if isinstance(preset, dict) and all(
+                            isinstance(v, (str, list, bool)) for v in preset.values()):
+                        new_presets[pname] = preset
+                    else:
+                        logger.warning(f"Skipping preset '{pname}' with unexpected shape")
+
+            self._components = new_components
+            self._scenario_presets = new_presets
             if not hasattr(self, '_load_failed'):
                 self._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
             self._load_failed['pieces'] = False
@@ -201,13 +233,14 @@ class PromptManager:
         reverting pieces set between polls). The tmp file's mtime survives
         the rename, so recording it BEFORE replace leaves zero window.
         """
+        from core.fs_utils import replace_with_retry
         tmp_path = target_path.with_suffix('.tmp')
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, **dump_kwargs)
             f.flush()
             os.fsync(f.fileno())
         mtime = tmp_path.stat().st_mtime
-        tmp_path.replace(target_path)
+        replace_with_retry(tmp_path, target_path)
         if not hasattr(self, '_last_mtimes'):
             self._last_mtimes = {}
         self._last_mtimes[str(target_path)] = mtime
@@ -309,7 +342,20 @@ class PromptManager:
         comps = self.components
 
         def _text(comp_type, key):
-            return comps.get(comp_type, {}).get(key, "") if key else ""
+            # Tolerate junk from hand-edited stores / third-party bundles:
+            # a non-string key is unhashable or nonsense, a non-string value
+            # would crash .strip() below — both render blank (ruling 3:
+            # missing/bad pieces show blank and heal when fixed).
+            if not key or not isinstance(key, str):
+                return ""
+            val = comps.get(comp_type, {}).get(key, "")
+            return val if isinstance(val, str) else ""
+
+        def _keys(comp_type):
+            keys = components.get(comp_type) or []
+            if isinstance(keys, str):
+                return [keys]
+            return keys if isinstance(keys, list) else []
 
         parts = [_text('character', components.get('character', 'sapphire'))]
 
@@ -327,9 +373,9 @@ class PromptManager:
         if scenario_key and scenario_key != 'default':
             parts.append(_text('scenario', scenario_key))
 
-        for extra in components.get('extras', []) or []:
+        for extra in _keys('extras'):
             parts.append(_text('extras', extra))
-        for emotion in components.get('emotions', []) or []:
+        for emotion in _keys('emotions'):
             parts.append(_text('emotions', emotion))
 
         return "\n".join(p for p in parts if p and p.strip())
@@ -418,13 +464,27 @@ class PromptManager:
     # mutation layer instead of enumerated per caller. Boot seeds silently.
 
     def _audit_state(self):
-        return {
-            'monoliths': {k: (v.get('content', '') if isinstance(v, dict) else str(v))
-                          for k, v in self._monoliths.items()},
-            'presets': {k: json.dumps(v, sort_keys=True, ensure_ascii=False)
-                        for k, v in self._scenario_presets.items()},
-            'components': {t: dict(kv) for t, kv in self._components.items()},
-        }
+        # Per-store try: one malformed entry must not raise, or every future
+        # _audit_diff skips on the exception and the ledger goes permanently
+        # dark (snapshot never refreshes). A failed store snapshots as {}
+        # for this pass and recovers on the next clean one.
+        out = {'monoliths': {}, 'presets': {}, 'components': {}}
+        try:
+            out['monoliths'] = {k: (v.get('content', '') if isinstance(v, dict) else str(v))
+                                for k, v in self._monoliths.items()}
+        except Exception as e:
+            logger.warning(f"[PROMPTS] audit snapshot (monoliths) failed: {e}")
+        try:
+            out['presets'] = {k: json.dumps(v, sort_keys=True, ensure_ascii=False)
+                              for k, v in self._scenario_presets.items()}
+        except Exception as e:
+            logger.warning(f"[PROMPTS] audit snapshot (presets) failed: {e}")
+        try:
+            out['components'] = {t: dict(kv) for t, kv in self._components.items()
+                                 if isinstance(kv, dict)}
+        except Exception as e:
+            logger.warning(f"[PROMPTS] audit snapshot (components) failed: {e}")
+        return out
 
     def _audit_seed(self):
         try:
@@ -621,7 +681,11 @@ class PromptManager:
                 for fname in ["prompt_pieces.json", "prompt_monoliths.json", "prompt_spices.json"]:
                     src = self.CORE_DIR / fname
                     if src.exists():
-                        shutil.copy2(src, self.USER_DIR / fname)
+                        # copyfile, not copy2: copy2 preserves source metadata —
+                        # a read-only attr from the install dir (Windows) makes
+                        # the provisioned file unwritable, and the stale mtime
+                        # confuses the file watcher.
+                        shutil.copyfile(src, self.USER_DIR / fname)
                 self.reload(audit_reason='reset to factory defaults')
             logger.info("Prompts reset to factory defaults")
             return True

@@ -23,6 +23,30 @@ def list_prompts():
     return sorted(all_prompts)
 
 
+def _monolith_result(name: str, mono) -> dict:
+    if not isinstance(mono, dict):
+        mono = {'content': str(mono)}
+    return {
+        'name': name,
+        'type': 'monolith',
+        'content': mono.get('content', ''),
+        'privacy_required': mono.get('privacy_required', False)
+    }
+
+
+def _preset_result(name: str, components: dict) -> dict:
+    privacy_required = components.get('_privacy_required', False)
+    # Filter out metadata for assembly
+    clean_components = {k: v for k, v in components.items() if not k.startswith('_')}
+    return {
+        'name': name,
+        'type': 'assembled',
+        'components': clean_components,
+        'content': prompt_manager.assemble_from_components(clean_components),
+        'privacy_required': privacy_required
+    }
+
+
 def get_prompt(name: str):
     """Resolve a prompt name to {name, type, content, privacy_required, ...}.
 
@@ -34,31 +58,21 @@ def get_prompt(name: str):
     session). Content is un-templated except for the sentinel (which
     renders through the live assembler); live paths apply
     _replace_templates / the chat-layer replace, which is idempotent.
+
+    Lookup order (C-10, Krem's ruling 2026-08-09): USER entries win — even
+    across types. Private dicts are checked before the pack-merged views so
+    a pack shipping name X of the OTHER type can't shadow the user's X.
     """
-    # Check monoliths
+    if name in prompt_manager._monoliths:
+        return _monolith_result(name, prompt_manager._monoliths[name])
+    if name in prompt_manager._scenario_presets:
+        return _preset_result(name, prompt_manager._scenario_presets[name])
+
+    # Pack-shipped entries (merged views minus the user hits above)
     if name in prompt_manager.monoliths:
-        mono = prompt_manager.monoliths[name]
-        return {
-            'name': name,
-            'type': 'monolith',
-            'content': mono.get('content', ''),
-            'privacy_required': mono.get('privacy_required', False)
-        }
-    
-    # Check scenario presets
+        return _monolith_result(name, prompt_manager.monoliths[name])
     if name in prompt_manager.scenario_presets:
-        components = prompt_manager.scenario_presets[name]
-        privacy_required = components.get('_privacy_required', False)
-        # Filter out metadata for assembly
-        clean_components = {k: v for k, v in components.items() if not k.startswith('_')}
-        assembled_text = prompt_manager.assemble_from_components(clean_components)
-        return {
-            'name': name,
-            'type': 'assembled',
-            'components': clean_components,
-            'content': assembled_text,
-            'privacy_required': privacy_required
-        }
+        return _preset_result(name, prompt_manager.scenario_presets[name])
 
     if name == 'default':
         # 'default' is the assembled-mode SENTINEL, not a stored name — it
@@ -99,17 +113,29 @@ def save_prompt(name: str, data: dict, allow_overwrite: bool = True,
         (success: bool, message: str)
     """
     try:
+        # Reserved sentinels: 'default' means "the current assembled state"
+        # (the resolver renders it live) and 'assembled' flips is_assembled_mode
+        # unconditionally. A stored prompt wearing either name would make the
+        # sentinel ambiguous — blocked at the write door (ruling 2026-08-09).
+        if name in ('default', 'assembled'):
+            msg = (f"'{name}' is a reserved name — it refers to the current "
+                   f"assembled state. Pick another name.")
+            logger.warning(f"Refused to save prompt under reserved name '{name}'")
+            return False, msg
+
         prompt_type = data.get('type', 'monolith')
 
-        # Check for name collision with opposite type
+        # Cross-type collision checks read the PRIVATE dicts (DR-7): a pack
+        # shipping the same name must not block the user's save — user
+        # entries win the merge, shadowing packs is the intended edit path.
         if prompt_type == 'monolith':
-            if name in prompt_manager.scenario_presets:
+            if name in prompt_manager._scenario_presets:
                 msg = f"Name '{name}' already exists as assembled prompt"
                 logger.warning(msg)
                 return False, msg
 
         elif prompt_type == 'assembled':
-            if name in prompt_manager.monoliths:
+            if name in prompt_manager._monoliths:
                 msg = f"Name '{name}' already exists as monolith prompt"
                 logger.warning(msg)
                 return False, msg
@@ -295,10 +321,15 @@ def activate_prompt(name: str, system) -> tuple[bool, str]:
         return True, f"Activated '{name}' for chat '{stream_chat}' (takes effect next turn)"
 
     content = data.get('content') if isinstance(data, dict) else str(data)
+    # Pieces BEFORE the live snapshot (C-5): a preset that fails validation
+    # aborts here with the previous prompt AND both trackers untouched —
+    # no half-activated chimera.
+    if name in getattr(prompt_manager, 'scenario_presets', {}):
+        if not prompt_state.apply_scenario(name):
+            return False, (f"Preset '{name}' failed validation — activation "
+                           f"aborted, previous prompt kept")
     system.llm_chat.set_system_prompt(content)
     prompt_state.set_active_preset_name(name)
-    if name in getattr(prompt_manager, 'scenario_presets', {}):
-        prompt_state.apply_scenario(name)
     system.llm_chat.session_manager.update_chat_settings({"prompt": name})
     return True, f"Activated '{name}'"
 
@@ -328,7 +359,13 @@ def revalidate_active(system=None, reason: str = "") -> bool:
             return False
 
         if name in prompt_manager.scenario_presets:
-            prompt_state.apply_scenario(name)
+            if not prompt_state.apply_scenario(name):
+                # Active preset went bad under us (disk edit) — loud handoff
+                # to default, same H3 discipline as the vanished-name case.
+                logger.warning(f"[PROMPTS] Active preset '{name}' failed to "
+                               f"re-apply — handing off to assembled default")
+                prompt_state.set_active_preset_name('default')
+                name = 'default'
 
         data = get_prompt(name)
         if not isinstance(data, dict):

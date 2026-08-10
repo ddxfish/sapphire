@@ -535,6 +535,10 @@ async def add_spice(request: Request, _=Depends(require_login)):
     content = data.get('content') or data.get('text')
     if not category or not content:
         raise HTTPException(status_code=400, detail="Category and content required")
+    if not isinstance(content, str):
+        # A non-string body value would persist into prompt_spices.json and
+        # detonate later in the ghost-message weave.
+        raise HTTPException(status_code=400, detail="Spice content must be a string")
     spices = prompts.prompt_manager._spices
     if category not in spices:
         raise HTTPException(status_code=404, detail=f"Category '{category}' not found")
@@ -549,6 +553,8 @@ async def update_spice(category: str, index: int, request: Request, _=Depends(re
     """Update a spice."""
     data = await request.json()
     content = data.get('content') or data.get('text')
+    if not isinstance(content, str) or not content:
+        raise HTTPException(status_code=400, detail="Spice content must be a non-empty string")
     spices = prompts.prompt_manager._spices
     if category not in spices or index < 0 or index >= len(spices[category]):
         raise HTTPException(status_code=404, detail="Spice not found")
@@ -961,36 +967,52 @@ async def _import_persona_from_bundle(data):
             # Don't overwrite — use existing prompt by name
             logger.info(f"[IMPORT] Prompt '{prompt_name}' exists, keeping existing")
         else:
+            # Save the prompt FIRST (DR-8): it's the door most likely to
+            # refuse (reserved name, cross-type collision, store latch).
+            # Refusing before any component commit keeps a failed import
+            # side-effect-free — the old order persisted the pieces, then
+            # ignored save_prompt's return entirely.
+            ok, msg = save_prompt(prompt_name, prompt_data, allow_overwrite=overwrite_prompt)
+            if not ok:
+                raise HTTPException(status_code=409,
+                                    detail=f"Prompt import refused: {msg}")
+            logger.info(f"[IMPORT] Saved prompt '{prompt_name}'")
+
             # Import components if present
             if data.get("components"):
                 components = data["components"]
                 if not isinstance(components, dict):
                     raise HTTPException(status_code=400, detail="Invalid components format")
-                for comp_type, defs in components.items():
-                    if not isinstance(defs, dict):
-                        continue
-                    for key, value in defs.items():
-                        if not isinstance(value, str):
-                            # Card bundles are third-party data — a non-string
-                            # piece persisted here detonates the renderer later.
-                            logger.warning(f"[IMPORT] Skipping non-string piece "
-                                           f"{comp_type}/{key} from card")
+                # Mutate + save under the manager lock like every other
+                # writer — unlocked mutation races the watcher's reload
+                # rebind (the write lands in an abandoned dict).
+                with prompt_manager._lock:
+                    for comp_type, defs in components.items():
+                        if not isinstance(defs, dict):
                             continue
-                        if (comp_type, key) in _keep:
-                            continue  # user unchecked this piece — keep local value
-                        existing_piece = prompt_manager.components.get(comp_type, {}).get(key)
-                        if existing_piece and not overwrite_prompt:
-                            continue
-                        # Write the PRIVATE dict — `.components` is a merged
-                        # COPY when prompt-packs are registered; writing to it
-                        # silently drops every imported piece (see PUT
-                        # /api/prompts/components above for the same rule).
-                        prompt_manager._components.setdefault(comp_type, {})[key] = value
-                prompt_manager.save_components()
-
-            # Save prompt
-            save_prompt(prompt_name, prompt_data, allow_overwrite=overwrite_prompt)
-            logger.info(f"[IMPORT] Saved prompt '{prompt_name}'")
+                        for key, value in defs.items():
+                            if not isinstance(value, str):
+                                # Card bundles are third-party data — a non-string
+                                # piece persisted here detonates the renderer later.
+                                logger.warning(f"[IMPORT] Skipping non-string piece "
+                                               f"{comp_type}/{key} from card")
+                                continue
+                            if (comp_type, key) in _keep:
+                                continue  # user unchecked this piece — keep local value
+                            existing_piece = prompt_manager.components.get(comp_type, {}).get(key)
+                            if existing_piece and not overwrite_prompt:
+                                continue
+                            # Write the PRIVATE dict — `.components` is a merged
+                            # COPY when prompt-packs are registered; writing to it
+                            # silently drops every imported piece (see PUT
+                            # /api/prompts/components above for the same rule).
+                            prompt_manager._components.setdefault(comp_type, {})[key] = value
+                    saved = prompt_manager.save_components()
+                if not saved:
+                    raise HTTPException(status_code=409,
+                                        detail="Component save refused — the prompt "
+                                               "store failed to load earlier; fix "
+                                               "user/prompts/prompt_pieces.json and reload")
 
     # Build persona settings
     voice_data = data.get("voice", {})

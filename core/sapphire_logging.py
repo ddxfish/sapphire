@@ -3,7 +3,14 @@ import sys
 import faulthandler
 import logging
 import shutil
+from pathlib import Path
 from logging.handlers import TimedRotatingFileHandler
+
+# Anchor everything to the repo root — a launch from another CWD (Windows
+# shortcut, service unit without WorkingDirectory) used to scatter a fresh
+# user/ tree wherever the shell happened to be. Same anchor pattern as
+# prompt_manager (no .resolve(): keep symlinked checkouts on their own path).
+_ROOT = Path(__file__).parent.parent
 
 # Reconfigure stdout/stderr to utf-8 with errors='replace' BEFORE any handler
 # is attached. Without this, Windows cmd.exe defaults to cp1252 — a single
@@ -36,8 +43,8 @@ _UNDER_PYTEST = 'pytest' in sys.modules or 'PYTEST_CURRENT_TEST' in os.environ
 _startup_log = None
 if not _UNDER_PYTEST:
     try:
-        os.makedirs('user/logs', exist_ok=True)
-        _startup_log = open('user/logs/startup_errors.log', 'a', encoding='utf-8')
+        os.makedirs(_ROOT / 'user/logs', exist_ok=True)
+        _startup_log = open(_ROOT / 'user/logs/startup_errors.log', 'a', encoding='utf-8')
         _startup_log.write(f"\n--- Startup attempt ---\n")
     except Exception:
         pass
@@ -66,14 +73,14 @@ _USER_DIRS = [
 ]
 try:
     for d in _USER_DIRS:
-        os.makedirs(d, exist_ok=True)
+        os.makedirs(_ROOT / d, exist_ok=True)
 except Exception as e:
     _log_startup_error(f"Failed to create user dirs: {e}")
 
 # Copy default avatars if none exist in user dir
 def _init_avatars():
-    avatar_dir = 'user/public/avatars'
-    static_dir = 'interfaces/web/static/users'
+    avatar_dir = str(_ROOT / 'user/public/avatars')
+    static_dir = str(_ROOT / 'interfaces/web/static/users')
 
     # Check if ANY avatar already exists (any format)
     for role in ('user', 'assistant'):
@@ -107,7 +114,7 @@ _init_avatars()
 file_handler = None
 if not _UNDER_PYTEST:
     file_handler = TimedRotatingFileHandler(
-        'user/logs/sapphire.log',
+        _ROOT / 'user/logs/sapphire.log',
         when='midnight',
         interval=1,
         backupCount=30,

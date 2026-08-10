@@ -638,3 +638,341 @@ class TestDefaultIsAssembledMode:
         finally:
             prompt_state._assembled_state.clear()
             prompt_state._assembled_state.update(saved)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Circle-back fixes, 2026-08-09 (Krem's rulings — scratch: circle-back-plan)
+# ═══════════════════════════════════════════════════════════════════════
+
+class TestApplyScenarioAtomicity:
+    """apply_scenario is all-or-nothing with complete-outfit semantics."""
+
+    def _with_state(self, mgr, state):
+        """Context: patch manager + install a known live state; restores after."""
+        from contextlib import contextmanager
+        from core import prompt_state
+
+        @contextmanager
+        def ctx():
+            saved = {k: (list(v) if isinstance(v, list) else v)
+                     for k, v in prompt_state._assembled_state.items()}
+            with patch.object(prompt_state, 'prompt_manager', mgr):
+                prompt_state._assembled_state.clear()
+                prompt_state._assembled_state.update(state)
+                try:
+                    yield prompt_state
+                finally:
+                    prompt_state._assembled_state.clear()
+                    prompt_state._assembled_state.update(saved)
+        return ctx()
+
+    def test_complete_outfit_clears_unlisted(self):
+        """Ruling 2A: a preset IS the whole outfit — unlisted extras/emotions
+        clear instead of bleeding through from the previous preset."""
+        mgr = _mgr_with(COMPONENTS, presets={'bare': {'character': 'testchar'}})
+        prev = {'character': 'other', 'location': 'lab', 'relationship': 'friend',
+                'goals': 'none', 'format': 'short', 'scenario': 'heist',
+                'extras': ['tools'], 'emotions': ['calm'],
+                'spice': 'S', 'active_preset': 'old'}
+        with self._with_state(mgr, prev) as ps:
+            assert ps.apply_scenario('bare') is True
+            st = ps._assembled_state
+            assert st['character'] == 'testchar'
+            assert st['extras'] == [] and st['emotions'] == []
+            assert st['location'] == 'default' and st['scenario'] == 'default'
+
+    def test_spice_survives_swap(self):
+        mgr = _mgr_with(COMPONENTS, presets={'bare': {'character': 'testchar'}})
+        prev = {'character': 'other', 'spice': 'KEEP', 'next_spice': 'NEXT',
+                'extras': [], 'emotions': [], 'active_preset': 'old'}
+        with self._with_state(mgr, prev) as ps:
+            assert ps.apply_scenario('bare') is True
+            assert ps._assembled_state['spice'] == 'KEEP'
+            assert ps._assembled_state['next_spice'] == 'NEXT'
+
+    def test_bad_preset_aborts_untouched(self):
+        """Non-string single / non-list extras → False, live state unchanged."""
+        mgr = _mgr_with(COMPONENTS, presets={
+            'bad1': {'character': {'nested': 'dict'}},
+            'bad2': {'character': 'testchar', 'extras': 'not-a-list'}})
+        prev = {'character': 'other', 'location': 'lab', 'extras': ['tools'],
+                'emotions': [], 'spice': '', 'active_preset': 'old'}
+        for bad in ('bad1', 'bad2'):
+            with self._with_state(mgr, prev) as ps:
+                assert ps.apply_scenario(bad) is False
+                st = ps._assembled_state
+                assert st['character'] == 'other'
+                assert st['extras'] == ['tools']
+                assert st['active_preset'] == 'old'
+
+    def test_unknown_scenario_returns_false(self):
+        from core import prompt_state
+        mgr = _mgr_with(COMPONENTS)
+        with patch.object(prompt_state, 'prompt_manager', mgr):
+            assert prompt_state.apply_scenario('no-such') is False
+
+    def test_stamps_both_trackers(self):
+        """R-8: apply_scenario stamps state AND manager attr — no drift."""
+        mgr = _mgr_with(COMPONENTS, presets={'p': {'character': 'testchar'}})
+        mgr._active_preset_name = 'old'
+        prev = {'character': 'other', 'extras': [], 'emotions': [],
+                'active_preset': 'old'}
+        with self._with_state(mgr, prev) as ps:
+            assert ps.apply_scenario('p') is True
+            assert ps._assembled_state['active_preset'] == 'p'
+            assert mgr._active_preset_name == 'p'
+
+    def test_in_place_mutation_not_rebind(self):
+        """meta.py imports the dict object — apply must never rebind it."""
+        from core import prompt_state
+        mgr = _mgr_with(COMPONENTS, presets={'p': {'character': 'testchar'}})
+        ref = prompt_state._assembled_state
+        saved = {k: (list(v) if isinstance(v, list) else v) for k, v in ref.items()}
+        try:
+            with patch.object(prompt_state, 'prompt_manager', mgr):
+                prompt_state.apply_scenario('p')
+            assert prompt_state._assembled_state is ref
+            prompt_state.reset_to_defaults()
+            assert prompt_state._assembled_state is ref
+        finally:
+            ref.clear()
+            ref.update(saved)
+
+
+class TestActivationAbort:
+    """A preset failing validation aborts activation cleanly (C-5)."""
+
+    def test_activate_prompt_aborts_before_snapshot(self):
+        from core import prompt_state, prompt_crud
+        mgr = _mgr_with(COMPONENTS, presets={'bad': {'character': ['list']}})
+        mgr._active_preset_name = 'before'
+        system = MagicMock()
+        with patch.object(prompt_state, 'prompt_manager', mgr), \
+             patch.object(prompt_crud, 'prompt_manager', mgr):
+            ok, msg = prompt_crud.activate_prompt('bad', system)
+        assert ok is False
+        assert 'abort' in msg.lower()
+        system.llm_chat.set_system_prompt.assert_not_called()
+        assert mgr._active_preset_name == 'before'
+
+
+class TestUserBeatsPack:
+    """C-10: user entries win get_prompt lookups even across types."""
+
+    def _pack_overlay(self, monoliths=None, presets=None, components=None):
+        return [
+            patch('core.prompt_packs.overlay_monoliths', return_value=monoliths or {}),
+            patch('core.prompt_packs.overlay_presets', return_value=presets or {}),
+            patch('core.prompt_packs.overlay_components', return_value=components or {}),
+        ]
+
+    def test_user_preset_beats_pack_monolith(self):
+        from core import prompt_crud
+        mgr = _mgr_with(COMPONENTS, presets={'x': {'character': 'testchar'}})
+        patches = self._pack_overlay(monoliths={'x': {'content': 'PACK', 'privacy_required': False}})
+        with patch.object(prompt_crud, 'prompt_manager', mgr):
+            for p in patches: p.start()
+            try:
+                result = prompt_crud.get_prompt('x')
+            finally:
+                for p in patches: p.stop()
+        assert result['type'] == 'assembled'
+
+    def test_user_monolith_beats_pack_preset(self):
+        from core import prompt_crud
+        mgr = _mgr_with(monoliths={'x': {'content': 'USER', 'privacy_required': False}})
+        patches = self._pack_overlay(presets={'x': {'character': 'packchar'}})
+        with patch.object(prompt_crud, 'prompt_manager', mgr):
+            for p in patches: p.start()
+            try:
+                result = prompt_crud.get_prompt('x')
+            finally:
+                for p in patches: p.stop()
+        assert result['type'] == 'monolith'
+        assert result['content'] == 'USER'
+
+    def test_pack_prompt_still_resolves(self):
+        from core import prompt_crud
+        mgr = _mgr_with()
+        patches = self._pack_overlay(monoliths={'packonly': {'content': 'P', 'privacy_required': False}})
+        with patch.object(prompt_crud, 'prompt_manager', mgr):
+            for p in patches: p.start()
+            try:
+                result = prompt_crud.get_prompt('packonly')
+            finally:
+                for p in patches: p.stop()
+        assert result['content'] == 'P'
+
+    def test_pack_name_no_longer_blocks_user_save(self):
+        """DR-7: cross-type collision checks read PRIVATE dicts — a pack
+        shipping the same name of the other type can't block the save."""
+        from core import prompt_crud
+        mgr = _mgr_with()
+        mgr.save_monoliths = MagicMock(return_value=True)
+        patches = self._pack_overlay(presets={'x': {'character': 'packchar'}})
+        with patch.object(prompt_crud, 'prompt_manager', mgr):
+            for p in patches: p.start()
+            try:
+                ok, _ = prompt_crud.save_prompt('x', {'type': 'monolith', 'content': 'mine'})
+            finally:
+                for p in patches: p.stop()
+        assert ok is True
+
+
+class TestReservedNames:
+    """'default' and 'assembled' are sentinels — blocked at the write door."""
+
+    def test_reserved_names_blocked(self):
+        from core import prompt_crud
+        mgr = _mgr_with()
+        with patch.object(prompt_crud, 'prompt_manager', mgr):
+            for name in ('default', 'assembled'):
+                ok, msg = prompt_crud.save_prompt(name, {'type': 'monolith', 'content': 'x'})
+                assert ok is False and 'reserved' in msg.lower()
+                ok, msg = prompt_crud.save_prompt(
+                    name, {'type': 'assembled', 'components': {'character': 'c'}})
+                assert ok is False and 'reserved' in msg.lower()
+        assert mgr._monoliths == {} and mgr._scenario_presets == {}
+
+
+class TestLoaderNormalization:
+    """_load_pieces drops+warns non-conforming entries like _load_monoliths."""
+
+    def _mgr_on_disk(self, tmp_path):
+        from core.prompt_manager import PromptManager
+        with patch.object(PromptManager, '__init__', lambda self: None):
+            mgr = PromptManager()
+        mgr.USER_DIR = tmp_path
+        mgr._components = {}
+        mgr._scenario_presets = {}
+        mgr._load_failed = {'pieces': False, 'monoliths': False, 'spices': False}
+        return mgr
+
+    def test_junk_dropped_good_kept(self, tmp_path):
+        import json
+        mgr = self._mgr_on_disk(tmp_path)
+        (tmp_path / 'prompt_pieces.json').write_text(json.dumps({
+            'components': {
+                'character': {'good': 'text', 'bad': {'nested': 'dict'}, 'worse': 7},
+                'broken-type': 'not-a-dict',
+            },
+            'scenario_presets': {
+                'good': {'character': 'good', 'extras': [], '_privacy_required': False},
+                'backup-shaped': {'character': {'key': 'text'}},
+            },
+        }), encoding='utf-8')
+        mgr._load_pieces()
+        assert mgr._load_failed['pieces'] is False
+        assert mgr._components['character'] == {'good': 'text'}
+        assert 'broken-type' not in mgr._components
+        assert 'good' in mgr._scenario_presets
+        assert 'backup-shaped' not in mgr._scenario_presets
+
+
+class TestRendererTolerance:
+    """assemble_from_components renders blank for junk, never crashes."""
+
+    def test_non_string_piece_value_blank(self):
+        mgr = _mgr_with(COMPONENTS)
+        mgr._components['character']['junk'] = {'nested': 'dict'}
+        out = mgr.assemble_from_components({'character': 'junk'})
+        assert 'nested' not in out
+
+    def test_non_string_keys_blank(self):
+        mgr = _mgr_with(COMPONENTS)
+        out = mgr.assemble_from_components({
+            'character': ['list-key'], 'location': {'d': 1},
+            'extras': {'not': 'a list'}, 'emotions': 42})
+        assert isinstance(out, str)
+
+    def test_string_extras_tolerated(self):
+        """A lone string where a list belongs renders as one key."""
+        mgr = _mgr_with(COMPONENTS)
+        out = mgr.assemble_from_components({'character': 'testchar', 'extras': 'tools'})
+        assert 'You have tools.' in out
+
+
+class TestMetaSaveFirst:
+    """DR-7B: piece tools save the candidate FIRST — a refused save leaves
+    the live assembled state untouched."""
+
+    def test_refused_save_leaves_state_alone(self):
+        from core import prompt_state
+        from functions.meta import MetaError, _save_and_activate_assembled
+        saved = {k: (list(v) if isinstance(v, list) else v)
+                 for k, v in prompt_state._assembled_state.items()}
+        candidate = dict(saved)
+        candidate['character'] = 'mutated'
+        try:
+            with patch('core.prompts.save_prompt', return_value=(False, 'refused')), \
+                 patch('core.prompts.get_prompt', return_value=None), \
+                 patch('core.prompts.get_active_preset_name', return_value='p'):
+                with pytest.raises(MetaError):
+                    _save_and_activate_assembled(MagicMock(), candidate)
+            assert prompt_state._assembled_state.get('character') == saved.get('character')
+        finally:
+            prompt_state._assembled_state.clear()
+            prompt_state._assembled_state.update(saved)
+
+
+class TestReplaceRetry:
+    """fs_utils.replace_with_retry outlasts transient PermissionError."""
+
+    def test_retries_then_succeeds(self, tmp_path):
+        from core import fs_utils
+        src = tmp_path / 'a.tmp'
+        dst = tmp_path / 'a.json'
+        src.write_text('x', encoding='utf-8')
+        calls = {'n': 0}
+        real_replace = type(src).replace
+
+        def flaky(self_path, target):
+            calls['n'] += 1
+            if calls['n'] <= 2:
+                raise PermissionError('locked')
+            return real_replace(self_path, target)
+
+        with patch.object(type(src), 'replace', flaky), \
+             patch.object(fs_utils.time, 'sleep'):
+            fs_utils.replace_with_retry(src, dst)
+        assert calls['n'] == 3
+        assert dst.read_text(encoding='utf-8') == 'x'
+
+    def test_persistent_lock_reraises(self, tmp_path):
+        from core import fs_utils
+        src = tmp_path / 'b.tmp'
+        dst = tmp_path / 'b.json'
+        src.write_text('x', encoding='utf-8')
+
+        def always_locked(self_path, target):
+            raise PermissionError('locked')
+
+        with patch.object(type(src), 'replace', always_locked), \
+             patch.object(fs_utils.time, 'sleep'):
+            with pytest.raises(PermissionError):
+                fs_utils.replace_with_retry(src, dst)
+
+
+class TestAuditResilience:
+    """One malformed entry can't permanently dark the prompt ledger."""
+
+    def test_bad_component_type_skipped(self):
+        mgr = _mgr_with(COMPONENTS)
+        mgr._components['rotten'] = 'not-a-dict'
+        state = mgr._audit_state()
+        assert 'rotten' not in state['components']
+        assert 'character' in state['components']
+
+    def test_bad_monolith_never_raises(self):
+        mgr = _mgr_with(monoliths={'ok': {'content': 'x'}, 'weird': 12345})
+        state = mgr._audit_state()
+        assert state['monoliths']['ok'] == 'x'
+
+    def test_sentinel_forks_to_character_name(self):
+        """Wearing pieces while on the 'default' sentinel saves under the
+        character's name — never under the (reserved) sentinel itself."""
+        from functions.meta import _get_current_preset_name
+        with patch('core.prompts.get_active_preset_name', return_value='default'):
+            assert _get_current_preset_name({'character': 'marcus'}) == 'marcus'
+        with patch('core.prompts.get_active_preset_name', return_value='heist'):
+            assert _get_current_preset_name({'character': 'marcus'}) == 'heist'

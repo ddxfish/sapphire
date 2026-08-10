@@ -3,6 +3,8 @@ import json
 import logging
 from pathlib import Path
 
+from core.fs_utils import replace_with_retry
+
 logger = logging.getLogger(__name__)
 
 USER_DIR = Path(__file__).parent.parent / "user"
@@ -94,9 +96,10 @@ def _migrate_loose_prompt_files_inner():
 
     def _set_aside(path, suffix):
         # replace(), not rename(): rename raises on Windows if a previous
-        # run already left the target behind.
+        # run already left the target behind. Retry wrapper for transient
+        # PermissionError (AV scanner holding the file).
         target = path.with_suffix(suffix)
-        path.replace(target)
+        replace_with_retry(path, target)
 
     changed = False
     for path in loose:
@@ -134,7 +137,7 @@ def _migrate_loose_prompt_files_inner():
             tmp = target.with_suffix('.tmp')
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
-            tmp.replace(target)
+            replace_with_retry(tmp, target)
 
 
 def migrate_misfiled_preset_pieces():
@@ -176,7 +179,7 @@ def migrate_misfiled_preset_pieces():
             tmp = path.with_suffix('.tmp')
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            tmp.replace(path)
+            replace_with_retry(tmp, path)
     except Exception as e:
         logger.error(f"Mis-filed piece migration failed: {e}")
 
@@ -221,7 +224,7 @@ def _migrate_prompt_pieces():
             tmp = path.with_suffix('.tmp')
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
-            tmp.replace(path)
+            replace_with_retry(tmp, path)
             logger.info("Migrated prompt_pieces.json: persona -> character")
     except Exception as e:
         logger.error(f"Migration failed for prompt_pieces.json: {e}")
@@ -264,7 +267,7 @@ def _migrate_user_prompts():
                 tmp = path.with_suffix('.tmp')
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
-                tmp.replace(path)
+                replace_with_retry(tmp, path)
                 logger.info(f"Migrated {path.name}: persona -> character")
         except Exception as e:
             logger.warning(f"Could not migrate {path.name}: {e}")
@@ -299,7 +302,7 @@ def migrate_stt_to_provider():
                 tmp = settings_path.with_suffix('.tmp')
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
-                tmp.replace(settings_path)
+                replace_with_retry(tmp, settings_path)
                 logger.info("Cleaned up root-level STT keys (already migrated)")
             return
 
@@ -322,7 +325,7 @@ def migrate_stt_to_provider():
         tmp = settings_path.with_suffix('.tmp')
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        tmp.replace(settings_path)
+        replace_with_retry(tmp, settings_path)
         logger.info(f"Migrated STT settings: enabled={was_enabled} engine={engine} -> provider={stt['STT_PROVIDER']}")
     except Exception as e:
         logger.error(f"STT settings migration failed: {e}")
@@ -356,7 +359,7 @@ def migrate_tts_to_provider():
                 tmp = settings_path.with_suffix('.tmp')
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
-                tmp.replace(settings_path)
+                replace_with_retry(tmp, settings_path)
                 logger.info("Cleaned up root-level TTS keys (already migrated)")
             return
 
@@ -376,7 +379,7 @@ def migrate_tts_to_provider():
         tmp = settings_path.with_suffix('.tmp')
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
-        tmp.replace(settings_path)
+        replace_with_retry(tmp, settings_path)
         logger.info(f"Migrated TTS settings: enabled={was_enabled} -> provider={tts['TTS_PROVIDER']}")
     except Exception as e:
         logger.error(f"TTS settings migration failed: {e}")
