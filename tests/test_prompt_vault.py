@@ -817,6 +817,16 @@ class TestPieceWriteRouting:
         ok, code = prompt_crud.delete_component("character", "vlt_hidden")
         assert not ok and code == 'not_found'
 
+    def test_origin_regular_pins_user_store(self, routed):
+        """Client import lane: origin='regular' must beat new-while-unlocked
+        routing (same rule as the prompt funnel)."""
+        from core import prompt_crud
+        ok, msg = prompt_crud.save_component("character", "vlt_imported",
+                                             "card text", origin="regular")
+        assert ok and "(vault)" not in msg
+        assert routed._components["character"]["vlt_imported"] == "card text"
+        assert not pv.vault_has_piece("character", "vlt_imported")
+
     def test_batch_import_never_routes_to_vault(self, routed):
         from core import prompt_crud
         ok, _ = prompt_crud.save_components_batch(
@@ -824,6 +834,102 @@ class TestPieceWriteRouting:
         assert ok
         assert routed._components["character"]["vlt_card"] == "imported text"
         assert not pv.vault_has_piece("character", "vlt_card")
+
+
+# ═══ STEP 4: vault lifecycle routes ═══
+
+class _Req:
+    headers = {}
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    async def json(self):
+        return self._payload
+
+
+class TestVaultRoutes:
+    """POST setup/unlock/lock. Wrong key MUST be 403 — fetch.js redirects
+    any 401 to /login, so a typo would log the user out (finding 5)."""
+
+    @pytest.fixture
+    def routes(self, vault, monkeypatch):
+        import core.api_fastapi  # noqa: F401  (route modules trip circular imports alone)
+        from core.routes import vault as vault_routes
+        slept = []
+
+        async def _fake_sleep(s):
+            slept.append(s)
+        monkeypatch.setattr(vault_routes.asyncio, "sleep", _fake_sleep)
+        vault_routes.slept = slept
+        yield vault_routes
+        del vault_routes.slept
+
+    def _run(self, coro):
+        import asyncio
+        return asyncio.run(coro)
+
+    def test_setup_then_duplicate_409(self, routes):
+        from fastapi import HTTPException
+        result = self._run(routes.vault_setup(_Req({"key": "hunter2"}), None))
+        assert result["vault"] == {"exists": True, "unlocked": True}
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_setup(_Req({"key": "other"}), None))
+        assert ei.value.status_code == 409
+
+    def test_setup_empty_key_400(self, routes):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_setup(_Req({"key": ""}), None))
+        assert ei.value.status_code == 400
+
+    def test_wrong_key_is_403_not_401_with_delay(self, routes):
+        from fastapi import HTTPException
+        self._run(routes.vault_setup(_Req({"key": "right"}), None))
+        self._run(routes.vault_lock(None))
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_unlock(_Req({"key": "wrong"}), None))
+        assert ei.value.status_code == 403          # NEVER 401
+        assert routes.slept == [routes._FAIL_DELAY_S]
+
+    def test_unlock_no_vault_404(self, routes):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_unlock(_Req({"key": "x"}), None))
+        assert ei.value.status_code == 404
+
+    def test_unlock_corrupt_500(self, routes):
+        from fastapi import HTTPException
+        pv.VAULT_PATH.write_bytes(b"not a vault")
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_unlock(_Req({"key": "x"}), None))
+        assert ei.value.status_code == 500
+
+    def test_lock_unlock_round_trip_and_idempotent(self, routes):
+        self._run(routes.vault_setup(_Req({"key": "k"}), None))
+        r1 = self._run(routes.vault_lock(None))
+        assert r1["vault"]["unlocked"] is False
+        r2 = self._run(routes.vault_lock(None))       # idempotent
+        assert r2["vault"]["unlocked"] is False
+        r3 = self._run(routes.vault_unlock(_Req({"key": "k"}), None))
+        assert r3["vault"]["unlocked"] is True
+        r4 = self._run(routes.vault_unlock(_Req({"key": "anything"}), None))
+        assert r4["vault"]["unlocked"] is True        # idempotent while open
+        assert routes.slept == []                     # no failures, no delays
+
+    def test_managed_mode_gates_setup_and_unlock_not_lock(self, routes, monkeypatch):
+        from fastapi import HTTPException
+        from core.settings_manager import settings as sm_settings
+        self._run(routes.vault_setup(_Req({"key": "k"}), None))
+        monkeypatch.setattr(sm_settings, "is_managed", lambda: True)
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_setup(_Req({"key": "k"}), None))
+        assert ei.value.status_code == 403
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_unlock(_Req({"key": "k"}), None))
+        assert ei.value.status_code == 403
+        r = self._run(routes.vault_lock(None))        # locking always allowed
+        assert r["vault"]["unlocked"] is False
 
 
 class TestRouteStatusMapping:

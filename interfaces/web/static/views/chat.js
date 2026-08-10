@@ -101,11 +101,19 @@ export default {
         // PUT for the OLD chat fires PROMPT_CHANGED:loaded via SSE, which arrived before
         // activateChat had switched the backend. loadSidebar's GET for the NEW chat name
         // hit the non-active-chat file-lookup path and 404'd.
-        eventBus.on(eventBus.Events.PROMPT_CHANGED, (data) => {
+        eventBus.on(eventBus.Events.PROMPT_CHANGED, async (data) => {
             if (data?.action === 'loaded') return;  // side effect, not user-initiated
+            // Await the cache bust BEFORE painting (same pattern as the
+            // TOOLSET_CHANGED handler above) — module listener order isn't
+            // guaranteed, so an un-awaited loadSidebar could paint from the
+            // stale init cache (vault names lingering after a lock).
+            await refreshInitData();
             loadSidebar();
         });
-        eventBus.on(eventBus.Events.PROMPT_DELETED, () => loadSidebar());
+        eventBus.on(eventBus.Events.PROMPT_DELETED, async () => {
+            await refreshInitData();
+            loadSidebar();
+        });
 
         // Refresh spice dropdown when spice sets change
         eventBus.on(eventBus.Events.SPICE_CHANGED, () => loadSidebar());
@@ -223,36 +231,103 @@ export default {
             await loadSidebar();
         });
 
-        // Private-chat eyeball — toggles the active chat's private_chat flag
+        // Private-chat eyeball — the vault's lock-now/unlock toggle (ruling B).
+        // Three states: off · on+unlocked (blue) · on+locked (amber pulse).
+        // Going private runs THROUGH the vault (decision 3: no skip path);
+        // pre-vault installs (no vault file) keep the plain v1 toggle.
         const eyeBtn = container.querySelector('#sb-privacy-eye');
         if (eyeBtn && window.__managed) eyeBtn.style.display = 'none';
+
+        const putPrivate = async (chatName, value) => {
+            await api.updateChatSettings(chatName, { private_chat: value });
+            eyeBtn.classList.toggle('private-on', value);
+            if (!value) eyeBtn.classList.remove('vault-locked');
+            if (value) {
+                // Warn (don't silently switch) if this chat's model is cloud.
+                // Only claim "local" when the provider actually resolves as
+                // local — before llmProviders loads (or in auto mode) the
+                // old toast promised "local only" for a cloud setup.
+                const provider = getVal(container, '#sb-llm-primary') || 'auto';
+                const meta = llmProviders.find(p => p.key === provider);
+                if (meta && !meta.is_local) {
+                    ui.showToast(`Private chat ON — but '${provider}' is a cloud model and will refuse. Pick a local model.`, 'error');
+                } else if (meta && meta.is_local) {
+                    ui.showToast('Private chat ON — local models and tools only', 'success');
+                } else {
+                    ui.showToast('Private chat ON — cloud models and tools will refuse', 'success');
+                }
+            } else {
+                ui.showToast('Private chat off', 'success');
+            }
+            const { populateChatDropdown } = await import('../features/chat-manager.js');
+            await populateChatDropdown();
+            await updateScene();
+        };
+
         eyeBtn?.addEventListener('click', async () => {
             const chatName = (getElements().chatSelect || document.getElementById('chat-select'))?.value;
             if (!chatName) return;
             const goingPrivate = !eyeBtn.classList.contains('private-on');
             try {
-                await api.updateChatSettings(chatName, { private_chat: goingPrivate });
-                eyeBtn.classList.toggle('private-on', goingPrivate);
+                const { vaultSetup, vaultUnlock, vaultLock, vaultStatus } =
+                    await import('../shared/vault-api.js');
+                const { keyPrompt } = await import('../shared/key-prompt.js');
+                const v = await vaultStatus();
+
                 if (goingPrivate) {
-                    // Warn (don't silently switch) if this chat's model is cloud.
-                    // Only claim "local" when the provider actually resolves as
-                    // local — before llmProviders loads (or in auto mode) the
-                    // old toast promised "local only" for a cloud setup.
-                    const provider = getVal(container, '#sb-llm-primary') || 'auto';
-                    const meta = llmProviders.find(p => p.key === provider);
-                    if (meta && !meta.is_local) {
-                        ui.showToast(`Private chat ON — but '${provider}' is a cloud model and will refuse. Pick a local model.`, 'error');
-                    } else if (meta && meta.is_local) {
-                        ui.showToast('Private chat ON — local models and tools only', 'success');
-                    } else {
-                        ui.showToast('Private chat ON — cloud models and tools will refuse', 'success');
+                    if (!v.exists) {
+                        // First run: create the vault, then go private.
+                        const res = await keyPrompt({
+                            title: 'Set up your prompt vault',
+                            message: 'Private chats live behind an encrypted prompt vault. Pick a passphrase.',
+                            mode: 'setup',
+                            validate: async (key) => { await vaultSetup(key); return ''; }
+                        });
+                        if (!res?.key) return;   // cancel = nothing changes
+                        ui.showToast('Vault created and unlocked', 'success');
+                    } else if (!v.unlocked) {
+                        const res = await keyPrompt({
+                            title: 'Unlock the vault',
+                            message: 'Enter your vault passphrase to go private.',
+                            validate: async (key) => { await vaultUnlock(key); return ''; }
+                        });
+                        if (!res?.key) return;
                     }
-                } else {
-                    ui.showToast('Private chat off', 'success');
+                    await putPrivate(chatName, true);
+                    return;
                 }
-                const { populateChatDropdown } = await import('../features/chat-manager.js');
-                await populateChatDropdown();
-                await updateScene();
+
+                // Eyeball is ON — three off-paths by vault state.
+                if (v.exists && !v.unlocked) {
+                    // Amber: private chat, vault asleep. One popup, two
+                    // meanings (the single two-choice popup in the feature).
+                    const res = await keyPrompt({
+                        title: 'Vault is locked',
+                        message: 'This chat is private but the vault is asleep. Unlock it, or turn privacy off for this chat.',
+                        secondaryLabel: 'Turn privacy off',
+                        validate: async (key) => { await vaultUnlock(key); return ''; }
+                    });
+                    if (!res) return;
+                    if (res.secondary) {
+                        await putPrivate(chatName, false);
+                    } else {
+                        eyeBtn.classList.remove('vault-locked');
+                        ui.showToast('Vault unlocked', 'success');
+                        await updateScene();
+                    }
+                    return;
+                }
+                if (v.exists && v.unlocked) {
+                    // Lock NOW, THEN drop the flag — strictly sequential
+                    // (finding 4): the 409 guard passes only once the
+                    // prompt name no longer resolves. Never Promise.all.
+                    await vaultLock();
+                    await putPrivate(chatName, false);
+                    ui.showToast('Vault locked', 'success');
+                    return;
+                }
+                // No vault at all — plain v1 toggle.
+                await putPrivate(chatName, false);
             } catch (err) {
                 console.error('Failed to toggle private chat:', err);
                 ui.showToast(err?.message || 'Failed to toggle private chat', 'error');
@@ -700,7 +775,13 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
 
         // Private-chat eyeball reflects this chat's flag (status poll keeps it synced)
         const eyeGlow = container.querySelector('#sb-privacy-eye');
-        if (eyeGlow) eyeGlow.classList.toggle('private-on', !!settings.private_chat);
+        if (eyeGlow) {
+            eyeGlow.classList.toggle('private-on', !!settings.private_chat);
+            // Amber (vault-asleep) is painted by the status poll in scene.js
+            // — it knows the vault state; settings alone don't. Only CLEAR
+            // it here when the chat isn't private at all.
+            if (!settings.private_chat) eyeGlow.classList.remove('vault-locked');
+        }
 
         // Populate prompt dropdown
         const promptSel = container.querySelector('#sb-prompt');

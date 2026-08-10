@@ -375,7 +375,7 @@ def save_component(comp_type: str, key: str, value: str,
         logger.warning(f"Refused vault-origin piece save '{comp_type}/{key}' while locked")
         return False, VAULT_LOCKED_MSG
     in_user = key in prompt_manager._components.get(comp_type, {})
-    if not in_user and prompt_vault.vault_unlocked():
+    if not in_user and prompt_vault.vault_unlocked() and origin != 'regular':
         from core import prompt_packs
         pack_shadow_edit = (prompt_packs.piece_source(comp_type, key) is not None
                             and not prompt_vault.vault_has_piece(comp_type, key))

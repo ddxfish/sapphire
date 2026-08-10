@@ -5972,6 +5972,20 @@ a.gallery-caption:hover {
     50% { opacity: 1; box-shadow: 0 0 12px rgba(59, 130, 246, 0.9); }
 }
 
+/* Third state: private chat whose vault is asleep (locked). Amber pulse —
+   painted by the /api/status poll in scene.js. */
+#sb-privacy-eye.private-on.vault-locked {
+    color: #f59e0b;
+    border-color: #f59e0b;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.7);
+    animation: vault-asleep-pulse 2s ease-in-out infinite;
+}
+
+@keyframes vault-asleep-pulse {
+    0%, 100% { opacity: 0.6; box-shadow: 0 0 6px rgba(245, 158, 11, 0.5); }
+    50% { opacity: 1; box-shadow: 0 0 12px rgba(245, 158, 11, 0.9); }
+}
+
 /* Toolset control warning: private chat + toolset contains web tools */
 .toolset-cloud-warn {
     border-color: #f59e0b !important;

@@ -82,10 +82,19 @@ export async function updateScene() {
         setPromptPrivacyRequired(status?.prompt_privacy_required || false);
 
         // Private-chat eyeball + toolset cloud warning (status is the sync
-        // source — covers chat switches, persona loads, and other tabs)
+        // source — covers chat switches, persona loads, and other tabs).
+        // Amber = private chat whose vault is asleep (exists && !unlocked);
+        // this poll is the authoritative painter for that third state.
         const priv = !!status?.chat_settings?.private_chat;
         const eye = document.getElementById('sb-privacy-eye');
-        if (eye) eye.classList.toggle('private-on', priv);
+        if (eye) {
+            eye.classList.toggle('private-on', priv);
+            const vaultAsleep = priv && !!status?.vault?.exists && !status?.vault?.unlocked;
+            eye.classList.toggle('vault-locked', vaultAsleep);
+            eye.title = vaultAsleep ? 'Private chat — vault locked (click to unlock)'
+                : priv ? 'Private chat — click to lock the vault and go public'
+                : 'Toggle private chat';
+        }
         const toolsetSel = document.getElementById('sb-toolset');
         if (toolsetSel) {
             const warn = priv && !!status?.has_cloud_tools;

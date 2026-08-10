@@ -671,7 +671,23 @@ function initEventBus() {
     eventBus.on(eventBus.Events.SPICE_CHANGED, refreshAndUpdateScene);
     eventBus.on(eventBus.Events.COMPONENTS_CHANGED, refreshAndUpdateScene);
     eventBus.on(eventBus.Events.PROMPT_DELETED, refreshAndUpdateScene);
-    eventBus.on(eventBus.Events.SETTINGS_CHANGED, refreshAndUpdateScene);
+    // chat_prompt_fallback fires PER DEGRADED TURN (chat pinned to a prompt
+    // that no longer resolves — e.g. asleep in a locked vault). Keyed out of
+    // the full init-refresh (a steady-state locked vault would hammer
+    // /api/init every turn) and surfaced as a throttled toast instead.
+    let lastFallbackToast = 0;
+    eventBus.on(eventBus.Events.SETTINGS_CHANGED, (data) => {
+        if (data?.key === 'chat_prompt_fallback') {
+            if (Date.now() - lastFallbackToast > 60000) {
+                lastFallbackToast = Date.now();
+                const missing = (data?.reason || '').replace(/^missing:/, '');
+                ui.showToast(`Prompt '${missing}' unavailable (vault locked or deleted) — running on the default prompt`, 'error');
+            }
+            debouncedUpdateScene();
+            return;
+        }
+        refreshAndUpdateScene();
+    });
     eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, () => debouncedUpdateScene());
 
     eventBus.on(eventBus.Events.CHAT_SWITCHED, async (data) => {

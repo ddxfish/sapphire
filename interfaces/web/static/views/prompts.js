@@ -15,6 +15,9 @@ let container = null;
 let prompts = [];
 let components = {};
 let componentSources = {};  // {type: {key: pluginName}} — plugin-pack pieces (🧩 badge)
+let vaultNames = new Set(); // prompt names resolving from the vault (unlocked only)
+let vaultPieces = {};       // {type: Set(keys)} — vault pieces (unlocked only)
+let viewVisible = false;
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
 let selectedData = null;
@@ -100,13 +103,50 @@ const ICONS = {
 };
 
 export default {
-    init(el) { container = el; },
+    init(el) { container = el; bindBus(); },
     async show() {
+        viewVisible = true;
         if (window._viewSelect) { selected = window._viewSelect; delete window._viewSelect; }
         await loadAll(); render();
     },
-    hide() {}
+    hide() { viewVisible = false; }
 };
+
+// ── Origin stamps (finding 6: a save of vault-loaded content must SAY so,
+// so the server can refuse it after an idle-lock instead of splashing
+// decrypted text into the plaintext store) ──
+const promptSaveData = (name, data) =>
+    vaultNames.has(name) ? { ...data, origin: 'vault' } : data;
+const pieceOrigin = (type, key) =>
+    vaultPieces[type]?.has(key) ? 'vault' : undefined;
+
+// ── Event-bus refresh (this view had ZERO listeners — a vault lock in
+// another tab, or Sapphire editing pieces, left a stale roster with vault
+// names still visible; self-origin events are dropped by the bus) ──
+let busBound = false;
+function bindBus() {
+    if (busBound) return;
+    busBound = true;
+    import('../core/event-bus.js').then(eventBus => {
+        const refreshIfVisible = async (data) => {
+            if (!viewVisible) return;
+            if (data?.action === 'loaded') return;  // activation side effect
+            await loadAll();
+            if (selected && !prompts.find(p => p.name === selected)) {
+                // Selection vanished (vault locked / deleted elsewhere) —
+                // drop the editor rather than editing a ghost.
+                selected = activePromptName || (prompts[0]?.name ?? null);
+                selectedData = selected ? (promptDetails[selected] || null) : null;
+                openAccordion = null;
+                editTarget = {};
+            }
+            render();
+        };
+        eventBus.on(eventBus.Events.PROMPT_CHANGED, refreshIfVisible);
+        eventBus.on(eventBus.Events.COMPONENTS_CHANGED, refreshIfVisible);
+        eventBus.on(eventBus.Events.PROMPT_DELETED, refreshIfVisible);
+    });
+}
 
 // ── Data ──
 async function loadAll() {
@@ -115,6 +155,9 @@ async function loadAll() {
         prompts = (pList || []).sort((a, b) => a.name.localeCompare(b.name));
         components = compData.components || {};
         componentSources = compData.sources || {};
+        vaultNames = new Set(prompts.filter(p => p.vault).map(p => p.name));
+        vaultPieces = Object.fromEntries(
+            Object.entries(compData.vault_pieces || {}).map(([t, keys]) => [t, new Set(keys)]));
 
         const active = prompts.find(p => p.active);
         activePromptName = active?.name || null;
@@ -415,9 +458,10 @@ function bindEvents() {
             if (cancelled || !newName || newName === selected) return;
 
             try {
-                // Save under new name, delete old
+                // Save under new name, delete old. Origin stamped by the OLD
+                // name — renamed vault content must stay vault-routed.
                 const wasActive = selected === activePromptName;
-                await savePrompt(newName, selectedData);
+                await savePrompt(newName, promptSaveData(selected, selectedData));
                 await deletePrompt(selected);
                 selected = newName;
                 if (wasActive) {
@@ -493,13 +537,15 @@ function bindEvents() {
                     for (const [type, defs] of Object.entries(importPieces)) {
                         for (const [key, value] of Object.entries(defs)) {
                             if (!overwrite && components[type]?.[key]) { skipped++; continue; }
-                            await saveComponent(type, key, value);
+                            // Import lane pins the regular store — installing
+                            // shared content must not route by lock state.
+                            await saveComponent(type, key, value, null, 'regular');
                             imported++;
                         }
                     }
                 }
 
-                await savePrompt(name, promptData);
+                await savePrompt(name, { ...promptData, origin: 'regular' });
                 if (name === activePromptName) await loadPrompt(name);
                 selected = name;
                 await loadAll();
@@ -527,8 +573,8 @@ function bindEvents() {
     const commitPromptReason = async () => {
         if (!selected || !selectedData) return;
         const why = liveReason('prompt');
-        await savePrompt(selected,
-            why ? { ...selectedData, reason: why } : selectedData);
+        await savePrompt(selected, promptSaveData(selected,
+            why ? { ...selectedData, reason: why } : selectedData));
     };
     layout.querySelector('#pr-content')?.addEventListener('input', e => {
         if (selectedData) {
@@ -643,7 +689,8 @@ function bindAccordionBodyEvents(body, type) {
     const defText = body.querySelector('.pr-def-text');
     const commitPieceReason = async () => {
         const k = defText.dataset.key;
-        await saveComponent(type, k, defText.value, liveReason(`${type}:${k}`));
+        await saveComponent(type, k, defText.value, liveReason(`${type}:${k}`),
+                            pieceOrigin(type, k));
     };
     defText?.addEventListener('input', e => {
         const key = e.target.dataset.key;
@@ -871,7 +918,8 @@ async function renameDefinition(type, oldKey, newKey) {
     }
     try {
         const text = defs[oldKey] || '';
-        await saveComponent(type, newKey, text);
+        // Origin from the OLD key — renamed vault pieces stay vault-routed.
+        await saveComponent(type, newKey, text, null, pieceOrigin(type, oldKey));
         await deleteComponent(type, oldKey);
 
         // Update local state
@@ -883,11 +931,11 @@ async function renameDefinition(type, oldKey, newKey) {
             if (MULTI_TYPES.includes(type)) {
                 const arr = selectedData.components[type] || [];
                 const idx = arr.indexOf(oldKey);
-                if (idx >= 0) { arr[idx] = newKey; await savePrompt(selected, selectedData); }
+                if (idx >= 0) { arr[idx] = newKey; await savePrompt(selected, promptSaveData(selected, selectedData)); }
             } else {
                 if (selectedData.components[type] === oldKey) {
                     selectedData.components[type] = newKey;
-                    await savePrompt(selected, selectedData);
+                    await savePrompt(selected, promptSaveData(selected, selectedData));
                 }
             }
         }
@@ -906,8 +954,8 @@ function debouncedSavePrompt() {
         if (!selected || !selectedData) return;
         try {
             const why = liveReason('prompt');
-            await savePrompt(selected,
-                why ? { ...selectedData, reason: why } : selectedData);
+            await savePrompt(selected, promptSaveData(selected,
+                why ? { ...selectedData, reason: why } : selectedData));
             if (selected === activePromptName) await loadPrompt(selected);
             updateScene();
             refreshPreview();
@@ -922,7 +970,10 @@ function debouncedSaveComponent(type, key, value) {
     clearTimeout(compSaveTimers[timerId]);
     compSaveTimers[timerId] = setTimeout(async () => {
         try {
-            await saveComponent(type, key, value, liveReason(timerId));
+            // pieceOrigin: THE stale-editor site (finding 6) — this debounced
+            // save fires after an idle-lock too; the stamp lets the server
+            // 409 it instead of writing vault text to the plaintext store.
+            await saveComponent(type, key, value, liveReason(timerId), pieceOrigin(type, key));
             if (components[type]) components[type][key] = value;
             // If this component is used by the current prompt, refresh preview
             if (selectedData?.components) {

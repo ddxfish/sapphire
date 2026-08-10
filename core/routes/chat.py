@@ -258,11 +258,18 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
 
         chat_settings = _backfill_persona_visuals(chat_settings)
 
+        # Piece names of an ACTIVE vault preset ride this while unlocked —
+        # accepted (the unlocked world is open by design; /api/prompts lists
+        # them too). While locked this can't fire: lock()'s handoff resets
+        # the active preset before returning. Ruled at step-4 build.
         prompt_state = prompts.get_current_state()
         prompt_name = prompts.get_active_preset_name()
         prompt_char_count = prompts.get_prompt_char_count()
         prompt_privacy_required = prompts.is_current_prompt_private() and not chat_settings.get('private_chat', False)
         is_assembled = prompts.is_assembled_mode()
+
+        from core import prompt_vault
+        vault_state = prompt_vault.vault_status()
 
         function_names = system.llm_chat.function_manager.get_enabled_function_names()
         toolset_info = system.llm_chat.function_manager.get_current_toolset_info()
@@ -302,6 +309,7 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
             "prompt_name": prompt_name,
             "prompt_char_count": prompt_char_count,
             "prompt_privacy_required": prompt_privacy_required,
+            "vault": vault_state,
             "prompt": prompt_state,
             "toolset": toolset_info,
             "functions": user_tools,

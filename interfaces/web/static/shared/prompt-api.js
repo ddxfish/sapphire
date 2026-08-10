@@ -48,11 +48,16 @@ export async function deletePrompt(name) {
   return res;
 }
 
-export async function saveComponent(type, key, value, reason) {
+export async function saveComponent(type, key, value, reason, origin) {
+  // origin='vault': the editor loaded this piece from the vault — the server
+  // refuses the save (409) if the vault has locked since (stale-editor guard).
+  const body = { value };
+  if (reason) body.reason = reason;
+  if (origin) body.origin = origin;
   return await fetchWithTimeout(`/api/prompts/components/${encodeURIComponent(type)}/${encodeURIComponent(key)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(reason ? { value, reason } : { value })
+    body: JSON.stringify(body)
   });
 }
 

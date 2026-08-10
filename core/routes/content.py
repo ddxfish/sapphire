@@ -62,7 +62,12 @@ async def list_prompts(request: Request, _=Depends(require_login)):
             'char_count': len(content),
             'token_count': count_tokens(content),
             'privacy_required': pdata.get('privacy_required', False) if isinstance(pdata, dict) else False,
-            'source': pack_sources.get(name) if name not in user_names else None
+            'source': pack_sources.get(name) if name not in user_names else None,
+            # Vault marker (only ever true while unlocked, by construction) —
+            # drives the 🗝 badge AND the editor's origin stamp (finding 6:
+            # a stale editor must send origin='vault' so the server can
+            # refuse the save after an idle-lock).
+            'vault': prompts.is_vault_prompt(name)
         })
     return {"prompts": prompt_list, "current": prompts.get_active_preset_name()}
 
@@ -78,15 +83,22 @@ async def reload_prompts(request: Request, _=Depends(require_login)):
 async def get_prompt_components(request: Request, _=Depends(require_login)):
     """Get prompt components (merged view) + plugin sources for pack pieces.
     A user piece shadowing a pack key carries no source (the user copy wins)."""
-    from core import prompt_packs
+    from core import prompt_packs, prompt_vault
     user_components = prompts.prompt_manager._components
     sources = {
         ctype: {k: v for k, v in entries.items()
                 if k not in user_components.get(ctype, {})}
         for ctype, entries in prompt_packs.component_sources().items()
     }
+    # Vault piece markers (unlocked only, unshadowed only) — 🗝 badge lane +
+    # the piece editor's origin stamp (finding 6).
+    vault_pieces = {
+        ctype: [k for k in entries if k not in user_components.get(ctype, {})]
+        for ctype, entries in prompt_vault.overlay_components().items()
+    }
     return {"components": prompts.prompt_manager.components,
-            "sources": {k: v for k, v in sources.items() if v}}
+            "sources": {k: v for k, v in sources.items() if v},
+            "vault_pieces": {k: v for k, v in vault_pieces.items() if v}}
 
 
 @router.get("/api/prompts/{name}")
