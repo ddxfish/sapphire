@@ -119,32 +119,63 @@ const promptSaveData = (name, data) =>
     vaultNames.has(name) ? { ...data, origin: 'vault' } : data;
 const pieceOrigin = (type, key) =>
     vaultPieces[type]?.has(key) ? 'vault' : undefined;
+// 🗝 marker for vault pieces — headers, dropdowns, chips (only ever true
+// while unlocked; the 🧩 pack lane keeps its own glyph)
+const vKey = (type, key) =>
+    vaultPieces[type]?.has(key) ? ' \u{1F5DD}' : '';
 
 // ── Event-bus refresh (this view had ZERO listeners — a vault lock in
 // another tab, or Sapphire editing pieces, left a stale roster with vault
-// names still visible; self-origin events are dropped by the bus) ──
+// names still visible) ──
+// FOCUS GUARD: funnel-level publishes carry no origin, so this tab's OWN
+// debounced saves echo back over SSE ~700ms after typing stops — a render()
+// then yanks the cursor out of the textarea mid-edit (Krem, 2026-08-10).
+// While an editable inside this view has focus, defer the refresh; the
+// focusout handler catches up as soon as the user leaves the field.
 let busBound = false;
+let pendingRefresh = false;
+
+const _editableFocused = () => {
+    const ae = document.activeElement;
+    return !!(container?.contains(ae) &&
+        (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT'));
+};
+
+async function doBusRefresh() {
+    pendingRefresh = false;
+    await loadAll();
+    if (selected && !prompts.find(p => p.name === selected)) {
+        // Selection vanished (vault locked / deleted elsewhere) —
+        // drop the editor rather than editing a ghost.
+        selected = activePromptName || (prompts[0]?.name ?? null);
+        selectedData = selected ? (promptDetails[selected] || null) : null;
+        openAccordion = null;
+        editTarget = {};
+    }
+    render();
+}
+
 function bindBus() {
     if (busBound) return;
     busBound = true;
     import('../core/event-bus.js').then(eventBus => {
-        const refreshIfVisible = async (data) => {
+        const refreshIfVisible = (data) => {
             if (!viewVisible) return;
             if (data?.action === 'loaded') return;  // activation side effect
-            await loadAll();
-            if (selected && !prompts.find(p => p.name === selected)) {
-                // Selection vanished (vault locked / deleted elsewhere) —
-                // drop the editor rather than editing a ghost.
-                selected = activePromptName || (prompts[0]?.name ?? null);
-                selectedData = selected ? (promptDetails[selected] || null) : null;
-                openAccordion = null;
-                editTarget = {};
-            }
-            render();
+            if (_editableFocused()) { pendingRefresh = true; return; }
+            doBusRefresh();
         };
         eventBus.on(eventBus.Events.PROMPT_CHANGED, refreshIfVisible);
         eventBus.on(eventBus.Events.COMPONENTS_CHANGED, refreshIfVisible);
         eventBus.on(eventBus.Events.PROMPT_DELETED, refreshIfVisible);
+    });
+    // Deferred-refresh catch-up: run once focus truly left the editables
+    // (150ms lets focus settle — focusout fires before the new target owns it).
+    container?.addEventListener('focusout', () => {
+        if (!pendingRefresh) return;
+        setTimeout(() => {
+            if (viewVisible && pendingRefresh && !_editableFocused()) doBusRefresh();
+        }, 150);
     });
 }
 
@@ -305,7 +336,7 @@ function renderSingleAccordion(type, comps) {
                 <span class="pr-acc-icon">${ICONS[type]}</span>
                 <div class="pr-acc-text">
                     <span class="pr-acc-label">${cap(type)}</span>
-                    <span class="pr-acc-value">${current || 'none'}</span>
+                    <span class="pr-acc-value">${current ? current + vKey(type, current) : 'none'}</span>
                 </div>
                 <span class="pr-acc-arrow">${isOpen ? '\u25BE' : '\u25B8'}</span>
             </div>
@@ -314,7 +345,7 @@ function renderSingleAccordion(type, comps) {
                     <div class="pr-piece-row">
                         <select class="pr-piece-select" data-type="${type}">
                             <option value="">None</option>
-                            ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}</option>`).join('')}
+                            ${keys.map(k => `<option value="${k}"${k === current ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</option>`).join('')}
                         </select>
                         ${current ? `<button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${current}" title="Rename">\u270F</button>` : ''}
                     </div>
@@ -340,7 +371,8 @@ function renderMultiAccordion(type, comps) {
     const keys = Object.keys(defs).sort();
     const target = editTarget[type] || current[0] || keys[0] || '';
     const targetText = defs[target] || '';
-    const headerValue = current.length ? current.slice().sort().join(', ') : 'none';
+    const headerValue = current.length
+        ? current.slice().sort().map(k => k + vKey(type, k)).join(', ') : 'none';
 
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
@@ -356,16 +388,16 @@ function renderMultiAccordion(type, comps) {
                 <div class="pr-accordion-body">
                     <div class="pr-chips">
                         ${keys.map(k => `
-                            <label class="pr-chip${current.includes(k) ? ' active' : ''}" title="${escAttr((componentSources[type]?.[k] ? `[Plugin: ${componentSources[type][k]}] ` : '') + (defs[k] || ''))}">
+                            <label class="pr-chip${current.includes(k) ? ' active' : ''}" title="${escAttr((componentSources[type]?.[k] ? `[Plugin: ${componentSources[type][k]}] ` : '') + (vaultPieces[type]?.has(k) ? '[Vault] ' : '') + (defs[k] || ''))}">
                                 <input type="checkbox" data-type="${type}" data-key="${k}" ${current.includes(k) ? 'checked' : ''}>
-                                <span>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}</span>
+                                <span>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</span>
                             </label>
                         `).join('')}
                     </div>
                     ${keys.length ? `
                         <div class="pr-piece-row">
                             <select class="pr-piece-select" data-type="${type}">
-                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}</option>`).join('')}
+                                ${keys.map(k => `<option value="${k}"${k === target ? ' selected' : ''}>${k}${componentSources[type]?.[k] ? ' \u{1F9E9}' : ''}${vKey(type, k)}</option>`).join('')}
                             </select>
                             <button class="btn-icon pr-rename-btn" data-type="${type}" data-key="${target}" title="Rename">\u270F</button>
                         </div>

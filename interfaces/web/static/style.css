@@ -5960,6 +5960,21 @@ a.gallery-caption:hover {
    PRIVATE CHAT (eyeball toggle)
    ============================================================================= */
 
+/* The glyph is text — without these the pointer reads as an I-beam and the
+   emoji is selectable, which makes the button feel unclickable. */
+#sb-privacy-eye {
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Privacy border on the chat area (painted by the status poll in scene.js).
+   Outline, not border — zero layout shift; drawn atop the opaque overlay. */
+#chatbg.privacy-open { outline: 2px solid #3b82f6; outline-offset: -2px; }
+#chatbg.privacy-open #chatbg-overlay { box-shadow: inset 0 0 18px rgba(59, 130, 246, 0.28); }
+#chatbg.privacy-asleep { outline: 2px solid #f59e0b; outline-offset: -2px; }
+#chatbg.privacy-asleep #chatbg-overlay { box-shadow: inset 0 0 18px rgba(245, 158, 11, 0.28); }
+
 #sb-privacy-eye.private-on {
     color: #3b82f6;
     border-color: #3b82f6;

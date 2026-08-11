@@ -24,25 +24,34 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
         const setup = mode === 'setup';
         const overlay = document.createElement('div');
         overlay.className = 'modal-overlay active';
+        // Real <form> + autocomplete hints on purpose: password managers key
+        // on form submission with new-password/current-password fields — bare
+        // inputs never trigger the "save this password?" offer. The hidden
+        // username field gives PMs an identity to file the entry under.
         overlay.innerHTML = `
             <div class="modal-base" style="max-width:440px;width:92vw;padding:18px">
                 <div style="font-weight:600;margin-bottom:8px">${esc(title)}</div>
                 ${message ? `<div style="font-size:var(--font-sm);margin-bottom:10px;line-height:1.5">${esc(message)}</div>` : ''}
-                <input type="password" id="kp-key" autocomplete="off" placeholder="Passphrase"
-                    style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">
-                ${setup ? `
-                <input type="password" id="kp-confirm" autocomplete="off" placeholder="Confirm passphrase"
-                    style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">
-                <div style="font-size:var(--font-xs);color:var(--text-dim);line-height:1.5;margin-bottom:8px">
-                    ⚠️ There is no recovery — a lost passphrase is a lost vault.<br>
-                    Names of vault prompts you actually use stay visible in the app; keep them neutral.
-                </div>` : ''}
-                <div id="kp-error" style="color:#ef4444;font-size:var(--font-xs);min-height:16px;margin-bottom:8px"></div>
-                <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
-                    ${secondaryLabel ? `<button class="btn-sm" id="kp-secondary" style="margin-right:auto">${esc(secondaryLabel)}</button>` : ''}
-                    <button class="btn-sm" id="kp-cancel">Cancel</button>
-                    <button class="btn-sm btn-primary" id="kp-ok">${setup ? 'Create vault' : 'Unlock'}</button>
-                </div>
+                <form id="kp-form" action="#" method="dialog">
+                    <input type="text" name="username" autocomplete="username"
+                        value="sapphire-vault" readonly hidden>
+                    <input type="password" id="kp-key" name="password"
+                        autocomplete="${setup ? 'new-password' : 'current-password'}" placeholder="Passphrase"
+                        style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">
+                    ${setup ? `
+                    <input type="password" id="kp-confirm" name="confirm" autocomplete="new-password" placeholder="Confirm passphrase"
+                        style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">
+                    <div style="font-size:var(--font-xs);color:var(--text-dim);line-height:1.5;margin-bottom:8px">
+                        ⚠️ There is no recovery — a lost passphrase is a lost vault.<br>
+                        Names of vault prompts you actually use stay visible in the app; keep them neutral.
+                    </div>` : ''}
+                    <div id="kp-error" style="color:#ef4444;font-size:var(--font-xs);min-height:16px;margin-bottom:8px"></div>
+                    <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+                        ${secondaryLabel ? `<button type="button" class="btn-sm" id="kp-secondary" style="margin-right:auto">${esc(secondaryLabel)}</button>` : ''}
+                        <button type="button" class="btn-sm" id="kp-cancel">Cancel</button>
+                        <button type="submit" class="btn-sm btn-primary" id="kp-ok">${setup ? 'Create vault' : 'Unlock'}</button>
+                    </div>
+                </form>
             </div>`;
         document.body.appendChild(overlay);
         const keyInput = overlay.querySelector('#kp-key');
@@ -73,12 +82,16 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
 
         const onKey = (e) => {
             if (e.key === 'Escape') done(null);
-            else if (e.key === 'Enter') submit();
         };
         document.addEventListener('keydown', onKey);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
         overlay.querySelector('#kp-cancel').addEventListener('click', () => done(null));
-        okBtn.addEventListener('click', submit);
+        // Submit via the FORM (Enter included) — password managers watch the
+        // submit event; a plain button click never triggers the save offer.
+        overlay.querySelector('#kp-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            submit();
+        });
         overlay.querySelector('#kp-secondary')?.addEventListener('click', () => done({ secondary: true }));
     });
 }

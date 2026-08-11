@@ -87,13 +87,20 @@ export async function updateScene() {
         // this poll is the authoritative painter for that third state.
         const priv = !!status?.chat_settings?.private_chat;
         const eye = document.getElementById('sb-privacy-eye');
+        const vaultAsleep = priv && !!status?.vault?.exists && !status?.vault?.unlocked;
         if (eye) {
             eye.classList.toggle('private-on', priv);
-            const vaultAsleep = priv && !!status?.vault?.exists && !status?.vault?.unlocked;
             eye.classList.toggle('vault-locked', vaultAsleep);
             eye.title = vaultAsleep ? 'Private chat — vault locked (click to unlock)'
                 : priv ? 'Private chat — click to lock the vault and go public'
                 : 'Toggle private chat';
+        }
+        // Privacy border on the chat area: blue glow = private + vault open
+        // (or plain v1 private), amber = private + vault asleep.
+        const chatbg = document.getElementById('chatbg');
+        if (chatbg) {
+            chatbg.classList.toggle('privacy-open', priv && !vaultAsleep);
+            chatbg.classList.toggle('privacy-asleep', vaultAsleep);
         }
         const toolsetSel = document.getElementById('sb-toolset');
         if (toolsetSel) {
