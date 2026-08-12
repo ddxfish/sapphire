@@ -381,6 +381,15 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
     # Now publish SETTINGS_CHANGED for deferred keys (provider is ready)
     for _, value, key, tier in deferred_actions:
         publish(Events.SETTINGS_CHANGED, {"key": key, "value": value, "tier": tier})
+    # Vault idle-timeout hot-apply: re-arm the running timer with the new
+    # value (a SHRUNK timeout would otherwise apply up to one old-timeout
+    # late). No-op while locked or with no vault.
+    if 'VAULT_IDLE_MINUTES' in settings_dict:
+        try:
+            from core import prompt_vault
+            prompt_vault.rearm()
+        except Exception:
+            pass
     return {"status": "success", "results": results}
 
 

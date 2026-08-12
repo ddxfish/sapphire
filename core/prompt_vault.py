@@ -355,6 +355,18 @@ def touch():
     _last_activity = time.monotonic()
 
 
+def rearm() -> bool:
+    """Re-arm the idle timer with the CURRENT timeout setting. Hot-apply for
+    VAULT_IDLE_MINUTES changes: a GROWN timeout self-corrects at the next
+    fire anyway, but a SHRUNK one would apply up to one old-timeout late
+    without this. No-op while locked."""
+    with _lock:
+        if _key is None:
+            return False
+        _arm_timer_locked()
+    return True
+
+
 def _touch_locked():
     global _last_activity
     _last_activity = time.monotonic()

@@ -296,6 +296,17 @@ class TestIdleLock:
         assert pv._timer is None
         assert pv.vault_unlocked()   # teardown cancels the timer, not the key
 
+    def test_rearm_hot_applies_new_timeout(self, vault):
+        """Privacy-tab hot-apply (step 8): rearm() re-reads the setting and
+        replaces the armed timer. No-op while locked."""
+        pv.setup("key")
+        before = pv._timer
+        assert pv.rearm() is True
+        assert pv._timer is not None and pv._timer is not before
+        pv.lock()
+        assert pv.rearm() is False
+        assert pv._timer is None
+
 
 # ── references index ──
 

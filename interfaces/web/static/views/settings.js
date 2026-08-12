@@ -14,6 +14,7 @@ import embeddingTab from './settings-tabs/embedding.js';
 import llmTab from './settings-tabs/llm.js';
 import toolsTab from './settings-tabs/tools.js';
 import networkTab from './settings-tabs/network.js';
+import privacyTab from './settings-tabs/privacy.js';
 import wakewordTab from './settings-tabs/wakeword.js';
 import conversationTab from './settings-tabs/conversation.js';
 import pluginsTab from './settings-tabs/plugins.js';
@@ -26,7 +27,7 @@ import storeTab from './settings-tabs/store-tab.js';
 
 import { getRegisteredTabs } from '../shared/plugin-registry.js';
 
-const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
+const STATIC_TABS = [dashboardTab, appearanceTab, audioTab, ttsTab, sttTab, embeddingTab, llmTab, toolsTab, networkTab, privacyTab, wakewordTab, conversationTab, pluginsTab, storeTab, backupTab, systemTab, helpTab, videosTab];
 
 let container = null;
 let activeTab = 'dashboard';

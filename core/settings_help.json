@@ -1,6 +1,5 @@
 {
   "_comment": "Help text for settings - displayed in settings modal UI",
-  
   "DEFAULT_USERNAME": {
     "short": "Your display name in conversations",
     "long": "The name used to identify you in chat messages. This appears in the message history and can be changed at any time without affecting past messages. Used in prompts via the {user_name} placeholder."
@@ -9,7 +8,6 @@
     "short": "Show avatar images in chat messages",
     "long": "When enabled, user and assistant avatar images appear next to each message in the chat. Disable to hide avatars for a cleaner, text-focused interface. Changes take effect on page refresh."
   },
-  
   "SOCKS_ENABLED": {
     "short": "Route web requests through SOCKS proxy",
     "long": "When enabled, all web search and URL fetching will route through the specified SOCKS proxy server. Useful for privacy, accessing region-restricted content, or routing through Tor. Requires SOCKS_HOST and SOCKS_PORT to be configured."
@@ -54,7 +52,6 @@
     "short": "Warn when a backup grows past this size (MB)",
     "long": "If the estimated backup size (after exclusions) exceeds this many megabytes, the Backup page shows a warning so you can exclude large folders. Soft warning only — it does not block backups. Set 0 to disable."
   },
-
   "AUDIO_INPUT_DEVICE": {
     "short": "Input device index (null = auto-detect)",
     "long": "Specific audio input device to use by index number. Set to null for automatic detection which tries preferred devices first (pipewire, pulse on Linux). Use the Audio tab test feature to find your device index. Useful when you have multiple microphones."
@@ -79,7 +76,6 @@
     "short": "Preferred audio devices on Windows",
     "long": "List of device name fragments to prefer on Windows, tried in order. 'default' uses the Windows default device. Other entries match against device names to prefer specific microphones or sound cards."
   },
-  
   "WAKE_WORD_ENABLED": {
     "short": "Enable wake word detection",
     "long": "When enabled, the system continuously listens for a wake word to trigger voice interaction. Uses OpenWakeWord with ONNX inference for cross-platform compatibility. Continuous audio monitoring may impact system resources on low-power devices."
@@ -140,7 +136,6 @@
     "short": "Frequency of wake acknowledgment tone (Hz)",
     "long": "Pitch of the beep tone when wake word is detected. 880 Hz is a pleasant, attention-getting tone (A5 musical note). Higher frequencies are more piercing, lower are more subtle."
   },
-  
   "STT_PROVIDER": {
     "short": "Speech-to-text provider",
     "long": "Select your STT engine. 'Disabled' turns off voice input. 'Local (Faster Whisper)' runs Whisper on your machine (free, requires RAM/VRAM). 'Fireworks Whisper' uses Fireworks AI cloud API (fast, requires API key, ~$0.01/min)."
@@ -185,7 +180,6 @@
     "short": "Enable Voice Activity Detection filter",
     "long": "When enabled, uses VAD to filter out non-speech audio before transcription. Improves accuracy by ignoring silence and background noise. Recommended to keep enabled for better results and faster processing."
   },
-  
   "STT_VAD_ENABLED": {
     "short": "Use Silero VAD (recommended)",
     "long": "When enabled, voice activity detection uses Silero — a tiny ML model robust to background noise. Falls back to Classic VAD (amplitude thresholding) if Silero fails to load. When disabled, only Classic VAD runs."
@@ -230,7 +224,6 @@
     "short": "Delay after beep before recording (seconds)",
     "long": "How long to wait after playing the start beep before beginning recording. 0.15 seconds allows the beep to finish and prevents it from being recorded. Too short may capture beep tail."
   },
-  
   "TTS_PROVIDER": {
     "short": "Text-to-speech provider",
     "long": "Which TTS engine to use for voice output. 'kokoro' runs locally (free, requires models). 'elevenlabs' uses the ElevenLabs cloud API (requires API key, per-character billing). 'none' disables TTS."
@@ -319,7 +312,6 @@
     "short": "API key for remote server (optional)",
     "long": "Sent as Bearer token. Leave blank if your server has no auth."
   },
-
   "LLM_MAX_HISTORY": {
     "short": "Maximum conversation messages to send (0 = unlimited)",
     "long": "How many past messages to send to LLM. Single messages count, not assistant/user pairs. Truncates earlier messages when exceeded. Set to 0 to disable message-based trimming and rely only on CONTEXT_LIMIT for token-based trimming."
@@ -364,7 +356,6 @@
     "short": "Max width for uploaded images (0 = disabled)",
     "long": "Images wider than this are resized and compressed to JPEG 85% quality before storing in chat history. Reduces storage and speeds up LLM processing. Set to 0 to disable optimization and keep original images. Only applies if compression actually makes the image smaller."
   },
-  
   "MAX_TOOL_ITERATIONS": {
     "short": "how many total tool iterations can be called (these can be parallel)",
     "long": "How many iterations the AI can do tool calls for. Prevents runaway tool calling."
@@ -412,5 +403,13 @@
   "WEB_UI_SSL_ADHOC": {
     "short": "Use self-signed SSL certificate",
     "long": "When enabled, the server generates a self-signed SSL certificate for HTTPS. Browser will show security warning but connection is encrypted. Disable only if you're behind a reverse proxy that handles SSL. Requires restart."
+  },
+  "VAULT_IDLE_MINUTES": {
+    "short": "Minutes of vault inactivity before auto-lock",
+    "long": "The prompt vault locks itself after this many minutes without vault activity (chat turns wearing a vault prompt, vault edits, unlocks). Listing prompt names does not count as activity. Changes apply to a running timer immediately. Minimum 1 minute; default 30."
+  },
+  "METRICS_ENABLED": {
+    "short": "Record local token-usage metrics",
+    "long": "Records per-LLM-call token usage in a local SQLite database (user/metrics/) for the dashboard's usage charts. Purely on-device either way — this only controls whether the local table is written at all."
   }
 }
