@@ -303,9 +303,11 @@ function renderEditor() {
         </div>
         <div class="pr-body">
             ${isMonolith ? renderMonolith(p) : renderAssembled(p)}
-            <div class="pr-privacy">
-                <label><input type="checkbox" id="pr-privacy" ${p.privacy_required ? 'checked' : ''}> Private only (chat must be private &mdash; the &#x1F441;&#xFE0E; eyeball)</label>
-            </div>
+            ${p.privacy_required && !vaultNames.has(selected) ? `
+            <div class="pr-privacy text-muted" style="font-size:var(--font-xs)">
+                \u{1F512} Legacy private flag — refuses cloud providers. New private
+                prompts live in the vault instead (privacy is automatic there).
+            </div>` : ''}
         </div>
     `;
 }
@@ -616,13 +618,13 @@ function bindEvents() {
         });
     });
 
-    // Privacy
-    layout.querySelector('#pr-privacy')?.addEventListener('change', e => {
-        if (selectedData) {
-            selectedData.privacy_required = e.target.checked;
-            debouncedSavePrompt();
-        }
-    });
+    // Privacy checkbox YEETED 2026-08-12 (Krem's ruling): vault membership
+    // IS the privacy bit — want a private prompt, put it in the vault (new
+    // saves while unlocked go there automatically). The privacy_required
+    // FIELD survives read-only: story costumes inherit it, packs ship it,
+    // and legacy-flagged prompts keep refusing cloud (fail-closed) until
+    // the v1.1 store-toggle migrates them in. selectedData round-trips the
+    // stored value on save, so nothing existing loses its gate.
 
     // Monolith content
     const commitPromptReason = async () => {
