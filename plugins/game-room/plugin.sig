@@ -12,7 +12,7 @@
     "gameroom_story/referee.py": "sha256:d2e5657aa03f1c3fffa47e384af8bb82283ca712d0933982d5cd80ed2024986f",
     "gameroom_story/render.py": "sha256:73f597e2a04d9f88c569c9cbcea6bc731efa97fd964692f6919ae6cc0c5f3773",
     "gameroom_story/rooms.py": "sha256:460ec196ffee0ffad659a2d10d17510cc6cec038503a4f8f35cbcd7945fb9d9c",
-    "gameroom_story/session.py": "sha256:3d0fd312ffb2b367d319ced1d16cefa7cee2bd178cc68d56e7d02080eb931dcf",
+    "gameroom_story/session.py": "sha256:45a3720fe308a1e4fd3b1498b29a8322803370c5236471dc8229dc061b92c010",
     "gameroom_story/state.py": "sha256:839f8f78424e3cba50fe5db42d91435303d704b4059c28d2c29043a10547ded9",
     "hooks/boot.py": "sha256:2fc5b105b8e0f341d164fa510879346b41d55f1301299c917cf90d31a7eb438f",
     "hooks/ghost.py": "sha256:faadd082b10d8c4618c845b4041577cc9b7dd8cae6db7c807c7f495c665ff0bc",
@@ -32,8 +32,9 @@
     "tests/test_seal_wait.py": "sha256:cffa5f7d6e6cc4ed68c7374ae8a76f6d86fd3d9bbb18f84ab1d6efe7c65cbb14",
     "tests/test_story_engine.py": "sha256:83aaad1199e5f9de722dd3c4f38ca5da9eff9355bb586bd5e5c0a1e2cf6eb23f",
     "tests/test_story_lifecycle.py": "sha256:35cd5001ae0535704ac26df72f7886cd29a5f75d6eee1bf0ca8bff1aa1db9431",
+    "tests/test_story_vault_gate.py": "sha256:d52ffb3dc15fdd4581242847f0a354566ac071e2cf5a0896ac26c36cd6e1719f",
     "tools/story_info.py": "sha256:100af6481eed63323bc23611b63418af96b7b9d94bae2b1ff701733b02053992",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "s36PsrihnaTA5QZ/u+vN0+xS0AbgCg5xK8S9niWax2z6ze5+52pr0U/3uHzCrAMAzpjF8/wO3D6f0nU8o5GFBw=="
+  "signature": "Jn77gL1pIhReJj76rkN5cHHAdJsJoOX8YUoFWNpVo0dZs8jMiNae1pOnAdfg+3+d/VwtC9mUwCdXgP5IrEoPBA=="
 }

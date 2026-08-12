@@ -439,9 +439,22 @@ def save() -> bool:
 
 # ── item mutators (step-3 write routing lands on these) ──
 
-def _mutate(fn) -> tuple:
+def _audit_row(event):
+    """Names-only ledger row for a vault mutation (recon finding 9). The
+    audit diff machinery deliberately can't see the vault — it snapshots
+    the plaintext dicts — so these rows are the vault's ONLY ledger trace.
+    Names/keys only, NEVER content: mind.db is plaintext."""
+    try:
+        from core.audit import emit, actor
+        emit({'kind': 'vault', 'actor': actor(), **event})
+    except Exception:
+        pass
+
+
+def _mutate(fn, audit_event=None) -> tuple:
     """Run fn(_data) under the lock while unlocked, then save. fn returns an
-    error code ('' = proceed)."""
+    error code ('' = proceed). audit_event: names-only row emitted on
+    success (outside the lock)."""
     with _lock:
         if _key is None:
             return False, 'locked'
@@ -452,6 +465,8 @@ def _mutate(fn) -> tuple:
             return False, 'save_failed'
         _touch_locked()
         _reconcile_refs_locked()
+    if audit_event:
+        _audit_row(audit_event)
     return True, ''
 
 
@@ -467,7 +482,7 @@ def set_monolith(name, content) -> tuple:
             return 'cross_type'   # same-store ambiguity — mirror the user-store rule
         d['monoliths'][name] = {'content': content, 'privacy_required': True}
         return ''
-    return _mutate(fn)
+    return _mutate(fn, {'item': 'monolith', 'name': name, 'action': 'saved'})
 
 
 def delete_monolith(name) -> tuple:
@@ -476,7 +491,7 @@ def delete_monolith(name) -> tuple:
             return 'not_found'
         del d['monoliths'][name]
         return ''
-    return _mutate(fn)
+    return _mutate(fn, {'item': 'monolith', 'name': name, 'action': 'deleted'})
 
 
 def set_piece(ctype, key, value) -> tuple:
@@ -484,7 +499,8 @@ def set_piece(ctype, key, value) -> tuple:
         return False, 'bad_name'
     if not isinstance(value, str):
         return False, 'bad_value'
-    return _mutate(lambda d: d['components'].setdefault(ctype, {}).__setitem__(key, value) or '')
+    return _mutate(lambda d: d['components'].setdefault(ctype, {}).__setitem__(key, value) or '',
+                   {'item': 'piece', 'comp_type': ctype, 'key': key, 'action': 'saved'})
 
 
 def delete_piece(ctype, key) -> tuple:
@@ -495,7 +511,7 @@ def delete_piece(ctype, key) -> tuple:
         if not d['components'][ctype]:
             del d['components'][ctype]
         return ''
-    return _mutate(fn)
+    return _mutate(fn, {'item': 'piece', 'comp_type': ctype, 'key': key, 'action': 'deleted'})
 
 
 def set_preset(name, preset) -> tuple:
@@ -511,7 +527,7 @@ def set_preset(name, preset) -> tuple:
             return 'cross_type'
         d['scenario_presets'][name] = {**preset, '_privacy_required': True}
         return ''
-    return _mutate(fn)
+    return _mutate(fn, {'item': 'preset', 'name': name, 'action': 'saved'})
 
 
 def delete_preset(name) -> tuple:
@@ -520,7 +536,7 @@ def delete_preset(name) -> tuple:
             return 'not_found'
         del d['scenario_presets'][name]
         return ''
-    return _mutate(fn)
+    return _mutate(fn, {'item': 'preset', 'name': name, 'action': 'deleted'})
 
 
 # ── references index (in-use names ONLY — ruling C amendment) ──

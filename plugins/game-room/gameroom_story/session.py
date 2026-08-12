@@ -216,6 +216,24 @@ def _register_prompt(story, state, entry, chat):
     monoliths, pieces = _manifest_prompts()
     slug = story["meta"]["slug"]
     mode = entry.get("mode")
+    # Vault gate (vault recon finding 7): local/combined modes extract the
+    # LOCAL prompt's character text and save_dynamic persists the rendered
+    # costume to a PLAINTEXT sidecar that re-merges every boot — decrypted
+    # vault text would survive lock and reboots. One gate here covers all
+    # five callers, including _set_mode re-pointing a RUNNING story.
+    # Pure 'story' mode (total swap, no local text) stays allowed.
+    if mode in ("local", "combined") and entry.get("local"):
+        try:
+            from core.prompt_crud import is_vault_prompt
+            _is_vault = is_vault_prompt(entry["local"])
+        except Exception:
+            _is_vault = False
+        if _is_vault:
+            raise ValueError(
+                f"Story mode can't carry vault prompts yet — "
+                f"'{entry['local']}' lives in the encrypted vault and the "
+                f"story engine persists rendered prompts in plaintext. "
+                f"Pick a non-vault prompt, or use 'story' identity mode.")
     local_ctx = _local_ctx(entry.get("local")) if entry.get("local") else None
     rendered = render.story_prompt(story, state, prompt_manager.components,
                                    character=entry.get("character"),

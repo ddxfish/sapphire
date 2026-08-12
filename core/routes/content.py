@@ -891,17 +891,32 @@ async def export_persona_card(name: str, request: Request, _=Depends(require_log
             bundle["prompt"] = {"name": prompt_name, "data": prompt_export}
 
             if prompt_data.get("type") == "assembled" and prompt_data.get("components"):
+                # Vault piece gate (recon finding 8): the prompt-level gate
+                # above catches vault PROMPTS (privacy_required by
+                # construction), but a public preset can still harvest a
+                # VAULT PIECE's text into the shareable PNG. Refuse those.
+                from core import prompt_vault
+
+                def _vault_piece(ct, k):
+                    return (prompt_vault.vault_has_piece(ct, k)
+                            and k not in prompt_manager._components.get(ct, {}))
+
                 used = {}
                 for comp_type, comp_key in prompt_data["components"].items():
-                    if isinstance(comp_key, str) and comp_key:
+                    keys = [comp_key] if isinstance(comp_key, str) else \
+                        (comp_key if isinstance(comp_key, list) else [])
+                    for ck in keys:
+                        if not ck:
+                            continue
+                        if _vault_piece(comp_type, ck):
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Piece '{comp_type}/{ck}' lives in the "
+                                       f"vault — persona export is blocked to "
+                                       f"keep it local")
                         pieces = prompt_manager.components.get(comp_type, {})
-                        if comp_key in pieces:
-                            used.setdefault(comp_type, {})[comp_key] = pieces[comp_key]
-                    elif isinstance(comp_key, list):
-                        for ck in comp_key:
-                            pieces = prompt_manager.components.get(comp_type, {})
-                            if ck in pieces:
-                                used.setdefault(comp_type, {})[ck] = pieces[ck]
+                        if ck in pieces:
+                            used.setdefault(comp_type, {})[ck] = pieces[ck]
                 if used:
                     bundle["components"] = used
 

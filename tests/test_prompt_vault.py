@@ -932,6 +932,84 @@ class TestVaultRoutes:
         assert r["vault"]["unlocked"] is False
 
 
+# ═══ STEP 7: leak gates ═══
+
+class TestPersonaPngGates:
+    """PNG card export must never carry vault content — neither the prompt
+    (privacy_required by construction) nor harvested PIECES (finding 8)."""
+
+    def _export(self, monkeypatch, persona_prompt):
+        import asyncio
+        import core.api_fastapi  # noqa: F401
+        import core.routes.content as content_mod
+        from core.personas import persona_manager as pm_obj
+        monkeypatch.setattr(pm_obj, "get", lambda n: {
+            "name": n, "tagline": "", "settings": {"prompt": persona_prompt}})
+        return asyncio.run(content_mod.export_persona_card("tester", None, None))
+
+    def test_vault_prompt_refused(self, vault, monkeypatch):
+        from fastapi import HTTPException
+        pv.setup("key")
+        pv.set_monolith("vlt_card_mono", "secret persona text")
+        with pytest.raises(HTTPException) as ei:
+            self._export(monkeypatch, "vlt_card_mono")
+        assert ei.value.status_code == 403
+
+    def test_vault_piece_in_public_preset_refused(self, vault, monkeypatch):
+        """A PUBLIC user preset borrowing a VAULT piece — the prompt-level
+        gate passes, the piece harvest must refuse."""
+        from fastapi import HTTPException
+        from core.prompt_manager import prompt_manager
+        pv.setup("key")
+        pv.set_piece("character", "vlt_card_piece", "secret piece text")
+        prompt_manager._scenario_presets["vlt_pub_preset"] = {
+            "character": "vlt_card_piece", "_privacy_required": False}
+        try:
+            with pytest.raises(HTTPException) as ei:
+                self._export(monkeypatch, "vlt_pub_preset")
+            assert ei.value.status_code == 403
+            assert "vlt_card_piece" in ei.value.detail
+        finally:
+            del prompt_manager._scenario_presets["vlt_pub_preset"]
+
+
+class TestVaultAuditRows:
+    """Finding 9: vault mutations get names-only ledger rows — content NEVER
+    reaches mind.db (it's plaintext)."""
+
+    @pytest.fixture
+    def rows(self, vault, monkeypatch):
+        import core.audit as audit_mod
+        captured = []
+        monkeypatch.setattr(audit_mod, "emit", lambda e: captured.append(e))
+        return captured
+
+    def test_mutations_emit_names_only(self, vault, rows):
+        import json as _json
+        pv.setup("key")
+        pv.set_monolith("vlt_aud", "TOP SECRET CONTENT ALPHA")
+        pv.set_piece("character", "vlt_aud_p", "TOP SECRET CONTENT BRAVO")
+        pv.set_preset("vlt_aud_s", {"character": "vlt_aud_p"})
+        pv.delete_piece("character", "vlt_aud_p")
+        pv.delete_preset("vlt_aud_s")
+        pv.delete_monolith("vlt_aud")
+        vault_rows = [r for r in rows if r.get("kind") == "vault"]
+        assert len(vault_rows) == 6
+        assert {(r.get("action"), r.get("item")) for r in vault_rows} == {
+            ("saved", "monolith"), ("saved", "piece"), ("saved", "preset"),
+            ("deleted", "piece"), ("deleted", "preset"), ("deleted", "monolith")}
+        blob = _json.dumps(rows)
+        assert "TOP SECRET" not in blob   # names only, never text
+
+    def test_no_content_rows_from_any_kind(self, vault, rows):
+        """The diff machinery must stay blind to the vault: no row of ANY
+        kind may carry vault text."""
+        pv.setup("key")
+        pv.set_monolith("vlt_aud2", "CLASSIFIED ZULU")
+        import json as _json
+        assert "CLASSIFIED ZULU" not in _json.dumps(rows)
+
+
 # ═══ STEP 6: references-index wiring (ruling C amendment) ═══
 
 class TestVaultRefSync:

@@ -521,6 +521,19 @@ function bindEvents() {
 
     layout.querySelector('#pr-export')?.addEventListener('click', () => {
         if (!selected || !selectedData) return;
+        // Vault export gates (finding 8): content never leaves the vault in
+        // a shareable bundle — neither the prompt nor any harvested piece.
+        if (vaultNames.has(selected)) {
+            ui.showToast(`'${selected}' is a vault prompt — export is blocked to keep it encrypted.`, 'error');
+            return;
+        }
+        const vaultUsed = Object.entries(getUsedPieces())
+            .flatMap(([t, defs]) => Object.keys(defs)
+                .filter(k => vaultPieces[t]?.has(k)).map(k => `${t}/${k}`));
+        if (vaultUsed.length) {
+            ui.showToast(`Export blocked — this prompt uses vault pieces: ${vaultUsed.join(', ')}`, 'error');
+            return;
+        }
         showExportDialog({
             type: 'Prompt',
             name: selected,
