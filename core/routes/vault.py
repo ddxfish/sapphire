@@ -67,6 +67,35 @@ async def vault_unlock(request: Request, _=Depends(require_login)):
     raise HTTPException(status_code=403, detail="Wrong passphrase")
 
 
+@router.post("/api/vault/move")
+async def vault_move(request: Request, _=Depends(require_login)):
+    """v1.1 store toggle: move a prompt or piece between the vault and the
+    regular store. direction 'in' = encrypt, 'out' = plaintext (the client
+    confirms 'out' — it writes decrypted content to disk)."""
+    _managed_guard()
+    data = await request.json()
+    direction = data.get('direction')
+    kind = data.get('kind')
+    if direction not in ('in', 'out'):
+        raise HTTPException(status_code=400, detail="direction must be 'in' or 'out'")
+    from core import prompt_crud
+    if kind == 'prompt':
+        fn = (prompt_crud.move_prompt_to_vault if direction == 'in'
+              else prompt_crud.move_prompt_from_vault)
+        ok, msg = fn(data.get('name') or '')
+    elif kind == 'piece':
+        fn = (prompt_crud.move_piece_to_vault if direction == 'in'
+              else prompt_crud.move_piece_from_vault)
+        ok, msg = fn(data.get('comp_type') or '', data.get('key') or '')
+    else:
+        raise HTTPException(status_code=400, detail="kind must be 'prompt' or 'piece'")
+    if ok:
+        return {"status": "success", "message": msg}
+    if msg == prompt_crud.VAULT_LOCKED_MSG:
+        raise HTTPException(status_code=409, detail=msg)
+    raise HTTPException(status_code=400, detail=msg)
+
+
 @router.post("/api/vault/lock")
 async def vault_lock(_=Depends(require_login)):
     """Lock NOW. Synchronous by contract (phase 0b): active-preset handoff

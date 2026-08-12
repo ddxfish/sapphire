@@ -13,6 +13,8 @@ const post = (url, body) => fetchWithTimeout(url, {
 export const vaultSetup = (key) => post('/api/vault/setup', { key });
 export const vaultUnlock = (key) => post('/api/vault/unlock', { key });
 export const vaultLock = () => post('/api/vault/lock');
+// {kind:'prompt', name, direction:'in'|'out'} or {kind:'piece', comp_type, key, direction}
+export const vaultMove = (payload) => post('/api/vault/move', payload);
 
 // Authoritative state off the standing /api/status channel.
 export async function vaultStatus() {

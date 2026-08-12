@@ -458,6 +458,155 @@ def is_vault_prompt(name: str) -> bool:
             and name not in prompt_manager._scenario_presets)
 
 
+# ── v1.1 store toggle: move items between the vault and the regular store ──
+# Sequencing rule (both directions): WRITE the destination before DELETING
+# the source — a crash mid-move leaves the item duplicated (user copy
+# shadows vault), never lost. Plaintext-side saves run audit=False: the
+# move itself is names-only in the ledger (the vault side's own row tells
+# the story); past ledger history of a moved-in prompt is history.
+
+def move_prompt_to_vault(name: str) -> tuple[bool, str]:
+    """Regular store → vault. Privacy becomes True by construction."""
+    from core import prompt_vault
+    if not prompt_vault.vault_unlocked():
+        return False, VAULT_LOCKED_MSG
+    with prompt_manager._lock:
+        if name in prompt_manager._monoliths:
+            entry = prompt_manager._monoliths[name]
+            content = entry.get('content', '') if isinstance(entry, dict) else str(entry)
+            ok, code = prompt_vault.set_monolith(name, content)
+            if not ok:
+                return False, f"Vault refused the move ({code})"
+            del prompt_manager._monoliths[name]
+            saved = prompt_manager.save_monoliths(
+                reason=f"moved '{name}' into the vault", audit=False)
+        elif name in prompt_manager._scenario_presets:
+            preset = {k: v for k, v in prompt_manager._scenario_presets[name].items()
+                      if k != '_privacy_required'}
+            ok, code = prompt_vault.set_preset(name, preset)
+            if not ok:
+                return False, f"Vault refused the move ({code})"
+            del prompt_manager._scenario_presets[name]
+            saved = prompt_manager.save_scenario_presets(
+                reason=f"moved '{name}' into the vault", audit=False)
+        else:
+            return False, f"Prompt '{name}' not found in the regular store"
+    if not saved:
+        return False, (f"'{name}' is in the vault, but the regular-store delete "
+                       f"failed to persist (store latch) — the plaintext copy "
+                       f"still shadows it. Fix the store and retry.")
+    # Referrers may already point at the name (it was a public prompt) —
+    # stamp the refs index only if something actually references it.
+    if _vault_name_still_referenced(name):
+        prompt_vault.refs_stamp(name)
+    _publish_vault_changed()
+    logger.info(f"Moved prompt '{name}' into the vault")
+    return True, f"Moved '{name}' into the vault"
+
+
+def move_prompt_from_vault(name: str) -> tuple[bool, str]:
+    """Vault → regular store. Leaving the vault CLEARS privacy_required
+    (Krem's ruling 2026-08-12: vault membership IS the privacy bit)."""
+    from core import prompt_vault
+    if not prompt_vault.vault_unlocked():
+        return False, VAULT_LOCKED_MSG
+    if name in prompt_manager._monoliths or name in prompt_manager._scenario_presets:
+        return False, (f"'{name}' also exists in the regular store — the user "
+                       f"copy already shadows the vault copy; delete one first")
+    monos = prompt_vault.overlay_monoliths()
+    presets = prompt_vault.overlay_presets()
+    if name in monos:
+        with prompt_manager._lock:
+            prompt_manager._monoliths[name] = {
+                'content': monos[name].get('content', ''), 'privacy_required': False}
+            saved = prompt_manager.save_monoliths(
+                reason=f"moved '{name}' out of the vault", audit=False)
+            if not saved:
+                prompt_manager._monoliths.pop(name, None)
+        if not saved:
+            return False, "Regular store refused the save (store latch) — nothing moved"
+        ok, code = prompt_vault.delete_monolith(name)
+    elif name in presets:
+        preset = {k: v for k, v in presets[name].items() if k != '_privacy_required'}
+        preset['_privacy_required'] = False
+        with prompt_manager._lock:
+            prompt_manager._scenario_presets[name] = preset
+            saved = prompt_manager.save_scenario_presets(
+                reason=f"moved '{name}' out of the vault", audit=False)
+            if not saved:
+                prompt_manager._scenario_presets.pop(name, None)
+        if not saved:
+            return False, "Regular store refused the save (store latch) — nothing moved"
+        ok, code = prompt_vault.delete_preset(name)
+    else:
+        return False, f"'{name}' is not in the vault"
+    if not ok:
+        return False, (f"Copied out, but the vault-side delete failed ({code}) — "
+                       f"the regular copy shadows the vault copy")
+    _publish_vault_changed()
+    logger.info(f"Moved prompt '{name}' out of the vault")
+    return True, f"Moved '{name}' to the regular store (now public — privacy flag cleared)"
+
+
+def move_piece_to_vault(comp_type: str, key: str) -> tuple[bool, str]:
+    from core import prompt_vault
+    if not prompt_vault.vault_unlocked():
+        return False, VAULT_LOCKED_MSG
+    with prompt_manager._lock:
+        if key not in prompt_manager._components.get(comp_type, {}):
+            return False, f"Piece '{comp_type}/{key}' not found in the regular store"
+        ok, code = prompt_vault.set_piece(comp_type, key,
+                                          prompt_manager._components[comp_type][key])
+        if not ok:
+            return False, f"Vault refused the move ({code})"
+        del prompt_manager._components[comp_type][key]
+        saved = prompt_manager.save_components(
+            reason=f"moved '{comp_type}/{key}' into the vault", audit=False)
+    if not saved:
+        return False, (f"'{comp_type}/{key}' is in the vault, but the regular-store "
+                       f"delete failed to persist — the plaintext copy still shadows it")
+    _publish_vault_changed(components=True)
+    logger.info(f"Moved piece '{comp_type}/{key}' into the vault")
+    return True, f"Moved '{comp_type}/{key}' into the vault"
+
+
+def move_piece_from_vault(comp_type: str, key: str) -> tuple[bool, str]:
+    from core import prompt_vault
+    if not prompt_vault.vault_unlocked():
+        return False, VAULT_LOCKED_MSG
+    if key in prompt_manager._components.get(comp_type, {}):
+        return False, f"'{comp_type}/{key}' also exists in the regular store — delete one copy first"
+    if not prompt_vault.vault_has_piece(comp_type, key):
+        return False, f"'{comp_type}/{key}' is not in the vault"
+    value = prompt_vault.overlay_components().get(comp_type, {}).get(key, '')
+    with prompt_manager._lock:
+        prompt_manager._components.setdefault(comp_type, {})[key] = value
+        saved = prompt_manager.save_components(
+            reason=f"moved '{comp_type}/{key}' out of the vault", audit=False)
+        if not saved:
+            prompt_manager._components[comp_type].pop(key, None)
+    if not saved:
+        return False, "Regular store refused the save (store latch) — nothing moved"
+    ok, code = prompt_vault.delete_piece(comp_type, key)
+    if not ok:
+        return False, (f"Copied out, but the vault-side delete failed ({code}) — "
+                       f"the regular copy shadows the vault copy")
+    _publish_vault_changed(components=True)
+    logger.info(f"Moved piece '{comp_type}/{key}' out of the vault")
+    return True, f"Moved '{comp_type}/{key}' to the regular store (plaintext)"
+
+
+def _publish_vault_changed(components=False):
+    """Name-free refresh nudge for both stores' listeners."""
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.PROMPT_CHANGED, {"name": "", "action": "vault_changed"})
+        if components:
+            publish(Events.COMPONENTS_CHANGED, {"action": "vault_changed"})
+    except Exception:
+        pass
+
+
 def vault_ref_sync(new_name=None, old_name=None):
     """References-index bookkeeping (ruling C amendment) — called by the
     three referrer funnels (chat settings, personas, continuity tasks)

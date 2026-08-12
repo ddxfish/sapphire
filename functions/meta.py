@@ -593,6 +593,18 @@ def _prompt_pieces(args):
         _audit_emit(e)
 
     if action == 'list':
+        # Locked-vault hint (vault v1.1): without it she burns tokens hunting
+        # a piece that's asleep in the vault — AIX bug class.
+        def _vault_hint():
+            try:
+                from core import prompt_vault
+                if prompt_vault.vault_exists() and not prompt_vault.vault_unlocked():
+                    return ("(a prompt vault exists and is LOCKED — its pieces are "
+                            "hidden until a human unlocks it)")
+            except Exception:
+                pass
+            return ''
+
         if not component:
             trans = get_transients()
             lines = ["Component types (active marked, temporary pieces show minutes left):"]
@@ -607,15 +619,21 @@ def _prompt_pieces(args):
                     active_str = f"{tv[0][0]}({tv[0][1]}m)" if tv else _assembled_state.get(c, 'none')
                 lines.append(f"  {c} ({available} available) — active: {active_str}")
             lines.append("prompt_pieces(action='list', component='X') to see keys.")
+            hint = _vault_hint()
+            if hint:
+                lines.append(hint)
             return '\n'.join(lines), True
         _require_component(component)
         items = comps.get(component, {})
+        hint = _vault_hint()
         if not items:
-            return f"No {component} pieces available.", True
+            return f"No {component} pieces available." + (f" {hint}" if hint else ""), True
         lines = [f"Available {component}:"]
         for k, v in items.items():
             preview = v[:80].replace('\n', ' ') + ('...' if len(v) > 80 else '')
             lines.append(f"  {k}: {preview}")
+        if hint:
+            lines.append(hint)
         return '\n'.join(lines), True
 
     if action == 'view':

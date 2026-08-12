@@ -303,6 +303,11 @@ function renderEditor() {
         </div>
         <div class="pr-body">
             ${isMonolith ? renderMonolith(p) : renderAssembled(p)}
+            ${vaultState.unlocked && !prompts.find(x => x.name === selected)?.source ? `
+            <div class="pr-privacy">
+                <label><input type="checkbox" id="pr-vault-toggle" ${vaultNames.has(selected) ? 'checked' : ''}>
+                \u{1F5DD} Keep in vault (encrypted at rest; private by construction)</label>
+            </div>` : ''}
             ${p.privacy_required && !vaultNames.has(selected) ? `
             <div class="pr-privacy text-muted" style="font-size:var(--font-xs)">
                 \u{1F512} Legacy private flag — refuses cloud providers. New private
@@ -367,6 +372,10 @@ function renderSingleAccordion(type, comps) {
                             <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
                             <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${current}">Duplicate</button>
                             <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${current}">Delete</button>
+                            ${vaultState.unlocked && !componentSources[type]?.[current] ? `
+                            <label style="font-size:var(--font-xs);display:flex;gap:5px;align-items:center;margin-left:auto">
+                                <input type="checkbox" class="pr-piece-vault" data-key="${current}" ${vaultPieces[type]?.has(current) ? 'checked' : ''}> \u{1F5DD} In vault
+                            </label>` : ''}
                         </div>
                     ` : `<p class="text-muted" style="font-size:var(--font-sm)">Select a piece above or click + New.</p>
                          <div class="pr-def-actions"><button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button></div>`}
@@ -418,6 +427,10 @@ function renderMultiAccordion(type, comps) {
                             <button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button>
                             <button class="btn-sm" data-action="dup-def" data-type="${type}" data-key="${target}">Duplicate</button>
                             <button class="btn-sm danger" data-action="del-def" data-type="${type}" data-key="${target}">Delete</button>
+                            ${vaultState.unlocked && !componentSources[type]?.[target] ? `
+                            <label style="font-size:var(--font-xs);display:flex;gap:5px;align-items:center;margin-left:auto">
+                                <input type="checkbox" class="pr-piece-vault" data-key="${target}" ${vaultPieces[type]?.has(target) ? 'checked' : ''}> \u{1F5DD} In vault
+                            </label>` : ''}
                         </div>
                     ` : `<div class="pr-def-actions"><button class="btn-sm" data-action="new-def" data-type="${type}">+ New</button></div>`}
                 </div>
@@ -626,6 +639,32 @@ function bindEvents() {
     // the v1.1 store-toggle migrates them in. selectedData round-trips the
     // stored value on save, so nothing existing loses its gate.
 
+    // v1.1 store toggle — visible only while the vault is unlocked. IN is
+    // the safe direction (no confirm); OUT writes decrypted content to
+    // plaintext disk and clears the privacy flag, so it gets a yes/no.
+    layout.querySelector('#pr-vault-toggle')?.addEventListener('change', async e => {
+        const goingIn = e.target.checked;
+        if (!goingIn && !confirm(
+            `Move "${selected}" OUT of the vault?\n\n` +
+            `Its content will be written to the regular store as plaintext ` +
+            `on disk, and it will no longer require privacy.`)) {
+            e.target.checked = true;
+            return;
+        }
+        try {
+            const { vaultMove } = await import('../shared/vault-api.js');
+            const res = await vaultMove({ kind: 'prompt', name: selected,
+                                          direction: goingIn ? 'in' : 'out' });
+            ui.showToast(res?.message || 'Moved', 'success');
+        } catch (err) {
+            ui.showToast(err?.message || 'Move failed', 'error');
+            e.target.checked = !goingIn;
+            return;
+        }
+        await loadAll();
+        render();
+    });
+
     // Monolith content
     const commitPromptReason = async () => {
         if (!selected || !selectedData) return;
@@ -759,6 +798,30 @@ function bindAccordionBodyEvents(body, type) {
     if (defText && liveReason(`${type}:${defText.dataset.key}`)) {
         ensureReasonRow(defText, `${type}:${defText.dataset.key}`, commitPieceReason);
     }
+
+    // v1.1 per-piece store toggle (unlocked only; OUT gets a yes/no)
+    body.querySelector('.pr-piece-vault')?.addEventListener('change', async e => {
+        const key = e.target.dataset.key;
+        const goingIn = e.target.checked;
+        if (!goingIn && !confirm(
+            `Move piece "${type}/${key}" OUT of the vault?\n\n` +
+            `Its text will be written to the regular store as plaintext on disk.`)) {
+            e.target.checked = true;
+            return;
+        }
+        try {
+            const { vaultMove } = await import('../shared/vault-api.js');
+            const res = await vaultMove({ kind: 'piece', comp_type: type, key,
+                                          direction: goingIn ? 'in' : 'out' });
+            ui.showToast(res?.message || 'Moved', 'success');
+        } catch (err) {
+            ui.showToast(err?.message || 'Move failed', 'error');
+            e.target.checked = !goingIn;
+            return;
+        }
+        await loadAll();
+        render();
+    });
 
     // Action buttons
     body.querySelectorAll('[data-action]').forEach(btn => {

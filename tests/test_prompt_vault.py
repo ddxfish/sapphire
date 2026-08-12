@@ -1021,6 +1021,142 @@ class TestVaultAuditRows:
         assert "CLASSIFIED ZULU" not in _json.dumps(rows)
 
 
+# ═══ V1.1: store toggle (move items between vault and regular store) ═══
+
+class TestStoreToggle:
+    """Both directions fail-DUPLICATED, never fail-lost: destination is
+    written before the source is deleted. OUT clears privacy_required
+    (Krem's ruling: vault membership IS the privacy bit)."""
+
+    @pytest.fixture
+    def stores(self, vault, tmp_path, monkeypatch):
+        from core.prompt_manager import prompt_manager
+        store_dir = tmp_path / "user_prompts"
+        store_dir.mkdir()
+        monkeypatch.setattr(prompt_manager, "USER_DIR", store_dir)
+        pv.setup("key")
+        yield prompt_manager
+        for n in list(prompt_manager._monoliths):
+            if n.startswith("vlt_"):
+                del prompt_manager._monoliths[n]
+        for n in list(prompt_manager._scenario_presets):
+            if n.startswith("vlt_"):
+                del prompt_manager._scenario_presets[n]
+        for ctype in list(prompt_manager._components):
+            for k in list(prompt_manager._components[ctype]):
+                if k.startswith("vlt_"):
+                    del prompt_manager._components[ctype][k]
+
+    def test_prompt_move_in(self, stores, monkeypatch):
+        from core import prompt_crud
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced", lambda n: False)
+        stores._monoliths["vlt_mv"] = {"content": "move me", "privacy_required": False}
+        ok, msg = prompt_crud.move_prompt_to_vault("vlt_mv")
+        assert ok and "vault" in msg
+        assert "vlt_mv" not in stores._monoliths
+        assert pv.overlay_monoliths()["vlt_mv"]["content"] == "move me"
+        assert pv.overlay_monoliths()["vlt_mv"]["privacy_required"] is True
+
+    def test_prompt_move_in_stamps_refs_when_referenced(self, stores, monkeypatch):
+        from core import prompt_crud
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced", lambda n: True)
+        stores._monoliths["vlt_mvref"] = {"content": "x", "privacy_required": False}
+        prompt_crud.move_prompt_to_vault("vlt_mvref")
+        assert "vlt_mvref" in pv.refs_names()
+
+    def test_prompt_move_out_clears_privacy_and_refs(self, stores):
+        from core import prompt_crud
+        pv.set_preset("vlt_out", {"character": "rose"})
+        pv.refs_stamp("vlt_out")
+        ok, msg = prompt_crud.move_prompt_from_vault("vlt_out")
+        assert ok
+        assert stores._scenario_presets["vlt_out"]["_privacy_required"] is False
+        assert not pv.vault_has_prompt("vlt_out")
+        assert "vlt_out" not in pv.refs_names()   # delete reconciled the index
+
+    def test_move_out_refused_when_user_copy_exists(self, stores):
+        from core import prompt_crud
+        pv.set_monolith("vlt_dup", "vault v")
+        stores._monoliths["vlt_dup"] = {"content": "user v", "privacy_required": False}
+        ok, msg = prompt_crud.move_prompt_from_vault("vlt_dup")
+        assert not ok and "shadows" in msg
+
+    def test_moves_refused_while_locked(self, stores):
+        from core import prompt_crud
+        pv.lock()
+        assert prompt_crud.move_prompt_to_vault("x")[1] == prompt_crud.VAULT_LOCKED_MSG
+        assert prompt_crud.move_prompt_from_vault("x")[1] == prompt_crud.VAULT_LOCKED_MSG
+        assert prompt_crud.move_piece_to_vault("t", "k")[1] == prompt_crud.VAULT_LOCKED_MSG
+        assert prompt_crud.move_piece_from_vault("t", "k")[1] == prompt_crud.VAULT_LOCKED_MSG
+
+    def test_piece_round_trip(self, stores):
+        from core import prompt_crud
+        stores._components.setdefault("character", {})["vlt_pc"] = "piece text"
+        ok, _ = prompt_crud.move_piece_to_vault("character", "vlt_pc")
+        assert ok
+        assert "vlt_pc" not in stores._components.get("character", {})
+        assert pv.vault_has_piece("character", "vlt_pc")
+        ok, msg = prompt_crud.move_piece_from_vault("character", "vlt_pc")
+        assert ok and "plaintext" in msg
+        assert stores._components["character"]["vlt_pc"] == "piece text"
+        assert not pv.vault_has_piece("character", "vlt_pc")
+
+    def test_move_ledger_is_names_only(self, stores, monkeypatch):
+        """The move itself never puts content in the audit ledger — the
+        plaintext-side save runs audit=False, the vault side is names-only."""
+        import json as _json
+        import core.audit as audit_mod
+        rows = []
+        monkeypatch.setattr(audit_mod, "emit", lambda e: rows.append(e))
+        stores._monoliths["vlt_quiet"] = {"content": "SECRET MOVE PAYLOAD",
+                                          "privacy_required": False}
+        from core import prompt_crud
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced", lambda n: False)
+        prompt_crud.move_prompt_to_vault("vlt_quiet")
+        prompt_crud.move_prompt_from_vault("vlt_quiet")
+        assert "SECRET MOVE PAYLOAD" not in _json.dumps(rows)
+
+    def test_route_mapping(self, stores):
+        import asyncio
+        from fastapi import HTTPException
+        import core.api_fastapi  # noqa: F401
+        from core.routes import vault as vault_routes
+
+        class _Req:
+            headers = {}
+            def __init__(self, p): self._p = p
+            async def json(self): return self._p
+
+        stores._monoliths["vlt_rt"] = {"content": "x", "privacy_required": False}
+        res = asyncio.run(vault_routes.vault_move(
+            _Req({"kind": "prompt", "name": "vlt_rt", "direction": "in"}), None))
+        assert res["status"] == "success"
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(vault_routes.vault_move(
+                _Req({"kind": "prompt", "name": "ghost", "direction": "out"}), None))
+        assert ei.value.status_code == 400
+        pv.lock()
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(vault_routes.vault_move(
+                _Req({"kind": "prompt", "name": "vlt_rt", "direction": "out"}), None))
+        assert ei.value.status_code == 409
+
+
+class TestLockedListHint:
+    """Her prompt_pieces list says WHY pieces are missing while the vault
+    sleeps (AIX: no token-burning hunts for hidden pieces)."""
+
+    def test_hint_appears_only_while_locked(self, vault, monkeypatch):
+        from functions import meta
+        pv.setup("key")
+        # Unlocked: no hint
+        out, ok = meta._prompt_pieces({"action": "list"})
+        assert ok and "LOCKED" not in out
+        pv.lock()
+        out, ok = meta._prompt_pieces({"action": "list"})
+        assert ok and "LOCKED" in out
+
+
 # ═══ STEP 6: references-index wiring (ruling C amendment) ═══
 
 class TestVaultRefSync:
