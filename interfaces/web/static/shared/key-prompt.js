@@ -32,7 +32,7 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
             <div class="modal-base" style="max-width:440px;width:92vw;padding:18px">
                 <div style="font-weight:600;margin-bottom:8px">${esc(title)}</div>
                 ${message ? `<div style="font-size:var(--font-sm);margin-bottom:10px;line-height:1.5">${esc(message)}</div>` : ''}
-                <form id="kp-form" action="#" method="dialog">
+                <form id="kp-form" action="#">
                     <input type="text" name="username" autocomplete="username"
                         value="sapphire-vault" readonly hidden>
                     <input type="password" id="kp-key" name="password"
@@ -77,6 +77,19 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
                 okBtn.disabled = false;
                 if (err) { errEl.textContent = err; keyInput.select(); return; }  // retry-in-place
             }
+            // Offer the ACCEPTED passphrase to the password manager. The
+            // Credential Management API is the reliable path in Chromium —
+            // SPA form heuristics often miss dynamically-injected dialogs
+            // (they did here); the form semantics above remain for Firefox.
+            try {
+                if (window.PasswordCredential) {
+                    await navigator.credentials.store(new PasswordCredential({
+                        id: 'sapphire-vault',
+                        name: 'Sapphire prompt vault',
+                        password: key,
+                    }));
+                }
+            } catch { /* user dismissed or unsupported — never block the unlock */ }
             done({ key });
         };
 

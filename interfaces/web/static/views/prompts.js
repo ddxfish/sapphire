@@ -123,6 +123,13 @@ const pieceOrigin = (type, key) =>
 // while unlocked; the 🧩 pack lane keeps its own glyph)
 const vKey = (type, key) =>
     vaultPieces[type]?.has(key) ? ' \u{1F5DD}' : '';
+// The PUT response says where a piece landed — badge immediately instead of
+// waiting for the SSE echo (which the focus guard may defer mid-edit).
+function noteVaultRouted(type, key, res) {
+    if (!res?.vault) return;
+    if (!vaultPieces[type]) vaultPieces[type] = new Set();
+    vaultPieces[type].add(key);
+}
 
 // ── Event-bus refresh (this view had ZERO listeners — a vault lock in
 // another tab, or Sapphire editing pieces, left a stale roster with vault
@@ -873,7 +880,8 @@ async function newDefinition(type) {
     const name = prompt(`New ${type} name:`);
     if (!name?.trim()) return;
     try {
-        await saveComponent(type, name.trim(), '');
+        const res = await saveComponent(type, name.trim(), '');
+        noteVaultRouted(type, name.trim(), res);
         if (!components[type]) components[type] = {};
         components[type][name.trim()] = '';
 
@@ -896,7 +904,8 @@ async function duplicateDefinition(type, key) {
     const newName = prompt(`Duplicate "${key}" as:`, key + '-copy');
     if (!newName?.trim() || newName.trim() === key) return;
     try {
-        await saveComponent(type, newName.trim(), text);
+        const res = await saveComponent(type, newName.trim(), text);
+        noteVaultRouted(type, newName.trim(), res);
         if (!components[type]) components[type] = {};
         components[type][newName.trim()] = text;
 
@@ -918,6 +927,7 @@ async function deleteDefinition(type, key) {
     try {
         await deleteComponent(type, key);
         delete components[type][key];
+        vaultPieces[type]?.delete(key);
 
         // If prompt was using this definition, clear it
         if (selectedData?.components) {
@@ -951,7 +961,9 @@ async function renameDefinition(type, oldKey, newKey) {
     try {
         const text = defs[oldKey] || '';
         // Origin from the OLD key — renamed vault pieces stay vault-routed.
-        await saveComponent(type, newKey, text, null, pieceOrigin(type, oldKey));
+        const res = await saveComponent(type, newKey, text, null, pieceOrigin(type, oldKey));
+        noteVaultRouted(type, newKey, res);
+        vaultPieces[type]?.delete(oldKey);
         await deleteComponent(type, oldKey);
 
         // Update local state

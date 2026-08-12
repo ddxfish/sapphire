@@ -196,7 +196,10 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
                   'actor': 'user', 'reason': reason})
         except Exception:
             pass
-    return {"status": "success", "components": prompts.prompt_manager.components}
+    # vault flag: tells the editor where the piece landed so it can badge
+    # 🗝 immediately (the SSE echo may be deferred while the user is typing).
+    return {"status": "success", "vault": msg.endswith("(vault)"),
+            "components": prompts.prompt_manager.components}
 
 
 @router.delete("/api/prompts/components/{comp_type}/{key}")
