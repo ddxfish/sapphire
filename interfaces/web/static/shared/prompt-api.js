@@ -8,10 +8,14 @@ export async function getComponents() {
   return data.components || {};
 }
 
-// Components + plugin-pack sources ({type: {key: pluginName}}) in one fetch
+// Components + plugin-pack sources ({type: {key: pluginName}}) + vault piece
+// markers in one fetch. (vault_pieces was silently STRIPPED here until
+// 2026-08-11 — the 🗝 piece badges never rendered from a page load; only
+// the creation-time badge worked, which masked it. Krem caught it.)
 export async function getComponentsWithSources() {
   const data = await fetchWithTimeout('/api/prompts/components');
-  return { components: data.components || {}, sources: data.sources || {} };
+  return { components: data.components || {}, sources: data.sources || {},
+           vault_pieces: data.vault_pieces || {} };
 }
 
 export async function listPrompts() {
