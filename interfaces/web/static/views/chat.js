@@ -783,13 +783,23 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
             if (!settings.private_chat) eyeGlow.classList.remove('vault-locked');
         }
 
-        // Populate prompt dropdown
+        // Populate prompt dropdown (🗝 = vault entry while unlocked)
         const promptSel = container.querySelector('#sb-prompt');
         if (promptSel && init?.prompts?.list) {
             promptSel.innerHTML = init.prompts.list.map(p =>
-                `<option value="${p.name}">${p.name.charAt(0).toUpperCase() + p.name.slice(1)}</option>`
+                `<option value="${p.name}">${p.name.charAt(0).toUpperCase() + p.name.slice(1)}${p.vault ? ' \u{1F5DD}' : ''}</option>`
             ).join('');
             setSelect(promptSel, settings.prompt || 'sapphire');
+            // Dangling vault name (locked): setSelect synthesized a bare
+            // option — label it so the user knows the prompt is asleep,
+            // not gone. Referenced names are the one surface allowed to
+            // show while sealed (refs index, ruling C).
+            const vrefs = init?.prompts?.vault_refs || {};
+            const cur = settings.prompt;
+            if (cur && cur in vrefs && !init.prompts.list.some(p => p.name === cur)) {
+                const opt = [...promptSel.options].find(o => o.value === cur);
+                if (opt) opt.textContent = `${cur} \u{1F5DD} (vault)`;
+            }
         }
 
         // Populate toolset dropdown (exclude raw module entries)

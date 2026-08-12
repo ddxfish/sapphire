@@ -193,6 +193,16 @@ class PersonaManager:
 
     # === CRUD ===
 
+    @staticmethod
+    def _vault_ref_sync(new_prompt, old_prompt):
+        """Personas are one of the three referrer classes of the vault
+        references index. Called OUTSIDE self._lock, best-effort."""
+        try:
+            from core.prompt_crud import vault_ref_sync
+            vault_ref_sync(new_prompt, old_prompt)
+        except Exception:
+            pass
+
     def create(self, name: str, data: dict) -> bool:
         """Create a new persona."""
         safe_name = self._sanitize_name(name)
@@ -210,7 +220,10 @@ class PersonaManager:
                 "settings": self._clean_settings(data.get("settings", {}))
             }
             self._personas[safe_name] = persona
-            return self._save_to_user()
+            ok = self._save_to_user()
+        if ok:
+            self._vault_ref_sync(persona["settings"].get("prompt"), None)
+        return ok
 
     def update(self, name: str, data: dict) -> bool:
         """Update an existing persona."""
@@ -219,6 +232,8 @@ class PersonaManager:
 
         with self._lock:
             persona = self._personas[name]
+            old_prompt = (persona.get("settings") or {}).get("prompt") \
+                if "settings" in data else None
             if "tagline" in data:
                 persona["tagline"] = data["tagline"]
             if "avatar" in data:
@@ -234,7 +249,10 @@ class PersonaManager:
                     persona["name"] = new_name
                     self._personas[new_name] = persona
                     del self._personas[name]
-            return self._save_to_user()
+            ok = self._save_to_user()
+        if ok and "settings" in data:
+            self._vault_ref_sync(persona["settings"].get("prompt"), old_prompt)
+        return ok
 
     def delete(self, name: str) -> bool:
         """Delete a persona.
@@ -297,8 +315,11 @@ class PersonaManager:
             except Exception as e:
                 logger.debug(f"[PERSONA] Active-persona handoff check skipped: {e}")
 
+            old_prompt = (persona.get("settings") or {}).get("prompt")
             del self._personas[name]
-            return self._save_to_user()
+            ok = self._save_to_user()
+        self._vault_ref_sync(None, old_prompt)
+        return ok
 
     def duplicate(self, name: str, new_name: str) -> bool:
         """Duplicate a persona with a new name."""
@@ -334,7 +355,10 @@ class PersonaManager:
                 "settings": settings
             }
             self._personas[safe_name] = persona
-            return self._save_to_user()
+            ok = self._save_to_user()
+        if ok:
+            self._vault_ref_sync(settings.get("prompt"), None)
+        return ok
 
     # === Avatar ===
 

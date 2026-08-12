@@ -333,6 +333,16 @@ class ContinuityScheduler:
     MAX_WEBHOOKS = 10
 
     @staticmethod
+    def _vault_ref_sync(new_name, old_name):
+        """Tasks are the third referrer class of the vault references index.
+        Called OUTSIDE self._lock (the release scan re-enters it)."""
+        try:
+            from core.prompt_crud import vault_ref_sync
+            vault_ref_sync(new_name, old_name)
+        except Exception:
+            pass
+
+    @staticmethod
     def _prompt_requires_privacy(name: str) -> bool:
         """Resolve a prompt name and report its privacy_required flag.
         Unresolvable (or any error) → False: the carrier this feeds is
@@ -433,8 +443,9 @@ class ContinuityScheduler:
         with self._lock:
             self._tasks[task["id"]] = task
             self._save_tasks()
-        
+
         logger.info(f"[Continuity] Created task: {task['name']} ({task['id']})")
+        self._vault_ref_sync(task.get("prompt"), None)
         return task
     
     def update_task(self, task_id: str, data: Dict) -> Optional[Dict]:
@@ -444,7 +455,8 @@ class ContinuityScheduler:
                 return None
             
             task = self._tasks[task_id]
-            
+            old_prompt = task.get("prompt") if "prompt" in data else None
+
             # Validate cron if provided
             if "schedule" in data:
                 try:
@@ -493,7 +505,9 @@ class ContinuityScheduler:
 
             self._save_tasks()
             logger.info(f"[Continuity] Updated task: {task['name']} ({task_id})")
-            return task
+        if "prompt" in data:
+            self._vault_ref_sync(data.get("prompt"), old_prompt)
+        return task
     
     def delete_task(self, task_id: str) -> bool:
         """Delete task by ID."""
@@ -502,6 +516,7 @@ class ContinuityScheduler:
                 return False
             
             name = self._tasks[task_id].get("name", task_id)
+            old_prompt = self._tasks[task_id].get("prompt")
             del self._tasks[task_id]
             self._task_pending.pop(task_id, None)
             self._task_running.pop(task_id, None)
@@ -509,7 +524,8 @@ class ContinuityScheduler:
             self._task_progress.pop(task_id, None)
             self._save_tasks()
             logger.info(f"[Continuity] Deleted task: {name} ({task_id})")
-            return True
+        self._vault_ref_sync(None, old_prompt)
+        return True
     
     # =========================================================================
     # SCHEDULE CHECKING

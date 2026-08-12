@@ -458,6 +458,60 @@ def is_vault_prompt(name: str) -> bool:
             and name not in prompt_manager._scenario_presets)
 
 
+def vault_ref_sync(new_name=None, old_name=None):
+    """References-index bookkeeping (ruling C amendment) — called by the
+    three referrer funnels (chat settings, personas, continuity tasks)
+    whenever a prompt reference changes hands.
+
+    Stamp: only lands for names in the UNLOCKED vault (refs_stamp no-ops
+    otherwise) — locked names aren't offered anywhere, so the index can
+    never grow while sealed. Release: any lock state, and only when the
+    ground-truth scan says NO referrer still pins the name."""
+    try:
+        from core import prompt_vault
+        if new_name and new_name != old_name:
+            prompt_vault.refs_stamp(new_name)
+        if old_name and old_name != new_name \
+                and old_name in prompt_vault.refs_names() \
+                and not _vault_name_still_referenced(old_name):
+            prompt_vault.refs_drop(old_name)
+    except Exception as e:
+        logger.warning(f"Vault ref sync failed: {e}")
+
+
+def _vault_name_still_referenced(name: str) -> bool:
+    """Ground-truth scan across the three referrer classes. Fail-SAFE per
+    source: an unreadable source counts as still-referenced — a stale name
+    lingering in the index is a smaller sin than dropping a live reference
+    (the name was already leaked by the referrer that created it)."""
+    try:
+        from core.api_fastapi import get_system
+        system = get_system()
+    except Exception:
+        return True
+    try:
+        if name in system.llm_chat.session_manager.get_all_prompt_settings():
+            return True
+    except Exception:
+        return True
+    try:
+        from core.personas.persona_manager import persona_manager
+        for p in persona_manager.get_all().values():
+            if (p.get('settings') or {}).get('prompt') == name:
+                return True
+    except Exception:
+        return True
+    try:
+        sched = getattr(system, 'continuity_scheduler', None)
+        if sched is not None:
+            with sched._lock:
+                if any(t.get('prompt') == name for t in sched._tasks.values()):
+                    return True
+    except Exception:
+        return True
+    return False
+
+
 def save_components_batch(items: dict, keep=frozenset(), overwrite: bool = True,
                           reason: str = None) -> tuple[bool, str]:
     """Bulk piece writer (persona-card import): one lock, one disk save,

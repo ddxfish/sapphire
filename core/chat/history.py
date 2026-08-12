@@ -15,6 +15,17 @@ from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
 
+
+def _vault_ref_sync(new_name, old_name):
+    """Prompt-reference bookkeeping for the vault references index (chat
+    settings are one of the three referrer classes). Best-effort — never
+    lets index bookkeeping break a settings write."""
+    try:
+        from core.prompt_crud import vault_ref_sync
+        vault_ref_sync(new_name, old_name)
+    except Exception:
+        pass
+
 # Static (non-scope) system defaults for chat settings.
 # Scope defaults are merged in dynamically by get_system_defaults() from SCOPE_REGISTRY.
 # Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
@@ -1961,15 +1972,20 @@ class ChatSessionManager:
 
         try:
             with self._lock, self._get_connection() as conn:
-                # Check if exists
+                # Check if exists (settings fetched for vault-ref bookkeeping)
                 cursor = conn.execute(
-                    "SELECT 1 FROM chats WHERE name = ?", 
+                    "SELECT settings FROM chats WHERE name = ?",
                     (chat_name,)
                 )
-                if not cursor.fetchone():
+                row = cursor.fetchone()
+                if not row:
                     logger.warning(f"Chat not found: {chat_name}")
                     return False
-                
+                try:
+                    deleted_prompt = json.loads(row['settings']).get('prompt')
+                except Exception:
+                    deleted_prompt = None
+
                 was_active = (chat_name == self.active_chat_name)
                 
                 # Delete chat and any associated data
@@ -2003,7 +2019,12 @@ class ChatSessionManager:
                     self._load_chat("default")
                     self.active_chat_name = "default"
                     logger.info("Switched to default after deleting active chat")
-                
+
+                # Safe under self._lock (RLock; the scan re-enters it) — and
+                # no path acquires scheduler._lock before history's, so the
+                # scan's lock ordering stays one-directional.
+                if deleted_prompt:
+                    _vault_ref_sync(None, deleted_prompt)
                 return True
                 
         except Exception as e:
@@ -2584,9 +2605,12 @@ class ChatSessionManager:
                         pass
                     logger.info(f"Updated settings for override chat '{eff_name}'")
                 return ok
+            old_prompt = self.current_settings.get('prompt') if 'prompt' in settings else None
             self.current_settings.update(settings)
             self._save_current_chat()
             logger.info(f"Updated settings for chat '{self.active_chat_name}'")
+            if 'prompt' in settings:
+                _vault_ref_sync(settings.get('prompt'), old_prompt)
             return True
         except Exception as e:
             logger.error(f"Failed to update settings: {e}")
@@ -2611,6 +2635,7 @@ class ChatSessionManager:
                     s = json.loads(row['settings'])
                 except Exception:
                     s = {}
+                old_prompt = s.get('prompt') if 'prompt' in patch else None
                 s.update(patch)
                 if touch_updated:
                     conn.execute("UPDATE chats SET settings = ?, updated_at = ? WHERE name = ?",
@@ -2621,10 +2646,31 @@ class ChatSessionManager:
                 conn.commit()
             if chat_name == self.active_chat_name:
                 self.current_settings.update(patch)
+            if 'prompt' in patch:
+                _vault_ref_sync(patch.get('prompt'), old_prompt)
             return True
         except Exception as e:
             logger.error(f"set_named_chat_settings failed for '{chat_name}': {e}")
             return False
+
+    def get_all_prompt_settings(self) -> list:
+        """Every chat's `prompt` setting (read-only) — the ground-truth scan
+        for vault references-index release checks."""
+        self._ensure_db()
+        try:
+            with self._lock, self._get_connection() as conn:
+                rows = conn.execute("SELECT settings FROM chats").fetchall()
+            out = []
+            for r in rows:
+                try:
+                    p = json.loads(r['settings']).get('prompt')
+                    if p:
+                        out.append(p)
+                except Exception:
+                    pass
+            return out
+        except Exception:
+            return []
 
     def clear_named_chat_messages(self, chat_name: str) -> bool:
         """Empty a specific chat's message history via a direct DB write WITHOUT

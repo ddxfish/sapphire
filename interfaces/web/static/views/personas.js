@@ -143,7 +143,7 @@ function render() {
                 renderItem: p => `
                     ${avatarImg(p.name, p.trim_color, 'pa-list-avatar', p.avatar)}
                     <div class="pa-list-info">
-                        <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}</span>
+                        <span class="pa-list-name">${esc(p.name)}${p.name === defaultPersona ? ' <span class="pa-default-star" title="Default persona">&#x2B50;</span>' : ''}${_refsVaultPrompt(p) ? ` <span title="References vault prompt '${esc(p.settings?.prompt || '')}'">\u{1F5DD}</span>` : ''}</span>
                         ${p.tagline ? `<span class="pa-list-tagline">${esc(p.tagline)}</span>` : ''}
                     </div>`,
                 emptyHTML: '<div class="text-muted" style="padding:16px;font-size:var(--font-sm)">No personas yet. Click + to create one from your current chat settings.</div>',
@@ -361,6 +361,16 @@ function renderSettingField(key, label, settings, optionsHtml, opts = {}) {
 }
 
 // Safety net (shared by the three builders below): if the persona's saved
+// Does this persona reference a vault prompt? Unlocked: the roster carries
+// a vault flag; locked: the refs index (referenced names only) still knows.
+function _refsVaultPrompt(p) {
+    const name = p?.settings?.prompt;
+    if (!name) return false;
+    const list = initData?.prompts?.list || [];
+    if (list.some(x => x.name === name && x.vault)) return true;
+    return name in (initData?.prompts?.vault_refs || {});
+}
+
 // value isn't in the (possibly stale) list, show it as a synthetic selected
 // option rather than letting the <select> silently fall to the first option.
 function _withMissing(opts, list, current, keyFn) {
@@ -373,9 +383,17 @@ function _withMissing(opts, list, current, keyFn) {
 function renderPromptOptions(current) {
     const list = initData?.prompts?.list || [];
     const opts = list.map(p =>
-        `<option value="${p.name}"${p.name === current ? ' selected' : ''}>${p.name}</option>`
+        `<option value="${p.name}"${p.name === current ? ' selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`
     );
-    return _withMissing(opts, list, current, p => p.name === current).join('')
+    // Dangling vault name (locked): label the synthesized option so the
+    // reference reads as asleep, not broken — and stays removable here.
+    if (current && !list.some(p => p.name === current)) {
+        const vrefs = initData?.prompts?.vault_refs || {};
+        const label = current in vrefs ? `${current} \u{1F5DD} (vault)` : current;
+        opts.unshift(`<option value="${current}" selected>${label}</option>`);
+        return opts.join('');
+    }
+    return opts.join('')
         || `<option value="${current || 'default'}">${current || 'default'}</option>`;
 }
 

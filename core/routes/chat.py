@@ -435,7 +435,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 'name': name,
                 'type': pdata.get('type', 'unknown') if isinstance(pdata, dict) else 'monolith',
                 'char_count': len(pdata.get('content', '')) if isinstance(pdata, dict) else len(str(pdata)),
-                'source': pack_sources.get(name) if name not in user_prompt_names else None
+                'source': pack_sources.get(name) if name not in user_prompt_names else None,
+                'vault': prompts.is_vault_prompt(name)
             })
         current_prompt_name = prompts.get_active_preset_name()
         current_prompt_data = prompts.get_prompt(current_prompt_name) if current_prompt_name else None
@@ -456,6 +457,15 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "emoji": ss.get('emoji', '')
             })
         current_spice_set = spice_set_manager.active_name
+
+        # Vault state + referenced names for the prompts init block
+        try:
+            from core import prompt_vault
+            _vault_state = prompt_vault.vault_status()
+            _vault_refs = prompt_vault.refs_names()
+        except Exception:
+            _vault_state = {"exists": False, "unlocked": False}
+            _vault_refs = {}
 
         # Settings
         avatars_in_chat = getattr(config, 'AVATARS_IN_CHAT', False)
@@ -553,7 +563,12 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "current_name": current_prompt_name,
                 "current": current_prompt_data,
                 "components": prompt_components,
-                "presets": dict(prompts.prompt_manager.scenario_presets)
+                "presets": dict(prompts.prompt_manager.scenario_presets),
+                # Referenced vault names ONLY (ruling C amendment) — lets
+                # dropdown synthesizers label dangling names "(vault 🗝)"
+                # while locked instead of a bare mystery name.
+                "vault_refs": _vault_refs,
+                "vault": _vault_state
             },
             "spices": spice_data,
             "spice_sets": {

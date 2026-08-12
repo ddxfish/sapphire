@@ -17,6 +17,7 @@ let components = {};
 let componentSources = {};  // {type: {key: pluginName}} — plugin-pack pieces (🧩 badge)
 let vaultNames = new Set(); // prompt names resolving from the vault (unlocked only)
 let vaultPieces = {};       // {type: Set(keys)} — vault pieces (unlocked only)
+let vaultState = { exists: false, unlocked: false };
 let viewVisible = false;
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
@@ -196,6 +197,7 @@ async function loadAll() {
         vaultNames = new Set(prompts.filter(p => p.vault).map(p => p.name));
         vaultPieces = Object.fromEntries(
             Object.entries(compData.vault_pieces || {}).map(([t, keys]) => [t, new Set(keys)]));
+        vaultState = pList?.vaultState || { exists: false, unlocked: false };
 
         const active = prompts.find(p => p.active);
         activePromptName = active?.name || null;
@@ -245,7 +247,8 @@ function render() {
                     const typeName = p.type === 'monolith' ? 'Monolith' : 'Assembled';
                     const character = d?.components?.character;
                     const meta = [typeName, character ? '👤 ' + character : '',
-                                  p.source ? '🧩 Plugin: ' + p.source : ''].filter(Boolean).join(' · ');
+                                  p.source ? '🧩 Plugin: ' + p.source : '',
+                                  p.vault ? '\u{1F5DD} Vault' : ''].filter(Boolean).join(' · ');
                     const isActive = p.name === activePromptName;
                     return `<div class="pr-item-info">
                         <span class="pr-item-name">${p.privacy_required ? '🔒 ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
@@ -290,7 +293,7 @@ function renderEditor() {
                     <h2 id="pr-prompt-name" style="margin:0">${p.privacy_required ? '\u{1F512} ' : ''}${selected}</h2>
                     <button class="btn-icon" id="pr-rename-prompt" title="Rename prompt" style="font-size:14px;opacity:0.5">\u270F</button>
                 </div>
-                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}${(prompts.find(x => x.name === selected)?.source) ? ' \u00B7 \u{1F9E9} Plugin: ' + prompts.find(x => x.name === selected).source : ''}</span>
+                <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}${(prompts.find(x => x.name === selected)?.source) ? ' \u00B7 \u{1F9E9} Plugin: ' + prompts.find(x => x.name === selected).source : ''}${vaultNames.has(selected) ? ' \u00B7 \u{1F5DD} Vault' : ''}</span>
             </div>
             <div class="pr-header-actions">
                 ${!isActive ? '<button class="btn-primary" id="pr-activate">Activate</button>' : '<span class="badge badge-active">Active</span>'}
@@ -800,6 +803,7 @@ function createPrompt() {
                     <button class="btn-primary" id="pr-new-monolith" style="flex:1">Monolith</button>
                 </div>
                 <p class="text-muted" style="font-size:var(--font-xs);margin-top:8px">Assembled = built from component pieces. Monolith = single free-text block.</p>
+                ${vaultState.unlocked ? '<p style="font-size:var(--font-xs);margin-top:6px;color:#f59e0b">\u{1F5DD} Vault is unlocked — this prompt will be saved into the vault.</p>' : ''}
             </div>
         </div>
     `;

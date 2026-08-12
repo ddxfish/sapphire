@@ -932,6 +932,122 @@ class TestVaultRoutes:
         assert r["vault"]["unlocked"] is False
 
 
+# ═══ STEP 6: references-index wiring (ruling C amendment) ═══
+
+class TestVaultRefSync:
+    """vault_ref_sync: stamp at reference time (unlocked-only by construction),
+    release only when the ground-truth scan says no referrer remains."""
+
+    def test_stamp_on_new_reference(self, vault):
+        from core import prompt_crud
+        pv.setup("key")
+        pv.set_monolith("vlt_ref", "text")
+        prompt_crud.vault_ref_sync("vlt_ref", None)
+        assert "vlt_ref" in pv.refs_names()
+
+    def test_stamp_noop_for_non_vault_name(self, vault):
+        from core import prompt_crud
+        pv.setup("key")
+        prompt_crud.vault_ref_sync("plain-user-prompt", None)
+        assert pv.refs_names() == {}
+
+    def test_release_when_last_referrer_gone(self, vault, monkeypatch):
+        from core import prompt_crud
+        pv.setup("key")
+        pv.set_monolith("vlt_ref", "text")
+        prompt_crud.vault_ref_sync("vlt_ref", None)
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced",
+                            lambda n: False)
+        prompt_crud.vault_ref_sync(None, "vlt_ref")
+        assert pv.refs_names() == {}
+
+    def test_release_skipped_while_still_referenced(self, vault, monkeypatch):
+        from core import prompt_crud
+        pv.setup("key")
+        pv.set_monolith("vlt_ref", "text")
+        prompt_crud.vault_ref_sync("vlt_ref", None)
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced",
+                            lambda n: True)
+        prompt_crud.vault_ref_sync(None, "vlt_ref")
+        assert "vlt_ref" in pv.refs_names()
+
+    def test_release_works_while_locked(self, vault, monkeypatch):
+        """Drop-only while sealed — the one locked-state mutation allowed."""
+        from core import prompt_crud
+        pv.setup("key")
+        pv.set_monolith("vlt_ref", "text")
+        prompt_crud.vault_ref_sync("vlt_ref", None)
+        pv.lock()
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced",
+                            lambda n: False)
+        prompt_crud.vault_ref_sync(None, "vlt_ref")
+        assert pv.refs_names() == {}
+
+    def test_swap_stamps_new_releases_old(self, vault, monkeypatch):
+        from core import prompt_crud
+        pv.setup("key")
+        pv.set_monolith("vlt_a", "a")
+        pv.set_monolith("vlt_b", "b")
+        prompt_crud.vault_ref_sync("vlt_a", None)
+        monkeypatch.setattr(prompt_crud, "_vault_name_still_referenced",
+                            lambda n: False)
+        prompt_crud.vault_ref_sync("vlt_b", "vlt_a")
+        assert set(pv.refs_names()) == {"vlt_b"}
+
+    def test_scan_fail_safe_without_system(self, vault, monkeypatch):
+        """Unreadable referrer source → treated as still-referenced (a stale
+        index name is a smaller sin than dropping a live reference)."""
+        from core import prompt_crud
+        import core.api_fastapi as af
+        monkeypatch.setattr(af, "get_system",
+                            lambda: (_ for _ in ()).throw(RuntimeError("no system")))
+        assert prompt_crud._vault_name_still_referenced("anything") is True
+
+
+class TestReferrerHooks:
+    """The three referrer classes call vault_ref_sync on their write paths."""
+
+    def test_scheduler_task_lifecycle_syncs(self, vault, monkeypatch):
+        import threading
+        from core import prompt_crud
+        from core.continuity.scheduler import ContinuityScheduler
+        calls = []
+        monkeypatch.setattr(prompt_crud, "vault_ref_sync",
+                            lambda n, o: calls.append((n, o)))
+        s = ContinuityScheduler.__new__(ContinuityScheduler)
+        s._lock = threading.RLock()
+        s._tasks = {}
+        s._task_pending = {}
+        s._task_running = {}
+        s._task_last_matched = {}
+        s._task_progress = {}
+        s._save_tasks = lambda: None
+        t = s.create_task({"prompt": "vlt_task"})
+        assert ("vlt_task", None) in calls
+        s.update_task(t["id"], {"prompt": "vlt_other"})
+        assert ("vlt_other", "vlt_task") in calls
+        s.delete_task(t["id"])
+        assert (None, "vlt_other") in calls
+
+    def test_persona_lifecycle_syncs(self, vault, monkeypatch):
+        import threading
+        from core import prompt_crud
+        from core.personas.persona_manager import PersonaManager
+        calls = []
+        monkeypatch.setattr(prompt_crud, "vault_ref_sync",
+                            lambda n, o: calls.append((n, o)))
+        pm = PersonaManager.__new__(PersonaManager)
+        pm._lock = threading.Lock()
+        pm._personas = {}
+        pm._save_to_user = lambda: True
+        assert pm.create("vlt-tester", {"settings": {"prompt": "vlt_p"}})
+        assert ("vlt_p", None) in calls
+        assert pm.update("vlt-tester", {"settings": {"prompt": "vlt_other"}})
+        assert ("vlt_other", "vlt_p") in calls
+        assert pm.delete("vlt-tester")
+        assert (None, "vlt_other") in calls
+
+
 class TestRouteStatusMapping:
     """The web route maps VAULT_LOCKED_MSG → 409 (not the generic 500/400)."""
 

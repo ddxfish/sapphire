@@ -41,8 +41,14 @@ export async function fetchAIConfigData() {
         _ttsVoicesCache = ttsV;
     } catch (e) { console.warn('AI config: failed to fetch options', e); }
 
+    let vaultRefs = {};
+    try {
+        const init = await getInitData();
+        vaultRefs = init?.prompts?.vault_refs || {};
+    } catch { /* labels degrade to "(missing)" */ }
+
     return { prompts, toolsets, providers, metadata,
-             scopeDeclarations, scopeData,
+             scopeDeclarations, scopeData, vaultRefs,
              personas, voices: _ttsVoicesCache?.voices || [] };
 }
 
@@ -116,8 +122,16 @@ export function renderAIConfig(t, data, opts = {}) {
                         <label>Prompt</label>
                         <select id="ed-prompt">
                             <option value="default">default</option>
-                            ${missingOpt(t.prompt, ['default', ...prompts.map(p => p.name)])}
-                            ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}</option>`).join('')}
+                            ${(() => {
+                                // Prompt-specific missing handler: a dangling
+                                // name that's a REFERENCED vault entry reads
+                                // "🗝 (vault)" — asleep, not broken.
+                                if (!t.prompt || t.prompt === 'default' || prompts.some(p => p.name === t.prompt)) return '';
+                                const label = (data.vaultRefs || {})[t.prompt]
+                                    ? `${_esc(t.prompt)} \u{1F5DD} (vault)` : `${_esc(t.prompt)} (missing)`;
+                                return `<option value="${_esc(t.prompt)}" selected>${label}</option>`;
+                            })()}
+                            ${prompts.map(p => `<option value="${p.name}" ${t.prompt === p.name ? 'selected' : ''}>${p.name}${p.vault ? ' \u{1F5DD}' : ''}</option>`).join('')}
                         </select>
                     </div>
                     <div class="sched-field">

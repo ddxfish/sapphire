@@ -20,6 +20,10 @@ export async function listPrompts() {
   const prompts = data.prompts || [];
   const current = data.current;
   if (current) prompts.forEach(p => p.active = (p.name === current));
+  // Vault meta rides as array properties — existing callers see a plain
+  // array, vault-aware ones (prompts view, trigger editor) read these.
+  prompts.vaultState = data.vault_state || { exists: false, unlocked: false };
+  prompts.vaultRefs = data.vault_refs || {};
   return prompts;
 }
 

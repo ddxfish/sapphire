@@ -69,7 +69,10 @@ async def list_prompts(request: Request, _=Depends(require_login)):
             # refuse the save after an idle-lock).
             'vault': prompts.is_vault_prompt(name)
         })
-    return {"prompts": prompt_list, "current": prompts.get_active_preset_name()}
+    from core import prompt_vault
+    return {"prompts": prompt_list, "current": prompts.get_active_preset_name(),
+            "vault_state": prompt_vault.vault_status(),
+            "vault_refs": prompt_vault.refs_names()}
 
 
 @router.post("/api/prompts/reload")
