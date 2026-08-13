@@ -281,6 +281,62 @@ def lock(reason="") -> bool:
     return True
 
 
+def rekey(current, new) -> tuple:
+    """Change the vault passphrase. (ok, code) — code '' | 'bad_passphrase'
+    | 'no_vault' | 'wrong_key' | 'corrupt' | 'save_failed'.
+
+    Requires the CURRENT passphrase even while unlocked — an unlocked session
+    is not proof of key knowledge (a walk-up at an open screen must not be
+    able to rotate the owner out). Verification is against the on-disk blob,
+    so it also proves the file itself. Works in either lock state and
+    PRESERVES it: unlocked → re-encrypt the in-memory data (authoritative —
+    may be ahead of a failed save) and stay unlocked; locked → re-frame the
+    decrypted bytes untouched and stay locked. Fresh salt either way."""
+    global _key, _salt
+    if not isinstance(new, str) or not new:
+        return False, 'bad_passphrase'
+    if not isinstance(current, str) or not current:
+        return False, 'wrong_key'
+    try:
+        blob = VAULT_PATH.read_bytes()
+    except OSError:
+        return False, 'no_vault'
+    try:
+        plaintext, _okey, _osalt = decrypt_bytes(blob, current)  # slow — outside lock
+    except VaultWrongKey:
+        logger.warning("[VAULT] rekey refused — wrong current passphrase")
+        return False, 'wrong_key'
+    except VaultCorrupt:
+        return False, 'corrupt'
+    new_salt = os.urandom(16)
+    new_key = _derive(new, new_salt)   # slow — outside lock
+    with _lock:
+        if _key is not None:
+            old = (_key, _salt)
+            _key, _salt = new_key, new_salt
+            if not _save_locked():
+                _key, _salt = old   # disk still holds the old-key blob
+                return False, 'save_failed'
+            _touch_locked()
+        else:
+            # Locked: preserve the ciphertext's content byte-for-byte; the
+            # decrypted plaintext never touches the prompt system or _data.
+            try:
+                out = encrypt_bytes(plaintext, new_key, new_salt)
+                tmp = VAULT_PATH.with_suffix('.enc.tmp')
+                with open(tmp, 'wb') as f:
+                    f.write(out)
+                    f.flush()
+                    os.fsync(f.fileno())
+                replace_with_retry(tmp, VAULT_PATH)
+            except Exception as e:
+                logger.error(f"[VAULT] rekey write failed: {e}")
+                return False, 'save_failed'
+    logger.info("[VAULT] passphrase changed (lock state preserved)")
+    _audit_row({'item': 'vault', 'action': 'rekey'})
+    return True, ''
+
+
 def _handoff_active(gone_names):
     """Active preset was a vault name → hand off to 'default' loudly, exactly
     like prompt_packs.unregister_plugin. Runtime-only: stored chat settings

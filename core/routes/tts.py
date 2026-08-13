@@ -374,6 +374,14 @@ async def handle_transcribe(request: Request, audio: UploadFile = File(...), _=D
     if not ok:
         raise HTTPException(status_code=400, detail=reason)
 
+    # Voice privacy gate (vault v1.1): private chat + cloud STT = the mic
+    # audio would leave the machine. 403 with the reason — the mic button
+    # surfaces it as a toast.
+    from core.voice_privacy import stt_gate_reason
+    gate = stt_gate_reason(system.llm_chat.session_manager.get_chat_settings())
+    if gate:
+        raise HTTPException(status_code=403, detail=gate)
+
     system.web_active_inc()
     fd, temp_path = tempfile.mkstemp(suffix=".wav")
     try:

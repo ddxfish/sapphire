@@ -67,6 +67,33 @@ async def vault_unlock(request: Request, _=Depends(require_login)):
     raise HTTPException(status_code=403, detail="Wrong passphrase")
 
 
+@router.post("/api/vault/rekey")
+async def vault_rekey(request: Request, _=Depends(require_login)):
+    """Change the vault passphrase. Requires the CURRENT passphrase even
+    while unlocked (an open session is not proof of key knowledge). Lock
+    state is preserved. Same failure posture as unlock: 403 never 401,
+    constant delay on every failure."""
+    _managed_guard()
+    data = await request.json()
+    ok, code = prompt_vault.rekey(data.get('current') or '', data.get('new') or '')
+    if ok:
+        return {"status": "success", "vault": prompt_vault.vault_status()}
+    await asyncio.sleep(_FAIL_DELAY_S)   # constant failure delay
+    if code == 'no_vault':
+        raise HTTPException(status_code=404,
+                            detail="No vault exists — set one up first")
+    if code == 'bad_passphrase':
+        raise HTTPException(status_code=400,
+                            detail="New passphrase must not be empty")
+    if code == 'corrupt':
+        raise HTTPException(status_code=500,
+                            detail="Vault file is corrupt — restore from a "
+                                   "backup before changing the key.")
+    if code == 'wrong_key':
+        raise HTTPException(status_code=403, detail="Wrong current passphrase")
+    raise HTTPException(status_code=500, detail=f"Rekey failed ({code})")
+
+
 @router.post("/api/vault/move")
 async def vault_move(request: Request, _=Depends(require_login)):
     """v1.1 store toggle: move a prompt or piece between the vault and the

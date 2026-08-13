@@ -98,6 +98,13 @@ async def handle_body_wake(
     _verify_brain_auth(authorization)
     logger.info(f"[body/wake] from {x_body_name!r}, content-type={audio.content_type}")
 
+    # Voice privacy gate (vault v1.1): body audio routes into the active
+    # chat — same rule as the web mic.
+    from core.voice_privacy import stt_gate_reason
+    _gate = stt_gate_reason(system.llm_chat.session_manager.get_chat_settings())
+    if _gate:
+        raise HTTPException(403, _gate)
+
     # Stick the most-recently-woken body name onto `system` so the body
     # plugin's `_resolve_body` picks the right destination on any later
     # body_speak/body_ring/body_health call that DOESN'T explicitly name

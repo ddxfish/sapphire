@@ -97,8 +97,15 @@ Each key is a system name (`tts`, `stt`, `embedding`, `llm`):
 | `class_name` | Yes | Class name to instantiate from the entry file |
 | `requires_api_key` | No | If true, UI hints that an API key is needed |
 | `api_key_env` | No | Environment variable name for the API key |
+| `is_local` | No | **Declare `true` only if inference runs entirely on-device.** Absent = treated as **cloud**: private chats will refuse to route voice through your STT/TTS provider (fail-closed privacy gate). Local LLM/embedding providers should declare it too. |
 
 Extra fields are passed through to the registry as metadata and available via `registry.get_entry(key)`.
+
+> **Privacy gate:** in a private chat (the 👁 eyeball), Sapphire refuses to
+> transcribe through a non-local STT provider or speak through a non-local
+> TTS provider — the user's voice / response text would leave the machine.
+> An honest `is_local: true` on a genuinely local provider is what keeps it
+> usable in private chats; a missing flag means "cloud" by design.
 
 ### Multi-system plugins
 

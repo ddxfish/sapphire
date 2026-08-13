@@ -13,6 +13,8 @@ const post = (url, body) => fetchWithTimeout(url, {
 export const vaultSetup = (key) => post('/api/vault/setup', { key });
 export const vaultUnlock = (key) => post('/api/vault/unlock', { key });
 export const vaultLock = () => post('/api/vault/lock');
+// Change passphrase — current required even while unlocked; lock state preserved.
+export const vaultRekey = (current, newKey) => post('/api/vault/rekey', { current, new: newKey });
 // {kind:'prompt', name, direction:'in'|'out'} or {kind:'piece', comp_type, key, direction}
 export const vaultMove = (payload) => post('/api/vault/move', payload);
 

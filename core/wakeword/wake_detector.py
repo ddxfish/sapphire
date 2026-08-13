@@ -247,6 +247,19 @@ class WakeWordDetector:
             publish(Events.STT_ERROR, {"message": f"Wakeword heard — {reason}"})
             return
 
+        # Voice privacy gate (vault v1.1): the wake path transcribes into the
+        # ACTIVE chat — gated BEFORE recording (don't capture what we refuse
+        # to transcribe).
+        try:
+            from core.voice_privacy import stt_gate_reason
+            gate = stt_gate_reason(self.system.llm_chat.session_manager.get_chat_settings())
+        except Exception:
+            gate = ''
+        if gate:
+            logger.warning(f"[WAKE] {gate} — utterance not recorded")
+            publish(Events.STT_ERROR, {"message": f"Wakeword heard — {gate}"})
+            return
+
         start_time = threading.local()
         start_time.value = time.time()
         logger.info("Wake word detected! Starting to listen...")

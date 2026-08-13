@@ -5,7 +5,7 @@
 // with that one key rendered by nothing.
 import * as ui from '../../ui.js';
 import { keyPrompt } from '../../shared/key-prompt.js';
-import { vaultSetup, vaultUnlock, vaultLock, vaultStatus } from '../../shared/vault-api.js';
+import { vaultSetup, vaultUnlock, vaultLock, vaultRekey, vaultStatus } from '../../shared/vault-api.js';
 
 export default {
     id: 'privacy',
@@ -47,6 +47,7 @@ export default {
                     ${!v.exists ? '<button class="btn-sm btn-primary" id="pv-setup">Create vault</button>' : ''}
                     ${v.exists && !v.unlocked ? '<button class="btn-sm btn-primary" id="pv-unlock">Unlock</button>' : ''}
                     ${v.exists && v.unlocked ? '<button class="btn-sm" id="pv-lock">Lock now</button>' : ''}
+                    ${v.exists ? '<button class="btn-sm" id="pv-rekey">Change key</button>' : ''}
                 </div>`;
 
             card.querySelector('#pv-setup')?.addEventListener('click', async () => {
@@ -65,6 +66,16 @@ export default {
                     validate: async (k) => { await vaultUnlock(k); return ''; },
                 });
                 if (res?.key) { ui.showToast('Vault unlocked', 'success'); paint(); }
+            });
+            card.querySelector('#pv-rekey')?.addEventListener('click', async () => {
+                const res = await keyPrompt({
+                    title: 'Change vault passphrase',
+                    message: 'Enter your current passphrase and pick a new one. '
+                        + 'Works locked or unlocked — the lock state is kept.',
+                    mode: 'rekey',
+                    validate: async (k, current) => { await vaultRekey(current, k); return ''; },
+                });
+                if (res?.key) { ui.showToast('Vault passphrase changed', 'success'); paint(); }
             });
             card.querySelector('#pv-lock')?.addEventListener('click', async () => {
                 try {

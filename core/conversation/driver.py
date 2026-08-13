@@ -77,6 +77,7 @@ class ConversationDriver:
         self._active_sink = None                   # set during a turn so barge-in can reach it
         self._start_word = start_word or ""        # STT start-word gate (off when empty)
         self._start_word_fuzzy = float(start_word_fuzzy)
+        self._privacy_gate_logged = False          # one loud log per session, not per turn
         self.engine = ConversationEngine(
             on_turn=self._on_turn,
             on_barge_in=self._on_barge_in,
@@ -147,6 +148,27 @@ class ConversationDriver:
 
     # ── the streaming turn ──────────────────────────────────────────────────
     def _run_turn(self, pcm):
+        # Voice privacy gate (vault v1.1): a private chat refuses cloud STT
+        # (voice in) AND cloud TTS (speech out). Either leak kills the whole
+        # turn — a half-voice call is a dead line, not privacy.
+        try:
+            if self._chat_name:
+                _settings = self.system.llm_chat.session_manager.get_settings_for(self._chat_name) or {}
+            else:
+                _settings = self.system.llm_chat.session_manager.get_chat_settings() or {}
+        except Exception:
+            _settings = {}
+        try:
+            from core.voice_privacy import stt_gate_reason, tts_gate_reason
+            _gate = stt_gate_reason(_settings) or tts_gate_reason(_settings)
+        except Exception:
+            _gate = ''
+        if _gate:
+            if not self._privacy_gate_logged:
+                logger.warning(f"[CONV] {_gate} — voice turns disabled for this session")
+                self._privacy_gate_logged = True
+            return
+
         message_id = uuid.uuid4().hex
         # Turn cues: a soft think-pulse every second until her audio starts
         # flowing — fills the STT+LLM dead air that reads as a hung line on a

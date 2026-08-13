@@ -145,6 +145,104 @@ class TestLifecycle:
         assert bad[0].read_bytes() == b'garbage that is not a vault at all'
 
 
+# ── rekey (v1.1 closing step: key change) ──
+
+class TestRekey:
+    def test_rekey_while_unlocked_stays_unlocked(self, vault):
+        pv.setup("old-key")
+        pv.set_monolith("moonlight", "secret text")
+        ok, code = pv.rekey("old-key", "new-key")
+        assert ok and code == ''
+        assert pv.vault_unlocked()   # state preserved
+        assert pv.overlay_monoliths()["moonlight"]["content"] == "secret text"
+        pv.lock()
+        assert pv.unlock("old-key") == (False, 'wrong_key')
+        ok, _ = pv.unlock("new-key")
+        assert ok
+        assert pv.overlay_monoliths()["moonlight"]["content"] == "secret text"
+
+    def test_rekey_while_locked_stays_locked(self, vault):
+        pv.setup("old-key")
+        pv.set_monolith("moonlight", "secret text")
+        pv.lock()
+        ok, code = pv.rekey("old-key", "new-key")
+        assert ok and code == ''
+        assert not pv.vault_unlocked()   # state preserved — no key cached
+        assert pv._key is None and pv._data is None
+        assert pv.unlock("old-key") == (False, 'wrong_key')
+        ok, _ = pv.unlock("new-key")
+        assert ok
+        assert pv.overlay_monoliths()["moonlight"]["content"] == "secret text"
+
+    def test_unlocked_session_is_not_proof(self, vault):
+        """A walk-up at an open screen can't rotate the owner out — the
+        CURRENT passphrase is required even while unlocked."""
+        pv.setup("old-key")
+        ok, code = pv.rekey("guess", "attacker-key")
+        assert not ok and code == 'wrong_key'
+        assert pv.vault_unlocked()   # untouched
+        pv.lock()
+        assert pv.unlock("old-key")[0]   # old key still works
+
+    @staticmethod
+    def _header_salt():
+        import struct
+        blob = pv.VAULT_PATH.read_bytes()
+        hlen = struct.unpack(">I", blob[12:16])[0]
+        return json.loads(blob[16:16 + hlen].decode("utf-8"))["salt"]
+
+    def test_rekey_rotates_salt(self, vault):
+        pv.setup("old-key")
+        before = self._header_salt()
+        assert pv.rekey("old-key", "old-key")[0]   # same passphrase, new salt
+        assert self._header_salt() != before
+
+    def test_rekey_input_validation(self, vault):
+        pv.setup("old-key")
+        assert pv.rekey("old-key", "") == (False, 'bad_passphrase')
+        assert pv.rekey("", "new-key") == (False, 'wrong_key')
+        assert pv.rekey(None, "new-key") == (False, 'wrong_key')
+
+    def test_rekey_no_vault(self, vault):
+        assert pv.rekey("a", "b") == (False, 'no_vault')
+
+    def test_rekey_corrupt_file(self, vault):
+        pv.VAULT_PATH.write_bytes(b'garbage that is not a vault at all')
+        ok, code = pv.rekey("a", "b")
+        assert not ok and code == 'corrupt'
+        # No quarantine on the rekey path — unlock owns that flow
+        assert pv.VAULT_PATH.exists()
+
+    def test_rekey_save_failure_rolls_back(self, vault, monkeypatch):
+        """Unlocked rekey whose disk write fails must keep the OLD key cached
+        — disk still holds the old-key blob, so memory must match it."""
+        pv.setup("old-key")
+        pv.set_monolith("moonlight", "secret text")
+        orig_save = pv._save_locked
+        # NEVER monkeypatch.undo() here — it shares the vault fixture's
+        # instance and would un-redirect VAULT_PATH to the real user file.
+        monkeypatch.setattr(pv, '_save_locked', lambda: False)
+        ok, code = pv.rekey("old-key", "new-key")
+        assert not ok and code == 'save_failed'
+        monkeypatch.setattr(pv, '_save_locked', orig_save)
+        assert pv.vault_unlocked()
+        assert pv.set_monolith("moonlight", "edited")[0]   # saves with OLD key
+        pv.lock()
+        assert pv.unlock("new-key") == (False, 'wrong_key')
+        assert pv.unlock("old-key")[0]
+        assert pv.overlay_monoliths()["moonlight"]["content"] == "edited"
+
+    def test_rekey_audit_row_names_only(self, vault, monkeypatch):
+        rows = []
+        monkeypatch.setattr(pv, '_audit_row', lambda ev: rows.append(ev))
+        pv.setup("old-key")
+        pv.set_monolith("moonlight", "secret text")
+        assert pv.rekey("old-key", "new-key")[0]
+        assert {'item': 'vault', 'action': 'rekey'} in rows
+        # Passphrases must never appear in any audit payload
+        assert 'old-key' not in json.dumps(rows) and 'new-key' not in json.dumps(rows)
+
+
 # ── normalization at unlock ──
 
 class TestNormalization:
@@ -927,6 +1025,47 @@ class TestVaultRoutes:
         r4 = self._run(routes.vault_unlock(_Req({"key": "anything"}), None))
         assert r4["vault"]["unlocked"] is True        # idempotent while open
         assert routes.slept == []                     # no failures, no delays
+
+    def test_rekey_route_round_trip(self, routes):
+        self._run(routes.vault_setup(_Req({"key": "old"}), None))
+        r = self._run(routes.vault_rekey(
+            _Req({"current": "old", "new": "fresh"}), None))
+        assert r["vault"] == {"exists": True, "unlocked": True}   # state preserved
+        self._run(routes.vault_lock(None))
+        r2 = self._run(routes.vault_rekey(
+            _Req({"current": "fresh", "new": "final"}), None))
+        assert r2["vault"] == {"exists": True, "unlocked": False}  # still locked
+        r3 = self._run(routes.vault_unlock(_Req({"key": "final"}), None))
+        assert r3["vault"]["unlocked"] is True
+        assert routes.slept == []
+
+    def test_rekey_wrong_current_403_with_delay(self, routes):
+        from fastapi import HTTPException
+        self._run(routes.vault_setup(_Req({"key": "old"}), None))
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_rekey(
+                _Req({"current": "wrong", "new": "fresh"}), None))
+        assert ei.value.status_code == 403          # NEVER 401
+        assert routes.slept == [routes._FAIL_DELAY_S]
+
+    def test_rekey_no_vault_404_empty_new_400(self, routes):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_rekey(_Req({"current": "a", "new": "b"}), None))
+        assert ei.value.status_code == 404
+        self._run(routes.vault_setup(_Req({"key": "old"}), None))
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_rekey(_Req({"current": "old", "new": ""}), None))
+        assert ei.value.status_code == 400
+
+    def test_rekey_managed_mode_403(self, routes, monkeypatch):
+        from fastapi import HTTPException
+        from core.settings_manager import settings as sm_settings
+        self._run(routes.vault_setup(_Req({"key": "k"}), None))
+        monkeypatch.setattr(sm_settings, "is_managed", lambda: True)
+        with pytest.raises(HTTPException) as ei:
+            self._run(routes.vault_rekey(_Req({"current": "k", "new": "n"}), None))
+        assert ei.value.status_code == 403
 
     def test_managed_mode_gates_setup_and_unlock_not_lock(self, routes, monkeypatch):
         from fastapi import HTTPException

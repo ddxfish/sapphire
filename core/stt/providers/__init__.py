@@ -28,7 +28,8 @@ class STTProviderRegistry(BaseProviderRegistry):
         self.register_core('faster_whisper', FasterWhisperProvider, 'Faster Whisper (Local)',
                           is_local=True)
         self.register_core('fireworks_whisper', FireworksWhisperProvider, 'Fireworks Whisper (Cloud)',
-                          requires_api_key=True, api_key_env='STT_FIREWORKS_API_KEY')
+                          requires_api_key=True, api_key_env='STT_FIREWORKS_API_KEY',
+                          is_local=False)  # explicit — was implicit-False; the privacy gate reads this
         # Sapphire Router — managed-mode cloud STT. sapphire.py branches on
         # provider=='sapphire_router' but was never registered here, so flipping
         # STT_PROVIDER to it silently landed on NullWhisperClient. H6 fix.

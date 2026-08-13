@@ -239,6 +239,15 @@ class TTSClient:
 
     def speak(self, text):
         """Send text to TTS server and play audio (non-blocking)."""
+        # Voice privacy gate (vault v1.1): private chat + cloud TTS = the
+        # response text leaves the machine as a synthesis request. Effective
+        # chat resolved inside the gate (stream-brain aware).
+        from core.voice_privacy import tts_gate_reason
+        _gate = tts_gate_reason()
+        if _gate:
+            logger.info(f"[TTS] {_gate} — speech skipped")
+            return False
+
         if not self.audio_available:
             logger.warning("Audio playback unavailable - skipping TTS")
             return False
@@ -303,6 +312,12 @@ class TTSClient:
 
     def speak_sync(self, text):
         """Send text to TTS server, play audio, and block until playback finishes."""
+        from core.voice_privacy import tts_gate_reason
+        _gate = tts_gate_reason()
+        if _gate:
+            logger.info(f"[TTS] {_gate} — speech skipped")
+            return False
+
         if not self.audio_available:
             logger.warning("Audio playback unavailable - skipping TTS")
             return False

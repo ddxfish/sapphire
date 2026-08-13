@@ -11,6 +11,8 @@
 //   title       — dialog heading
 //   message     — body text (plain text, escaped)
 //   mode        — 'unlock' (one input) | 'setup' (key + confirm + warnings)
+//                 | 'rekey' (current + new + confirm — validate receives
+//                 (newKey, currentKey); the PM stores the NEW passphrase)
 //   secondaryLabel — optional extra button (e.g. "Turn privacy off")
 //   validate    — optional async (key) => '' | 'error text'. Non-empty keeps
 //                 the dialog OPEN with the error inline (retry-in-place).
@@ -22,6 +24,8 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
                             secondaryLabel = null, validate = null } = {}) {
     return new Promise((resolve) => {
         const setup = mode === 'setup';
+        const rekey = mode === 'rekey';
+        const newKeyMode = setup || rekey;   // confirm field + no-recovery warning
         const overlay = document.createElement('div');
         overlay.className = 'modal-overlay active';
         // Real <form> + autocomplete hints on purpose: password managers key
@@ -35,11 +39,14 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
                 <form id="kp-form" action="#">
                     <input type="text" name="username" autocomplete="username"
                         value="sapphire-vault" readonly hidden>
+                    ${rekey ? `
+                    <input type="password" id="kp-current" name="current" autocomplete="current-password" placeholder="Current passphrase"
+                        style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">` : ''}
                     <input type="password" id="kp-key" name="password"
-                        autocomplete="${setup ? 'new-password' : 'current-password'}" placeholder="Passphrase"
+                        autocomplete="${newKeyMode ? 'new-password' : 'current-password'}" placeholder="${rekey ? 'New passphrase' : 'Passphrase'}"
                         style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">
-                    ${setup ? `
-                    <input type="password" id="kp-confirm" name="confirm" autocomplete="new-password" placeholder="Confirm passphrase"
+                    ${newKeyMode ? `
+                    <input type="password" id="kp-confirm" name="confirm" autocomplete="new-password" placeholder="Confirm ${rekey ? 'new ' : ''}passphrase"
                         style="width:100%;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border);border-radius:6px;color:var(--text-bright);box-sizing:border-box;margin-bottom:8px">
                     <div style="font-size:var(--font-xs);color:var(--text-dim);line-height:1.5;margin-bottom:8px">
                         ⚠️ There is no recovery — a lost passphrase is a lost vault.<br>
@@ -49,33 +56,37 @@ export function keyPrompt({ title = 'Vault', message = '', mode = 'unlock',
                     <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
                         ${secondaryLabel ? `<button type="button" class="btn-sm" id="kp-secondary" style="margin-right:auto">${esc(secondaryLabel)}</button>` : ''}
                         <button type="button" class="btn-sm" id="kp-cancel">Cancel</button>
-                        <button type="submit" class="btn-sm btn-primary" id="kp-ok">${setup ? 'Create vault' : 'Unlock'}</button>
+                        <button type="submit" class="btn-sm btn-primary" id="kp-ok">${setup ? 'Create vault' : rekey ? 'Change key' : 'Unlock'}</button>
                     </div>
                 </form>
             </div>`;
         document.body.appendChild(overlay);
         const keyInput = overlay.querySelector('#kp-key');
+        const curInput = overlay.querySelector('#kp-current');
         const errEl = overlay.querySelector('#kp-error');
         const okBtn = overlay.querySelector('#kp-ok');
-        keyInput.focus();
+        (curInput || keyInput).focus();
 
         const done = (val) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(val); };
 
         const submit = async () => {
             const key = keyInput.value;
+            const current = curInput?.value;
             errEl.textContent = '';
-            if (!key) { errEl.textContent = 'Passphrase must not be empty.'; return; }
-            if (setup) {
+            if (rekey && !current) { errEl.textContent = 'Current passphrase must not be empty.'; return; }
+            if (!key) { errEl.textContent = `${rekey ? 'New p' : 'P'}assphrase must not be empty.`; return; }
+            if (newKeyMode) {
                 const confirm = overlay.querySelector('#kp-confirm')?.value;
                 if (key !== confirm) { errEl.textContent = 'Passphrases do not match.'; return; }
             }
             if (validate) {
                 okBtn.disabled = true;
                 let err = '';
-                try { err = await validate(key) || ''; }
+                try { err = await validate(key, current) || ''; }
                 catch (e) { err = e?.message || 'Failed'; }
                 okBtn.disabled = false;
-                if (err) { errEl.textContent = err; keyInput.select(); return; }  // retry-in-place
+                // retry-in-place; in rekey the likely failure is the current key
+                if (err) { errEl.textContent = err; (curInput || keyInput).select(); return; }
             }
             // Offer the ACCEPTED passphrase to the password manager. The
             // Credential Management API is the reliable path in Chromium —
