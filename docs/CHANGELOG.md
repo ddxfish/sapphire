@@ -1,5 +1,10 @@
+# 2.11.0 - Privacy v2
+- Prompt vault, encrypted auto-locking prompt db overlay
+- Move between vault and plaintext
+- Settings page for Privacy Vault
+- When vault is unlocked, only private models allowed
 # 2.10.4 - Bug fixes and QoL
-- Spices can go in ghost rail so AI doesn't get suspicious
+- Spices can go in ghost rail or sys prompt so AI doesn't get suspicious
 - Cursor being moved when DOM reset
 - Next TTS overlapping last message stops last
 - Code harness safety for ~ and other literals
