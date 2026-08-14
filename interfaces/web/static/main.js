@@ -666,7 +666,16 @@ function initEventBus() {
 
     // System state events — invalidate init cache so views get fresh data on show()
     const refreshAndUpdateScene = () => { refreshInitData(); debouncedUpdateScene(); };
-    eventBus.on(eventBus.Events.PROMPT_CHANGED, refreshAndUpdateScene);
+    eventBus.on(eventBus.Events.PROMPT_CHANGED, (data) => {
+        // Vault lock/unlock changes WHICH CHATS EXIST (vaulted chats Phase 1:
+        // private chats vanish sealed, reappear unlocked) — repaint the chat
+        // list too. Without this wire, nothing repainted on vault_changed and
+        // hidden chats lingered until an unrelated event. Eviction's own
+        // CHAT_SWITCHED handles the transcript; the Phase 0 paint-seq guard
+        // dedups the overlapping repaints.
+        if (data?.action === 'vault_changed') populateChatDropdown();
+        refreshAndUpdateScene();
+    });
     eventBus.on(eventBus.Events.TOOLSET_CHANGED, refreshAndUpdateScene);
     eventBus.on(eventBus.Events.SPICE_CHANGED, refreshAndUpdateScene);
     eventBus.on(eventBus.Events.COMPONENTS_CHANGED, refreshAndUpdateScene);

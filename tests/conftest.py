@@ -60,6 +60,21 @@ def _no_destructive_git(monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _no_real_vault_seal(monkeypatch):
+    """Vaulted chats (Phase 1, 2026-08-14): the dev box usually has a REAL
+    locked prompt vault, which would flip core.chat.history._vault_sealed()
+    True for every test — hiding private chats from store tests on this
+    machine but not in CI (no vault file). Pin the baseline to 'no vault'
+    so the suite is environment-independent; sealed-state tests monkeypatch
+    _vault_sealed (or prompt_vault.vault_status for route gates) explicitly."""
+    try:
+        import core.chat.history as _hist
+        monkeypatch.setattr(_hist, "_vault_sealed", lambda: False)
+    except Exception:
+        pass
+
+
 # ─── Thread leak guard ────────────────────────────────────────────────────────
 # Default every threading.Thread created during tests to daemon=True. Some
 # concurrency tests (SQLite write stress in test_220_regression, scope-bleed

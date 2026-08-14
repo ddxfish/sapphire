@@ -269,7 +269,7 @@ export default {
             if (!chatName) return;
             const goingPrivate = !eyeBtn.classList.contains('private-on');
             try {
-                const { vaultSetup, vaultUnlock, vaultLock, vaultStatus } =
+                const { vaultSetup, vaultUnlock, vaultStatus } =
                     await import('../shared/vault-api.js');
                 const { keyPrompt } = await import('../shared/key-prompt.js');
                 const v = await vaultStatus();
@@ -288,10 +288,21 @@ export default {
                     } else if (!v.unlocked) {
                         const res = await keyPrompt({
                             title: 'Unlock the vault',
-                            message: 'Enter your vault passphrase to go private.',
+                            message: 'Enter your vault passphrase.',
                             validate: async (key) => { await vaultUnlock(key); return ''; }
                         });
                         if (!res?.key) return;
+                        // Unlocking must NEVER mutate the chat underfoot
+                        // (Krem's trap report 2026-08-14: typing the key here
+                        // silently flipped the active chat private). Unlock
+                        // stops here; going private is a second, deliberate
+                        // click. Full fix = the backrooms relocation model,
+                        // tmp/vaulted-chats-plan.md.
+                        ui.showToast('Vault unlocked — click the eye again to make this chat private', 'success');
+                        const { populateChatDropdown } = await import('../features/chat-manager.js');
+                        await populateChatDropdown();
+                        await updateScene();
+                        return;
                     }
                     await putPrivate(chatName, true);
                     return;
@@ -318,12 +329,16 @@ export default {
                     return;
                 }
                 if (v.exists && v.unlocked) {
-                    // Lock NOW, THEN drop the flag — strictly sequential
-                    // (finding 4): the 409 guard passes only once the
-                    // prompt name no longer resolves. Never Promise.all.
-                    await vaultLock();
+                    // Drop the flag; the vault STAYS OPEN. The old
+                    // lock-then-PUT sequence died with vaulted chats
+                    // (2026-08-14): locking now EVICTS + hides this chat, so
+                    // the follow-up PUT would 404 — and flipping a sealed
+                    // chat public without the key is exactly the walk-up
+                    // hole the vault exists to close. Side benefit: toggling
+                    // one chat no longer locks the whole vault. If this
+                    // chat's prompt is privacy_required the PUT 409s —
+                    // switch prompts first, the toast explains.
                     await putPrivate(chatName, false);
-                    ui.showToast('Vault locked', 'success');
                     return;
                 }
                 // No vault at all — plain v1 toggle.

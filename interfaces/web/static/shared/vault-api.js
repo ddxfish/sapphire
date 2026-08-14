@@ -1,7 +1,9 @@
 // shared/vault-api.js — prompt-vault lifecycle calls.
 // Wrong key comes back as 403 (NOT 401 — fetch.js would bounce to /login).
 // The lock POST is synchronous server-side: when it resolves, the world IS
-// locked — safe to follow with PUT private_chat:false (the 0b contract).
+// locked — private chats hidden, a private active chat already evicted.
+// (The old 0b "lock then PUT private_chat:false" sequence is DEAD as of
+// vaulted chats 2026-08-14 — a sealed chat's flag can't be flipped.)
 import { fetchWithTimeout } from './fetch.js';
 
 const post = (url, body) => fetchWithTimeout(url, {

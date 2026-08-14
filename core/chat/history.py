@@ -26,6 +26,20 @@ def _vault_ref_sync(new_name, old_name):
     except Exception:
         pass
 
+
+def _vault_sealed() -> bool:
+    """Vaulted chats Phase 1: True while a prompt vault EXISTS and is LOCKED —
+    the window where private chats are invisible everywhere. No vault at all
+    keeps private_chat's pre-vault meaning (local-only, always visible).
+    Unreadable vault state seals (fail closed) — never leak on a glitch."""
+    try:
+        from core import prompt_vault
+        s = prompt_vault.vault_status()
+        return bool(s.get('exists')) and not bool(s.get('unlocked'))
+    except Exception as e:
+        logger.warning(f"vault state unreadable — sealing private chats (fail closed): {e}")
+        return True
+
 # Static (non-scope) system defaults for chat settings.
 # Scope defaults are merged in dynamically by get_system_defaults() from SCOPE_REGISTRY.
 # Primary source is user/settings/chat_defaults.json or factory chat_defaults.json
@@ -840,6 +854,16 @@ class ChatSessionManager:
         else:
             self._load_chat("default")
 
+        # Vaulted chats: boot always comes up sealed (the key never
+        # persists) — if the restored active chat is private, evict NOW,
+        # before any route can serve its name or content. Without this, a
+        # restart mid-private-session resurrected the chat via the
+        # active-chat exemption (live-caught 2026-08-14).
+        try:
+            self.evict_private_active()
+        except Exception as e:
+            logger.warning(f"Boot private-active eviction skipped: {e}")
+
         # Rowify: pre-warm the one-shot snapshot at BOOT when legacy blob
         # chats exist — the lazy trigger would otherwise run VACUUM INTO
         # under self._lock mid-traffic and stall every chat op for the copy
@@ -1573,6 +1597,8 @@ class ChatSessionManager:
 
         Reads from the store (complete even when the in-memory load was
         capped); outside a live stream the store always matches memory."""
+        if self._vault_hidden(chat_name):
+            return None   # sealed vault: behaves as nonexistent (ruling 4, 2026-08-14)
         self._ensure_db()
         try:
             with self._get_connection() as conn:
@@ -1601,6 +1627,8 @@ class ChatSessionManager:
         chat_messages + tool_images + active-name/marker, one transaction."""
         if old_name == "default":
             return False, "Cannot rename the default chat"
+        if self._vault_hidden(old_name):
+            return False, f"Chat '{old_name}' not found"   # sealed — as if absent
         safe_name = "".join(c for c in (new_name or "") if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_name = safe_name.replace(' ', '_').lower()
         if not safe_name:
@@ -1805,11 +1833,42 @@ class ChatSessionManager:
         self._prune_orphaned_tool_images(chat_name)
         return True, report
 
-    def list_chat_files(self, stats: bool = False) -> List[Dict[str, Any]]:
+    def _vault_hidden(self, chat_name: str) -> bool:
+        """Disclosure gate (vaulted chats Phase 1): True when this chat is
+        private and the vault is sealed — the caller must then behave exactly
+        as if the chat doesn't exist. The ACTIVE chat is exempt: it can only
+        be private-while-sealed if lock-time eviction failed (mid-stream),
+        and hiding its settings would blind the very privacy gates that read
+        them to ENFORCE local-only — hiding would fail open. A DB error here
+        fails open instead (systemic posture, matches voice_privacy): the
+        caller's own read is about to fail the same way anyway."""
+        if not _vault_sealed():
+            return False
+        if chat_name == self.active_chat_name:
+            return False
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT json_extract(settings, '$.private_chat') FROM chats WHERE name = ?",
+                    (chat_name,)).fetchone()
+            return bool(row and row[0])
+        except Exception as e:
+            logger.warning(f"_vault_hidden('{chat_name}') read failed — treating as visible: {e}")
+            return False
+
+    def list_chat_files(self, stats: bool = False,
+                        include_hidden: bool = False) -> List[Dict[str, Any]]:
         """List all available chats with metadata.
 
         stats=True adds size_bytes (message store + tool images) per chat —
-        Chat Manager only; the hot dropdown path skips the size subqueries."""
+        Chat Manager only; the hot dropdown path skips the size subqueries.
+
+        While the vault is sealed, private chats are OMITTED entirely — no
+        name, no counts, no timestamps (Krem's ruling C, 2026-08-13). Every
+        list consumer (dropdown, Chat Manager, plugins, executor target
+        resolution) inherits from this one filter. include_hidden=True is
+        for in-process housekeeping that needs ground truth (lock-time
+        eviction) — never hand it to a route or tool."""
         self._ensure_db()
 
         size_cols = ""
@@ -1833,6 +1892,7 @@ class ChatSessionManager:
                               END AS turn_count"""
 
         chats = []
+        sealed = (not include_hidden) and _vault_sealed()
         try:
             with self._lock, self._get_connection() as conn:
                 # msg_count is format-aware: COUNT(*) over chat_messages for
@@ -1850,6 +1910,13 @@ class ChatSessionManager:
                 )
                 for row in cursor:
                     settings = json.loads(row["settings"])
+                    # Sealed vault: private rows vanish. The active chat stays
+                    # (only reachable when lock-time eviction failed) — the
+                    # Phase 0 select-invariant depends on the active chat
+                    # being representable, and its name is already on screen.
+                    if sealed and settings.get("private_chat") \
+                            and row["name"] != self.active_chat_name:
+                        continue
 
                     entry = {
                         "name": row["name"],
@@ -1891,13 +1958,28 @@ class ChatSessionManager:
         pattern = f"%{esc}%"
         self._ensure_db()
         hits: Dict[str, int] = {}
+        # Sealed vault: private chats are excluded from the scan — a hit
+        # count is a keyword ORACLE on hidden content (recon 2026-08-13).
+        # If the exclusion set itself can't be built, return NO results:
+        # a broken filter must not become the oracle it exists to prevent.
+        hidden: set = set()
+        if _vault_sealed():
+            try:
+                with self._get_connection() as conn:
+                    hidden = {r[0] for r in conn.execute(
+                        "SELECT name FROM chats WHERE json_extract(settings, '$.private_chat')")}
+                hidden.discard(self.active_chat_name)
+            except Exception as e:
+                logger.warning(f"search privacy filter unreadable — search disabled while sealed: {e}")
+                return {}
         try:
             with self._lock, self._get_connection() as conn:
                 for name, n in conn.execute(
                     r"""SELECT cm.chat_name, COUNT(*) FROM chat_messages cm
                         WHERE json_extract(cm.message_json, '$.content') LIKE ? ESCAPE '\'
                         GROUP BY cm.chat_name""", (pattern,)):
-                    hits[name] = n
+                    if name not in hidden:
+                        hits[name] = n
                 for name, n in conn.execute(
                     r"""SELECT chats.name, COUNT(*)
                         FROM chats, json_each(chats.messages)
@@ -1905,7 +1987,8 @@ class ChatSessionManager:
                           AND chats.messages IS NOT NULL
                           AND json_extract(json_each.value, '$.content') LIKE ? ESCAPE '\'
                         GROUP BY chats.name""", (pattern,)):
-                    hits[name] = hits.get(name, 0) + n
+                    if name not in hidden:
+                        hits[name] = hits.get(name, 0) + n
         except Exception as e:
             logger.error(f"Chat content search failed: {e}")
         return hits
@@ -1965,6 +2048,9 @@ class ChatSessionManager:
     def delete_chat(self, chat_name: str) -> bool:
         """Delete chat. Recreates default if deleted, switches active if needed."""
         self._ensure_db()
+
+        if self._vault_hidden(chat_name):
+            return False   # sealed vault: behaves as nonexistent
 
         if self._is_streaming and chat_name == self.active_chat_name:
             logger.warning(f"Cannot delete '{chat_name}' — streaming in progress")
@@ -2079,6 +2165,9 @@ class ChatSessionManager:
 
     def set_active_chat(self, chat_name: str) -> bool:
         """Switch to a different chat - loads messages AND settings."""
+        if self._vault_hidden(chat_name):
+            logger.warning(f"Cannot switch to '{chat_name}' — sealed in a locked vault")
+            return False
         with self._lock:
             if chat_name == self.active_chat_name:
                 return True
@@ -2103,6 +2192,56 @@ class ChatSessionManager:
         """Get active chat name (thread-safe)."""
         with self._lock:
             return self.active_chat_name
+
+    def evict_private_active(self) -> Optional[str]:
+        """Vaulted chats Phase 1 (ruling B): if the ACTIVE chat is private
+        while the vault is sealed, land on a safe public chat and publish
+        the switch. Two callers: prompt_vault.lock() (true-vanish eviction)
+        and BOOT — a restart always comes up sealed, and the .active_chat
+        marker may point at a private chat (lock-time eviction never ran if
+        the app died unlocked; live-caught 2026-08-14). Landing: 'default'
+        unless default itself is private, else the freshest non-private
+        chat, else a fresh 'scratch' chat. Returns the landing name, or
+        None when no eviction was needed or possible."""
+        try:
+            if not _vault_sealed():
+                return None
+            chats = self.list_chat_files(include_hidden=True)
+            by_name = {c['name']: c for c in chats}
+            active = self.get_active_chat_name()
+            if not by_name.get(active, {}).get('private_chat'):
+                return None
+            target = None
+            d = by_name.get('default')
+            if d is not None and not d.get('private_chat'):
+                target = 'default'
+            else:
+                for c in chats:   # updated_at DESC — freshest non-private wins
+                    if not c.get('private_chat') and c['name'] != active:
+                        target = c['name']
+                        break
+            if target is None:
+                if not self.create_chat('scratch'):
+                    logger.warning("[VAULT] no safe landing for private active "
+                                   "chat — staying (sealed)")
+                    return None
+                target = 'scratch'
+            if not self.set_active_chat(target):
+                logger.warning("[VAULT] private-active eviction FAILED "
+                               "(streaming?) — staying")
+                return None
+            logger.warning(f"[VAULT] active chat was private — evicted to '{target}'")
+            try:
+                # Server-initiated switch: origin None → every tab follows
+                # (transcript refresh + dropdown adopt). The activate route
+                # owns this publish on user-driven switches.
+                publish(Events.CHAT_SWITCHED, {"name": target, "origin": None})
+            except Exception:
+                pass
+            return target
+        except Exception as e:
+            logger.warning(f"[VAULT] private-active eviction failed: {e}")
+            return None
 
     def add_user_message(self, content: Union[str, List[Dict[str, Any]]], persona: Optional[str] = None):
         if persona is None:
@@ -2250,6 +2389,11 @@ class ChatSessionManager:
                 if not row:
                     return None
                 stored = json.loads(row["settings"]) if row["settings"] else {}
+                # Sealed vault: a hidden chat's settings are as absent as the
+                # chat itself. Active chat exempt (privacy gates read it).
+                if stored.get("private_chat") and chat_name != self.active_chat_name \
+                        and _vault_sealed():
+                    return None
                 merged = get_system_defaults()
                 merged.update(stored)
                 return merged
@@ -2262,6 +2406,8 @@ class ChatSessionManager:
         """Read messages from a named chat WITHOUT switching active chat.
         context_limit overrides the global trim budget for this read (the
         librarian's 128K night sessions)."""
+        if self._vault_hidden(chat_name):
+            return []   # sealed vault: behaves as nonexistent
         self._ensure_db()
         try:
             with self._get_connection() as conn:
@@ -2316,6 +2462,12 @@ class ChatSessionManager:
         and the write is SKIPPED on timeout (data loss > corruption).
         """
         self._ensure_db()
+
+        if self._vault_hidden(chat_name):
+            # Sealed vault: a background writer must not touch (or reveal) a
+            # hidden chat. Loud — this is the cron/daemon write path.
+            logger.warning(f"append to '{chat_name}' refused — chat is sealed in a locked vault")
+            return False
 
         # Defer if the target is the active chat and a stream is running.
         # Event-based wait — fires as soon as the last stream ends, no poll.
@@ -2578,7 +2730,11 @@ class ChatSessionManager:
                 row = conn.execute("SELECT settings FROM chats WHERE name = ?", (chat_name,)).fetchone()
             if not row:
                 return None
-            return json.loads(row['settings'])
+            s = json.loads(row['settings'])
+            # Sealed vault: hidden chat = absent. (Active chat returned above.)
+            if s.get('private_chat') and _vault_sealed():
+                return None
+            return s
         except Exception as e:
             logger.error(f"get_settings_for('{chat_name}') failed: {e}")
             return None
@@ -2635,6 +2791,10 @@ class ChatSessionManager:
                     s = json.loads(row['settings'])
                 except Exception:
                     s = {}
+                # Sealed vault: hidden chat = absent, even for writers.
+                if s.get('private_chat') and chat_name != self.active_chat_name \
+                        and _vault_sealed():
+                    return False
                 old_prompt = s.get('prompt') if 'prompt' in patch else None
                 s.update(patch)
                 if touch_updated:
@@ -2679,6 +2839,8 @@ class ChatSessionManager:
         conversation. Mirrors the in-memory copy if it IS the active chat so a later
         save can't resurrect the old messages. Never wipes mid-stream."""
         self._ensure_db()
+        if self._vault_hidden(chat_name):
+            return False   # sealed vault: behaves as nonexistent
         if chat_name == self.active_chat_name and self._is_streaming:
             logger.warning(f"clear_named_chat_messages skipped for '{chat_name}' — streaming in progress")
             return False

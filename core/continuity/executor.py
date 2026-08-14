@@ -571,7 +571,17 @@ class ContinuityExecutor:
                 logger.info(f"[Continuity] Creating new chat: {target_chat}")
                 # create_chat now publishes CHAT_CREATED itself (the creation
                 # chokepoint), so no explicit publish here.
-                session_manager.create_chat(target_chat)
+                if not session_manager.create_chat(target_chat):
+                    # Vaulted chats Phase 1 (Krem's ruling: fail LOUDLY): the
+                    # name may belong to a chat sealed in a locked vault — the
+                    # list above can't see it, but the row exists. Falling
+                    # through would create a plaintext twin and write into it
+                    # in the clear, the one unforgivable outcome. Any create
+                    # failure kills the task.
+                    raise ValueError(
+                        f"chat_target '{target_chat}' could not be created "
+                        f"(name already taken — possibly by a chat sealed in "
+                        f"the locked vault) — task refused.")
                 target_chat = normalized
 
             # Build ExecutionContext — isolated, no singleton mutation.

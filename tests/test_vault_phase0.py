@@ -185,12 +185,18 @@ class _FakeSystem:
         self.llm_chat = type("L", (), {"session_manager": sm})()
 
 
-def _put_settings(chat_settings, payload, monkeypatch, resolver):
+def _put_settings(chat_settings, payload, monkeypatch, resolver,
+                  vault=None):
     """Drive the PUT /api/chats/{name}/settings route directly (non-active
-    chat branch — storage write, no live apply)."""
+    chat branch — storage write, no live apply). `vault` pins the vault
+    state the route's membership gate sees (default: no vault = the
+    pre-vault v1 world; the dev box's REAL vault must never leak in)."""
     from core.routes.chat import update_chat_settings
     from core import prompts as prompts_mod
+    from core import prompt_vault as pv_mod
     monkeypatch.setattr(prompts_mod, "get_prompt", resolver)
+    _v = dict(vault or {"exists": False, "unlocked": False})
+    monkeypatch.setattr(pv_mod, "vault_status", lambda: dict(_v))
     sm = _FakeSessionManager(chat_settings)
     return asyncio.run(update_chat_settings(
         "pinned-chat", _FakeRequest({"settings": payload}),
@@ -208,16 +214,55 @@ class TestLockOrderingContract:
                 lambda name: {"name": name, "privacy_required": True})
         assert ei.value.status_code == 409
 
-    def test_unresolved_prompt_passes_put_false(self, monkeypatch):
-        """(ii) THE lock-then-PUT contract: once the name no longer resolves
-        (vault locked / prompt gone), the same PUT succeeds. The vault's
-        eyeball flow depends on this exact pass — lock first, then PUT."""
+    def test_unresolved_prompt_passes_put_false_unlocked(self, monkeypatch):
+        """(ii) REWRITTEN for vaulted chats (2026-08-14): the old lock-then-
+        PUT contract is dead — a sealed chat's flag can't be flipped. The
+        unresolvable-prompt pass survives for the DELETED-prompt case, but
+        now only while the vault is open (or absent... here: open)."""
         result, sm = _put_settings(
             {"prompt": "moonlight", "private_chat": True},
             {"private_chat": False}, monkeypatch,
-            lambda name: None)
+            lambda name: None,
+            vault={"exists": True, "unlocked": True})
         assert result["status"] == "success"
         assert sm.written == {"private_chat": False}
+
+    def test_sealed_vault_blocks_membership_flip_off(self, monkeypatch):
+        """(iii) NEW CONTRACT: sealed vault + non-active private chat —
+        flipping private_chat OFF is 403 (a walk-up must not expose hidden
+        chats without the key). This is the exact PUT the old eyeball
+        lock-then-PUT flow performed; that flow is retired."""
+        with pytest.raises(HTTPException) as ei:
+            _put_settings(
+                {"prompt": "sunny", "private_chat": True},
+                {"private_chat": False}, monkeypatch,
+                lambda name: None,
+                vault={"exists": True, "unlocked": False})
+        assert ei.value.status_code == 403
+
+    def test_sealed_vault_blocks_membership_flip_on(self, monkeypatch):
+        """(iii b) Sealed vault: flipping a public chat PRIVATE is also 403 —
+        it would vanish into a vault the user can't open (walk-up hiding
+        your chats without the key)."""
+        with pytest.raises(HTTPException) as ei:
+            _put_settings(
+                {"prompt": "sunny", "private_chat": False},
+                {"private_chat": True}, monkeypatch,
+                lambda name: None,
+                vault={"exists": True, "unlocked": False})
+        assert ei.value.status_code == 403
+
+    def test_sealed_vault_allows_unchanged_flag(self, monkeypatch):
+        """(iv) The sidebar debounce-save PUTs whole settings objects with
+        private_chat UNCHANGED — a sealed vault must not break ordinary
+        edits to public chats."""
+        result, sm = _put_settings(
+            {"prompt": "sunny", "private_chat": False},
+            {"private_chat": False, "voice": "af_heart"}, monkeypatch,
+            lambda name: None,
+            vault={"exists": True, "unlocked": False})
+        assert result["status"] == "success"
+        assert sm.written == {"private_chat": False, "voice": "af_heart"}
 
 
 # ── 0c: continuity privacy carrier ──

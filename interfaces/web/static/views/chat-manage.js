@@ -13,13 +13,15 @@ import * as eventBus from '../core/event-bus.js';
 import { handleChatChange, populateChatDropdown } from '../features/chat-manager.js';
 import { getIsProc } from '../core/state.js';
 import { switchView } from '../core/router.js';
+import { vaultStatus } from '../shared/vault-api.js';
 
 let container = null;
 let chats = [];
 let selected = new Set();
 let sortKey = 'modified';
 let sortDir = -1; // -1 desc, 1 asc
-let tab = 'chat';        // 'chat' | 'game' | 'librarian'
+let tab = 'chat';        // 'chat' | 'private' | 'game' | 'librarian' | 'archive'
+let vaultState = { exists: false, unlocked: false };
 let query = '';          // live name filter (as-you-type)
 let deepHits = null;     // Map(name → matching msg count) after Enter, else null
 let deepQuery = '';      // the query deepHits answers
@@ -37,8 +39,14 @@ const LIB_RE = /^librarian(-\d{8}-\d{4}(-.*)?)?$/;
 // One chat, one tab — and archived trumps everything (Krem's ruling
 // 2026-08-05: a real archive tucks away, it doesn't badge). The living
 // tabs never show archived chats; the Archive tab shows only them.
+// Private ranks under archived (Krem's ruling 2026-08-14: Archive wins,
+// the 🗝 badge marks private rows there) — private chats NEED archivability
+// or the Private tab recreates the dropdown-clog archive exists to solve.
+// While the vault is sealed, private chats aren't in the payload at all
+// (server filter), so the Private tab shows only when there's something in it.
 const chatTab = c => {
     if (c.archived) return 'archive';
+    if (c.private_chat) return 'private';
     const m = c.mode || c.settings?.mode;
     if (m === 'game') return 'game';
     // mode stamp = new plumbing (librarian stamps at claim since 2026-08-05);
@@ -47,7 +55,8 @@ const chatTab = c => {
     return 'chat';
 };
 const isStory = c => ((c.settings?.game_id) || '').startsWith('story:');
-const TAB_LABELS = { chat: '\u{1F4AC} Chats', game: '\u{1F3B2} Game Room',
+const TAB_LABELS = { chat: '\u{1F4AC} Chats', private: '\u{1F5DD} Private',
+                     game: '\u{1F3B2} Game Room',
                      librarian: '\u{1F4DA} Librarian', archive: '\u{1F4E6} Archive' };
 
 function matchesSearch(c) {
@@ -112,7 +121,11 @@ function reportResults(results, okVerb) {
 
 async function refresh() {
     try {
-        const data = await api.fetchChatListStats();
+        // Vault state rides along: the 🗝 toggle is offered only while the
+        // vault is open (or absent — the pre-vault v1 flag). vaultStatus()
+        // never throws (self-caught, returns closed-looking state).
+        const [data, v] = await Promise.all([api.fetchChatListStats(), vaultStatus()]);
+        vaultState = v;
         chats = data.chats || [];
         // Drop selections for chats that no longer exist
         const names = new Set(chats.map(c => c.name));
@@ -144,18 +157,23 @@ function render() {
     });
 
     // Per-tab totals (and match counts while a search is narrowing things)
-    const counts = { chat: 0, game: 0, librarian: 0, archive: 0 };
-    const matched = { chat: 0, game: 0, librarian: 0, archive: 0 };
+    const counts = { chat: 0, private: 0, game: 0, librarian: 0, archive: 0 };
+    const matched = { chat: 0, private: 0, game: 0, librarian: 0, archive: 0 };
     for (const c of chats) {
         const t = chatTab(c);
         counts[t]++;
         if (matchesSearch(c)) matched[t]++;
     }
+    // Sealed vault (or simply no private chats): the Private tab has nothing
+    // to say — hide it entirely (ruling C: show NOTHING about locked chats).
+    // If it was selected when the vault locked, land back on Chats.
+    if (tab === 'private' && !counts.private) tab = 'chat';
     const searching = !!(query || deepHits);
     container.querySelectorAll('.cm-tab').forEach(b => {
         const t = b.dataset.tab;
         b.textContent = `${TAB_LABELS[t]} (${searching ? `${matched[t]}/${counts[t]}` : counts[t]})`;
         b.classList.toggle('active', t === tab);
+        if (t === 'private') b.style.display = counts.private ? '' : 'none';
     });
 
     const vis = sortedChats();
@@ -171,15 +189,20 @@ function render() {
         // Keyed off MODE, not tab: an archived story chat is still a story.
         const gated = (c.mode ?? c.settings?.mode) === 'game';
         const hits = deepHits?.get(c.name);
+        // 🗝 toggle: only while the vault is open, or absent entirely (the
+        // pre-vault v1 flag). Sealed vault: the server 403s membership
+        // changes anyway — no button, no tease.
+        const canVault = !vaultState.exists || vaultState.unlocked;
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
+            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ' <span class="cm-badge">\u{1F5DD} private</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>
             <td>${fmtDate(c.modified)}</td>
             <td>${fmtDate(c.created)}</td>
             <td class="cm-actions">
+                ${canVault ? `<button class="cm-act" data-act="private" title="${c.private_chat ? 'Make public (local-only + vault rules stop applying)' : 'Make private (local models only; hides when the vault locks)'}">${c.private_chat ? '\u{1F513}' : '\u{1F5DD}'}</button>` : ''}
                 <button class="cm-act" data-act="archive" title="${c.archived ? 'Unarchive (back to its tab + sidebar)' : 'Archive (tuck away in the Archive tab)'}">${c.archived ? '\u{1F4C2}' : '\u{1F4E6}'}</button>
                 <button class="cm-act" data-act="rename" title="Rename">✏️</button>
                 <button class="cm-act" data-act="export" title="Export JSON">⬇️</button>
@@ -316,6 +339,21 @@ async function doRowAction(act, name) {
         } catch (e) {
             ui.showToast(`Export failed: ${e.message}`, 'error');
         }
+    } else if (act === 'private') {
+        const chat = chats.find(c => c.name === name);
+        const to = !chat?.private_chat;
+        try {
+            await api.updateChatSettings(name, { private_chat: to });
+            ui.showToast(to
+                ? `${chat?.display_name || name} is now private \u{1F5DD} — local models only, hides on vault lock`
+                : `${chat?.display_name || name} is now public`, 'success');
+        } catch (e) {
+            // Likely 409 (privacy_required prompt — switch prompts first) or
+            // 403 (vault sealed). Server message says which; show it whole.
+            ui.showToast(e.message, 'error', 8000);
+        }
+        await refresh();
+        await populateChatDropdown();   // private section membership changed
     } else if (act === 'archive') {
         const chat = chats.find(c => c.name === name);
         const toArchived = !chat?.archived;
@@ -638,6 +676,7 @@ export default {
         <div id="cm-wrap">
             <div id="cm-tabs">
                 <button class="cm-tab" data-tab="chat"></button>
+                <button class="cm-tab" data-tab="private"></button>
                 <button class="cm-tab" data-tab="game"></button>
                 <button class="cm-tab" data-tab="librarian"></button>
                 <button class="cm-tab" data-tab="archive"></button>

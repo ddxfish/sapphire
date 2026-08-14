@@ -1202,6 +1202,28 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
             if sm_settings.is_managed():
                 raise HTTPException(status_code=403, detail="Private chats are disabled in managed mode")
 
+        if 'private_chat' in new_settings:
+            # Vaulted chats Phase 1: vault MEMBERSHIP changes need the vault
+            # OPEN (prompt-vault move parity — a walk-up must not hide your
+            # chats, nor expose hidden ones, without the key). The ACTIVE
+            # chat is exempt: it's already fully on screen, so flipping it
+            # public reveals nothing new — and it's the amber eyeball's
+            # escape hatch when lock-time eviction failed. No vault at all
+            # keeps the pre-vault v1 meaning (local-only flag, freely
+            # toggled). Hidden and nonexistent names answer identically.
+            try:
+                from core import prompt_vault as _pv
+                _vs = _pv.vault_status()
+            except Exception:
+                _vs = {}
+            if _vs.get('exists') and not _vs.get('unlocked') \
+                    and chat_name != session_manager.get_active_chat_name():
+                _cur = session_manager.read_chat_settings(chat_name) or {}
+                if bool(new_settings.get('private_chat')) != bool(_cur.get('private_chat')):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="The vault is locked — unlock it to change chat privacy.")
+
         if 'private_chat' in new_settings and not new_settings.get('private_chat'):
             # Turning the eyeball OFF while this chat's prompt demands privacy
             # would let the next turn run the private prompt on a cloud
@@ -1223,10 +1245,11 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
                 # Deliberately fail-OPEN: this is a courtesy guard, not the
                 # enforcement gate. If it skips and privacy goes off anyway,
                 # _select_provider (fail-closed) refuses the next turn loudly
-                # — nothing leaks. Vault note (phase 0b contract): a prompt
-                # name that no longer RESOLVES passes this guard by design;
-                # that is what lets "lock vault, THEN PUT private_chat:false"
-                # succeed — the eyeball client must sequence in that order.
+                # — nothing leaks. (The old 0b lock-then-PUT sequence that
+                # exploited the unresolvable-name pass died with vaulted
+                # chats 2026-08-14 — locking now evicts and hides the chat;
+                # the eyeball PUTs directly while unlocked and surfaces the
+                # 409 instead.)
                 logger.warning(f"privacy-required check on settings PUT skipped: {e}")
 
         if chat_name != session_manager.get_active_chat_name():

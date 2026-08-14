@@ -654,7 +654,11 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     // Everything else lives one click away in Chat Manager (the "See more"
     // item below). The hidden select above stays uncapped on purpose.
     const MAX_PICKER = 10;
-    let regShow = chats.slice(0, MAX_PICKER);
+    // Reserve up to 3 picker slots for the private section — with 10+
+    // regular chats the old math sliced private to ZERO, leaving 🗝 chats
+    // reachable only via active-rescue (dropdown hunt #4, 2026-08-13).
+    const privReserve = Math.min(privateChats.length, 3);
+    let regShow = chats.slice(0, MAX_PICKER - privReserve);
     let privShow = privateChats.slice(0, Math.max(0, MAX_PICKER - regShow.length));
     if (effectiveActive && ![...regShow, ...privShow].some(c => c.name === effectiveActive)) {
         const a = chats.find(c => c.name === effectiveActive);
@@ -674,11 +678,13 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
 
     if (privShow.length > 0) {
         itemsHtml += '<div class="chat-picker-divider"></div>';
+        // \ud83d\udddd = the vault glyph (matches vault-backed prompts in the sidebar);
+        // \ud83d\udd12 is taken \u2014 it means privacy_required on prompts.
         itemsHtml += privShow.map(c => `
             <button class="chat-picker-item chat-picker-private ${c.name === effectiveActive ? 'active' : ''}"
                     data-chat="${c.name}">
                 <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
-                <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
+                <span class="chat-picker-item-name">\u{1F5DD} ${escapeHtml(c.display_name)}</span>
             </button>
         `).join('');
     }

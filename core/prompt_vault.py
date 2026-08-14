@@ -277,6 +277,7 @@ def lock(reason="") -> bool:
             _timer = None
     logger.info(f"[VAULT] locked{f' ({reason})' if reason else ''}")
     _handoff_active(gone)      # outside _lock — calls into the prompt system
+    _handoff_active_chat()     # vaulted chats: evict a private active chat
     _publish("vault_changed")
     return True
 
@@ -356,6 +357,22 @@ def _handoff_active(gone_names):
             revalidate_active(reason="vault locked")
     except Exception as e:
         logger.warning(f"[VAULT] active-preset handoff failed: {e}")
+
+
+def _handoff_active_chat():
+    """Vaulted chats Phase 1: a private ACTIVE chat must not survive a lock —
+    its settings ride /api/status and /api/history serves its content. Evict
+    to a safe landing BEFORE vault_changed publishes, keeping the lock
+    route's synchronous contract (when lock() returns, the world IS locked).
+    The landing logic lives in the store (evict_private_active) because BOOT
+    needs the identical pass — a restart comes up sealed without lock() ever
+    running. Runtime switch only — the private chat's stored settings are
+    untouched, exactly like the prompt handoff above."""
+    try:
+        from core.api_fastapi import get_system
+        get_system().llm_chat.session_manager.evict_private_active()
+    except Exception as e:
+        logger.warning(f"[VAULT] active-chat handoff failed: {e}")
 
 
 def _warn_user_shadows():
