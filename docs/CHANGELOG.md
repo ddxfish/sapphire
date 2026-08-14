@@ -1,3 +1,10 @@
+# 2.10.4 - Bug fixes and QoL
+- Spices can go in ghost rail so AI doesn't get suspicious
+- Cursor being moved when DOM reset
+- Next TTS overlapping last message stops last
+- Code harness safety for ~ and other literals
+- Expanded Improved metrics on each chat, timestamp, accordion more info
+- Blender plugin
 # 2.10.3 - Prompt refactor
 - Old prompt system yeeted for new one
 - Reduced code paths for prompt and privacy
