@@ -1,3 +1,5 @@
+# 2.11.1 - Private chats
+- Chats in private mode are encrypted
 # 2.11.0 - Privacy v2
 - Prompt vault, encrypted auto-locking prompt db overlay
 - Move between vault and plaintext
