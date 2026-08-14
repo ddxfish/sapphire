@@ -7,11 +7,19 @@ import { updateScene, updateSendButtonLLM } from './scene.js';
 import { applyTrimColor } from './chat-settings.js';
 import { cancelPendingSave, flushPendingSave } from '../views/chat.js';
 
+let _listPaintSeq = 0;
+
 export async function populateChatDropdown({ forceAdopt = false } = {}) {
     const { chatSelect } = getElements();
     const epochAtFetch = api.getSwitchEpoch();
+    // Paint-sequence guard (mirrors loadSidebar's _sbPaintSeq): event-driven
+    // callers never await this, so two list fetches routinely overlap even
+    // with no switch in flight — and out-of-order responses painted the
+    // STALE list last. Newest call wins; superseded responses are dropped.
+    const mySeq = ++_listPaintSeq;
     try {
         const data = await api.fetchChatList();
+        if (mySeq !== _listPaintSeq) return;
         // Adopt the server's active_chat into #chat-select only if no chat
         // switch STARTED while this list was in flight — a stale response
         // must not clobber the user's in-flight selection (the GLM-sidebar

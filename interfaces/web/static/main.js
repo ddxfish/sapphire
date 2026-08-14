@@ -724,6 +724,18 @@ function initEventBus() {
         populateChatDropdown();
     });
 
+    // Delete/rename from ANOTHER surface (Chat Manager, second tab, a tool) —
+    // these events had zero listeners, so this tab's dropdown kept the ghost
+    // (or the stale name) forever while SSE was up; clicking the ghost 400'd.
+    // Vaulted-chats Phase 0, 2026-08-13.
+    eventBus.on(eventBus.Events.CHAT_DELETED, () => {
+        populateChatDropdown();
+    });
+
+    eventBus.on(eventBus.Events.CHAT_RENAMED, () => {
+        populateChatDropdown();
+    });
+
     // Plugin reload/toggle — load new scripts
     eventBus.on(eventBus.Events.PLUGIN_RELOADED, (data) => {
         ui.showToast(`Plugin '${data?.plugin || 'unknown'}' reloaded`, 'success');

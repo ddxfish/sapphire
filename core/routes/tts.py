@@ -92,6 +92,14 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         system.tts.speak(text)
         return {"status": "success", "message": "Playback started."}
     elif output_mode == 'file':
+        # Voice privacy gate (vault v1.1): play-mode self-gates inside
+        # speak(), but file-mode calls generate_audio_data directly — and the
+        # browser's non-streaming TTS path ships chat response text through
+        # here. Same posture as the vault routes: 403, never 401.
+        from core.voice_privacy import tts_gate_reason
+        _gate = tts_gate_reason()
+        if _gate:
+            raise HTTPException(status_code=403, detail=_gate)
         audio_data = await asyncio.to_thread(system.tts.generate_audio_data, text)
         if not audio_data:
             raise HTTPException(status_code=503, detail="TTS generation failed")

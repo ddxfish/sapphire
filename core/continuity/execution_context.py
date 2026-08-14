@@ -343,7 +343,8 @@ class ExecutionContext:
                 meta = PROVIDER_METADATA.get(provider_key, {})
                 if not pconf.get('is_local', meta.get('is_local', False)):
                     raise ConnectionError(
-                        f"Prompt '{self.task_settings.get('prompt')}' requires privacy; "
+                        f"Task requires privacy (private target chat, or prompt "
+                        f"'{self.task_settings.get('prompt')}' is privacy_required); "
                         f"provider '{provider_key}' is not marked local — task refused.")
             provider = get_provider_by_key(
                 provider_key, providers_config,

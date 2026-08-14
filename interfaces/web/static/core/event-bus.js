@@ -200,6 +200,8 @@ export const Events = {
     CHAT_TRIMMED: 'chat_trimmed',
     CHAT_COMPRESSED: 'chat_compressed',
     CHAT_ARCHIVED: 'chat_archived',
+    CHAT_DELETED: 'chat_deleted',
+    CHAT_RENAMED: 'chat_renamed',
 
     // TTS events
     TTS_PLAYING: 'tts_playing',

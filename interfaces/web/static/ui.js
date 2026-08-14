@@ -611,10 +611,7 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
     // Update hidden select (state holder used throughout the app).
     // `adopt=false` means this render rides a chat-list response that is
     // stale truth (a switch started while it was in flight) — rebuild the
-    // option list but keep the user's selection. The innerHTML wipe is
-    // itself a writer: with no selected option a single-line select snaps
-    // to index 0, so the previous value must be restored explicitly and
-    // synthesized if the stale list lacks it (fresh create, archived).
+    // option list but keep the user's selection.
     const select = document.getElementById('chat-select');
     const prev = select?.value || '';
     if (select) {
@@ -626,10 +623,21 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
             if (adopt ? chat.name === activeChat : chat.name === prev) opt.selected = true;
             select.appendChild(opt);
         });
-        if (!adopt && prev && ![...select.options].some(o => o.value === prev)) {
+        // INVARIANT (vaulted-chats Phase 0, 2026-08-13): the select always
+        // contains its intended selection, under EITHER adopt mode. The
+        // innerHTML wipe is itself a writer — with no selected option a
+        // single-line select snaps to index 0, loadSidebar follows the new
+        // value, and the sidebar paints (then debounce-SAVES onto) a chat the
+        // transcript isn't on. The synthesizer used to cover only !adopt
+        // (stale-response rollback); a chat legitimately missing from the
+        // list (fresh create mid-flight, archived race, vault lock) hit the
+        // index-0 snap with the sidebar following it.
+        const intended = adopt ? activeChat : prev;
+        if (intended && ![...select.options].some(o => o.value === intended)) {
+            const known = allChats.find(c => c.name === intended);
             const opt = document.createElement('option');
-            opt.value = prev;
-            opt.textContent = prev;
+            opt.value = intended;
+            opt.textContent = known?.display_name || intended;
             opt.selected = true;
             select.appendChild(opt);
         }

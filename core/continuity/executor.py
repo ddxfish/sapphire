@@ -578,9 +578,13 @@ class ContinuityExecutor:
             # "Webhook specifies chat name" (trigger_config.chat_from_payload): the
             # named chat answers with ITS OWN settings, not the task's — so the reply
             # runs as if typed in that chat (persona/toolset/scopes come from the chat).
+            # Settings are read unconditionally: the privacy stamp below needs them.
+            # A read failure propagates — a task that can't see its target chat's
+            # settings must not run as if it could (fail-closed, like the gate).
+            chat_settings = session_manager.read_chat_settings(target_chat) or {}
             if task.get("trigger_config", {}).get("chat_from_payload"):
                 from core.chat.function_manager import scope_setting_keys
-                cc = session_manager.read_chat_settings(target_chat) or {}
+                cc = chat_settings
                 merged = {**task,
                           "prompt": cc.get("persona") or cc.get("prompt") or "default",
                           "toolset": cc.get("toolset") or cc.get("ability") or "none",
@@ -590,6 +594,16 @@ class ContinuityExecutor:
                 task_settings = self._extract_task_settings(merged)
             else:
                 task_settings = self._extract_task_settings(task)
+            # Privacy rides the CHAT here, not just the prompt (vaulted-chats
+            # Phase 0, 2026-08-13). This lane is about to read the target
+            # chat's whole transcript into the LLM request — before this, only
+            # a privacy_required PROMPT forced local-only, so a cron/agent/
+            # daemon task with chat_target=<private chat> + a cloud provider
+            # shipped that chat's history out. OR the chat's flag into the
+            # same carrier the prompt gate uses; ExecutionContext then gates
+            # provider selection AND network tools off it.
+            if chat_settings.get("private_chat"):
+                task_settings["privacy_required"] = True
             ctx = ExecutionContext(
                 self.system.llm_chat.function_manager,
                 self.system.llm_chat.tool_engine,

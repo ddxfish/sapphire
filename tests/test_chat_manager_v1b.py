@@ -500,3 +500,61 @@ class TestCompressChat:
                 break
             time.sleep(0.1)
         assert s["done"] and s["ok"] and s["result"]["chat"] == "j1"
+
+
+class TestCompressPrivacyGate:
+    """The route-level private-chat gate (chat.py, Fork 2A + local-provider
+    rule) had ZERO coverage — vaulted-chats Phase 0 recon finding, 2026-08-13.
+    Direct handler calls; start_compress_job is captured, never run."""
+
+    def _call(self, monkeypatch, chat_settings, provider, body=None):
+        import asyncio
+        import core.api_fastapi  # noqa: F401  (route imports trip circulars alone)
+        import core.routes.chat as chat_routes
+        from core.chat import compress
+
+        captured = {}
+
+        def _fake_start(sm, chat_name, **kw):
+            captured.update(kw, chat=chat_name)
+            return True, ''
+
+        monkeypatch.setattr(compress, 'start_compress_job', _fake_start)
+        monkeypatch.setattr(chat_routes, '_live_call_chats', lambda s: set())
+        monkeypatch.setattr(chat_routes.config, 'LLM_CUSTOM_PROVIDERS',
+                            {'mylocal': {'is_local': True}}, raising=False)
+
+        class _SM:
+            def read_chat_settings(self, name):
+                return dict(chat_settings)
+
+        class _Sys:
+            llm_chat = type('L', (), {'session_manager': _SM()})()
+
+        class _Req:
+            async def json(self):
+                return {'provider': provider, 'mode': 'whole', **(body or {})}
+
+        result = asyncio.run(chat_routes.compress_chat(
+            'somechat', _Req(), _=None, system=_Sys()))
+        return result, captured
+
+    def test_private_cloud_provider_400(self, monkeypatch):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as ei:
+            self._call(monkeypatch, {'private_chat': True}, 'claude')
+        assert ei.value.status_code == 400
+        assert 'private' in ei.value.detail.lower()
+
+    def test_private_local_provider_starts_backup_forced_off(self, monkeypatch):
+        """Fork 2A: even an explicit backup:true never writes the plaintext
+        export for a private chat."""
+        result, captured = self._call(
+            monkeypatch, {'private_chat': True}, 'mylocal', {'backup': True})
+        assert result['status'] == 'started'
+        assert captured['backup'] is False
+
+    def test_public_cloud_provider_starts(self, monkeypatch):
+        result, captured = self._call(monkeypatch, {}, 'claude', {'backup': True})
+        assert result['status'] == 'started'
+        assert captured['backup'] is True

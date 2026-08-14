@@ -163,6 +163,21 @@ class StreamingTTSPump:
         """Push LLM content text; return SSE event dicts to yield."""
         if not self.enabled or not text or self._closed or self._skip_turn:
             return []
+        if not self._stream_started:
+            # Voice privacy gate (vault v1.1): private chat + cloud TTS = the
+            # response text leaves the machine as a synthesis request. Checked
+            # on first push, not at construction, so it runs inside the
+            # stream's brain context (effective chat resolved in the gate) and
+            # covers every pump owner — web turns and /api/tts/stream alike.
+            # State mirrors the plugin skip_tts cancel; no hooks fired yet, so
+            # none need closing.
+            from core.voice_privacy import tts_gate_reason
+            _gate = tts_gate_reason()
+            if _gate:
+                logger.info(f"[TTS-STREAM] {_gate} — streaming TTS skipped")
+                self._skip_turn = True
+                self._closed = True
+                return [{"type": "notice", "severity": "warning", "message": _gate}]
         out: list = []
         if not self._stream_started:
             self._stream_started = True

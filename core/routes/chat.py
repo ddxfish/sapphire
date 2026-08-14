@@ -337,7 +337,6 @@ async def get_unified_status(request: Request, _=Depends(require_login), system=
                 "limit": context_limit,
                 "percent": context_percent
             },
-            "chats": system.llm_chat.list_chats(),
             "chat_settings": chat_settings
         }
     except Exception as e:

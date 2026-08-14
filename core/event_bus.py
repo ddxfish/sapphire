@@ -30,9 +30,15 @@ class EventBus:
         }
 
         with self._lock:
-            # Ephemeral events (transient UI toasts) aren't replayed to late
-            # subscribers - a freshly-opened tab shouldn't surface a stale "done" toast.
-            if event_type not in ("plugin_notice",):
+            # Ephemeral events aren't replayed to late subscribers. plugin_notice:
+            # a freshly-opened tab shouldn't surface a stale "done" toast. The
+            # voice_turn_* trio: transient paint events whose durable copy is chat
+            # history — replaying them re-paints fragments of a finished turn, and
+            # the ring would hold a private chat's spoken transcript (user_text /
+            # chunk text) in memory for any later tab, even past a vault lock
+            # (vaulted-chats Phase 0, 2026-08-13).
+            if event_type not in ("plugin_notice", "voice_turn_start",
+                                  "voice_turn_chunk", "voice_turn_end"):
                 self._replay_buffer.append(event)
             dead_subscribers = []
 

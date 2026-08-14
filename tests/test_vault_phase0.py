@@ -325,3 +325,84 @@ class TestCarrierRuntime:
         settings = ContinuityExecutor._extract_task_settings(
             {"prompt": "moonlight", "privacy_required": True})
         assert settings["privacy_required"] is True
+
+
+# ── vaulted-chats Phase 0: the CHAT half of the privacy carrier ──
+
+class _CtxAbort(Exception):
+    """Raised by the capture-fake so the run stops before any LLM work."""
+
+
+class TestChatCarrierForeground:
+    """_run_foreground ORs the TARGET CHAT's private_chat flag into the same
+    privacy carrier the prompt gate uses (vaulted-chats Phase 0, 2026-08-13).
+    Before this, only a privacy_required PROMPT forced local-only in the
+    continuity lane — a cron/agent/daemon task with chat_target=<private
+    chat> plus a cloud provider shipped that chat's transcript out."""
+
+    def _foreground_settings(self, monkeypatch, task, chat_settings):
+        from core.continuity import executor as ex_mod
+        import core.continuity.execution_context as ec_mod
+        captured = {}
+
+        class _CaptureCtx:
+            def __init__(self, fm, engine, task_settings):
+                captured['ts'] = task_settings
+                raise _CtxAbort()
+
+        monkeypatch.setattr(ec_mod, "ExecutionContext", _CaptureCtx)
+
+        class _SM:
+            def list_chat_files(self):
+                return [{"name": "secret_chat"}]
+
+            def read_chat_settings(self, name):
+                return dict(chat_settings)
+
+        ex = ex_mod.ContinuityExecutor.__new__(ex_mod.ContinuityExecutor)
+        ex._voice_lock = threading.RLock()
+        ex._snapshot_voice = lambda: {}
+        ex._apply_voice = lambda t: None
+        ex._restore_voice = lambda snap: None
+        ex.system = type("S", (), {"llm_chat": type("L", (), {
+            "session_manager": _SM(),
+            "function_manager": None,
+            "tool_engine": None})()})()
+        result = {"errors": [], "responses": []}
+        ex._run_foreground(dict(task), result)   # _CtxAbort lands in errors
+        assert 'ts' in captured, f"ExecutionContext never built: {result['errors']}"
+        return captured['ts']
+
+    def test_private_target_chat_stamps_carrier(self, monkeypatch):
+        ts = self._foreground_settings(
+            monkeypatch,
+            {"chat_target": "secret_chat", "name": "t", "prompt": "sunny"},
+            {"private_chat": True})
+        assert ts["privacy_required"] is True
+
+    def test_public_target_chat_unstamped(self, monkeypatch):
+        ts = self._foreground_settings(
+            monkeypatch,
+            {"chat_target": "secret_chat", "name": "t", "prompt": "sunny"},
+            {})
+        assert ts["privacy_required"] is False
+
+    def test_task_carrier_not_cleared_by_public_chat(self, monkeypatch):
+        """The stamp only ever sets True — a task-carried flag survives a
+        public target chat."""
+        ts = self._foreground_settings(
+            monkeypatch,
+            {"chat_target": "secret_chat", "name": "t", "prompt": "sunny",
+             "privacy_required": True},
+            {})
+        assert ts["privacy_required"] is True
+
+    def test_webhook_payload_branch_stamps(self, monkeypatch):
+        """chat_from_payload (an EXTERNAL caller names the chat) rides the
+        same stamp — the remote-reachable variant of the leak."""
+        ts = self._foreground_settings(
+            monkeypatch,
+            {"chat_target": "secret_chat", "name": "t",
+             "trigger_config": {"chat_from_payload": True}},
+            {"private_chat": True, "persona": "rose", "toolset": "none"})
+        assert ts["privacy_required"] is True

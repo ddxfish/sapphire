@@ -157,3 +157,52 @@ class TestDoors:
         c = TTSClient.__new__(TTSClient)   # gate fires before any attr access
         assert c.speak('hello world, this is long enough') is False
         assert c.speak_sync('hello world, this is long enough') is False
+
+    def test_tts_stream_pump_skipped(self, monkeypatch):
+        """The streaming pump self-gates on FIRST PUSH (vaulted-chats Phase
+        0): both its owners — the web-turn stream and /api/tts/stream — went
+        straight to the provider before this. The gated turn emits one
+        notice, then stays silent; synth is never reached."""
+        from core.tts import stream_pump as sp
+        monkeypatch.setattr(sp.config, 'TTS_ENABLED', True, raising=False)
+        monkeypatch.setattr(sp.config, 'TTS_STREAMING_ENABLED', True, raising=False)
+        monkeypatch.setattr(vp, 'tts_gate_reason', lambda s=None: 'blocked')
+
+        class _Prov:
+            supports_streaming = True
+
+            def generate_stream(self, *a, **k):
+                raise AssertionError("synth reached in a gated turn")
+
+            def generate(self, *a, **k):
+                raise AssertionError("synth reached in a gated turn")
+
+        class _TTS:
+            _provider = _Prov()
+            voice_name = 'af_heart'
+            speed = 1.0
+            pitch_shift = 1.0
+
+        pump = sp.StreamingTTSPump(system=type('S', (), {'tts': _TTS()})())
+        out = pump.push('hello world')
+        assert out and out[0]['type'] == 'notice'
+        assert pump.push('more text') == []   # closed — stays silent
+
+    def test_tts_file_mode_403(self, monkeypatch):
+        """/api/tts output_mode='file' calls generate_audio_data directly —
+        the browser's non-streaming TTS path ships chat response text through
+        it, bypassing the speak() gate. 403, never 401."""
+        import asyncio
+        from fastapi import HTTPException
+        import core.routes.tts as tts_routes
+        monkeypatch.setattr(tts_routes, 'check_endpoint_rate', lambda *a, **k: None)
+        monkeypatch.setattr(tts_routes.config, 'TTS_ENABLED', True, raising=False)
+        monkeypatch.setattr(vp, 'tts_gate_reason', lambda s=None: 'blocked')
+
+        class _Req:
+            async def json(self):
+                return {'text': 'hello world', 'output_mode': 'file'}
+
+        with pytest.raises(HTTPException) as ei:
+            asyncio.run(tts_routes.handle_tts_speak(_Req(), _=None, system=None))
+        assert ei.value.status_code == 403
