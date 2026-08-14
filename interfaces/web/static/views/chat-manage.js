@@ -215,6 +215,9 @@ async function doBulkDelete() {
     try {
         const res = await api.bulkDeleteChats(names);
         reportResults(res.results, 'Deleted');
+        // One local dispatch repaints this tab's dropdown for the whole
+        // batch — the SSE echoes are self-filtered (see rename above).
+        eventBus.dispatch('chat_deleted', { names });
     } catch (e) {
         ui.showToast(`Bulk delete failed: ${e.message}`, 'error');
     }
@@ -296,6 +299,11 @@ async function doRowAction(act, name) {
         try {
             const res = await api.renameChat(name, newName);
             ui.showToast(`Renamed to ${res.new}`, 'success');
+            // Local dispatch, same reason as archive below: the SSE echo is
+            // self-filtered (origin match), so THIS tab's dropdown never
+            // hears the rename — other tabs repaint, the initiating tab
+            // kept an orphaned select on the old name (Krem, 2026-08-13).
+            eventBus.dispatch('chat_renamed', { old: name, new: res.new });
         } catch (e) {
             ui.showToast(`Rename failed: ${e.message}`, 'error');
         }
@@ -331,6 +339,8 @@ async function doRowAction(act, name) {
         try {
             await api.deleteChat(name);
             ui.showToast(`Deleted ${name}`, 'success');
+            // Local dispatch — SSE echo is self-filtered (see rename above).
+            eventBus.dispatch('chat_deleted', { name });
         } catch (e) {
             ui.showToast(`Delete failed: ${e.message}`, 'error');
         }
