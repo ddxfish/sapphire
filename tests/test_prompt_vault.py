@@ -1431,3 +1431,38 @@ class TestRouteStatusMapping:
         with pytest.raises(HTTPException) as ei:
             asyncio.run(save_prompt_component("character", "vlt_stale", _Req(), None))
         assert ei.value.status_code == 409
+
+
+class TestChatDataKey:
+    """Phase 2 (vaulted chats): the chat DATA key lives INSIDE the vault
+    frame — created once, survives rekey (the frame re-wrap carries it),
+    dies at lock, returns at unlock. Rows encrypted under it never
+    re-encrypt on a passphrase change."""
+
+    def _quiet(self, vault, monkeypatch):
+        monkeypatch.setattr(vault, '_handoff_active_chat', lambda: None)
+        monkeypatch.setattr(vault, '_migrate_unvaulted_private_chats', lambda: None)
+
+    def test_created_once_persists_and_dies_at_lock(self, vault, monkeypatch):
+        self._quiet(vault, monkeypatch)
+        assert vault.chat_data_key() is None          # no vault yet
+        vault.setup('pw')
+        k1 = vault.chat_data_key()
+        assert isinstance(k1, bytes) and len(k1) == 32
+        assert vault.chat_data_key() == k1            # stable, never re-rolled
+        vault.lock()
+        assert vault.chat_data_key() is None
+        vault.unlock('pw')
+        assert vault.chat_data_key() == k1            # persisted in the frame
+
+    def test_rekey_keeps_dek_and_old_ciphertexts(self, vault, monkeypatch):
+        self._quiet(vault, monkeypatch)
+        vault.setup('old-pw')
+        blob = vault.encrypt_chat_blob(b'row bytes')
+        ok, code = vault.rekey('old-pw', 'new-pw')
+        assert ok, code
+        assert vault.decrypt_chat_blob(blob) == b'row bytes'
+        vault.lock()
+        ok, code = vault.unlock('new-pw')
+        assert ok, code
+        assert vault.decrypt_chat_blob(blob) == b'row bytes'

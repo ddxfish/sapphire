@@ -77,6 +77,35 @@ class StreamingChat:
             except Exception as e:
                 logger.warning(f"[STREAMING] stop_tts failed: {e}")
 
+    def _stamp_private_if_unlocked(self):
+        """Vaulted chats — 'messages control the private marker': an operator
+        turn in a chat while the vault is OPEN marks that chat private (one-way;
+        Chat Manager owns the unmark). Skips: no/locked vault (no private mode),
+        managed mode, already-private, and MODE-TAGGED chats (game/story/
+        librarian/limbo belong to plugin surfaces — talking in a game while
+        unlocked must not vault the game). A stamp failure logs and lets the
+        turn run public (systemic-error posture; matches voice_privacy)."""
+        try:
+            from core import prompt_vault
+            vs = prompt_vault.vault_status()
+            if not (vs.get('exists') and vs.get('unlocked')):
+                return
+            from core.settings_manager import settings as sm_settings
+            if sm_settings.is_managed():
+                return
+            sm = self.main_chat.session_manager
+            cur = sm.get_chat_settings()
+            if cur.get('private_chat') or cur.get('mode'):
+                return
+            if sm.update_chat_settings({'private_chat': True}):
+                name = sm.get_active_chat_name()
+                logger.info(f"[VAULT] chat '{name}' marked private — spoke while vault open")
+                publish(Events.CHAT_SETTINGS_CHANGED,
+                        {"chat": name, "settings": {"private_chat": True},
+                         "origin": None})
+        except Exception as e:
+            logger.warning(f"[VAULT] talk-stamp failed — turn runs unstamped: {e}")
+
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
         Stream chat responses. Yields typed events:
@@ -178,6 +207,16 @@ class StreamingChat:
                 except Exception as _e:
                     logger.warning(f"[A1] stream brain override failed for '{_tgt}': {_e}")
                     _brain_token = None
+            else:
+                # Talk-marks-private (Krem's ruling 2026-08-14): SPEAKING in a
+                # chat while the vault is open stamps it private — reading
+                # never does; the only unmark is Chat Manager. Operator lanes
+                # only: web typing and browser voice both ride target_chat=
+                # None, while phone/background streams carry an explicit
+                # target and never stamp. Runs BEFORE provider selection so
+                # THIS turn already enforces local-only (stamping after would
+                # leak the first turn to a cloud provider).
+                self._stamp_private_if_unlocked()
             # Spice rail AFTER the A1 override install: before this, a phone
             # turn's spice cadence read the OPERATOR'S chat settings and turn
             # count (the ContextVar wasn't set yet) and could rewrite the

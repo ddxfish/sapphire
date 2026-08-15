@@ -156,8 +156,21 @@ def _normalize(raw):
             presets[k] = {**v, '_privacy_required': True}
         else:
             logger.warning(f"[VAULT] skipping preset '{k}' (bad shape)")
-    return {'monoliths': monoliths, 'components': components,
-            'scenario_presets': presets}
+    out = {'monoliths': monoliths, 'components': components,
+           'scenario_presets': presets}
+    # Vaulted chats Phase 2: the chat DATA key rides inside the vault frame
+    # (wrapped by the passphrase key — rekey re-wraps it for free, chat rows
+    # never re-encrypt). Normalization must carry it or unlock drops it and
+    # every encrypted chat becomes unreadable.
+    ck = raw.get('chat_key')
+    if isinstance(ck, str) and len(ck) == 64:
+        try:
+            bytes.fromhex(ck)
+            out['chat_key'] = ck
+        except ValueError:
+            logger.error("[VAULT] malformed chat_key in vault — dropped "
+                         "(encrypted chats will not decrypt)")
+    return out
 
 
 # ── status ──
@@ -173,6 +186,70 @@ def vault_unlocked() -> bool:
 
 def vault_status() -> dict:
     return {"exists": vault_exists(), "unlocked": vault_unlocked()}
+
+
+_CHAT_ENC_PREFIX = "@enc1:"
+
+
+def chat_data_key():
+    """Vaulted chats Phase 2: the 32-byte chat DATA key. Random, generated
+    once, stored INSIDE the vault frame — so it's wrapped by the passphrase-
+    derived key, rekey re-wraps it with the frame (chat rows never
+    re-encrypt), and lock drops it from memory with everything else.
+    None while locked/absent. Lazily created and persisted on first use;
+    an unpersistable key is never handed out (rows encrypted under a key
+    that isn't saved would be lost at lock)."""
+    with _lock:
+        if _key is None or _data is None:
+            return None
+        ck = _data.get('chat_key')
+        if not ck:
+            ck = os.urandom(32).hex()
+            _data['chat_key'] = ck
+            if not _save_locked():
+                _data.pop('chat_key', None)
+                logger.error("[VAULT] chat data key could not be persisted")
+                return None
+            logger.info("[VAULT] chat data key created")
+        return bytes.fromhex(ck)
+
+
+def encrypt_chat_blob(data: bytes):
+    """AES-256-GCM under the chat data key → '@enc1:' + base64(nonce|ct+tag)
+    as str. None while locked (caller must treat as 'cannot encrypt' and
+    REFUSE the write — never fall back to plaintext)."""
+    key = chat_data_key()
+    if key is None:
+        return None
+    import base64
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    nonce = os.urandom(12)
+    ct = AESGCM(key).encrypt(nonce, data, None)
+    return _CHAT_ENC_PREFIX + base64.b64encode(nonce + ct).decode('ascii')
+
+
+def is_chat_encrypted(value) -> bool:
+    if isinstance(value, bytes):
+        return value.startswith(_CHAT_ENC_PREFIX.encode('ascii'))
+    return isinstance(value, str) and value.startswith(_CHAT_ENC_PREFIX)
+
+
+def decrypt_chat_blob(value):
+    """Inverse of encrypt_chat_blob (str or bytes in) → plaintext bytes, or
+    None while locked / on tamper (callers: locked = expected, tamper on an
+    unlocked read = corrupt, be loud)."""
+    key = chat_data_key()
+    if key is None:
+        return None
+    try:
+        import base64
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        s = value.decode('ascii') if isinstance(value, bytes) else value
+        raw = base64.b64decode(s[len(_CHAT_ENC_PREFIX):])
+        return AESGCM(key).decrypt(raw[:12], raw[12:], None)
+    except Exception as e:
+        logger.error(f"[VAULT] chat blob decrypt failed: {e}")
+        return None
 
 
 def vault_has_prompt(name) -> bool:
@@ -215,6 +292,7 @@ def setup(passphrase) -> tuple:
         _touch_locked()
         _arm_timer_locked()
     logger.info("[VAULT] created and unlocked")
+    _migrate_unvaulted_private_chats()   # pre-vault v1 private chats, if any
     _publish("vault_changed")
     return True, ''
 
@@ -257,6 +335,7 @@ def unlock(passphrase) -> tuple:
                   'scenario_presets': len(_data['scenario_presets'])}
     logger.info(f"[VAULT] unlocked: {counts}")
     _warn_user_shadows()   # outside _lock — reads prompt_manager dicts
+    _migrate_unvaulted_private_chats()   # Phase 2: encrypt stragglers
     _publish("vault_changed")
     return True, ''
 
@@ -357,6 +436,19 @@ def _handoff_active(gone_names):
             revalidate_active(reason="vault locked")
     except Exception as e:
         logger.warning(f"[VAULT] active-preset handoff failed: {e}")
+
+
+def _migrate_unvaulted_private_chats():
+    """Phase 2 transition: chats marked private BEFORE encryption shipped
+    (or whose encrypt pass failed) sit at vaulted=0 — hidden by Phase 1's
+    gates but plaintext on disk. Every unlock sweeps them into the vault
+    while the key is present. Self-healing: a failed vault_chat leaves the
+    flag alone and the next unlock retries."""
+    try:
+        from core.api_fastapi import get_system
+        get_system().llm_chat.session_manager.vault_pending_private()
+    except Exception as e:
+        logger.warning(f"[VAULT] private-chat encrypt sweep skipped: {e}")
 
 
 def _handoff_active_chat():

@@ -126,7 +126,10 @@ async function refresh() {
         // never throws (self-caught, returns closed-looking state).
         const [data, v] = await Promise.all([api.fetchChatListStats(), vaultStatus()]);
         vaultState = v;
-        chats = data.chats || [];
+        // mode 'limbo' = the backrooms (the vault's hidden eviction landing).
+        // Invisible even here, by ruling — the one chat the admin surface
+        // doesn't list (Krem 2026-08-15: "lame AF for people to see").
+        chats = (data.chats || []).filter(c => (c.mode || c.settings?.mode) !== 'limbo');
         // Drop selections for chats that no longer exist
         const names = new Set(chats.map(c => c.name));
         for (const s of [...selected]) if (!names.has(s)) selected.delete(s);
@@ -195,7 +198,7 @@ function render() {
         const canVault = !vaultState.exists || vaultState.unlocked;
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ' <span class="cm-badge">\u{1F5DD} private</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
+            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>

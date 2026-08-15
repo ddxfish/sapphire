@@ -27,6 +27,13 @@ export default {
                     daily driver — this card is administration. There is no key recovery:
                     a lost passphrase is a lost vault.
                 </p>
+                <p class="text-muted" style="font-size:var(--font-sm);line-height:1.5">
+                    Private chats encrypt with the same key — messages, images, and
+                    settings. Note: backups made <b>before</b> a chat went private still
+                    hold its earlier history in plaintext (nothing can rewrite the past).
+                    You can mark any old public chat private in Chat Manager at any
+                    time — its whole history encrypts on the spot.
+                </p>
                 ${card}
             </div>
             ${ctx.renderFields(this.essentialKeys)}

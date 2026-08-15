@@ -87,13 +87,19 @@ export async function updateScene() {
         // this poll is the authoritative painter for that third state.
         const priv = !!status?.chat_settings?.private_chat;
         const eye = document.getElementById('sb-privacy-eye');
+        const vaultOpen = !!status?.vault?.exists && !!status?.vault?.unlocked;
         const vaultAsleep = priv && !!status?.vault?.exists && !status?.vault?.unlocked;
         if (eye) {
-            eye.classList.toggle('private-on', priv);
+            // Eyeball = VAULT STATE, one job (Krem's ruling 2026-08-14):
+            // blue = private mode armed (talking marks chats private);
+            // amber = standing in a private chat while sealed (the rare
+            // failed-eviction edge). Per-CHAT privacy shows on the chatbg
+            // border and the 🗝 in the dropdown, never on the toggle.
+            eye.classList.toggle('private-on', vaultOpen);
             eye.classList.toggle('vault-locked', vaultAsleep);
-            eye.title = vaultAsleep ? 'Private chat — vault locked (click to unlock)'
-                : priv ? 'Private chat — click to lock the vault and go public'
-                : 'Toggle private chat';
+            eye.title = vaultAsleep ? 'Private chat, vault locked — click to unlock'
+                : vaultOpen ? 'Private mode ON — talking marks the chat private; click to lock'
+                : 'Private mode off — click to unlock the vault';
         }
         // Privacy border on the chat area: blue glow = private + vault open
         // (or plain v1 private), amber = private + vault asleep.

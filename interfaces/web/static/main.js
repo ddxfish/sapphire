@@ -697,7 +697,13 @@ function initEventBus() {
         }
         refreshAndUpdateScene();
     });
-    eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, () => debouncedUpdateScene());
+    // Settings changes can move a chat between dropdown sections (the
+    // talk-stamp flips private_chat server-side mid-turn) — repaint the
+    // list too, not just the scene. Paint-seq guard dedups.
+    eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, () => {
+        populateChatDropdown();
+        debouncedUpdateScene();
+    });
 
     eventBus.on(eventBus.Events.CHAT_SWITCHED, async (data) => {
         // Remote switch (phone / other tab) — this tab's own switches are

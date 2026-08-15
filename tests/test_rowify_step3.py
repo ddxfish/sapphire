@@ -129,38 +129,36 @@ class TestAppendPathConversion:
 
 
 class TestSnapshot:
-    def test_snapshot_created_once(self, chat_env, tmp_path):
+    def test_snapshot_retired_conversion_still_works(self, chat_env, tmp_path):
+        """REWRITTEN for vaulted chats Phase 2 (Krem's ruling 2026-08-15:
+        'rowify is working great'): the pre-rowify snapshot — a full
+        PLAINTEXT copy of every chat outside all encryption — is retired.
+        Boot latches the marker; lazy conversion proceeds snapshot-free."""
         mgr = chat_env()
         seed_blob_chat(tmp_path, "legacy_a")
-        seed_blob_chat(tmp_path, "legacy_b")
 
         mgr.append_messages_to_chat("legacy_a", [{"role": "user", "content": "x"}])
-        snaps = list(tmp_path.glob("pre_rowify_*.db"))
-        assert len(snaps) == 1
+        assert not list(tmp_path.glob("pre_rowify_*.db"))
         assert (tmp_path / ".pre_rowify_snapshot_done").exists()
-        # Snapshot is a valid pre-conversion copy: legacy_a still blob inside it.
-        sconn = sqlite3.connect(f"file:{snaps[0]}?mode=ro", uri=True)
-        fmt = sconn.execute(
+        # Conversion itself still happened.
+        conn = sqlite3.connect(str(tmp_path / "sapphire_history.db"))
+        fmt = conn.execute(
             "SELECT storage_format FROM chats WHERE name='legacy_a'").fetchone()[0]
-        sconn.close()
-        assert fmt == "blob"
-
-        mgr.append_messages_to_chat("legacy_b", [{"role": "user", "content": "y"}])
-        assert len(list(tmp_path.glob("pre_rowify_*.db"))) == 1  # latched
+        conn.close()
+        assert fmt == "rows"
 
 
 class TestBootPreWarm:
-    def test_boot_snapshots_when_blob_chats_exist(self, chat_env, tmp_path):
-        """Race scout + day-ruiner (same finding): the lazy snapshot runs
-        VACUUM INTO under the global lock mid-traffic. Boot pre-warm takes
-        it while nothing else runs — a fresh manager init on a DB with blob
-        chats must create the snapshot BEFORE any write."""
+    def test_boot_never_snapshots_and_deletes_leftovers(self, chat_env, tmp_path):
+        """REWRITTEN for vaulted chats Phase 2: boot creates NO snapshot even
+        with blob chats present, and deletes any leftover one (a plaintext
+        copy of every chat must not outlive chat encryption)."""
         chat_env()                       # first init: rows-only DB
         seed_blob_chat(tmp_path, "old_timer")
-        assert not list(tmp_path.glob("pre_rowify_*.db"))
+        (tmp_path / "pre_rowify_20260709.db").write_bytes(b"old plaintext copy")
 
         chat_env()                       # simulated boot with a blob chat present
-        assert len(list(tmp_path.glob("pre_rowify_*.db"))) == 1
+        assert not list(tmp_path.glob("pre_rowify_*.db"))
         assert (tmp_path / ".pre_rowify_snapshot_done").exists()
 
     def test_boot_skips_snapshot_on_rows_only_db(self, chat_env, tmp_path):

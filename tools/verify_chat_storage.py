@@ -122,6 +122,15 @@ def verify(db_path, verbose=False):
                      f"seq not gapless 0..{len(seqs)-1} (got {seqs[:5]}...{seqs[-3:]})"
                      if len(seqs) > 8 else f"seq not gapless: {seqs}")
 
+            # Vaulted chats (Phase 2): rows are '@enc1:' ciphertext — the
+            # verifier runs keyless and read-only, so content invariants
+            # (R2/R3) can't be checked. Seq-gaplessness (R1, above) still
+            # verified. Skip with a note, never a failure.
+            if any(str(r["message_json"] or "").startswith("@enc1:") for r in rows):
+                results.append(("INFO", name, "ENC",
+                                "vaulted (encrypted) — content invariants skipped (keyless run)"))
+                continue
+
             parsed_rows = []
             ok = True
             for r in rows:

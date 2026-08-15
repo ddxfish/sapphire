@@ -201,17 +201,60 @@ class TestLockEviction:
         assert landing == "pub"
         assert sm.get_active_chat_name() == "pub"
 
-    def test_no_safe_landing_creates_scratch(self, sm, monkeypatch):
-        """Krem's ruling refinement: 'empty chat or new chat if default was
-        private' — every chat private ⇒ a fresh scratch chat."""
+    def test_no_safe_landing_creates_backrooms(self, sm, monkeypatch):
+        """Every chat private ⇒ the hidden limbo chat (Krem 2026-08-15:
+        invisible everywhere, neutral display name, wiped on landing)."""
         for name in ("default", "pub"):
             sm.set_named_chat_settings(name, {"private_chat": True})
         sm.set_active_chat("priv")
         _seal(monkeypatch, True)
         landing, _ = self._evict(sm, monkeypatch)
-        assert landing == "scratch"
-        assert sm.get_active_chat_name() == "scratch"
-        assert not (sm.get_settings_for("scratch") or {}).get("private_chat")
+        assert landing == "backrooms"
+        assert sm.get_active_chat_name() == "backrooms"
+        s = sm.get_settings_for("backrooms") or {}
+        assert s.get("mode") == "limbo"                      # hidden by mode tag
+        assert s.get("private_display_name") == "New Chat"   # never says backrooms
+        assert not s.get("private_chat")
+
+    def test_backrooms_wiped_on_each_landing(self, sm, monkeypatch):
+        for name in ("default", "pub"):
+            sm.set_named_chat_settings(name, {"private_chat": True})
+        sm.set_active_chat("priv")
+        _seal(monkeypatch, True)
+        self._evict(sm, monkeypatch)
+        sm.append_messages_to_chat("backrooms", [
+            {"role": "user", "content": "left in limbo"}])
+        # Next cycle: back to priv (unsealed), reseal, evict again → wiped.
+        _seal(monkeypatch, False)
+        sm.set_active_chat("priv")
+        _seal(monkeypatch, True)
+        self._evict(sm, monkeypatch)
+        assert sm.read_chat_messages("backrooms") == []
+
+    def test_mode_tagged_chats_never_a_landing(self, sm, monkeypatch):
+        """A game/story session must not become the eviction destination —
+        the backrooms outranks any mode-tagged chat."""
+        sm.set_named_chat_settings("default", {"private_chat": True})
+        sm.set_named_chat_settings("pub", {"mode": "game"})
+        sm.set_active_chat("priv")
+        _seal(monkeypatch, True)
+        landing, _ = self._evict(sm, monkeypatch)
+        assert landing == "backrooms"
+
+    def test_user_owned_private_backrooms_untouched(self, sm, monkeypatch):
+        """A USER chat named 'backrooms' that is private is not ours to
+        overwrite — eviction stays put and logs."""
+        for name in ("default", "pub"):
+            sm.set_named_chat_settings(name, {"private_chat": True})
+        sm.create_chat("backrooms")
+        sm.set_named_chat_settings("backrooms", {"private_chat": True})
+        sm.set_active_chat("priv")
+        _seal(monkeypatch, True)
+        landing, _ = self._evict(sm, monkeypatch)
+        assert landing is None
+        assert sm.get_active_chat_name() == "priv"
+        _seal(monkeypatch, False)
+        assert (sm.get_settings_for("backrooms") or {}).get("private_chat") is True
 
     def test_lock_handoff_delegates_to_store(self, sm, monkeypatch):
         """prompt_vault.lock()'s chat handoff is a thin delegation."""
@@ -249,3 +292,69 @@ class TestBootEviction:
             m2 = hist.ChatSessionManager(history_dir=str(tmp_path))
             assert m2.get_active_chat_name() == "default"
             assert "priv" not in {c["name"] for c in m2.list_chat_files()}
+
+
+class TestTalkStamp:
+    """'Messages control the private marker' (Krem's ruling 2026-08-14):
+    an operator turn while the vault is OPEN stamps the chat private —
+    reading never does; Chat Manager owns the unmark. Direct tests of
+    StreamingChat._stamp_private_if_unlocked."""
+
+    def _run(self, monkeypatch, vault, settings, managed=False):
+        import core.chat.chat_streaming as cs
+        from core import prompt_vault as pv
+        from core.settings_manager import settings as sm_settings
+        monkeypatch.setattr(pv, "vault_status", lambda: dict(vault))
+        monkeypatch.setattr(sm_settings, "is_managed", lambda: managed)
+        published = []
+        monkeypatch.setattr(cs, "publish",
+                            lambda et, data=None: published.append((et, data)))
+        written = {}
+
+        class _SM:
+            def get_chat_settings(self):
+                return dict(settings)
+
+            def get_active_chat_name(self):
+                return "somechat"
+
+            def update_chat_settings(self, patch):
+                written.update(patch)
+                return True
+
+        stream = cs.StreamingChat.__new__(cs.StreamingChat)
+        stream.main_chat = type("M", (), {"session_manager": _SM()})()
+        stream._stamp_private_if_unlocked()
+        return written, published
+
+    def test_stamps_when_unlocked(self, monkeypatch):
+        written, published = self._run(
+            monkeypatch, {"exists": True, "unlocked": True}, {})
+        assert written == {"private_chat": True}
+        assert any(et == "chat_settings_changed" for et, _ in published)
+
+    def test_no_stamp_when_locked_or_no_vault(self, monkeypatch):
+        for vault in ({"exists": True, "unlocked": False},
+                      {"exists": False, "unlocked": False}):
+            written, _ = self._run(monkeypatch, vault, {})
+            assert written == {}
+
+    def test_no_stamp_when_managed(self, monkeypatch):
+        written, _ = self._run(
+            monkeypatch, {"exists": True, "unlocked": True}, {}, managed=True)
+        assert written == {}
+
+    def test_no_restamp_when_already_private(self, monkeypatch):
+        written, _ = self._run(
+            monkeypatch, {"exists": True, "unlocked": True},
+            {"private_chat": True})
+        assert written == {}
+
+    def test_no_stamp_on_mode_tagged_chats(self, monkeypatch):
+        """Game/story/librarian/limbo chats belong to plugin surfaces —
+        talking in a game while unlocked must not vault the game."""
+        for mode in ("game", "librarian", "limbo"):
+            written, _ = self._run(
+                monkeypatch, {"exists": True, "unlocked": True},
+                {"mode": mode})
+            assert written == {}, f"mode '{mode}' must not stamp"
