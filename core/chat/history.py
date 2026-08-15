@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
@@ -839,7 +840,16 @@ class ChatSessionManager:
         
         # Initialize database
         self._init_db()
-        
+
+        # Vault hunt G3: hand prompt_vault ground truth for its chat-key
+        # mint guard — a fresh key must never be minted while sealed rows
+        # exist (older vault file restored beside a newer chat DB).
+        try:
+            from core import prompt_vault as _pv
+            _pv.set_sealed_rows_probe(self._any_vaulted_rows)
+        except Exception as e:
+            logger.warning(f"sealed-rows probe registration failed: {e}")
+
         # Migrate any existing JSON files
         self._migrate_json_files()
         
@@ -936,10 +946,12 @@ class ChatSessionManager:
         Sets the no-streams event when the counter reaches 0 so any
         append waiters can proceed immediately.
         """
+        _no_streams = False
         with self._lock:
             cur = getattr(self, '_streaming_count', 0)
             self._streaming_count = cur - 1 if cur > 0 else 0
             if self._streaming_count == 0:
+                _no_streams = True
                 evt = getattr(self, '_no_streams_event', None)
                 if evt is not None:
                     evt.set()
@@ -949,6 +961,18 @@ class ChatSessionManager:
                 # __init__. Never raises — this runs inside request finallys.
                 if getattr(self, '_rows_state', None) is not None:
                     self._maybe_convert_active_chat()
+        # Vault hunt R2 (2026-08-15): a seal that landed mid-stream had its
+        # eviction refused ("staying — streaming"). The 1→0 boundary is the
+        # retry point. evict_private_active is idempotent (cheap early-out
+        # when unsealed or active isn't private) and never raises. Outside
+        # the lock: the eviction publishes a switch event — keep bus fan-out
+        # out of the history lock.
+        if _no_streams:
+            try:
+                if _vault_sealed():
+                    self.evict_private_active()
+            except Exception:
+                pass
 
     @contextmanager
     def _get_connection(self):
@@ -1241,8 +1265,14 @@ class ChatSessionManager:
                     logger.warning(f"Chat not found in database: {chat_name}")
                     return False
 
+                # Vault hunt R1 (2026-08-15): build into LOCALS and commit to
+                # self.* only after the sealed-settings gate passes. The old
+                # order assigned current_chat.messages first, so a racing seal
+                # could leave THIS chat's partial plaintext living under the
+                # previous chat's name in the live singleton — and a later
+                # full-window resync could write it into that chat's rows.
                 if row["storage_format"] == "rows":
-                    self.current_chat.messages = self._read_rows_messages(conn, chat_name)
+                    new_messages = self._read_rows_messages(conn, chat_name)
                     # Watermark: memory now mirrors the store exactly. offset
                     # is non-zero when the load was capped (we hold only the
                     # newest window; older rows stay untouched on disk).
@@ -1250,28 +1280,34 @@ class ChatSessionManager:
                         "SELECT COALESCE(MAX(seq) + 1, 0) FROM chat_messages "
                         "WHERE chat_name = ?", (chat_name,)
                     ).fetchone()[0]
-                    loaded = len(self.current_chat.messages)
-                    self._rows_state[chat_name] = {"offset": total - loaded,
-                                                   "count": loaded}
+                    loaded = len(new_messages)
+                    new_rows_state = {"offset": total - loaded, "count": loaded}
                 else:
                     raw_messages = row["messages"]
                     # Guard against OOM on massive chat blobs (>50MB)
                     if len(raw_messages) > 50 * 1024 * 1024:
                         logger.warning(f"Chat '{chat_name}' messages blob too large ({len(raw_messages) // 1024 // 1024}MB), truncating to last 5000 messages")
                         all_msgs = json.loads(raw_messages)
-                        self.current_chat.messages = all_msgs[-5000:]
+                        new_messages = all_msgs[-5000:]
                     else:
-                        self.current_chat.messages = json.loads(raw_messages)
-                    self._rows_state.pop(chat_name, None)
-                # The assignments above tripped the setter's resync flag —
-                # memory matches the store right now, so clear it.
-                self.current_chat._needs_full_resync = False
+                        new_messages = json.loads(raw_messages)
+                    new_rows_state = None
                 file_settings = self._settings_dict(row["settings"], chat_name)
                 if file_settings is None:
                     # Vaulted chat while sealed — must not become active with
-                    # defaults masquerading as its settings.
+                    # defaults masquerading as its settings. Nothing committed:
+                    # the previous chat's live state is untouched.
                     logger.warning(f"Cannot load '{chat_name}' — vaulted and sealed")
                     return False
+                # ── Commit point — all-or-nothing from here ──
+                self.current_chat.messages = new_messages
+                if new_rows_state is not None:
+                    self._rows_state[chat_name] = new_rows_state
+                else:
+                    self._rows_state.pop(chat_name, None)
+                # The assignment above tripped the setter's resync flag —
+                # memory matches the store right now, so clear it.
+                self.current_chat._needs_full_resync = False
                 self.current_settings = get_system_defaults()
                 self.current_settings.update(file_settings)
 
@@ -1664,6 +1700,11 @@ class ChatSessionManager:
         The active chat routes through clear() so the in-memory list resets
         too. Total wipe regardless of storage format: blob nulled, rows
         deleted, tool images swept. Route layer refuses live-call chats."""
+        if self._vault_hidden(chat_name):
+            # Vault hunt G2: the one by-name op that lacked this gate — a
+            # sealed chat must be indestructible by stale name (bulk-clear
+            # clicked across an idle-lock). Hidden = nonexistent, even here.
+            return False
         if chat_name == self.active_chat_name:
             self.clear()
             return True
@@ -1946,6 +1987,14 @@ class ChatSessionManager:
         self._prune_orphaned_tool_images(chat_name)
         return True, report
 
+    def _any_vaulted_rows(self) -> bool:
+        """Vault hunt G3 probe: True when any vaulted chat exists. Raises on
+        DB trouble — prompt_vault's mint guard treats a raise as refuse
+        (fail closed)."""
+        with self._get_connection() as conn:
+            return conn.execute(
+                "SELECT 1 FROM chats WHERE vaulted LIMIT 1").fetchone() is not None
+
     def _vault_hidden(self, chat_name: str) -> bool:
         """Disclosure gate (vaulted chats Phase 1): True when this chat is
         private and the vault is sealed — the caller must then behave exactly
@@ -1955,8 +2004,21 @@ class ChatSessionManager:
         them to ENFORCE local-only — hiding would fail open. A DB error here
         fails open instead (systemic posture, matches voice_privacy): the
         caller's own read is about to fail the same way anyway."""
-        if not _vault_sealed():
-            return False
+        sealed = _vault_sealed()
+        if not sealed:
+            # Vault hunt G4: "not sealed" is not the same as "key present" —
+            # a MISSING vault file (deleted / quarantined / partial restore)
+            # also reads not-sealed, but a vaulted=1 row is ciphertext with
+            # no key and its name must stay hidden then too. chat_data_key
+            # is the truth: with the G3 mint guard it returns None in every
+            # keyless state. Legacy plaintext private chats keep their
+            # pre-vault visible meaning; only the sealed branch hides them.
+            try:
+                from core import prompt_vault
+                if prompt_vault.chat_data_key() is not None:
+                    return False   # key present: nothing hidden while open
+            except Exception:
+                pass   # unreadable state — fall through to the row check
         if chat_name == self.active_chat_name:
             return False
         try:
@@ -1972,7 +2034,9 @@ class ChatSessionManager:
             if not row:
                 return False
             if row[0]:
-                return True
+                return True   # hidden while sealed OR keyless (G4)
+            if not sealed:
+                return False  # vault absent: legacy flag keeps pre-vault visibility
             s = row[1]
             if isinstance(s, str) and s.startswith("@enc1:"):
                 return True   # encrypted settings = vaulted, whatever the flag says
@@ -2029,6 +2093,17 @@ class ChatSessionManager:
 
         chats = []
         sealed = (not include_hidden) and _vault_sealed()
+        # Vault hunt G4: a MISSING vault file isn't "unlocked" — vaulted rows
+        # are ciphertext with no key, so their names stay hidden then too.
+        # chat_data_key is the truth (None in every keyless state, G3 guard).
+        # Legacy plaintext private chats keep pre-vault visibility.
+        keyless_vaulted = sealed
+        if not include_hidden and not sealed:
+            try:
+                from core import prompt_vault
+                keyless_vaulted = prompt_vault.chat_data_key() is None
+            except Exception:
+                keyless_vaulted = True
         try:
             with self._lock, self._get_connection() as conn:
                 # msg_count is format-aware: COUNT(*) over chat_messages for
@@ -2045,10 +2120,11 @@ class ChatSessionManager:
                        ORDER BY updated_at DESC"""
                 )
                 for row in cursor:
-                    # Vaulted + sealed: skip BEFORE any settings parse — the
-                    # ciphertext can't be read and the row must not exist.
+                    # Vaulted + sealed (or vault file missing — G4): skip
+                    # BEFORE any settings parse — the ciphertext can't be
+                    # read and the row must not exist.
                     # (Active-chat exemption kept: Phase 0 select-invariant.)
-                    if sealed and row["vaulted"] \
+                    if keyless_vaulted and row["vaulted"] \
                             and row["name"] != self.active_chat_name:
                         continue
                     settings = self._settings_dict(row["settings"], row["name"])
@@ -2113,23 +2189,47 @@ class ChatSessionManager:
         # a broken filter must not become the oracle it exists to prevent.
         hidden: set = set()
         if _vault_sealed():
+            # Vault hunt G1 sibling: built in PYTHON through the settings
+            # funnel — SQL json_extract on a vaulted chat's `@enc1:` settings
+            # RAISES (the seed defect's family), which used to disable search
+            # entirely while sealed. Unreadable settings = hidden.
             try:
                 with self._get_connection() as conn:
-                    hidden = {r[0] for r in conn.execute(
-                        "SELECT name FROM chats WHERE vaulted "
-                        "OR json_extract(settings, '$.private_chat')")}
+                    rows = conn.execute(
+                        "SELECT name, settings, vaulted FROM chats").fetchall()
+                for r in rows:
+                    if r["vaulted"]:
+                        hidden.add(r["name"])
+                        continue
+                    s = self._settings_dict(r["settings"], r["name"])
+                    if s is None or s.get("private_chat"):
+                        hidden.add(r["name"])
                 hidden.discard(self.active_chat_name)
             except Exception as e:
                 logger.warning(f"search privacy filter unreadable — search disabled while sealed: {e}")
                 return {}
+        # Vault hunt G1 (PROVEN 2026-08-15): a vaulted chat's rows are
+        # `@enc1:` strings — bare json_extract RAISES on the first one and
+        # killed the whole scan for EVERY chat. CASE is the only SQLite
+        # construct with guaranteed evaluation order (AND terms may run in
+        # any order per the docs), so the json_valid probe MUST live in a
+        # CASE, not an AND. Sealed content itself is owned by the Python
+        # decrypt-scan below; each scan gets its own try so one lane's
+        # failure can't blank the other.
         try:
             with self._lock, self._get_connection() as conn:
                 for name, n in conn.execute(
                     r"""SELECT cm.chat_name, COUNT(*) FROM chat_messages cm
-                        WHERE json_extract(cm.message_json, '$.content') LIKE ? ESCAPE '\'
+                        WHERE CASE WHEN json_valid(cm.message_json)
+                              THEN json_extract(cm.message_json, '$.content') LIKE ? ESCAPE '\'
+                              ELSE 0 END
                         GROUP BY cm.chat_name""", (pattern,)):
                     if name not in hidden:
                         hits[name] = n
+        except Exception as e:
+            logger.error(f"Chat content search (rows scan) failed: {e}")
+        try:
+            with self._lock, self._get_connection() as conn:
                 for name, n in conn.execute(
                     r"""SELECT chats.name, COUNT(*)
                         FROM chats, json_each(chats.messages)
@@ -2140,7 +2240,7 @@ class ChatSessionManager:
                     if name not in hidden:
                         hits[name] = hits.get(name, 0) + n
         except Exception as e:
-            logger.error(f"Chat content search failed: {e}")
+            logger.error(f"Chat content search (blob scan) failed: {e}")
         # Vaulted chats while UNLOCKED: LIKE can't see ciphertext — decrypt-
         # scan in Python (Chat Manager deep search must find private content
         # when the key is present). Sealed: excluded above, oracle stays shut.
@@ -2466,6 +2566,11 @@ class ChatSessionManager:
         try:
             n_rows = 0
             with self._lock, self._get_connection() as conn:
+                # Vault hunt G9: without secure_delete, the plaintext OLD page
+                # images survive these UPDATEs in the DB file's free space —
+                # readable by exactly whom at-rest protection exists for.
+                # Per-connection PRAGMA; costs only this migration's writes.
+                conn.execute("PRAGMA secure_delete=ON")
                 row = conn.execute(
                     "SELECT settings, messages, storage_format, conversion_failed, "
                     "vaulted FROM chats WHERE name = ?", (chat_name,)).fetchone()
@@ -2500,13 +2605,19 @@ class ChatSessionManager:
                     "UPDATE chats SET settings = ?, messages = '[]', vaulted = 1 "
                     "WHERE name = ?",
                     (self._enc_value(json.dumps(s)), chat_name))
+                # Vault hunt G10: collect-then-executemany (the message-row
+                # pattern above) — SELECT-while-UPDATE on one table lets
+                # SQLite skip rows under concurrent modification, and a
+                # skipped plaintext image is never re-scanned (the vaulted=1
+                # early-out above).
+                enc_imgs = []
                 for r in conn.execute(
                         "SELECT id, data FROM tool_images WHERE chat_name = ?",
                         (chat_name,)):
                     if not prompt_vault.is_chat_encrypted(r["data"]):
-                        conn.execute(
-                            "UPDATE tool_images SET data = ? WHERE id = ?",
-                            (self._enc_value_bytes(r["data"]), r["id"]))
+                        enc_imgs.append((self._enc_value_bytes(r["data"]), r["id"]))
+                conn.executemany(
+                    "UPDATE tool_images SET data = ? WHERE id = ?", enc_imgs)
                 conn.commit()
             self._scrub_wal()
             self._scrub_public_deposits(chat_name)
@@ -2593,6 +2704,10 @@ class ChatSessionManager:
                 conn.execute(
                     "UPDATE chats SET settings = ?, vaulted = 0 WHERE name = ?",
                     (json.dumps(s), chat_name))
+                # Vault hunt G10 twin: collect-then-executemany — a skipped
+                # still-encrypted image in a public chat would never be
+                # re-scanned (vaulted=0 early-out on the seal side).
+                dec_imgs = []
                 for r in conn.execute(
                         "SELECT id, data FROM tool_images WHERE chat_name = ?",
                         (chat_name,)):
@@ -2600,8 +2715,9 @@ class ChatSessionManager:
                         d = prompt_vault.decrypt_chat_blob(r["data"])
                         if d is None:
                             return False, f"image {r['id']} undecryptable — aborted"
-                        conn.execute("UPDATE tool_images SET data = ? WHERE id = ?",
-                                     (d, r["id"]))
+                        dec_imgs.append((d, r["id"]))
+                conn.executemany(
+                    "UPDATE tool_images SET data = ? WHERE id = ?", dec_imgs)
                 conn.commit()
             logger.info("[VAULT] chat decrypted back to plaintext")
             return True, ''
@@ -2611,14 +2727,30 @@ class ChatSessionManager:
 
     def vault_pending_private(self) -> int:
         """Encrypt every private-flagged chat still at vaulted=0 — the
-        pre-encryption legacy, or an earlier pass that failed. Runs at every
-        unlock (self-healing ratchet). Returns the count encrypted."""
+        pre-encryption legacy, or an earlier pass that failed. Also heals the
+        inverse stranding (vaulted=1 with the private flag OFF — a raced flip
+        left seal and flag disagreeing; the FLAG is truth everywhere else, so
+        decrypt back to public). Runs at every unlock (self-healing ratchet).
+        Returns the count encrypted."""
         self._ensure_db()
+        pending, stranded = [], []
         try:
             with self._get_connection() as conn:
-                pending = [r[0] for r in conn.execute(
-                    "SELECT name FROM chats WHERE vaulted = 0 "
-                    "AND json_extract(settings, '$.private_chat')")]
+                rows = conn.execute(
+                    "SELECT name, settings, vaulted FROM chats").fetchall()
+            # Vault hunt G5: parsed in PYTHON through the settings funnel.
+            # The old SQL json_extract raised on any `@enc1:` settings value
+            # (seed-defect family) and ONE mixed row killed the whole sweep
+            # forever — and SQLite doesn't guarantee left-to-right AND order,
+            # so the vaulted=0 term was no protection.
+            for r in rows:
+                s = self._settings_dict(r["settings"], r["name"])
+                if not r["vaulted"] and s and s.get("private_chat"):
+                    pending.append(r["name"])
+                elif r["vaulted"] and s and not s.get("private_chat"):
+                    # G6 inverse: unreadable settings (s is None) are skipped
+                    # — never heal what can't be verified.
+                    stranded.append(r["name"])
         except Exception as e:
             logger.warning(f"pending-private scan failed: {e}")
             return 0
@@ -2629,6 +2761,13 @@ class ChatSessionManager:
                 n += 1
             else:
                 logger.warning(f"[VAULT] deferred encrypt of a pending chat failed: {err}")
+        for name in stranded:
+            ok, err = self.unvault_chat(name)
+            if ok:
+                logger.warning("[VAULT] healed a raced flip — decrypted a "
+                               "sealed chat whose flag said public")
+            else:
+                logger.warning(f"[VAULT] raced-flip heal failed: {err}")
         if n:
             logger.info(f"[VAULT] encrypted {n} pending private chat(s) at unlock")
         return n
@@ -2639,7 +2778,17 @@ class ChatSessionManager:
         vacuum returns freed pages. Best-effort — never fails a migration."""
         try:
             with self._get_connection() as conn:
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                # Vault hunt G8: wal_checkpoint reports failure by RESULT ROW
+                # (busy, log, checkpointed) — it never raises. busy=1 (an open
+                # reader) means plaintext frames silently survive the seal;
+                # retry once after a beat, then say so loudly.
+                row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if row and row[0]:
+                    time.sleep(0.25)
+                    row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if row and row[0]:
+                    logger.error("[VAULT] WAL checkpoint stayed busy — pre-seal "
+                                 "frames may persist until the next checkpoint")
                 conn.execute("PRAGMA incremental_vacuum")
                 conn.commit()
         except Exception as e:
@@ -3176,11 +3325,17 @@ class ChatSessionManager:
             logger.error(f"get_settings_for('{chat_name}') failed: {e}")
             return None
 
-    def update_chat_settings(self, settings: Dict[str, Any]) -> bool:
+    def update_chat_settings(self, settings: Dict[str, Any],
+                             expected_active: Optional[str] = None) -> bool:
         """Update the EFFECTIVE chat's settings and save. Normally the active chat;
         under a per-stream brain override (phone call / background conversation) the
         stream's own chat — so an AI switch_model/switch_toolset/set_voice writes to
-        the chat it is actually running in, not the operator's active web chat."""
+        the chat it is actually running in, not the operator's active web chat.
+
+        expected_active (vault hunt R5, 2026-08-15): the chat the CALLER meant
+        to write. If a lock's eviction retargeted the active chat between the
+        caller's check and this write, refuse — a sidebar payload must never
+        merge into the eviction landing chat."""
         try:
             eff_chat = self._effective_chat()
             if eff_chat is not self.current_chat:
@@ -3198,38 +3353,55 @@ class ChatSessionManager:
                         pass
                     logger.info(f"Updated settings for override chat '{eff_name}'")
                 return ok
-            was_priv = bool(self.current_settings.get('private_chat'))
-            new_priv = bool(settings.get('private_chat', was_priv))
-            if new_priv and not was_priv \
-                    and (settings.get('mode', self.current_settings.get('mode'))):
-                # Ruling F1 (2026-08-15): game/story chats can't be private —
-                # their engines keep plaintext sidecars outside the vault
-                # (journal, saves). Lifted when chat-scoped plugin storage
-                # ships (v1.3).
-                logger.warning("[VAULT] refused: game/story chats can't be private yet")
-                return False
-            if was_priv and not new_priv:
-                # Unflip: decrypt BEFORE the flag drops — no-op for legacy
-                # unvaulted private chats; refusal refuses the write.
-                ok, err = self.unvault_chat(self.active_chat_name)
-                if not ok:
-                    logger.warning(f"[VAULT] decrypt of active chat refused "
-                                   f"the settings write: {err}")
+            # Vault hunt R5/G6: the whole read-decide-write-seal runs under
+            # the lock so a timer-thread eviction (which switches chats under
+            # the same lock) can't rebind current_settings mid-body.
+            with self._lock:
+                if expected_active is not None \
+                        and expected_active != self.active_chat_name:
+                    logger.warning("[VAULT] settings write refused — active "
+                                   "chat changed since the caller checked "
+                                   "(eviction?)")
                     return False
-            old_prompt = self.current_settings.get('prompt') if 'prompt' in settings else None
-            self.current_settings.update(settings)
-            self._save_current_chat()
-            logger.info(f"Updated settings for chat '{self.active_chat_name}'")
-            if 'prompt' in settings:
-                _vault_ref_sync(settings.get('prompt'), old_prompt)
-            if new_priv and not was_priv:
-                # Flip to private (the talk-stamp lands here): encrypt NOW —
-                # synchronous by ruling. Failure leaves the flag; Phase 1
-                # hiding holds and the unlock sweep retries.
-                ok, err = self.vault_chat(self.active_chat_name)
-                if not ok:
-                    logger.warning(f"[VAULT] encrypt of active chat deferred: {err}")
-            return True
+                was_priv = bool(self.current_settings.get('private_chat'))
+                new_priv = bool(settings.get('private_chat', was_priv))
+                if new_priv and not was_priv \
+                        and (settings.get('mode', self.current_settings.get('mode'))):
+                    # Ruling F1 (2026-08-15): game/story chats can't be private —
+                    # their engines keep plaintext sidecars outside the vault
+                    # (journal, saves). Lifted when chat-scoped plugin storage
+                    # ships (v1.3).
+                    logger.warning("[VAULT] refused: game/story chats can't be private yet")
+                    return False
+                if new_priv and not was_priv and _vault_sealed():
+                    # Vault hunt R4: the talk-stamp raced a seal. A locked
+                    # vault has no private mode — refusing here beats leaving
+                    # a plaintext chat wearing a private flag in a sealed
+                    # world. The stamp simply re-fires next unlocked turn.
+                    logger.warning("[VAULT] refused private flip — vault sealed")
+                    return False
+                if was_priv and not new_priv:
+                    # Unflip: decrypt BEFORE the flag drops — no-op for legacy
+                    # unvaulted private chats; refusal refuses the write.
+                    ok, err = self.unvault_chat(self.active_chat_name)
+                    if not ok:
+                        logger.warning(f"[VAULT] decrypt of active chat refused "
+                                       f"the settings write: {err}")
+                        return False
+                old_prompt = self.current_settings.get('prompt') if 'prompt' in settings else None
+                self.current_settings.update(settings)
+                self._save_current_chat()
+                logger.info(f"Updated settings for chat '{self.active_chat_name}'")
+                if 'prompt' in settings:
+                    _vault_ref_sync(settings.get('prompt'), old_prompt)
+                if new_priv and not was_priv:
+                    # Flip to private (the talk-stamp lands here): encrypt NOW —
+                    # synchronous by ruling. Failure leaves the flag; Phase 1
+                    # hiding holds and the unlock sweep retries.
+                    ok, err = self.vault_chat(self.active_chat_name)
+                    if not ok:
+                        logger.warning(f"[VAULT] encrypt of active chat deferred: {err}")
+                return True
         except Exception as e:
             logger.error(f"Failed to update settings: {e}")
             return False
@@ -3269,6 +3441,12 @@ class ChatSessionManager:
                     # outside the vault — refuse private until chat-scoped
                     # plugin storage ships (v1.3).
                     logger.warning("[VAULT] refused: game/story chats can't be private yet")
+                    return False
+                if new_priv and not was_priv and _vault_sealed():
+                    # Vault hunt R4 twin: a locked vault has no private mode —
+                    # no lane may flip a chat private into a sealed world
+                    # (the flag would stand over plaintext until unlock).
+                    logger.warning("[VAULT] refused private flip — vault sealed")
                     return False
                 if was_priv and not new_priv and row['vaulted']:
                     # Unflip: DECRYPT FIRST — a public chat must never sit

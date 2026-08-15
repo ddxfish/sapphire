@@ -1113,6 +1113,12 @@ async def compress_chat(chat_name: str, request: Request, _=Depends(require_logi
 async def activate_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Activate/switch to a chat."""
     try:
+        # User activity for the vault idle clock (ruling 2026-08-15).
+        try:
+            from core import prompt_vault as _pv_touch
+            _pv_touch.touch()
+        except Exception:
+            pass
         if system.llm_chat.switch_chat(chat_name):
             settings = system.llm_chat.session_manager.get_chat_settings()
             _apply_chat_settings(system, settings)
@@ -1197,6 +1203,13 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
         session_manager = system.llm_chat.session_manager
         new_settings = data["settings"]
 
+        # User activity for the vault idle clock (ruling 2026-08-15).
+        try:
+            from core import prompt_vault as _pv_touch
+            _pv_touch.touch()
+        except Exception:
+            pass
+
         if new_settings.get('private_chat'):
             from core.settings_manager import settings as sm_settings
             if sm_settings.is_managed():
@@ -1216,23 +1229,28 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
             # Vaulted chats Phase 1: vault MEMBERSHIP changes need the vault
             # OPEN (prompt-vault move parity — a walk-up must not hide your
             # chats, nor expose hidden ones, without the key). The ACTIVE
-            # chat is exempt: it's already fully on screen, so flipping it
-            # public reveals nothing new — and it's the amber eyeball's
-            # escape hatch when lock-time eviction failed. No vault at all
-            # keeps the pre-vault v1 meaning (local-only flag, freely
-            # toggled). Hidden and nonexistent names answer identically.
+            # chat is exempt ONLY for the private→public direction: it's
+            # already fully on screen, so flipping it public reveals nothing
+            # new — the amber eyeball's escape hatch when lock-time eviction
+            # failed. Flipping TO private while sealed is refused on every
+            # lane (vault hunt R4: a locked vault has no private mode). No
+            # vault at all keeps the pre-vault v1 meaning (local-only flag,
+            # freely toggled). Hidden and nonexistent names answer identically.
             try:
                 from core import prompt_vault as _pv
                 _vs = _pv.vault_status()
             except Exception:
                 _vs = {}
-            if _vs.get('exists') and not _vs.get('unlocked') \
-                    and chat_name != session_manager.get_active_chat_name():
+            if _vs.get('exists') and not _vs.get('unlocked'):
                 _cur = session_manager.read_chat_settings(chat_name) or {}
-                if bool(new_settings.get('private_chat')) != bool(_cur.get('private_chat')):
-                    raise HTTPException(
-                        status_code=403,
-                        detail="The vault is locked — unlock it to change chat privacy.")
+                _want = bool(new_settings.get('private_chat'))
+                _have = bool(_cur.get('private_chat'))
+                if _want != _have:
+                    _is_active = chat_name == session_manager.get_active_chat_name()
+                    if not (_is_active and _have and not _want):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="The vault is locked — unlock it to change chat privacy.")
 
         if 'private_chat' in new_settings and not new_settings.get('private_chat'):
             # Turning the eyeball OFF while this chat's prompt demands privacy
@@ -1276,7 +1294,11 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
             return {"status": "success", "message": f"Settings updated for '{chat_name}'",
                     "toolset": None, "functions": [], "state_tools": []}
 
-        if not session_manager.update_chat_settings(new_settings):
+        # expected_active (vault hunt R5): if an eviction retargeted the
+        # active chat between the check above and this write, the store
+        # refuses instead of merging this payload into the landing chat.
+        if not session_manager.update_chat_settings(new_settings,
+                                                    expected_active=chat_name):
             raise HTTPException(status_code=500, detail="Failed to update settings")
 
         _apply_chat_settings(system, session_manager.get_chat_settings())

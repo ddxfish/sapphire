@@ -182,6 +182,16 @@ class EventBus:
         with self._lock:
             return len(self._subscribers) + len(self._async_subscribers)
 
+    def clear_replay(self):
+        """Empty the replay ring. Vault hunt R6 (2026-08-15): the ring
+        outlives a vault lock — chat_switched / chat_settings_changed events
+        deposited while unlocked carry private chat names (and settings text)
+        to any later replay=true subscriber. lock() calls this so nothing
+        pre-seal survives into the sealed world. Live subscribers are
+        unaffected; only late-joiner replay is trimmed."""
+        with self._lock:
+            self._replay_buffer.clear()
+
 
 # Singleton instance
 _bus: Optional[EventBus] = None
@@ -197,6 +207,11 @@ def publish(event_type: str, data: Optional[Dict[str, Any]] = None,
             ephemeral: bool = False):
     """Convenience function to publish to the global bus."""
     get_event_bus().publish(event_type, data, ephemeral=ephemeral)
+
+
+def clear_replay():
+    """Convenience: empty the global bus's replay ring (see EventBus.clear_replay)."""
+    get_event_bus().clear_replay()
 
 
 # Event type constants

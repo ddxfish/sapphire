@@ -25,6 +25,7 @@ let vaultState = { exists: false, unlocked: false };
 let query = '';          // live name filter (as-you-type)
 let deepHits = null;     // Map(name → matching msg count) after Enter, else null
 let deepQuery = '';      // the query deepHits answers
+let visible = false;     // vault hunt U2: only refresh-on-lock when on screen
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
 
@@ -270,13 +271,22 @@ async function doBulkClear() {
 async function doBulkExport() {
     const names = [...selected];
     if (!names.length) return;
+    // Vault hunt U3: the zip endpoint silently skips private chats (they
+    // export one at a time, per-row) — filter here and SAY so, instead of
+    // toasting a count that includes chats that never landed in the zip.
+    const privCount = names.filter(n => chats.find(c => c.name === n)?.private_chat).length;
+    const pubNames = names.filter(n => !chats.find(c => c.name === n)?.private_chat);
+    if (!pubNames.length) {
+        ui.showToast('Private chats export one at a time — use each row\'s ⬇️ button', 'warning');
+        return;
+    }
     try {
         // Zip download — raw fetch (fetchWithTimeout JSON-parses responses).
         const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
         const resp = await fetch('/api/chats/bulk-export-zip', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-            body: JSON.stringify({ names })
+            body: JSON.stringify({ names: pubNames })
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const blob = await resp.blob();
@@ -288,7 +298,10 @@ async function doBulkExport() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        ui.showToast(`Exported ${names.length} chat(s) as zip`, 'success');
+        const skipped = privCount
+            ? ` — ${privCount} private skipped (export those per-row)` : '';
+        ui.showToast(`Exported ${pubNames.length} chat(s) as zip${skipped}`,
+                     privCount ? 'warning' : 'success');
     } catch (e) {
         ui.showToast(`Export failed: ${e.message}`, 'error');
     }
@@ -408,6 +421,24 @@ function closeModal() {
     overlay.querySelector('#cm-modal-box').innerHTML = '';
 }
 
+// Vault hunt U4 (the P4 second gate, now shared): the vault can LOCK while
+// a dialog sits open (idle-lock, another tab). The server refuses anyway
+// (the chat is hidden = nonexistent), but "Chat not found" is a lying error
+// for a chat the user is looking at — re-check and say what happened.
+// Returns true when it's safe to proceed; closes the modal otherwise.
+async function ensureVaultOpenFor(chat, verb) {
+    if (!chat?.private_chat) return true;
+    try {
+        const v = await vaultStatus();
+        if (v.exists && !v.unlocked) {
+            ui.showToast(`The vault locked while this dialog was open — unlock it to ${verb} this chat`, 'error');
+            closeModal();
+            return false;
+        }
+    } catch (e) { /* status unknown — let the server be the gate */ }
+    return true;
+}
+
 function openTrimModal(name) {
     const chat = chats.find(c => c.name === name);
     const overlay = openModal(`
@@ -459,6 +490,7 @@ function openTrimModal(name) {
     preview();
     overlay.querySelector('#cm-trim-cancel').addEventListener('click', closeModal);
     overlay.querySelector('#cm-trim-go').addEventListener('click', async () => {
+        if (!await ensureVaultOpenFor(chat, 'trim')) return;   // U4 second gate
         const p = await preview();          // fresh numbers, never stale
         if (!p) return;
         if (p.no_op) { ui.showToast('Nothing to trim', 'warning'); return; }
@@ -545,20 +577,8 @@ async function openCompressModal(name) {
             keep_last_turns: parseInt(overlay.querySelector('#cm-c-keep').value, 10) || 10,
             backup: overlay.querySelector('#cm-c-backup').checked,
         };
-        // Second gate (P4): the vault can LOCK while this dialog sits open
-        // (idle-lock, another tab). The server refuses anyway (the chat is
-        // hidden = nonexistent), but "Chat not found" is a lying error for
-        // a chat the user is looking at — re-check and say what happened.
-        if (chat?.private_chat) {
-            try {
-                const v = await vaultStatus();
-                if (v.exists && !v.unlocked) {
-                    ui.showToast('The vault locked while this dialog was open — unlock it to compress this chat', 'error');
-                    closeModal();
-                    return;
-                }
-            } catch (e) { /* status unknown — let the server be the gate */ }
-        }
+        // Second gate (P4) — shared helper, see ensureVaultOpenFor.
+        if (!await ensureVaultOpenFor(chat, 'compress')) return;
         try {
             await api.compressChat(name, opts);
             ui.showToast(`Compress started on ${name} — running in background`, 'success');
@@ -745,6 +765,14 @@ export default {
             if (e.target.id === 'cm-modal') closeModal();
         });
 
+        // Vault hunt U2: lock/unlock changes WHICH CHATS EXIST — without
+        // ears here, private names lingered on this table indefinitely
+        // after an idle-lock (the walk-up exposure the vault exists to
+        // prevent). Same PROMPT_CHANGED/action ride main.js uses.
+        eventBus.on(eventBus.Events.PROMPT_CHANGED, (data) => {
+            if (data?.action === 'vault_changed' && visible) refresh();
+        });
+
         // ALL handlers bound ONCE here via delegation (never per-render —
         // the stacked-handler class bug).
         el.querySelector('#cm-tabs').addEventListener('click', e => {
@@ -833,10 +861,11 @@ export default {
     },
 
     show() {
+        visible = true;
         refresh();
         // A compress started last visit may still be running — reattach
         resumeCompressPollIfRunning();
     },
 
-    hide() {}
+    hide() { visible = false; }
 };

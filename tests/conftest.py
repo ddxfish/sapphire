@@ -75,6 +75,26 @@ def _no_real_metrics_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_stale_sealed_rows_probe():
+    """Vault hunt G3 (2026-08-15): ChatSessionManager registers a global
+    sealed-rows probe with prompt_vault at construction. Hermetic managers
+    built on tmp dirs leak that probe across test files — a later REAL
+    chat_data_key() mint then probes a dead DB and refuses. Reset around
+    every test; a test's own manager re-registers when it constructs."""
+    try:
+        from core import prompt_vault as _pv
+        _pv.set_sealed_rows_probe(None)
+    except Exception:
+        pass
+    yield
+    try:
+        from core import prompt_vault as _pv
+        _pv.set_sealed_rows_probe(None)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_real_vault_seal(monkeypatch):
     """Vaulted chats (Phase 1, 2026-08-14): the dev box usually has a REAL
     locked prompt vault, which would flip core.chat.history._vault_sealed()

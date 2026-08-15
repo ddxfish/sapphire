@@ -262,7 +262,24 @@ def _create_llm_worker():
             te = system.llm_chat.tool_engine
 
             ctx = ExecutionContext(fm, te, task_settings)
-            raw = ctx.run(self.mission)
+            # Vault hunt H2 (2026-08-15): hooks fired on this agent thread
+            # (pre/post_execute via function_manager) resolve privacy through
+            # the stream-brain override — without one they read the
+            # OPERATOR'S active chat and under-withhold when this agent was
+            # spawned from a private chat. Same primitive as the continuity
+            # executor; the privacy bit is the F4 snapshot, not a live read
+            # (the spawning chat may be hidden by the time we run).
+            from core.chat import stream_brain
+            _brain_token = stream_brain.set_override({
+                "chat": self.chat_name,
+                "settings": {"private_chat": bool(self._privacy_required)},
+                "system_prompt": "",
+                "tools": None,
+            })
+            try:
+                raw = ctx.run(self.mission)
+            finally:
+                stream_brain.reset_override(_brain_token)
             self.result = re.sub(r'<think>[\s\S]*?</think>\s*', '', raw).strip() if raw else ''
             self.tool_log = ctx.tool_log
             # If the run degraded to a placeholder (tool loop exhausted, context

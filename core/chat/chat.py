@@ -660,6 +660,20 @@ class LLMChat:
             self.refresh_spice_if_needed()
             logger.info(f"[CHAT] CHAT: user said something here")
 
+            # Ruling RM3 (2026-08-15): this non-streaming operator door
+            # (REST /api/chat, wake, body) stamps talk-marks-private too —
+            # talking is talking, whichever door it comes through. BEFORE
+            # the pre_chat hook so the stamping turn itself is already
+            # withheld from non-privacy-aware plugins (streaming-lane
+            # ordering). Also user activity for the vault idle clock.
+            try:
+                from core import prompt_vault as _pv_touch
+                _pv_touch.touch()
+            except Exception:
+                pass
+            from core.chat.chat_streaming import stamp_private_if_unlocked
+            stamp_private_if_unlocked(self.session_manager)
+
             # Plugin pre_chat hook — can modify input, bypass LLM, or stop propagation
             if hook_runner.has_handlers("pre_chat"):
                 hook_event = HookEvent(input=user_input, config=config,

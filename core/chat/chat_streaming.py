@@ -14,6 +14,43 @@ from core.tts.stream_pump import StreamingTTSPump
 logger = logging.getLogger(__name__)
 
 
+def stamp_private_if_unlocked(session_manager):
+    """Vaulted chats — 'messages control the private marker': an operator
+    turn in a chat while the vault is OPEN marks that chat private (one-way;
+    Chat Manager owns the unmark). Skips: no/locked vault (no private mode),
+    managed mode, already-private, and MODE-TAGGED chats (game/story/
+    librarian/limbo belong to plugin surfaces — talking in a game while
+    unlocked must not vault the game). A stamp failure logs and lets the
+    turn run public (systemic-error posture; matches voice_privacy).
+    Module-level (ruling RM3, 2026-08-15) so the non-streaming operator door
+    (REST /api/chat, wake, body) stamps through the same code."""
+    try:
+        from core import prompt_vault
+        vs = prompt_vault.vault_status()
+        if not (vs.get('exists') and vs.get('unlocked')):
+            return
+        from core.settings_manager import settings as sm_settings
+        if sm_settings.is_managed():
+            return
+        sm = session_manager
+        # Name captured BEFORE the write (vault hunt R5 family): if an
+        # eviction retargets the active chat mid-stamp, expected_active
+        # makes the store refuse rather than mark the landing chat.
+        name = sm.get_active_chat_name()
+        cur = sm.get_chat_settings()
+        if cur.get('private_chat') or cur.get('mode'):
+            return
+        if sm.update_chat_settings({'private_chat': True},
+                                   expected_active=name):
+            # No name in the log — it just became a secret (ruling F3).
+            logger.info("[VAULT] active chat marked private — spoke while vault open")
+            publish(Events.CHAT_SETTINGS_CHANGED,
+                    {"chat": name, "settings": {"private_chat": True},
+                     "origin": None})
+    except Exception as e:
+        logger.warning(f"[VAULT] talk-stamp failed — turn runs unstamped: {e}")
+
+
 class StreamingChat:
     def __init__(self, main_chat):
         self.main_chat = main_chat
@@ -78,34 +115,8 @@ class StreamingChat:
                 logger.warning(f"[STREAMING] stop_tts failed: {e}")
 
     def _stamp_private_if_unlocked(self):
-        """Vaulted chats — 'messages control the private marker': an operator
-        turn in a chat while the vault is OPEN marks that chat private (one-way;
-        Chat Manager owns the unmark). Skips: no/locked vault (no private mode),
-        managed mode, already-private, and MODE-TAGGED chats (game/story/
-        librarian/limbo belong to plugin surfaces — talking in a game while
-        unlocked must not vault the game). A stamp failure logs and lets the
-        turn run public (systemic-error posture; matches voice_privacy)."""
-        try:
-            from core import prompt_vault
-            vs = prompt_vault.vault_status()
-            if not (vs.get('exists') and vs.get('unlocked')):
-                return
-            from core.settings_manager import settings as sm_settings
-            if sm_settings.is_managed():
-                return
-            sm = self.main_chat.session_manager
-            cur = sm.get_chat_settings()
-            if cur.get('private_chat') or cur.get('mode'):
-                return
-            if sm.update_chat_settings({'private_chat': True}):
-                name = sm.get_active_chat_name()
-                # No name in the log — it just became a secret (ruling F3).
-                logger.info("[VAULT] active chat marked private — spoke while vault open")
-                publish(Events.CHAT_SETTINGS_CHANGED,
-                        {"chat": name, "settings": {"private_chat": True},
-                         "origin": None})
-        except Exception as e:
-            logger.warning(f"[VAULT] talk-stamp failed — turn runs unstamped: {e}")
+        """Streaming-lane wrapper — see stamp_private_if_unlocked below."""
+        stamp_private_if_unlocked(self.main_chat.session_manager)
 
     def chat_stream(self, user_input: str, prefill: str = None, skip_user_message: bool = False, images: list = None, files: list = None) -> Generator[Union[str, Dict[str, Any]], None, None]:
         """
@@ -166,14 +177,56 @@ class StreamingChat:
         _brain_token = None   # A1: declared before the try so the finally is always safe
 
         try:
+            # H4 counter, moved to the TOP of the try (vault hunt R3 2026-08-15):
+            # count this stream BEFORE any setup so (a) a vault lock's eviction
+            # defers to end_streaming instead of racing the setup below, and
+            # (b) the unconditional end_streaming in the finally can never
+            # double-decrement a concurrent stream's count when setup throws.
+            # (H4 2026-04-22 history: single bool let two concurrent streams
+            # corrupt mid-turn history; counter fix.)
+            self.main_chat.session_manager.begin_streaming()
             self.cancel_flag = False
             self.tts_stopped = False
             self.current_stream = None
             self.ephemeral = False
+            # begin_stream() stamped the route-accept active chat on us; the
+            # gap between that and this generator starting is UNCOUNTED — an
+            # eviction may have landed in it.
+            _intended_chat = getattr(self, "active_chat_name", None) or None
             try:
                 self.active_chat_name = self.main_chat.session_manager.get_active_chat_name()
             except Exception:
                 self.active_chat_name = None
+
+            # Vault hunt R3/R4: operator lane — if a lock's eviction moved the
+            # world in that uncounted gap, refuse the turn instead of writing
+            # the user's private-intent text into the eviction landing chat.
+            # Same refusal when the active chat is private in a sealed world
+            # (failed-eviction state): its turns can't persist honestly.
+            if not getattr(self, "target_chat", None):
+                if _intended_chat and self.active_chat_name \
+                        and _intended_chat != self.active_chat_name:
+                    logger.warning("[VAULT] active chat changed during stream "
+                                   "setup — turn refused")
+                    yield {"type": "content",
+                           "text": "🔒 The vault locked while this message was "
+                                   "in flight and the active chat changed. "
+                                   "Please resend."}
+                    return
+                try:
+                    from core import prompt_vault as _pv
+                    _vs_gate = _pv.vault_status()
+                    if _vs_gate.get('exists') and not _vs_gate.get('unlocked') \
+                            and self.main_chat.session_manager.get_chat_settings().get('private_chat'):
+                        logger.warning("[VAULT] turn refused — active chat is "
+                                       "private and the vault is sealed")
+                        yield {"type": "content",
+                               "text": "🔒 The vault is locked and this chat is "
+                                       "private — unlock the vault to continue "
+                                       "here."}
+                        return
+                except Exception:
+                    pass
 
             # A1: if this stream has an EXPLICIT target chat (driver/phone — web
             # passes None), install a per-context brain override so the whole turn
@@ -217,18 +270,21 @@ class StreamingChat:
                 # target and never stamp. Runs BEFORE provider selection so
                 # THIS turn already enforces local-only (stamping after would
                 # leak the first turn to a cloud provider).
+                # An operator turn is USER ACTIVITY for the vault idle clock
+                # (Krem's ruling 2026-08-15): chatting in a private chat must
+                # not read as "idle" to the auto-lock. Phone/background
+                # streams ride the target_chat branch and never touch.
+                try:
+                    from core import prompt_vault as _pv_touch
+                    _pv_touch.touch()
+                except Exception:
+                    pass
                 self._stamp_private_if_unlocked()
             # Spice rail AFTER the A1 override install: before this, a phone
             # turn's spice cadence read the OPERATOR'S chat settings and turn
             # count (the ContextVar wasn't set yet) and could rewrite the
             # global prompt from a foreign stream.
             self.main_chat.refresh_spice_if_needed()
-
-            # H4 follow-up 2026-04-22: was `_is_streaming = True` (single bool).
-            # Two concurrent streams on same chat had the first finisher set
-            # False while the second was still running → append_messages_to_chat
-            # guard failed → mid-turn history corruption. Counter fix.
-            self.main_chat.session_manager.begin_streaming()
 
             # Plugin pre_chat hook — can modify input, bypass LLM, or stop propagation
             if hook_runner.has_handlers("pre_chat"):

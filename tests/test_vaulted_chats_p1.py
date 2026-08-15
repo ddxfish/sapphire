@@ -318,7 +318,10 @@ class TestTalkStamp:
             def get_active_chat_name(self):
                 return "somechat"
 
-            def update_chat_settings(self, patch):
+            def update_chat_settings(self, patch, expected_active=None):
+                # expected_active (vault hunt R5): the stamp must pin its
+                # write to the name it captured — assert the contract here.
+                assert expected_active == "somechat"
                 written.update(patch)
                 return True
 

@@ -163,13 +163,20 @@ def _normalize(raw):
     # never re-encrypt). Normalization must carry it or unlock drops it and
     # every encrypted chat becomes unreadable.
     ck = raw.get('chat_key')
-    if isinstance(ck, str) and len(ck) == 64:
-        try:
-            bytes.fromhex(ck)
-            out['chat_key'] = ck
-        except ValueError:
-            logger.error("[VAULT] malformed chat_key in vault — dropped "
-                         "(encrypted chats will not decrypt)")
+    if ck is not None:
+        ok_shape = isinstance(ck, str) and len(ck) == 64
+        if ok_shape:
+            try:
+                bytes.fromhex(ck)
+            except ValueError:
+                ok_shape = False
+        if not ok_shape:
+            # Vault hunt G3b (2026-08-15): proceeding would let the next save
+            # persist the vault WITHOUT the (possibly hand-recoverable) key
+            # material — making every sealed chat permanently unreadable.
+            # Refuse the unlock instead; the file stays on disk untouched.
+            raise VaultCorrupt("malformed chat_key in vault payload")
+        out['chat_key'] = ck
     return out
 
 
@@ -190,6 +197,17 @@ def vault_status() -> dict:
 
 _CHAT_ENC_PREFIX = "@enc1:"
 
+# Vault hunt G3: history registers a callable returning True when any
+# vaulted=1 chat exists — ground truth for the mint guard below. Unregistered
+# (standalone vault tests, pre-boot) means no chat store is in play, so no
+# sealed rows can exist and minting is safe.
+_sealed_rows_probe = None
+
+
+def set_sealed_rows_probe(fn):
+    global _sealed_rows_probe
+    _sealed_rows_probe = fn
+
 
 def chat_data_key():
     """Vaulted chats Phase 2: the 32-byte chat DATA key. Random, generated
@@ -204,6 +222,27 @@ def chat_data_key():
             return None
         ck = _data.get('chat_key')
         if not ck:
+            # Vault hunt G3: NEVER mint over existing sealed rows. If this
+            # vault file is an older restore (predating the first vaulted
+            # chat) beside a current history DB, a fresh key would overwrite
+            # the file and permanently orphan every '@enc1:' row — the old
+            # key in the replaced file was the last recovery path. A probe
+            # failure also refuses (can't verify → don't mint).
+            probe = _sealed_rows_probe
+            if probe is not None:
+                try:
+                    sealed_exist = bool(probe())
+                except Exception as e:
+                    logger.error(f"[VAULT] sealed-rows probe failed — "
+                                 f"refusing chat-key mint (fail closed): {e}")
+                    return None
+                if sealed_exist:
+                    logger.error(
+                        "[VAULT] REFUSING to mint a chat data key: sealed "
+                        "chat rows exist but this vault has no chat_key — "
+                        "this looks like an older prompt_vault.enc beside a "
+                        "newer chat DB. Restore the matching vault backup.")
+                    return None
             ck = os.urandom(32).hex()
             _data['chat_key'] = ck
             if not _save_locked():
@@ -327,7 +366,17 @@ def unlock(passphrase) -> tuple:
         return False, 'corrupt'
     with _lock:
         _key, _salt = key, salt
-        _data = _normalize(raw)
+        try:
+            _data = _normalize(raw)
+        except VaultCorrupt as e:
+            # G3b: malformed chat_key — refuse WITHOUT quarantining (the
+            # rest of the vault is intact; renaming it would take the
+            # prompts hostage too). Manual recovery stays possible.
+            _key = _salt = None
+            _data = None
+            logger.error(f"[VAULT] unlock refused — {e}; vault file left "
+                         "in place for manual recovery")
+            return False, 'corrupt'
         _touch_locked()
         _arm_timer_locked()
         counts = {'monoliths': len(_data['monoliths']),
@@ -355,6 +404,15 @@ def lock(reason="") -> bool:
             _timer.cancel()
             _timer = None
     logger.info(f"[VAULT] locked{f' ({reason})' if reason else ''}")
+    # Vault hunt R6: the replay ring outlives the seal — pre-lock
+    # chat_switched / settings events carry names that just became secrets.
+    # BEFORE the handoffs so what late subscribers replay is only post-seal
+    # events (the eviction's switch to a public landing chat is safe).
+    try:
+        from core.event_bus import clear_replay as _clear_replay
+        _clear_replay()
+    except Exception:
+        pass
     _handoff_active(gone)      # outside _lock — calls into the prompt system
     _handoff_active_chat()     # vaulted chats: evict a private active chat
     _publish("vault_changed")

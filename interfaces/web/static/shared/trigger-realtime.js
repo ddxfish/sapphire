@@ -115,6 +115,7 @@ export async function openRealtimeEditor(task, refresh) {
                         <div style="display:flex;gap:8px;align-items:center">
                             <select id="rt-chat" style="flex:1">
                                 <option value="">Select a chat…</option>
+                                ${t.chat_target === '__locked__' ? `<option value="__locked__" selected>🔒 in the locked vault (kept)</option>` : ''}
                                 ${chatNames.map(n => `<option value="${_esc(n)}" ${t.chat_target === n ? 'selected' : ''}>${_esc(n)}</option>`).join('')}
                             </select>
                             <button class="btn-sm" id="rt-newchat" type="button">+ new</button>
@@ -384,13 +385,24 @@ export async function openRealtimeEditor(task, refresh) {
         };
         if (subKey) trigger_config[subKey] = subVal;
 
+        // Vault hunt U1: while the vault is sealed a private target serves
+        // as '__locked__' — the synthetic option above keeps it selected so
+        // this save round-trips the sentinel (the scheduler's keep-existing
+        // guard preserves the real target). And saved mode with NO chat
+        // picked must not silently write an empty target.
+        const rtChatVal = modal.querySelector('#rt-chat').value || '';
+        if (!eph && !rtChatVal) {
+            showToast('Pick a chat for this rule (or switch to per-caller)', 'error');
+            return;
+        }
+
         const data = {
             name, type: 'daemon', emoji: emojiBtn.textContent.trim() || '📞',
             initial_message: '',
             trigger_config,
             schedule: '0 0 31 2 *', chance: 100, active_hours_start: null, active_hours_end: null,
             // Saved mode: behavior is the chat's (A1). Per-caller: these seed the throwaway chat.
-            chat_target: eph ? '' : (modal.querySelector('#rt-chat').value || ''),
+            chat_target: eph ? '' : rtChatVal,
             prompt: eph ? (modal.querySelector('#rt-prompt').value || 'default') : 'default',
             toolset: eph ? (modal.querySelector('#rt-toolset').value || 'none') : 'none',
             provider: eph ? (modal.querySelector('#rt-provider').value || 'auto') : 'auto',

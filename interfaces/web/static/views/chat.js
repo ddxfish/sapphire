@@ -910,7 +910,15 @@ function debouncedSave(container) {
     // already moved to the new chat, but the save belongs to the OLD chat.
     const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
     pendingSaveChatName = chatSelect?.value || null;
-    saveTimer = setTimeout(() => saveSettings(container, pendingSaveChatName), SAVE_DEBOUNCE);
+    // Vault hunt R8: clear the pair AT fire time. A fired timer that left
+    // saveTimer/pendingSaveChatName standing let a later flushPendingSave
+    // re-fire a full sidebar payload at a name captured chats ago.
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        const n = pendingSaveChatName;
+        pendingSaveChatName = null;
+        saveSettings(container, n);
+    }, SAVE_DEBOUNCE);
 }
 
 /** Cancel any pending debounced save — called on chat switch to prevent cross-chat writes */
@@ -1226,8 +1234,19 @@ async function refreshVoiceDropdown() {
         _updateSpeedRange(container, data);
         // Save the new voice to chat so backend TTS uses it immediately
         if (voiceChanged) {
+            // Vault hunt R8: capture the name like debouncedSave does — an
+            // armed timer WITHOUT pendingSaveChatName desynced the pair, so
+            // a chat switch inside the 100ms window flushed a full foreign
+            // payload onto whatever stale name the pair still held.
             if (saveTimer) clearTimeout(saveTimer);
-            saveTimer = setTimeout(() => saveSettings(container), 100);
+            const chatSel = document.getElementById('chat-select');
+            pendingSaveChatName = chatSel?.value || null;
+            saveTimer = setTimeout(() => {
+                saveTimer = null;
+                const n = pendingSaveChatName;
+                pendingSaveChatName = null;
+                saveSettings(container, n);
+            }, 100);
         }
     } catch (e) {
         console.warn('[chat] Failed to refresh voice dropdown:', e);
