@@ -492,10 +492,11 @@ def get_full_status_sync():
         except Exception:
             pass
 
-        # Token metrics
+        # Token metrics (the singleton is `metrics` — the old `token_metrics`
+        # import never existed, so this section silently reported {} forever)
         metrics = {}
         try:
-            from core.metrics import token_metrics
+            from core.metrics import metrics as token_metrics
             metrics = token_metrics.summary(days=7)
         except Exception:
             pass

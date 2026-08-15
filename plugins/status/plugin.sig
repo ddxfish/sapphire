@@ -4,8 +4,8 @@
   "files": {
     "app/index.js": "sha256:1e857ed46dffbe53a13a927f913f03e8f1f390eff3808bf9b861789fbfdd9394",
     "plugin.json": "sha256:f3c0e05199ff704d0f081f2fdd2917dae1624e5e345c171e6963152210d02eb2",
-    "routes/status.py": "sha256:aec798675c7f8d617e253d17459789b381890568f83668e597e0d2aaf44c7e40",
-    "tools/status_tool.py": "sha256:08c7a8f92bef08c9eb411f4631a1da91c61b5fba2a6975d3cf92eca66f54c4f7"
+    "routes/status.py": "sha256:d3e575db3d7a072935de6f17f8c921c638104a4725ba9e59f8492353cb9e78f9",
+    "tools/status_tool.py": "sha256:cc7059e5fce627705b9176fc9cff967eba0d741162f821f250ac8d71243d0ec9"
   },
-  "signature": "NdN4cytyyM6iNkV1mW+HXz57lWKx8nHSX3ERR9FaLPwMBsjCpwme3xiu8Sgtozcu9nGwJkKh/BxFFpKa0RtzDQ=="
+  "signature": "2C8MndLhijRyrVoI22+kl0AW06MpfP56a66eJndQeYbbiJe9ZzNcXyj9ltQhu/WCgSh+mLo26WhTjbE80qAMDQ=="
 }

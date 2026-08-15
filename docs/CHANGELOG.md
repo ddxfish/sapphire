@@ -1,3 +1,5 @@
+# 2.11.2 - Privacy Aware Plugins
+- Hooks are not exposed to plugins unless they are privacy_aware true
 # 2.11.1 - Private chats
 - Chats in private mode are encrypted
 # 2.11.0 - Privacy v2

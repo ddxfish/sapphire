@@ -7,13 +7,13 @@
     "app/room.js": "sha256:d5895d6bb5bdc0329d6de87528e0eb200764f653be15734cd88d095579f9109b",
     "app/settings-modal.js": "sha256:39a70ec7b44dd9e1625034659808f2cacd38a96336f7ad5ec1e78190ddaf31f2",
     "app/story-room.js": "sha256:1c3c5b23a2228bba2230d48d3f96ff7aaf4cf02073ab1fd465b534888b3acf2a",
-    "gameroom_core.py": "sha256:f30037d55037524c2f6c51ebce5f0f9ba1f8aca9e0aa0142f1e2b53e55496d8f",
+    "gameroom_core.py": "sha256:38836315c820259d93297abc3eb202b920a73d4043f397f59b71ac84cd24e30b",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/referee.py": "sha256:d2e5657aa03f1c3fffa47e384af8bb82283ca712d0933982d5cd80ed2024986f",
     "gameroom_story/render.py": "sha256:73f597e2a04d9f88c569c9cbcea6bc731efa97fd964692f6919ae6cc0c5f3773",
     "gameroom_story/rooms.py": "sha256:460ec196ffee0ffad659a2d10d17510cc6cec038503a4f8f35cbcd7945fb9d9c",
-    "gameroom_story/session.py": "sha256:45a3720fe308a1e4fd3b1498b29a8322803370c5236471dc8229dc061b92c010",
-    "gameroom_story/state.py": "sha256:839f8f78424e3cba50fe5db42d91435303d704b4059c28d2c29043a10547ded9",
+    "gameroom_story/session.py": "sha256:5a57ab1929aab1cd5b0c9b36f3b694b158b27d5f7a771b284319dd9b738610c4",
+    "gameroom_story/state.py": "sha256:6d335f296cd301430a0f0915a53fe0b81abe019b91e1e13f1ac816019d5ab35a",
     "hooks/boot.py": "sha256:2fc5b105b8e0f341d164fa510879346b41d55f1301299c917cf90d31a7eb438f",
     "hooks/ghost.py": "sha256:faadd082b10d8c4618c845b4041577cc9b7dd8cae6db7c807c7f495c665ff0bc",
     "hooks/lifecycle.py": "sha256:43de6b51fce2a0560a63d40567ce56d307ef7b45046667fffe340df5dcaf61fa",
@@ -33,8 +33,9 @@
     "tests/test_story_engine.py": "sha256:83aaad1199e5f9de722dd3c4f38ca5da9eff9355bb586bd5e5c0a1e2cf6eb23f",
     "tests/test_story_lifecycle.py": "sha256:35cd5001ae0535704ac26df72f7886cd29a5f75d6eee1bf0ca8bff1aa1db9431",
     "tests/test_story_vault_gate.py": "sha256:d52ffb3dc15fdd4581242847f0a354566ac071e2cf5a0896ac26c36cd6e1719f",
-    "tools/story_info.py": "sha256:100af6481eed63323bc23611b63418af96b7b9d94bae2b1ff701733b02053992",
+    "tests/test_vault_gates_p3.py": "sha256:9f93980f616a54598f3213343f6549c9f223b846115b5d7a18142cb382203160",
+    "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "Jn77gL1pIhReJj76rkN5cHHAdJsJoOX8YUoFWNpVo0dZs8jMiNae1pOnAdfg+3+d/VwtC9mUwCdXgP5IrEoPBA=="
+  "signature": "SH3riKJvN4YVesuGblA5c5Wh/Ej2GJZWe/Bm/5IPpdRhdLirESj+TB0diMk2yFDGfR3eefEWbNbitvLYgWrACA=="
 }

@@ -9,7 +9,7 @@
     "glb_merger.py": "sha256:6baccd4aced1a2fb5d97bc0b679ea58b8f0bc35527abadbc1dd9b3ace99d13ca",
     "glb_parser.py": "sha256:e03aab34f4496a8f866c600e3b67d6d0c8305ac1a00c94cdfc4b809bc72ca09c",
     "hooks/prompt_inject.py": "sha256:e7616a10bc85c9e70d67fa4d5febaca8cddcb1ab5a711c9bb8a448bc424d0577",
-    "plugin.json": "sha256:e4399faed779dee613a2efa2b6141550b6cd5cbc162587500d38040ed1c50783",
+    "plugin.json": "sha256:5b658545e4904102220fdf9da3b0dcb002524f13a22c30bfd0b0568f36ef8e82",
     "routes/api.py": "sha256:60deb2c1889db69b9f23a0a0d493116a38ef572a56ab6f0bfda6c281549ae792",
     "web/camera-orbits.js": "sha256:9e401ad6f7207a805a5e507374788a2b1b5c444405a9303a43a97983851f87e7",
     "web/environment.js": "sha256:591e515585034d671f849bec899e70b01426fb7ea01e6a4085da4a383e8eaf99",
@@ -25,5 +25,5 @@
     "web/sidebar.html": "sha256:c0d25cc097f997c3413abd941e6bbbde238cb6c65e35a0d19885d75b40fc5e25",
     "web/sidebar.js": "sha256:d7d2142033c5ad7663d4a9224a73797c6ff4215c7e7b1bc2e346192a7f5e236d"
   },
-  "signature": "5sUlm24TDGMmAKcCl5ywXyd5UvPK/3zSF0UGVYqxYmU1Gh+0KDD5e+DwL1KKcwPYeaclx/oWyPPAgSKpLLfXCQ=="
+  "signature": "DpFHDai1xQjH9s/aMN5wCB5ayEHHrj6vwiiOdrkGsngBLJrYH02UnFu6UkYl1tQUd3TrCiRevvgk9NTzRsxpAQ=="
 }

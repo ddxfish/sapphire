@@ -61,6 +61,20 @@ def _no_destructive_git(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_metrics_db(tmp_path, monkeypatch):
+    """Vaulted chats Phase 3: vault_chat's full-scrub (and metrics tests)
+    reach core.metrics — redirect its DB_PATH so no test can UPDATE the dev
+    box's real user/metrics/token_usage.db."""
+    try:
+        import core.metrics as _m
+        _p = tmp_path / "metrics" / "token_usage.db"
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(_m, "DB_PATH", _p)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_real_vault_seal(monkeypatch):
     """Vaulted chats (Phase 1, 2026-08-14): the dev box usually has a REAL
     locked prompt vault, which would flip core.chat.history._vault_sealed()
@@ -328,7 +342,12 @@ def mock_system(monkeypatch):
     try:
         yield sys_mock
     finally:
-        if old is not None and hasattr(apifa, "set_system"):
+        # Restore ALWAYS — including back to None. The old `if old is not
+        # None` guard left the MagicMock installed for the REST OF THE
+        # SUITE once the first mock_system test ran; every later
+        # get_system() caller (the P3 vault gates in game-room, notably)
+        # then saw truthy Mocks and mis-gated. Caught 2026-08-15.
+        if hasattr(apifa, "set_system"):
             try:
                 apifa.set_system(old)
             except Exception:

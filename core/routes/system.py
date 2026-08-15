@@ -384,12 +384,29 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
 # CONTINUITY ROUTES
 # =============================================================================
 
+def _mask_locked_target(system, task: dict) -> dict:
+    """P3-T14: while the vault is sealed, a task aimed at a private chat must
+    not show that chat's name in the Schedule UI (ruling 7 — no names while
+    locked). The name stays intact AT REST (tasks.json is user-authored);
+    only the served copy masks. The scheduler treats the sentinel as
+    'keep existing' on write, so a sealed round-trip edit can't clobber."""
+    try:
+        tgt = task.get("chat_target")
+        if tgt and system.llm_chat.session_manager.is_chat_hidden(tgt):
+            task = dict(task)
+            task["chat_target"] = "__locked__"
+    except Exception:
+        pass
+    return task
+
+
 @router.get("/api/continuity/tasks")
 async def list_continuity_tasks(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """List continuity tasks. Optional ?heartbeat=true/false or ?type=daemon/webhook filter."""
     if not hasattr(system, 'continuity_scheduler') or not system.continuity_scheduler:
         return {"tasks": []}
-    tasks = system.continuity_scheduler.list_tasks()
+    tasks = [_mask_locked_target(system, t)
+             for t in system.continuity_scheduler.list_tasks()]
 
     # Type filter (new)
     type_filter = request.query_params.get("type")
@@ -422,7 +439,7 @@ async def get_continuity_task(task_id: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=503, detail="Continuity scheduler not available")
     task = system.continuity_scheduler.get_task(task_id)
     if task:
-        return task
+        return _mask_locked_target(system, task)
     else:
         raise HTTPException(status_code=404, detail="Task not found")
 

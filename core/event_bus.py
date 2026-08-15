@@ -21,8 +21,28 @@ class EventBus:
         self._subscriber_counter = 0
         logger.info(f"EventBus initialized (replay_size={replay_size})")
     
-    def publish(self, event_type: str, data: Optional[Dict[str, Any]] = None):
-        """Publish an event to all subscribers (sync and async)."""
+    # Ephemeral events aren't replayed to late subscribers. plugin_notice:
+    # a freshly-opened tab shouldn't surface a stale "done" toast. The
+    # voice_turn_* trio: transient paint events whose durable copy is chat
+    # history — replaying them re-paints fragments of a finished turn, and
+    # the ring would hold a private chat's spoken transcript in memory for
+    # any later tab, even past a vault lock (vaulted-chats Phase 0).
+    # tts_speak: replaying makes a late tab SPEAK stale text, and the ring
+    # would hold a private task response past a lock (Phase 3).
+    _EPHEMERAL_TYPES = frozenset({
+        "plugin_notice", "voice_turn_start", "voice_turn_chunk",
+        "voice_turn_end", "tts_speak",
+    })
+
+    def publish(self, event_type: str, data: Optional[Dict[str, Any]] = None,
+                ephemeral: bool = False):
+        """Publish an event to all subscribers (sync and async).
+
+        ephemeral=True keeps the event out of the replay ring — REQUIRED for
+        any event whose payload carries chat content (vaulted chats Phase 3:
+        the ring outlives a vault lock and replays to any later tab). Plugin
+        publishers can't reach the core name list above, so they must pass
+        the flag themselves."""
         event = {
             "type": event_type,
             "data": data or {},
@@ -30,15 +50,7 @@ class EventBus:
         }
 
         with self._lock:
-            # Ephemeral events aren't replayed to late subscribers. plugin_notice:
-            # a freshly-opened tab shouldn't surface a stale "done" toast. The
-            # voice_turn_* trio: transient paint events whose durable copy is chat
-            # history — replaying them re-paints fragments of a finished turn, and
-            # the ring would hold a private chat's spoken transcript (user_text /
-            # chunk text) in memory for any later tab, even past a vault lock
-            # (vaulted-chats Phase 0, 2026-08-13).
-            if event_type not in ("plugin_notice", "voice_turn_start",
-                                  "voice_turn_chunk", "voice_turn_end"):
+            if not ephemeral and event_type not in self._EPHEMERAL_TYPES:
                 self._replay_buffer.append(event)
             dead_subscribers = []
 
@@ -181,9 +193,10 @@ def get_event_bus() -> EventBus:
         _bus = EventBus()
     return _bus
 
-def publish(event_type: str, data: Optional[Dict[str, Any]] = None):
+def publish(event_type: str, data: Optional[Dict[str, Any]] = None,
+            ephemeral: bool = False):
     """Convenience function to publish to the global bus."""
-    get_event_bus().publish(event_type, data)
+    get_event_bus().publish(event_type, data, ephemeral=ephemeral)
 
 
 # Event type constants

@@ -552,7 +552,10 @@ class PluginLoader:
             except Exception as e:
                 logger.error(f"[PLUGINS] {name}: failed to register scopes: {e}", exc_info=True)
 
-        # Register hooks
+        # Register hooks. privacy_aware (manifest top-level, vaulted chats
+        # ruling F2): only plugins declaring it receive hooks for private-chat
+        # turns — undeclared plugins are withheld, fail-closed.
+        hook_runner.mark_privacy_aware(name, bool(manifest.get("privacy_aware")))
         hooks = capabilities.get("hooks", {})
         for hook_name, handler_path in hooks.items():
             handler_func = self._load_handler(plugin_dir, handler_path, hook_name)

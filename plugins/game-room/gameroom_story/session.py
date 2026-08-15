@@ -107,7 +107,21 @@ def _manifest_prompts():
         pieces = json.loads((_PLUGIN_DIR / "prompts" / "pieces.json").read_text(encoding="utf-8"))
     except Exception as e:
         logger.warning(f"[STORY] pieces.json unreadable: {e}")
-    monoliths.update(st.get_dynamic())  # restart-proof rendered story prompts
+    dyn = st.get_dynamic()  # restart-proof rendered story prompts
+    # Sealed filter (P3-T16): a hidden chat's rendered prompt is named
+    # '<role>@<chat suffix>' — merging it would surface that name in the
+    # GLOBAL prompt list while the vault is locked. Skipped, not dropped:
+    # the sidecar keeps it; the next unlocked restore re-merges.
+    try:
+        from core.api_fastapi import get_system
+        _sm = get_system().llm_chat.session_manager
+        owners = {e.get("prompt_name"): c
+                  for c, e in (st.get_active() or {}).items()}
+        dyn = {k: v for k, v in dyn.items()
+               if not (owners.get(k) and _sm.is_chat_hidden(owners[k]))}
+    except Exception:
+        pass
+    monoliths.update(dyn)
     return monoliths, pieces
 
 
@@ -376,6 +390,17 @@ def _start(system, slug, character, mode, local, session):
     chat = _chat_name(system, session)
     if session and not _chat_exists(system, chat):
         return f"No chat named '{chat}' — a story's session must be a real chat.", False
+    # Ruling F1 (P3): stories keep plaintext sidecars (journal, active.json)
+    # outside the vault — a private chat can't host one until chat-scoped
+    # plugin storage ships (v1.3). The UI's mode-tagged chats can never BE
+    # private; this closes the explicit-session / effective-chat door.
+    try:
+        _s = system.llm_chat.session_manager.get_settings_for(chat)
+        if isinstance(_s, dict) and _s.get("private_chat"):
+            return ("This chat is private — stories keep their saves outside "
+                    "the vault, so they can't run here yet.", False)
+    except Exception:
+        pass
     if st.get_active().get(chat):
         return f"A story is already active in this chat — story_end first.", False
     story = rooms.load_story(slug)
@@ -903,6 +928,15 @@ def _ending_card_url(story, state, room):
 def full_state(system, session=None):
     """Everything stored, for the Inspect modal — including False/None."""
     chat = _chat_name(system, session)
+    # Sealed-vault gate (P3-T9): a hidden session answers exactly like a
+    # nonexistent one — this funnel serves status AND inspect, which
+    # otherwise hand back the full state (sealed-blank text, whole prompt)
+    # for any chat name the caller supplies.
+    try:
+        if system and system.llm_chat.session_manager.is_chat_hidden(chat):
+            return None
+    except Exception:
+        pass
     # The 12s story-room poll funnels here (and stops when the tab hides) —
     # that makes this call the honest "a player is watching" signal the live
     # seal wait gates on. Browser-only path; server code never polls this.
@@ -975,6 +1009,13 @@ def last_played(system, session=None):
     chat = _chat_name(system, session)
     if not chat or st.get_active().get(chat):
         return None
+    # Sealed-vault gate (P3-T9): a hidden chat's finished playthrough
+    # (ending card, story title) answers like it never happened.
+    try:
+        if system and system.llm_chat.session_manager.is_chat_hidden(chat):
+            return None
+    except Exception:
+        pass
     best = None
     for slug in rooms.list_stories():
         try:

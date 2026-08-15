@@ -357,6 +357,9 @@ class ContinuityScheduler:
 
     def create_task(self, data: Dict) -> Dict:
         """Create new task, returns the created task."""
+        # P3-T14: the sealed-vault display mask is never a real target.
+        if data.get("chat_target") == "__locked__":
+            data = {k: v for k, v in data.items() if k != "chat_target"}
         task_type = data.get("type", "heartbeat" if data.get("heartbeat") else "task")
 
         with self._lock:
@@ -456,6 +459,11 @@ class ContinuityScheduler:
             
             task = self._tasks[task_id]
             old_prompt = task.get("prompt") if "prompt" in data else None
+
+            # P3-T14: '__locked__' is the route's sealed-vault display mask,
+            # never a real target — a round-trip edit keeps the stored name.
+            if data.get("chat_target") == "__locked__":
+                data = {k: v for k, v in data.items() if k != "chat_target"}
 
             # Validate cron if provided
             if "schedule" in data:

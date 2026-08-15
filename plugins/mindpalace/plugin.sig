@@ -3,7 +3,8 @@
   "version": "0.15.0",
   "files": {
     "README.md": "sha256:5abb98016f50b66cfdfb5610bdd8b4e9059b7ce7b6ed62a39b1d979ee9821728",
-    "plugin.json": "sha256:474cec0c498335482860274ea76d582cf10c987223699636c763acb991846b0b",
+    "hooks/chat_vaulted.py": "sha256:6ecede9c400d711a0ff056398286e2eccf354976c906af6e62d9c6a7fccedf99",
+    "plugin.json": "sha256:d49ebc626081e483cb1f458e7ff0b483a5243fd0960788cfcf6050aceb22ac83",
     "routes/browse.py": "sha256:7b06d413fa213024719fcbd5b8f1695a6e9b47423e72d99b202c014a7114c53e",
     "routes/goals_routes.py": "sha256:5bd7a69960707327c0cb17b92238e8547ba95f338ef2224d2e0bd7580afd64c0",
     "routes/library_routes.py": "sha256:7003b18c8cb67311e32004452a37f78e4e368cdda00158e08a94aa984b0ba107",
@@ -43,6 +44,7 @@
     "tests/test_resident.py": "sha256:795b8d48dacfbf81432fa5abdd721a3c50abf175573b10a814302a90b6ab069d",
     "tests/test_scout_fixes.py": "sha256:296a5feb5d36d04ee1e57dcac70d260a95007ba0afacd9677234a8702b1ecb7b",
     "tests/test_temporal.py": "sha256:b6e6809f2e4cab13dda9a87813e3ce72efe4ac6cab5dce3747af1d3ca8b81290",
+    "tests/test_vault_privacy_p3.py": "sha256:49eb6614f2471f0bd6b9240d8fd407da6527ab15ed75b06511b8ef2cbf100303",
     "tests/test_wake_ledger.py": "sha256:9dc86e8994e1c05b0d7e134a952850409be701897335589349ca80038ebd7209",
     "tools/dynamics.py": "sha256:0fe74a58450b38d7056cc3e2b244a0ca3996b515c19c7b6a87e40318e61afddd",
     "tools/geonames.py": "sha256:4130d0f7ab8b234e8a4d2236d748bc4c682593c5695ed83229b622d34cf74bb8",
@@ -55,7 +57,7 @@
     "tools/librarian_tools.py": "sha256:791b5c535c586807f4acfa95bfa5883c8e862644c22001ff51256858db076a5f",
     "tools/library.py": "sha256:2dace3b1968dde274fa82d3fc7bce7aac5343d28d19cf607a4470bf0011304ac",
     "tools/library_tools.py": "sha256:cd10b48c6d8cd772c607826b074436ebc92f8036cf7c2cad10aaa9d725f3ee52",
-    "tools/metadata.py": "sha256:c234b333c6582a8cf3e289206e27efec1d852d7aceadae453d8d43e1b6a6b41c",
+    "tools/metadata.py": "sha256:8ca10bffed6064e3167127e3ef5ba25cd60076b03a0101c9eaf7bd2042aac7ed",
     "tools/palace_tools.py": "sha256:4388e8aef9840ace76a9626f8e99f670cd3f82a624e27e915b4e6f61ab36c676",
     "tools/prompt_audit.py": "sha256:68c3cf6787f66344eece7f7ef421ef9d8d5c8201420bbabe75b516e75f2a7a54",
     "tools/self_tools.py": "sha256:a68b61ea0e0f5b4fa1927608141b770b9a6cdfb06606c5300a447296d84a5d49",
@@ -64,5 +66,5 @@
     "tools/temporal.py": "sha256:2b387fbd3c8553b5cf2d8700b8b1e35a8902f0a885779aa7a694d28741847daa",
     "tools/vision_embed.py": "sha256:3d9a9772e638dc08fde36e28ffede91bb4c055330cc55fdaaf65787d9ee087e5"
   },
-  "signature": "HDhG+LPE6/Mw1VU3EoRZCqc4GxnLuhHp+fzXwePVrdFBd5QvD9sRC2ujGXuYGt+Fi2NwJyVCyi3RiiyaiigjAQ=="
+  "signature": "VtF/1oYs6AMGAdj5JUjHIkmdP3VCRIPIyZ24hMQitEH/47pO/quH5HeGsffiY6sl9tB8S61EbhDsfib42QjFBA=="
 }

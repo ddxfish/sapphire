@@ -147,11 +147,16 @@ def _create_llm_worker():
 
         def __init__(self, agent_id, name, mission, chat_name='', on_complete=None,
                      model='', toolset='default', prompt='agent',
-                     _inherit_scopes=True, **kwargs):
+                     _inherit_scopes=True, _privacy_required=False, **kwargs):
             super().__init__(agent_id, name, mission, chat_name, on_complete)
             self._model = model
             self._toolset = toolset
             self._prompt = prompt
+            # Snapshotted from the SPAWNING chat's scope_private (P3-T2/F4):
+            # the worker thread can't read the caller's ContextVar, and
+            # without this carrier a private chat's mission ran on a cloud
+            # provider with network tools unblocked.
+            self._privacy_required = _privacy_required
             # When spawn_agent was called with prompt='self' (not an explicit
             # persona name), this is False. `self` means "inherit identity
             # (voice/prompt/toolset) but NOT data access (scopes)." The
@@ -246,6 +251,11 @@ def _create_llm_worker():
                 'inject_datetime': True,
                 **scope_settings,
             }
+            if self._privacy_required:
+                # Same carrier the continuity executor uses (Phase 0):
+                # ExecutionContext gates provider selection AND network
+                # tools off it. Ruling F4: inherit, fail loudly at use.
+                task_settings['privacy_required'] = True
 
             system = get_system()
             fm = system.llm_chat.function_manager
@@ -537,8 +547,23 @@ def _spawn_agent(manager, arguments, ps):
     agent_type = arguments.get('agent_type', 'llm')
     chat_name = _get_active_chat()
 
+    # P3-T2 (ruling F4): snapshot the SPAWNING chat's privacy while still in
+    # the caller's context — the worker runs on a bare thread and can't see
+    # this ContextVar. Private chat → LLM agents inherit local-only +
+    # network-tool blocking; Claude Code agents ARE a cloud service, refuse.
+    try:
+        from core.chat.function_manager import scope_private
+        _privacy = bool(scope_private.get())
+    except Exception:
+        _privacy = True   # unreadable = fail closed
+    if _privacy and agent_type != 'llm':
+        return ("This chat is private — Claude Code agents run through a "
+                "cloud service and can't be dispatched from here.", False)
+
     # Build kwargs based on agent type
     kwargs = {}
+    if _privacy:
+        kwargs['_privacy_required'] = True
 
     if agent_type == 'llm':
         model_arg = arguments.get('model', '')

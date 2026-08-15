@@ -55,6 +55,12 @@ class HookEvent:
                            chat's per-chat state here — otherwise recreating the
                            name resurrects it. Fires after the delete succeeds,
                            on EVERY path (single, bulk, manage). 2026-08-05.
+        chat_vaulted:      A chat was just encrypted into the vault (marked
+                           private). metadata: `name`. Plugins holding plaintext
+                           deposits keyed by or containing this chat's name
+                           scrub them here (full-scrub ruling F5, 2026-08-15).
+                           Delivered ONLY to privacy_aware plugins — the event
+                           itself says "this name is private".
 
     Fields:
         input: User's message / STT transcription (mutable in post_stt, pre_chat)
@@ -75,6 +81,14 @@ class HookEvent:
         tts_text: Text about to be spoken for pre_tts (mutable) / spoken text for post_tts
         skip_tts: Set True in pre_tts to cancel TTS entirely
         ephemeral: Set True with skip_llm to show response without persisting to history
+        chat_name: THIS turn's effective chat (stamped by the runner via the
+                   privacy resolver; fire sites may pre-stamp). None until resolved.
+        chat_private: True when that chat is private (vaulted chats Phase 3).
+                   None = not yet resolved — the runner resolves it once per fire.
+                   Private turns are delivered ONLY to plugins that declare
+                   `"privacy_aware": true` in their manifest (ruling F2: core
+                   withholds; a plugin with no privacy signal must not receive
+                   private-chat content it might persist or transmit).
     """
     input: str = ""
     skip_llm: bool = False
@@ -97,6 +111,8 @@ class HookEvent:
     tts_text: Optional[str] = None
     skip_tts: bool = False
     ephemeral: bool = False
+    chat_name: Optional[str] = None
+    chat_private: Optional[bool] = None
 
 
 class HookRunner:
@@ -114,11 +130,39 @@ class HookRunner:
         80-99: Observation (logging, analytics)
     """
 
+    # Hooks that deliver regardless of chat privacy (vaulted chats ruling F2
+    # carve-out): rename/delete are HOUSEKEEPING — withholding them strands a
+    # private chat's plugin-side data under a stale name, creating the exact
+    # plaintext orphan the gate exists to prevent. The others carry no chat
+    # content and no chat identity.
+    ALWAYS_DELIVER = frozenset({
+        "chat_renamed", "chat_deleted", "plugins_ready",
+        "provider_switched", "on_wake",
+    })
+
     def __init__(self):
         # {hook_name: [(priority, handler, plugin_name, voice_match)]}
         self._hooks: Dict[str, List[tuple]] = {}
         self._sorted: Dict[str, bool] = {}
         self._lock = threading.Lock()
+        # Vaulted chats Phase 3 (ruling F2): core installs a resolver at boot
+        # returning (effective_chat_name, is_private) for the current turn;
+        # plugins whose manifest declares privacy_aware register here.
+        self._privacy_resolver: Optional[Callable] = None
+        self._privacy_aware: set = set()
+
+    def set_privacy_resolver(self, resolver: Optional[Callable]):
+        """Install the (chat_name, is_private) resolver. None uninstalls
+        (tests / pre-boot): with no resolver, turns resolve as public."""
+        self._privacy_resolver = resolver
+
+    def mark_privacy_aware(self, plugin_name: str, aware: bool = True):
+        """Record a plugin's manifest-declared privacy awareness. Only
+        privacy_aware plugins receive hooks for private-chat turns."""
+        if aware:
+            self._privacy_aware.add(plugin_name)
+        else:
+            self._privacy_aware.discard(plugin_name)
 
     def register(self, hook_name: str, handler: Callable, priority: int = 50,
                  plugin_name: str = "", voice_match: dict = None):
@@ -156,6 +200,7 @@ class HookRunner:
         """Remove all handlers for a plugin from all hooks."""
         for hook_name in list(self._hooks.keys()):
             self.unregister(hook_name, plugin_name)
+        self._privacy_aware.discard(plugin_name)
 
     def _ensure_sorted(self, hook_name: str):
         if not self._sorted.get(hook_name, True):
@@ -208,7 +253,26 @@ class HookRunner:
 
         is_ghost_hook = (hook_name == "ghost_inject")
 
+        # Resolve this turn's chat identity once per fire (ruling F2). A fire
+        # site may pre-stamp chat_private (e.g. chat_vaulted = True by
+        # definition); ALWAYS_DELIVER hooks skip resolution entirely; a
+        # resolver failure fails CLOSED (treat as private).
+        if event.chat_private is None:
+            if hook_name in self.ALWAYS_DELIVER or self._privacy_resolver is None:
+                event.chat_private = False
+            else:
+                try:
+                    event.chat_name, event.chat_private = self._privacy_resolver()
+                except Exception:
+                    event.chat_private = True
+
+        withhold = bool(event.chat_private) and hook_name not in self.ALWAYS_DELIVER
+
         for priority, handler, plugin_name, voice_match in snapshot:
+            if withhold and plugin_name not in self._privacy_aware:
+                logger.debug(f"[HOOKS] '{hook_name}' withheld from {plugin_name} "
+                             f"(private chat, plugin not privacy_aware)")
+                continue
             if not self._check_voice_match(voice_match, event.input):
                 continue
 
@@ -261,6 +325,8 @@ class HookRunner:
         with self._lock:
             self._hooks.clear()
             self._sorted.clear()
+            self._privacy_resolver = None
+            self._privacy_aware.clear()
 
 
 # Singleton

@@ -433,13 +433,22 @@ class ContinuityExecutor:
                         except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                     if response:
+                        # P3-T5 (background/ephemeral path — no target chat):
+                        # privacy_required is the carrier; local-only TTS via
+                        # the same gate a private chat uses.
                         if browser_tts:
                             publish(Events.TTS_SPEAK, {"text": response, "task": task_name})
                         elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
-                            try:
-                                self.system.tts.speak_sync(response)
-                            except Exception as tts_err:
-                                logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                            from core.voice_privacy import tts_gate_reason
+                            _gate = tts_gate_reason(
+                                {"private_chat": bool(task_settings.get("privacy_required"))})
+                            if _gate:
+                                logger.info(f"[Continuity] TTS gated: {_gate}")
+                            else:
+                                try:
+                                    self.system.tts.speak_sync(response)
+                                except Exception as tts_err:
+                                    logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
                     result["responses"].append({
                         "iteration": 1,
@@ -744,13 +753,27 @@ class ContinuityExecutor:
                     except Exception as _e: logger.error(f"[Continuity] Response callback failed: {_e}")
 
                 if response:
+                    # P3-T5: TTS evaluates the TASK's chat, not the operator's
+                    # (the brain override is already reset here, so the
+                    # client-side self-gate would read the wrong chat). A
+                    # private chat's response never broadcasts to every tab.
+                    _priv_chat = bool(chat_settings.get("private_chat"))
                     if browser_tts:
-                        publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
+                        if _priv_chat:
+                            logger.info("[Continuity] browser TTS skipped — target chat is private")
+                        else:
+                            publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
                     elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
-                        try:
-                            self.system.tts.speak_sync(response)
-                        except Exception as tts_err:
-                            logger.warning(f"[Continuity] TTS failed: {tts_err}")
+                        from core.voice_privacy import tts_gate_reason
+                        _gate = tts_gate_reason({"private_chat": _priv_chat or
+                                                 bool(task_settings.get("privacy_required"))})
+                        if _gate:
+                            logger.info(f"[Continuity] TTS gated: {_gate}")
+                        else:
+                            try:
+                                self.system.tts.speak_sync(response)
+                            except Exception as tts_err:
+                                logger.warning(f"[Continuity] TTS failed: {tts_err}")
 
                 result["responses"].append({
                     "iteration": 1,

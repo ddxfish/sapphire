@@ -1,5 +1,6 @@
 {
   "name": "twilio-voice",
+  "privacy_aware": true,
   "short_display_name": "Twilio Voice",
   "version": "0.3.0",
   "description": "Sapphire answers real phone calls over Twilio SIP — no open ports (outbound SIP registration). Multi-account; per-number on/off via Triggers > Daemon.",

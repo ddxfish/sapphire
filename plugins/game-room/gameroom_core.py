@@ -266,7 +266,21 @@ def session_cfg(session=None):
         logger.warning(f'game-room: settings lookup failed for session {session!r}: {e}')
         s = None
     if not isinstance(s, dict):
+        # Named session with unreadable settings: if the chat is hidden
+        # (private + vault sealed) the seat must FAIL CLOSED — before this,
+        # a hidden session silently lost its own llm_primary and fell to
+        # the room-wide provider (P3-T3). is_chat_hidden fails open on DB
+        # error, keeping the transient-error posture unchanged.
+        try:
+            from core.api_fastapi import get_system
+            cfg['hidden'] = bool(get_system().llm_chat.session_manager
+                                 .is_chat_hidden(session))
+        except Exception:
+            pass
         return cfg
+    # Private session chat → the seat inherits core's local-only rule
+    # (the explicit-key path here used to bypass it entirely — P3-T3).
+    cfg['privacy_required'] = bool(s.get('private_chat'))
     cfg['persona'] = s.get('persona') or None
     cfg['prompt'] = s.get('prompt') or None
     cfg['provider'] = s.get('llm_primary') or 'auto'
@@ -411,10 +425,30 @@ def _extract_json(text):
     return None
 
 
-def _get_provider(provider_key=None, model=''):
+def _is_local_provider(key):
+    """Mirror of core's private-chat provider check (chat.py): config
+    is_local wins, PROVIDER_METADATA fills in. Unverifiable = cloud."""
+    try:
+        import config
+        from core.chat.llm_providers import PROVIDER_METADATA
+        pconf = {**getattr(config, 'LLM_PROVIDERS', {}),
+                 **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}.get(key, {})
+        meta = PROVIDER_METADATA.get(key, {})
+        return bool(pconf.get('is_local', meta.get('is_local', False)))
+    except Exception:
+        return False
+
+
+def _get_provider(provider_key=None, model='', privacy_required=False):
     """Explicit provider by key (with optional model override), else the live
-    chat's brain, else Auto default."""
+    chat's brain, else Auto default. privacy_required=True (private session
+    chat, P3-T3) allows LOCAL providers only — refusal never falls back to
+    a cloud pick."""
     if provider_key and provider_key != 'auto':
+        if privacy_required and not _is_local_provider(provider_key):
+            logger.warning(f'game-room: provider {provider_key!r} is not local '
+                           f'— refused for a private session')
+            return None
         try:
             from core.chat.llm_providers import provider_registry
             p = provider_registry.get_provider_by_key(provider_key, model_override=model or '')
@@ -423,6 +457,24 @@ def _get_provider(provider_key=None, model=''):
             logger.warning(f'game-room: provider {provider_key!r} unavailable, falling back to auto')
         except Exception as e:
             logger.warning(f'game-room: provider lookup {provider_key!r} failed: {e}')
+    if privacy_required:
+        # Local-only auto: filter the roster before picking.
+        try:
+            import config
+            from core.chat.llm_providers import provider_registry
+            providers_config = {**getattr(config, 'LLM_PROVIDERS', {}),
+                                **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
+            local_cfg = {k: v for k, v in providers_config.items()
+                         if v.get('enabled') and _is_local_provider(k)}
+            order = [k for k in getattr(config, 'LLM_FALLBACK_ORDER', list(local_cfg))
+                     if k in local_cfg] or list(local_cfg)
+            got = provider_registry.get_first_available_provider(local_cfg, order)
+            if got:
+                return got[1]
+        except Exception as e:
+            logger.warning(f'game-room: local-only provider lookup failed: {e}')
+        logger.warning('game-room: private session — no local provider available')
+        return None
     try:
         from core.api_fastapi import get_system
         system = get_system()
@@ -528,7 +580,11 @@ def _system_prompt(contract, view, cfg, gcfg=None):
 def _call_llm(system, user, cfg):
     """One-shot completion → think-stripped content string, or None."""
     cfg = cfg or {}
-    provider = _get_provider(cfg.get('provider'), cfg.get('model', ''))
+    if cfg.get('hidden'):
+        logger.warning('game-room: session chat is sealed in a locked vault — seat refused')
+        return None
+    provider = _get_provider(cfg.get('provider'), cfg.get('model', ''),
+                             privacy_required=bool(cfg.get('privacy_required')))
     if provider is None:
         logger.warning('game-room: no LLM provider available')
         return None

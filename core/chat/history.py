@@ -692,7 +692,8 @@ class ConversationHistory:
                 break
 
         if user_index == -1:
-            logger.warning(f"User message not found for deletion: {user_content[:50]}...")
+            # Never the text itself — logs are plaintext at rest (ruling F3).
+            logger.warning(f"User message not found for deletion ({len(user_content)} chars)")
             return False
 
         messages_to_delete = len(self.messages) - user_index
@@ -1961,16 +1962,35 @@ class ChatSessionManager:
         try:
             with self._get_connection() as conn:
                 # vaulted (Phase 2) OR the legacy plaintext flag (vaulted=0
-                # pre-encryption chats). Encrypted settings answer NULL to
-                # json_extract, which is why the plaintext column exists.
+                # pre-encryption chats). Parse in Python, NOT json_extract:
+                # SQLite RAISES 'malformed JSON' on an '@enc1:' settings
+                # string, and that exception fail-opened this gate for every
+                # fully-vaulted chat (caught by the P3 test pack 2026-08-15).
                 row = conn.execute(
-                    "SELECT vaulted, json_extract(settings, '$.private_chat') "
-                    "FROM chats WHERE name = ?",
+                    "SELECT vaulted, settings FROM chats WHERE name = ?",
                     (chat_name,)).fetchone()
-            return bool(row and (row[0] or row[1]))
+            if not row:
+                return False
+            if row[0]:
+                return True
+            s = row[1]
+            if isinstance(s, str) and s.startswith("@enc1:"):
+                return True   # encrypted settings = vaulted, whatever the flag says
+            try:
+                return bool(json.loads(s or "{}").get("private_chat"))
+            except Exception:
+                return False
         except Exception as e:
-            logger.warning(f"_vault_hidden('{chat_name}') read failed — treating as visible: {e}")
+            logger.warning(f"_vault_hidden read failed — treating as visible: {e}")
             return False
+
+    def is_chat_hidden(self, chat_name: str) -> bool:
+        """PUBLIC seam for plugins (P3): True when this chat must be treated
+        as nonexistent (private + vault sealed). Explicit — plugins must not
+        reverse-engineer the get_settings_for(None) sentinel, which also
+        means 'no such chat'. Same semantics as every by-name store gate,
+        active-chat exemption included."""
+        return self._vault_hidden(chat_name)
 
     def list_chat_files(self, stats: bool = False,
                         include_hidden: bool = False) -> List[Dict[str, Any]]:
@@ -2313,17 +2333,23 @@ class ChatSessionManager:
         return None
 
     def _save_last_active(self, chat_name):
-        """Persist active chat name for restart recovery."""
+        """Persist active chat name for restart recovery. A private active
+        chat BLANKS the marker instead (full-scrub ruling F5: no private
+        name at rest in a sidecar file) — restart then lands on default,
+        which is where boot eviction would put you anyway."""
         marker = self.history_dir / ".active_chat"
         try:
-            marker.write_text(chat_name, encoding='utf-8')
+            if self.current_settings.get('private_chat'):
+                marker.write_text("", encoding='utf-8')
+            else:
+                marker.write_text(chat_name, encoding='utf-8')
         except Exception:
             pass
 
     def set_active_chat(self, chat_name: str) -> bool:
         """Switch to a different chat - loads messages AND settings."""
         if self._vault_hidden(chat_name):
-            logger.warning(f"Cannot switch to '{chat_name}' — sealed in a locked vault")
+            logger.warning("Chat switch refused — target is sealed in a locked vault")
             return False
         with self._lock:
             if chat_name == self.active_chat_name:
@@ -2483,12 +2509,53 @@ class ChatSessionManager:
                             (self._enc_value_bytes(r["data"]), r["id"]))
                 conn.commit()
             self._scrub_wal()
-            logger.info(f"[VAULT] chat '{chat_name}' encrypted "
-                        f"({n_rows} rows + settings + images)")
+            self._scrub_public_deposits(chat_name)
+            # T8: vault-labeled log lines never carry the name — writing
+            # "chat 'X' encrypted" records X as secret at the exact moment
+            # it becomes one (and logs are plaintext at rest for 30 days).
+            logger.info(f"[VAULT] chat encrypted ({n_rows} rows + settings + images)")
             return True, ''
         except Exception as e:
-            logger.error(f"vault_chat('{chat_name}') failed: {e}")
+            logger.error(f"vault_chat failed: {e}")
             return False, str(e)
+
+    def _scrub_public_deposits(self, chat_name: str):
+        """Full-scrub (ruling F5, 2026-08-15): a chat that just went private
+        also cleans the plaintext deposits it left while public. Best-effort
+        — the encryption itself already committed. Covers: stale compress
+        exports (the one CONTENT tunnel), token-metrics rows (name+counts+
+        timestamps), the .active_chat marker, and — via the chat_vaulted
+        hook — plugin-side deposits (mindpalace provenance)."""
+        try:
+            exports_dir = self.history_dir / "exports"
+            # Exact-stamp match so chat 'email' never eats an export belonging
+            # to chat 'email_backup'.
+            pat = re.compile(re.escape(chat_name) + r"_\d{8}_\d{6}\.json$")
+            if exports_dir.is_dir():
+                for f in exports_dir.iterdir():
+                    if pat.fullmatch(f.name):
+                        f.unlink()
+                        logger.info("[VAULT] scrubbed a stale plaintext export")
+        except Exception as e:
+            logger.warning(f"[VAULT] export scrub failed: {e}")
+        try:
+            from core.metrics import metrics as token_metrics
+            token_metrics.scrub_chat(chat_name)
+        except Exception as e:
+            logger.warning(f"[VAULT] metrics scrub failed: {e}")
+        try:
+            marker = self.history_dir / ".active_chat"
+            if marker.exists() and marker.read_text(encoding='utf-8').strip() == chat_name:
+                marker.write_text("", encoding='utf-8')
+        except Exception:
+            pass
+        try:
+            from core.hooks import hook_runner, HookEvent
+            hook_runner.fire("chat_vaulted", HookEvent(
+                metadata={"name": chat_name}, chat_name=chat_name,
+                chat_private=True))
+        except Exception as e:
+            logger.warning(f"[VAULT] chat_vaulted hook failed: {e}")
 
     def unvault_chat(self, chat_name: str):
         """(ok, err): decrypt a vaulted chat back to plaintext (Chat Manager
@@ -2536,10 +2603,10 @@ class ChatSessionManager:
                         conn.execute("UPDATE tool_images SET data = ? WHERE id = ?",
                                      (d, r["id"]))
                 conn.commit()
-            logger.info(f"[VAULT] chat '{chat_name}' decrypted back to plaintext")
+            logger.info("[VAULT] chat decrypted back to plaintext")
             return True, ''
         except Exception as e:
-            logger.error(f"unvault_chat('{chat_name}') failed: {e}")
+            logger.error(f"unvault_chat failed: {e}")
             return False, str(e)
 
     def vault_pending_private(self) -> int:
@@ -2561,7 +2628,7 @@ class ChatSessionManager:
             if ok:
                 n += 1
             else:
-                logger.warning(f"[VAULT] deferred encrypt of '{name}' failed: {err}")
+                logger.warning(f"[VAULT] deferred encrypt of a pending chat failed: {err}")
         if n:
             logger.info(f"[VAULT] encrypted {n} pending private chat(s) at unlock")
         return n
@@ -2806,7 +2873,7 @@ class ChatSessionManager:
         if self._vault_hidden(chat_name):
             # Sealed vault: a background writer must not touch (or reveal) a
             # hidden chat. Loud — this is the cron/daemon write path.
-            logger.warning(f"append to '{chat_name}' refused — chat is sealed in a locked vault")
+            logger.warning("append refused — target chat is sealed in a locked vault")
             return False
 
         # Defer if the target is the active chat and a stream is running.
@@ -3074,6 +3141,19 @@ class ChatSessionManager:
             pass
         return self.current_settings.copy()
 
+    def metrics_chat_label(self) -> str:
+        """Chat label for the token-metrics deposit. token_usage.db is
+        plaintext at rest and outlives the vault, and per-chat
+        name+counts+timestamps are exactly what the lock hides — so private
+        chats deposit as '__private__' (totals/summaries unaffected; nothing
+        groups by chat today). Fail-closed: an unreadable answer masks."""
+        try:
+            if self.get_chat_settings().get('private_chat'):
+                return '__private__'
+            return self._effective_chat_name()
+        except Exception:
+            return '__private__'
+
     def get_settings_for(self, chat_name: str) -> Optional[Dict[str, Any]]:
         """Read a specific chat's settings from disk (does NOT activate it).
         Returns None if the chat doesn't exist."""
@@ -3120,6 +3200,14 @@ class ChatSessionManager:
                 return ok
             was_priv = bool(self.current_settings.get('private_chat'))
             new_priv = bool(settings.get('private_chat', was_priv))
+            if new_priv and not was_priv \
+                    and (settings.get('mode', self.current_settings.get('mode'))):
+                # Ruling F1 (2026-08-15): game/story chats can't be private —
+                # their engines keep plaintext sidecars outside the vault
+                # (journal, saves). Lifted when chat-scoped plugin storage
+                # ships (v1.3).
+                logger.warning("[VAULT] refused: game/story chats can't be private yet")
+                return False
             if was_priv and not new_priv:
                 # Unflip: decrypt BEFORE the flag drops — no-op for legacy
                 # unvaulted private chats; refusal refuses the write.
@@ -3140,7 +3228,7 @@ class ChatSessionManager:
                 # hiding holds and the unlock sweep retries.
                 ok, err = self.vault_chat(self.active_chat_name)
                 if not ok:
-                    logger.warning(f"[VAULT] encrypt of '{self.active_chat_name}' deferred: {err}")
+                    logger.warning(f"[VAULT] encrypt of active chat deferred: {err}")
             return True
         except Exception as e:
             logger.error(f"Failed to update settings: {e}")
@@ -3175,6 +3263,13 @@ class ChatSessionManager:
                     return False
                 was_priv = bool(s.get('private_chat'))
                 new_priv = bool(patch.get('private_chat', was_priv))
+                if new_priv and not was_priv \
+                        and (patch.get('mode', s.get('mode'))):
+                    # Ruling F1: game/story chats keep plaintext sidecars
+                    # outside the vault — refuse private until chat-scoped
+                    # plugin storage ships (v1.3).
+                    logger.warning("[VAULT] refused: game/story chats can't be private yet")
+                    return False
                 if was_priv and not new_priv and row['vaulted']:
                     # Unflip: DECRYPT FIRST — a public chat must never sit
                     # with encrypted rows. Refusal (sealed/tamper) refuses
@@ -3183,8 +3278,8 @@ class ChatSessionManager:
                     # doesn't deadlock the WAL.
                     ok, err = self.unvault_chat(chat_name)
                     if not ok:
-                        logger.warning(f"[VAULT] decrypt of '{chat_name}' "
-                                       f"refused the settings write: {err}")
+                        logger.warning(f"[VAULT] decrypt refused the settings "
+                                       f"write: {err}")
                         return False
                 old_prompt = s.get('prompt') if 'prompt' in patch else None
                 s.update(patch)
@@ -3208,7 +3303,7 @@ class ChatSessionManager:
                 # applies and the unlock sweep retries the encryption.
                 ok, err = self.vault_chat(chat_name)
                 if not ok:
-                    logger.warning(f"[VAULT] encrypt of '{chat_name}' deferred: {err}")
+                    logger.warning(f"[VAULT] encrypt deferred: {err}")
             return True
         except Exception as e:
             logger.error(f"set_named_chat_settings failed for '{chat_name}': {e}")
@@ -3519,11 +3614,17 @@ class ChatSessionManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT data, media_type FROM tool_images WHERE id = ?",
+                    "SELECT data, media_type, chat_name FROM tool_images WHERE id = ?",
                     (image_id,)
                 )
                 row = cursor.fetchone()
                 if not row:
+                    return None
+                # Hidden-owner gate (P3): crypto alone misses a legacy
+                # private_chat=1/vaulted=0 chat, whose images are still
+                # PLAINTEXT — the disclosure check must not rely on the
+                # bytes being ciphertext.
+                if self._vault_hidden(row[2]):
                     return None
                 from core import prompt_vault
                 data = row[0]

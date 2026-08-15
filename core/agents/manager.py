@@ -114,7 +114,8 @@ class AgentManager:
             'agent_type': agent_type,
         })
 
-        logger.info(f"Agent {name} ({agent_id}) spawned: type={agent_type}, mission={mission[:80]}")
+        logger.info(f"Agent {name} ({agent_id}) spawned: type={agent_type}, "
+                    f"mission {len(mission)} chars")
         return {'id': agent_id, 'name': name}
 
     def check_all(self, chat_name='') -> list:

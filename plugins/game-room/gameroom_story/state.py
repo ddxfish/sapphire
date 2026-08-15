@@ -147,6 +147,18 @@ def append(story, chat, event):
             if not _anchor_warned:
                 _anchor_warned = True
                 logger.warning(f"[STORY] turn anchors not recording (first failure: {e}) — revert-to-message will lack alignment for this run")
+    # Sealed-vault backstop (P3-T9): never accrue journal events on disk for
+    # a hidden chat — the chat is invisible everywhere else, its sidecar
+    # must not keep moving. Loud, matching the fail-loudly ruling.
+    try:
+        from core.api_fastapi import get_system
+        _sys = get_system()
+        if _sys and _sys.llm_chat.session_manager.is_chat_hidden(chat):
+            logger.warning("[STORY] journal write refused — session chat is "
+                           "sealed in a locked vault")
+            return
+    except Exception:
+        pass
     path = journal_path(story, chat)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _lock:

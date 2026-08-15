@@ -1,5 +1,6 @@
 {
   "name": "captioning",
+  "privacy_aware": true,
   "short_display_name": "Captioning",
   "version": "0.1.0",
   "description": "Live captions for streaming TTS — demo of the v2.7.0 tts_chunk_text hook surface. Shows each spoken sentence in a banner near the bottom of the screen.",

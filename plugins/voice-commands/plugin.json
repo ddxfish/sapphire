@@ -1,5 +1,6 @@
 {
   "name": "voice-commands",
+  "privacy_aware": true,
   "short_display_name": "Voice Commands",
   "version": "1.0.0",
   "description": "Voice Commands — stop, reset, and other instant voice actions",

@@ -194,8 +194,11 @@ function render() {
         const hits = deepHits?.get(c.name);
         // 🗝 toggle: only while the vault is open, or absent entirely (the
         // pre-vault v1 flag). Sealed vault: the server 403s membership
-        // changes anyway — no button, no tease.
-        const canVault = !vaultState.exists || vaultState.unlocked;
+        // changes anyway — no button, no tease. Game/story chats can't GO
+        // private (ruling F1: plaintext sidecars — server 409s too), but a
+        // legacy already-private one still gets its 🔓 out.
+        const canVault = (!vaultState.exists || vaultState.unlocked)
+            && (c.private_chat || !(c.mode ?? c.settings?.mode));
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
             <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>

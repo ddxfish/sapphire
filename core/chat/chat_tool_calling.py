@@ -257,7 +257,14 @@ def _save_tool_image(img, history=None):
         img_bytes = base64.b64decode(img["data"])
 
         if history and hasattr(history, 'save_tool_image'):
-            history.save_tool_image(full_id, img_bytes, media_type)
+            # EFFECTIVE chat, not active: a phone/background stream's image
+            # belongs to ITS chat — keying it to the operator's open chat
+            # both mis-cascades AND stores a private chat's image plaintext
+            # (the encrypt decision reads the owner's vaulted flag). P3-T4.
+            owner = None
+            if hasattr(history, '_effective_chat_name'):
+                owner = history._effective_chat_name()
+            history.save_tool_image(full_id, img_bytes, media_type, chat_name=owner)
             logger.info(f"[TOOL] Saved tool image to DB: {full_id}")
         else:
             # Fallback to disk if no history available (isolated tool calls)

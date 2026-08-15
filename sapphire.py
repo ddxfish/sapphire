@@ -99,6 +99,16 @@ class VoiceChatSystem:
         self._init_tts_provider(tts_provider, base_dir)
 
         self.llm_chat = LLMChat(self.history, system=self)
+
+        # Vaulted chats Phase 3 (ruling F2): hook runner resolves each fire's
+        # effective chat + privacy through the session manager; private turns
+        # then reach only privacy_aware plugins.
+        from core.hooks import hook_runner as _hr
+        _sm = self.llm_chat.session_manager
+        _hr.set_privacy_resolver(
+            lambda: (_sm._effective_chat_name(),
+                     bool((_sm.get_chat_settings() or {}).get('private_chat'))))
+
         self._hand_back_game_chat()
         self._prime_default_prompt()
         self._apply_initial_chat_settings()
@@ -280,7 +290,11 @@ class VoiceChatSystem:
         """Remove RAG scopes for chats that no longer exist."""
         try:
             from plugins.memory.tools import knowledge_tools as knowledge
-            chat_names = [c["name"] for c in self.llm_chat.list_chats()]
+            # include_hidden: boot always comes up vault-sealed, so the plain
+            # list omits vaulted chats — treating them as orphans would DELETE
+            # their RAG documents. A sweep that deletes must never run blind.
+            chat_names = [c["name"] for c in
+                          self.llm_chat.session_manager.list_chat_files(include_hidden=True)]
             knowledge.cleanup_orphaned_rag_scopes(chat_names)
         except Exception as e:
             logger.warning(f"RAG orphan cleanup failed: {e}", exc_info=True)

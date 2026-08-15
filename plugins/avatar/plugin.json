@@ -1,5 +1,6 @@
 {
   "name": "avatar",
+  "privacy_aware": true,
   "short_display_name": "Avatar",
   "version": "1.1.0",
   "description": "3D Avatar \u2014 animated presence that reacts to Sapphire's state in real-time",

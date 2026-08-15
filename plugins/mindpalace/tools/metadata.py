@@ -70,11 +70,20 @@ _NOUN_STOP = {
 def _context_fields() -> dict:
     """Provenance from core's tool_context ContextVar (chat/persona/model/
     channel), set at chat setup and carried on the scope-snapshot rail.
-    Fail-safe: unreadable context → fewer meta keys, never an error."""
+    Fail-safe: unreadable context → fewer meta keys, never an error.
+
+    Private chats stamp '__private__' as the chat provenance (vaulted chats
+    ruling 8): mind.db is plaintext at rest and outlives the vault lock —
+    the memory itself is the user's call to save, but the private chat's
+    NAME must not ride along. Placeholder, not dropped: the added_by
+    migration infers 'ai' from meta.chat being present."""
     try:
-        from core.chat.function_manager import tool_context
+        from core.chat.function_manager import tool_context, scope_private
         ctx = tool_context.get()
-        return {k: v for k, v in dict(ctx).items() if v} if ctx else {}
+        fields = {k: v for k, v in dict(ctx).items() if v} if ctx else {}
+        if fields.get('chat') and scope_private.get():
+            fields['chat'] = '__private__'
+        return fields
     except Exception:
         return {}
 

@@ -99,7 +99,8 @@ class StreamingChat:
                 return
             if sm.update_chat_settings({'private_chat': True}):
                 name = sm.get_active_chat_name()
-                logger.info(f"[VAULT] chat '{name}' marked private — spoke while vault open")
+                # No name in the log — it just became a secret (ruling F3).
+                logger.info("[VAULT] active chat marked private — spoke while vault open")
                 publish(Events.CHAT_SETTINGS_CHANGED,
                         {"chat": name, "settings": {"private_chat": True},
                          "origin": None})
@@ -567,8 +568,9 @@ class StreamingChat:
                     call_type = "tool_call" if tool_calls else "conversation"
                     estimated = metadata["tokens"].get("estimated", False)
                     try:
-                        # effective chat: a phone call's tokens attribute to ITS chat.
-                        chat_name = self.main_chat.session_manager._effective_chat_name()
+                        # effective chat: a phone call's tokens attribute to ITS
+                        # chat ('__private__' for private chats — plaintext deposit).
+                        chat_name = self.main_chat.session_manager.metrics_chat_label()
                         token_metrics.record(chat_name, provider_key, effective_model,
                                              call_type, metadata, estimated=estimated)
                     except Exception:

@@ -208,6 +208,14 @@ def execute(function_name, arguments, config=None):
         # Recent errors
         if include_errors:
             try:
+                # Sealed vault → the tail goes dark wholesale (P3-T6): raw
+                # WARNING/ERROR lines can carry hidden chat names, and the
+                # private-name list needed to filter line-by-line is exactly
+                # what's unreadable while sealed. Unlocked = as today.
+                from core.chat.history import _vault_sealed
+                if _vault_sealed():
+                    lines.append("\nRecent warnings/errors: hidden (vault locked).")
+                    return "\n".join(lines), True
                 from plugins.status.routes.status import get_logs_sync
                 log_data = get_logs_sync()  # no request = defaults (200 lines, ALL)
                 error_lines = [l for l in (log_data.get("lines", [])) if l["level"] in ("WARNING", "ERROR", "CRITICAL")]

@@ -21,14 +21,18 @@ def tts_stream_start(event):
 
 
 def tts_chunk_text(event):
-    """A speakable chunk is about to be synthesized — surface its text."""
+    """A speakable chunk is about to be synthesized — surface its text.
+
+    ephemeral=True: caption text is chat content — it must not sit in the
+    SSE replay ring, where it outlives a vault lock and replays to any
+    later tab (vaulted chats P3-T15)."""
     publish("captioning_chunk", {
         "stream_id": event.metadata.get("stream_id"),
         "chunk_index": event.metadata.get("chunk_index"),
         "text": event.tts_text or "",
         "boundary": event.metadata.get("boundary"),
         "pause_after_ms": event.metadata.get("pause_after_ms"),
-    })
+    }, ephemeral=True)
 
 
 def tts_stream_end(event):

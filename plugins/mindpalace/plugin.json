@@ -8,7 +8,11 @@
   "icon": "🏛️",
   "priority": 1,
   "default_enabled": false,
+  "privacy_aware": true,
   "capabilities": {
+    "hooks": {
+      "chat_vaulted": "hooks/chat_vaulted.py"
+    },
     "tools": [
       "tools/palace_tools.py",
       "tools/import_tools.py",

@@ -45,8 +45,20 @@ def execute(function_name, arguments, config):
         except Exception:
             pass
 
+        # Sealed-vault filter (P3-T9, ruling 7): a hidden chat's playthrough
+        # simply isn't in the list — no name, no count, no "1 hidden".
+        # is_chat_hidden is core's explicit plugin seam; unreadable → shown
+        # (fail-open matches the store's own posture).
+        def _hidden(chat):
+            try:
+                return bool(sm and sm.is_chat_hidden(chat))
+            except Exception:
+                return False
+
         lines = []
         for chat, entry in (st.get_active() or {}).items():
+            if _hidden(chat):
+                continue
             try:
                 state = st.replay(entry["story"], chat)
                 story = rooms.load_story(entry["story"])

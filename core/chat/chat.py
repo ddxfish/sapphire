@@ -975,9 +975,10 @@ class LLMChat:
                 }
 
                 # Record metrics — effective chat so a phone call's tokens attribute
-                # to ITS chat, not the operator's active chat.
+                # to ITS chat, not the operator's active chat; private chats
+                # deposit as '__private__' (token_usage.db is plaintext at rest).
                 try:
-                    chat_name = self.session_manager._effective_chat_name()
+                    chat_name = self.session_manager.metrics_chat_label()
                     token_metrics.record(chat_name, provider_key, effective_model,
                                          "conversation", metadata,
                                          estimated=tokens_info.get("estimated", False))
@@ -1055,8 +1056,9 @@ class LLMChat:
             }
 
             try:
-                # effective chat: attribute a stream's tokens to ITS chat.
-                chat_name = self.session_manager._effective_chat_name()
+                # effective chat: attribute a stream's tokens to ITS chat
+                # ('__private__' for private chats — plaintext deposit).
+                chat_name = self.session_manager.metrics_chat_label()
                 token_metrics.record(chat_name, provider_key, effective_model,
                                      "conversation", metadata,
                                      estimated=tokens_info.get("estimated", False))

@@ -423,7 +423,7 @@ class OpenAICompatProvider(BaseProvider):
                             try:
                                 json.loads(args)
                             except (json.JSONDecodeError, ValueError):
-                                logger.warning(f"[OPENAI-COMPAT] Tool call arguments not valid JSON, defaulting to empty: {args[:100]!r}")
+                                logger.warning(f"[OPENAI-COMPAT] Tool call arguments not valid JSON, defaulting to empty ({len(args)} chars)")
                                 args = '{}'
                         else:
                             args = '{}'
@@ -763,7 +763,7 @@ class OpenAICompatProvider(BaseProvider):
                 for attr in ['reasoning', 'reasoning_content', 'thought', 'thinking']:
                     val = getattr(delta, attr, None)
                     if val:
-                        logger.info(f"[REASONING] Found {attr}: {val[:100]}...")
+                        logger.info(f"[REASONING] Found {attr} ({len(val)} chars)")
             
             # Content chunk
             if delta.content:
