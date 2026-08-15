@@ -545,6 +545,20 @@ async function openCompressModal(name) {
             keep_last_turns: parseInt(overlay.querySelector('#cm-c-keep').value, 10) || 10,
             backup: overlay.querySelector('#cm-c-backup').checked,
         };
+        // Second gate (P4): the vault can LOCK while this dialog sits open
+        // (idle-lock, another tab). The server refuses anyway (the chat is
+        // hidden = nonexistent), but "Chat not found" is a lying error for
+        // a chat the user is looking at — re-check and say what happened.
+        if (chat?.private_chat) {
+            try {
+                const v = await vaultStatus();
+                if (v.exists && !v.unlocked) {
+                    ui.showToast('The vault locked while this dialog was open — unlock it to compress this chat', 'error');
+                    closeModal();
+                    return;
+                }
+            } catch (e) { /* status unknown — let the server be the gate */ }
+        }
         try {
             await api.compressChat(name, opts);
             ui.showToast(`Compress started on ${name} — running in background`, 'success');

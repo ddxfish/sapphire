@@ -8,6 +8,7 @@ import { applyTrimColor } from './chat-settings.js';
 import { cancelPendingSave, flushPendingSave } from '../views/chat.js';
 
 let _listPaintSeq = 0;
+let _listRetryTimer = null;
 
 export async function populateChatDropdown({ forceAdopt = false } = {}) {
     const { chatSelect } = getElements();
@@ -35,8 +36,14 @@ export async function populateChatDropdown({ forceAdopt = false } = {}) {
         ui.renderChatDropdown(regularChats, data.active_chat, [], privateChats, { adopt });
     } catch (e) {
         console.error('Failed to load chat list:', e);
-        if (chatSelect && chatSelect.options.length === 0) {
-            console.log('Backend may still be starting up, will retry...');
+        // Dropdown hunt #6: the old log line PROMISED a retry and lied —
+        // a boot-race failure left the sidebar blank until SSE reconnect.
+        // One timer at a time; each attempt re-arms only on failure.
+        if (chatSelect && chatSelect.options.length === 0 && !_listRetryTimer) {
+            _listRetryTimer = setTimeout(() => {
+                _listRetryTimer = null;
+                populateChatDropdown({ forceAdopt });
+            }, 3000);
         }
     }
 }

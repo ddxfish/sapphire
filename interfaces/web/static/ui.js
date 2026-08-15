@@ -670,7 +670,7 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
 
     let itemsHtml = regShow.map(c => `
         <button class="chat-picker-item ${c.name === effectiveActive ? 'active' : ''}"
-                data-chat="${c.name}">
+                data-chat="${escapeAttr(c.name)}">
             <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
             <span class="chat-picker-item-name">${escapeHtml(c.display_name)}</span>
         </button>
@@ -682,7 +682,7 @@ export const renderChatDropdown = (chats, activeChat, _legacyStoryChats = [], pr
         // \ud83d\udd12 is taken \u2014 it means privacy_required on prompts.
         itemsHtml += privShow.map(c => `
             <button class="chat-picker-item chat-picker-private ${c.name === effectiveActive ? 'active' : ''}"
-                    data-chat="${c.name}">
+                    data-chat="${escapeAttr(c.name)}">
                 <span class="chat-picker-item-check">${c.name === effectiveActive ? '\u2713' : ''}</span>
                 <span class="chat-picker-item-name">\u{1F5DD} ${escapeHtml(c.display_name)}</span>
             </button>
@@ -724,6 +724,14 @@ const escapeHtml = (str) => {
     div.textContent = str;
     return div.innerHTML;
 };
+
+// Attribute-context escape: escapeHtml (textContent→innerHTML) does NOT
+// escape quotes, so a name in data-attr position could break out of the
+// attribute. All creation paths sanitize names today — belt-and-suspenders
+// (dropdown hunt #9).
+const escapeAttr = (str) => String(str)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 // =============================================================================
 // TEXT EXTRACTION

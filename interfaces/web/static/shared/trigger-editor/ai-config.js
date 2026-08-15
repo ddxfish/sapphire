@@ -168,10 +168,10 @@ export function renderAIConfig(t, data, opts = {}) {
         </details>
 
         <details class="sched-accordion">
-            <summary class="sched-acc-header">Chat <span class="sched-preview" id="ed-chat-preview">${t.chat_target ? _esc(t.chat_target) : 'No history'}</span></summary>
+            <summary class="sched-acc-header">Chat <span class="sched-preview" id="ed-chat-preview">${t.chat_target === '__locked__' ? '🔒 locked vault' : (t.chat_target ? _esc(t.chat_target) : 'No history')}</span></summary>
             <div class="sched-acc-body"><div class="sched-acc-inner">
                 <div class="sched-field">
-                    <label>Chat Name <span class="help-tip" data-tip="Run in a named chat (conversation saved). Leave blank for ephemeral background execution.">?</span></label>
+                    <label>Chat Name <span class="help-tip" data-tip="Run in a named chat (conversation saved). Leave blank for ephemeral background execution. '__locked__' means the target is a private chat sealed in the locked vault — saving keeps the real target; type a name to retarget.">?</span></label>
                     <input type="text" id="ed-chat" value="${_esc(t.chat_target || '')}" placeholder="Leave blank for ephemeral">
                 </div>
                 <div class="sched-checkbox">

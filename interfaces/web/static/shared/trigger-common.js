@@ -33,6 +33,15 @@ export function esc(str) {
     return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+export function chatChip(target) {
+    // '__locked__' is the server's sealed-vault mask for a private chat's
+    // name (never the real value; the scheduler treats it as keep-existing
+    // on write). Render it honestly instead of leaking the sentinel.
+    if (!target) return '';
+    if (target === '__locked__') return '💬 🔒 <em>locked vault</em>';
+    return `💬 ${esc(target)}`;
+}
+
 export function formatHourRange(start, end) {
     const fmt = h => {
         if (h === 0) return '12AM';
@@ -141,7 +150,7 @@ export function renderTaskCard(t) {
         t.chance < 100 ? `${t.chance}%` : '',
         t.active_hours_start != null ? `🕓 ${formatHourRange(t.active_hours_start, t.active_hours_end)}` : '',
         statusText,
-        t.chat_target ? `💬 ${esc(t.chat_target)}` : '',
+        chatChip(t.chat_target),
         `Last: ${lastRun}`
     ].filter(Boolean).join(' · ');
 
@@ -258,7 +267,7 @@ export function renderDaemonList(daemons) {
         const meta = [
             source,
             hasFilter ? 'filtered' : '',
-            d.chat_target ? `💬 ${esc(d.chat_target)}` : '',
+            chatChip(d.chat_target),
             `Last: ${lastRun}`
         ].filter(Boolean).join(' · ');
 
@@ -294,7 +303,7 @@ export function renderWebhookList(webhooks) {
         const lastRun = w.last_run ? formatTime(w.last_run) : 'Never';
         const meta = [
             `${method} /api/events/webhook/${esc(path)}`,
-            w.chat_target ? `💬 ${esc(w.chat_target)}` : '',
+            chatChip(w.chat_target),
             `Last: ${lastRun}`
         ].filter(Boolean).join(' · ');
 
