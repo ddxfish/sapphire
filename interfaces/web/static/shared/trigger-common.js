@@ -420,6 +420,12 @@ function buildTaskExport(task) {
     const clean = { ...task };
     EXPORT_STRIP_KEYS.forEach(k => delete clean[k]);
     clean.enabled = false; // always import disabled
+    // Vault hunt U6: while sealed, a private target serves as the
+    // '__locked__' mask — a serve-time disguise, not data. Baking it into
+    // a persistence file meant import (even unlocked) silently stripped it
+    // and the task arrived targetless with no notice. Drop it here instead;
+    // exportTask warns the user the target was withheld.
+    if (clean.chat_target === '__locked__') delete clean.chat_target;
     return {
         sapphire_export: true,
         type: clean.type || 'task',
@@ -431,6 +437,11 @@ function buildTaskExport(task) {
 
 export function exportTask(task) {
     const type = task.type || 'task';
+    if (task.chat_target === '__locked__') {
+        ui.showToast('This task\'s chat is in the locked vault — the export '
+            + 'carries no target; re-pick one after importing (or export '
+            + 'while unlocked)', 'warning');
+    }
     showExportDialog({
         type: type.charAt(0).toUpperCase() + type.slice(1),
         name: task.name,

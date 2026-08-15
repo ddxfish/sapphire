@@ -853,6 +853,22 @@ def _call_ended(scope, caller, chat, ephemeral, reason, duration_sec, turns,
     try:
         from core.hooks import hook_runner, HookEvent
         ev = HookEvent()
+        # Vault hunt H1: pre-stamp privacy from the CALL's own context —
+        # fired on the daemon thread, the resolver would read the OPERATOR'S
+        # active chat instead. Metadata carries the call chat, origin chat,
+        # and goal text; if either chat is private (or unreadable — sealed =
+        # hidden = None), the event is private. Fail closed.
+        def _chat_priv(name):
+            if not name:
+                return False
+            try:
+                from core.api_fastapi import get_system
+                s = get_system().llm_chat.session_manager.read_chat_settings(name)
+                return True if s is None else bool(s.get("private_chat"))
+            except Exception:
+                return True
+        ev.chat_name = chat
+        ev.chat_private = _chat_priv(chat) or _chat_priv(origin_chat)
         ev.metadata = {
             "hook": "twilio_call_ended", "account": scope, "number": number,
             "caller": caller, "direction": direction, "chat": chat,

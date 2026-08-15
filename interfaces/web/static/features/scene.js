@@ -45,11 +45,19 @@ export function updateSendButtonLLM(primary, model = '') {
     }
 }
 
+// Vault hunt U5: newest-wins guard, same pattern as every sibling painter
+// (_sbPaintSeq, _listPaintSeq). Two overlapping status fetches during a
+// lock→unlock storm could let the OLDER response paint the eyeball/border
+// with stale vault state.
+let _sceneSeq = 0;
+
 export async function updateScene() {
+    const mySeq = ++_sceneSeq;
     try {
         // Use unified status endpoint - single call for all state
         const status = await api.fetchStatus();
-        
+        if (mySeq !== _sceneSeq) return null;   // superseded — discard
+
         if (status?.tts_enabled !== undefined) {
             setTtsEnabled(status.tts_enabled);
             const volumeRow = document.querySelector('.sidebar-row-3');

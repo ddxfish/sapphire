@@ -673,7 +673,10 @@ function initEventBus() {
         // hidden chats lingered until an unrelated event. Eviction's own
         // CHAT_SWITCHED handles the transcript; the Phase 0 paint-seq guard
         // dedups the overlapping repaints.
-        if (data?.action === 'vault_changed') populateChatDropdown();
+        // forceAdopt (vault hunt R7): a lock/unlock repaint must adopt the
+        // server's real active — the adopt=false path could re-synthesize a
+        // sealed chat's RAW name into the select/header in a two-tab storm.
+        if (data?.action === 'vault_changed') populateChatDropdown({ forceAdopt: true });
         refreshAndUpdateScene();
     });
     eventBus.on(eventBus.Events.TOOLSET_CHANGED, refreshAndUpdateScene);
