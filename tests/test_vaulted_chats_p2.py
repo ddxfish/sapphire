@@ -292,3 +292,56 @@ class TestSnapshotRetirement:
             ChatSessionManager(history_dir=str(tmp_path))
         assert not list(tmp_path.glob("pre_rowify_*.db"))
         assert (tmp_path / ".pre_rowify_snapshot_done").exists()
+
+
+class TestCrossFeatureRoundTrips:
+    """Chat surgery on ENCRYPTED chats — trim/clear/rename/delete all run
+    through patched paths, but only a round-trip proves the seams hold."""
+
+    def _grow(self, sm, turns=3):
+        for i in range(turns):
+            sm.append_messages_to_chat("pub", [
+                {"role": "user", "content": f"question {i}"},
+                {"role": "assistant", "content": f"answer {i}"},
+            ])
+
+    def test_trim_on_vaulted_round_trip(self, sm, tmp_path, monkeypatch):
+        _key_on(monkeypatch)
+        self._grow(sm)
+        sm.vault_chat("pub")
+        ok, report = sm.trim_chat("pub", 1, 1)
+        assert ok, report
+        assert report["deleted_messages"] > 0
+        flags = _rows_enc(tmp_path, "pub")
+        assert flags and all(flags)          # surgery result re-encrypted
+        msgs = sm.read_chat_messages("pub")  # and still readable
+        assert any("answer 2" in str(m.get("content")) for m in msgs)
+
+    def test_clear_wipes_future_appends_still_encrypt(self, sm, tmp_path, monkeypatch):
+        _key_on(monkeypatch)
+        sm.vault_chat("pub")
+        assert sm.clear_named_chat_messages("pub") is True
+        assert _rows_enc(tmp_path, "pub") == []
+        assert raw(tmp_path, "SELECT vaulted FROM chats WHERE name='pub'")[0][0] == 1
+        sm.append_messages_to_chat("pub", [{"role": "user", "content": "fresh"}])
+        assert all(_rows_enc(tmp_path, "pub"))
+
+    def test_rename_vaulted_carries_everything(self, sm, tmp_path, monkeypatch):
+        _key_on(monkeypatch)
+        sm.vault_chat("pub")
+        ok, new_name = sm.rename_chat("pub", "moved")
+        assert ok, new_name
+        assert raw(tmp_path, "SELECT vaulted FROM chats WHERE name='moved'")[0][0] == 1
+        assert all(_rows_enc(tmp_path, "moved"))
+        msgs = sm.read_chat_messages("moved")
+        assert any("gravy" in str(m.get("content")) for m in msgs)
+        img = raw(tmp_path, "SELECT chat_name FROM tool_images WHERE id='img1'")[0]
+        assert img["chat_name"] == "moved"
+
+    def test_delete_vaulted_cascades(self, sm, tmp_path, monkeypatch):
+        _key_on(monkeypatch)
+        sm.vault_chat("pub")
+        assert sm.delete_chat("pub") is True
+        assert not raw(tmp_path, "SELECT 1 FROM chats WHERE name='pub'")
+        assert not raw(tmp_path, "SELECT 1 FROM chat_messages WHERE chat_name='pub'")
+        assert not raw(tmp_path, "SELECT 1 FROM tool_images WHERE chat_name='pub'")
