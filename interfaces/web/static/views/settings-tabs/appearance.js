@@ -1,7 +1,22 @@
-// settings-tabs/appearance.js - Theme picker, density, font settings
-// Appearance settings use localStorage (client-side only)
+// settings-tabs/appearance.js - Visual settings: color sets, type, background, options
+// Appearance settings use localStorage (client-side only), except data-key rows.
+// P1 of themes-v2 (plan: tmp/themes-v2-plan.md): true miniature theme cards via
+// [data-theme] scoping, font preset cards, scene library surfaced here.
+
+import { mountScenePicker } from '../../shared/scene-picker.js';
+import { applyBackground, setDefaultBackground } from '../../features/chat-settings.js';
+import { updateSettingsBatch } from '../../shared/settings-api.js';
 
 let _allThemes = [];
+
+// Font presets — stacks mirror the [data-font] blocks in shared.css.
+// P2 adds downloadable webfont presets to this same grid.
+const FONT_PRESETS = [
+    { id: 'system',  label: 'System',    stack: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif` },
+    { id: 'mono',    label: 'Monospace', stack: `'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace` },
+    { id: 'serif',   label: 'Serif',     stack: `'Georgia', 'Cambria', 'Times New Roman', serif` },
+    { id: 'rounded', label: 'Rounded',   stack: `'Nunito', 'Varela Round', -apple-system, sans-serif` },
+];
 
 export default {
     id: 'appearance',
@@ -18,11 +33,26 @@ export default {
 
         return `
         <div class="appearance-page">
-            <div class="setting-section-title">Theme</div>
+            <div class="setting-section-title">Colors</div>
             <div class="theme-grid" id="theme-grid">
                 <div class="text-muted" style="font-size:var(--font-sm);padding:12px">Loading themes...</div>
             </div>
             <div id="theme-settings-panel" style="display:none"></div>
+
+            <div class="setting-section-title" style="margin-top:20px">Type</div>
+            <div class="font-grid" id="font-grid">
+                ${FONT_PRESETS.map(f => `
+                    <div class="font-card ${font === f.id ? 'active' : ''}" data-font-id="${f.id}" style="font-family:${f.stack}">
+                        <div class="font-sample">Aa</div>
+                        <div class="font-quick">The quick brown fox jumps</div>
+                        <div class="font-card-name">${f.label}</div>
+                        <div class="theme-check">✓</div>
+                    </div>`).join('')}
+            </div>
+
+            <div class="setting-section-title" style="margin-top:20px">Background</div>
+            <div class="setting-help" style="margin-bottom:8px">Global underlay &mdash; shown whenever a chat has no scene of its own. A chat's scene (set from the chat sidebar) always wins.</div>
+            <div id="visual-scene-mount"></div>
 
             <div class="setting-section-title" style="margin-top:20px">Options</div>
             <div class="settings-grid">
@@ -33,17 +63,6 @@ export default {
                             <option value="compact" ${density === 'compact' ? 'selected' : ''}>Compact</option>
                             <option value="default" ${density === 'default' ? 'selected' : ''}>Default</option>
                             <option value="comfortable" ${density === 'comfortable' ? 'selected' : ''}>Comfortable</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="setting-row">
-                    <div class="setting-label"><label>Font</label><div class="setting-help">Text style</div></div>
-                    <div class="setting-input">
-                        <select id="app-font">
-                            <option value="system" ${font === 'system' ? 'selected' : ''}>System</option>
-                            <option value="mono" ${font === 'mono' ? 'selected' : ''}>Monospace</option>
-                            <option value="serif" ${font === 'serif' ? 'selected' : ''}>Serif</option>
-                            <option value="rounded" ${font === 'rounded' ? 'selected' : ''}>Rounded</option>
                         </select>
                     </div>
                 </div>
@@ -78,21 +97,56 @@ export default {
         <style>
             .appearance-page { max-width: 900px; }
             .setting-section-title { font-weight: 600; font-size: var(--font-sm); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 10px; }
-            .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+            .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
             .theme-card {
                 display: flex; flex-direction: column; align-items: center; gap: 6px;
-                padding: 10px 8px; border-radius: 10px; cursor: pointer;
+                padding: 8px; border-radius: 10px; cursor: pointer;
                 background: var(--bg-secondary); border: 2px solid transparent;
                 transition: border-color 0.15s, transform 0.1s;
             }
-            .theme-card:hover { transform: translateY(-1px); border-color: var(--border-hover, #555); }
-            .theme-card.active { border-color: var(--accent, #4a9eff); }
+            .theme-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
+            .theme-card.active { border-color: var(--trim); }
             .theme-card.active .theme-check { display: block; }
-            .theme-swatch { display: flex; gap: 3px; width: 100%; height: 28px; border-radius: 6px; overflow: hidden; }
-            .theme-swatch-bar { flex: 1; }
             .theme-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); text-align: center; }
             .theme-card-badge { font-size: 9px; color: var(--text-muted); }
-            .theme-check { display: none; font-size: 10px; color: var(--accent, #4a9eff); }
+            .theme-check { display: none; font-size: 10px; color: var(--trim); }
+
+            /* Miniature app preview — every color is a live var() resolved
+               through the card's own data-theme (core) or inline props
+               (plugin previews), so cards ARE the theme, not swatches of it. */
+            .tc-mini {
+                display: flex; width: 100%; height: 78px;
+                border-radius: 8px; overflow: hidden;
+                background: var(--bg); border: 1px solid var(--border);
+            }
+            .tc-rail { width: 16px; background: var(--bg-secondary); border-right: 1px solid var(--border);
+                display: flex; flex-direction: column; align-items: center; gap: 3px; padding-top: 4px; flex-shrink: 0; }
+            .tc-logo { width: 7px; height: 7px; border-radius: 2px; background: var(--trim); }
+            .tc-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--text); opacity: .22; }
+            .tc-dot.on { background: var(--trim); opacity: 1; }
+            .tc-body { flex: 1; display: flex; flex-direction: column; gap: 3px; padding: 5px; min-width: 0; }
+            .tc-bubble { border-radius: 4px; height: 14px; }
+            .tc-user { background: var(--user-bg, var(--bg-secondary)); width: 62%; align-self: flex-end; }
+            .tc-assistant { background: var(--assistant-bg, var(--bg-secondary)); width: 78%; }
+            .tc-composer { margin-top: auto; height: 12px; border: 1px solid var(--border); border-radius: 4px;
+                background: var(--bg-secondary); display: flex; justify-content: flex-end; align-items: center; padding: 1px 2px; }
+            .tc-send { width: 8px; height: 8px; border-radius: 2px; background: var(--primary); }
+
+            /* Font preset cards */
+            .font-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+            .font-card {
+                position: relative;
+                display: flex; flex-direction: column; align-items: center; gap: 2px;
+                padding: 12px 8px 8px; border-radius: 10px; cursor: pointer;
+                background: var(--bg-secondary); border: 2px solid transparent;
+                transition: border-color 0.15s, transform 0.1s;
+            }
+            .font-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
+            .font-card.active { border-color: var(--trim); }
+            .font-card.active .theme-check { display: block; position: absolute; top: 6px; right: 8px; }
+            .font-sample { font-size: 26px; color: var(--text); line-height: 1.1; }
+            .font-quick { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+            .font-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); margin-top: 4px; font-family: var(--font-body); }
             .theme-settings-panel {
                 margin-top: 12px; padding: 14px; border-radius: 10px;
                 background: var(--bg-secondary); border: 1px solid var(--border);
@@ -123,9 +177,11 @@ export default {
             }
         });
 
-        // Font
-        el.querySelector('#app-font')?.addEventListener('change', e => {
-            const v = e.target.value;
+        // Font preset cards (Type section)
+        el.querySelector('#font-grid')?.addEventListener('click', e => {
+            const card = e.target.closest('.font-card');
+            if (!card) return;
+            const v = card.dataset.fontId;
             if (v === 'system') {
                 document.documentElement.removeAttribute('data-font');
                 localStorage.removeItem('sapphire-font');
@@ -133,7 +189,28 @@ export default {
                 document.documentElement.setAttribute('data-font', v);
                 localStorage.setItem('sapphire-font', v);
             }
+            el.querySelectorAll('.font-card').forEach(c => c.classList.toggle('active', c === card));
         });
+
+        // Scene library (Background section) — the GLOBAL underlay, not the
+        // current chat's scene (that stays in the chat sidebar's Scene modal).
+        // Saves immediately, like theme cards; repaints live only when the
+        // current chat is actually riding the underlay.
+        const sceneMount = el.querySelector('#visual-scene-mount');
+        if (sceneMount) {
+            mountScenePicker(sceneMount, {
+                current: ctx.getValue('DEFAULT_BACKGROUND') || '',
+                onSelect: (name) => {
+                    updateSettingsBatch({ DEFAULT_BACKGROUND: name }).catch(() => {});
+                    // Mirror into the page's loaded settings (already persisted
+                    // above — markChanged would flag a phantom unsaved state).
+                    ctx.settings.DEFAULT_BACKGROUND = name;
+                    setDefaultBackground(name);
+                    const chatScene = document.getElementById('chatbg')?.dataset.scene || '';
+                    applyBackground(chatScene);
+                }
+            }).catch(() => {});
+        }
 
         // Icon color (instance-level gem/favicon tint)
         const iconPicker = el.querySelector('#icon-color-picker');
@@ -211,25 +288,38 @@ async function _loadThemeGrid(el) {
     const core = _allThemes.filter(t => t.source === 'core');
     const plugin = _allThemes.filter(t => t.source !== 'core');
 
+    // Load every core theme's stylesheet once. All theme rules are
+    // [data-theme="x"]-scoped (verified across all 14, P0 recon), so the
+    // sheets are inert everywhere except an element carrying the attribute \u2014
+    // which is exactly what each card's miniature does. This is what makes
+    // the previews REAL instead of extracted swatches.
+    for (const t of core) {
+        if (!document.querySelector(`link[data-theme-preview="${CSS.escape(t.id)}"]`)) {
+            const l = document.createElement('link');
+            l.rel = 'stylesheet';
+            l.href = t.css;
+            l.dataset.themePreview = t.id;
+            document.head.appendChild(l);
+        }
+    }
+
+    const MINI = `
+        <div class="tc-rail"><span class="tc-logo"></span><span class="tc-dot on"></span><span class="tc-dot"></span><span class="tc-dot"></span></div>
+        <div class="tc-body">
+            <div class="tc-bubble tc-user"></div>
+            <div class="tc-bubble tc-assistant"></div>
+            <div class="tc-composer"><span class="tc-send"></span></div>
+        </div>`;
+
     const cards = [...core, ...plugin].map(t => {
-        const p = t.preview || {};
         const isActive = _themeMatchesCurrent(t, currentTheme);
         const hasScripts = t.scripts?.length > 0;
-        const bg = p.bg || '#1a1a2e';
-        const bg2 = p.bg2 || _darken(bg);
-        const text = p.text || '#ccc';
-        const accent = p.accent || p.trim || '#4a9eff';
-        const border = p.border || '#333';
-
+        const scope = t.source === 'core'
+            ? ` data-theme="${_esc(t.id)}"`
+            : ` data-plugin-mini="${_esc(t.id)}"`;
         return `
             <div class="theme-card ${isActive ? 'active' : ''}" data-theme-id="${_esc(t.id)}" title="${_esc(t.description || t.name)}">
-                <div class="theme-swatch">
-                    <div class="theme-swatch-bar" style="background:${_esc(bg)}"></div>
-                    <div class="theme-swatch-bar" style="background:${_esc(bg2)}"></div>
-                    <div class="theme-swatch-bar" style="background:${_esc(text)}"></div>
-                    <div class="theme-swatch-bar" style="background:${_esc(accent)}"></div>
-                    <div class="theme-swatch-bar" style="background:${_esc(border)}"></div>
-                </div>
+                <div class="tc-mini"${scope}>${MINI}</div>
                 <div class="theme-card-name">${t.icon ? _esc(t.icon) + ' ' : ''}${_esc(t.name)}</div>
                 ${hasScripts ? '<div class="theme-card-badge">animated</div>' : ''}
                 <div class="theme-check">\u2713</div>
@@ -237,6 +327,26 @@ async function _loadThemeGrid(el) {
     }).join('');
 
     grid.innerHTML = cards || '<div class="text-muted" style="font-size:var(--font-sm)">No themes found</div>';
+
+    // Plugin minis can't use data-theme scoping (their CSS isn't loaded here,
+    // and loading arbitrary plugin CSS globally would be a leak risk) \u2014 paint
+    // their declared preview colors as inline custom properties instead.
+    // setProperty with a value-shape gate, never string-templated into style
+    // attributes (chaos hunt T4).
+    const COLOR_RE = /^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%]+\))$/;
+    grid.querySelectorAll('[data-plugin-mini]').forEach(miniEl => {
+        const t = _allThemes.find(x => x.id === miniEl.dataset.pluginMini);
+        const p = (t && t.preview) || {};
+        const accent = p.accent || p.trim;
+        const map = {
+            '--bg': p.bg, '--bg-secondary': p.bg2, '--text': p.text,
+            '--trim': accent, '--primary': accent, '--border': p.border,
+            '--user-bg': p.bg2, '--assistant-bg': p.bg2,
+        };
+        for (const [k, v] of Object.entries(map)) {
+            if (typeof v === 'string' && COLOR_RE.test(v.trim())) miniEl.style.setProperty(k, v.trim());
+        }
+    });
 
     // Click handler
     const settingsPanel = el.querySelector('#theme-settings-panel');
@@ -403,16 +513,6 @@ function _applyTheme(theme) {
 
 function _themeMatchesCurrent(theme, currentId) {
     return theme.id === currentId;
-}
-
-function _darken(hex) {
-    // Simple darken for bg2 when not provided
-    try {
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        return `rgb(${Math.max(0, r + 15)}, ${Math.max(0, g + 15)}, ${Math.max(0, b + 15)})`;
-    } catch { return '#222'; }
 }
 
 function _esc(s) { return String(s || '').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }

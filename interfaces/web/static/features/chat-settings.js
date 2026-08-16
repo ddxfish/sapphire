@@ -57,24 +57,40 @@ export function releaseBackground(owner) {
     }
 }
 
+// Global underlay: the app-wide default scene (DEFAULT_BACKGROUND setting),
+// painted only when the chat has no scene of its own. Resolution happens at
+// paint time, in this one choke point — the chain is
+//   chat scene > global underlay > blank
+// (themes-v2 P2 slots a theme-default layer between underlay and blank).
+// The image URL is only referenced when actually painted, so the underlay is
+// never fetched while a chat scene covers it.
+let _defaultBackground = '';
+
+export function setDefaultBackground(name) {
+    _defaultBackground = (name && /^[a-z0-9_-]{1,50}$/.test(name)) ? name : '';
+}
+
 export function applyBackground(name) {
     const bg = document.getElementById('chatbg');
     if (!bg) return;
+    const explicit = (name && /^[a-z0-9_-]{1,50}$/.test(name)) ? name : '';
     if (bg.dataset.bgOwner) {
         bg.dataset.bgPending = name || '';
         // Keep the "current scene" record honest even while deferred — the
         // Scene modal seeds its selection from dataset.scene and was showing
         // the pre-story scene as current during stories (P0 hunt 2026-08-16).
-        bg.dataset.scene = name && /^[a-z0-9_-]{1,50}$/.test(name) ? name : '';
+        bg.dataset.scene = explicit;
         return;
     }
-    if (name && /^[a-z0-9_-]{1,50}$/.test(name)) {
-        bg.style.backgroundImage = `url('/api/backgrounds/${encodeURIComponent(name)}')`;
+    const painted = explicit || _defaultBackground;
+    if (painted) {
+        bg.style.backgroundImage = `url('/api/backgrounds/${encodeURIComponent(painted)}')`;
         bg.classList.add('has-bg');
-        bg.dataset.scene = name;
     } else {
         bg.style.backgroundImage = '';
         bg.classList.remove('has-bg');
-        bg.dataset.scene = '';
     }
+    // dataset.scene records the chat's OWN scene only ('' when riding the
+    // underlay) — the per-chat Scene modal must not claim the global default.
+    bg.dataset.scene = explicit;
 }

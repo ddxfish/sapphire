@@ -8,6 +8,10 @@
     "short": "Show avatar images in chat messages",
     "long": "When enabled, user and assistant avatar images appear next to each message in the chat. Disable to hide avatars for a cleaner, text-focused interface. Changes take effect on page refresh."
   },
+  "DEFAULT_BACKGROUND": {
+    "short": "Global underlay scene shown when a chat has no scene of its own",
+    "long": "Name of a scene from the background library used as the app-wide default background. A chat with its own scene (set from the chat sidebar) overrides it, and the underlay image is only fetched when it is actually shown. Empty means no default background."
+  },
   "ICON_COLOR": {
     "short": "Tint the gem logo and favicon for this Sapphire instance",
     "long": "Hex color (e.g. #9b30ff) that recolors the gem logo in the nav rail and the browser tab favicon, so different Sapphire instances are distinguishable at a glance. A chat or persona trim color overrides it while that chat is active. Leave empty for the stock sapphire blue."

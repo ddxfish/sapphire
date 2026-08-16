@@ -5,6 +5,7 @@
     "DEFAULT_USERNAME": "Human Protagonist",
     "AVATARS_IN_CHAT": true,
     "ICON_COLOR": "",
+    "DEFAULT_BACKGROUND": "",
     "DEFAULT_PERSONA": "",
     "USER_TIMEZONE": "UTC",
     "DASHBOARD_DISPLAY_NAME": "Sapphire",

@@ -1,3 +1,7 @@
+# 2.11.5 - Theme fixes
+- Theme BG is a fallback when no per-chat bg is set
+- Wont crash on theme error, proper handling
+- CSS ground truth reduced, removed dead code
 # 2.11.4 - App icon
 - Can set favicon color in Settings > Visual
 - Updated SVG icon for app with trim optional

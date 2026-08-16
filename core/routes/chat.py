@@ -581,6 +581,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             "settings": {
                 "AVATARS_IN_CHAT": avatars_in_chat,
                 "ICON_COLOR": getattr(config, 'ICON_COLOR', '') or '',
+                "DEFAULT_BACKGROUND": getattr(config, 'DEFAULT_BACKGROUND', '') or '',
                 "DEFAULT_USERNAME": getattr(config, 'DEFAULT_USERNAME', 'Human Protagonist'),
                 "USER_TIMEZONE": getattr(config, 'USER_TIMEZONE', 'UTC') or 'UTC'
             },

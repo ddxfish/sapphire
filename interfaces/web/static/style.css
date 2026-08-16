@@ -7639,10 +7639,13 @@ a.gallery-caption:hover {
 
 @media (max-width: 768px) {
     .nav-flyout {
-        left: auto;
-        right: 8px;
-        bottom: 60px;
-        top: auto !important;
+        /* Anchored above the bottom bar; horizontal position is set inline
+           by nav-rail.js, centered over the tapped item. (The old
+           top:auto!important + right:8px pinned every flyout to the lower
+           right and dead-lettered the JS positioning — P0 follow-up.) */
+        right: auto;
+        bottom: 64px;
+        top: auto;
         margin-left: 0;
     }
 

@@ -29,13 +29,20 @@ export function initNavRail() {
                 e.stopPropagation();
                 // Close other flyouts
                 rail.querySelectorAll('.nav-group-parent').forEach(p => p.classList.remove('flyout-open'));
-                // Position flyout vertically
+                item.classList.add('flyout-open');
+                // Center the flyout above the tapped item, clamped to the
+                // viewport. Open first so offsetWidth is measurable; clear
+                // any desktop inline top so the CSS bottom anchor applies.
                 const flyout = item.querySelector('.nav-flyout');
                 if (flyout) {
+                    flyout.style.top = '';
                     const rect = item.getBoundingClientRect();
-                    flyout.style.top = rect.top + 'px';
+                    const w = flyout.offsetWidth || 150;
+                    const left = Math.max(8, Math.min(
+                        rect.left + rect.width / 2 - w / 2,
+                        window.innerWidth - w - 8));
+                    flyout.style.left = left + 'px';
                 }
-                item.classList.add('flyout-open');
                 return;
             }
         }
@@ -50,11 +57,13 @@ export function initNavRail() {
         parent.addEventListener('mouseenter', () => {
             if (isMobile()) return;
             clearTimeout(hoverTimer);
-            // Position the flyout vertically to match the parent button
+            // Position the flyout vertically to match the parent button;
+            // clear any mobile inline left so the CSS left:68px applies.
             const flyout = parent.querySelector('.nav-flyout');
             if (flyout) {
                 const rect = parent.getBoundingClientRect();
                 flyout.style.top = rect.top + 'px';
+                flyout.style.left = '';
             }
             parent.classList.add('flyout-open');
         });
