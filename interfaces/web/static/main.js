@@ -117,23 +117,10 @@ async function loadPluginLayerViews() {
     }
 }
 
-// Initialize appearance settings from localStorage (theme, density, font)
-// Trim color is per-persona now — default cyan set in CSS body
+// DOM-dependent appearance bits only — density/font restore moved into the
+// index.html inline guard (pre-CSS, no reflow), theme re-assert lives in
+// core/theme.js initTheme() (the one apply path, themes-v2 B1).
 function initAppearance() {
-    const root = document.documentElement;
-
-    // Density
-    const density = localStorage.getItem('sapphire-density');
-    if (density && density !== 'default') {
-        root.setAttribute('data-density', density);
-    }
-
-    // Font
-    const font = localStorage.getItem('sapphire-font');
-    if (font && font !== 'system') {
-        root.setAttribute('data-font', font);
-    }
-
     // Clean up stale trim localStorage (now per-persona)
     localStorage.removeItem('sapphire-trim');
 
@@ -157,6 +144,11 @@ async function init() {
         renderSurface(document.getElementById('view-chat'), chatMode);
         ui.bindChatDom();
         initAppearance();
+        // Re-assert the theme through the one apply path (versioned CSS,
+        // bundle font/bg, theme settings, self-heal, multi-tab sync).
+        // Fire-and-forget: the inline boot guard already painted base CSS.
+        import('./core/theme.js').then(m => m.initTheme()).catch(() => {});
+        import('./shared/fonts.js').then(m => m.initFonts()).catch(() => {});
         initElements();
 
         const { form, sendBtn, micBtn, input } = getElements();

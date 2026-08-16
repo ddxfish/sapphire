@@ -32,7 +32,7 @@
             // context) used to throw on the first getItem and kill theming
             // entirely — no stylesheet at all (P0 hunt 2026-08-16).
             try {
-                var saved = localStorage.getItem('sapphire-theme') || 'dark';
+                var saved = localStorage.getItem('sapphire-theme') || '{{ default_theme }}';
                 document.documentElement.setAttribute('data-theme', saved);
 
                 // Check if this is a plugin theme (has saved theme data with CSS URL)
@@ -73,27 +73,36 @@
                     document.head.appendChild(link);
                 }
 
-                // Restore chat-style data attributes from localStorage.
-                // Per-key try: one junk key (space/quote in prefix) used to
-                // abort the whole loop and silently drop every later key.
+                // Restore the ACTIVE theme's chat-style attrs only — settings
+                // live under namespaced keys `theme:{id}:{key}` now, so other
+                // themes' leftovers no longer ghost-restore (lifecycle #3/#9).
+                // Per-key try: one junk key must not abort the loop.
+                var pfx = 'theme:' + saved + ':';
                 for (var i = 0; i < localStorage.length; i++) {
                     try {
                         var key = localStorage.key(i);
-                        if (key && key.endsWith('-chat-style')) {
-                            var prefix = key.replace('-chat-style', '');
+                        if (key && key.indexOf(pfx) === 0 && key.endsWith('-chat-style')) {
+                            var prefix = key.slice(pfx.length).replace('-chat-style', '');
                             if (/^[a-z0-9-]+$/.test(prefix)) {
                                 document.documentElement.setAttribute('data-' + prefix + '-chat', localStorage.getItem(key));
                             }
                         }
                     } catch(e) {}
                 }
+
+                // Density + font — moved from main.js initAppearance, which
+                // ran post-module-load and caused a visible reflow (L11).
+                var density = localStorage.getItem('sapphire-density');
+                if (density && density !== 'default') document.documentElement.setAttribute('data-density', density);
+                var savedFont = localStorage.getItem('sapphire-font');
+                if (savedFont && savedFont !== 'system') document.documentElement.setAttribute('data-font', savedFont);
             } catch(e) {
                 // Storage unavailable: fall back to the default dark theme.
                 try {
                     var fallback = document.createElement('link');
                     fallback.id = 'theme-stylesheet';
                     fallback.rel = 'stylesheet';
-                    fallback.href = '/static/themes/dark.css?v={{ v }}';
+                    fallback.href = '/static/themes/{{ default_theme }}.css?v={{ v }}';
                     document.head.appendChild(fallback);
                 } catch(e2) {}
             }

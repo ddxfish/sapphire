@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import re
 import tempfile
 import threading
 import logging
@@ -607,44 +608,116 @@ async def list_registered_games(_=Depends(require_login)):
     return {"games": list_games(), "generation": generation()}
 
 
+# ── Themes v2 (plan: tmp/themes-v2-plan.md) ────────────────────────────────
+# The validation floor: manifest JSON (themes.json AND third-party plugin
+# manifests) is never trusted as core-authored data. Every field is shape-
+# checked here so one malformed entry degrades to a skip-and-log, never a 500
+# (chaos hunt T5), and hostile values never reach client sinks (T1/T3/T4).
+
+_THEME_ID_RE = re.compile(r'^[a-z0-9_-]{1,50}$')
+_COLOR_VALUE_RE = re.compile(r'^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%]+\))$')
+_ALLOWED_SETTING_TYPES = {'select', 'boolean', 'checkbox', 'range', 'text'}
+
+
+def _clean_preview(p):
+    """Keep only string color values matching a strict color shape (T4)."""
+    if not isinstance(p, dict):
+        return {}
+    return {k: v.strip() for k, v in p.items()
+            if isinstance(k, str) and isinstance(v, str) and _COLOR_VALUE_RE.match(v.strip())}
+
+
+def _clean_settings(defs):
+    """Normalize theme setting declarations (T6/T7): valid key shape, reserved
+    sapphire* namespace refused, type whitelisted, options coerced to a list."""
+    out = []
+    if not isinstance(defs, list):
+        return out
+    for s in defs:
+        if not isinstance(s, dict):
+            continue
+        key = s.get('key')
+        if not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', key):
+            continue
+        if key.lower().startswith('sapphire'):
+            logger.warning(f"theme setting key {key!r} uses reserved namespace, skipped")
+            continue
+        stype = s.get('type') if s.get('type') in _ALLOWED_SETTING_TYPES else 'text'
+        entry = {'key': key, 'type': stype,
+                 'label': str(s.get('label', key)), 'help': str(s.get('help', '')),
+                 'default': s.get('default', '')}
+        if stype == 'select':
+            opts = s.get('options')
+            entry['options'] = [o for o in opts if isinstance(o, (str, dict))] if isinstance(opts, list) else []
+        if stype == 'range':
+            for k in ('min', 'max', 'step'):
+                if k in s:
+                    entry[k] = s[k]
+        out.append(entry)
+    return out
+
+
+def _safe_rel_path(p):
+    """Relative plugin-web path: no absolute, no traversal segments."""
+    return (isinstance(p, str) and p and not p.startswith('/')
+            and '..' not in p.split('/') and not p.startswith('\\'))
+
+
 @router.get("/api/themes")
 async def list_themes(_=Depends(require_login)):
     """List all available themes — core + plugin manifest themes."""
+    from core.api_fastapi import BOOT_VERSION  # lazy: avoid circular import
     themes = []
+    default_theme = 'dark'
 
-    # 1. Core themes (static/themes/)
+    # 1. Core themes (static/themes/themes.json — v2 object entries; bare
+    #    strings stay legal and get preview regex-extracted as before)
     themes_dir = PROJECT_ROOT / "interfaces" / "web" / "static" / "themes"
     themes_json = themes_dir / "themes.json"
-    core_names = []
+    core_entries = []
     if themes_json.exists():
         try:
             data = json.loads(themes_json.read_text(encoding='utf-8'))
-            core_names = data.get("themes", [])
+            core_entries = data.get("themes", [])
+            if isinstance(data.get("default"), str) and _THEME_ID_RE.match(data["default"]):
+                default_theme = data["default"]
         except Exception:
             pass
 
-    for name in core_names:
-        # Skip-and-log, never crash the list: one malformed entry must not
-        # blank the entire theme grid (chaos hunt T5 2026-08-16). v2's
-        # object-shaped entries land here later — string-only until then.
-        if not isinstance(name, str) or not name:
-            logger.warning(f"themes.json: skipping non-string theme entry {name!r}")
+    for entry in core_entries if isinstance(core_entries, list) else []:
+        if isinstance(entry, str):
+            entry = {"id": entry}
+        if not isinstance(entry, dict):
+            logger.warning(f"themes.json: skipping malformed theme entry {entry!r}")
             continue
-        css_path = themes_dir / f"{name}.css"
-        preview = _extract_css_preview(css_path) if css_path.exists() else {}
+        tid = entry.get("id")
+        if not isinstance(tid, str) or not _THEME_ID_RE.match(tid):
+            logger.warning(f"themes.json: skipping theme with bad id {tid!r}")
+            continue
+        css_path = themes_dir / f"{tid}.css"
+        preview = _clean_preview(entry.get("preview"))
+        if not preview and css_path.exists():
+            preview = _extract_css_preview(css_path)
         themes.append({
-            "id": name,
-            "name": name.replace('-', ' ').replace('_', ' ').title(),
+            "id": tid,
+            "name": str(entry.get("name") or tid.replace('-', ' ').replace('_', ' ').title()),
+            "description": str(entry.get("description", "")),
             "source": "core",
-            "css": f"/static/themes/{name}.css",
+            # Versioned URL — the live-switch path used to serve unversioned
+            # CSS and eat hour-stale edits (lifecycle #6 / chaos T10).
+            "css": f"/static/themes/{tid}.css?v={BOOT_VERSION}",
             "scripts": [],
             "preview": preview,
+            "font": entry.get("font") if isinstance(entry.get("font"), str) else None,
+            "bg": entry.get("bg") if isinstance(entry.get("bg"), str) else None,
+            "motion": entry.get("motion") if isinstance(entry.get("motion"), str) else None,
+            "settings": _clean_settings(entry.get("settings")),
         })
 
     # 2. Plugin manifest themes (capabilities.themes)
     from core.plugin_loader import plugin_loader
     for pname, info in plugin_loader._plugins.items():
-        if not info.get("loaded"):
+        if not info.get("loaded") or not info.get("enabled"):
             continue
         manifest = info.get("manifest", {})
         capabilities = manifest.get("capabilities", {})
@@ -653,34 +726,42 @@ async def list_themes(_=Depends(require_login)):
             logger.warning(f"Plugin '{pname}': capabilities.themes is not a list, skipping")
             theme_defs = []
         for td in theme_defs:
-            # Same skip-and-log rule as core entries (chaos hunt T5).
             if not isinstance(td, dict):
                 logger.warning(f"Plugin '{pname}': skipping non-dict theme entry {td!r}")
                 continue
             tid = td.get("id", "")
-            if not tid or not isinstance(tid, str):
+            if not isinstance(tid, str) or not _THEME_ID_RE.match(tid):
                 continue
             css_path = td.get("css", "")
             scripts = td.get("scripts", [])
-            # Resolve paths relative to plugin web serving
-            css_url = f"/plugin-web/{pname}/{css_path}" if css_path else ""
-            script_urls = [f"/plugin-web/{pname}/{s}" for s in scripts]
+            if not isinstance(scripts, list):
+                scripts = []
+            css_url = f"/plugin-web/{pname}/{css_path}" if _safe_rel_path(css_path) else ""
+            script_urls = [f"/plugin-web/{pname}/{s}" for s in scripts if _safe_rel_path(s)]
+            bg = td.get("bg")
+            bg_url = f"/plugin-web/{pname}/{bg}" if _safe_rel_path(bg) else None
             themes.append({
-                "id": f"plugin-{pname}-{tid}",
-                "name": td.get("name", tid.title()),
+                # `:` separator — the old plugin-{name}-{id} mint collided
+                # (foo/bar-baz == foo-bar/baz, chaos T11) and `:` can't appear
+                # in either part. Zero shipped plugin themes = free rename.
+                "id": f"plugin:{pname}:{tid}",
+                "name": str(td.get("name", tid.title())),
                 # Same sanitizer as /api/plugins — /api/themes missed the
                 # 2026-05-07 day-ruiner sweep (chaos hunt T1 2026-08-16).
                 "icon": _safe_emoji_icon(td.get("icon", "")),
-                "description": td.get("description", ""),
+                "description": str(td.get("description", "")),
                 "source": "plugin",
                 "plugin": pname,
-                "css": css_url,
+                "css": f"{css_url}?v={BOOT_VERSION}" if css_url else "",
                 "scripts": script_urls,
-                "preview": td.get("preview", {}),
-                "settings": td.get("settings", []),
+                "preview": _clean_preview(td.get("preview")),
+                "font": td.get("font") if isinstance(td.get("font"), str) else None,
+                "bg": bg_url,
+                "motion": td.get("motion") if isinstance(td.get("motion"), str) else None,
+                "settings": _clean_settings(td.get("settings")),
             })
 
-    return {"themes": themes}
+    return {"themes": themes, "default": default_theme}
 
 
 def _extract_css_preview(css_path):

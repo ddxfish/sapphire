@@ -1,0 +1,132 @@
+/* Paper Theme - /static/themes/paper.css */
+/* Handwritten notes on warm paper — themes-v2 P2 bundle proof: ships with
+   font: handwriting (Caveat, downloaded on demand) + bg: paper texture.
+   The scrim override matters: the default dark chat scrim would muddy the
+   paper texture; a faint warm wash keeps it readable and papery. */
+[data-theme="paper"] {
+    color-scheme: light;
+
+    /* Trim - fountain-pen sepia */
+    --trim: #7a5230;
+    --trim-glow: rgba(122, 82, 48, 0.3);
+    --trim-light: rgba(122, 82, 48, 0.1);
+    --trim-border: rgba(122, 82, 48, 0.3);
+    --trim-50: rgba(122, 82, 48, 0.5);
+
+    /* Borders */
+    --border-subtle: rgba(90, 70, 45, 0.12);
+
+    /* Colors - Core - warm cream */
+    --bg: #f5efe0;
+    --bg-secondary: #efe7d2;
+    --bg-dark: #e8dfc8;
+    --bg-tertiary: #eae1cc;
+    --bg-hover: #e2d7bd;
+    --bg-inset: rgba(90, 70, 45, 0.06);
+    --text: #3a2f22;
+    --text-bright: #241c12;
+    --text-light: #453a2b;
+    --text-secondary: #5a4c38;
+    --text-tertiary: #75654e;
+    --text-muted: #8d7d64;
+    --text-dim: #a89878;
+    --border: #d8ccae;
+    --border-light: #cbbd9c;
+    --border-hover: #b3a382;
+
+    /* Overlays & Shadows */
+    --overlay-bg: rgba(60, 45, 25, 0.5);
+    --overlay-medium: rgba(60, 45, 25, 0.4);
+    --shadow-medium: rgba(90, 70, 45, 0.18);
+    --shadow-heavy: rgba(90, 70, 45, 0.3);
+    --highlight-subtle: rgba(90, 70, 45, 0.06);
+
+    /* Chat area: let the paper texture through, faint warm scrim only */
+    --chat-area-bg: #f5efe0;
+    --chat-area-overlay: transparent;
+    --chat-area-scrim: rgba(245, 239, 224, 0.35);
+
+    /* Scrollbar */
+    --scrollbar-track: #efe7d2;
+    --scrollbar-thumb: rgba(90, 70, 45, 0.22);
+    --scrollbar-thumb-hover: rgba(90, 70, 45, 0.38);
+
+    /* Inputs */
+    --input-bg: #f9f4e8;
+    --input-border: #c4b593;
+    --input-focus-border: #8d7d64;
+    --input-focus-bg: #fdfaf2;
+    --placeholder-color: #a89878;
+
+    /* Code/Mono */
+    --code-bg: rgba(90, 70, 45, 0.07);
+
+    /* Focus ring */
+    --focus-ring: rgba(122, 82, 48, 0.4);
+
+    /* Selection */
+    --selection-bg: rgba(122, 82, 48, 0.25);
+    --selection-text: #241c12;
+
+    /* Select dropdown arrow */
+    --select-arrow: url('data:image/svg+xml;utf8,<svg fill="%235a4c38" height="24" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg"><path d="M7 10l5 5 5-5z"/></svg>');
+
+    /* Primary - inkwell brown */
+    --primary: #6d4a2a;
+    --primary-hover: #573a20;
+
+    /* Success - moss ink */
+    --success: #4a6741;
+    --success-text: #3c5535;
+    --success-bg: rgba(74, 103, 65, 0.95);
+    --success-light: rgba(74, 103, 65, 0.12);
+    --success-border: rgba(74, 103, 65, 0.3);
+    --success-border-hover: rgba(74, 103, 65, 0.5);
+
+    /* Warning - amber ink */
+    --warning: #a5702a;
+    --warning-text: #8d5e20;
+    --warning-bg: rgba(165, 112, 42, 0.95);
+    --warning-light: rgba(165, 112, 42, 0.12);
+    --warning-border: rgba(165, 112, 42, 0.3);
+
+    /* Error/Danger - red ink */
+    --error: #a53a2a;
+    --error-text: #8d2f20;
+    --error-bg: rgba(165, 58, 42, 0.95);
+    --error-light: rgba(165, 58, 42, 0.1);
+    --error-border: rgba(165, 58, 42, 0.3);
+    --error-border-hover: rgba(165, 58, 42, 0.5);
+    --error-subtle: rgba(165, 58, 42, 0.05);
+    --danger: #a53a2a;
+    --danger-hover: #8d2f20;
+    --danger-red: #b04432;
+    --danger-glow: rgba(165, 58, 42, 0.5);
+
+    /* Info */
+    --info-bg: rgba(109, 74, 42, 0.95);
+
+    /* Accent colors */
+    --accent-blue: #4a6a8d;
+    --accent-blue-hover: #3c5875;
+    --accent-blue-light: rgba(74, 106, 141, 0.12);
+    --accent-blue-border: rgba(74, 106, 141, 0.3);
+    --accent-cyan: #4a7d75;
+    --accent-cyan-light: rgba(74, 125, 117, 0.12);
+    --accent-orange: #a5702a;
+
+    /* Chat message backgrounds - sticky-note tints */
+    --user-bg: #efe2c2;
+    --assistant-bg: #ece7d6;
+
+    /* Plugin-specific accents */
+    --plugin-spice-bg: rgba(165, 58, 42, 0.08);
+    --plugin-spice-bg-hover: rgba(165, 58, 42, 0.15);
+    --plugin-ability-bg: rgba(74, 125, 117, 0.1);
+    --plugin-ability-bg-hover: rgba(74, 125, 117, 0.16);
+    --plugin-prompt-bg: rgba(109, 74, 42, 0.1);
+    --plugin-prompt-bg-focus: rgba(109, 74, 42, 0.18);
+
+    /* Tool result accent */
+    --tool-result-bg: rgba(74, 103, 65, 0.1);
+}

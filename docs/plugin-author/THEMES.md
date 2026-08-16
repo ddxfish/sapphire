@@ -62,10 +62,10 @@ plugins/my-theme-pack/
 Theme CSS files override Sapphire's CSS variables. **Two runtime behaviors you must account for:**
 
 1. **Paths are relative to your plugin's `web/` directory.** Manifest `css`/`scripts` values are served from `/plugin-web/{plugin}/`, which already points at `web/` — so write `themes/cyberpunk/cyberpunk.css`, NOT `web/themes/...` (the latter resolves to `web/web/...` and 404s).
-2. **Your theme id is namespaced.** The runtime sets `data-theme="plugin-{plugin-name}-{theme-id}"`, not your bare `id`. Wrap your CSS in that prefixed selector — a bare `[data-theme="cyberpunk"]` will never match. For id `cyberpunk` in a plugin named `neon-pack`:
+2. **Your theme id is namespaced.** The runtime sets `data-theme="plugin:{plugin-name}:{theme-id}"` (colon-separated — colons can't appear in either part, so names with dashes never collide), not your bare `id`. Wrap your CSS in that prefixed selector — a bare `[data-theme="cyberpunk"]` will never match. For id `cyberpunk` in a plugin named `neon-pack`:
 
 ```css
-[data-theme="plugin-neon-pack-cyberpunk"] {
+[data-theme="plugin:neon-pack:cyberpunk"] {
     --bg: #0a0a1a;
     --bg-secondary: #12122a;
     --text: #e0e0ff;
@@ -125,7 +125,7 @@ Theme scripts are loaded as `<script>` tags when the theme is activated and remo
 
     // Cleanup when theme changes — check periodically.
     // IMPORTANT: the runtime stamps data-theme-script with the NAMESPACED id
-    // `plugin-<your-plugin-name>-<theme-id>` (same namespacing as the CSS
+    // `plugin:<your-plugin-name>:<theme-id>` (same namespacing as the CSS
     // note above), NOT the bare theme id. Using the bare id here makes this
     // check fire on its first tick and kill your animation ~1s after it
     // starts. Match your own <script> tag instead — it is always correct:

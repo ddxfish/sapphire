@@ -305,15 +305,19 @@
 
 /* System (default) - no override needed */
 
+/* Webfont-first stacks: the leading family is a downloadable OFL webfont
+   (shared/fonts.js registers it via FontFace when present); the rest of the
+   stack is the graceful system fallback when it was never downloaded. */
+
 /* Monospace - everything in mono */
 [data-font="mono"] {
-    --font-body: 'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace;
+    --font-body: 'JetBrains Mono', 'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace;
     --font-heading: var(--font-body);
 }
 
 /* Serif - elegant reading font */
 [data-font="serif"] {
-    --font-body: 'Georgia', 'Cambria', 'Times New Roman', serif;
+    --font-body: 'Lora', 'Georgia', 'Cambria', 'Times New Roman', serif;
     --font-heading: var(--font-body);
 }
 
@@ -321,6 +325,13 @@
 [data-font="rounded"] {
     --font-body: 'Nunito', 'Varela Round', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-heading: var(--font-body);
+}
+
+/* Handwriting - Caveat script (paper theme's default) */
+[data-font="handwriting"] {
+    --font-body: 'Caveat', 'Segoe Script', cursive;
+    --font-heading: var(--font-body);
+    font-size: 1.08em;  /* Caveat runs small at equal px */
 }
 
 /* =============================================================================

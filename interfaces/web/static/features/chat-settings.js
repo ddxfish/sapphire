@@ -57,17 +57,22 @@ export function releaseBackground(owner) {
     }
 }
 
-// Global underlay: the app-wide default scene (DEFAULT_BACKGROUND setting),
-// painted only when the chat has no scene of its own. Resolution happens at
-// paint time, in this one choke point — the chain is
-//   chat scene > global underlay > blank
-// (themes-v2 P2 slots a theme-default layer between underlay and blank).
-// The image URL is only referenced when actually painted, so the underlay is
-// never fetched while a chat scene covers it.
-let _defaultBackground = '';
+// Background resolution happens at paint time, in this one choke point:
+//   chat scene > global underlay (DEFAULT_BACKGROUND) > theme bg > blank
+// Image URLs are only referenced when actually painted, so lower layers are
+// never fetched while a higher one covers them.
+let _defaultBackground = '';   // scene NAME from the background library
+let _themeBackground = '';     // URL from the active theme's bundle (core/theme.js)
 
 export function setDefaultBackground(name) {
     _defaultBackground = (name && /^[a-z0-9_-]{1,50}$/.test(name)) ? name : '';
+}
+
+export function setThemeBackground(url) {
+    // Same-app asset URLs only — theme bg comes from /api/themes which builds
+    // /static/... or /plugin-web/... paths; refuse anything else.
+    _themeBackground = (typeof url === 'string' &&
+        (url.startsWith('/static/') || url.startsWith('/plugin-web/'))) ? url : '';
 }
 
 export function applyBackground(name) {
@@ -82,9 +87,12 @@ export function applyBackground(name) {
         bg.dataset.scene = explicit;
         return;
     }
-    const painted = explicit || _defaultBackground;
-    if (painted) {
-        bg.style.backgroundImage = `url('/api/backgrounds/${encodeURIComponent(painted)}')`;
+    const paintedName = explicit || _defaultBackground;
+    if (paintedName) {
+        bg.style.backgroundImage = `url('/api/backgrounds/${encodeURIComponent(paintedName)}')`;
+        bg.classList.add('has-bg');
+    } else if (_themeBackground) {
+        bg.style.backgroundImage = `url('${_themeBackground}')`;
         bg.classList.add('has-bg');
     } else {
         bg.style.backgroundImage = '';

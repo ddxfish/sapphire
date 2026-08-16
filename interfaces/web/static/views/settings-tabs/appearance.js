@@ -6,17 +6,10 @@
 import { mountScenePicker } from '../../shared/scene-picker.js';
 import { applyBackground, setDefaultBackground } from '../../features/chat-settings.js';
 import { updateSettingsBatch } from '../../shared/settings-api.js';
+import { applyTheme, fetchThemes, currentThemeId, settingKey } from '../../core/theme.js';
+import { FONT_PRESETS, fontStatus, ensureFont } from '../../shared/fonts.js';
 
 let _allThemes = [];
-
-// Font presets — stacks mirror the [data-font] blocks in shared.css.
-// P2 adds downloadable webfont presets to this same grid.
-const FONT_PRESETS = [
-    { id: 'system',  label: 'System',    stack: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif` },
-    { id: 'mono',    label: 'Monospace', stack: `'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', monospace` },
-    { id: 'serif',   label: 'Serif',     stack: `'Georgia', 'Cambria', 'Times New Roman', serif` },
-    { id: 'rounded', label: 'Rounded',   stack: `'Nunito', 'Varela Round', -apple-system, sans-serif` },
-];
 
 export default {
     id: 'appearance',
@@ -25,7 +18,6 @@ export default {
     description: 'Theme, spacing, and font settings',
 
     render(ctx) {
-        const currentTheme = localStorage.getItem('sapphire-theme') || 'dark';
         const density = localStorage.getItem('sapphire-density') || 'default';
         const font = localStorage.getItem('sapphire-font') || 'system';
         const avatars = ctx.getValue('AVATARS_IN_CHAT') ?? true;
@@ -42,10 +34,11 @@ export default {
             <div class="setting-section-title" style="margin-top:20px">Type</div>
             <div class="font-grid" id="font-grid">
                 ${FONT_PRESETS.map(f => `
-                    <div class="font-card ${font === f.id ? 'active' : ''}" data-font-id="${f.id}" style="font-family:${f.stack}">
+                    <div class="font-card ${font === f.id ? 'active' : ''}" data-font-id="${f.id}" data-family="${f.family || ''}" style="font-family:${f.stack}">
                         <div class="font-sample">Aa</div>
                         <div class="font-quick">The quick brown fox jumps</div>
                         <div class="font-card-name">${f.label}</div>
+                        <span class="font-dl" hidden title="Downloads on first use (~300KB, OFL)">&#x2913;</span>
                         <div class="theme-check">✓</div>
                     </div>`).join('')}
             </div>
@@ -147,6 +140,7 @@ export default {
             .font-sample { font-size: 26px; color: var(--text); line-height: 1.1; }
             .font-quick { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
             .font-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); margin-top: 4px; font-family: var(--font-body); }
+            .font-dl { position: absolute; top: 6px; left: 8px; font-size: 12px; color: var(--text-muted); }
             .theme-settings-panel {
                 margin-top: 12px; padding: 14px; border-radius: 10px;
                 background: var(--bg-secondary); border: 1px solid var(--border);
@@ -177,18 +171,38 @@ export default {
             }
         });
 
-        // Font preset cards (Type section)
-        el.querySelector('#font-grid')?.addEventListener('click', e => {
+        // Font preset cards (Type section). Webfont-backed presets show a ⤓
+        // badge until their font is downloaded (pinned + sha-verified server
+        // side); first click downloads, then applies.
+        fontStatus().then(status => {
+            el.querySelectorAll('.font-card[data-family]').forEach(c => {
+                const fam = c.dataset.family;
+                if (fam && !status[fam]?.downloaded) c.querySelector('.font-dl')?.removeAttribute('hidden');
+            });
+        }).catch(() => {});
+
+        el.querySelector('#font-grid')?.addEventListener('click', async e => {
             const card = e.target.closest('.font-card');
             if (!card) return;
             const v = card.dataset.fontId;
-            if (v === 'system') {
-                document.documentElement.removeAttribute('data-font');
-                localStorage.removeItem('sapphire-font');
-            } else {
-                document.documentElement.setAttribute('data-font', v);
-                localStorage.setItem('sapphire-font', v);
+            const fam = card.dataset.family;
+            if (fam) {
+                const badge = card.querySelector('.font-dl');
+                const needs = badge && !badge.hidden;
+                if (needs) badge.textContent = '⏳';
+                try {
+                    await ensureFont(fam);
+                    badge?.setAttribute('hidden', '');
+                } catch {
+                    if (badge) badge.textContent = '⚠';
+                    return;
+                }
             }
+            // Always store the pick, 'system' included — an EXPLICIT choice
+            // must outrank a theme bundle's font default (themes-v2 P2).
+            localStorage.setItem('sapphire-font', v);
+            if (v === 'system') document.documentElement.removeAttribute('data-font');
+            else document.documentElement.setAttribute('data-font', v);
             el.querySelectorAll('.font-card').forEach(c => c.classList.toggle('active', c === card));
         });
 
@@ -246,43 +260,13 @@ async function _loadThemeGrid(el) {
     const grid = el.querySelector('#theme-grid');
     if (!grid) return;
 
-    const currentTheme = localStorage.getItem('sapphire-theme') || 'dark';
+    const currentTheme = currentThemeId();
 
-    // Gather themes from all sources
-    _allThemes = [];
-
-    // 1. API themes (core + manifest plugins)
-    try {
-        const res = await fetch('/api/themes');
-        if (res.ok) {
-            const data = await res.json();
-            _allThemes.push(...(data.themes || []));
-        }
-    } catch {}
-
-    // 2. Legacy plugin themes (window.sapphireThemes global)
-    if (window.sapphireThemes) {
-        try {
-            const legacy = window.sapphireThemes.getAll();
-            for (const [id, t] of Object.entries(legacy || {})) {
-                if (_allThemes.find(x => x.id === id)) continue; // skip dupes
-                // Check for settings: declared on theme object, or via getSettings()
-                let settings = t.settings || [];
-                if (!settings.length && window.sapphireThemes.getSettings) {
-                    try { settings = window.sapphireThemes.getSettings(id) || []; } catch {}
-                }
-                _allThemes.push({
-                    id, name: t.name || id, icon: t.icon || '',
-                    description: t.description || '',
-                    source: 'plugin-legacy',
-                    css: t.css || '',
-                    scripts: t.scripts || [],
-                    preview: t.preview || {},
-                    settings,
-                });
-            }
-        } catch {}
-    }
+    // One source of truth: the server list via core/theme.js. The old
+    // window.sapphireThemes legacy merge is gone — it had zero producers
+    // anywhere in the tree and fed unvalidated css/script values straight
+    // into boot persistence (lifecycle #14 / chaos T2).
+    _allThemes = await fetchThemes();
 
     // Group: core first, then plugin
     const core = _allThemes.filter(t => t.source === 'core');
@@ -353,10 +337,13 @@ async function _loadThemeGrid(el) {
     grid.addEventListener('click', e => {
         const card = e.target.closest('.theme-card');
         if (!card) return;
+        // Re-clicking the active card used to re-run the whole apply and
+        // double-inject theme scripts (lifecycle #5).
+        if (card.classList.contains('active')) return;
         const themeId = card.dataset.themeId;
         const theme = _allThemes.find(t => t.id === themeId);
         if (!theme) return;
-        _applyTheme(theme);
+        applyTheme(theme);
         // Update active state
         grid.querySelectorAll('.theme-card').forEach(c => c.classList.remove('active'));
         card.classList.add('active');
@@ -381,7 +368,9 @@ function _renderThemeSettings(panel, theme) {
 
     const rows = settings.map(s => {
         const key = s.key || '';
-        const current = localStorage.getItem(key) ?? s.default ?? '';
+        // Namespaced per-theme storage (theme:{id}:{key}) — bare manifest
+        // keys could clobber sapphire-* app state (lifecycle #9 / chaos T7).
+        const current = localStorage.getItem(settingKey(theme.id, key)) ?? s.default ?? '';
         let input = '';
 
         if (s.type === 'select' && s.options) {
@@ -428,7 +417,7 @@ function _renderThemeSettings(panel, theme) {
         const handler = () => {
             const key = input.dataset.settingKey;
             const val = input.type === 'checkbox' ? String(input.checked) : input.value;
-            localStorage.setItem(key, val);
+            try { localStorage.setItem(settingKey(theme.id, key), val); } catch {}
             // Update range display
             if (input.type === 'range') {
                 const span = input.nextElementSibling;
@@ -445,69 +434,6 @@ function _renderThemeSettings(panel, theme) {
         input.addEventListener('change', handler);
         if (input.type === 'range') input.addEventListener('input', handler);
     });
-}
-
-
-function _applyTheme(theme) {
-    // 0. Clear old chat-style data attributes (prevents bleed between themes)
-    Array.from(document.documentElement.attributes)
-        .filter(a => a.name.startsWith('data-') && a.name.endsWith('-chat'))
-        .forEach(a => document.documentElement.removeAttribute(a.name));
-
-    // 1. Remove old theme scripts
-    document.querySelectorAll('script[data-theme-script]').forEach(s => s.remove());
-
-    // 2. Apply CSS
-    if (theme.source === 'core') {
-        // Core themes use data-theme attribute + stylesheet link
-        document.documentElement.setAttribute('data-theme', theme.id);
-        localStorage.setItem('sapphire-theme', theme.id);
-        const link = document.getElementById('theme-stylesheet');
-        if (link) { link.href = theme.css; link.disabled = false; }
-        else {
-            const l = document.createElement('link');
-            l.id = 'theme-stylesheet'; l.rel = 'stylesheet';
-            l.href = theme.css;
-            document.head.appendChild(l);
-        }
-        // Remove plugin theme CSS if any
-        const pluginCSS = document.getElementById('plugin-theme-css');
-        if (pluginCSS) pluginCSS.remove();
-        // Clear plugin theme data from localStorage
-        localStorage.removeItem('sapphire-theme-data');
-    } else {
-        // Plugin themes use their own CSS file
-        document.documentElement.setAttribute('data-theme', theme.id);
-        localStorage.setItem('sapphire-theme', theme.id);
-        // Store full theme info for reload
-        localStorage.setItem('sapphire-theme-data', JSON.stringify({
-            id: theme.id, source: theme.source, css: theme.css, scripts: theme.scripts || []
-        }));
-        // Load plugin CSS
-        let pluginCSS = document.getElementById('plugin-theme-css');
-        if (pluginCSS) {
-            pluginCSS.href = theme.css;
-        } else {
-            pluginCSS = document.createElement('link');
-            pluginCSS.id = 'plugin-theme-css';
-            pluginCSS.rel = 'stylesheet';
-            pluginCSS.href = theme.css;
-            document.head.appendChild(pluginCSS);
-        }
-        // Disable core theme stylesheet to avoid conflicts
-        const coreLink = document.getElementById('theme-stylesheet');
-        if (coreLink) coreLink.disabled = true;
-    }
-
-    // 3. Load scripts (animated backgrounds)
-    if (theme.scripts?.length) {
-        for (const src of theme.scripts) {
-            const s = document.createElement('script');
-            s.src = src;
-            s.dataset.themeScript = theme.id;
-            document.body.appendChild(s);
-        }
-    }
 }
 
 

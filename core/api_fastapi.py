@@ -174,6 +174,12 @@ async def serve_plugin_web(plugin_name: str, path: str, _=Depends(require_login)
     try:
         from core.plugin_loader import plugin_loader
         info = plugin_loader.get_plugin_info(plugin_name)
+        # Disable must be revocation: a known-but-not-running plugin serves
+        # NOTHING — before this, a disabled theme plugin's CSS/JS kept loading
+        # from disk on every boot via stale localStorage URLs (lifecycle #1).
+        # Unknown names still fall through to the dir scan (registry gaps).
+        if info and (not info.get("loaded") or not info.get("enabled")):
+            return JSONResponse({"error": "Not found"}, status_code=404)
         if info and info.get("path"):
             candidates.append(Path(info["path"]))
     except Exception:
@@ -592,6 +598,19 @@ def _no_cache_html(template: str, context: dict):
     return resp
 
 
+def _default_theme():
+    """Boot-fallback theme id from themes.json 'default' (was dead config —
+    lifecycle #15). Template-stamped into the FOUC guard."""
+    try:
+        data = json.loads((STATIC_DIR / "themes" / "themes.json").read_text(encoding='utf-8'))
+        d = data.get("default")
+        if isinstance(d, str) and re.fullmatch(r'[a-z0-9_-]{1,50}', d):
+            return d
+    except Exception:
+        pass
+    return "dark"
+
+
 @app.get("/")
 async def index(request: Request, _=Depends(require_login)):
     """Main chat page."""
@@ -602,7 +621,8 @@ async def index(request: Request, _=Depends(require_login)):
         "v": BOOT_VERSION,
         "app_version": APP_VERSION,
         "managed": _is_managed(),
-        "import_map": IMPORT_MAP
+        "import_map": IMPORT_MAP,
+        "default_theme": _default_theme(),
     })
 
 
@@ -917,6 +937,7 @@ from core.routes.dashboard import router as dashboard_router
 from core.routes.body import router as body_router
 from core.routes.videos import router as videos_router
 from core.routes.backgrounds import router as backgrounds_router
+from core.routes.fonts import router as fonts_router
 from core.routes.conversation import router as conversation_router
 from core.routes.vault import router as vault_router
 
@@ -935,6 +956,7 @@ app.include_router(dashboard_router)
 app.include_router(body_router)
 app.include_router(videos_router)
 app.include_router(backgrounds_router)
+app.include_router(fonts_router)
 app.include_router(conversation_router)
 app.include_router(vault_router)
 
