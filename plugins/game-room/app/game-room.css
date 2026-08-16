@@ -339,7 +339,41 @@
 .gr-card-body { flex: 1 1 0; }
 .gr-card-btns { flex-direction: row; align-items: center; }
 .gr-card-btns .pk-btn { width: auto; }
-.gr-card-side { align-items: center; }
+.gr-card-side { align-items: center; width: auto; flex: 0 0 auto; }
+
+/* ---------------- split Play + More Info (Krem 2026-08-16) ----------------
+   Right side is TWO controls: [Play|▾] as one blue pill (Play Private in the
+   ▾ menu, carat only while the vault's open) + the settings gear. Details
+   moved into the body as "More Info ▾" left of the stats line. */
+.gr-play-split { position: relative; display: flex; }
+.gr-play-split .gr-play { border-radius: 8px 0 0 8px; }
+.gr-play-split .gr-play-caret {
+    border-radius: 0 8px 8px 0; margin-left: -1px;
+    border-left-color: #5ab0ff55; padding: 9px 9px;
+}
+.gr-play-menu {
+    position: absolute; top: calc(100% + 5px); right: 0; z-index: 30;
+    background: var(--bg-secondary, #1c2230); border: 1px solid var(--border, #2a3040);
+    border-radius: 8px; padding: 4px; min-width: 160px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+.gr-play-menu button {
+    display: block; width: 100%; text-align: left; white-space: nowrap;
+    background: none; border: none; border-radius: 6px; cursor: pointer;
+    color: var(--text, #e6e6ef); font-size: 0.9em; font-weight: 600; padding: 8px 10px;
+}
+.gr-play-menu button:hover:not(:disabled) { background: #1d4e8955; }
+.gr-play-menu button:disabled { opacity: 0.4; cursor: not-allowed; }
+.gr-card-stats { display: flex; align-items: center; gap: 12px; }
+/* Badge look, same language as .gr-card-genre — outlined pill, no fill,
+   so it reads as a quiet affordance rather than a button (Krem 2026-08-16). */
+.gr-more-toggle {
+    background: none; border: 1px solid var(--border, #2a3040); border-radius: 10px;
+    padding: 2px 9px; cursor: pointer;
+    font: inherit; font-weight: 600; color: var(--text-secondary, #8a8fa3);
+    white-space: nowrap;
+}
+.gr-more-toggle:hover { color: var(--accent, #5ab0ff); border-color: var(--accent, #5ab0ff); }
 
 /* ---------------- Dark Horse Tower (towerd) ---------------- */
 .td-wrap { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-height: 0; }

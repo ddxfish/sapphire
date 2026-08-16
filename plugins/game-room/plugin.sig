@@ -2,8 +2,8 @@
   "plugin": "game-room",
   "version": "0.9.0",
   "files": {
-    "app/game-room.css": "sha256:0926c83703b9a573595a06f2020930114c475db3089642bd61920be42418166b",
-    "app/index.js": "sha256:68b2af1b21aad222de557f9a58ce8724f583ad709f52f171e72242e43f4151e9",
+    "app/game-room.css": "sha256:35b5d70c6e009e8c200705987cc4e1a18cf52a726a7956ce3c462903e216a4cc",
+    "app/index.js": "sha256:59a37bf7effe777d594d0304fd5da1c8b3986c439ec16b8f8b5d399069d88e2b",
     "app/room.js": "sha256:bda2f280f55f64460e735ba95a149fd92f5f63b1bc9e75bc18e097b6660f6492",
     "app/settings-modal.js": "sha256:39a70ec7b44dd9e1625034659808f2cacd38a96336f7ad5ec1e78190ddaf31f2",
     "app/story-room.js": "sha256:798a9422223e87d133cff099944c1ff47b4b846e67722881ca3868e7232df3ef",
@@ -36,5 +36,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "BcLxnm0RDut+VSjy22ws+e2qizwaV4RYloFXWqTuWSebuUIGZQY1ZJiU0PagdX3hTVDouX1avSke6nqRMYhxBQ=="
+  "signature": "CkMumfjHfmiJePpvz0JiRu1CxYSRWIPtyU6yMy55ybYDAqx/8/7/V+cICWCp1q5TKnQ1TpJbUD/ey780+vUiDw=="
 }

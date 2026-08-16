@@ -22,6 +22,12 @@ let _search = '';
 let _genre = 'all';
 
 const LIB_SIDEBAR_KEY = 'sapphire-game-lib-sidebar';
+
+// Any click outside a split-Play control closes open Play menus (the carat
+// and menu items stopPropagation, so this only sees genuine outside clicks).
+// Module scope = bound once; a no-op querySelectorAll outside the library.
+document.addEventListener('click', () =>
+    document.querySelectorAll('.gr-play-menu').forEach(m => { m.style.display = 'none'; }));
 const bootV = () => document.querySelector('meta[name="boot-version"]')?.content || '';
 const csrfTok = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
 
@@ -230,9 +236,27 @@ function paintShelf() {
         (_genre === 'all' || _genre === 'story')
         && (!q || `${s.title || ''} ${s.description || ''} ${s.slug} ${(s.tags || []).join(' ')}`.toLowerCase().includes(q)));
 
-    // One compact stats line always visible; ▾ expands the tile for the
-    // pack-authored facts + full details (Krem 2026-08-04).
+    // One compact stats line always visible; "More Info ▾" beside it expands
+    // the tile for the pack-authored facts + full details (Krem 2026-08-16 —
+    // moved off the button stack into the body, left of the stats).
     const artFmt = kb => kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB';
+    // Split Play: one blue pill, Play is the default, ▾ drops Play Private.
+    // Vault closed = plain Play, no carat — the library looks exactly like
+    // pre-v1.3 until the door's unlocked (same rule as before, fewer buttons).
+    const playCtl = (privTitle) => _vaultOpen ? `
+        <div class="gr-play-split">
+          <button class="pk-btn pk-btn-primary gr-play">Play</button>
+          <button class="pk-btn pk-btn-primary gr-play-caret" title="More ways to play">&#x25BE;</button>
+          <div class="gr-play-menu" style="display:none">
+            <button class="gr-play-priv" title="${privTitle}">\u{1F5DD} Play Private</button>
+          </div>
+        </div>`
+        : `<button class="pk-btn pk-btn-primary gr-play">Play</button>`;
+    const statsRow = (statLine) => `
+        <div class="gr-card-stats">
+          <button class="gr-more-toggle" title="Details">More Info &#x25BE;</button>
+          ${statLine ? `<span>${esc(statLine)}</span>` : ''}
+        </div>`;
     // Tile art with emoji fallback (story tiles are server-verified to
     // exist; game tiles fall back via onerror until the art lands)
     const artCell = (tileUrl, emoji) => tileUrl
@@ -260,14 +284,12 @@ function paintShelf() {
             <div class="gr-card-title">${esc(s.title || s.slug)}
               <span class="gr-card-genre">story</span></div>
             <div class="gr-card-desc">${esc(s.description || '')}</div>
-            ${statLine ? `<div class="gr-card-stats">${esc(statLine)}</div>` : ''}
+            ${statsRow(statLine)}
           </div>
           <div class="gr-card-side">
             <div class="gr-card-btns">
-              <button class="pk-btn pk-btn-primary gr-play">Play</button>
-              ${_vaultOpen ? `<button class="pk-btn gr-play-priv" title="New PRIVATE playthrough — sealed and hidden whenever the vault locks">\u{1F5DD} Private</button>` : ''}
+              ${playCtl('New PRIVATE playthrough — sealed and hidden whenever the vault locks')}
               <button class="pk-btn gr-card-story-gear" data-story="${esc(s.slug)}" title="${esc(s.title || s.slug)} — GM settings">&#x2699;&#xFE0E;</button>
-              <button class="pk-btn gr-card-more-btn" title="Details">&#x25BE;</button>
             </div>
             <span class="gr-card-count">${counts['story:' + s.slug] ? counts['story:' + s.slug] + ' playthrough' + (counts['story:' + s.slug] > 1 ? 's' : '') : 'new tale'}</span>
           </div>
@@ -289,14 +311,12 @@ function paintShelf() {
             <div class="gr-card-title">${esc(g.title || g.id)}
               ${g.genre ? `<span class="gr-card-genre">${esc(g.genre)}</span>` : ''}</div>
             <div class="gr-card-desc">${esc(g.desc || '')}</div>
-            ${statLine ? `<div class="gr-card-stats">${esc(statLine)}</div>` : ''}
+            ${statsRow(statLine)}
           </div>
           <div class="gr-card-side">
             <div class="gr-card-btns">
-              <button class="pk-btn pk-btn-primary gr-play">Play</button>
-              ${_vaultOpen ? `<button class="pk-btn gr-play-priv" title="New PRIVATE session — sealed and hidden whenever the vault locks">\u{1F5DD} Private</button>` : ''}
+              ${playCtl('New PRIVATE session — sealed and hidden whenever the vault locks')}
               <button class="pk-btn gr-card-gear" data-game="${esc(g.id)}" title="${esc(g.title || g.id)} settings">&#x2699;&#xFE0E;</button>
-              <button class="pk-btn gr-card-more-btn" title="Details">&#x25BE;</button>
             </div>
             <span class="gr-card-count">${counts[g.id] ? counts[g.id] + ' session' + (counts[g.id] > 1 ? 's' : '') : 'new table'}</span>
           </div>
@@ -324,10 +344,23 @@ function paintShelf() {
             mod.openStorySettings(btn.dataset.story);
         });
     });
+    // ▾ on the split Play button: toggle this card's menu, close any other
+    shelf.querySelectorAll('.gr-play-caret').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();   // the card click underneath opens the game
+            const menu = btn.parentNode.querySelector('.gr-play-menu');
+            if (!menu) return;
+            const wasOpen = menu.style.display !== 'none';
+            shelf.querySelectorAll('.gr-play-menu').forEach(m => { m.style.display = 'none'; });
+            if (!wasOpen) menu.style.display = '';
+        });
+    });
     shelf.querySelectorAll('.gr-play-priv').forEach(btn => {
         btn.addEventListener('click', async (e) => {
             e.stopPropagation();   // the card click underneath opens PUBLIC
             const card = btn.closest('.gr-card');
+            const menu = btn.closest('.gr-play-menu');
+            if (menu) menu.style.display = 'none';
             btn.disabled = true;
             try {
                 if (card?.dataset.story) {
@@ -346,14 +379,14 @@ function paintShelf() {
             }
         });
     });
-    shelf.querySelectorAll('.gr-card-more-btn').forEach(btn => {
+    shelf.querySelectorAll('.gr-more-toggle').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();   // the card click underneath opens the game
             const more = btn.closest('.gr-card')?.querySelector('.gr-card-more');
             if (!more) return;
             const open = more.style.display !== 'none';
             more.style.display = open ? 'none' : '';
-            btn.innerHTML = open ? '&#x25BE;' : '&#x25B4;';
+            btn.innerHTML = open ? 'More Info &#x25BE;' : 'More Info &#x25B4;';
         });
     });
     shelf.querySelectorAll('.gr-card').forEach(el => {
