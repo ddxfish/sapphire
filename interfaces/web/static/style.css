@@ -3,16 +3,6 @@
 
 * { box-sizing: border-box; }
 
-html {
-    --trim: #00cccc;
-    --trim-glow: rgba(0, 204, 204, 0.35);
-    --trim-light: rgba(0, 204, 204, 0.15);
-    --trim-border: rgba(0, 204, 204, 0.4);
-    --trim-50: rgba(0, 204, 204, 0.5);
-    --accordion-header-bg: rgba(0, 204, 204, 0.08);
-    --accordion-header-hover: rgba(0, 204, 204, 0.12);
-}
-
 body {
     font-family: var(--font-body);
     margin: 0;
@@ -30,14 +20,14 @@ body {
    ============================================================================= */
 
 #nav-rail {
-    width: 64px;
+    width: var(--nav-rail-w);
     height: 100%;
     position: fixed;
     left: 0;
     top: 0;
     z-index: 999;
-    background: var(--bg-secondary);
-    border-right: 1px solid var(--border);
+    background: var(--nav-bg);
+    border-right: 1px solid var(--nav-border);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -50,8 +40,8 @@ body {
 #nav-rail::-webkit-scrollbar { display: none; } /* Chrome/Safari */
 
 #app-content {
-    margin-left: 64px;
-    width: calc(100% - 64px);
+    margin-left: var(--nav-rail-w);
+    width: calc(100% - var(--nav-rail-w));
     height: 100%;
     min-height: 0;
     min-width: 0;
@@ -188,8 +178,8 @@ body {
 }
 
 .nav-item.active {
-    background: var(--trim-light, rgba(74, 158, 255, 0.15));
-    color: var(--trim, #4a9eff);
+    background: var(--trim-light);
+    color: var(--trim);
 }
 
 /* Active left indicator bar */
@@ -201,7 +191,7 @@ body {
     bottom: 8px;
     width: 3px;
     border-radius: 0 3px 3px 0;
-    background: var(--trim, #4a9eff);
+    background: var(--trim);
 }
 
 .nav-icon {
@@ -261,8 +251,8 @@ body {
     color: var(--text);
 }
 .nav-version.update-available {
-    color: var(--warning-color, #f0ad4e);
-    border-color: var(--warning-color, #f0ad4e);
+    color: var(--warning, #f0ad4e);
+    border-color: var(--warning, #f0ad4e);
     padding: 3px 6px 3px;
 }
 .nav-branch {
@@ -284,7 +274,7 @@ body {
     border-radius: var(--radius-md);
     padding: 4px;
     min-width: 140px;
-    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 -4px 16px var(--shadow-medium);
     z-index: 1000;
 }
 .nav-overflow-menu.hidden { display: none; }
@@ -3955,6 +3945,12 @@ div.hb-response-summary {
     background-color: var(--chat-area-bg, var(--border));
     overflow: hidden;
     position: relative;
+    /* Own stacking context: lets a background layer (motion/canvas) slot
+       between this element's paint and the overlay via z-index — without
+       this, no z value works (negative hides behind our own bg-color,
+       0+ covers the transcript). Also immunizes against .shake's transform
+       creating a transient context. (P0 2026-08-16) */
+    isolation: isolate;
     min-height: 0; /* Critical for flex overflow */
     min-width: 0;  /* Prevent content from expanding container */
 }
@@ -3965,6 +3961,9 @@ div.hb-response-summary {
     width: 100%;
     overflow-y: auto;
     overflow-x: hidden;
+    /* Positioned above future background layers inside #chatbg's context */
+    position: relative;
+    z-index: 1;
 }
 
 /* Scene backgrounds: image on #chatbg (set inline by applyBackground), and a
@@ -5055,6 +5054,10 @@ a.gallery-caption:hover {
         border-top: 1px solid var(--border);
         padding: 4px 0;
         z-index: 999;
+        /* The bottom bar never scrolls; the desktop rail's overflow rules
+           would clip the ⋯ overflow dropup (bottom:100% renders outside
+           the 56px box) — it shipped invisible until this. */
+        overflow: visible;
     }
 
     .nav-logo { display: none; }
@@ -5093,7 +5096,7 @@ a.gallery-caption:hover {
         bottom: 56px;
         z-index: 998;
         width: 280px;
-        box-shadow: -4px 0 16px rgba(0, 0, 0, 0.4);
+        box-shadow: -4px 0 16px var(--shadow-medium);
     }
 
     .chat-sidebar.collapsed {
@@ -5782,7 +5785,7 @@ a.gallery-caption:hover {
     border-radius: var(--radius-lg);
     width: 360px;
     max-width: 90vw;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 8px 32px var(--shadow-medium);
 }
 .up-header {
     display: flex;
@@ -6596,7 +6599,7 @@ a.gallery-caption:hover {
     border-color: var(--text-muted);
 }
 /* Duplicate finder */
-.mind-dup-clean { text-align:center; padding:12px; color:var(--color-success, #66bb6a); font-size:var(--font-sm); }
+.mind-dup-clean { text-align:center; padding:12px; color:var(--success, #66bb6a); font-size:var(--font-sm); }
 .mind-dup-header { font-size:var(--font-sm); color:var(--text-muted); padding:8px 0 4px; border-bottom:1px solid var(--border); margin-bottom:8px; }
 .mind-dup-section { margin-bottom:12px; }
 .mind-dup-section h4 { font-size:var(--font-sm); color:#ffa726; margin:0 0 6px; }
@@ -6604,7 +6607,7 @@ a.gallery-caption:hover {
 .mind-dup-preview { font-size:var(--font-xs); color:var(--text-muted); font-family:monospace; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:4px; }
 .mind-dup-entries { font-size:var(--font-xs); margin-bottom:6px; }
 .mind-dup-entry { padding:1px 0; }
-.mind-dup-entry.keep { color:var(--color-success, #66bb6a); }
+.mind-dup-entry.keep { color:var(--success, #66bb6a); }
 .mind-dup-entry.remove { color:#ef5350; }
 .mind-dup-hint { font-size:var(--font-xs); color:var(--text-muted); font-style:italic; }
 
@@ -6923,7 +6926,7 @@ a.gallery-caption:hover {
     border-radius: var(--radius-md);
     padding: 4px;
     min-width: 140px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 16px var(--shadow-medium);
     z-index: 1001;
 }
 

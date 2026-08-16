@@ -62,6 +62,10 @@ export function applyBackground(name) {
     if (!bg) return;
     if (bg.dataset.bgOwner) {
         bg.dataset.bgPending = name || '';
+        // Keep the "current scene" record honest even while deferred — the
+        // Scene modal seeds its selection from dataset.scene and was showing
+        // the pre-story scene as current during stories (P0 hunt 2026-08-16).
+        bg.dataset.scene = name && /^[a-z0-9_-]{1,50}$/.test(name) ? name : '';
         return;
     }
     if (name && /^[a-z0-9_-]{1,50}$/.test(name)) {

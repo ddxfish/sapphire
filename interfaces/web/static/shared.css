@@ -15,6 +15,10 @@
        ========================================================================= */
     --sidebar-width: 275px;
     --chat-max-width: 1280px;
+    /* Nav rail tokens — the rail was an unthemable opaque wall (P0 2026-08-16) */
+    --nav-rail-w: 64px;
+    --nav-bg: var(--bg-secondary);
+    --nav-border: var(--border);
     --chat-padding-x: 30px;
     --chat-padding-y: 20px;
     
@@ -48,9 +52,19 @@
     --trim-light: rgba(74, 158, 255, 0.15);
     --trim-border: rgba(74, 158, 255, 0.4);
     --trim-50: rgba(74, 158, 255, 0.5);
-    /* Accordion uses even more subtle trim */
-    --accordion-header-bg: rgba(74, 158, 255, 0.08);
-    --accordion-header-hover: rgba(74, 158, 255, 0.12);
+    /* Accordion uses even more subtle trim — derived so every theme's trim
+       flows through without redefining these (themes may still override) */
+    --accordion-header-bg: color-mix(in srgb, var(--trim) 8%, transparent);
+    --accordion-header-hover: color-mix(in srgb, var(--trim) 12%, transparent);
+
+    /* Compat aliases — these names are used across style.css but were never
+       defined anywhere (aborted second naming convention); aliased to the
+       canonical tokens so themes flow through them. Do not use in new code. */
+    --bg-primary: var(--bg);
+    --bg-elevated: var(--bg-tertiary);
+    --text-primary: var(--text);
+    --accent: var(--primary);
+    --radius: var(--radius-md);
     
     /* Toolbar buttons (message actions) */
     --toolbar-btn-bg: var(--bg-tertiary);
@@ -786,14 +800,14 @@
 .btn-action {
     padding: 6px 16px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--bg-elevated);
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
     color: var(--text);
     cursor: pointer;
     font-size: var(--font-sm);
     transition: background 0.15s, border-color 0.15s;
 }
-.btn-action:hover { background: var(--bg-hover); border-color: var(--accent); }
+.btn-action:hover { background: var(--bg-hover); border-color: var(--trim); }
 .btn-action.btn-connected {
     border-color: var(--success, #4caf50);
     color: var(--success, #4caf50);
@@ -801,7 +815,7 @@
 .btn-disconnect {
     padding: 6px 12px;
     border: 1px solid var(--danger, #e53935);
-    border-radius: var(--radius);
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--danger, #e53935);
     cursor: pointer;

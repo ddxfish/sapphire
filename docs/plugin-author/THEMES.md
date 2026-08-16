@@ -123,9 +123,15 @@ Theme scripts are loaded as `<script>` tags when the theme is activated and remo
     window.addEventListener('resize', resize);
     draw();
 
-    // Cleanup when theme changes — check periodically
+    // Cleanup when theme changes — check periodically.
+    // IMPORTANT: the runtime stamps data-theme-script with the NAMESPACED id
+    // `plugin-<your-plugin-name>-<theme-id>` (same namespacing as the CSS
+    // note above), NOT the bare theme id. Using the bare id here makes this
+    // check fire on its first tick and kill your animation ~1s after it
+    // starts. Match your own <script> tag instead — it is always correct:
+    const selfScript = document.currentScript;
     const cleanup = setInterval(() => {
-        if (!document.querySelector(`script[data-theme-script="cyberpunk"]`)) {
+        if (!selfScript || !selfScript.isConnected) {
             cancelAnimationFrame(animId);
             window.removeEventListener('resize', resize);
             canvas.remove();

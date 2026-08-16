@@ -624,6 +624,12 @@ async def list_themes(_=Depends(require_login)):
             pass
 
     for name in core_names:
+        # Skip-and-log, never crash the list: one malformed entry must not
+        # blank the entire theme grid (chaos hunt T5 2026-08-16). v2's
+        # object-shaped entries land here later — string-only until then.
+        if not isinstance(name, str) or not name:
+            logger.warning(f"themes.json: skipping non-string theme entry {name!r}")
+            continue
         css_path = themes_dir / f"{name}.css"
         preview = _extract_css_preview(css_path) if css_path.exists() else {}
         themes.append({
@@ -641,10 +647,18 @@ async def list_themes(_=Depends(require_login)):
         if not info.get("loaded"):
             continue
         manifest = info.get("manifest", {})
-        theme_defs = manifest.get("capabilities", {}).get("themes", [])
+        capabilities = manifest.get("capabilities", {})
+        theme_defs = capabilities.get("themes", []) if isinstance(capabilities, dict) else []
+        if not isinstance(theme_defs, list):
+            logger.warning(f"Plugin '{pname}': capabilities.themes is not a list, skipping")
+            theme_defs = []
         for td in theme_defs:
+            # Same skip-and-log rule as core entries (chaos hunt T5).
+            if not isinstance(td, dict):
+                logger.warning(f"Plugin '{pname}': skipping non-dict theme entry {td!r}")
+                continue
             tid = td.get("id", "")
-            if not tid:
+            if not tid or not isinstance(tid, str):
                 continue
             css_path = td.get("css", "")
             scripts = td.get("scripts", [])
@@ -654,7 +668,9 @@ async def list_themes(_=Depends(require_login)):
             themes.append({
                 "id": f"plugin-{pname}-{tid}",
                 "name": td.get("name", tid.title()),
-                "icon": td.get("icon", ""),
+                # Same sanitizer as /api/plugins — /api/themes missed the
+                # 2026-05-07 day-ruiner sweep (chaos hunt T1 2026-08-16).
+                "icon": _safe_emoji_icon(td.get("icon", "")),
                 "description": td.get("description", ""),
                 "source": "plugin",
                 "plugin": pname,

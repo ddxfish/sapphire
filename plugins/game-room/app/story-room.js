@@ -768,6 +768,10 @@ function paintBackdrop(a) {
     } else {
         el.style.backgroundImage = _bdPrev.img;
         el.classList.toggle('has-bg', _bdPrev.had);
+        // Backdrop-less room: hand the surface back, or the claim from a
+        // prior backdropped room leaks — core's set_scene paints were being
+        // swallowed into bgPending until story exit (P0 hunt 2026-08-16).
+        releaseBackground(OWNER);
     }
 }
 

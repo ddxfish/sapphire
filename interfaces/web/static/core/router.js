@@ -99,6 +99,19 @@ export function getCurrentView() {
 export { VIEW_GROUPS, VIEW_TO_GROUP };
 
 export function initRouter(defaultView = 'chat') {
+    // Derive view→group from the nav markup so the flyout lists are the single
+    // source of truth. The hand-kept VIEW_GROUPS drifted (store/admin missing →
+    // those views highlighted nothing in the rail); this kills the desync class.
+    document.querySelectorAll('#nav-rail .nav-group-parent').forEach(p => {
+        const g = p.dataset.view;
+        if (!g) return;
+        p.querySelectorAll('.nav-flyout-item[data-view]').forEach(i => {
+            const v = i.dataset.view;
+            VIEW_TO_GROUP[v] = g;
+            if (VIEW_GROUPS[g] && !VIEW_GROUPS[g].includes(v)) VIEW_GROUPS[g].push(v);
+        });
+    });
+
     // Hide ALL views before first switch — prevents dual-display when hash
     // restores a non-default view (chat starts visible in HTML, others display:none)
     document.querySelectorAll('.view').forEach(v => { v.style.display = 'none'; });

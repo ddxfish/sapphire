@@ -28,49 +28,75 @@
     <script>
         // Load saved theme before CSS renders to prevent flash
         (function() {
-            const saved = localStorage.getItem('sapphire-theme') || 'dark';
-            document.documentElement.setAttribute('data-theme', saved);
-
-            // Check if this is a plugin theme (has saved theme data with CSS URL)
-            var themeDataStr = localStorage.getItem('sapphire-theme-data');
-            var themeData = null;
-            try { themeData = themeDataStr ? JSON.parse(themeDataStr) : null; } catch(e) {}
-
-            if (themeData && themeData.id === saved && themeData.css) {
-                // Plugin theme — load from plugin CSS URL
-                var link = document.createElement('link');
-                link.id = 'plugin-theme-css';
-                link.rel = 'stylesheet';
-                link.href = themeData.css;
-                document.head.appendChild(link);
-                // Also load scripts if any
-                if (themeData.scripts) {
-                    themeData.scripts.forEach(function(src) {
-                        var s = document.createElement('script');
-                        s.src = src;
-                        s.dataset.themeScript = saved;
-                        document.head.appendChild(s);
-                    });
-                }
-            } else {
-                // Core theme — load from static/themes/
-                var link = document.createElement('link');
-                link.id = 'theme-stylesheet';
-                link.rel = 'stylesheet';
-                link.href = '/static/themes/' + saved + '.css?v={{ v }}';
-                document.head.appendChild(link);
-            }
-
-            // Restore chat-style data attributes from localStorage
+            // Whole IIFE is guarded: blocked storage (cookies off, partitioned
+            // context) used to throw on the first getItem and kill theming
+            // entirely — no stylesheet at all (P0 hunt 2026-08-16).
             try {
-                for (var i = 0; i < localStorage.length; i++) {
-                    var key = localStorage.key(i);
-                    if (key && key.endsWith('-chat-style')) {
-                        var prefix = key.replace('-chat-style', '');
-                        document.documentElement.setAttribute('data-' + prefix + '-chat', localStorage.getItem(key));
+                var saved = localStorage.getItem('sapphire-theme') || 'dark';
+                document.documentElement.setAttribute('data-theme', saved);
+
+                // Check if this is a plugin theme (has saved theme data with CSS URL)
+                var themeDataStr = localStorage.getItem('sapphire-theme-data');
+                var themeData = null;
+                try { themeData = themeDataStr ? JSON.parse(themeDataStr) : null; } catch(e) {}
+
+                // localStorage is a cache here, not an authority: only load
+                // same-app asset paths from it (a stale/poisoned record must
+                // not become a boot-time script injector — chaos hunt T2).
+                var okUrl = function(u) {
+                    return typeof u === 'string' &&
+                        (u.indexOf('/static/themes/') === 0 || u.indexOf('/plugin-web/') === 0);
+                };
+
+                if (themeData && themeData.id === saved && okUrl(themeData.css)) {
+                    // Plugin theme — load from plugin CSS URL
+                    var link = document.createElement('link');
+                    link.id = 'plugin-theme-css';
+                    link.rel = 'stylesheet';
+                    link.href = themeData.css;
+                    document.head.appendChild(link);
+                    // Also load scripts if any
+                    if (Array.isArray(themeData.scripts)) {
+                        themeData.scripts.filter(okUrl).forEach(function(src) {
+                            var s = document.createElement('script');
+                            s.src = src;
+                            s.dataset.themeScript = saved;
+                            document.head.appendChild(s);
+                        });
                     }
+                } else {
+                    // Core theme — load from static/themes/
+                    var link = document.createElement('link');
+                    link.id = 'theme-stylesheet';
+                    link.rel = 'stylesheet';
+                    link.href = '/static/themes/' + saved + '.css?v={{ v }}';
+                    document.head.appendChild(link);
                 }
-            } catch(e) {}
+
+                // Restore chat-style data attributes from localStorage.
+                // Per-key try: one junk key (space/quote in prefix) used to
+                // abort the whole loop and silently drop every later key.
+                for (var i = 0; i < localStorage.length; i++) {
+                    try {
+                        var key = localStorage.key(i);
+                        if (key && key.endsWith('-chat-style')) {
+                            var prefix = key.replace('-chat-style', '');
+                            if (/^[a-z0-9-]+$/.test(prefix)) {
+                                document.documentElement.setAttribute('data-' + prefix + '-chat', localStorage.getItem(key));
+                            }
+                        }
+                    } catch(e) {}
+                }
+            } catch(e) {
+                // Storage unavailable: fall back to the default dark theme.
+                try {
+                    var fallback = document.createElement('link');
+                    fallback.id = 'theme-stylesheet';
+                    fallback.rel = 'stylesheet';
+                    fallback.href = '/static/themes/dark.css?v={{ v }}';
+                    document.head.appendChild(fallback);
+                } catch(e2) {}
+            }
         })();
     </script>
     <script>

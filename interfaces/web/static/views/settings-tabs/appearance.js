@@ -230,7 +230,7 @@ async function _loadThemeGrid(el) {
                     <div class="theme-swatch-bar" style="background:${_esc(accent)}"></div>
                     <div class="theme-swatch-bar" style="background:${_esc(border)}"></div>
                 </div>
-                <div class="theme-card-name">${t.icon ? t.icon + ' ' : ''}${_esc(t.name)}</div>
+                <div class="theme-card-name">${t.icon ? _esc(t.icon) + ' ' : ''}${_esc(t.name)}</div>
                 ${hasScripts ? '<div class="theme-card-badge">animated</div>' : ''}
                 <div class="theme-check">\u2713</div>
             </div>`;
@@ -271,7 +271,7 @@ function _renderThemeSettings(panel, theme) {
 
     const rows = settings.map(s => {
         const key = s.key || '';
-        const current = localStorage.getItem(key) || s.default || '';
+        const current = localStorage.getItem(key) ?? s.default ?? '';
         let input = '';
 
         if (s.type === 'select' && s.options) {
@@ -286,8 +286,11 @@ function _renderThemeSettings(panel, theme) {
             const checked = current === 'true' || current === true;
             input = `<input type="checkbox" data-setting-key="${_esc(key)}" ${checked ? 'checked' : ''}>`;
         } else if (s.type === 'range') {
+            // Number() coercion: min/max/step come from third-party manifests
+            // and were interpolated raw into attributes (chaos hunt T3).
+            const nMin = Number(s.min) || 0, nMax = Number(s.max) || 100, nStep = Number(s.step) || 1;
             input = `<input type="range" data-setting-key="${_esc(key)}"
-                min="${s.min || 0}" max="${s.max || 100}" step="${s.step || 1}" value="${_esc(current)}">
+                min="${nMin}" max="${nMax}" step="${nStep}" value="${_esc(current)}">
                 <span class="text-muted" style="font-size:var(--font-xs);min-width:30px;text-align:right">${_esc(current)}</span>`;
         } else {
             input = `<input type="text" data-setting-key="${_esc(key)}" value="${_esc(current)}" style="width:120px">`;
@@ -305,7 +308,7 @@ function _renderThemeSettings(panel, theme) {
 
     panel.innerHTML = `
         <div class="theme-settings-panel">
-            <div class="theme-settings-title">${theme.icon || ''} ${_esc(theme.name)} Settings</div>
+            <div class="theme-settings-title">${_esc(theme.icon || '')} ${_esc(theme.name)} Settings</div>
             ${rows}
         </div>`;
     panel.style.display = '';
