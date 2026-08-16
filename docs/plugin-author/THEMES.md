@@ -93,9 +93,74 @@ The `preview` object controls the color swatch shown in the theme picker card:
 }
 ```
 
-## Animated Backgrounds (JS)
+## Bundle Defaults (font / bg / motion)
 
-Theme scripts are loaded as `<script>` tags when the theme is activated and removed when switching away. Use an IIFE to avoid polluting the global scope:
+A theme can ship look-and-feel defaults beyond CSS. Each is a *default*: an explicit user pick in Settings > Visual always wins.
+
+```json
+{
+  "id": "cyberpunk",
+  "font": "mono",
+  "bg": "themes/cyberpunk/city.webp",
+  "motion": "rain",
+  ...
+}
+```
+
+- `font` — a font preset id (`system`, `rounded`, `serif`, `mono`, `handwriting`). Webfont presets download on first use.
+- `bg` — a background image, path relative to your `web/` dir. It sits at the BOTTOM of the background chain: a chat's own scene and the global underlay both cover it.
+- `motion` — a motion id to run by default (see Motions below). Use your own motion's **bare** id here — the runtime resolves it against your plugin's namespace first, or name a core motion (`stars`, `drift`, `fireflies`).
+
+## Motions (`capabilities.motions`)
+
+Motions are the supported way to ship animated backgrounds. A motion is an ES module with a mount/unmount contract — the runtime imports it, mounts it into a dedicated layer behind the chat transcript, and **calls `unmount()` before any switch**, so teardown is guaranteed (the old scripts[] lane had none).
+
+### plugin.json
+
+```json
+{
+  "capabilities": {
+    "motions": [
+      { "id": "rain", "name": "Neon Rain", "description": "Falling neon streaks",
+        "script": "motions/rain.js" }
+    ]
+  }
+}
+```
+
+`script` is relative to your `web/` dir. Your motion id is namespaced at runtime to `plugin:{plugin-name}:{id}`, same as themes.
+
+### motion module contract
+
+```js
+let canvas, raf = 0, ro;
+
+export default {
+    id: 'rain', name: 'Neon Rain',
+    mount(host, settings) {
+        // host = the #motion-layer div (pointer-events:none, behind chat).
+        // Create your canvas here; size it to the host (use a ResizeObserver —
+        // the layer lives inside a flexing, sometimes re-parented container).
+        canvas = document.createElement('canvas');
+        host.appendChild(canvas);
+        // ... start your requestAnimationFrame loop, keep the id in `raf`
+    },
+    unmount() {
+        // MUST cancel rAF, disconnect observers, remove your nodes.
+        cancelAnimationFrame(raf);
+        ro?.disconnect();
+        canvas?.remove();
+    },
+};
+```
+
+The runtime handles the hard parts for you — your motion is automatically unmounted while a background image covers it, while the tab is hidden, while the chat surface is off-screen, and whenever `prefers-reduced-motion` is set. It is **remounted on theme switch**, so sample theme colors (e.g. `--trim`) at mount time and they will always be current. Don't add your own visibility handling.
+
+Users pick motions in Settings > Visual > Background & Motion; the choice persists in localStorage (`sapphire-motion`).
+
+## Animated Backgrounds (JS) — DEPRECATED
+
+**Deprecated in favor of Motions (above).** The `scripts` array still works — scripts are loaded as `<script>` tags when the theme is activated and removed when switching away — but script-tag removal cannot stop a running animation loop; you must self-terminate. New themes should ship a motion instead. Use an IIFE to avoid polluting the global scope:
 
 ```js
 (function() {

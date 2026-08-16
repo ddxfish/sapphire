@@ -25,6 +25,7 @@
     --bg-inset: rgba(90, 70, 45, 0.06);
     --text: #3a2f22;
     --text-bright: #241c12;
+    --text-on-accent: #f9f4e8;  /* paper-white on the inkwell fills */
     --text-light: #453a2b;
     --text-secondary: #5a4c38;
     --text-tertiary: #75654e;
@@ -129,4 +130,13 @@
 
     /* Tool result accent */
     --tool-result-bg: rgba(74, 103, 65, 0.1);
+}
+
+/* The paper texture is a seamless 1024px tile — repeat it at native size.
+   has-bg's default cover would stretch the facets into flat cream (the v1
+   bug). has-theme-bg = painted from the theme layer only, and :not(owner)
+   keeps story-room backdrop paints (which bypass applyBackground) on cover. */
+[data-theme="paper"] #chatbg.has-theme-bg:not([data-bg-owner]) {
+    background-size: auto;
+    background-repeat: repeat;
 }

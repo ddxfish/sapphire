@@ -21,6 +21,7 @@
     --bg-inset: rgba(0, 0, 0, 0.04);
     --text: #1a1a1a;
     --text-bright: #000;
+    --text-on-accent: #fff;  /* dark text-bright must not land on accent fills */
     --text-light: #222;
     --text-secondary: #444;
     --text-tertiary: #666;

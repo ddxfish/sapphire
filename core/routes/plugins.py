@@ -709,7 +709,11 @@ async def list_themes(_=Depends(require_login)):
             "scripts": [],
             "preview": preview,
             "font": entry.get("font") if isinstance(entry.get("font"), str) else None,
-            "bg": entry.get("bg") if isinstance(entry.get("bg"), str) else None,
+            # Version local bg assets like the CSS — unversioned URLs served
+            # the stale cached texture after regeneration (same class as T10).
+            "bg": (f"{entry['bg']}?v={BOOT_VERSION}"
+                   if isinstance(entry.get("bg"), str) and entry["bg"].startswith("/static/")
+                   else (entry.get("bg") if isinstance(entry.get("bg"), str) else None)),
             "motion": entry.get("motion") if isinstance(entry.get("motion"), str) else None,
             "settings": _clean_settings(entry.get("settings")),
         })
@@ -739,7 +743,15 @@ async def list_themes(_=Depends(require_login)):
             css_url = f"/plugin-web/{pname}/{css_path}" if _safe_rel_path(css_path) else ""
             script_urls = [f"/plugin-web/{pname}/{s}" for s in scripts if _safe_rel_path(s)]
             bg = td.get("bg")
-            bg_url = f"/plugin-web/{pname}/{bg}" if _safe_rel_path(bg) else None
+            bg_url = f"/plugin-web/{pname}/{bg}?v={BOOT_VERSION}" if _safe_rel_path(bg) else None
+            motion = td.get("motion") if isinstance(td.get("motion"), str) else None
+            # A bare id naming a motion THIS plugin ships resolves to its
+            # namespaced mint; anything else passes through (core motion ids).
+            if motion:
+                own_motions = capabilities.get("motions", []) if isinstance(capabilities, dict) else []
+                if isinstance(own_motions, list) and any(
+                        isinstance(m, dict) and m.get("id") == motion for m in own_motions):
+                    motion = f"plugin:{pname}:{motion}"
             themes.append({
                 # `:` separator — the old plugin-{name}-{id} mint collided
                 # (foo/bar-baz == foo-bar/baz, chaos T11) and `:` can't appear
@@ -757,11 +769,76 @@ async def list_themes(_=Depends(require_login)):
                 "preview": _clean_preview(td.get("preview")),
                 "font": td.get("font") if isinstance(td.get("font"), str) else None,
                 "bg": bg_url,
-                "motion": td.get("motion") if isinstance(td.get("motion"), str) else None,
+                "motion": motion,
                 "settings": _clean_settings(td.get("settings")),
             })
 
     return {"themes": themes, "default": default_theme}
+
+
+@router.get("/api/motions")
+async def list_motions(_=Depends(require_login)):
+    """Ambient motion registry (themes-v2 P3) — core motions + plugin
+    capabilities.motions. Same validation floor as /api/themes: registry and
+    manifest JSON are never trusted; bad entries skip-and-log, never 500."""
+    from core.api_fastapi import BOOT_VERSION  # lazy: avoid circular import
+    motions = []
+
+    motions_dir = PROJECT_ROOT / "interfaces" / "web" / "static" / "motions"
+    entries = []
+    motions_json = motions_dir / "motions.json"
+    if motions_json.exists():
+        try:
+            entries = json.loads(motions_json.read_text(encoding='utf-8')).get("motions", [])
+        except Exception:
+            pass
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            logger.warning(f"motions.json: skipping malformed entry {entry!r}")
+            continue
+        mid = entry.get("id")
+        if not isinstance(mid, str) or not _THEME_ID_RE.match(mid):
+            logger.warning(f"motions.json: skipping motion with bad id {mid!r}")
+            continue
+        if not (motions_dir / mid / "motion.js").exists():
+            logger.warning(f"motions.json: '{mid}' has no motion.js, skipped")
+            continue
+        motions.append({
+            "id": mid,
+            "name": str(entry.get("name") or mid.replace('-', ' ').title()),
+            "description": str(entry.get("description", "")),
+            "source": "core",
+            "script": f"/static/motions/{mid}/motion.js?v={BOOT_VERSION}",
+        })
+
+    from core.plugin_loader import plugin_loader
+    for pname, info in plugin_loader._plugins.items():
+        if not info.get("loaded") or not info.get("enabled"):
+            continue
+        capabilities = info.get("manifest", {}).get("capabilities", {})
+        motion_defs = capabilities.get("motions", []) if isinstance(capabilities, dict) else []
+        if not isinstance(motion_defs, list):
+            logger.warning(f"Plugin '{pname}': capabilities.motions is not a list, skipping")
+            continue
+        for md in motion_defs:
+            if not isinstance(md, dict):
+                logger.warning(f"Plugin '{pname}': skipping non-dict motion entry {md!r}")
+                continue
+            mid = md.get("id", "")
+            script = md.get("script", "")
+            if not isinstance(mid, str) or not _THEME_ID_RE.match(mid) or not _safe_rel_path(script):
+                logger.warning(f"Plugin '{pname}': skipping invalid motion entry {md!r}")
+                continue
+            motions.append({
+                "id": f"plugin:{pname}:{mid}",  # same collision-proof mint as themes
+                "name": str(md.get("name", mid.title())),
+                "description": str(md.get("description", "")),
+                "source": "plugin",
+                "plugin": pname,
+                "script": f"/plugin-web/{pname}/{script}?v={BOOT_VERSION}",
+            })
+
+    return {"motions": motions}
 
 
 def _extract_css_preview(css_path):

@@ -1,0 +1,145 @@
+// core/motions.js — ambient motion layer host (themes-v2 P3, plan: tmp/themes-v2-plan.md)
+//
+// Motions replace the legacy theme scripts[] lane (which had NO teardown —
+// removing a <script> tag never stopped its rAF loop). A motion is an ES
+// module default-exporting { id, name, mount(host, settings), unmount() };
+// this loader dynamic-import()s it, holds the module ref, and calls unmount()
+// before any switch — the teardown is a real function call, not a prayer.
+//
+// The host div #motion-layer is a CHILD of #chatbg (before #chatbg-overlay):
+// #chatbg is a MOVING node — organs.js re-parents it into story rooms — so a
+// child rides the transplant while a sibling would be orphaned invisible.
+//
+// Resolution: explicit user pick (localStorage 'sapphire-motion', 'none' =
+// explicitly off) > theme bundle default > none. Same precedence as fonts.
+//
+// The motion only runs when ALL of these hold (each wired below):
+//   - prefers-reduced-motion is not set (first use of the query in the app)
+//   - no background image covers it (has-bg class on #chatbg — set by BOTH
+//     writers: applyBackground and story-room's direct paint; deliberately
+//     NOT the claim/release protocol, which story rooms bypass)
+//   - the tab is visible (sd-server visibility-pause pattern)
+//   - #motion-layer is actually on screen (view switches away from chat)
+
+let _registry = [];
+let _themeMotion = '';
+let _mounted = null;       // { id, mod }
+let _gen = 0;              // supersedes in-flight imports on rapid switches
+let _suppressed = false;   // bg image active
+let _hidden = document.hidden;
+let _offscreen = false;    // host not in viewport (other view active)
+let _reduced = false;
+let _wired = false;
+
+export function getMotions() { return _registry; }
+
+function _explicitPick() {
+    try { return localStorage.getItem('sapphire-motion') || ''; } catch { return ''; }
+}
+
+// Effective desired motion id ('' = none), ignoring suppression state.
+export function currentMotionId() {
+    const pick = _explicitPick();
+    if (pick === 'none') return '';
+    const want = pick || _themeMotion;
+    return _registry.some(m => m.id === want) ? want : '';
+}
+
+async function _sync() {
+    const host = document.getElementById('motion-layer');
+    if (!host) return;
+    const want = (!_reduced && !_suppressed && !_hidden && !_offscreen) ? currentMotionId() : '';
+    if ((_mounted ? _mounted.id : '') === want) return;
+    const gen = ++_gen;
+    if (_mounted) {
+        try { _mounted.mod.unmount(); }
+        catch (e) { console.warn('[Motion] unmount failed:', e); }
+        host.innerHTML = '';   // backstop: a leaky unmount never strands nodes
+        _mounted = null;
+    }
+    if (!want) return;
+    const entry = _registry.find(m => m.id === want);
+    const src = entry && entry.script || '';
+    // Same-app module URLs only — /api/motions builds exactly these prefixes.
+    if (!src.startsWith('/static/motions/') && !src.startsWith('/plugin-web/')) return;
+    let mod;
+    try { mod = (await import(src)).default; }
+    catch (e) { console.warn(`[Motion] failed to load '${want}':`, e); return; }
+    if (gen !== _gen) return;   // superseded while importing
+    if (!mod || typeof mod.mount !== 'function' || typeof mod.unmount !== 'function') {
+        console.warn(`[Motion] '${want}' does not export {mount, unmount} — skipped`);
+        return;
+    }
+    try {
+        mod.mount(host, entry.settings || {});
+        _mounted = { id: want, mod };
+    } catch (e) {
+        console.warn(`[Motion] mount of '${want}' failed:`, e);
+        host.innerHTML = '';
+    }
+}
+
+// Force a remount (theme switch): motions sample theme colors at mount.
+function _restart() {
+    if (_mounted) {
+        try { _mounted.mod.unmount(); } catch {}
+        const host = document.getElementById('motion-layer');
+        if (host) host.innerHTML = '';
+        _mounted = null;
+    }
+    _sync();
+}
+
+// Explicit user pick. '' or 'none' = explicitly off — stored either way, so
+// a user's None survives switching to a theme that bundles a motion.
+export function applyMotion(id) {
+    try { localStorage.setItem('sapphire-motion', id || 'none'); } catch {}
+    _sync();
+}
+
+// Theme bundle default (set by core/theme.js _applyBundle, like setThemeBackground).
+export function setThemeMotion(id) {
+    _themeMotion = (typeof id === 'string' && /^[a-z0-9:_-]{1,120}$/.test(id)) ? id : '';
+    _sync();
+}
+
+export async function initMotions() {
+    if (!_wired) {
+        _wired = true;
+
+        const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+        _reduced = mq.matches;
+        if (mq.addEventListener) mq.addEventListener('change', e => { _reduced = e.matches; _sync(); });
+
+        document.addEventListener('visibilitychange', () => { _hidden = document.hidden; _sync(); });
+
+        // Multi-tab: follow motion picks made in another tab (theme.js pattern).
+        window.addEventListener('storage', e => { if (e.key === 'sapphire-motion') _sync(); });
+
+        const bg = document.getElementById('chatbg');
+        if (bg) {
+            _suppressed = bg.classList.contains('has-bg');
+            new MutationObserver(() => {
+                const s = bg.classList.contains('has-bg');
+                if (s !== _suppressed) { _suppressed = s; _sync(); }
+            }).observe(bg, { attributes: true, attributeFilter: ['class'] });
+        }
+
+        const host = document.getElementById('motion-layer');
+        if (host && 'IntersectionObserver' in window) {
+            new IntersectionObserver(entries => {
+                const off = !entries.some(x => x.isIntersecting);
+                if (off !== _offscreen) { _offscreen = off; _sync(); }
+            }).observe(host);
+        }
+
+        // Remount on theme switch so mount-time color sampling stays current.
+        new MutationObserver(() => _restart())
+            .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    }
+    try {
+        const res = await fetch('/api/motions');
+        if (res.ok) _registry = (await res.json()).motions || [];
+    } catch {}
+    _sync();
+}

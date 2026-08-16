@@ -91,12 +91,16 @@ export function applyBackground(name) {
     if (paintedName) {
         bg.style.backgroundImage = `url('/api/backgrounds/${encodeURIComponent(paintedName)}')`;
         bg.classList.add('has-bg');
+        bg.classList.remove('has-theme-bg');
     } else if (_themeBackground) {
+        // has-theme-bg marks paints from the THEME layer only — theme CSS can
+        // key on it to tile a texture (background-size:auto) while scenes and
+        // the underlay keep has-bg's default cover.
         bg.style.backgroundImage = `url('${_themeBackground}')`;
-        bg.classList.add('has-bg');
+        bg.classList.add('has-bg', 'has-theme-bg');
     } else {
         bg.style.backgroundImage = '';
-        bg.classList.remove('has-bg');
+        bg.classList.remove('has-bg', 'has-theme-bg');
     }
     // dataset.scene records the chat's OWN scene only ('' when riding the
     // underlay) — the per-chat Scene modal must not claim the global default.

@@ -145,7 +145,7 @@ function showAddModal() {
                 <div class="mind-form">
                     <textarea id="pal-add-content" placeholder="The memory (max 512 chars) *" rows="4" maxlength="512"></textarea>
                     <input type="text" id="pal-add-label" placeholder="Label (optional)">
-                    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-muted);cursor:pointer">
+                    <label style="display:flex;align-items:center;gap:8px;font-size:0.8125rem;color:var(--text-muted);cursor:pointer">
                         <input type="checkbox" id="pal-add-fav"> Favorite (never fades)
                     </label>
                     <button class="mind-btn" id="pal-add-save">Save</button>

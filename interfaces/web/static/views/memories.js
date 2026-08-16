@@ -146,23 +146,23 @@ const MEM_CARD_STYLES = `
 }
 .mind-mem-search-wrap::before {
     content: '⌕'; position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
-    font-size: 13px; color: var(--text-muted, #888); pointer-events: none;
+    font-size: 0.8125rem; color: var(--text-muted, #888); pointer-events: none;
 }
 .mind-mem-search {
     width: 100%; background: var(--bg-secondary, #1a1b2e); color: var(--text, #e1e1e6);
     border: 1px solid var(--border, #333); border-radius: 6px;
-    padding: 7px 12px 7px 30px; font-size: 13px; outline: none;
+    padding: 7px 12px 7px 30px; font-size: 0.8125rem; outline: none;
 }
 .mind-mem-search:focus { border-color: var(--accent, #4a7); }
 .mind-mem-sort {
     width: auto !important;
     background: var(--bg-secondary, #1a1b2e); color: var(--text, #e1e1e6);
     border: 1px solid var(--border, #333); border-radius: 6px;
-    padding: 6px 10px; font-size: 12px; cursor: pointer; outline: none;
+    padding: 6px 10px; font-size: 0.75rem; cursor: pointer; outline: none;
 }
 .mind-mem-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; }
 .mind-mem-chip {
-    padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer;
+    padding: 4px 10px; font-size: 0.6875rem; border-radius: 4px; cursor: pointer;
     background: transparent; color: var(--text-muted, #888);
     border: 1px solid var(--border, #333); transition: all 0.15s;
 }
@@ -174,7 +174,7 @@ const MEM_CARD_STYLES = `
 }
 .mind-mem-stats-inline {
     margin-left: auto; display: inline-flex; gap: 6px; align-items: center;
-    font-size: 11px; font-family: monospace; color: var(--text-muted, #888);
+    font-size: 0.6875rem; font-family: monospace; color: var(--text-muted, #888);
     white-space: nowrap;
 }
 .mind-mem-stats-inline strong { color: var(--text, #e1e1e6); }
@@ -186,18 +186,18 @@ const MEM_CARD_STYLES = `
     animation: mindMemSlideIn 0.32s ease both;
 }
 .mind-mem-header { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; flex-wrap: wrap; }
-.mind-mem-label { font-size: 10px; padding: 2px 8px; border-radius: 3px; font-family: monospace; letter-spacing: 0.04em; }
+.mind-mem-label { font-size: 0.625rem; padding: 2px 8px; border-radius: 3px; font-family: monospace; letter-spacing: 0.04em; }
 .mind-mem-key {
-    font-size: 10px; padding: 2px 8px; border-radius: 3px; font-family: monospace;
+    font-size: 0.625rem; padding: 2px 8px; border-radius: 3px; font-family: monospace;
     background: hsla(40, 80%, 18%, 1); color: hsl(40, 90%, 70%); border: 1px solid hsl(40, 70%, 38%);
 }
-.mind-mem-time { font-size: 10px; color: var(--text-muted, #888); font-family: monospace; margin-left: auto; }
-.mind-mem-id { font-size: 9px; color: var(--text-muted, #888); font-family: monospace; opacity: 0.5; }
-.mind-mem-content { font-size: 13px; color: var(--text, #e1e1e6); line-height: 1.55; word-break: break-word; }
+.mind-mem-time { font-size: 0.625rem; color: var(--text-muted, #888); font-family: monospace; margin-left: auto; }
+.mind-mem-id { font-size: 0.5625rem; color: var(--text-muted, #888); font-family: monospace; opacity: 0.5; }
+.mind-mem-content { font-size: 0.8125rem; color: var(--text, #e1e1e6); line-height: 1.55; word-break: break-word; }
 .mind-mem-actions { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; }
 .mind-mem-card:hover .mind-mem-actions { opacity: 1; }
 .mind-mem-show-more {
-    margin-top: 10px; padding: 8px; text-align: center; font-size: 12px;
+    margin-top: 10px; padding: 8px; text-align: center; font-size: 0.75rem;
     color: var(--text-muted, #888); cursor: pointer;
     background: var(--bg-secondary, #1a1b2e); border: 1px dashed var(--border, #333); border-radius: 6px;
 }
@@ -458,14 +458,14 @@ function _showDuplicatesModal(el, pairs) {
                 <div class="pr-modal-body" style="display:flex;flex-direction:column;gap:12px">
                     <div style="display:flex;gap:12px">
                         <div style="flex:1;padding:10px;background:var(--bg-tertiary);border-radius:var(--radius);font-size:var(--font-sm)">
-                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Keep (oldest)</div>
+                            <div style="font-size:0.6875rem;color:var(--text-muted);margin-bottom:4px">Keep (oldest)</div>
                             ${escHtml(pair.keep.content)}
-                            ${pair.keep.label ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Label: ${escHtml(pair.keep.label)}</div>` : ''}
+                            ${pair.keep.label ? `<div style="margin-top:6px;font-size:0.6875rem;color:var(--text-muted)">Label: ${escHtml(pair.keep.label)}</div>` : ''}
                         </div>
                         <div style="flex:1;padding:10px;background:var(--bg-tertiary);border-radius:var(--radius);font-size:var(--font-sm);opacity:0.7">
-                            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Remove (newer)</div>
+                            <div style="font-size:0.6875rem;color:var(--text-muted);margin-bottom:4px">Remove (newer)</div>
                             ${escHtml(pair.remove.content)}
-                            ${pair.remove.label ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Label: ${escHtml(pair.remove.label)}</div>` : ''}
+                            ${pair.remove.label ? `<div style="margin-top:6px;font-size:0.6875rem;color:var(--text-muted)">Label: ${escHtml(pair.remove.label)}</div>` : ''}
                         </div>
                     </div>
                     <div style="display:flex;gap:8px;justify-content:center">

@@ -149,6 +149,7 @@ async function init() {
         // Fire-and-forget: the inline boot guard already painted base CSS.
         import('./core/theme.js').then(m => m.initTheme()).catch(() => {});
         import('./shared/fonts.js').then(m => m.initFonts()).catch(() => {});
+        import('./core/motions.js').then(m => m.initMotions()).catch(() => {});
         initElements();
 
         const { form, sendBtn, micBtn, input } = getElements();

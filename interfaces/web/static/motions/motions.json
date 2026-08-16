@@ -1,0 +1,8 @@
+{
+  "_comment": "Core ambient-motion registry (themes-v2 P3). Each entry maps to static/motions/<id>/motion.js — an ES module default-exporting {id, name, mount(host, settings), unmount()}. Served via /api/motions with the same validation floor as /api/themes; plugin motions ride capabilities.motions.",
+  "motions": [
+    { "id": "stars", "name": "Stars", "description": "Slow-twinkling starfield" },
+    { "id": "drift", "name": "Drift", "description": "Soft motes drifting upward" },
+    { "id": "fireflies", "name": "Fireflies", "description": "Wandering points of glow" }
+  ]
+}

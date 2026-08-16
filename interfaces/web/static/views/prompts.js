@@ -291,7 +291,7 @@ function renderEditor() {
             <div class="pr-header-left">
                 <div style="display:flex;align-items:center;gap:6px">
                     <h2 id="pr-prompt-name" style="margin:0">${p.privacy_required ? '\u{1F512} ' : ''}${selected}</h2>
-                    <button class="btn-icon" id="pr-rename-prompt" title="Rename prompt" style="font-size:14px;opacity:0.5">\u270F</button>
+                    <button class="btn-icon" id="pr-rename-prompt" title="Rename prompt" style="font-size:0.875rem;opacity:0.5">\u270F</button>
                 </div>
                 <span class="view-subtitle">${isMonolith ? 'Monolith' : 'Assembled'}${p.char_count ? ' \u00B7 ' + formatCount(p.char_count) + ' chars' : ''}${(prompts.find(x => x.name === selected)?.source) ? ' \u00B7 \u{1F9E9} Plugin: ' + prompts.find(x => x.name === selected).source : ''}${vaultNames.has(selected) ? ' \u00B7 \u{1F5DD} Vault' : ''}</span>
             </div>

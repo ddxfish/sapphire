@@ -19,6 +19,7 @@ export default {
 
     render(ctx) {
         const density = localStorage.getItem('sapphire-density') || 'default';
+        const fontsize = localStorage.getItem('sapphire-fontsize') || 'default';
         const font = localStorage.getItem('sapphire-font') || 'system';
         const avatars = ctx.getValue('AVATARS_IN_CHAT') ?? true;
         const iconColor = ctx.getValue('ICON_COLOR') || '';
@@ -43,9 +44,11 @@ export default {
                     </div>`).join('')}
             </div>
 
-            <div class="setting-section-title" style="margin-top:20px">Background</div>
+            <div class="setting-section-title" style="margin-top:20px">Background &amp; Motion</div>
             <div class="setting-help" style="margin-bottom:8px">Global underlay &mdash; shown whenever a chat has no scene of its own. A chat's scene (set from the chat sidebar) always wins.</div>
             <div id="visual-scene-mount"></div>
+            <div class="setting-help" style="margin:14px 0 8px">Ambient motion behind chat &mdash; pauses automatically under scene images and while the tab is hidden.</div>
+            <div class="motion-row" id="motion-row"><div class="text-muted" style="font-size:var(--font-sm)">Loading&hellip;</div></div>
 
             <div class="setting-section-title" style="margin-top:20px">Options</div>
             <div class="settings-grid">
@@ -56,6 +59,17 @@ export default {
                             <option value="compact" ${density === 'compact' ? 'selected' : ''}>Compact</option>
                             <option value="default" ${density === 'default' ? 'selected' : ''}>Default</option>
                             <option value="comfortable" ${density === 'comfortable' ? 'selected' : ''}>Comfortable</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-label"><label>Font Size</label><div class="setting-help">Scales all text (stacks with the font's own sizing)</div></div>
+                    <div class="setting-input">
+                        <select id="app-fontsize">
+                            <option value="small" ${fontsize === 'small' ? 'selected' : ''}>Small</option>
+                            <option value="default" ${fontsize === 'default' ? 'selected' : ''}>Default</option>
+                            <option value="large" ${fontsize === 'large' ? 'selected' : ''}>Large</option>
+                            <option value="xlarge" ${fontsize === 'xlarge' ? 'selected' : ''}>Extra Large</option>
                         </select>
                     </div>
                 </div>
@@ -101,8 +115,8 @@ export default {
             .theme-card.active { border-color: var(--trim); }
             .theme-card.active .theme-check { display: block; }
             .theme-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); text-align: center; }
-            .theme-card-badge { font-size: 9px; color: var(--text-muted); }
-            .theme-check { display: none; font-size: 10px; color: var(--trim); }
+            .theme-card-badge { font-size: 0.5625rem; color: var(--text-muted); }
+            .theme-check { display: none; font-size: 0.625rem; color: var(--trim); }
 
             /* Miniature app preview — every color is a live var() resolved
                through the card's own data-theme (core) or inline props
@@ -137,10 +151,23 @@ export default {
             .font-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
             .font-card.active { border-color: var(--trim); }
             .font-card.active .theme-check { display: block; position: absolute; top: 6px; right: 8px; }
-            .font-sample { font-size: 26px; color: var(--text); line-height: 1.1; }
+            .font-sample { font-size: 1.625rem; color: var(--text); line-height: 1.1; }
             .font-quick { font-size: var(--font-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-            .font-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); margin-top: 4px; font-family: var(--font-body); }
-            .font-dl { position: absolute; top: 6px; left: 8px; font-size: 12px; color: var(--text-muted); }
+            .font-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); margin-top: 4px; }
+            .font-dl { position: absolute; top: 6px; left: 8px; font-size: 0.75rem; color: var(--text-muted); }
+
+            /* Ambient motion picker (P3) */
+            .motion-row { display: flex; flex-wrap: wrap; gap: 8px; }
+            .motion-card {
+                padding: 8px 14px; border-radius: 10px; cursor: pointer;
+                background: var(--bg-secondary); border: 2px solid transparent;
+                font-size: var(--font-sm); color: var(--text);
+                transition: border-color 0.15s, transform 0.1s;
+            }
+            .motion-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
+            .motion-card.active { border-color: var(--trim); }
+            .motion-badge { font-size: 0.5625rem; color: var(--text-muted); margin-left: 6px; }
+            .motion-row.reduced .motion-card { opacity: 0.55; pointer-events: none; }
             .theme-settings-panel {
                 margin-top: 12px; padding: 14px; border-radius: 10px;
                 background: var(--bg-secondary); border: 1px solid var(--border);
@@ -160,6 +187,17 @@ export default {
         await _loadThemeGrid(el);
 
         // Density
+        el.querySelector('#app-fontsize')?.addEventListener('change', e => {
+            const v = e.target.value;
+            if (v === 'default') {
+                document.documentElement.removeAttribute('data-fontsize');
+                localStorage.removeItem('sapphire-fontsize');
+            } else {
+                document.documentElement.setAttribute('data-fontsize', v);
+                localStorage.setItem('sapphire-fontsize', v);
+            }
+        });
+
         el.querySelector('#app-density')?.addEventListener('change', e => {
             const v = e.target.value;
             if (v === 'default') {
@@ -226,6 +264,13 @@ export default {
             }).catch(() => {});
         }
 
+        // Ambient motion picker (P3) — registry is server-fetched; initMotions
+        // is idempotent (observers wire once) so re-entering the tab is safe.
+        import('../../core/motions.js').then(async m => {
+            await m.initMotions();
+            _renderMotionRow(el, m);
+        }).catch(() => {});
+
         // Icon color (instance-level gem/favicon tint)
         const iconPicker = el.querySelector('#icon-color-picker');
         const iconHidden = el.querySelector('#setting-ICON_COLOR');
@@ -252,6 +297,40 @@ export default {
         });
     }
 };
+
+
+// ── Motion Row ──────────────────────────────────────────────
+// Highlights the EFFECTIVE motion; when it comes from the theme bundle (no
+// explicit pick yet) the card carries a "theme" badge. Clicking any card —
+// None included — stores an explicit pick, same precedence story as fonts.
+
+function _renderMotionRow(el, m) {
+    const row = el.querySelector('#motion-row');
+    if (!row) return;
+    const motions = m.getMotions();
+    let pick = '';
+    try { pick = localStorage.getItem('sapphire-motion') || ''; } catch {}
+    const effective = m.currentMotionId();
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const cards = [{ id: 'none', name: 'None' }, ...motions].map(mo => {
+        const isNone = mo.id === 'none';
+        const active = isNone ? !effective : mo.id === effective;
+        const badge = (!pick && !isNone && mo.id === effective)
+            ? '<span class="motion-badge">theme</span>' : '';
+        return `<div class="motion-card${active ? ' active' : ''}" data-motion="${_esc(mo.id)}" title="${_esc(mo.description || '')}">${_esc(mo.name)}${badge}</div>`;
+    }).join('');
+
+    row.classList.toggle('reduced', reduced);
+    row.innerHTML = cards + (reduced
+        ? '<div class="setting-help" style="flex-basis:100%">Your system asks for reduced motion &mdash; motions stay off while that preference is set.</div>'
+        : '');
+
+    row.querySelectorAll('.motion-card').forEach(c => c.addEventListener('click', () => {
+        m.applyMotion(c.dataset.motion === 'none' ? '' : c.dataset.motion);
+        _renderMotionRow(el, m);
+    }));
+}
 
 
 // ── Theme Grid ──────────────────────────────────────────────

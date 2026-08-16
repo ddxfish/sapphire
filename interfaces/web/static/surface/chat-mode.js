@@ -13,6 +13,7 @@ export const chatMode = {
 
     mainPane: `
                     <div id="chatbg">
+                        <div id="motion-layer" aria-hidden="true"></div>
                         <div id="chatbg-overlay">
                             <div id="chat-container"></div>
                         </div>

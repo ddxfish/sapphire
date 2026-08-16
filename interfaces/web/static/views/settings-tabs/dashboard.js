@@ -81,7 +81,7 @@ export default {
                         <button id="dash-edit-widgets" title="Edit dashboard">✎ Edit</button>
                     </div>
                     <div class="dash-action-panels" id="dash-panels">
-                        <span class="dim" style="font-size:11px;padding:8px">Loading widgets...</span>
+                        <span class="dim" style="font-size:0.6875rem;padding:8px">Loading widgets...</span>
                     </div>
                 </div>
 
@@ -638,13 +638,13 @@ async function openWidgetSettings(el, instance_id) {
             case 'textarea': {
                 input = document.createElement('textarea');
                 input.rows = field.rows || 3;
-                input.style.cssText = 'width:100%;padding:8px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px;resize:vertical';
+                input.style.cssText = 'width:100%;padding:8px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem;resize:vertical';
                 input.value = (cur ?? '');
                 break;
             }
             case 'select': {
                 input = document.createElement('select');
-                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px';
+                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem';
                 for (const opt of (field.options || [])) {
                     const o = document.createElement('option');
                     o.value = opt.value;
@@ -657,7 +657,7 @@ async function openWidgetSettings(el, instance_id) {
             case 'number': {
                 input = document.createElement('input');
                 input.type = 'number';
-                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px';
+                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem';
                 if (typeof cur === 'number') input.value = cur;
                 if (field.min !== undefined) input.min = field.min;
                 if (field.max !== undefined) input.max = field.max;
@@ -682,7 +682,7 @@ async function openWidgetSettings(el, instance_id) {
             default: {
                 input = document.createElement('input');
                 input.type = 'text';
-                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:13px';
+                input.style.cssText = 'width:100%;padding:6px 10px;background:var(--bg-tertiary,#2c2c2c);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:inherit;font-size:0.8125rem';
                 input.value = (cur ?? '');
                 break;
             }
@@ -770,7 +770,7 @@ async function mountPanels(el) {
 
     const panels = await _fetchUserPanels();
     if (panels.length === 0) {
-        container.innerHTML = `<span class="dim" style="font-size:13px;padding:14px">Your command center is empty. Click <strong>+ Add</strong> above to get started.</span>`;
+        container.innerHTML = `<span class="dim" style="font-size:0.8125rem;padding:14px">Your command center is empty. Click <strong>+ Add</strong> above to get started.</span>`;
         return;
     }
 

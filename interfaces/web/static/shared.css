@@ -81,6 +81,10 @@
     --bg-inset: rgba(0, 0, 0, 0.25);
     --text: #e0e0e0;
     --text-bright: #fff;
+    /* Text ON accent/semantic fills (send button, btn-primary, toasts).
+       Dark themes: same as text-bright. Light themes MUST override — their
+       dark text-bright lands on dark accent fills otherwise (paper bug). */
+    --text-on-accent: var(--text-bright);
     --text-light: #ddd;
     --text-secondary: #ccc;
     --text-tertiary: #aaa;
@@ -134,13 +138,13 @@
     /* =========================================================================
        FONT SIZES
        ========================================================================= */
-    --font-xs: 10px;
-    --font-sm: 11px;
-    --font-base: 13px;
-    --font-md: 14px;
-    --font-lg: 16px;
-    --font-xl: 18px;
-    --font-2xl: 20px;
+    --font-xs: 0.625rem;
+    --font-sm: 0.6875rem;
+    --font-base: 0.8125rem;
+    --font-md: 0.875rem;
+    --font-lg: 1rem;
+    --font-xl: 1.125rem;
+    --font-2xl: 1.25rem;
     
     /* =========================================================================
        TRANSITIONS
@@ -251,13 +255,13 @@
     --msg-margin: 10px;
     --msg-avatar-size: 26px;
     
-    --font-xs: 9px;
-    --font-sm: 10px;
-    --font-base: 12px;
-    --font-md: 13px;
-    --font-lg: 14px;
-    --font-xl: 16px;
-    --font-2xl: 18px;
+    --font-xs: 0.5625rem;
+    --font-sm: 0.625rem;
+    --font-base: 0.75rem;
+    --font-md: 0.8125rem;
+    --font-lg: 0.875rem;
+    --font-xl: 1rem;
+    --font-2xl: 1.125rem;
     
     --radius-sm: 3px;
     --radius-md: 4px;
@@ -284,13 +288,13 @@
     --msg-margin: 20px;
     --msg-avatar-size: 40px;
     
-    --font-xs: 11px;
-    --font-sm: 12px;
-    --font-base: 14px;
-    --font-md: 15px;
-    --font-lg: 18px;
-    --font-xl: 20px;
-    --font-2xl: 24px;
+    --font-xs: 0.6875rem;
+    --font-sm: 0.75rem;
+    --font-base: 0.875rem;
+    --font-md: 0.9375rem;
+    --font-lg: 1.125rem;
+    --font-xl: 1.25rem;
+    --font-2xl: 1.5rem;
     
     --radius-sm: 6px;
     --radius-md: 8px;
@@ -302,6 +306,21 @@
    FONT FAMILY MODIFIERS
    Applied via data-font attribute on <html>
    ============================================================================= */
+
+/* Form controls do NOT inherit font-family per spec (UA default wins) — this
+   is why <button>-based chrome (#nav-apps, settings-nav-item) stayed sans
+   while <div role="button"> siblings followed the font mode. Inherit
+   restores one voice; explicit rules (JetBrains Mono blocks etc.) still win. */
+button, input, select, textarea { font-family: inherit; }
+
+/* Font scale: user zoom × per-font native compensation, as MULTIPLYING vars —
+   two plain font-size rules on html would last-rule-wins instead of compose.
+   On the root element 1em = the browser's configured default, so user browser
+   font settings are respected as the baseline. */
+html { font-size: calc(1em * var(--font-zoom, 1) * var(--font-native-scale, 1)); }
+[data-fontsize="small"]  { --font-zoom: 0.9; }
+[data-fontsize="large"]  { --font-zoom: 1.15; }
+[data-fontsize="xlarge"] { --font-zoom: 1.3; }
 
 /* System (default) - no override needed */
 
@@ -331,7 +350,9 @@
 [data-font="handwriting"] {
     --font-body: 'Caveat', 'Segoe Script', cursive;
     --font-heading: var(--font-body);
-    font-size: 1.08em;  /* Caveat runs small at equal px */
+    --font-native-scale: 1.15;  /* mild x-height compensation — 1.7 was tuned against the
+                                   old px plumbing where root scaling barely reached text;
+                                   with rem it overshot. 1 = no special treatment. */
 }
 
 /* =============================================================================
@@ -368,7 +389,7 @@
     padding: var(--space-md) var(--space-md) var(--space-md) var(--space-xl);
     border-radius: var(--radius-md);
     background: var(--error-bg);
-    color: var(--text-bright);
+    color: var(--text-on-accent);
     font-size: var(--font-md);
     box-shadow: 0 4px 12px var(--shadow-medium);
     opacity: 0;
@@ -385,7 +406,7 @@
     border: none;
     color: inherit;
     opacity: 0.6;
-    font-size: 18px;
+    font-size: 1.125rem;
     cursor: pointer;
     padding: 0 4px;
     line-height: 1;
@@ -917,7 +938,7 @@
 .btn-primary {
     background: var(--trim, var(--primary));
     border-color: var(--trim, var(--primary));
-    color: var(--text-bright);
+    color: var(--text-on-accent);
 }
 
 .btn-primary:hover {
@@ -928,7 +949,7 @@
 .btn-danger {
     background: var(--danger);
     border-color: var(--danger);
-    color: var(--text-bright);
+    color: var(--text-on-accent);
 }
 
 .btn-danger:hover {
@@ -939,7 +960,7 @@
 .btn-success {
     background: var(--success);
     border-color: var(--success);
-    color: var(--text-bright);
+    color: var(--text-on-accent);
 }
 
 .btn-ghost {
@@ -1295,7 +1316,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
     text-transform: uppercase;
 }
 
-.badge-primary { background: var(--primary); color: var(--text-bright); }
+.badge-primary { background: var(--primary); color: var(--text-on-accent); }
 .badge-success { background: var(--success-light); color: var(--success-text); border: 1px solid var(--success-border); }
 .badge-warning { background: var(--warning-light); color: var(--warning-text); border: 1px solid var(--warning-border); }
 .badge-danger { background: var(--error-light); color: var(--error-text); border: 1px solid var(--error-border); }
@@ -1366,7 +1387,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 }
 
 .accordion-arrow {
-    font-size: 10px;
+    font-size: 0.625rem;
     transition: transform 0.2s ease;
     color: var(--text-muted);
 }
@@ -1377,7 +1398,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 
 .accordion-badge {
     margin-left: auto;
-    font-size: 11px;
+    font-size: 0.6875rem;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
     background: var(--trim, var(--accent-blue));
@@ -1407,7 +1428,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 .state-info {
     display: flex;
     gap: var(--space-lg);
-    font-size: 12px;
+    font-size: 0.75rem;
     color: var(--text-muted);
     margin-bottom: var(--space-sm);
 }
@@ -1422,7 +1443,7 @@ input[type="range"]:focus::-webkit-slider-thumb {
 .scene-picker { display: flex; flex-direction: column; gap: 10px; }
 .scene-search {
     padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
-    background: var(--bg-primary); color: var(--text); font-size: 13px;
+    background: var(--bg-primary); color: var(--text); font-size: 0.8125rem;
 }
 .scene-grid {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
@@ -1438,17 +1459,17 @@ input[type="range"]:focus::-webkit-slider-thumb {
 .scene-tile:hover { border-color: var(--border-hover, var(--border)); }
 .scene-tile-name {
     position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 5px;
-    font-size: 10px; color: #fff; background: rgba(0, 0, 0, 0.55);
+    font-size: 0.625rem; color: #fff; background: rgba(0, 0, 0, 0.55);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .scene-tile-del {
     position: absolute; top: 2px; right: 2px; width: 18px; height: 18px;
     border: none; border-radius: 4px; background: rgba(0, 0, 0, 0.55); color: #fff;
-    font-size: 14px; line-height: 1; cursor: pointer; display: none; padding: 0;
+    font-size: 0.875rem; line-height: 1; cursor: pointer; display: none; padding: 0;
 }
 .scene-tile:hover .scene-tile-del { display: block; }
 .scene-tile-del:hover { background: var(--error, #e74c3c); }
 .scene-none-inner, .scene-upload-inner {
-    font-size: 12px; color: var(--text-muted); text-align: center;
+    font-size: 0.75rem; color: var(--text-muted); text-align: center;
 }
 .scene-none, .scene-upload { border: 1px dashed var(--border); background: var(--bg-primary); }

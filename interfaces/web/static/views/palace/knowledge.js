@@ -376,7 +376,7 @@ function bindFolders(el) {
 
 function folderModal() {
     showModal('Watch a folder', [
-        { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);font-size:13px;">Files are indexed IN PLACE — nothing is copied. New files become findable on each scan; images get thumbnails and vision search. Supported: images, txt, md, pdf, epub.</p>` },
+        { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);font-size:0.8125rem;">Files are indexed IN PLACE — nothing is copied. New files become findable on each scan; images get thumbnails and vision search. Supported: images, txt, md, pdf, epub.</p>` },
         { id: 'path', label: 'Absolute folder path on this machine *', type: 'text' },
         collectionOptions(null),
     ], async data => {
@@ -501,7 +501,7 @@ function fileModal(file) {
 
 function bulkModal(files) {
     showModal(`Bulk import — ${files.length} files`, [
-        { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);font-size:13px;">${files.map(f => escHtml(f.name)).join('<br>')}</p>` },
+        { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);font-size:0.8125rem;">${files.map(f => escHtml(f.name)).join('<br>')}</p>` },
         collectionOptions(null),
         IMP_FIELD('low'),
     ], data => uploadFiles(files, data, null), { saveLabel: `Import ${files.length}` });
@@ -509,7 +509,7 @@ function bulkModal(files) {
 
 function imagesModal(files) {
     showModal(`Import images — ${files.length}`, [
-        { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);font-size:13px;">${files.map(f => escHtml(f.name)).join('<br>')}</p>` },
+        { type: 'html', value: `<p style="margin:0;color:var(--text-secondary);font-size:0.8125rem;">${files.map(f => escHtml(f.name)).join('<br>')}</p>` },
         { id: 'description', label: 'Short description — applies to all, helps her FIND them', type: 'text' },
         collectionOptions(null),
         IMP_FIELD('med'),

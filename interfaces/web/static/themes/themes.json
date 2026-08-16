@@ -28,6 +28,7 @@
     { "id": "terminal", "name": "Terminal", "description": "Green phosphor CRT",
       "preview": { "bg": "#0a0a0a", "bg2": "#0d0d0d", "text": "#33ff33", "accent": "#33ff33", "border": "#1a3a1a" } },
     { "id": "abyss", "name": "Abyss", "description": "Bioluminescence in deep water",
+      "motion": "drift",
       "preview": { "bg": "#050810", "bg2": "#080c18", "text": "#a8c0d8", "accent": "#40c8e0", "border": "#182838" } },
     { "id": "paper", "name": "Paper", "description": "Handwritten notes on warm paper",
       "font": "handwriting", "bg": "/static/themes/paper/paper.webp",

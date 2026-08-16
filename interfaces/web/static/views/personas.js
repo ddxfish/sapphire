@@ -315,7 +315,7 @@ function renderDetail(p, isActive) {
                 </div>
 
                 <div class="pa-fence-group pa-fence-group-wide">
-                    <div class="pa-fence-heading"><span>Scene</span> <span class="pa-fence-heading-right" style="font-weight:400;color:var(--text-muted);font-size:11px;">default chat background for this persona</span></div>
+                    <div class="pa-fence-heading"><span>Scene</span> <span class="pa-fence-heading-right" style="font-weight:400;color:var(--text-muted);font-size:0.6875rem;">default chat background for this persona</span></div>
                     <div class="pa-fence">
                         <div class="pa-fence-body">
                             <input type="hidden" id="pa-s-background" data-key="background" value="${esc(s.background || '')}">

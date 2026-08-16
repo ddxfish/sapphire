@@ -96,6 +96,8 @@
                 if (density && density !== 'default') document.documentElement.setAttribute('data-density', density);
                 var savedFont = localStorage.getItem('sapphire-font');
                 if (savedFont && savedFont !== 'system') document.documentElement.setAttribute('data-font', savedFont);
+                var fontsize = localStorage.getItem('sapphire-fontsize');
+                if (fontsize && fontsize !== 'default') document.documentElement.setAttribute('data-fontsize', fontsize);
             } catch(e) {
                 // Storage unavailable: fall back to the default dark theme.
                 try {

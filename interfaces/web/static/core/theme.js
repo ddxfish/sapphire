@@ -14,6 +14,7 @@
 
 import { applyBackground, setThemeBackground } from '../features/chat-settings.js';
 import { ensurePresetFont } from '../shared/fonts.js';
+import { setThemeMotion } from './motions.js';
 
 let _themes = [];
 let _defaultId = 'dark';
@@ -73,6 +74,11 @@ function _applyBundle(theme) {
     setThemeBackground(theme.bg || '');
     const chatScene = document.getElementById('chatbg')?.dataset.scene || '';
     applyBackground(chatScene);
+
+    // Motion: theme bundle default; an explicit pick (incl. 'none') wins
+    // inside the motions module. Recolor-on-switch is handled there too
+    // (it watches data-theme and remounts).
+    setThemeMotion(theme.motion || '');
 }
 
 export function applyTheme(theme, opts = {}) {

@@ -340,7 +340,7 @@ function updateSaveButtonForTab(tab) {
     if (selfSaving && !hint) {
         hint = document.createElement('span');
         hint.id = 'settings-selfsave-hint';
-        hint.style.cssText = 'font-size:12px;color:var(--text-muted);align-self:center';
+        hint.style.cssText = 'font-size:0.75rem;color:var(--text-muted);align-self:center';
         hint.textContent = 'This page saves with its own buttons';
         saveBtn.parentElement.insertBefore(hint, saveBtn);
     }
