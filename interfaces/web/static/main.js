@@ -9,6 +9,7 @@ import { populateChatDropdown } from './features/chat-manager.js';
 import { hasPendingActivate } from './api.js';
 import { updateScene, updateSendButtonLLM } from './features/scene.js';
 import { applyTrimColor } from './features/chat-settings.js';
+import { setInstanceColor } from './features/logo.js';
 import { refreshInitData } from './shared/init-data.js';
 import { initUserProfile } from './features/user-profile.js';
 import { handleAutoRefresh } from './handlers/message-handlers.js';
@@ -190,6 +191,7 @@ async function init() {
         try {
             initData = await getInitData();
             ui.initFromInitData(initData);
+            setInstanceColor(initData?.settings?.ICON_COLOR || '');
             // One-time notice: global privacy mode was removed in v2.8.4 —
             // users still carrying the old setting are otherwise silently
             // unprotected after upgrade.

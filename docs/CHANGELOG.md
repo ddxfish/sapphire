@@ -1,3 +1,6 @@
+# 2.11.4 - App icon
+- Can set favicon color in Settings > Visual
+- Updated SVG icon for app with trim optional
 # 2.11.3 - Private Games
 - Story engine and game room chats private capable
 - Settings > Privacy > Allow Unflagged Tools to unblock legacy tools

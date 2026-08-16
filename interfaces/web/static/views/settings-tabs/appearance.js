@@ -14,6 +14,7 @@ export default {
         const density = localStorage.getItem('sapphire-density') || 'default';
         const font = localStorage.getItem('sapphire-font') || 'system';
         const avatars = ctx.getValue('AVATARS_IN_CHAT') ?? true;
+        const iconColor = ctx.getValue('ICON_COLOR') || '';
 
         return `
         <div class="appearance-page">
@@ -53,6 +54,14 @@ export default {
                             <input type="checkbox" id="app-send-trim" ${localStorage.getItem('sapphire-send-btn-trim') === 'true' ? 'checked' : ''}>
                             <span>Use trim color</span>
                         </label>
+                    </div>
+                </div>
+                <div class="setting-row" data-key="ICON_COLOR">
+                    <div class="setting-label"><label>Icon Color</label><div class="setting-help">Tint the gem logo + favicon for this Sapphire (persona trim overrides it)</div></div>
+                    <div class="setting-input" style="display:flex;gap:6px;align-items:center">
+                        <input type="color" id="icon-color-picker" value="${iconColor || '#036ec3'}" title="Icon color">
+                        <input type="hidden" id="setting-ICON_COLOR" data-key="ICON_COLOR" value="${iconColor}">
+                        <button class="btn-sm" id="icon-color-clear" title="Reset to sapphire blue">&#x21BA;</button>
                     </div>
                 </div>
                 <div class="setting-row" data-key="AVATARS_IN_CHAT">
@@ -124,6 +133,24 @@ export default {
                 document.documentElement.setAttribute('data-font', v);
                 localStorage.setItem('sapphire-font', v);
             }
+        });
+
+        // Icon color (instance-level gem/favicon tint)
+        const iconPicker = el.querySelector('#icon-color-picker');
+        const iconHidden = el.querySelector('#setting-ICON_COLOR');
+        const previewIcon = v => import('../../features/logo.js')
+            .then(m => { m.setInstanceColor(v); m.applyLogoTint(''); })
+            .catch(() => {});
+        iconPicker?.addEventListener('input', () => {
+            iconHidden.value = iconPicker.value;
+            ctx.markChanged('ICON_COLOR', iconPicker.value);
+            previewIcon(iconPicker.value);
+        });
+        el.querySelector('#icon-color-clear')?.addEventListener('click', () => {
+            iconHidden.value = '';
+            iconPicker.value = '#036ec3';
+            ctx.markChanged('ICON_COLOR', '');
+            previewIcon('');
         });
 
         // Send button trim

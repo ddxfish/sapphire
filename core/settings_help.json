@@ -8,6 +8,10 @@
     "short": "Show avatar images in chat messages",
     "long": "When enabled, user and assistant avatar images appear next to each message in the chat. Disable to hide avatars for a cleaner, text-focused interface. Changes take effect on page refresh."
   },
+  "ICON_COLOR": {
+    "short": "Tint the gem logo and favicon for this Sapphire instance",
+    "long": "Hex color (e.g. #9b30ff) that recolors the gem logo in the nav rail and the browser tab favicon, so different Sapphire instances are distinguishable at a glance. A chat or persona trim color overrides it while that chat is active. Leave empty for the stock sapphire blue."
+  },
   "SOCKS_ENABLED": {
     "short": "Route web requests through SOCKS proxy",
     "long": "When enabled, all web search and URL fetching will route through the specified SOCKS proxy server. Useful for privacy, accessing region-restricted content, or routing through Tor. Requires SOCKS_HOST and SOCKS_PORT to be configured."

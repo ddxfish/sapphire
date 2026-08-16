@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Sapphire</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="icon" type="image/svg+xml" id="favicon-svg" href="/static/logo.svg">
+    <link rel="alternate icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/shared.css?v={{ v }}">
 
     <!-- Syntax Highlighting (local) -->
@@ -94,7 +95,7 @@
          NAV RAIL (left, 64px desktop / bottom bar mobile)
          ================================================================ -->
     <nav id="nav-rail">
-        <div class="nav-logo" title="Sapphire">S</div>
+        <div class="nav-logo" title="Sapphire"><svg viewBox="793.73 373.73 332.54 332.54" aria-hidden="true"><path fill="#3289d9" d="M960,373.73a28.75,28.75,0,0,0-14.39,3.85L826.54,446.33a28.68,28.68,0,0,0-10.49,10.46L960,539.9Z"/><path fill="#036ec3" d="M816.05,456.79a28.67,28.67,0,0,0-3.9,14.47V608.74A28.71,28.71,0,0,0,816,623.06L960,539.9Z"/><path fill="#046dc0" d="M1107.85,471.26a28.67,28.67,0,0,0-3.9-14.47L960,539.9l144,83.16a28.71,28.71,0,0,0,3.81-14.32Z"/><path fill="#62a2e5" d="M1104,456.79a28.68,28.68,0,0,0-10.49-10.46L974.39,377.58A28.75,28.75,0,0,0,960,373.73V539.9Z"/><path fill="#004594" d="M960,706.27a28.75,28.75,0,0,0,14.39-3.85l119.07-68.75A28.72,28.72,0,0,0,1104,623.06L960,539.9Z"/><path fill="#015cb5" d="M816,623.06a28.72,28.72,0,0,0,10.58,10.61l119.07,68.75A28.75,28.75,0,0,0,960,706.27V539.9Z"/></svg></div>
 
         <div class="nav-item active nav-group-parent" data-view="chat" role="button" tabindex="0">
             <span class="nav-icon">&#x1F4AC;</span>

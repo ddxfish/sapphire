@@ -30,6 +30,7 @@ export function applyTrimColor(color) {
     }
 
     import('./volume.js').then(vol => vol.updateSliderFill()).catch(() => {});
+    import('./logo.js').then(m => m.applyLogoTint(color)).catch(() => {});
 }
 
 // Scene background: set #chatbg's image from a scene name (or clear to default CSS).
