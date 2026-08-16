@@ -1055,6 +1055,31 @@ class ChatSessionManager:
                     )
                 """)
 
+                # Chat-scoped plugin data (vault v1.3, tmp/v13-chat-scoped-
+                # storage-plan.md): rows follow the chat — sealed in
+                # vault_chat, strictly unsealed in unvault_chat, renamed and
+                # deleted with it. Values are JSON text; '@enc1:' ciphertext
+                # while the chat is vaulted. seq=0 is the put/get slot;
+                # appends allocate 1.. so journal-shaped keys cost one row
+                # per event, not a whole-blob rewrite per turn.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS plugin_chat_data (
+                        plugin     TEXT NOT NULL,
+                        chat_name  TEXT NOT NULL,
+                        key        TEXT NOT NULL,
+                        seq        INTEGER NOT NULL DEFAULT 0,
+                        value      TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (plugin, chat_name, key, seq)
+                    )
+                """)
+                # rename/delete/vault walk by chat_name alone; the PK leads
+                # with plugin, so they need their own index.
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_plugin_chat_data_chat
+                    ON plugin_chat_data(chat_name)
+                """)
+
                 # Guarded ALTERs for pre-rowify databases (the CREATE above only
                 # shapes FRESH installs; ALTER isn't idempotent, hence the
                 # PRAGMA check). storage_format: 'blob' | 'rows'.
@@ -1767,7 +1792,8 @@ class ChatSessionManager:
         Returns (ok, result) — result is the sanitized new name on success,
         an error string on failure. Route layer owns the RAG-scope rename,
         agent refusal, and live-call refusal; this owns chats +
-        chat_messages + tool_images + active-name/marker, one transaction."""
+        chat_messages + tool_images + plugin_chat_data + active-name/marker,
+        one transaction."""
         if old_name == "default":
             return False, "Cannot rename the default chat"
         if self._vault_hidden(old_name):
@@ -1792,6 +1818,8 @@ class ChatSessionManager:
                 conn.execute("UPDATE chat_messages SET chat_name = ? WHERE chat_name = ?",
                              (safe_name, old_name))
                 conn.execute("UPDATE tool_images SET chat_name = ? WHERE chat_name = ?",
+                             (safe_name, old_name))
+                conn.execute("UPDATE plugin_chat_data SET chat_name = ? WHERE chat_name = ?",
                              (safe_name, old_name))
                 conn.commit()
                 if old_name in self._rows_state:
@@ -2055,6 +2083,206 @@ class ChatSessionManager:
         means 'no such chat'. Same semantics as every by-name store gate,
         active-chat exemption included."""
         return self._vault_hidden(chat_name)
+
+    # ── Chat-scoped plugin data (vault v1.3) ──
+    # Sealed contract: reads on a hidden chat come back empty (as-if-
+    # absent, same as every by-name gate); writes RAISE — a plugin must
+    # never silently drop a private deposit. Writes on a vaulted chat
+    # encrypt in the funnel; keyless encrypt raises in _enc_value.
+
+    def _plugin_data_writable(self, conn, chat_name: str):
+        """Raise if this chat can't accept plugin data right now."""
+        if self._vault_hidden(chat_name):
+            raise RuntimeError("plugin data write refused — chat hidden (vault sealed)")
+        if not conn.execute("SELECT 1 FROM chats WHERE name = ?",
+                            (chat_name,)).fetchone():
+            raise ValueError(f"Chat '{chat_name}' not found")
+
+    def _plugin_data_decode(self, value, chat_name: str):
+        """Stored value → Python object; None = unreadable (logged in the
+        funnel) or unparseable."""
+        v = self._dec_value(value, "plugin data", chat_name)
+        if v is None:
+            return None
+        try:
+            return json.loads(v)
+        except Exception:
+            logger.error(f"plugin data row unparseable in chat '{chat_name}'")
+            return None
+
+    def plugin_data_get(self, plugin: str, chat_name: str, key: str, default=None):
+        """seq=0 slot for (plugin, chat, key), JSON-decoded. default when
+        absent, hidden, or unreadable."""
+        if self._vault_hidden(chat_name):
+            return default
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT value FROM plugin_chat_data "
+                    "WHERE plugin = ? AND chat_name = ? AND key = ? AND seq = 0",
+                    (plugin, chat_name, key)).fetchone()
+            if not row:
+                return default
+            out = self._plugin_data_decode(row["value"], chat_name)
+            return default if out is None else out
+        except Exception as e:
+            logger.error(f"plugin_data_get({plugin}) failed: {e}")
+            return default
+
+    def plugin_data_put(self, plugin: str, chat_name: str, key: str, value):
+        """Upsert the seq=0 slot. Raises on hidden chat, missing chat, or
+        sealed-vault encrypt refusal — never a silent drop."""
+        with self._lock, self._get_connection() as conn:
+            self._plugin_data_writable(conn, chat_name)
+            conn.execute(
+                "INSERT OR REPLACE INTO plugin_chat_data "
+                "(plugin, chat_name, key, seq, value, updated_at) "
+                "VALUES (?, ?, ?, 0, ?, ?)",
+                (plugin, chat_name, key,
+                 self._plugin_data_payload(conn, chat_name, value),
+                 datetime.now().isoformat()))
+            conn.commit()
+
+    def plugin_data_append(self, plugin: str, chat_name: str, key: str, value) -> int:
+        """Append one event row (seq = max+1, starting at 1). Returns the
+        seq. Same raise semantics as put. Don't mix put and append on one
+        key — seq 0 would lead every read_all."""
+        with self._lock, self._get_connection() as conn:
+            self._plugin_data_writable(conn, chat_name)
+            seq = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM plugin_chat_data "
+                "WHERE plugin = ? AND chat_name = ? AND key = ?",
+                (plugin, chat_name, key)).fetchone()[0]
+            conn.execute(
+                "INSERT INTO plugin_chat_data "
+                "(plugin, chat_name, key, seq, value, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (plugin, chat_name, key, seq,
+                 self._plugin_data_payload(conn, chat_name, value),
+                 datetime.now().isoformat()))
+            conn.commit()
+            return seq
+
+    def plugin_data_read_all(self, plugin: str, chat_name: str, key: str) -> list:
+        """All rows for (plugin, chat, key) ordered by seq — the journal
+        read. Empty when hidden. Unreadable rows are skipped (the funnel
+        already error-logged them)."""
+        if self._vault_hidden(chat_name):
+            return []
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT value FROM plugin_chat_data "
+                    "WHERE plugin = ? AND chat_name = ? AND key = ? ORDER BY seq",
+                    (plugin, chat_name, key)).fetchall()
+            out = []
+            for r in rows:
+                v = self._plugin_data_decode(r["value"], chat_name)
+                if v is not None:
+                    out.append(v)
+            return out
+        except Exception as e:
+            logger.error(f"plugin_data_read_all({plugin}) failed: {e}")
+            return []
+
+    def plugin_data_replace(self, plugin: str, chat_name: str, key: str, values: list):
+        """Atomically swap a key's whole row set (the journal-truncate op —
+        revert lives here). Rows renumber 1..len(values). Same raise
+        semantics as put."""
+        with self._lock, self._get_connection() as conn:
+            self._plugin_data_writable(conn, chat_name)
+            now = datetime.now().isoformat()
+            payloads = [(plugin, chat_name, key, i + 1,
+                         self._plugin_data_payload(conn, chat_name, v), now)
+                        for i, v in enumerate(values)]
+            conn.execute(
+                "DELETE FROM plugin_chat_data "
+                "WHERE plugin = ? AND chat_name = ? AND key = ?",
+                (plugin, chat_name, key))
+            conn.executemany(
+                "INSERT INTO plugin_chat_data "
+                "(plugin, chat_name, key, seq, value, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)", payloads)
+            conn.commit()
+
+    def plugin_data_delete(self, plugin: str, chat_name: str, key: str = None):
+        """Delete one key (all seqs) or, with key=None, every key this
+        plugin holds for the chat. Refuses on hidden; tolerates a missing
+        chat (cleanup after chat_deleted must not throw)."""
+        if self._vault_hidden(chat_name):
+            raise RuntimeError("plugin data delete refused — chat hidden (vault sealed)")
+        with self._lock, self._get_connection() as conn:
+            if key is None:
+                conn.execute(
+                    "DELETE FROM plugin_chat_data WHERE plugin = ? AND chat_name = ?",
+                    (plugin, chat_name))
+            else:
+                conn.execute(
+                    "DELETE FROM plugin_chat_data "
+                    "WHERE plugin = ? AND chat_name = ? AND key = ?",
+                    (plugin, chat_name, key))
+            conn.commit()
+
+    def plugin_data_get_all_chats(self, plugin: str, key: str) -> dict:
+        """{chat_name: decoded seq=0 value} for every chat holding `key` —
+        HIDDEN CHATS OMITTED, same inheritance rule as list_chat_files.
+        This is the only cross-chat read; the hidden filter lives here so
+        no plugin ever re-implements it."""
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT chat_name, value FROM plugin_chat_data "
+                    "WHERE plugin = ? AND key = ? AND seq = 0",
+                    (plugin, key)).fetchall()
+            out = {}
+            for r in rows:
+                if self._vault_hidden(r["chat_name"]):
+                    continue
+                v = self._plugin_data_decode(r["value"], r["chat_name"])
+                if v is not None:
+                    out[r["chat_name"]] = v
+            return out
+        except Exception as e:
+            logger.error(f"plugin_data_get_all_chats({plugin}) failed: {e}")
+            return {}
+
+    def plugin_data_meta(self, plugin: str, chat_name: str, key: str):
+        """{'rows': n, 'updated_at': max-ISO} for a key, or None when
+        absent/hidden. Lets plugins ask 'which save is newest' without
+        decrypting a single row."""
+        if self._vault_hidden(chat_name):
+            return None
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS n, MAX(updated_at) AS u "
+                    "FROM plugin_chat_data "
+                    "WHERE plugin = ? AND chat_name = ? AND key = ?",
+                    (plugin, chat_name, key)).fetchone()
+            if not row or not row["n"]:
+                return None
+            return {"rows": row["n"], "updated_at": row["u"]}
+        except Exception as e:
+            logger.error(f"plugin_data_meta({plugin}) failed: {e}")
+            return None
+
+    def plugin_data_keys(self, plugin: str, chat_name: str) -> list:
+        """Distinct keys this plugin holds for the chat. Empty when hidden."""
+        if self._vault_hidden(chat_name):
+            return []
+        try:
+            with self._get_connection() as conn:
+                return [r[0] for r in conn.execute(
+                    "SELECT DISTINCT key FROM plugin_chat_data "
+                    "WHERE plugin = ? AND chat_name = ? ORDER BY key",
+                    (plugin, chat_name))]
+        except Exception as e:
+            logger.error(f"plugin_data_keys({plugin}) failed: {e}")
+            return []
+
+    def _plugin_data_payload(self, conn, chat_name: str, value) -> str:
+        s = json.dumps(value)
+        return self._enc_value(s) if self._is_vaulted_conn(conn, chat_name) else s
 
     def list_chat_files(self, stats: bool = False,
                         include_hidden: bool = False) -> List[Dict[str, Any]]:
@@ -2358,6 +2586,13 @@ class ChatSessionManager:
                     conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (chat_name,))
                 except Exception:
                     pass  # Table may not exist yet
+                # v1.3 ruling (a): plugin rows die with the chat, no core
+                # archive. Public chats may archive plugin-side via the
+                # chat_deleted hook; private chats must not (vault wins).
+                try:
+                    conn.execute("DELETE FROM plugin_chat_data WHERE chat_name = ?", (chat_name,))
+                except Exception:
+                    pass
                 conn.commit()
                 # Reclaim freed pages now that we deleted a chat (potentially
                 # with megabytes of tool_images blobs). `auto_vacuum=INCREMENTAL`
@@ -2618,6 +2853,16 @@ class ChatSessionManager:
                         enc_imgs.append((self._enc_value_bytes(r["data"]), r["id"]))
                 conn.executemany(
                     "UPDATE tool_images SET data = ? WHERE id = ?", enc_imgs)
+                # v1.3: chat-scoped plugin data rides the same flip. rowid-
+                # keyed — the 4-column PK is clumsy in an executemany WHERE.
+                enc_pcd = []
+                for r in conn.execute(
+                        "SELECT rowid, value FROM plugin_chat_data "
+                        "WHERE chat_name = ?", (chat_name,)):
+                    if not prompt_vault.is_chat_encrypted(r["value"]):
+                        enc_pcd.append((self._enc_value(r["value"]), r["rowid"]))
+                conn.executemany(
+                    "UPDATE plugin_chat_data SET value = ? WHERE rowid = ?", enc_pcd)
                 conn.commit()
             self._scrub_wal()
             self._scrub_public_deposits(chat_name)
@@ -2718,6 +2963,19 @@ class ChatSessionManager:
                         dec_imgs.append((d, r["id"]))
                 conn.executemany(
                     "UPDATE tool_images SET data = ? WHERE id = ?", dec_imgs)
+                # v1.3 twin: strict — a half-decrypted journal is a forked
+                # playthrough, so any unreadable row aborts the whole flip.
+                dec_pcd = []
+                for r in conn.execute(
+                        "SELECT rowid, value FROM plugin_chat_data "
+                        "WHERE chat_name = ?", (chat_name,)):
+                    if prompt_vault.is_chat_encrypted(r["value"]):
+                        d = self._dec_value(r["value"], "unvault plugin data", chat_name)
+                        if d is None:
+                            return False, "plugin data row undecryptable — aborted"
+                        dec_pcd.append((d, r["rowid"]))
+                conn.executemany(
+                    "UPDATE plugin_chat_data SET value = ? WHERE rowid = ?", dec_pcd)
                 conn.commit()
             logger.info("[VAULT] chat decrypted back to plaintext")
             return True, ''
@@ -3365,14 +3623,9 @@ class ChatSessionManager:
                     return False
                 was_priv = bool(self.current_settings.get('private_chat'))
                 new_priv = bool(settings.get('private_chat', was_priv))
-                if new_priv and not was_priv \
-                        and (settings.get('mode', self.current_settings.get('mode'))):
-                    # Ruling F1 (2026-08-15): game/story chats can't be private —
-                    # their engines keep plaintext sidecars outside the vault
-                    # (journal, saves). Lifted when chat-scoped plugin storage
-                    # ships (v1.3).
-                    logger.warning("[VAULT] refused: game/story chats can't be private yet")
-                    return False
+                # Ruling F1 refusal LIFTED (v1.3, 2026-08-15): game/story
+                # chats may be private now — their journals/saves live in
+                # plugin_chat_data and seal with the chat.
                 if new_priv and not was_priv and _vault_sealed():
                     # Vault hunt R4: the talk-stamp raced a seal. A locked
                     # vault has no private mode — refusing here beats leaving
@@ -3435,13 +3688,8 @@ class ChatSessionManager:
                     return False
                 was_priv = bool(s.get('private_chat'))
                 new_priv = bool(patch.get('private_chat', was_priv))
-                if new_priv and not was_priv \
-                        and (patch.get('mode', s.get('mode'))):
-                    # Ruling F1: game/story chats keep plaintext sidecars
-                    # outside the vault — refuse private until chat-scoped
-                    # plugin storage ships (v1.3).
-                    logger.warning("[VAULT] refused: game/story chats can't be private yet")
-                    return False
+                # Ruling F1 refusal LIFTED (v1.3, 2026-08-15) — see the
+                # update_chat_settings twin.
                 if new_priv and not was_priv and _vault_sealed():
                     # Vault hunt R4 twin: a locked vault has no private mode —
                     # no lane may flip a chat private into a sealed world

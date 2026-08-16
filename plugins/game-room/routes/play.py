@@ -185,7 +185,10 @@ def forget(game, body=None, query=None, **_):
     if not session:
         return ({'error': 'session required'}, 400)
     with gc.session_lock(game, session):
-        gc.store.delete(gc.state_key(game, session))
+        # v1.3: sessioned saves live on the chat's rows; core also drops
+        # them with the chat, but the room deletes save-first by design.
+        gc.chat_store.delete(session, f'game:{game}')
+        gc.store.delete(gc.state_key(game, session))   # pre-v1.3 residue
     return {'status': 'ok'}
 
 

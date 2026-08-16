@@ -59,7 +59,13 @@ AI_TURN_GUARD = 12
 # The loader's cached singleton, NEVER a bare PluginState('game-room'):
 # each instance is a whole-file snapshot, and a second one silently erases
 # the other's keys on every save (poker move vs GM settings, 2026-08-05).
+# Holds ROOM-GLOBAL keys only since v1.3 (config, gamecfg:*, roomcfg, the
+# pre-0.5 session-less game states).
 store = plugin_loader.get_plugin_state('game-room')
+
+# Per-CHAT game state (vault v1.3): rows in core's plugin_chat_data table,
+# sealed/renamed/deleted with the chat. Sessioned saves live here.
+chat_store = plugin_loader.get_chat_state('game-room')
 
 # Per-(game, session) locks, NOT one global lock: the global was held across
 # LLM calls, so one poker turn serialized every other session in the house —
@@ -224,14 +230,24 @@ def state_key(game_id, session=None):
 
 
 def load_state(game_id, session=None):
-    raw = store.get(state_key(game_id, session))
-    if raw is None and not session and game_id == 'poker':
+    if session:
+        # v1.3: sessioned saves ride the chat's row set. A hidden chat
+        # reads None — the seat is fail-closed before this anyway.
+        raw = chat_store.get(session, f'game:{game_id}')
+        return copy.deepcopy(raw) if raw else None
+    raw = store.get(state_key(game_id, None))
+    if raw is None and game_id == 'poker':
         raw = store.get('poker')               # pre-0.4 legacy key
     return copy.deepcopy(raw) if raw else None
 
 
 def save_state(game_id, state, session=None):
-    store.save(state_key(game_id, session), state)
+    if session:
+        # Raises on a hidden/sealed chat — a private save is never
+        # silently dropped (v1.3 sealed contract).
+        chat_store.put(session, f'game:{game_id}', state)
+    else:
+        store.save(state_key(game_id, session), state)
 
 
 def get_config():

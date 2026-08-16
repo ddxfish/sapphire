@@ -107,20 +107,12 @@ def _manifest_prompts():
         pieces = json.loads((_PLUGIN_DIR / "prompts" / "pieces.json").read_text(encoding="utf-8"))
     except Exception as e:
         logger.warning(f"[STORY] pieces.json unreadable: {e}")
-    dyn = st.get_dynamic()  # restart-proof rendered story prompts
-    # Sealed filter (P3-T16): a hidden chat's rendered prompt is named
-    # '<role>@<chat suffix>' — merging it would surface that name in the
-    # GLOBAL prompt list while the vault is locked. Skipped, not dropped:
-    # the sidecar keeps it; the next unlocked restore re-merges.
-    try:
-        from core.api_fastapi import get_system
-        _sm = get_system().llm_chat.session_manager
-        owners = {e.get("prompt_name"): c
-                  for c, e in (st.get_active() or {}).items()}
-        dyn = {k: v for k, v in dyn.items()
-               if not (owners.get(k) and _sm.is_chat_hidden(owners[k]))}
-    except Exception:
-        pass
+    # Restart-proof rendered story prompts. The sealed filter (P3-T16) is
+    # STRUCTURAL now: costumes live on their chat's plugin_chat_data row,
+    # and core's cross-chat read omits hidden chats — a locked chat's
+    # costume name can't surface in the global prompt list, and the next
+    # unlocked read re-merges it. (v1.3 cutover, 2026-08-15.)
+    dyn = st.get_dynamic()
     monoliths.update(dyn)
     return monoliths, pieces
 
@@ -255,7 +247,7 @@ def _register_prompt(story, state, entry, chat):
                                    conduct=conduct_for(story))
     name = entry.get("prompt_name") or _prompt_name_for(story, mode or "local", chat)
     private = _inherits_privacy(entry)
-    st.save_dynamic(name, rendered, privacy_required=private)
+    st.save_dynamic(name, rendered, privacy_required=private, chat=chat)
     monoliths[name] = {"content": rendered, "privacy_required": private}
     prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces)
     return name
@@ -390,17 +382,10 @@ def _start(system, slug, character, mode, local, session):
     chat = _chat_name(system, session)
     if session and not _chat_exists(system, chat):
         return f"No chat named '{chat}' — a story's session must be a real chat.", False
-    # Ruling F1 (P3): stories keep plaintext sidecars (journal, active.json)
-    # outside the vault — a private chat can't host one until chat-scoped
-    # plugin storage ships (v1.3). The UI's mode-tagged chats can never BE
-    # private; this closes the explicit-session / effective-chat door.
-    try:
-        _s = system.llm_chat.session_manager.get_settings_for(chat)
-        if isinstance(_s, dict) and _s.get("private_chat"):
-            return ("This chat is private — stories keep their saves outside "
-                    "the vault, so they can't run here yet.", False)
-    except Exception:
-        pass
+    # Ruling F1 refusal LIFTED (v1.3, 2026-08-15): journals/costumes live
+    # on the chat's plugin_chat_data rows and seal with it — private chats
+    # host stories now. The HIDDEN gate (sealed vault) still refuses via
+    # the store's own write raise + the P3 seat rails.
     if st.get_active().get(chat):
         return f"A story is already active in this chat — story_end first.", False
     story = rooms.load_story(slug)
@@ -417,12 +402,7 @@ def _start(system, slug, character, mode, local, session):
         mode = "local"
 
     # Fresh playthrough = fresh journal; the old one archives beside it
-    jp = st.journal_path(slug, chat)
-    if jp.exists():
-        n = 1
-        while jp.with_suffix(f".run{n}.jsonl").exists():
-            n += 1
-        jp.rename(jp.with_suffix(f".run{n}.jsonl"))
+    st.new_run(slug, chat)
 
     from core import prompts
     # Pre-story costume + cockpit come from the TARGET chat's own settings,
@@ -728,13 +708,9 @@ def _end(system, session):
                         {"toolset": entry.get("prev_toolset") or "all",
                          "extra_toolsets": entry.get("prev_extras") or []})
     st.clear_active(chat)
-    # The REAL path — the pre-2.7 hardcoded string sent her (and the player)
-    # to a directory that no longer exists under the digest scheme.
-    try:
-        keep = rooms.save_dir(entry["story"], chat).relative_to(rooms.SAPPHIRE_ROOT)
-    except Exception:
-        keep = f"user/story_saves/{entry['story']}"
-    return (f"Story closed. Journal kept at {keep}/ — "
+    # v1.3: the journal lives on this chat's rows now — kept until the chat
+    # itself is deleted, sealed if the chat is.
+    return (f"Story closed. Journal kept with this chat — "
             f"{prompt_note}."), True
 
 
@@ -1019,11 +995,10 @@ def last_played(system, session=None):
     best = None
     for slug in rooms.list_stories():
         try:
-            jp = st.journal_path(slug, chat)
-            if jp.exists():
-                m = jp.stat().st_mtime
-                if best is None or m > best[1]:
-                    best = (slug, m)
+            meta = st.journal_meta(slug, chat)
+            # ISO timestamps compare lexicographically — same clock wrote them
+            if meta and (best is None or meta["updated_at"] > best[1]):
+                best = (slug, meta["updated_at"])
         except Exception:
             continue
     if not best:

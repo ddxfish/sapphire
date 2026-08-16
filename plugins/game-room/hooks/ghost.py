@@ -41,7 +41,7 @@ def handle(event):
         chat = _chat_name(event)
         if not chat:
             return
-        entry = st.get_active().get(chat)
+        entry = st.get_active_entry(chat)   # hot path: no cross-chat sweep
         if not entry or entry.get("paused"):
             return  # intermission: no ticks, no block — clock stops
         story, state = session.load_active(chat)

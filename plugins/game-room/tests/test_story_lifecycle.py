@@ -75,9 +75,7 @@ def engine(tmp_path, monkeypatch):
     DYNAMIC_FILE was previously left pointing at the real user dir)."""
     monkeypatch.setattr(rooms, "_story_roots",
                         lambda: [Path(__file__).parent / "fixtures" / "stories"])
-    monkeypatch.setattr(st, "SAVES_ROOT", tmp_path)
-    monkeypatch.setattr(st, "ACTIVE_FILE", tmp_path / "active.json")
-    monkeypatch.setattr(st, "DYNAMIC_FILE", tmp_path / "_dynamic_monoliths.json")
+    # v1.3: journal storage bound hermetically by conftest's autouse guard.
     # Prompt registration is core-side; the lifecycle contract is what we test.
     # (chat param added 2026-08-05: costume names are playthrough-scoped now.)
     monkeypatch.setattr(sess, "_register_prompt", lambda story, state, entry, chat:

@@ -1,9 +1,10 @@
 {
   "name": "game-room",
+  "privacy_aware": true,
   "short_display_name": "Game Room",
   "display_name": "Game Room",
   "description": "The Game Room host: Surface rooms, sealed-seat rails, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "emoji": "🎲",
   "author": "Krem & Claude",
   "default_enabled": true,
@@ -24,9 +25,7 @@
     ],
     "hooks": {
       "ghost_inject": "hooks/ghost.py",
-      "plugins_ready": "hooks/boot.py",
-      "chat_renamed": "hooks/lifecycle.py",
-      "chat_deleted": "hooks/lifecycle.py"
+      "plugins_ready": "hooks/boot.py"
     },
     "routes": [
       {

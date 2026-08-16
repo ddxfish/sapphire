@@ -171,6 +171,53 @@ class PluginState:
             return new_value
 
 
+class PluginChatState:
+    """Chat-scoped plugin data (vault v1.3). Rows live in the history DB
+    and follow the chat: sealed with vault_chat, renamed with it, deleted
+    with it. Values are JSON-serializable objects. Reads on a hidden chat
+    (private + vault sealed) come back empty; writes RAISE there — never a
+    silent drop. Resolves the chat store lazily per call so this can be
+    handed out at plugin-load time, before the chat system is up."""
+
+    def __init__(self, plugin_name: str):
+        self._name = plugin_name
+
+    @staticmethod
+    def _sm():
+        from core.api_fastapi import get_system
+        return get_system().llm_chat.session_manager
+
+    def get(self, chat_name: str, key: str, default=None):
+        return self._sm().plugin_data_get(self._name, chat_name, key, default)
+
+    def put(self, chat_name: str, key: str, value):
+        self._sm().plugin_data_put(self._name, chat_name, key, value)
+
+    def append(self, chat_name: str, key: str, value) -> int:
+        return self._sm().plugin_data_append(self._name, chat_name, key, value)
+
+    def read_all(self, chat_name: str, key: str) -> list:
+        return self._sm().plugin_data_read_all(self._name, chat_name, key)
+
+    def replace(self, chat_name: str, key: str, values: list):
+        self._sm().plugin_data_replace(self._name, chat_name, key, values)
+
+    def delete(self, chat_name: str, key: str = None):
+        self._sm().plugin_data_delete(self._name, chat_name, key)
+
+    def keys(self, chat_name: str) -> list:
+        return self._sm().plugin_data_keys(self._name, chat_name)
+
+    def get_all_chats(self, key: str) -> dict:
+        """{chat: value} across every VISIBLE chat holding `key` — hidden
+        chats structurally absent (core filters, not the plugin)."""
+        return self._sm().plugin_data_get_all_chats(self._name, key)
+
+    def meta(self, chat_name: str, key: str):
+        """{'rows': n, 'updated_at': max-ISO} or None when absent/hidden."""
+        return self._sm().plugin_data_meta(self._name, chat_name, key)
+
+
 class PluginLoader:
     """Discovers, validates, and loads plugins from plugins/ and user/plugins/."""
 
@@ -2076,6 +2123,16 @@ class PluginLoader:
             if name not in self._plugin_state_cache:
                 self._plugin_state_cache[name] = PluginState(name)
             return self._plugin_state_cache[name]
+
+    _chat_state_cache: dict = {}
+
+    def get_chat_state(self, name: str) -> PluginChatState:
+        """Chat-scoped plugin data helper (cached per name). Sibling of
+        get_plugin_state; rows ride the chat's vault/rename/delete."""
+        with self._plugin_state_cache_lock:
+            if name not in self._chat_state_cache:
+                self._chat_state_cache[name] = PluginChatState(name)
+            return self._chat_state_cache[name]
 
     def get_credentials(self):
         """Get the credentials manager singleton. Convenience for plugins."""

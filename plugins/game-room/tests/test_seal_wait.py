@@ -41,10 +41,8 @@ def sealed_story(monkeypatch):
 
 
 @pytest.fixture
-def tmp_saves(tmp_path, monkeypatch):
-    monkeypatch.setattr(st, "SAVES_ROOT", tmp_path)
-    monkeypatch.setattr(st, "ACTIVE_FILE", tmp_path / "active.json")
-    monkeypatch.setattr(st, "DYNAMIC_FILE", tmp_path / "_dynamic_monoliths.json")
+def tmp_saves(tmp_path):
+    # v1.3: journal storage bound hermetically by conftest's autouse guard.
     return tmp_path
 
 

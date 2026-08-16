@@ -24,4 +24,15 @@ def plugins_ready(event):
     except Exception as e:
         logger.warning(f"[STORY] boot pack re-merge failed: {e} — active story "
                        f"prompts won't resolve until a story action runs")
+    # v1.3 no-migration ruling (2026-08-15): playthroughs live in the chat
+    # DB now. Old file saves are never read — one boot notice so leftovers
+    # don't rot silently.
+    try:
+        from gameroom_story import rooms
+        if rooms.SAVES_ROOT.is_dir() and any(rooms.SAVES_ROOT.iterdir()):
+            logger.info("[STORY] legacy user/story_saves/ files present — "
+                        "unused since v1.3 (saves live in the chat DB); "
+                        "safe to clean up by hand")
+    except Exception:
+        pass
     return event

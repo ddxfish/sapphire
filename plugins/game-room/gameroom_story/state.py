@@ -1,129 +1,131 @@
 # engine/state.py — the event journal (Krem's design, 2026-07-13).
 #
-# No save system, no state store: every resolved event appends to a JSONL
-# journal keyed by (story, chat). Current state is a pure fold over the
-# journal — replay of 1000+ events is sub-ms, complete BY CONSTRUCTION
-# because every mutation passes through the one-tool referee. Revert =
-# truncate journal at turn N (+ chat truncation, handled by the tool layer).
-# Events log resolved OUTCOMES, never intents — replay uses no LLM, no
-# randomness, no clock.
+# No save system, no state store: every resolved event appends to a journal
+# keyed by (story, chat). Current state is a pure fold over the journal —
+# replay of 1000+ events is sub-ms, complete BY CONSTRUCTION because every
+# mutation passes through the one-tool referee. Revert = truncate journal at
+# turn N (+ chat truncation, handled by the tool layer). Events log resolved
+# OUTCOMES, never intents — replay uses no LLM, no randomness, no clock.
+#
+# Storage (vault v1.3, 2026-08-15): rows in core's plugin_chat_data table,
+# NOT files — journals/active/costumes follow the chat through vault (sealed
+# to '@enc1:'), rename, and delete. The old user/story_saves/ files are
+# retired unread (no-migration ruling — alpha, fresh start). Sealed-blank
+# player text now seals with the chat instead of sitting plaintext on disk.
+# Keys: 'story:active' + 'story:monolith' (per chat, seq0), and per story
+# 'story:journal:<slug>' (append rows), ':run<n>' archives, 'story:reverted:
+# <slug>' (revert forensics).
 import json
 import logging
 import threading
-
-from .rooms import SAVES_ROOT, save_dir
 
 logger = logging.getLogger(__name__)
 _anchor_warned = False   # one warning per process, not five per turn
 
 _lock = threading.Lock()
 
-ACTIVE_FILE = SAVES_ROOT / "active.json"
-DYNAMIC_FILE = SAVES_ROOT / "_dynamic_monoliths.json"
+K_ACTIVE = "story:active"
+K_MONO = "story:monolith"
+
+_CS = None
+
+
+def _cs():
+    """The plugin's chat-scoped store (core-owned; cached veneer)."""
+    global _CS
+    if _CS is None:
+        from core.plugin_loader import plugin_loader
+        _CS = plugin_loader.get_chat_state("game-room")
+    return _CS
+
+
+def _jkey(story):
+    return f"story:journal:{story}"
 
 
 def get_dynamic():
-    """Rendered story prompts persisted across restarts — merged into every
-    pack registration so story_{slug} always resolves after a reboot.
-
-    A corrupt file is QUARANTINED, not silently swallowed: returning {} let
-    the next save_dynamic overwrite the only copy of every active costume,
-    and every story chat would quietly un-register (Tier 5, front D —
-    PluginState already handles corruption this way, this didn't)."""
-    if not DYNAMIC_FILE.exists():
-        return {}
+    """{prompt_name: {content, privacy_required}} — rendered story costumes
+    across every VISIBLE chat, merged into pack registration so story
+    prompts always resolve after a reboot. A hidden chat's costume is
+    structurally absent (core's hidden filter — the old P3-T16 manual
+    filter's job, now unskippable)."""
+    out = {}
     try:
-        data = json.loads(DYNAMIC_FILE.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-        raise ValueError(f"expected an object, got {type(data).__name__}")
+        for chat, row in _cs().get_all_chats(K_MONO).items():
+            if isinstance(row, dict) and row.get("name"):
+                out[row["name"]] = {
+                    "content": row.get("content", ""),
+                    "privacy_required": bool(row.get("privacy_required")),
+                }
     except Exception as e:
-        from datetime import datetime
-        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-        bad = DYNAMIC_FILE.with_suffix(f".json.bad-{stamp}")
-        try:
-            DYNAMIC_FILE.rename(bad)
-            logger.error(f"[STORY] dynamic monolith sidecar corrupt ({e}) — quarantined "
-                         f"to {bad.name}. Active story costumes must be re-asserted "
-                         f"(enter the room, or story settings save).")
-        except Exception as rename_err:
-            logger.error(f"[STORY] dynamic sidecar corrupt ({e}) and could not be "
-                         f"quarantined ({rename_err}) — next save will overwrite it.")
-        return {}
+        logger.warning(f"[STORY] dynamic monolith read failed: {e}")
+    return out
 
 
-def save_dynamic(name, content, privacy_required=False):
-    with _lock:
-        data = get_dynamic()
-        # Privacy rides WITH the rendered prompt: the sidecar re-registers it
-        # at every boot, so a flag dropped here is a send-gate lost forever
-        # (finding 2.10).
-        data[name] = {"content": content, "privacy_required": bool(privacy_required)}
-        DYNAMIC_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = DYNAMIC_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        tmp.replace(DYNAMIC_FILE)
+def save_dynamic(name, content, privacy_required=False, chat=None):
+    """Persist a rendered costume ON ITS CHAT'S ROW — it seals, renames and
+    dies with the playthrough. Privacy rides WITH the rendered prompt
+    (finding 2.10). chat is required in the DB world; the kwarg default
+    keeps the old signature importable."""
+    if not chat:
+        raise ValueError("save_dynamic needs the owning chat")
+    _cs().put(chat, K_MONO, {"name": name, "content": content,
+                             "privacy_required": bool(privacy_required)})
 
 
 def drop_dynamic(name):
-    with _lock:
-        data = get_dynamic()
-        if data.pop(name, None) is not None:
-            tmp = DYNAMIC_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-            tmp.replace(DYNAMIC_FILE)
+    """Drop a costume by prompt name, whichever visible chat holds it. A
+    name nobody holds (already replaced, legacy key) is a no-op."""
+    try:
+        for chat, row in _cs().get_all_chats(K_MONO).items():
+            if isinstance(row, dict) and row.get("name") == name:
+                _cs().delete(chat, K_MONO)
+    except Exception as e:
+        logger.warning(f"[STORY] drop_dynamic({name!r}) failed: {e}")
 
 
 # ── Active-story map (chat → story) ─────────────────────────────────────────
 
 def get_active():
-    """{chat_name: {story, prev_prompt}} — which chats are mid-story."""
+    """{chat_name: {story, prev_prompt, ...}} — which VISIBLE chats are
+    mid-story. Hidden chats answer like they never happened."""
     try:
-        return json.loads(ACTIVE_FILE.read_text(encoding="utf-8"))
+        return _cs().get_all_chats(K_ACTIVE)
     except Exception:
         return {}
 
 
+def get_active_entry(chat):
+    """One chat's active entry (hot-path form — the ghost hook runs this
+    every player message; no cross-chat sweep needed)."""
+    return _cs().get(chat, K_ACTIVE)
+
+
 def set_active(chat, story, prev_prompt):
-    with _lock:
-        data = get_active()
-        data[chat] = {"story": story, "prev_prompt": prev_prompt}
-        ACTIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = ACTIVE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        tmp.replace(ACTIVE_FILE)
+    _cs().put(chat, K_ACTIVE, {"story": story, "prev_prompt": prev_prompt})
 
 
 def update_active(chat, **fields):
     """Update fields on an existing active entry (e.g. paused=True).
     Returns False if the chat has no active story."""
     with _lock:
-        data = get_active()
-        if chat not in data:
+        entry = _cs().get(chat, K_ACTIVE)
+        if entry is None:
             return False
-        data[chat].update(fields)
-        tmp = ACTIVE_FILE.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        tmp.replace(ACTIVE_FILE)
+        entry.update(fields)
+        _cs().put(chat, K_ACTIVE, entry)
         return True
 
 
 def clear_active(chat):
     with _lock:
-        data = get_active()
-        entry = data.pop(chat, None)
+        entry = _cs().get(chat, K_ACTIVE)
         if entry is not None:
-            tmp = ACTIVE_FILE.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp.replace(ACTIVE_FILE)
+            _cs().delete(chat, K_ACTIVE)
         return entry
 
 
 # ── Journal ──────────────────────────────────────────────────────────────────
-
-def journal_path(story, chat):
-    return save_dir(story, chat) / "journal.jsonl"
-
 
 def append(story, chat, event):
     """Append one resolved event. Caller supplies {'event': ..., ...};
@@ -147,68 +149,58 @@ def append(story, chat, event):
             if not _anchor_warned:
                 _anchor_warned = True
                 logger.warning(f"[STORY] turn anchors not recording (first failure: {e}) — revert-to-message will lack alignment for this run")
-    # Sealed-vault backstop (P3-T9): never accrue journal events on disk for
-    # a hidden chat — the chat is invisible everywhere else, its sidecar
-    # must not keep moving. Loud, matching the fail-loudly ruling.
-    try:
-        from core.api_fastapi import get_system
-        _sys = get_system()
-        if _sys and _sys.llm_chat.session_manager.is_chat_hidden(chat):
-            logger.warning("[STORY] journal write refused — session chat is "
-                           "sealed in a locked vault")
-            return
-    except Exception:
-        pass
-    path = journal_path(story, chat)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Sealed-vault backstop (P3-T9, now core-enforced): the store RAISES on
+    # a hidden chat's write — catch and warn to keep this rail no-raise for
+    # its per-turn callers. Loud, matching the fail-loudly ruling.
     with _lock:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
-
-
-def _read_journal_unlocked(path):
-    if not path.exists():
-        return []
-    out = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                out.append(json.loads(line))
-            except Exception:
-                logger.warning(f"[STORY] skipping corrupt journal line in {path}")
-    return out
+        try:
+            _cs().append(chat, _jkey(story), event)
+        except Exception as e:
+            logger.warning(f"[STORY] journal write refused: {e}")
 
 
 def read_journal(story, chat):
-    return _read_journal_unlocked(journal_path(story, chat))
+    return _cs().read_all(chat, _jkey(story))
+
+
+def journal_meta(story, chat):
+    """{'rows': n, 'updated_at': max-ISO} or None — 'does a playthrough
+    exist, and how fresh' without reading a row (last_played's mtime)."""
+    return _cs().meta(chat, _jkey(story))
 
 
 def truncate(story, chat, turn):
     """Revert: drop all events with turn > N (single timeline — the dead
-    branch is archived to one file for forensics, then gone).
+    branch is archived to a forensics key, then gone).
 
-    The read happens INSIDE the lock: reading first meant any event appended
-    while the revert ran was erased by the rewrite and never archived —
-    silent, unrecoverable loss of a turn the player just took (finding 2.9)."""
-    path = journal_path(story, chat)
+    Read INSIDE the lock: reading first meant any event appended while the
+    revert ran was erased by the rewrite and never archived — silent,
+    unrecoverable loss of a turn the player just took (finding 2.9). The
+    lock serializes against append(); the final replace is atomic in the
+    store."""
     with _lock:
-        events = _read_journal_unlocked(path)
+        events = _cs().read_all(chat, _jkey(story))
         keep = [e for e in events if e.get("turn", 0) <= turn]
         dropped = events[len(keep):]
-        if dropped:
-            arch = path.with_suffix(".reverted.jsonl")
-            with open(arch, "a", encoding="utf-8") as f:
-                for e in dropped:
-                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
-        tmp = path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            for e in keep:
-                f.write(json.dumps(e, ensure_ascii=False) + "\n")
-        tmp.replace(path)
+        for e in dropped:
+            _cs().append(chat, f"story:reverted:{story}", e)
+        _cs().replace(chat, _jkey(story), keep)
     return len(dropped)
+
+
+def new_run(story, chat):
+    """Fresh playthrough: archive the existing journal aside as run<n>
+    (never erased — same law as revert forensics), leaving the live key
+    empty for the new start."""
+    with _lock:
+        events = _cs().read_all(chat, _jkey(story))
+        if not events:
+            return
+        n = 1
+        while _cs().read_all(chat, f"{_jkey(story)}:run{n}"):
+            n += 1
+        _cs().replace(chat, f"{_jkey(story)}:run{n}", events)
+        _cs().delete(chat, _jkey(story))
 
 
 # ── Replay (pure fold) ───────────────────────────────────────────────────────

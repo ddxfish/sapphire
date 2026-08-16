@@ -23,11 +23,9 @@ def story(monkeypatch):
 
 
 @pytest.fixture
-def tmp_saves(tmp_path, monkeypatch):
-    # DYNAMIC_FILE included — see conftest's autouse guard for why.
-    monkeypatch.setattr(st, "SAVES_ROOT", tmp_path)
-    monkeypatch.setattr(st, "ACTIVE_FILE", tmp_path / "active.json")
-    monkeypatch.setattr(st, "DYNAMIC_FILE", tmp_path / "_dynamic_monoliths.json")
+def tmp_saves(tmp_path):
+    # v1.3: journal storage is bound hermetically by conftest's autouse
+    # guard (plugin_chat_data rows); nothing path-shaped left to redirect.
     return tmp_path
 
 
@@ -325,8 +323,8 @@ def test_journal_replay_and_revert(tmp_saves, story):
     state = st.replay("goblin-den", chat)
     assert state["room"] == 1 and state["turn"] == 1
     assert "rusty_key" in state["inventory"]  # found at turn 1, survives
-    # Dead branch archived
-    assert (st.journal_path("goblin-den", chat).with_suffix(".reverted.jsonl")).exists()
+    # Dead branch archived (v1.3: forensics rows on the chat, not a file)
+    assert len(st._cs().read_all(chat, "story:reverted:goblin-den")) == 3
 
 
 def test_replay_is_pure_and_repeatable(tmp_saves):

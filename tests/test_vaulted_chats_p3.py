@@ -149,43 +149,50 @@ class TestHookWithholdGate:
         assert "careful" not in r._privacy_aware
 
 
-# ── F1: story/game chats can't go private ───────────────────────────────────
+# ── F1 LIFTED (v1.3, 2026-08-15): story/game chats vault like any other ─────
+# The v1.2 refusal existed because engines kept plaintext files outside the
+# vault. v1.3 moved those deposits into plugin_chat_data rows that seal with
+# the chat — mode-tagged chats flip, seal, and release like any chat now.
 
-class TestStoryGameRefusal:
-    def test_named_flip_refused_on_mode_chat(self, sm, monkeypatch):
+class TestStoryGameVaulting:
+    def test_named_flip_allowed_on_mode_chat(self, sm, tmp_path, monkeypatch):
         _key_on(monkeypatch)
         sm.create_chat("poker")
         assert sm.set_named_chat_settings("poker", {"mode": "game"})
-        assert not sm.set_named_chat_settings("poker", {"private_chat": True})
-        s = sm.get_settings_for("poker")
-        assert not s.get("private_chat")
+        assert sm.set_named_chat_settings("poker", {"private_chat": True})
+        assert raw(tmp_path, "SELECT vaulted FROM chats WHERE name='poker'")[0][0] == 1
 
-    def test_active_flip_refused_on_mode_chat(self, sm, monkeypatch):
+    def test_active_flip_allowed_on_mode_chat(self, sm, monkeypatch):
         _key_on(monkeypatch)
         sm.create_chat("story1")
         sm.set_named_chat_settings("story1", {"mode": "game"})
         assert sm.set_active_chat("story1")
-        assert not sm.update_chat_settings({"private_chat": True})
-        assert not sm.current_settings.get("private_chat")
+        assert sm.update_chat_settings({"private_chat": True})
+        assert sm.current_settings.get("private_chat")
 
-    def test_simultaneous_mode_and_private_refused(self, sm, monkeypatch):
+    def test_plugin_rows_seal_with_mode_chat(self, sm, tmp_path, monkeypatch):
+        """The reason the lift is safe: a story journal on the chat's rows
+        goes '@enc1:' the moment the chat flips."""
         _key_on(monkeypatch)
-        sm.create_chat("combo")
-        assert not sm.set_named_chat_settings(
-            "combo", {"mode": "game", "private_chat": True})
+        sm.create_chat("gm")
+        sm.set_named_chat_settings("gm", {"mode": "game"})
+        sm.plugin_data_append("game-room", "gm", "story:journal:x",
+                              {"event": "started", "turn": 0})
+        assert sm.set_named_chat_settings("gm", {"private_chat": True})
+        vals = [r[0] for r in raw(
+            tmp_path, "SELECT value FROM plugin_chat_data WHERE chat_name='gm'")]
+        assert vals and all(v.startswith("@enc1:") for v in vals)
 
     def test_plain_chat_still_flips(self, sm, tmp_path, monkeypatch):
         _key_on(monkeypatch)
         assert sm.set_named_chat_settings("pub", {"private_chat": True})
         assert raw(tmp_path, "SELECT vaulted FROM chats WHERE name='pub'")[0][0] == 1
 
-    def test_unflip_still_allowed_on_legacy_private_mode_chat(self, sm, monkeypatch):
-        """A legacy chat that is somehow both mode-tagged and private must
-        still be releasable — the F1 guard blocks the way IN, never OUT."""
+    def test_private_mode_chat_still_releasable(self, sm, monkeypatch):
         _key_on(monkeypatch)
         sm.create_chat("legacy")
         sm.set_named_chat_settings("legacy", {"private_chat": True})
-        sm.set_named_chat_settings("legacy", {"mode": "game"})  # mode after — bypasses guard
+        sm.set_named_chat_settings("legacy", {"mode": "game"})
         assert sm.set_named_chat_settings("legacy", {"private_chat": False})
 
 
