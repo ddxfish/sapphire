@@ -11,6 +11,7 @@ import * as ui from '/static/ui.js';
 
 let room = null;   // ./room.js, loaded with boot-version (same policy as views)
 let storyRoom = null;   // ./story-room.js — lazy, only when a story tile opens
+let _vaultOpen = false; // refreshed by renderLibrary; gates the 🗝 Private buttons
 let _root = null;
 let _cssLink = null;
 let _games = [];
@@ -96,6 +97,14 @@ async function renderLibrary() {
         console.warn('[GameRoom] games registry fetch failed', e);
     }
     try { _sessions = await room.listSessions(); } catch (e) { _sessions = []; }
+    // Play Private is offered only while the vault is OPEN — closed or
+    // absent, the library looks exactly like pre-v1.3 (the second universe
+    // only exists once the door's unlocked).
+    _vaultOpen = false;
+    try {
+        const st = await (await fetch('/api/status')).json();
+        _vaultOpen = !!(st?.vault?.exists && st?.vault?.unlocked);
+    } catch { /* no status = no private button, fail quiet */ }
     try {
         const res = await fetch('/api/plugin/game-room/room/config', { headers: { 'X-CSRF-Token': csrfTok() } });
         if (res.ok) roomCfg = (await res.json()).config || {};
@@ -256,6 +265,7 @@ function paintShelf() {
           <div class="gr-card-side">
             <div class="gr-card-btns">
               <button class="pk-btn pk-btn-primary gr-play">Play</button>
+              ${_vaultOpen ? `<button class="pk-btn gr-play-priv" title="New PRIVATE playthrough — sealed and hidden whenever the vault locks">\u{1F5DD} Private</button>` : ''}
               <button class="pk-btn gr-card-story-gear" data-story="${esc(s.slug)}" title="${esc(s.title || s.slug)} — GM settings">&#x2699;&#xFE0E;</button>
               <button class="pk-btn gr-card-more-btn" title="Details">&#x25BE;</button>
             </div>
@@ -284,6 +294,7 @@ function paintShelf() {
           <div class="gr-card-side">
             <div class="gr-card-btns">
               <button class="pk-btn pk-btn-primary gr-play">Play</button>
+              ${_vaultOpen ? `<button class="pk-btn gr-play-priv" title="New PRIVATE session — sealed and hidden whenever the vault locks">\u{1F5DD} Private</button>` : ''}
               <button class="pk-btn gr-card-gear" data-game="${esc(g.id)}" title="${esc(g.title || g.id)} settings">&#x2699;&#xFE0E;</button>
               <button class="pk-btn gr-card-more-btn" title="Details">&#x25BE;</button>
             </div>
@@ -311,6 +322,28 @@ function paintShelf() {
             e.stopPropagation();
             const mod = await import(`./settings-modal.js?v=${bootV()}`);
             mod.openStorySettings(btn.dataset.story);
+        });
+    });
+    shelf.querySelectorAll('.gr-play-priv').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();   // the card click underneath opens PUBLIC
+            const card = btn.closest('.gr-card');
+            btn.disabled = true;
+            try {
+                if (card?.dataset.story) {
+                    const s = _stories.find(x => x.slug === card.dataset.story);
+                    if (s) await openStory(s, { priv: true });
+                    return;
+                }
+                const g = _roomGames.find(x => x.id === card?.dataset.game);
+                if (!g) return;
+                const session = await room.createPrivateSession(g.id, g.id);
+                await room.openRoom(_root, g, session, { back: renderLibrary, games: _roomGames });
+            } catch (e2) {
+                console.error('[GameRoom] private session failed', e2);
+                ui.showToast(e2.message, 'error');
+                btn.disabled = false;
+            }
         });
     });
     shelf.querySelectorAll('.gr-card-more-btn').forEach(btn => {
@@ -344,9 +377,14 @@ function paintShelf() {
 // Story tile → playthrough chat (mode-tagged story:<slug>) → the story room:
 // the real chat rail transplanted into a story frame (Plan B,
 // tmp/story-primitive-plan.md). The 📖 chat accordion stays the escape hatch.
-async function openStory(st) {
+async function openStory(st, opts) {
     try {
-        const session = await room.ensureSession('story:' + st.slug, st.slug);
+        // priv: a NEW playthrough born private (Play Private) — resume
+        // stays on ensureSession, which naturally finds private ones too
+        // while the vault is open (they're just visible chats then).
+        const session = opts?.priv
+            ? await room.createPrivateSession('story:' + st.slug, st.slug)
+            : await room.ensureSession('story:' + st.slug, st.slug);
         if (!storyRoom) storyRoom = await import(`./story-room.js?v=${bootV()}`);
         await storyRoom.openStoryRoom(_root, st, session, { back: renderLibrary, stories: _stories });
     } catch (e) {

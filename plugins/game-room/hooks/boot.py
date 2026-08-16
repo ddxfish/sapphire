@@ -18,12 +18,36 @@ logger = logging.getLogger(__name__)
 
 
 def plugins_ready(event):
-    try:
+    # v1.3: costumes live in the chat DB, reached through get_system() —
+    # which isn't servable yet at plugins_ready (fires at scan end, before
+    # the system finishes init). The file-era code could merge here; the
+    # DB era must WAIT for the system, so the re-merge runs in a short
+    # retry thread. Live-caught 2026-08-15 ('503: System not initialized'
+    # at every boot — active story costumes silently unregistered).
+    import threading
+    import time
+
+    def _merge_when_ready():
         from gameroom_story import session
-        session._restore_pack()
+        for _ in range(30):          # up to ~60s, then give up loudly
+            try:
+                from core.api_fastapi import get_system
+                if get_system() is not None:
+                    session._restore_pack()
+                    logger.info("[STORY] boot costume re-merge done")
+                    return
+            except Exception:
+                pass
+            time.sleep(2)
+        logger.warning("[STORY] boot pack re-merge never ran (system not "
+                       "ready in 60s) — active story prompts won't resolve "
+                       "until a story action runs")
+
+    try:
+        threading.Thread(target=_merge_when_ready, daemon=True,
+                         name="gameroom-boot-remerge").start()
     except Exception as e:
-        logger.warning(f"[STORY] boot pack re-merge failed: {e} — active story "
-                       f"prompts won't resolve until a story action runs")
+        logger.warning(f"[STORY] boot pack re-merge failed to start: {e}")
     # v1.3 no-migration ruling (2026-08-15): playthroughs live in the chat
     # DB now. Old file saves are never read — one boot notice so leftovers
     # don't rot silently.

@@ -21,6 +21,7 @@ import { refresh } from '/static/core/state.js';
 import { updateScene, updateSendButtonLLM } from '/static/features/scene.js';
 import { applyTrimColor } from '/static/features/chat-settings.js';
 import { populateChatDropdown } from '/static/features/chat-manager.js';
+import * as eventBus from '/static/core/event-bus.js';
 
 const PLUGIN_API = '/api/plugin/game-room/';
 const VOICE_KEY = 'gameroom_voice';
@@ -117,6 +118,74 @@ export async function ensureSession(tagId, baseName) {
 
 export const latestOrNewSession = (game) => ensureSession(game.id, game.id);
 
+// Play Private (v1.3.1, Krem's ruling 2026-08-15): a NEW session born
+// private — never flips an existing one (that stays Chat Manager's job).
+// Order matters: mode stamp first (route reads it), then the private flip
+// (encrypts the empty chat + registers it with the vault). A failed flip
+// deletes the just-made chat — no public stragglers wearing a game tag.
+export async function createPrivateSession(tagId, baseName) {
+    for (let n = 1; n <= 20; n++) {
+        const nm = sanitizeName(n === 1 ? `${baseName}_private` : `${baseName}_private_${n}`);
+        try {
+            await coreApi.createChat(nm);
+        } catch (e) {
+            if (String(e.message).includes('already exists')) continue;
+            throw e;
+        }
+        try {
+            await coreApi.updateChatSettings(nm, { mode: 'game', game_id: tagId });
+            await coreApi.updateChatSettings(nm, { private_chat: true });
+            return nm;
+        } catch (e) {
+            try { await coreApi.deleteChat(nm); } catch { /* best effort */ }
+            throw new Error(`Couldn't make the session private: ${e.message}`);
+        }
+    }
+    throw new Error('Could not find a free session name');
+}
+
+// Vault watch: when the vault locks while a PRIVATE session is open, the
+// server evicts its chat — the room must follow instead of showing a
+// sealed chat's board. One module-level bind; _session guards liveness.
+let _vaultWatchBound = false;
+export function bindVaultWatch() {
+    if (_vaultWatchBound) return;
+    _vaultWatchBound = true;
+    eventBus.on(eventBus.Events.PROMPT_CHANGED, async (d) => {
+        if (d?.action !== 'vault_changed' || !_session) return;
+        try {
+            const list = await listSessions();
+            if (!list.some(c => c.name === _session)) {
+                const back = _back;
+                ui.showToast('Vault locked — this private session is sealed until you unlock', 'info');
+                close();
+                if (back) back();
+            }
+        } catch { /* listing failed — leave the room alone */ }
+    });
+    // SSE reconnect: the server may have REBOOTED onto 'default' (the
+    // active marker never holds a mode/private name), and main.js's
+    // reconnect resync then paints THAT chat into our borrowed rail while
+    // the room frame stays mounted (Krem live-hit 2026-08-15). Re-assert
+    // the session after the resync storm settles; if it's gone (sealed
+    // private session), bounce to the library like the vault watch.
+    eventBus.on(eventBus.Events.BUS_CONNECTED, () => {
+        if (!_session) return;
+        const sess = _session;
+        setTimeout(async () => {
+            if (_session !== sess) return;
+            try {
+                await activateSession(sess);
+            } catch {
+                const back = _back;
+                ui.showToast('Session unavailable after restart — back to the library', 'info');
+                close();
+                if (back) back();
+            }
+        }, 800);
+    });
+}
+
 // Activate a session chat + repaint core (rail/scene/trim/picker) — the same
 // post-activate sequence openRoom runs, exported for the library's story tiles.
 export async function activateSession(name) {
@@ -163,6 +232,7 @@ export async function openRoom(root, gameMeta, sessionName, opts) {
     const act = await coreApi.activateChat(sessionName);
     _chatSettings = act?.settings || {};
     syncCore(sessionName, _chatSettings);
+    bindVaultWatch();
 
     const v = document.querySelector('meta[name="boot-version"]')?.content || '';
     const [mod, status] = await Promise.all([
@@ -246,7 +316,7 @@ function skeleton() {
                 <button type="button" id="gr-back" class="sb-icon-btn" title="Game library">🎲</button>
                 <div class="sb-chat-picker" id="gr-session-picker">
                     <button class="sb-chat-picker-btn" id="gr-session-btn">
-                        <span id="gr-session-name">${esc(_session)}</span>
+                        <span id="gr-session-name">${_chatSettings.private_chat ? '\u{1F5DD} ' : ''}${esc(_session)}</span>
                         <span class="sb-chat-arrow">&#x25BE;</span>
                     </button>
                     <div class="sb-chat-picker-dropdown" id="gr-session-dropdown"></div>

@@ -692,8 +692,11 @@ function initEventBus() {
         if (data?.key === 'chat_prompt_fallback') {
             if (Date.now() - lastFallbackToast > 60000) {
                 lastFallbackToast = Date.now();
+                // Self-healing condition (setting kept; heals when the
+                // prompt re-registers — unlock, boot re-merge, room entry).
+                // A notice, not a red alert (Krem's ruling 2026-08-15).
                 const missing = (data?.reason || '').replace(/^missing:/, '');
-                ui.showToast(`Prompt '${missing}' unavailable (vault locked or deleted) — running on the default prompt`, 'error');
+                ui.showToast(`Prompt '${missing}' isn't available right now (vault locked, or re-registering after a restart) — using the default prompt this turn`, 'info');
             }
             debouncedUpdateScene();
             return;

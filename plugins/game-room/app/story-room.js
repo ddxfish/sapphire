@@ -54,6 +54,45 @@ busOn(BusEvents.TOOL_EXECUTING, (d) => {
     setTimeout(() => { if (_tickNow === t) _tickNow(); }, 1200);
 });
 
+// Vault watch (v1.3.1, room.js twin): the vault locking while a PRIVATE
+// playthrough is open evicts its chat server-side — the story room must
+// follow instead of showing a sealed tale. Registered once at module load;
+// _session guards liveness like every other module-level listener here.
+busOn(BusEvents.PROMPT_CHANGED, async (d) => {
+    if (d?.action !== 'vault_changed' || !_session) return;
+    try {
+        const list = await room.listSessions();
+        if (!list.some(c => c.name === _session)) {
+            const back = _back;
+            ui.showToast('Vault locked — this private playthrough is sealed until you unlock', 'info');
+            close();
+            if (back) back();
+        }
+    } catch { /* listing failed — leave the room alone */ }
+});
+
+// SSE reconnect twin (see room.js): server reboot lands active on
+// 'default'; main.js's resync paints that into the transplanted rail under
+// the story frame. Re-assert the playthrough after the storm settles —
+// activateSession repaints the rail, story/reassert re-dresses the costume
+// (boot re-merge covers visible chats, but re-assert is the resume law).
+busOn(BusEvents.BUS_CONNECTED, () => {
+    if (!_session) return;
+    const sess = _session;
+    setTimeout(async () => {
+        if (_session !== sess) return;
+        try {
+            await room.activateSession(sess);
+            await api('story/reassert', 'POST').catch(() => {});
+        } catch {
+            const back = _back;
+            ui.showToast('Playthrough unavailable after restart — back to the library', 'info');
+            close();
+            if (back) back();
+        }
+    }, 800);
+});
+
 function csrf() {
     const m = document.querySelector('meta[name="csrf-token"]');
     return (m && m.content) || '';
@@ -219,7 +258,7 @@ function skeleton() {
         mainPane: `
             <div class="gr-stage-bar">
                 <button type="button" id="st-back" class="sb-icon-btn" title="Back to Game Room">&#x2190;</button>
-                <span class="gr-stage-title">&#x1F4D6; ${esc(_story.title || _story.slug)}</span>
+                <span class="gr-stage-title">&#x1F4D6; ${_chatSettings.private_chat ? '\u{1F5DD} ' : ''}${esc(_story.title || _story.slug)}</span>
                 <span class="gr-stage-info" id="st-stage-info"></span>
             </div>
             <div class="st-stage" id="st-stage">
