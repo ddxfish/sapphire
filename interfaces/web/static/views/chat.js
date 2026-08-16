@@ -247,6 +247,10 @@ export default {
                     await import('../shared/vault-api.js');
                 const { keyPrompt } = await import('../shared/key-prompt.js');
                 const v = await vaultStatus();
+                if (!v) {
+                    ui.showToast("Sapphire isn't reachable right now — vault state unknown", 'error');
+                    return;
+                }
                 if (!v.exists) {
                     const res = await keyPrompt({
                         title: 'Set up your vault',

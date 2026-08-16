@@ -124,9 +124,10 @@ async function refresh() {
     try {
         // Vault state rides along: the 🗝 toggle is offered only while the
         // vault is open (or absent — the pre-vault v1 flag). vaultStatus()
-        // never throws (self-caught, returns closed-looking state).
+        // never throws; null = server unreachable → treat as closed-looking
+        // (exists+locked) so the toggle is WITHHELD, not offered blind.
         const [data, v] = await Promise.all([api.fetchChatListStats(), vaultStatus()]);
-        vaultState = v;
+        vaultState = v || { exists: true, unlocked: false };
         // mode 'limbo' = the backrooms (the vault's hidden eviction landing).
         // Invisible even here, by ruling — the one chat the admin surface
         // doesn't list (Krem 2026-08-15: "lame AF for people to see").
@@ -428,8 +429,8 @@ function closeModal() {
 async function ensureVaultOpenFor(chat, verb) {
     if (!chat?.private_chat) return true;
     try {
-        const v = await vaultStatus();
-        if (v.exists && !v.unlocked) {
+        const v = await vaultStatus();   // null (unreachable) → server is the gate
+        if (v && v.exists && !v.unlocked) {
             ui.showToast(`The vault locked while this dialog was open — unlock it to ${verb} this chat`, 'error');
             closeModal();
             return false;

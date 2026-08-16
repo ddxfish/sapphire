@@ -21,11 +21,14 @@ export const vaultRekey = (current, newKey) => post('/api/vault/rekey', { curren
 export const vaultMove = (payload) => post('/api/vault/move', payload);
 
 // Authoritative state off the standing /api/status channel.
+// null = server UNREACHABLE — never conflate that with "no vault exists"
+// (a dead server once made the eyeball offer vault SETUP; the backend's
+// 409 held, but the dialog itself was a lie — Krem, flow 3, 2026-08-16).
 export async function vaultStatus() {
     try {
         const s = await fetchWithTimeout('/api/status');
         return s?.vault || { exists: false, unlocked: false };
     } catch {
-        return { exists: false, unlocked: false };
+        return null;
     }
 }
