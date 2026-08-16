@@ -31,6 +31,16 @@ If reload fails, the plugin stays unloaded. No half-loaded state.
 
 A buggy plugin never crashes the system. If a hook handler throws an exception, it's logged and skipped — the next handler fires normally. Tool execution errors are caught and returned as error messages to the AI.
 
+## Chat Lifecycle
+
+Plugin data can also be scoped to a *chat* instead of the plugin. Rows written
+through `plugin_loader.get_chat_state(name)` live in the chat database, and core
+owns their whole life: carried across a rename, encrypted when the chat goes
+private, deleted with the chat (public and private alike, inside the delete
+transaction). Plugins no longer register `chat_renamed` / `chat_deleted` to
+shepherd that data — those hooks are for chat-keyed things kept elsewhere.
+See [Chat-Scoped State](tools.md#chat-scoped-state).
+
 ## API Reference
 
 | Method | Endpoint | Description |

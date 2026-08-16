@@ -773,5 +773,58 @@ class TestIntegration:
         ), "enabled_tools should be a property"
 
 
+class TestPrivateUnflaggedToggle:
+    """PRIVATE_ALLOW_UNFLAGGED_TOOLS (Settings > Privacy, 2026-08-15):
+    plugins that predate the per-tool is_local flag were blocked wholesale
+    in private chats (fail-closed). The opt-in treats a MISSING flag as
+    local; tools that explicitly declare non-local stay blocked either way."""
+
+    def _gate(self, is_local_map):
+        from core.chat.function_manager import FunctionManager
+        mgr = FunctionManager.__new__(FunctionManager)
+        mgr._is_local_map = is_local_map
+        return mgr
+
+    def _check(self, is_local_map, name, toggle, monkeypatch):
+        import config
+        from core.chat import function_manager as fm
+        monkeypatch.setattr(config, 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', toggle,
+                            raising=False)
+        tok = fm.scope_private.set(True)
+        try:
+            return self._gate(is_local_map)._check_privacy_allowed(name)
+        finally:
+            fm.scope_private.reset(tok)
+
+    def test_unflagged_blocked_by_default(self, monkeypatch):
+        ok, msg = self._check({}, 'mystery_tool', False, monkeypatch)
+        assert not ok
+        assert 'no locality flag' in msg
+        assert 'Settings > Privacy' in msg   # the hint that the toggle exists
+
+    def test_unflagged_allowed_with_toggle(self, monkeypatch):
+        ok, msg = self._check({}, 'mystery_tool', True, monkeypatch)
+        assert ok and msg is None
+
+    def test_declared_nonlocal_blocked_despite_toggle(self, monkeypatch):
+        ok, _ = self._check({'web_tool': False}, 'web_tool', True, monkeypatch)
+        assert not ok
+        ok, _ = self._check({'ep_tool': 'endpoint'}, 'ep_tool', True, monkeypatch)
+        assert not ok
+
+    def test_declared_local_allowed_regardless(self, monkeypatch):
+        ok, _ = self._check({'local_tool': True}, 'local_tool', False, monkeypatch)
+        assert ok
+
+    def test_public_chat_never_gated(self, monkeypatch):
+        import config
+        from core.chat import function_manager as fm
+        monkeypatch.setattr(config, 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', False,
+                            raising=False)
+        assert fm.scope_private.get() is False
+        ok, _ = self._gate({})._check_privacy_allowed('mystery_tool')
+        assert ok
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

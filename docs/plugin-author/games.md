@@ -116,6 +116,8 @@ SETTINGS = [
 
 Types: `text` (+`rows`), `string`, `number`, `range` (+`min`/`max`/`step`). `tab` groups fields.
 
+Saved values are stored per *game*, plugin-wide — a player's house rules carry across every session. They are not chat-scoped and not encrypted with a private chat, so keep conversation content out of them.
+
 ## The board module (`entry_js`)
 
 Loaded fresh on every room entry as an ES module from `/plugin-web/<your-plugin>/<entry_js>`. Two shapes:
@@ -132,7 +134,9 @@ const defs = await fetch(`${base}/defs.json`).then(r => r.json());
 
 ## Sessions, saves, and silent verbs
 
-- **Sessions are chats** — the chat IS the save. The host keys state per `(game, session)` in its own store; your plugin never touches disk for state. Saves survive your plugin moving or renaming — but never survive changing the game `id`, so don't.
+- **Sessions are chats** — the chat IS the save, literally: the host writes your engine's state as a row *on the session chat* (core's chat-scoped store, key `game:<id>`), so your plugin never touches disk for state. Keep state JSON-serializable; it round-trips through JSON on every save.
+- **Saves follow the chat** — renamed with it, encrypted with it if it goes private, deleted with it. They survive your plugin moving or being renamed, but never survive changing the game `id`, so don't.
+- **Private sessions are allowed.** Mark a session chat private (🗝) and its save seals with the chat. While the vault is locked that chat is hidden: the host reads no state and refuses to write (loudly — never a silent drop), and her seat fails closed rather than playing on a fallback provider. Unlock and the table is exactly where you left it.
 - Player actions POST through the host's `play/{game}/act`. Actions prefixed `_` are **silent system verbs** (checkpoints, state syncs from real-time games): no talk line, no AI turn.
 - Real-time games checkpoint at natural boundaries (wave end, hand end) via a silent verb; keep snapshots small (the tower defense engine caps at 60KB).
 

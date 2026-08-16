@@ -61,8 +61,8 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. API k
 |--------|----------|---------|
 | GET | `/api/chats` | List all chats |
 | POST | `/api/chats` | Create new chat |
-| POST | `/api/chats/private` | Create private chat |
-| DELETE | `/api/chats/{name}` | Delete chat |
+| GET | `/api/chats/search` | Search chat content (private chats excluded while the vault is sealed) |
+| DELETE | `/api/chats/{name}` | Delete chat (also deletes its plugin/playthrough data) |
 | POST | `/api/chats/{name}/activate` | Switch active chat |
 | GET | `/api/chats/active` | Get active chat name |
 | GET | `/api/chats/{name}/settings` | Get chat settings |
@@ -164,13 +164,19 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. API k
 | GET | `/api/embedding/reembed/status` | Re-embed progress |
 | POST | `/api/embedding/reembed/cancel` | Cancel an in-progress re-embed |
 
-### Privacy
+### Privacy Vault
+
+Vault state (`{exists, unlocked}`) rides the top-level `vault` key on `GET /api/status`. Wrong passphrase returns **403**, never 401. See [PRIVACY.md](PRIVACY.md).
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/privacy` | Get privacy mode status |
-| PUT | `/api/privacy` | Toggle privacy mode |
-| PUT | `/api/privacy/start-mode` | Set privacy mode default at startup |
+| POST | `/api/vault/setup` | Create the vault and unlock it (409 if one exists) |
+| POST | `/api/vault/unlock` | Unlock with the passphrase (idempotent) |
+| POST | `/api/vault/lock` | Lock now — synchronous; evicts a private active chat first |
+| POST | `/api/vault/rekey` | Change the passphrase (needs the current one; lock state preserved) |
+| POST | `/api/vault/move` | Move a prompt or piece in/out of the vault |
+
+Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. Membership changes need the vault unlocked (403 otherwise); while sealed, private chats answer as nonexistent on every by-name route.
 
 ### System Prompt
 
@@ -423,11 +429,12 @@ CSRF tokens are required for browser sessions on POST/PUT/DELETE requests. API k
 | DELETE | `/api/webui/plugins/{name}/settings` | Reset plugin settings |
 | GET | `/api/webui/plugins/config` | Get plugin config metadata |
 
-### Apps & Themes
+### Apps, Games & Themes
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
 | GET | `/api/apps` | List plugin apps (plugins with an app/ directory) |
+| GET | `/api/games` | List games registered via `capabilities.games` (empty unless game plugins are enabled) |
 | GET | `/api/themes` | List all themes (core + plugin manifest themes) |
 
 ### Home Assistant Plugin

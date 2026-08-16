@@ -1,16 +1,21 @@
 # Spice
 
-Spice prevents stories from going stale and helps avoid loops or repetitive formatting. Spices are random prompt snippets delivered to the AI as a per-turn operator-metadata note, changing each round (or however often you set). This keeps conversations fresh and unpredictable.
+Spice prevents stories from going stale and helps avoid loops or repetitive formatting. Spices are random prompt snippets delivered to the AI each turn — as a note beside your message, or woven into the system prompt — changing each round (or however often you set). This keeps conversations fresh and unpredictable.
 
 ## How It Works
 
 1. Create spices in categories via the Spice Manager
 2. Enable/disable categories with checkboxes (applies globally)
 3. Enable spice for a chat in Chat Settings
-4. Each message, one random snippet rides on the **ghost-message rail** — a labeled note inserted just before your input, visible to the AI but not to you
+4. Each message, one random snippet reaches the AI — by default on the **ghost-message rail**, a labeled note inserted just before your input, visible to the AI but not to you
 5. Rotates every X messages based on your settings
 
-**Why the ghost rail?** Pre-2.6.4 spice was injected into the system prompt every turn. That broke prompt caching on Claude (any system-prompt change invalidates the cache). Now spice lives outside the cached prefix — it's free on the cache budget, and it lands closer to the moment of generation, so models actually weight it more (recency effect). Stronger spice compliance, no caching cost.
+**Two ways to deliver it.** Settings → LLM → General → **Spice Delivery** picks the rail. It applies immediately, no restart:
+
+- **Ghost message** (default) — the snippet rides a labeled per-turn note (`Spice: ...`) just before your input. The system prompt never changes, so prompt caching on cloud models stays intact, and the line lands right before generation where models weight it most (recency effect). Trade-off: the note is labeled as coming from Sapphire's own app, so the AI knows it was injected and may say so out loud.
+- **System prompt** — the snippet is appended to the system prompt unattributed, so the AI wears it as its own inclination instead of an instruction handed to it. Feels the most natural. Trade-off: the prompt changes on every rotation, which re-tokenizes the cached prefix on cache-billed cloud models (free on local models).
+
+Rule of thumb: cloud model with long chats → ghost message. Local model, or you want the spice to feel self-chosen → system prompt. Rotation, categories, and the per-chat toggle work the same either way.
 
 <img width="50%" alt="sapphire-spices" src="https://github.com/user-attachments/assets/f5563bed-7c5d-490a-9d18-c7f87339d9ef" />
 
@@ -71,10 +76,11 @@ QUICK ACCESS:
 - Click: toggle spice for this chat
 
 HOW IT WORKS:
-- One random snippet rides on the ghost-message rail per interval (since 2.6.4)
-- Only enabled categories contribute to pool
+- One random snippet per interval; only enabled categories contribute to pool
+- Delivery picked by SPICE_DELIVERY (Settings > LLM > General, hot-reload, default 'ghost'):
+  - 'ghost' — rides the ghost-message rail as a labeled line (since 2.6.4); system prompt stays cached
+  - 'system' — appended to the system prompt unattributed; prompt changes each rotation, so cache-billed cloud models re-tokenize (free on local models)
 - Stored in user/prompts/prompt_spices.json
-- Cache-friendly — spice does NOT invalidate Claude prompt caching (lives outside the cached prefix)
 
 GOOD SPICES:
 - "Something unexpected happens" (vague, fits any scene)

@@ -1164,8 +1164,9 @@ class LLMChat:
                     _priv_required = _prompts.is_current_prompt_private()
                 if _priv_required and not chat_settings.get('private_chat', False):
                     raise ConnectionError(
-                        "This prompt is marked private — toggle the eyeball "
-                        "(private chat) on this chat to use it.")
+                        "This prompt is marked private — unlock the vault and "
+                        "send a message (talking marks the chat private), or "
+                        "use Chat Manager's \U0001F5DD on it first.")
             except ConnectionError:
                 raise
             except Exception as e:

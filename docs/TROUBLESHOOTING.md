@@ -95,6 +95,34 @@
 - Settings > System tab
 - You can reset all prompts to default, or merge the defaults back into yours
 
+## Vault / private chat issues
+
+**A chat vanished from the dropdown**
+- The vault locked (idle timeout, or someone clicked the eyeball). Private chats are hidden while sealed — that's the design, nothing is lost.
+- Click the 👁 eyeball and unlock. Everything comes back.
+- Raise the timeout in Settings > Privacy (`VAULT_IDLE_MINUTES`, default 30).
+
+**A chat became private and I didn't ask for it**
+- Talking in a chat while the vault is unlocked marks it private. Lock the vault when you don't want that.
+- To release one: Chat Manager > its row > 🔓. It decrypts back to normal storage.
+
+**"Provider is not marked local/private-safe"**
+- The chat is private, so only providers ticked *Local / private server* are allowed.
+- Either pick a local provider, or release the chat in Chat Manager.
+- Same rule applies to compressing a private chat, and to cloud STT/TTS (voice goes quiet with a notice instead of speaking).
+
+**Export or compress fails on a private chat**
+- Bulk export and export-zip skip private chats on purpose. Use the row's ⬇️ to export one at a time.
+- Both need the vault unlocked. If it locked while the dialog was open, unlock and retry.
+
+**Forgot the vault passphrase**
+- There is no recovery. The key is derived from the passphrase alone.
+- Restore `user/prompts/prompt_vault.enc` **and** `user/history/sapphire_history.db` together from a backup taken when you still knew it.
+
+**"Vault file was corrupt — quarantined"**
+- The bad file is renamed `prompt_vault.enc.bad-<timestamp>` beside itself, never deleted.
+- Restore the vault file from a backup, paired with the chat database from the same backup.
+
 ## LLM issues
 **LM Studio (simple) test failing**
 - Open LM studio, click Developer in lower left to show advanced options, click green Developer tab, toggle server on, load a model

@@ -240,6 +240,41 @@ class TestSealedContract:
             sm.plugin_data_put(PLUGIN, "pub", "save", 1)
 
 
+class TestCrossChatRead:
+    """get_all_chats/meta are what the story costume + active-map listing
+    ride — the hidden filter HERE is the structural replacement for the old
+    P3-T16 manual sealed filter. If this leaks, a locked chat's costume
+    name surfaces in the global prompt list."""
+
+    def test_get_all_chats_omits_hidden(self, sm, monkeypatch):
+        _key_on(monkeypatch)
+        _seal(monkeypatch, False)
+        sm.create_chat("other")
+        sm.plugin_data_put(PLUGIN, "pub", "story:active", {"story": "a"})
+        sm.plugin_data_put(PLUGIN, "other", "story:active", {"story": "b"})
+        assert sm.plugin_data_get_all_chats(PLUGIN, "story:active") == {
+            "pub": {"story": "a"}, "other": {"story": "b"}}
+        assert sm.vault_chat("pub")[0]
+        _key_off(monkeypatch)
+        _seal(monkeypatch, True)
+        # Sealed world: the vaulted chat's entry is GONE, not erroring —
+        # and the public chat's entry still reads.
+        assert sm.plugin_data_get_all_chats(PLUGIN, "story:active") == {
+            "other": {"story": "b"}}
+
+    def test_meta_hidden_is_none(self, sm, monkeypatch):
+        _key_on(monkeypatch)
+        _seal(monkeypatch, False)
+        sm.plugin_data_append(PLUGIN, "pub", "journal", {"e": "a"})
+        m = sm.plugin_data_meta(PLUGIN, "pub", "journal")
+        assert m and m["rows"] == 1 and m["updated_at"]
+        assert sm.plugin_data_meta(PLUGIN, "pub", "nothere") is None
+        assert sm.vault_chat("pub")[0]
+        _key_off(monkeypatch)
+        _seal(monkeypatch, True)
+        assert sm.plugin_data_meta(PLUGIN, "pub", "journal") is None
+
+
 class TestLoaderVeneer:
     def test_bound_roundtrip(self, sm, monkeypatch):
         _open(monkeypatch)

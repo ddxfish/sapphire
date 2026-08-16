@@ -1214,16 +1214,10 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
             from core.settings_manager import settings as sm_settings
             if sm_settings.is_managed():
                 raise HTTPException(status_code=403, detail="Private chats are disabled in managed mode")
-            # Ruling F1 (P3): game/story chats keep plaintext sidecars
-            # (journal, saves) outside the vault — refuse with the honest
-            # reason instead of the store's generic False. Lifts in v1.3.
-            _cur0 = session_manager.read_chat_settings(chat_name) or {}
-            if new_settings.get('mode', _cur0.get('mode')) \
-                    and not _cur0.get('private_chat'):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Game and story chats can't be private yet — their "
-                           "saves live outside the vault. Coming in a later version.")
+            # Ruling F1 refusal LIFTED (v1.3, 2026-08-15): game/story saves
+            # live in plugin_chat_data now and seal with the chat — mode
+            # chats flip private like any other (route caught late in the
+            # lift; the two store chokepoints dropped theirs same day).
 
         if 'private_chat' in new_settings:
             # Vaulted chats Phase 1: vault MEMBERSHIP changes need the vault

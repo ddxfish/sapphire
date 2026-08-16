@@ -155,7 +155,8 @@ Set scopes in **Chat Settings → Mind Scopes** (or they come bundled with a per
 | **Telegram** | Telegram account | No |
 | **Discord** | Discord account | No |
 | **RAG** | Per-chat documents | No (strict) |
-| **Private** | No memory writes | N/A (boolean) |
+
+**Private chats** aren't a scope dropdown — a chat becomes private when you talk in it with the vault unlocked, which locks it to local models and local tools and encrypts it on disk. See [PRIVACY.md](PRIVACY.md).
 
 **How global overlay works:** Memory, goals, knowledge, and people scopes see their own data AND anything in the "global" scope. So shared info (your name, your preferences) lives in global and every scope sees it, while specialized data stays isolated.
 
@@ -327,7 +328,7 @@ SCOPES (11 types):
 - memory, goal, knowledge, people: global overlay (sees own + global)
 - email, bitcoin, gcal, telegram, discord: no overlay (strict per-scope)
 - rag: strict per-chat isolation
-- private: boolean (no memory writes)
+- private: boolean — private chat (local models + local tools only); not a dropdown, see docs/PRIVACY.md
 - Set per-chat in Chat Settings → Mind Scopes
 - "none" disables a system for that chat
 - Create new scopes with + button

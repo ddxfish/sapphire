@@ -1272,10 +1272,18 @@ class FunctionManager:
         if is_local is True:
             return True, None
 
-        # No flag = assume non-local for safety
+        # No flag = assume non-local for safety — unless the user opted in
+        # (Settings > Privacy). The opt-out covers ONLY unflagged tools:
+        # a tool that DECLARES is_local False/"endpoint" stays blocked, or
+        # "private" stops meaning anything. ALLOW_UNSIGNED_PLUGINS pattern —
+        # safe default, sovereign override (Krem's ruling 2026-08-15).
         if is_local is None:
+            if getattr(config, 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', False):
+                return True, None
             logger.warning(f"Tool '{function_name}' has no is_local flag, blocking in private chat")
-            return False, f"Tool '{function_name}' is blocked in this private chat (no locality flag)."
+            return False, (f"Tool '{function_name}' is blocked in this private chat "
+                           f"(no locality flag). If this plugin only talks to local "
+                           f"hardware, Settings > Privacy can allow unflagged tools.")
 
         # False, "endpoint", or anything else — network access, blocked
         return False, f"Tool '{function_name}' requires network access and is blocked in this private chat. Inform the user."

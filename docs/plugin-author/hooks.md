@@ -22,6 +22,17 @@ All hooks receive a mutable `HookEvent`. Changes persist across handlers in prio
 | `tts_stream_end` | Streaming TTS: turn ends | — | Finalize captions/recording |
 | `on_wake` | Wakeword detected | — | Play sounds, log, custom reactions |
 | `provider_switched` | After a TTS/STT/embed provider hot-swap | metadata `kind`, `provider` | Warm caches / reset state (observational) |
+| `chat_renamed` | After a chat rename succeeds | metadata `old`, `new` | Re-key chat-keyed data your plugin holds *outside* the chat-scoped store |
+| `chat_deleted` | After a chat delete succeeds (every path) | metadata `name` | Drop chat-keyed data your plugin holds *outside* the chat-scoped store |
+| `chat_vaulted` | After a chat is encrypted into the vault | metadata `name` | Scrub plaintext deposits keyed by that name. **`privacy_aware` plugins only — see [Private chats](#private-chats--privacy_aware)** |
+| `plugins_ready` | Once per plugin scan, after every enabled plugin registered | metadata `loaded`, `reason` | Boot work that needs other plugins present |
+
+Data kept in the [chat-scoped store](tools.md#chat-scoped-state) needs neither
+rename nor delete handling — core carries those rows through the rename and
+drops them inside the delete transaction. Reach for `chat_renamed` /
+`chat_deleted` only for chat-keyed things that live somewhere else: files,
+your own database, an external service. (The Game Room used to carry its
+playthroughs by hand this way; it doesn't any more.)
 
 ### Manifest Declaration
 
@@ -64,7 +75,11 @@ class HookEvent:
     result: Optional[str] = None             # Tool result (post_execute)
     tts_text: Optional[str] = None           # TTS text (mutable in pre_tts)
     skip_tts: bool = False                   # Cancel TTS
+    chat_name: Optional[str] = None          # This turn's chat (runner-stamped)
+    chat_private: Optional[bool] = None      # True = private chat (runner-stamped)
 ```
+
+`chat_name` / `chat_private` are stamped by the runner, not by you — read them, don't set them. See [Private chats](#private-chats--privacy_aware).
 
 ---
 
@@ -92,6 +107,10 @@ Handlers get the `VoiceChatSystem` instance via `event.metadata.get("system")`. 
 | `tts_stream_end` | **Yes** | Yes | None (observational) |
 | `on_wake` | No | Yes | None (notification only) |
 | `provider_switched` | No | No | None (observational; metadata `kind`, `provider`) |
+| `chat_renamed` | No | No | None (observational; metadata `old`, `new`) |
+| `chat_deleted` | No | No | None (observational; metadata `name`) |
+| `chat_vaulted` | No | No | None (observational; metadata `name`) |
+| `plugins_ready` | No | No | None (observational; metadata `loaded`, `reason`) |
 
 ### What System Access Gives You
 
@@ -119,6 +138,79 @@ def pre_chat(event):
         return
     if hasattr(system, "tts") and system.tts:
         system.tts.set_voice("af_sky")
+```
+
+---
+
+## Private chats & `privacy_aware`
+
+A chat can be marked private (the 👁 toggle; with the prompt vault set up, its
+history is also encrypted at rest). On a turn in a private chat, the hook runner
+**withholds every hook from plugins that haven't declared themselves
+privacy-aware**. Your handler simply isn't called — the skip is logged at debug
+level and nothing else happens. Core withholds by default because a plugin with
+no privacy signal might persist or transmit content the user just locked up.
+
+Declare it **top-level in `plugin.json`** (next to `name`, not inside `capabilities`):
+
+```json
+{
+  "name": "my-plugin",
+  "privacy_aware": true,
+  "capabilities": {
+    "hooks": { "post_chat": "hooks/log.py" }
+  }
+}
+```
+
+**Rules the runner follows:**
+
+- Privacy is resolved **once per fire**. The event arrives at your handler with
+  `chat_name` and `chat_private` already stamped.
+- **Fail-closed**: if privacy can't be resolved (resolver error), the turn is
+  treated as private and non-aware plugins are withheld.
+- Some hooks **always deliver**, private or not: `chat_renamed`, `chat_deleted`,
+  `plugins_ready`, `provider_switched`, `on_wake`. Rename/delete are housekeeping —
+  withholding them would strand a private chat's plugin-side data under a stale
+  name, which is the exact plaintext orphan the gate exists to prevent. The rest
+  carry no chat content and no chat identity.
+- Awareness is dropped when the plugin unloads, and re-read from the manifest on
+  the next load.
+
+**When to declare it.** Only when your plugin is correct on private content: it
+doesn't write chat text or chat names into plaintext stores, doesn't ship them
+off-box, and doesn't log them. If your plugin mirrors conversation anywhere,
+leave the flag off — being withheld in private chats is the safe default, not a
+bug. Bundled examples that declare it: `plugins/game-room`, `plugins/mindpalace`,
+`plugins/captioning`.
+
+### `chat_vaulted` — a chat just went private
+
+Fires **after** the chat is sealed (encryption already committed), with
+`event.metadata["name"]` set to the chat that flipped. Delivered **only to
+privacy_aware plugins** — the event itself says "this name is now a secret."
+
+Use it to scrub plaintext deposits your plugin left while the chat was public:
+rows keyed by that chat name, exports, caches. Errors are isolated and best-effort
+(a failure here doesn't unwind the vaulting), so make the handler idempotent.
+Scrubbing is **one-way** — unvaulting the chat later cannot restore what you
+removed, and shouldn't.
+
+```python
+# hooks/chat_vaulted.py
+def chat_vaulted(event):
+    name = (event.metadata or {}).get("name")
+    if not name:
+        return
+    my_store.rekey_chat(name, "__private__")   # or delete outright
+    # Don't log the name — it just became a secret.
+```
+
+```json
+"privacy_aware": true,
+"capabilities": {
+  "hooks": { "chat_vaulted": "hooks/chat_vaulted.py" }
+}
 ```
 
 ---
@@ -448,7 +540,7 @@ handle = ghost_inject  # fallback for `handle` dispatch
 When ghost contributions exist for a turn, the runner builds a single envelope and inserts it as a user-role message just before the new user input:
 
 ```
-[Sapphire turn-context — operator-injected, not user voice]
+[System context from Sapphire's own app — not written by the user]
 - Time: Tuesday, May 8, 8:55 PM (America/Indiana/Indianapolis)
 - Spice: Speak more urgently in this reply.
 - weather: Light rain in user's area.

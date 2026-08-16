@@ -18,6 +18,7 @@ Every plugin needs a `plugin.json` in its root folder.
 | `short_name` | string | No | — | Legacy fallback for `short_display_name`. Prefer `short_display_name`. |
 | `priority` | int | No | 50 | Execution order within band (lower = first) |
 | `default_enabled` | bool | No | false | Auto-enable on fresh install |
+| `privacy_aware` | bool | No | false | Declares the plugin safe to run on **private chats**. Without it, every hook is withheld from your plugin on a private-chat turn (fail-closed), and `chat_vaulted` never fires. Only set it if your plugin never persists, transmits, or logs chat content — see [Private chats & `privacy_aware`](hooks.md#private-chats--privacy_aware) |
 | `essential` | bool\|string | No | false | `true` = core plugin: boot alarms if it fails to load, hidden from the plugin manager, toggle refused. A **string** names an alternates group (e.g. `"memory"` on both memory and mindpalace): visible and switchable, boot alarms only if NO plugin in the group loaded |
 | `managed_hide` | bool | No | false | Hide plugin entirely in managed/resale mode |
 | `settingsUI` | string\|null | No | `"auto"` | Controls settings panel: `"auto"` (from manifest schema), `"plugin"` (custom JS), `"core"` (hardcoded), or `null` (none) |
@@ -48,6 +49,7 @@ The `capabilities` object declares what the plugin provides:
     "settings": [ ... ],
     "providers": { ... },
     "memory_layers": [ ... ],
+    "games": [ ... ],
     "prompts": { ... },
     "web": { ... },
     "daemon": { ... },
@@ -69,6 +71,7 @@ Each capability is documented in its own guide:
 - [Settings & Web UI](settings.md)
 - [Providers (TTS, STT, Embedding, LLM)](providers.md)
 - [Memory Layers](memory-layers.md) — register your own layer in the Mind Palace memory system
+- [Games](games.md) — register a playable game (`capabilities.games`) with the Game Room host. Story packs need no capability at all: ship a `stories/` dir ([Stories](stories.md))
 - [Prompt Packs](prompts.md) — ship monolith prompts and assembled-prompt pieces (mirror-only, user always wins collisions)
 - [Apps](APPS.md)
 - [Themes](THEMES.md)

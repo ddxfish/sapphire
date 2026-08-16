@@ -40,6 +40,8 @@ Tasks can run in the foreground (switches to that chat) or background (invisible
 | **Memory Scope** | Which memory slot to read/write. "none" = no memory access. |
 | **Enable TTS** | Speak the response out loud. |
 | **Background** | Controlled by **Chat Name**: leave it blank for background mode (no UI switching), or name a chat for foreground mode. |
+
+If a task targets a private chat and the vault is locked, the Chat Name shows **🔒 locked vault** instead of the name — saving the task keeps the real target, or type a name to retarget. A task that fires at a sealed chat fails loudly rather than creating a plaintext chat with the same name. See [PRIVACY.md](PRIVACY.md).
 | **Inject datetime** | Add current date/time to the system prompt so the AI knows when it is. |
 
 ## Cron Basics
@@ -87,7 +89,7 @@ KEY FIELDS:
 - type: task | heartbeat | daemon | webhook
 - schedule: cron format (minute hour day month weekday) — for time-based types
 - chance: 1-100 probability to actually run
-- chat_target: blank = ephemeral, named = persistent chat
+- chat_target: blank = ephemeral, named = persistent chat; '__locked__' = target is a private chat in a sealed vault (display mask; saving keeps the real target)
 - background: blank chat_target = background (no UI switching)
 - memory_scope: which memory slot to use
 

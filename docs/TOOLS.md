@@ -112,6 +112,10 @@ Sapphire ships with a large set of built-in tools across core modules and plugin
 | `get_transactions` | bitcoin_tool.py | Recent transactions |
 | `ssh_get_servers` | ssh_tool.py | List SSH servers |
 | `ssh_run_command` | ssh_tool.py | Execute remote command |
+| `calendar_today` | calendar.py | Today's Google Calendar schedule |
+| `calendar_range` | calendar.py | Events for a date range |
+| `calendar_add` | calendar.py | Add a calendar event |
+| `calendar_delete` | calendar.py | Delete a calendar event |
 
 ### Utilities
 
@@ -179,7 +183,7 @@ For full plugin development (tools + hooks + voice commands + schedules + web UI
 
 Tools are functions the AI calls to interact with systems — web search, memory, device control.
 
-TOOL MODULES (15 total, 65+ functions):
+TOOL MODULES (19 listed, 75+ functions):
 - memory_tools.py (plugins/memory): save_memory, search_memory, get_recent_memories, delete_memory
 - knowledge_tools.py (plugins/memory): save_person, save_knowledge, search_knowledge, delete_knowledge
 - goals_tools.py (plugins/memory): create_goal, list_goals, update_goal, delete_goal
@@ -195,6 +199,7 @@ TOOL MODULES (15 total, 65+ functions):
 - email_tool.py: get_inbox, read_email, archive_emails, get_recipients, send_email
 - bitcoin_tool.py: get_wallet, send_bitcoin, get_transactions
 - ssh_tool.py: ssh_get_servers, ssh_run_command
+- calendar.py (plugins/google-calendar): calendar_today, calendar_range, calendar_add, calendar_delete
 - network.py: get_external_ip, check_internet, website_status
 - notepad.py: notepad_read, notepad_append_lines, notepad_delete_lines, notepad_insert_line
 - docs.py: search_help_docs

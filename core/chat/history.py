@@ -1203,8 +1203,14 @@ class ChatSessionManager:
             return value
         out = prompt_vault.decrypt_chat_blob(value)
         if out is None:
-            logger.error(f"{what} of vaulted chat '{chat_name}' unreadable "
-                         f"(vault locked, or tampered)")
+            # Locked = EXPECTED (boot with a sealed vault reads the last-
+            # active chat's settings to evict it — that's the design, not
+            # an incident). Key present + undecryptable = tampered = loud.
+            if prompt_vault.chat_data_key() is None:
+                logger.debug(f"{what} of a vaulted chat unreadable (vault locked)")
+            else:
+                logger.error(f"{what} of vaulted chat '{chat_name}' unreadable "
+                             f"while the key is present — tampered?")
             return None
         return out.decode('utf-8')
 
@@ -1450,7 +1456,19 @@ class ChatSessionManager:
                     self.current_chat.messages = [dict(m) for m in eff_chat.messages]
                 logger.debug(f"Saved chat '{eff_name}' ({len(eff_chat.messages)} messages)")
             except Exception as e:
-                logger.error(f"Failed to save chat '{eff_name}': {e}")
+                # The vault-sealed refusal is EXPECTED at lock time: eviction
+                # switches away from the private chat and the switch-away
+                # flush finds the key already dropped (by design — key first,
+                # then evict). Rows are already at rest encrypted; the resync
+                # latch below rewrites any in-memory delta on the next save
+                # after unlock. Calm words, not a data-loss scare
+                # (Krem live-hit this 2026-08-15).
+                sealed = "vault sealed" in str(e)
+                if sealed:
+                    logger.info(f"Chat save deferred — vault sealed mid-switch; "
+                                f"re-syncs on next unlocked save")
+                else:
+                    logger.error(f"Failed to save chat '{eff_name}': {e}")
                 # Restore the blob path's self-healing property for rows
                 # chats (scout, 2026-07-20): after ANY failed save, force a
                 # full window resync so the next save rebuilds from the
@@ -1464,7 +1482,10 @@ class ChatSessionManager:
                 try:
                     publish(Events.CONTINUITY_TASK_ERROR, {
                         "task": "Chat Save",
-                        "error": f"Failed to save chat: {e}. Messages may be lost on restart."
+                        "error": ("Chat sealed before its final flush — everything "
+                                  "already written is encrypted at rest; it re-syncs "
+                                  "on your next unlock." if sealed else
+                                  f"Failed to save chat: {e}. Messages may be lost on restart.")
                     })
                 except Exception:
                     pass

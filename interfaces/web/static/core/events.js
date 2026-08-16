@@ -102,9 +102,15 @@ export function bindAllEvents() {
     // Document-level events
     document.addEventListener('visibilitychange', () => handleVisibilityChange(triggerSendWithText));
 
-    // Image ready handler (for inline cloning)
-    document.addEventListener('imageReady', handleImageReady);
 }
+
+// Image ready handler (for inline cloning) — bound at MODULE LOAD, not in
+// bindAllEvents: init renders history BEFORE bindAllEvents runs, with awaits
+// between, so a browser-CACHED image could load and dispatch into a document
+// with no listener — the inline clone silently lost on every refresh of a
+// chat whose image was cached (Krem live-hit 2026-08-15). Module scope runs
+// at first import, before any render exists to race.
+document.addEventListener('imageReady', handleImageReady);
 
 // PATH 2 of 2 for tool images: clones each accordion tool-result image (rendered
 // in ui-parsing.js, the loop tagged "PATH 1 of 2") out into the reply body, right

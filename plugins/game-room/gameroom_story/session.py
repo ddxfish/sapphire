@@ -223,11 +223,13 @@ def _register_prompt(story, state, entry, chat):
     slug = story["meta"]["slug"]
     mode = entry.get("mode")
     # Vault gate (vault recon finding 7): local/combined modes extract the
-    # LOCAL prompt's character text and save_dynamic persists the rendered
-    # costume to a PLAINTEXT sidecar that re-merges every boot — decrypted
-    # vault text would survive lock and reboots. One gate here covers all
-    # five callers, including _set_mode re-pointing a RUNNING story.
-    # Pure 'story' mode (total swap, no local text) stays allowed.
+    # LOCAL prompt's character text into the rendered costume. Since v1.3
+    # the costume is a chat-scoped ROW — but on a PUBLIC story chat that
+    # row is plaintext, so decrypted vault text would still leave the
+    # vault. Possible relaxation (needs a ruling): allow when the session
+    # chat is private/vaulted, since the row seals with it. One gate here
+    # covers all five callers, including _set_mode re-pointing a RUNNING
+    # story. Pure 'story' mode (total swap, no local text) stays allowed.
     if mode in ("local", "combined") and entry.get("local"):
         try:
             from core.prompt_crud import is_vault_prompt

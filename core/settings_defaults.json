@@ -20,7 +20,8 @@
   "privacy": {
     "_comment": "Private chats only reach providers/tools marked local (is_local)",
     "METRICS_ENABLED": true,
-    "VAULT_IDLE_MINUTES": 30
+    "VAULT_IDLE_MINUTES": 30,
+    "PRIVATE_ALLOW_UNFLAGGED_TOOLS": false
   },
   
   "backups": {

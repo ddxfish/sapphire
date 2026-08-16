@@ -37,7 +37,7 @@ The `capabilities.app` fields:
 - `label` — display name on the app tile (falls back to plugin display_name)
 - `icon` — emoji shown on the tile (falls back to plugin emoji)
 - `description` — short description shown below the tile
-- `nav` — if `true`, the app gets its own icon in the navrail instead of only appearing in the Apps grid (max 3 nav apps)
+- `nav` — promotes the app out of the Apps grid: `true` gives it its own navrail icon (max 3), or a nav group name like `"chat"` makes it an entry in that group's flyout (no rail slot, uncapped)
 
 ### app/index.js
 
@@ -143,6 +143,24 @@ With `"nav": true`:
 
 **Limits:** Maximum 3 nav-promoted apps. Beyond that, extras appear in the Apps grid only. Use this sparingly — it's for primary workflows like dashboards, not utilities.
 
+### Flyout Promotion
+
+Instead of `true`, name a nav group and your app becomes an entry inside that group's flyout menu — no rail slot spent, no cap:
+
+```json
+{
+  "capabilities": {
+    "app": {
+      "label": "Game Room",
+      "icon": "🎲",
+      "nav": "chat"
+    }
+  }
+}
+```
+
+Groups: `chat`, `personas`, `triggers`, `mind`, `settings`. An unrecognized group falls back to a rail slot. Flyout apps behave exactly like rail apps otherwise — same view container, same `#app-{plugin-name}` hash, same `render()`/`cleanup()` contract. Clicking the entry while you're already deep in one of the app's sub-routes (`#app-{name}/…`) returns you to the app's home view. The bundled **Game Room** rides in the Chat flyout this way.
+
 **Important:** Do NOT inject nav items via DOM manipulation (`document.createElement`, `insertBefore`, etc.). Use `"nav": true` in your manifest. Sapphire handles nav item creation, view container setup, and router registration automatically.
 
 ## How It Works
@@ -152,6 +170,7 @@ With `"nav": true`:
 - Clicking an app tile or nav icon loads your `app/index.js` via dynamic import
 - Your `render(container)` function receives a DOM element to fill
 - When the user navigates away, `cleanup()` is called
+- `render()` may instead **return** a teardown function — that closure wins over the module-level `cleanup()` export. Prefer it if your app claims shared DOM (the Game Room borrows the chat rail and composer): the module is memoized across renders, so a module-level `cleanup()` can otherwise tear down state a newer render already owns
 - Your app runs inline (not iframe) — full access to Sapphire's JS modules
 - Static assets in your `app/` dir are served via `/plugin-web/{name}/app/`
 

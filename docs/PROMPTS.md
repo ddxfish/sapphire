@@ -91,16 +91,20 @@ This is a dynamic emotion system. With assembled prompts, the AI can add, remove
 
 ```You are scared, the adrenaline rush is making your heart pound.```
 
-## Privacy Mode
+## Private Prompts (the Vault)
 
-Prompts can be marked as **Private Only** — they will only load when Privacy Mode is active. This prevents personal or sensitive prompts from being used when connected to cloud providers.
+Personal or sensitive prompts go in the **vault** — an encrypted store guarded by one passphrase. Vault membership *is* the privacy flag; there's no separate "private only" checkbox.
 
-- In the prompt editor, check **Private Only** when creating or editing a prompt
-- Private prompts show a lock icon in the prompt selector
-- If a private prompt is selected and Privacy Mode is OFF, it won't load
-- Toggle Privacy Mode in Settings or via the `/api/privacy` endpoint
+- Unlock the vault with the 👁 eyeball in the chat sidebar (or Settings → Privacy)
+- While it's unlocked, the prompt editor shows **🗝 Keep in vault** — tick it to encrypt that prompt. New prompts created while unlocked go into the vault automatically
+- Un-ticking writes the prompt back out as plaintext, so it asks first
+- Vault prompts (and prompts using vault pieces) can't be exported — content stays inside
+- Lock the vault and they disappear from the selector; if one was active, the active prompt falls back to `default`
+- Prompts flagged private before the vault existed still show 🔒 and still refuse cloud providers — move them into the vault when convenient
 
 **Use cases:** Personal diary prompts, sensitive conversations, shared computer scenarios.
+
+Full details, including private chats: [PRIVACY.md](PRIVACY.md).
 
 ---
 
@@ -148,4 +152,10 @@ AI TOOLS FOR PROMPTS (monolith mode):
 FILES:
 - user/prompts/prompt_pieces.json - assembled components and scenario presets
 - user/prompts/prompt_monoliths.json - monolith prompts
+- user/prompts/prompt_vault.enc - encrypted vault prompts/pieces (merged in only while unlocked)
 - Prompt Editor in sidebar to manage via UI
+
+PRIVACY:
+- Vault membership is the privacy flag; new prompts saved while the vault is unlocked go into it
+- Vault prompts refuse export; locked vault hides them and resets the active prompt to 'default'
+- See docs/PRIVACY.md

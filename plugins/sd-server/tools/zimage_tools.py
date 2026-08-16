@@ -159,6 +159,9 @@ def _tool_schema(description):
                 "face and the back of a head at the same time) - regenerating will not "
                 "fix that. Stop and ask the user rather than trying again."
             ),
+            # Local hardware by design (your own SD box) — usable in
+            # private chats. Same declaration image-gen carries.
+            "is_local": True,
             "function": {
                 "name": "generate_image",
                 "description": description,

@@ -675,6 +675,7 @@ class SettingsManager:
             'LLM_MAX_HISTORY', 'CONTEXT_LIMIT',
             'FORCE_THINKING', 'THINKING_PREFILL',
             'CLAUDE_THINKING_ENABLED', 'SPICE_DELIVERY',
+            'PRIVATE_ALLOW_UNFLAGGED_TOOLS',
             'LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS', 'LLM_FALLBACK_ORDER', 'LLM_REQUEST_TIMEOUT',
             # SOCKS can be hot-reloaded - session cache is cleared on change
             'SOCKS_ENABLED', 'SOCKS_HOST', 'SOCKS_PORT', 'SOCKS_TIMEOUT',

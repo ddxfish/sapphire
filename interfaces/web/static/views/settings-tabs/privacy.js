@@ -12,7 +12,7 @@ export default {
     name: 'Privacy',
     icon: '\u{1F5DD}',
     description: 'Prompt vault administration, idle auto-lock, and privacy toggles',
-    essentialKeys: ['VAULT_IDLE_MINUTES', 'METRICS_ENABLED'],
+    essentialKeys: ['VAULT_IDLE_MINUTES', 'PRIVATE_ALLOW_UNFLAGGED_TOOLS', 'METRICS_ENABLED'],
 
     render(ctx) {
         const card = ctx.managed

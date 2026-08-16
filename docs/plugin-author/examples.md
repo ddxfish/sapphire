@@ -96,7 +96,9 @@ def prompt_inject(event):
     event.context_parts.append("The user's favorite color is blue.")
 ```
 
-Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`
+Hook points: `post_stt`, `pre_chat`, `prompt_inject`, `ghost_inject`, `post_llm`, `post_chat`, `pre_execute`, `post_execute`, `pre_tts`, `post_tts`, `on_wake`, `chat_renamed`, `chat_deleted`, `chat_vaulted`, `plugins_ready`
+
+In a private chat your hooks are withheld unless the manifest declares top-level `"privacy_aware": true` — see [Private chats](hooks.md#private-chats--privacy_aware).
 
 Key fields on HookEvent:
 - `event.input` — user message (mutable in pre_chat)

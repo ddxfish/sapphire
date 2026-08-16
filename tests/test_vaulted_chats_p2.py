@@ -345,3 +345,32 @@ class TestCrossFeatureRoundTrips:
         assert not raw(tmp_path, "SELECT 1 FROM chats WHERE name='pub'")
         assert not raw(tmp_path, "SELECT 1 FROM chat_messages WHERE chat_name='pub'")
         assert not raw(tmp_path, "SELECT 1 FROM tool_images WHERE chat_name='pub'")
+
+
+class TestSealedSaveCalm:
+    """Lock-time switch-away flush on a vaulted chat refuses (key already
+    dropped — by design; rows are at rest encrypted). The surfaced event
+    must be CALM, not a data-loss scare, and the resync latch must still
+    set. Krem live-hit the scary version 2026-08-15. The branch keys on
+    _enc_value's 'vault sealed' wording — this test breaks if either side
+    is reworded alone."""
+
+    def test_sealed_flush_publishes_calm_event(self, sm, monkeypatch):
+        _key_on(monkeypatch)
+        _seal(monkeypatch, False)
+        assert sm.set_active_chat("pub")
+        ok, err = sm.vault_chat("pub")
+        assert ok, err
+        _key_off(monkeypatch)
+        _seal(monkeypatch, True)
+        events = []
+        import core.chat.history as hist
+        monkeypatch.setattr(hist, "publish",
+                            lambda ev, data=None: events.append((ev, data)))
+        sm.current_chat.messages.append({"role": "user", "content": "pending"})
+        sm._save_current_chat()   # must not raise
+        saves = [d for _, d in events if d and d.get("task") == "Chat Save"]
+        assert saves, "expected a Chat Save event"
+        msg = saves[-1]["error"]
+        assert "re-syncs" in msg and "lost" not in msg
+        assert getattr(sm.current_chat, "_needs_full_resync", False)

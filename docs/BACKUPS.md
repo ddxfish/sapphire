@@ -21,9 +21,11 @@ Backups contain the entire `user/` directory as a `.tar.gz` archive. This includ
 | Plugin state | `user/plugin_state/` | Yes |
 | User plugins | `user/plugins/` | Yes |
 | User-created tools | `user/functions/`, `user/tools/` | Yes |
-| Story saves/presets | `user/story_saves/`, `user/story_presets/` | Yes |
+| Hand-authored story packs | `user/story_presets/` | Yes |
 | Settings | `user/settings/` | Yes |
 | SSL certs | `user/ssl/` | Yes |
+
+Story journals and game saves live *inside* the chat database, so they ride along with `user/history/` — there's no separate saves folder any more. If an older `user/story_saves/` folder is still on disk it's archived with everything else under `user/`, but nothing reads it.
 
 ### What's NOT Backed Up
 
@@ -36,6 +38,12 @@ Backups contain the entire `user/` directory as a `.tar.gz` archive. This includ
 | Logs | `user/logs/` | Included in the archive but not critical for restore. |
 | Downloaded models | System-dependent | STT/TTS models are re-downloaded if missing. |
 | Per-file `.tmp` rename intermediaries + `.bad-{ts}` quarantine files | various | Excluded by filter — they're either in-flight writes or corrupted-state forensics, not data. |
+
+### Private Chats in Backups
+
+Backups include both the chat database and the vault file (`user/prompts/prompt_vault.enc`), so a restore keeps working — but **restore them together**. The vault holds the key those encrypted chat rows were written with; pairing an old vault file with a newer chat database leaves them unreadable, and Sapphire refuses to mint a replacement key rather than orphan them silently.
+
+Private chats ride the archive as ciphertext, but backups taken **before** a chat went private still hold its earlier history in plaintext. Marking a chat private encrypts it from that moment on; nothing can rewrite copies that already left. See [PRIVACY.md](PRIVACY.md).
 
 ## Automatic Backups
 

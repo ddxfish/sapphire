@@ -215,6 +215,28 @@ state.clear()                  # wipe everything
 
 PluginState is thread-safe — daemon threads, continuity tasks, and API handlers can all read/write the same plugin's state concurrently without data loss.
 
+### Chat-Scoped State
+
+For data that belongs to one *chat* — a playthrough, a per-conversation cache, a journal — use the chat-scoped store instead. Its rows live in the chat database and follow the chat: renamed with it, **encrypted with it** when it goes private, and deleted with it.
+
+```python
+state = plugin_loader.get_chat_state("my-plugin")
+
+state.put(chat, "save", {...})       # single slot per key
+state.get(chat, "save", default)
+state.append(chat, "journal", event) # ordered rows — O(1) append, returns seq
+state.read_all(chat, "journal")      # every row for that key, in order
+state.replace(chat, "journal", rows) # atomic renumber (revert/rewrite)
+state.delete(chat, "journal")        # or delete(chat) for everything
+state.keys(chat)
+state.get_all_chats("save")          # {chat: value} across visible chats
+state.meta(chat, "journal")          # {'rows': n, 'updated_at': iso} or None
+```
+
+Values are JSON-serializable objects. On a **hidden** chat (private + vault sealed), reads come back empty and writes **raise** — never a silent drop, so handle the exception rather than falling back to a file. Use this instead of writing chat-keyed files under `user/`: file paths leak chat names and don't encrypt.
+
+Deleting a chat deletes these rows with it, for public and private chats alike — core does it inside the delete transaction, before `chat_deleted` fires. Don't rebuild an archive-on-delete around it: a private chat's data must not outlive the chat. Keep never-erase behaviour *inside* a living chat (extra keys, extra rows) instead. See [Private chats & `privacy_aware`](hooks.md#private-chats--privacy_aware).
+
 For heavier storage, plugins can create their own SQLite database.
 
 ---

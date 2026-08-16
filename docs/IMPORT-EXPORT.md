@@ -77,6 +77,7 @@ Since exports are just JSON files, you can share them however you like:
 - **Import rejected** — Check the JSON is valid and has the right `type` field
 - **Missing data after import** — Some items depend on plugins being installed (e.g., a toolset referencing tools from a plugin you don't have)
 - **Avatar missing** — If a persona was exported without its avatar, you'll need to set one manually
+- **Export blocked on a prompt** — Prompts kept in the vault (and assembled prompts using vault pieces) refuse to export; content doesn't leave the vault. See [PRIVACY.md](PRIVACY.md)
 
 ## Reference for AI
 

@@ -1,3 +1,6 @@
+# 2.11.3 - Private Games
+- Story engine and game room chats private capable
+- Settings > Privacy > Allow Unflagged Tools to unblock legacy tools
 # 2.11.2 - Privacy Aware Plugins
 - Hooks are not exposed to plugins unless they are privacy_aware true
 # 2.11.1 - Private chats

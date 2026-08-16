@@ -32,9 +32,9 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | Guide | What's Inside |
 |-------|--------------|
 | [Manifest](manifest.md) | `plugin.json` reference — fields, priority bands, directory structure |
-| [Hooks](hooks.md) | All 16 hook points (incl. `ghost_inject`, streaming-TTS, `provider_switched`), HookEvent fields, system access, examples |
+| [Hooks](hooks.md) | All 20 hook points (incl. `ghost_inject`, streaming-TTS, chat lifecycle), HookEvent fields, system access, the `privacy_aware` gate for private chats, examples |
 | [Voice Commands](voice-commands.md) | Keyword triggers that bypass the LLM — match modes, handlers, macros |
-| [Tools](tools.md) | Tool file format, schema flags, scopes, reading settings, privacy patterns |
+| [Tools](tools.md) | Tool file format, schema flags, scopes, reading settings, plugin + chat-scoped state, privacy patterns |
 | [Routes](routes.md) | Custom HTTP endpoints — path params, auth enforcement, handler signature |
 | [Schedule](schedule.md) | Cron tasks — manifest fields, handler contract, examples |
 | [Daemons](daemons.md) | Background event listeners — Telegram, Discord, Email, custom sources |
@@ -42,12 +42,12 @@ In short, a plugin is an autonomous package that can reshape how Sapphire behave
 | [Widgets](widgets.md) | Dashboard panels — manifest, render contract, settings schema, sample plugin |
 | [Games](games.md) | Game Room games — engine contract, sealed seat, board modules, sessions-are-chats |
 | [Stories](stories.md) | Story packs — rooms, referee, dice, sealed blanks, identity modes, backdrops |
-| [Apps](APPS.md) | Full-page plugin UIs in the Apps nav — render/cleanup contract, navrail promotion |
+| [Apps](APPS.md) | Full-page plugin UIs in the Apps nav — render/cleanup contract, navrail + flyout promotion |
 | [Settings](settings.md) | Manifest-declared settings, custom web UI, settings API, danger confirms |
 | [Web UI](web-ui.md) | Shared JS modules, CSS variables, modals, CSRF, style injection |
 | [Themes](THEMES.md) | Custom themes — CSS, animated JS backgrounds, per-theme settings (Settings > Visual) |
 | [Signing](signing.md) | Verification states, sideloading, signing your own plugins |
-| [Lifecycle](lifecycle.md) | Startup, live toggle, hot reload, rescan, error isolation |
+| [Lifecycle](lifecycle.md) | Startup, live toggle, hot reload, rescan, error isolation, chat lifecycle |
 | [Publishing](publishing.md) | How to structure your repo and submit to the Sapphire Store |
 | [Examples](examples.md) | Minimal working examples of every capability type — copy-paste templates |
 | [AI Reference](ai-reference.md) | Compact reference for Sapphire's own use when building plugins |

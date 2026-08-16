@@ -145,7 +145,11 @@ Ship `prompts/pieces.json` with keys namespaced `story_<slug>_<emotion>` (e.g. `
 
 ## Saves
 
-The chat is the save. Every resolved outcome appends to a per-(story, chat) journal; current state is a pure replay — no LLM, no randomness, no clock. Ship nothing.
+The chat is the save — literally. Every resolved outcome appends a row to a per-(story, chat) journal stored on the chat itself, next to the active-story pointer and the rendered role prompt; current state is a pure replay of that journal — no LLM, no randomness, no clock. Ship nothing.
+
+The journal follows its chat: renamed with it, encrypted with it when the chat goes private, and deleted with it. Run and revert archives live as extra rows *inside* the living chat, so reverting never loses history — but deleting the chat ends that playthrough for good.
+
+**Private playthroughs work.** Mark a story chat private (🗝) and the whole run seals with it — journal, the sealed-blank text the player wrote, the rendered role prompt. While the vault is locked that chat is hidden: the playthrough reads as if it never happened, the engine refuses writes against it, and the role's prompt name doesn't surface in the prompt list. Unlock and it resumes. One limit today: in `local`/`combined` mode the local persona can't be a vault prompt — use a non-vault prompt, or pure `story` mode.
 
 ## Checklist
 

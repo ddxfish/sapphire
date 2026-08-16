@@ -404,6 +404,10 @@
     "short": "Use self-signed SSL certificate",
     "long": "When enabled, the server generates a self-signed SSL certificate for HTTPS. Browser will show security warning but connection is encrypted. Disable only if you're behind a reverse proxy that handles SSL. Requires restart."
   },
+  "PRIVATE_ALLOW_UNFLAGGED_TOOLS": {
+    "short": "Private chats: allow tools with no locality flag",
+    "long": "Tools declare is_local in their schema; private chats refuse any tool without it (fail-closed — an unknown tool might send data to the cloud). Many plugins predate the flag, so private mode blocks them. Enable to treat UNFLAGGED tools as local on your box. Tools that explicitly declare themselves non-local (web search, email, etc.) stay blocked in private chats regardless. Default off."
+  },
   "VAULT_IDLE_MINUTES": {
     "short": "Minutes of vault inactivity before auto-lock",
     "long": "The prompt vault locks itself after this many minutes without vault activity (chat turns wearing a vault prompt, vault edits, unlocks). Listing prompt names does not count as activity. Changes apply to a running timer immediately. Minimum 1 minute; default 30."

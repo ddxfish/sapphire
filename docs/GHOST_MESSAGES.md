@@ -25,7 +25,7 @@ new user turn**, opening with a sentinel header and one attributed line per
 contribution:
 
 ```
-[Sapphire turn-context — operator-injected, not user voice]
+[System context from Sapphire's own app — not written by the user]
 - Time: Friday, July 03, 2026 at 08:55 PM (America/New_York)
 - Spice: Speak a little more warmly this reply.
 - (operator): You're on a phone call — reply briefly, it's spoken aloud.
