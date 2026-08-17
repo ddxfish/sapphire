@@ -1787,6 +1787,17 @@ class ChatSessionManager:
                 conn.commit()
                 self._rows_state.pop(chat_name, None)
             publish(Events.CHAT_CLEARED, {"chat_name": chat_name})
+            # Plugin hook twin of the event (Krem's ruling 2026-08-17: story
+            # journals die with the transcript — their turn anchors point at
+            # messages that no longer exist). Hook, not bus: manifest-wired
+            # handlers survive plugin reloads without stacking subscribers.
+            try:
+                from core.hooks import hook_runner, HookEvent
+                if hook_runner.has_handlers("chat_cleared"):
+                    hook_runner.fire("chat_cleared",
+                                     HookEvent(metadata={"chat": chat_name}))
+            except Exception as e:
+                logger.warning(f"chat_cleared hook dispatch failed: {e}")
             return True
         except Exception as e:
             logger.error(f"clear_chat('{chat_name}') failed: {e}")
@@ -3620,6 +3631,13 @@ class ChatSessionManager:
                 pass  # Table may not exist yet
 
         publish(Events.CHAT_CLEARED, {"chat_name": eff_name})
+        try:
+            from core.hooks import hook_runner, HookEvent
+            if hook_runner.has_handlers("chat_cleared"):
+                hook_runner.fire("chat_cleared",
+                                 HookEvent(metadata={"chat": eff_name}))
+        except Exception as e:
+            logger.warning(f"chat_cleared hook dispatch failed: {e}")
 
     def edit_message_by_content(self, role: str, original_content: str, new_content: str) -> bool:
         """Edit message and save."""

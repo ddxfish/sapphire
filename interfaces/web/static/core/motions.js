@@ -140,6 +140,7 @@ export function setChatMotion(id) {
 }
 
 export function chatMotionId() { return _chatMotion; }
+export function themeMotionId() { return _themeMotion; }
 
 // Explicit user pick. '' or 'none' = explicitly off — stored either way, so
 // a user's None survives switching to a theme that bundles a motion.

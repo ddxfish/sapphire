@@ -16,7 +16,9 @@
     "gameroom_story/state.py": "sha256:176af5608088372bd5cd9aa9d1cf1a7e226ace63ac066f4900fdbfe41b555443",
     "hooks/boot.py": "sha256:271fd0fc7b5bf60c4f19e48ab87dd8b5ed3cb3b8ad093acc8009089c3469153b",
     "hooks/ghost.py": "sha256:01c8adc35d89cb459881fd7353a011db373c7b1ac3a8daab0d1bd335e9942433",
-    "plugin.json": "sha256:3c6f5518f101ff540a94337a32bc7e8b4124a19d6a851df8e5f7e08ef5f2e969",
+    "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
+    "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
+    "plugin.json": "sha256:a07b2fcdcf658c00a304ade8406c5df619562598f6cbcf813feff2a940bf249f",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
     "routes/play.py": "sha256:07a3d47e0276c434162f1ccdfc57fd8f219f6d941831d875fe75b8ed20b5d3c1",
@@ -36,5 +38,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "BtPih8eQg3GglksOwMG2/eLdNBQLltAGitPlSST2Ni3t+4jDdquOLyAtP+y8sqdqeph58Kve0g2TVN0JYvTJDQ=="
+  "signature": "6ZsCG0ftWQF/9jVmupk/O9/7laO9YnU6Uy6JHIQJ7Sx5bRtqT2gTnAn1zS3mhaZgfqZ61oYQwTAp/uR0v80VAw=="
 }

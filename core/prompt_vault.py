@@ -385,14 +385,52 @@ def unlock(passphrase) -> tuple:
     logger.info(f"[VAULT] unlocked: {counts}")
     _warn_user_shadows()   # outside _lock — reads prompt_manager dicts
     _migrate_unvaulted_private_chats()   # Phase 2: encrypt stragglers
+    _fire_plugin_hook("vault_unlocked")
     _publish("vault_changed")
     return True, ''
+
+
+def _fire_plugin_hook(name):
+    """Plugin hook (core/hooks): 'the vault's visibility just changed —
+    re-derive anything you cached from it' (hunt 2026-08-17: a sealed
+    chat's story costume stayed registered in the process-global prompt
+    pack until the next story action). Double-guarded — a plugin fault
+    must never fail a lock/unlock."""
+    try:
+        from core.hooks import hook_runner, HookEvent
+        if hook_runner.has_handlers(name):
+            hook_runner.fire(name, HookEvent(metadata={}))
+    except Exception as e:
+        logger.warning(f"[VAULT] {name} hook dispatch failed: {e}")
 
 
 def lock(reason="") -> bool:
     """Seal the vault: drop key + plaintext, cancel the idle timer, hand off
     the active preset if it was a vault name. Idempotent."""
     global _key, _salt, _data, _timer
+    # Ruling B (2026-08-17): a mid-stream seal can't flush the in-flight
+    # turn (keyless saves raise) and the end-of-stream eviction would then
+    # DISCARD it while the toast claimed it was safe — so a lock during a
+    # PRIVATE chat's live stream WAITS for the reply to finish. Retries
+    # itself every 5s; idempotent if the vault locked some other way
+    # meanwhile. Non-private streams don't defer: their saves don't need
+    # the key.
+    try:
+        from core.api_fastapi import get_system
+        _sm = get_system().llm_chat.session_manager
+        if getattr(_sm, '_is_streaming', False) and \
+                bool((getattr(_sm, 'current_settings', None) or {}).get('private_chat')):
+            with _lock:
+                still_open = _key is not None
+            if still_open:
+                t = threading.Timer(5.0, lambda: lock(reason=reason or "deferred"))
+                t.daemon = True
+                t.start()
+                logger.info("[VAULT] lock deferred — private chat mid-stream; "
+                            "retrying in 5s so the turn flushes first")
+                return False
+    except Exception:
+        pass
     with _lock:
         if _key is None:
             return False
@@ -415,6 +453,7 @@ def lock(reason="") -> bool:
         pass
     _handoff_active(gone)      # outside _lock — calls into the prompt system
     _handoff_active_chat()     # vaulted chats: evict a private active chat
+    _fire_plugin_hook("vault_locked")
     _publish("vault_changed")
     return True
 

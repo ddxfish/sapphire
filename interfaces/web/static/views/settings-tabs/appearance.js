@@ -314,9 +314,12 @@ export default {
 
 
 // ── Motion Row ──────────────────────────────────────────────
-// Highlights the EFFECTIVE motion; when it comes from the theme bundle (no
-// explicit pick yet) the card carries a "theme" badge. Clicking any card —
-// None included — stores an explicit pick, same precedence story as fonts.
+// Shows and sets the GLOBAL default (Krem's ruling 2026-08-17) — a chat's
+// own override lives in the chat scene modal. Painting the effective value
+// here made every click look dead whenever the open chat overrode it: the
+// click wrote the global pick, the highlight snapped back to the chat's.
+// When it comes from the theme bundle (no explicit pick yet) the card
+// carries a "theme" badge; a chat override gets a note, not the highlight.
 
 function _renderMotionRow(el, m) {
     const row = el.querySelector('#motion-row');
@@ -324,20 +327,33 @@ function _renderMotionRow(el, m) {
     const motions = m.getMotions();
     let pick = '';
     try { pick = localStorage.getItem('sapphire-motion') || ''; } catch {}
-    const effective = m.currentMotionId();
+    const valid = id => motions.some(x => x.id === id);
+    // Global-only resolution: explicit pick > theme bundle (orphan picks
+    // fall through to the theme, mirroring currentMotionId).
+    let globalEff = '';
+    if (pick !== 'none') {
+        globalEff = (pick && valid(pick)) ? pick
+            : (valid(m.themeMotionId()) ? m.themeMotionId() : '');
+    }
+    const fromTheme = !!globalEff && !(pick && valid(pick));
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     const cards = [{ id: 'none', name: 'None' }, ...motions].map(mo => {
         const isNone = mo.id === 'none';
-        const active = isNone ? !effective : mo.id === effective;
-        const badge = (!pick && !isNone && mo.id === effective)
+        const active = isNone ? !globalEff : mo.id === globalEff;
+        const badge = (fromTheme && !isNone && mo.id === globalEff)
             ? '<span class="motion-badge">theme</span>' : '';
         return `<div class="motion-card${active ? ' active' : ''}" data-motion="${_esc(mo.id)}" title="${_esc(mo.description || '')}">${_esc(mo.name)}${badge}</div>`;
     }).join('');
 
+    const chatOv = m.chatMotionId();
+    const chatNote = (chatOv && valid(chatOv))
+        ? `<div class="setting-help" style="flex-basis:100%">The open chat overrides this with &ldquo;${_esc((motions.find(x => x.id === chatOv) || {}).name || chatOv)}&rdquo; &mdash; change that from the chat&rsquo;s scene menu.</div>`
+        : '';
+
     // Reduced-motion never locks the picker — an explicit pick is consent
     // (the OS flag only stops THEME-DEFAULT motions from auto-starting).
-    row.innerHTML = cards + (reduced
+    row.innerHTML = cards + chatNote + (reduced
         ? '<div class="setting-help" style="flex-basis:100%">Your system prefers reduced motion, so themes won’t auto-start one &mdash; a pick you make here still applies.</div>'
         : '');
 

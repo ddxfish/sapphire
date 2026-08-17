@@ -25,7 +25,10 @@
     ],
     "hooks": {
       "ghost_inject": "hooks/ghost.py",
-      "plugins_ready": "hooks/boot.py"
+      "plugins_ready": "hooks/boot.py",
+      "vault_locked": "hooks/vault.py",
+      "vault_unlocked": "hooks/vault.py",
+      "chat_cleared": "hooks/lifecycle.py"
     },
     "routes": [
       {

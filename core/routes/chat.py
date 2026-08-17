@@ -1297,6 +1297,20 @@ async def update_chat_settings(chat_name: str, request: Request, _=Depends(requi
                                                     expected_active=chat_name):
             raise HTTPException(status_code=500, detail="Failed to update settings")
 
+        # Cosmetic-only writes (scene modal motion/background clicks) skip
+        # the full brain re-apply — prompt, scope reset, spice re-roll (a
+        # disk write that also re-rolls her queued pick), toolset re-apply,
+        # and the origin-less TOOLSET_CHANGED that made every tab refetch
+        # 7 endpoints per click (hunt 2026-08-17 M16). Nothing in
+        # _apply_chat_settings reads these two keys.
+        if new_settings and set(new_settings) <= {"motion", "background"}:
+            origin = request.headers.get('X-Session-ID')
+            publish(Events.CHAT_SETTINGS_CHANGED,
+                    {"chat": chat_name, "settings": new_settings, "origin": origin})
+            return {"status": "success",
+                    "message": f"Settings updated for '{chat_name}'",
+                    "toolset": None, "functions": [], "state_tools": []}
+
         _apply_chat_settings(system, session_manager.get_chat_settings())
 
         origin = request.headers.get('X-Session-ID')
