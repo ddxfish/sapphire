@@ -486,7 +486,14 @@ def _run_command(args, settings):
     max_timeout = max(5, int(_setting(settings, 'max_timeout')))
     timeout = min(max(5, int(args.get('timeout') or 120)), max_timeout)
     limit = int(args.get('max_output') or _setting(settings, 'output_limit'))
-    limit = max(200, min(limit, 1_000_000))
+    # Ceiling matches the core tool-result cap (TOOL_RESULT_MAX_CHARS) so the
+    # max_output param doesn't promise chars the chat pipeline would truncate.
+    try:
+        import config as _cfg
+        _ceiling = int(getattr(_cfg, 'TOOL_RESULT_MAX_CHARS', 200_000)) or 1_000_000
+    except Exception:
+        _ceiling = 200_000
+    limit = max(200, min(limit, _ceiling))
 
     logger.info(f"HARNESS [{cwd}] $ {command[:100]}")
     # Own process group so a timeout can kill the whole tree (see _kill_tree),

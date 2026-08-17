@@ -177,7 +177,33 @@ def wire_to_canonical(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return result
 
 
-def _extract_tool_images(result, history=None, provider=None):
+def cap_tool_result_text(text, function_name=None):
+    """Head-preserving cap on tool-result text (TOOL_RESULT_MAX_CHARS, 0=off).
+
+    HEAD-preserving is mandatory: <<IMG::tool:id>> markers are PREPENDED to
+    the text and are the ONLY liveness reference protecting saved image bytes
+    from the orphan-GC sweep (history.py orphan cleanup) — a tail-keeping cap
+    would silently delete the user's images.
+    """
+    try:
+        import config
+        limit = int(getattr(config, 'TOOL_RESULT_MAX_CHARS', 200_000))
+    except Exception:
+        limit = 200_000
+    if limit <= 0 or len(text) <= limit:
+        return text
+    dropped = len(text) - limit
+    who = f" from '{function_name}'" if function_name else ""
+    logger.warning(f"[TOOL] result{who} capped: {len(text)} -> {limit} chars")
+    return (text[:limit] +
+            f"\n[... {dropped} chars truncated — this result{who} exceeded "
+            f"Sapphire's {limit}-char tool-result cap. This is a size limit, "
+            f"NOT a tool failure. Re-run with a narrower scope (smaller range, "
+            f"fewer items, a filter) if you need the rest. Any images this "
+            f"tool returned were unaffected.]")
+
+
+def _extract_tool_images(result, history=None, provider=None, function_name=None):
     """Extract images from a tool result if it returned structured data.
 
     Tools can return {"text": "...", "images": [{"data": base64, "media_type": "image/..."}]}
@@ -240,8 +266,9 @@ def _extract_tool_images(result, history=None, provider=None):
             elif not supports_vision:
                 text = (text + "\n\n[Note: current model does not support image inputs - "
                         f"image(s) were captured and saved but cannot be analyzed this turn.]").strip()
-        return text, llm_images
-    return str(result), []
+        # Cap AFTER marker-prepend so head-keeping preserves every marker.
+        return cap_tool_result_text(text, function_name), llm_images
+    return cap_tool_result_text(str(result), function_name), []
 
 
 def _save_tool_image(img, history=None):
@@ -461,7 +488,7 @@ class ToolCallingEngine:
                 function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
 
             # Extract images if tool returned structured result
-            result_str, images = _extract_tool_images(function_result, history, provider)
+            result_str, images = _extract_tool_images(function_result, history, provider, function_name)
             if images:
                 tool_images.extend(images)
                 logger.info(f"[TOOL] {function_name} returned {len(images)} image(s)")
@@ -554,7 +581,7 @@ class ToolCallingEngine:
             logger.error(f"Text-based tool failed for {function_name}: {tool_error}")
             function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
 
-        result_str, tool_images = _extract_tool_images(function_result, history, provider)
+        result_str, tool_images = _extract_tool_images(function_result, history, provider, function_name)
         if tool_images:
             logger.info(f"[TOOL] {function_name} returned {len(tool_images)} image(s) (text-based)")
         clean_result = strip_ui_markers(result_str)

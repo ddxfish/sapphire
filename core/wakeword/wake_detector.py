@@ -6,6 +6,7 @@ import time
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import config
+from core.audio import convert_to_mono, resample_audio
 from core.event_bus import publish, Events
 
 logger = logging.getLogger(__name__)
@@ -349,8 +350,17 @@ class WakeWordDetector:
         """Main listening loop - polls OWW for predictions."""
         # OWW works best with 80ms frames (1280 samples at 16kHz)
         frame_samples = 1280
+        target_rate = 16000
         consecutive_errors = 0
         max_consecutive = 10  # After 10 rapid errors, back off hard
+        # 16kHz-mono accumulator between device reads and OWW. The device may
+        # capture at any rate/channel count; OWW only ever sees exact
+        # 1280-sample 16k mono frames drained from here. (F4 2026-08-17: the
+        # old loop read 1280 RAW device frames — at 48k that's 26.7ms of audio
+        # fed as "80ms" = 3x time-stretch, −1.58 octave, detector deaf; and
+        # .flatten() on stereo interleaved L/R samples — deaf even at native
+        # 16k. The resample path existed but had zero callers.)
+        buf16 = np.zeros(0, dtype=np.int16)
 
         logger.info(f"Listen loop started: frame_samples={frame_samples}, threshold={self.threshold}")
 
@@ -367,36 +377,56 @@ class WakeWordDetector:
 
                 stream = self.audio_recorder.get_stream()
                 if stream is None:
+                    # Stream teardown (STT handoff) — any partial frame is
+                    # stale audio from before the handoff.
+                    buf16 = np.zeros(0, dtype=np.int16)
                     time.sleep(0.1)
                     continue
 
-                # Read audio frame (sounddevice returns numpy array directly)
-                audio_data, overflowed = stream.read(frame_samples)
+                # Read ~80ms of DEVICE frames (recomputed every pass — the
+                # error-recovery path can re-resolve to a different rate).
+                actual_rate = int(getattr(self.audio_recorder, 'actual_rate', None)
+                                  or target_rate)
+                read_frames = int(round(frame_samples * actual_rate / target_rate)) \
+                    or frame_samples
+                audio_data, overflowed = stream.read(read_frames)
                 if overflowed:
                     logger.debug("Audio buffer overflow in wake detection")
-                audio_array = audio_data.flatten().astype(np.int16)
+                chunk = convert_to_mono(np.asarray(audio_data))  # downmix, never interleave
+                if actual_rate != target_rate:
+                    chunk = resample_audio(chunk, actual_rate, target_rate)
+                buf16 = np.concatenate((buf16, chunk))
 
-                # Get prediction from OWW
-                predictions = self.model.predict(audio_array)
+                # Drain exact 1280-sample frames; score INSIDE the drain so a
+                # detection can't hide in a multi-frame backlog.
+                while len(buf16) >= frame_samples:
+                    frame = buf16[:frame_samples]
+                    buf16 = buf16[frame_samples:]
 
-                # Check if wake word detected. OWW keys predictions by file
-                # stem when loaded by path (e.g. 'hey_mycroft_v0.1' for the
-                # bundled v0.1.onnx files) and by bare name when loaded as a
-                # builtin. Try exact match first, then prefix match against
-                # versioned stems, finally fall back to whatever the only
-                # loaded model returned. Single-model detector — safe to
-                # inspect all keys.
-                score = predictions.get(self.model_name, 0)
-                if score < self.threshold and predictions:
-                    for k, v in predictions.items():
-                        if k.startswith(self.model_name):
-                            score = v
-                            break
-                if score >= self.threshold:
-                    logger.info(f"Wake word '{self.model_name}' detected with score {score:.3f}")
-                    self._on_activation()
-                    # Note: _on_activation resets state, minimal cooldown needed
-                    time.sleep(0.5)
+                    predictions = self.model.predict(frame)
+
+                    # Check if wake word detected. OWW keys predictions by file
+                    # stem when loaded by path (e.g. 'hey_mycroft_v0.1' for the
+                    # bundled v0.1.onnx files) and by bare name when loaded as a
+                    # builtin. Try exact match first, then prefix match against
+                    # versioned stems, finally fall back to whatever the only
+                    # loaded model returned. Single-model detector — safe to
+                    # inspect all keys.
+                    score = predictions.get(self.model_name, 0)
+                    if score < self.threshold and predictions:
+                        for k, v in predictions.items():
+                            if k.startswith(self.model_name):
+                                score = v
+                                break
+                    if score >= self.threshold:
+                        logger.info(f"Wake word '{self.model_name}' detected with score {score:.3f}")
+                        # Pre-activation audio is stale by the time the voice
+                        # turn ends — start the next listen fresh.
+                        buf16 = np.zeros(0, dtype=np.int16)
+                        self._on_activation()
+                        # Note: _on_activation resets state, minimal cooldown needed
+                        time.sleep(0.5)
+                        break
 
                 consecutive_errors = 0  # Reset on successful read
 

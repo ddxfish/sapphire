@@ -4,7 +4,7 @@ import re
 import time
 from typing import Generator, Union, Dict, Any
 import config
-from .chat_tool_calling import strip_ui_markers, wrap_tool_result, _extract_tool_images, filter_to_thinking_only
+from .chat_tool_calling import strip_ui_markers, wrap_tool_result, _extract_tool_images, filter_to_thinking_only, cap_tool_result_text
 from .llm_providers import LLMResponse, get_generation_params
 from core.event_bus import publish, Events
 from core.hooks import hook_runner, HookEvent
@@ -757,7 +757,7 @@ class StreamingChat:
 
                         try:
                             function_result = self.main_chat.function_manager.execute_function(function_name, function_args, scopes=_scopes, allowed_tools=_allowed_tool_names, executor_snapshot=_executor_snapshot)
-                            result_str, tool_imgs = _extract_tool_images(function_result, self.main_chat.session_manager, provider)
+                            result_str, tool_imgs = _extract_tool_images(function_result, self.main_chat.session_manager, provider, function_name)
                             if tool_imgs:
                                 iteration_tool_images.extend(tool_imgs)
                                 logger.info(f"[TOOL] {function_name} returned {len(tool_imgs)} image(s)")
@@ -792,7 +792,9 @@ class StreamingChat:
 
                         except Exception as tool_error:
                             logger.error(f"Tool execution error: {tool_error}", exc_info=True)
-                            error_result = f"Error: {str(tool_error)}"
+                            # Exception strings can embed whole payloads — this
+                            # path bypasses _extract_tool_images, so cap here.
+                            error_result = cap_tool_result_text(f"Error: {str(tool_error)}", function_name)
                             # Loop-warn to the LLM only; history + SSE keep the raw error.
                             llm_result = error_result + self.main_chat.function_manager.loop_warn_suffix(function_name, loop_counts)
 

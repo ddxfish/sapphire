@@ -9,15 +9,12 @@ resampling if the device doesn't support native 16kHz.
 
 import numpy as np
 import sounddevice as sd
-import array
 import logging
 import threading
 
 from core.audio import (
     get_device_manager,
-    classify_audio_error,
-    convert_to_mono,
-    resample_audio
+    classify_audio_error
 )
 import config
 
@@ -50,15 +47,6 @@ class AudioRecorder:
         # Guards open/close/pause/resume — see start_recording's comment.
         self._stream_lock = threading.Lock()
         
-        # Frame skipping parameters (hardcoded to 1 - process every frame)
-        self.frame_skip = 1
-        self.frame_counter = 0
-        self.previous_result = np.array([], dtype=np.int16)
-        
-        # Pre-allocate buffer
-        self.buffer = array.array('h', [0] * int(config.BUFFER_DURATION * self.target_rate))
-        self.buffer_index = 0
-        
         # Find working device via DeviceManager
         self._init_device()
         
@@ -88,7 +76,7 @@ class AudioRecorder:
                 logger.info(f"Wakeword: Device supports native {self.target_rate}Hz")
             else:
                 logger.info(f"Wakeword: Device using {self.actual_rate}Hz "
-                           f"(will resample to {self.target_rate}Hz)")
+                           f"(wake listen loop resamples to {self.target_rate}Hz)")
 
         except Exception as e:
             logger.error(f"Wakeword device init failed: {classify_audio_error(e)}")
@@ -198,43 +186,7 @@ class AudioRecorder:
         """Return the underlying stream (for compatibility)."""
         return self.stream
 
-    def get_latest_chunk(self, duration):
-        """
-        Get latest audio chunk with frame skipping optimization.
-        
-        Returns audio resampled to 16kHz for OWW compatibility.
-        Returns cached result on skipped frames for performance.
-        """
-        # Frame skipping logic
-        self.frame_counter = (self.frame_counter + 1) % self.frame_skip
-        if self.frame_counter != 0:
-            return self.previous_result
-        
-        if self.stream is None:
-            return self.previous_result
-        
-        # Calculate how many samples to read at actual device rate
-        actual_samples = int(duration * self.actual_rate)
-        
-        try:
-            data, overflowed = self.stream.read(actual_samples)
-            if overflowed:
-                logger.debug("Wakeword audio buffer overflow (non-fatal)")
-            
-            # Convert stereo to mono if needed
-            if self._needs_stereo_downmix:
-                audio = convert_to_mono(data)
-            else:
-                audio = data.flatten().astype(np.int16)
-            
-            # Resample to target rate if needed
-            if self._resample_ratio != 1.0:
-                audio = resample_audio(audio, self.actual_rate, self.target_rate)
-            
-            self.previous_result = audio
-            
-        except Exception as e:
-            logger.warning(f"Error reading wakeword audio chunk: {classify_audio_error(e)}")
-            # Return previous result to avoid breaking detection loop
-        
-        return self.previous_result
+    # get_latest_chunk removed (F4 2026-08-17): it was the CORRECT
+    # downmix+resample read path, but it had zero callers — the listen loop
+    # read the raw stream directly. That conversion now lives in
+    # wake_detector._listen_loop, the one place that reads this stream.

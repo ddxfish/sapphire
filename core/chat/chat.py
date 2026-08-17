@@ -655,6 +655,20 @@ class LLMChat:
             return f"[RAG documents are configured but failed to load: {e}]"
 
     def chat(self, user_input: str):
+        # F1 Stage A (2026-08-17): the non-streaming doors (wake voice,
+        # POST /api/chat, body) never counted as active streams, so every
+        # _is_streaming guard — switch/delete/rename/replace refusals,
+        # append-wait, vault eviction deferral — was blind to voice turns.
+        # Count first (mirrors chat_streaming.py:187), release in finally
+        # so the 1→0 side effects (_no_streams_event, rowify conversion,
+        # deferred private eviction) fire exactly as they do for SSE.
+        self.session_manager.begin_streaming()
+        try:
+            return self._chat_inner(user_input)
+        finally:
+            self.session_manager.end_streaming()
+
+    def _chat_inner(self, user_input: str):
         try:
             chat_start_time = time.time()
             self.refresh_spice_if_needed()
