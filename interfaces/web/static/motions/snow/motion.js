@@ -1,8 +1,8 @@
-// static/motions/stars/motion.js — slow flight through a starfield.
-// Classic pseudo-3D: stars carry (x, y, z); z shrinks, points stream outward
-// from center and brighten as they approach. A drift, not a warp.
+// static/motions/snow/motion.js — falling flakes with a soft twinkle and a
+// gentle sway. (Born as "Stars" in P3; Krem correctly identified it as snow.)
 // Motion contract (themes-v2 P3): default export { id, name, mount, unmount }.
-// settings.speed / settings.intensity = global user multipliers.
+// settings.speed = global user multiplier. Colors sampled at mount — the host
+// remounts on theme switch.
 
 function themeRGB(varName, fallback) {
     const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
@@ -12,18 +12,20 @@ function themeRGB(varName, fallback) {
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-let canvas, ctx, ro, raf = 0, stars = [], W = 0, H = 0, INT = 1;
-
-function spawn(s) {
-    s.x = (Math.random() * 2 - 1);
-    s.y = (Math.random() * 2 - 1);
-    s.z = 0.3 + Math.random() * 0.7;
-    return s;
-}
+let canvas, ctx, ro, raf = 0, flakes = [], W = 0, H = 0, INT = 1;
 
 function seed() {
-    const count = Math.min(400, Math.round((W * H) / 7000 * INT));
-    stars = Array.from({ length: count }, () => spawn({}));
+    const count = Math.min(320, Math.round((W * H) / 9000 * INT));
+    flakes = Array.from({ length: count }, () => ({
+        x: Math.random() * W, y: Math.random() * H,
+        r: 0.6 + Math.random() * 1.6,
+        tw: 0.3 + Math.random() * 1.0,
+        ph: Math.random() * Math.PI * 2,
+        v: 8 + Math.random() * 12,
+        amp: 3 + Math.random() * 8,
+        freq: 0.15 + Math.random() * 0.35,
+        glint: Math.random() < 0.1,
+    }));
 }
 
 function resize(host) {
@@ -36,35 +38,33 @@ function resize(host) {
 }
 
 export default {
-    id: 'stars', name: 'Stars',
+    id: 'snow', name: 'Snow',
     mount(host, settings) {
         const SPD = +((settings || {}).speed) || 1;
         INT = +((settings || {}).intensity) || 1;
         canvas = document.createElement('canvas');
         ctx = canvas.getContext('2d');
         host.appendChild(canvas);
-        const [r, g, b] = themeRGB('--text', [224, 224, 224]);
+        const text = themeRGB('--text', [224, 224, 224]);
+        const trim = themeRGB('--trim', [74, 158, 255]);
         resize(host);
         ro = new ResizeObserver(() => resize(host));
         ro.observe(host);
         let last = performance.now();
         const tick = (now) => {
-            const dt = Math.min((now - last) / 1000, 0.1);
+            const dt = Math.min((now - last) / 1000, 0.1) * SPD;
             last = now;
             ctx.clearRect(0, 0, W, H);
-            const cx = W / 2, cy = H / 2;
-            const scale = Math.min(W, H) * 0.5;
-            for (const s of stars) {
-                s.z -= 0.035 * dt * SPD;             // ~20s+ center-to-edge
-                if (s.z <= 0.05) spawn(s);
-                const px = cx + (s.x / s.z) * scale;
-                const py = cy + (s.y / s.z) * scale;
-                if (px < -4 || px > W + 4 || py < -4 || py > H + 4) { spawn(s); continue; }
-                const depth = 1 - s.z;
-                const a = 0.15 + depth * 0.65;
+            const t = now / 1000;
+            for (const f of flakes) {
+                f.y += f.v * dt;
+                if (f.y > H + 2) { f.y = -2; f.x = Math.random() * W; }
+                const x = f.x + Math.sin(t * f.freq * Math.PI * 2 * SPD + f.ph) * f.amp;
+                const a = 0.3 + 0.5 * (0.5 + 0.5 * Math.sin(t * f.tw * SPD + f.ph));
+                const [r, g, b] = f.glint ? trim : text;
                 ctx.fillStyle = `rgba(${r},${g},${b},${a.toFixed(3)})`;
                 ctx.beginPath();
-                ctx.arc(px, py, 0.4 + depth * 1.8, 0, Math.PI * 2);
+                ctx.arc(x, f.y, f.r, 0, Math.PI * 2);
                 ctx.fill();
             }
             raf = requestAnimationFrame(tick);
@@ -76,6 +76,6 @@ export default {
         if (ro) ro.disconnect();
         if (canvas) canvas.remove();
         canvas = ctx = ro = null;
-        stars = [];
+        flakes = [];
     },
 };

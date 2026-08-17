@@ -11,7 +11,7 @@ function themeRGB(varName, fallback) {
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
-let canvas, ctx, ro, raf = 0, flies = [], W = 0, H = 0;
+let canvas, ctx, ro, raf = 0, flies = [], W = 0, H = 0, INT = 1;
 
 function retarget(f) {
     f.tx = Math.random() * W;
@@ -20,7 +20,7 @@ function retarget(f) {
 }
 
 function seed() {
-    const count = Math.max(5, Math.min(16, Math.round((W * H) / 60000)));
+    const count = Math.max(3, Math.min(28, Math.round((W * H) / 60000 * INT)));
     flies = Array.from({ length: count }, () => {
         const f = {
             x: Math.random() * W, y: Math.random() * H,
@@ -44,7 +44,9 @@ function resize(host) {
 
 export default {
     id: 'fireflies', name: 'Fireflies',
-    mount(host) {
+    mount(host, settings) {
+        const SPD = +((settings || {}).speed) || 1;
+        INT = +((settings || {}).intensity) || 1;
         canvas = document.createElement('canvas');
         ctx = canvas.getContext('2d');
         host.appendChild(canvas);
@@ -54,7 +56,7 @@ export default {
         ro.observe(host);
         let last = performance.now();
         const tick = (now) => {
-            const dt = Math.min((now - last) / 1000, 0.1);
+            const dt = Math.min((now - last) / 1000, 0.1) * SPD;
             last = now;
             ctx.clearRect(0, 0, W, H);
             const t = now / 1000;

@@ -1,8 +1,11 @@
 {
-  "_comment": "Core ambient-motion registry (themes-v2 P3). Each entry maps to static/motions/<id>/motion.js — an ES module default-exporting {id, name, mount(host, settings), unmount()}. Served via /api/motions with the same validation floor as /api/themes; plugin motions ride capabilities.motions.",
+  "_comment": "Core ambient-motion registry (themes-v2 P3). Each entry maps to static/motions/<id>/motion.js — an ES module default-exporting {id, name, mount(host, settings), unmount()}. settings.speed and settings.intensity carry the user's global multipliers. Served via /api/motions with the same validation floor as /api/themes; plugin motions ride capabilities.motions.",
   "motions": [
-    { "id": "stars", "name": "Stars", "description": "Slow-twinkling starfield" },
-    { "id": "drift", "name": "Drift", "description": "Soft motes drifting upward" },
-    { "id": "fireflies", "name": "Fireflies", "description": "Wandering points of glow" }
+    { "id": "snow", "name": "Snow", "description": "Falling flakes with a soft twinkle" },
+    { "id": "stars", "name": "Stars", "description": "Slow flight through a starfield" },
+    { "id": "fireflies", "name": "Fireflies", "description": "Wandering points of glow" },
+    { "id": "nibblers", "name": "Nibblers", "description": "Light trails racing the grid" },
+    { "id": "triangles", "name": "Triangles", "description": "Bouncing ribbon triangles" },
+    { "id": "coder", "name": "Coder", "description": "Glyph rain" }
   ]
 }

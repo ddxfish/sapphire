@@ -14,18 +14,26 @@
 // explicitly off) > theme bundle default > none. Same precedence as fonts.
 //
 // The motion only runs when ALL of these hold (each wired below):
-//   - prefers-reduced-motion is not set (first use of the query in the app)
-//   - no background image covers it (has-bg class on #chatbg — set by BOTH
-//     writers: applyBackground and story-room's direct paint; deliberately
-//     NOT the claim/release protocol, which story rooms bypass)
+//   - prefers-reduced-motion: gates THEME-DEFAULT motions only. An explicit
+//     in-app pick is user consent and always wins — the OS flag sets the
+//     default, it must never lock the picker (Krem's box: GNOME
+//     enable-animations=false made the row unclickable, 2026-08-16).
+//   - no view OWNS the chat surface (data-bg-owner on #chatbg — story rooms
+//     control their own presentation). Scene/theme bg images do NOT suppress
+//     (Krem's ruling 2026-08-16: snow over a winter scene is the point) —
+//     motion paints above the bg image, under the readability scrim.
 //   - the tab is visible (sd-server visibility-pause pattern)
 //   - #motion-layer is actually on screen (view switches away from chat)
+//
+// settings.speed / settings.intensity (localStorage 'sapphire-motion-speed'
+// / '-intensity', set in Visual) are merged into the settings passed to
+// mount() — plugin motions get both for free.
 
 let _registry = [];
 let _themeMotion = '';
 let _mounted = null;       // { id, mod }
 let _gen = 0;              // supersedes in-flight imports on rapid switches
-let _suppressed = false;   // bg image active
+let _suppressed = false;   // a view owns the chat surface (story room)
 let _hidden = document.hidden;
 let _offscreen = false;    // host not in viewport (other view active)
 let _reduced = false;
@@ -48,7 +56,9 @@ export function currentMotionId() {
 async function _sync() {
     const host = document.getElementById('motion-layer');
     if (!host) return;
-    const want = (!_reduced && !_suppressed && !_hidden && !_offscreen) ? currentMotionId() : '';
+    // reduced-motion blocks theme defaults only — an explicit pick is consent
+    const gated = _reduced && !_explicitPick();
+    const want = (!gated && !_suppressed && !_hidden && !_offscreen) ? currentMotionId() : '';
     if ((_mounted ? _mounted.id : '') === want) return;
     const gen = ++_gen;
     if (_mounted) {
@@ -70,8 +80,13 @@ async function _sync() {
         console.warn(`[Motion] '${want}' does not export {mount, unmount} — skipped`);
         return;
     }
+    let speed = 1, intensity = 1;
     try {
-        mod.mount(host, entry.settings || {});
+        speed = parseFloat(localStorage.getItem('sapphire-motion-speed')) || 1;
+        intensity = parseFloat(localStorage.getItem('sapphire-motion-intensity')) || 1;
+    } catch {}
+    try {
+        mod.mount(host, { ...(entry.settings || {}), speed, intensity });
         _mounted = { id: want, mod };
     } catch (e) {
         console.warn(`[Motion] mount of '${want}' failed:`, e);
@@ -97,6 +112,17 @@ export function applyMotion(id) {
     _sync();
 }
 
+// Global speed / intensity multipliers — remount so the running motion picks them up.
+export function setMotionSpeed(mult) {
+    try { localStorage.setItem('sapphire-motion-speed', String(mult || 1)); } catch {}
+    _restart();
+}
+
+export function setMotionIntensity(mult) {
+    try { localStorage.setItem('sapphire-motion-intensity', String(mult || 1)); } catch {}
+    _restart();
+}
+
 // Theme bundle default (set by core/theme.js _applyBundle, like setThemeBackground).
 export function setThemeMotion(id) {
     _themeMotion = (typeof id === 'string' && /^[a-z0-9:_-]{1,120}$/.test(id)) ? id : '';
@@ -118,11 +144,15 @@ export async function initMotions() {
 
         const bg = document.getElementById('chatbg');
         if (bg) {
-            _suppressed = bg.classList.contains('has-bg');
+            // Only a view that OWNS the surface suppresses (story rooms —
+            // they control their own presentation). Bg images don't: motion
+            // paints above the image, under the readability scrim.
+            const owned = () => bg.hasAttribute('data-bg-owner');
+            _suppressed = owned();
             new MutationObserver(() => {
-                const s = bg.classList.contains('has-bg');
+                const s = owned();
                 if (s !== _suppressed) { _suppressed = s; _sync(); }
-            }).observe(bg, { attributes: true, attributeFilter: ['class'] });
+            }).observe(bg, { attributes: true, attributeFilter: ['data-bg-owner'] });
         }
 
         const host = document.getElementById('motion-layer');

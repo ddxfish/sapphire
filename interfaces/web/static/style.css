@@ -3943,6 +3943,14 @@ div.hb-response-summary {
 #chatbg {
     flex: 1;
     background-color: var(--chat-area-bg, var(--border));
+    /* The overlay's tint moved DOWN here as a gradient layer (identical
+       composite) so #chatbg-overlay can be transparent — otherwise the
+       overlay's opaque veil sits ABOVE #motion-layer and no motion is ever
+       visible on themes without a bg image (P3 round 6). applyBackground's
+       inline background-image replaces this gradient in has-bg mode, where
+       the overlay scrim takes over readability — unchanged behavior. */
+    background-image: linear-gradient(var(--chat-area-overlay, var(--overlay-bg)),
+                                      var(--chat-area-overlay, var(--overlay-bg)));
     overflow: hidden;
     position: relative;
     /* Own stacking context: lets a background layer (motion/canvas) slot
@@ -3969,7 +3977,9 @@ div.hb-response-summary {
 #motion-layer canvas { display: block; width: 100%; height: 100%; }
 
 #chatbg-overlay {
-    background: var(--chat-area-overlay, var(--overlay-bg));
+    /* Transparent — the chat-area veil lives on #chatbg now (see above) so
+       the motion canvas paints between the floor and the transcript. */
+    background: transparent;
     height: 100%;
     width: 100%;
     overflow-y: auto;

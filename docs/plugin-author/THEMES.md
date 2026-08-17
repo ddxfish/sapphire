@@ -154,7 +154,9 @@ export default {
 };
 ```
 
-The runtime handles the hard parts for you — your motion is automatically unmounted while a background image covers it, while the tab is hidden, while the chat surface is off-screen, and whenever `prefers-reduced-motion` is set. It is **remounted on theme switch**, so sample theme colors (e.g. `--trim`) at mount time and they will always be current. Don't add your own visibility handling.
+The runtime handles the hard parts for you — your motion is automatically unmounted while another view owns the chat surface (e.g. game-room story backdrops), while the tab is hidden, and while the chat surface is off-screen. Background images do NOT suppress motion — your canvas paints above the bg image and below the readability scrim. When the OS requests `prefers-reduced-motion`, theme-default motions never auto-start — but an explicit user pick in the picker still runs (a pick is consent).
+
+`settings` passed to `mount()` includes two global user multipliers: `speed` (0.5 slow / 1 normal / 1.75 fast — multiply your velocities and cadences by it) and `intensity` (0.5 low / 1 normal / 1.75 high — multiply your particle/element counts by it). Any other keys you declare in your motion's `settings` object in the manifest are passed through alongside them. It is **remounted on theme switch**, so sample theme colors (e.g. `--trim`) at mount time and they will always be current. Don't add your own visibility handling.
 
 Users pick motions in Settings > Visual > Background & Motion; the choice persists in localStorage (`sapphire-motion`).
 

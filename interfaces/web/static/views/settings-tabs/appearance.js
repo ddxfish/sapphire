@@ -47,8 +47,22 @@ export default {
             <div class="setting-section-title" style="margin-top:20px">Background &amp; Motion</div>
             <div class="setting-help" style="margin-bottom:8px">Global underlay &mdash; shown whenever a chat has no scene of its own. A chat's scene (set from the chat sidebar) always wins.</div>
             <div id="visual-scene-mount"></div>
-            <div class="setting-help" style="margin:14px 0 8px">Ambient motion behind chat &mdash; pauses automatically under scene images and while the tab is hidden.</div>
+            <div class="setting-help" style="margin:14px 0 8px">Ambient motion behind chat &mdash; runs over scenes too, pauses while the tab is hidden.</div>
             <div class="motion-row" id="motion-row"><div class="text-muted" style="font-size:var(--font-sm)">Loading&hellip;</div></div>
+            <div class="motion-speed-row">
+                <span class="setting-help">Speed</span>
+                <select id="motion-speed">
+                    <option value="0.5">Slow</option>
+                    <option value="1" selected>Normal</option>
+                    <option value="1.75">Fast</option>
+                </select>
+                <span class="setting-help" style="margin-left:12px">Intensity</span>
+                <select id="motion-intensity">
+                    <option value="0.5">Low</option>
+                    <option value="1" selected>Normal</option>
+                    <option value="1.75">High</option>
+                </select>
+            </div>
 
             <div class="setting-section-title" style="margin-top:20px">Options</div>
             <div class="settings-grid">
@@ -167,7 +181,8 @@ export default {
             .motion-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
             .motion-card.active { border-color: var(--trim); }
             .motion-badge { font-size: 0.5625rem; color: var(--text-muted); margin-left: 6px; }
-            .motion-row.reduced .motion-card { opacity: 0.55; pointer-events: none; }
+            .motion-speed-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+            .motion-speed-row select { min-width: 100px; }
             .theme-settings-panel {
                 margin-top: 12px; padding: 14px; border-radius: 10px;
                 background: var(--bg-secondary); border: 1px solid var(--border);
@@ -269,6 +284,14 @@ export default {
         import('../../core/motions.js').then(async m => {
             await m.initMotions();
             _renderMotionRow(el, m);
+            const wire = (sel, key, setter) => {
+                if (!sel) return;
+                try { sel.value = localStorage.getItem(key) || '1'; } catch {}
+                if (!sel.value) sel.value = '1';   // stored value not among options
+                sel.addEventListener('change', () => setter(parseFloat(sel.value)));
+            };
+            wire(el.querySelector('#motion-speed'), 'sapphire-motion-speed', m.setMotionSpeed);
+            wire(el.querySelector('#motion-intensity'), 'sapphire-motion-intensity', m.setMotionIntensity);
         }).catch(() => {});
 
         // Icon color (instance-level gem/favicon tint)
@@ -321,9 +344,10 @@ function _renderMotionRow(el, m) {
         return `<div class="motion-card${active ? ' active' : ''}" data-motion="${_esc(mo.id)}" title="${_esc(mo.description || '')}">${_esc(mo.name)}${badge}</div>`;
     }).join('');
 
-    row.classList.toggle('reduced', reduced);
+    // Reduced-motion never locks the picker — an explicit pick is consent
+    // (the OS flag only stops THEME-DEFAULT motions from auto-starting).
     row.innerHTML = cards + (reduced
-        ? '<div class="setting-help" style="flex-basis:100%">Your system asks for reduced motion &mdash; motions stay off while that preference is set.</div>'
+        ? '<div class="setting-help" style="flex-basis:100%">Your system prefers reduced motion, so themes won’t auto-start one &mdash; a pick you make here still applies.</div>'
         : '');
 
     row.querySelectorAll('.motion-card').forEach(c => c.addEventListener('click', () => {
