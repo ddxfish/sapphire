@@ -28,12 +28,13 @@ AVAILABLE_FUNCTIONS = [
     'list_tools',
     'switch_model',
     'switch_toolset',
+    'set_motion',
 ]
 
 # Mode-based filtering - function_manager uses this to show/hide tools
 MODE_FILTER = {
-    "monolith": ['prompt_view', 'prompt_switch', 'prompt_edit', 'prompt_create', 'set_voice', 'reset_chat', 'change_username', 'list_tools', 'switch_model', 'switch_toolset'],
-    "assembled": ['prompt_view', 'prompt_switch', 'prompt_create', 'prompt_pieces', 'set_voice', 'reset_chat', 'change_username', 'list_tools', 'switch_model', 'switch_toolset'],
+    "monolith": ['prompt_view', 'prompt_switch', 'prompt_edit', 'prompt_create', 'set_voice', 'reset_chat', 'change_username', 'list_tools', 'switch_model', 'switch_toolset', 'set_motion'],
+    "assembled": ['prompt_view', 'prompt_switch', 'prompt_create', 'prompt_pieces', 'set_voice', 'reset_chat', 'change_username', 'list_tools', 'switch_model', 'switch_toolset', 'set_motion'],
 }
 
 # Settings-gated tools — function_manager hides these entirely (not just
@@ -222,6 +223,21 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Model name or friendly name from the roster"}
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "set_motion",
+            "description": "Set an ambient motion animation (snow, stars, fireflies...) behind the current chat — the user sees it live. A per-chat override; 'none' clears back to the user's default. No name = list available motions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Motion id or name from the list, or 'none' to clear."}
                 },
                 "required": []
             }
@@ -1007,6 +1023,50 @@ def _switch_toolset(args):
     return f"Switched to toolset '{match}' ({len(fm.get_enabled_function_names())} tools).{note}", True
 
 
+def _set_motion(args):
+    from core.event_bus import publish, Events
+    from core.routes.plugins import collect_motions
+
+    system = _system()
+    sm = system.llm_chat.session_manager
+    motions = collect_motions()
+    current = (sm.get_chat_settings() or {}).get('motion', '')
+
+    name = (args.get('name') or '').strip()
+    if not name:
+        cur_label = current or "(default — follows the user's global pick)"
+        lines = [f"Current chat motion: {cur_label}",
+                 "Available motions:"]
+        for m in motions:
+            marker = "  <- current" if m['id'] == current else ""
+            desc = f" — {m['description']}" if m.get('description') else ""
+            lines.append(f"  {m['id']}: {m['name']}{desc}{marker}")
+        if not motions:
+            lines.append("  (none installed)")
+        lines.append("set_motion(name) to set it for this chat, or 'none' to clear.")
+        return '\n'.join(lines), True
+
+    low = name.lower()
+    if low in ("none", "clear", "off", "default"):
+        target = ""
+    else:
+        target = next((m['id'] for m in motions
+                       if m['id'].lower() == low or m['name'].lower() == low), None)
+        if target is None:
+            menu = ", ".join(m['id'] for m in motions) or "(none installed)"
+            return f"Motion '{name}' not found. Available: {menu}.", False
+
+    # Per-chat override (merges; resolution = chat > user's global pick > theme).
+    if not sm.update_chat_settings({"motion": target}):
+        return "Failed to update chat settings.", False
+    # Tell the frontend to apply it live (same lane as set_scene).
+    publish(Events.CHAT_SETTINGS_CHANGED, {"motion": target, "origin": "set_motion"})
+
+    if target:
+        return f"Motion set to '{target}' for this chat — the user sees it animating behind the conversation.", True
+    return "Chat motion cleared — back to the user's default.", True
+
+
 _HANDLERS = {
     'prompt_view': _prompt_view,
     'prompt_switch': _prompt_switch,
@@ -1019,6 +1079,7 @@ _HANDLERS = {
     'list_tools': _list_tools,
     'switch_model': _switch_model,
     'switch_toolset': _switch_toolset,
+    'set_motion': _set_motion,
 }
 
 

@@ -10,8 +10,11 @@
 // #chatbg is a MOVING node — organs.js re-parents it into story rooms — so a
 // child rides the transplant while a sibling would be orphaned invisible.
 //
-// Resolution: explicit user pick (localStorage 'sapphire-motion', 'none' =
-// explicitly off) > theme bundle default > none. Same precedence as fonts.
+// Resolution: per-chat motion (chat settings, set in the scene modal or by
+// the set_motion tool) > explicit user pick (localStorage 'sapphire-motion',
+// 'none' = explicitly off) > theme bundle default > none. The global pick is
+// the master default; a chat value overrides it, unset falls through — the
+// exact shape of chat background > underlay (Krem's rulings 2026-08-17).
 //
 // The motion only runs when ALL of these hold (each wired below):
 //   - prefers-reduced-motion: gates THEME-DEFAULT motions only. An explicit
@@ -31,6 +34,7 @@
 
 let _registry = [];
 let _themeMotion = '';
+let _chatMotion = '';      // per-chat override ('' = unset, falls through)
 let _mounted = null;       // { id, mod }
 let _gen = 0;              // supersedes in-flight imports on rapid switches
 let _suppressed = false;   // a view owns the chat surface (story room)
@@ -47,6 +51,7 @@ function _explicitPick() {
 
 // Effective desired motion id ('' = none), ignoring suppression state.
 export function currentMotionId() {
+    if (_chatMotion && _registry.some(m => m.id === _chatMotion)) return _chatMotion;
     const pick = _explicitPick();
     if (pick === 'none') return '';
     const want = pick || _themeMotion;
@@ -56,8 +61,11 @@ export function currentMotionId() {
 async function _sync() {
     const host = document.getElementById('motion-layer');
     if (!host) return;
-    // reduced-motion blocks theme defaults only — an explicit pick is consent
-    const gated = _reduced && !_explicitPick();
+    // reduced-motion blocks theme defaults only — an explicit pick is
+    // consent, and a per-chat pick is consent too (someone chose it for
+    // this chat deliberately).
+    const chatPick = _chatMotion && _registry.some(m => m.id === _chatMotion);
+    const gated = _reduced && !_explicitPick() && !chatPick;
     const want = (!gated && !_suppressed && !_hidden && !_offscreen) ? currentMotionId() : '';
     if ((_mounted ? _mounted.id : '') === want) return;
     const gen = ++_gen;
@@ -104,6 +112,19 @@ function _restart() {
     }
     _sync();
 }
+
+// Per-chat override — set by chat.js on chat switch (settings.motion), the
+// scene modal, and the set_motion tool via CHAT_SETTINGS_CHANGED. '' clears
+// back to the global pick / theme default. Not persisted here: the chat's
+// settings row is the store, this is just the live value.
+export function setChatMotion(id) {
+    const v = (typeof id === 'string' && /^[a-z0-9:_-]{1,120}$/.test(id)) ? id : '';
+    if (v === _chatMotion) return;
+    _chatMotion = v;
+    _sync();
+}
+
+export function chatMotionId() { return _chatMotion; }
 
 // Explicit user pick. '' or 'none' = explicitly off — stored either way, so
 // a user's None survives switching to a theme that bundles a motion.

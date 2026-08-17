@@ -253,3 +253,35 @@ def test_in_tool_cycle_active_and_override_independent(sm):
         stream_brain.reset_override(tok)
     assert sm.current_chat._in_tool_cycle is True      # active flag survived intact
     assert "back-to-active" not in _texts(sm.read_chat_messages("phone"))
+
+
+# ─────────────── Incomplete override (missing 'history') ───────────────
+# The continuity executor shipped its override without a 'history' key until
+# 2026-08-17. update_chat_settings then fell through to the active branch and
+# _save_current_chat persisted the ACTIVE chat's settings+messages under the
+# override NAME — a cross-chat clobber. These pin the fix: settings writes
+# route by the override's chat NAME, and a name-diverted save with no history
+# object is dropped loudly, never written.
+
+def test_incomplete_override_settings_write_routes_to_named_chat(sm):
+    active = sm.get_active_chat_name()
+    tok = stream_brain.set_override({"chat": "phone", "settings": {}})
+    try:
+        assert sm.update_chat_settings({"motion": "fireflies"}) is True
+    finally:
+        stream_brain.reset_override(tok)
+    assert sm.read_chat_settings("phone").get("motion") == "fireflies"
+    assert "motion" not in sm.current_settings
+    assert (sm.read_chat_settings(active) or {}).get("motion") is None
+
+
+def test_incomplete_override_save_never_clobbers_named_chat(sm):
+    sm.set_named_chat_settings("phone", {"persona": "phone_persona"})
+    sm.add_user_message("active-only-text")        # no override: hits active
+    tok = stream_brain.set_override({"chat": "phone", "settings": {}})
+    try:
+        sm._save_current_chat()                    # invariant breach → dropped
+    finally:
+        stream_brain.reset_override(tok)
+    assert sm.read_chat_settings("phone").get("persona") == "phone_persona"
+    assert "active-only-text" not in _texts(sm.read_chat_messages("phone"))

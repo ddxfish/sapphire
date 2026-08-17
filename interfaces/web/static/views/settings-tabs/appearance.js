@@ -170,17 +170,8 @@ export default {
             .font-card-name { font-size: var(--font-xs); font-weight: 600; color: var(--text); margin-top: 4px; }
             .font-dl { position: absolute; top: 6px; left: 8px; font-size: 0.75rem; color: var(--text-muted); }
 
-            /* Ambient motion picker (P3) */
-            .motion-row { display: flex; flex-wrap: wrap; gap: 8px; }
-            .motion-card {
-                padding: 8px 14px; border-radius: 10px; cursor: pointer;
-                background: var(--bg-secondary); border: 2px solid transparent;
-                font-size: var(--font-sm); color: var(--text);
-                transition: border-color 0.15s, transform 0.1s;
-            }
-            .motion-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
-            .motion-card.active { border-color: var(--trim); }
-            .motion-badge { font-size: 0.5625rem; color: var(--text-muted); margin-left: 6px; }
+            /* Ambient motion picker (P3) — card styles live in style.css
+               (shared with the chat scene modal) */
             .motion-speed-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
             .motion-speed-row select { min-width: 100px; }
             .theme-settings-panel {

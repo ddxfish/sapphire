@@ -679,12 +679,24 @@ class ContinuityExecutor:
                 # closes the daemon↔web state-leak family (a Discord reply
                 # reported the web chat's model as its own).
                 from core.chat import stream_brain
+                from core.chat.history import ConversationHistory
                 _cc = session_manager.read_chat_settings(target_chat)
+                # 'history' is REQUIRED, not decorative: _effective_chat()
+                # diverts on it, and every override consumer (settings
+                # writes, _save_current_chat, _in_tool_cycle) keys off that
+                # divert. Shipping this override without it made a tool's
+                # settings write persist the operator's ACTIVE chat's
+                # settings+messages under target_chat (trinity clobbered
+                # with default, 2026-08-17). Seeded from the messages we
+                # already read — same shape make_stream_session builds.
+                _hist = ConversationHistory(max_history=session_manager.max_history)
+                _hist.messages = list(history_messages or [])
                 _brain_token = stream_brain.set_override({
                     "chat": target_chat,
                     "settings": _cc if isinstance(_cc, dict) else {},
                     "system_prompt": ctx.system_prompt,
                     "tools": None,
+                    "history": _hist,
                 })
                 try:
                     # Run through isolated ExecutionContext — no singleton contact

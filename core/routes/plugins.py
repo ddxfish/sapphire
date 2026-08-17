@@ -776,11 +776,11 @@ async def list_themes(_=Depends(require_login)):
     return {"themes": themes, "default": default_theme}
 
 
-@router.get("/api/motions")
-async def list_motions(_=Depends(require_login)):
+def collect_motions():
     """Ambient motion registry (themes-v2 P3) — core motions + plugin
     capabilities.motions. Same validation floor as /api/themes: registry and
-    manifest JSON are never trusted; bad entries skip-and-log, never 500."""
+    manifest JSON are never trusted; bad entries skip-and-log, never 500.
+    Shared by /api/motions and the set_motion tool (functions/meta.py)."""
     from core.api_fastapi import BOOT_VERSION  # lazy: avoid circular import
     motions = []
 
@@ -838,7 +838,12 @@ async def list_motions(_=Depends(require_login)):
                 "script": f"/plugin-web/{pname}/{script}?v={BOOT_VERSION}",
             })
 
-    return {"motions": motions}
+    return motions
+
+
+@router.get("/api/motions")
+async def list_motions(_=Depends(require_login)):
+    return {"motions": collect_motions()}
 
 
 def _extract_css_preview(css_path):

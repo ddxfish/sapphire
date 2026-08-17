@@ -3976,6 +3976,28 @@ div.hb-response-summary {
 }
 #motion-layer canvas { display: block; width: 100%; height: 100%; }
 
+/* Motion picker cards — shared by Settings > Visual AND the chat scene
+   modal (which mounts on document.body, so these can't live in a
+   view-scoped <style> block). */
+.motion-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.motion-card {
+    padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    background: var(--bg-secondary); border: 2px solid transparent;
+    font-size: var(--font-sm); color: var(--text);
+    transition: border-color 0.15s, transform 0.1s;
+}
+.motion-card:hover { transform: translateY(-1px); border-color: var(--border-hover); }
+.motion-card.active { border-color: var(--trim); }
+.motion-badge { font-size: 0.5625rem; color: var(--text-muted); margin-left: 6px; }
+
+/* Per-chat motion section in the scene modal */
+.scene-motion-sect { margin-top: 16px; }
+.scene-motion-sect h4 {
+    margin: 0 0 8px; font-size: var(--font-xs); font-weight: 600;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+}
+.scene-motion-help { font-size: var(--font-xs); color: var(--text-muted); margin-top: 6px; }
+
 #chatbg-overlay {
     /* Transparent — the chat-area veil lives on #chatbg now (see above) so
        the motion canvas paints between the floor and the transcript. */

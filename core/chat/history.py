@@ -1394,6 +1394,20 @@ class ChatSessionManager:
         eff_name = self._effective_chat_name()
         is_override = eff_chat is not self.current_chat
 
+        # Invariant guard (2026-08-17): the name and the history object must
+        # divert TOGETHER. An override that names another chat but carries no
+        # history would fall into the non-override branch below and persist
+        # the ACTIVE chat's settings+messages under the override's name — a
+        # cross-chat clobber (how trinity got default's row). Fail loudly,
+        # never write.
+        if not is_override and eff_name != self.active_chat_name:
+            logger.error(
+                f"Save invariant breach: stream override names '{eff_name}' "
+                f"but carries no history — dropping save to protect it. "
+                f"Fix the override producer to include 'history'."
+            )
+            return
+
         with self._lock:
             try:
                 with self._get_connection() as conn:
@@ -3616,20 +3630,30 @@ class ChatSessionManager:
         caller's check and this write, refuse — a sidebar payload must never
         merge into the eviction landing chat."""
         try:
-            eff_chat = self._effective_chat()
-            if eff_chat is not self.current_chat:
+            # Divert on the override's CHAT NAME, not history-object identity.
+            # The continuity executor's override used to ship without a
+            # 'history' key, so `_effective_chat() is current_chat` held even
+            # mid-task and a tool's settings write fell through to the
+            # operator's active chat — then _save_current_chat persisted the
+            # ACTIVE chat's settings+messages under the override NAME
+            # (clobbered trinity with default, 2026-08-17). Name presence is
+            # the real "am I in someone else's turn" signal.
+            _ov = None
+            try:
+                from core.chat.stream_brain import get_override
+                _ov = get_override()
+            except Exception:
+                pass
+            if _ov and _ov.get("chat"):
                 # Override active — merge into the stream's own chat via a direct DB
                 # write, and keep this turn's in-memory snapshot in sync.
-                eff_name = self._effective_chat_name()
+                # set_named_chat_settings also mirrors into current_settings
+                # when the override happens to target the active chat.
+                eff_name = _ov["chat"]
                 ok = self.set_named_chat_settings(eff_name, settings)
                 if ok:
-                    try:
-                        from core.chat.stream_brain import get_override
-                        o = get_override()
-                        if o is not None and o.get("settings") is not None:
-                            o["settings"].update(settings)
-                    except Exception:
-                        pass
+                    if _ov.get("settings") is not None:
+                        _ov["settings"].update(settings)
                     logger.info(f"Updated settings for override chat '{eff_name}'")
                 return ok
             # Vault hunt R5/G6: the whole read-decide-write-seal runs under

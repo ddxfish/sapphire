@@ -158,7 +158,7 @@ The runtime handles the hard parts for you — your motion is automatically unmo
 
 `settings` passed to `mount()` includes two global user multipliers: `speed` (0.5 slow / 1 normal / 1.75 fast — multiply your velocities and cadences by it) and `intensity` (0.5 low / 1 normal / 1.75 high — multiply your particle/element counts by it). Any other keys you declare in your motion's `settings` object in the manifest are passed through alongside them. It is **remounted on theme switch**, so sample theme colors (e.g. `--trim`) at mount time and they will always be current. Don't add your own visibility handling.
 
-Users pick motions in Settings > Visual > Background & Motion; the choice persists in localStorage (`sapphire-motion`).
+Users pick motions in Settings > Visual > Background & Motion; the choice persists in localStorage (`sapphire-motion`). That pick is the **master default** — each chat can override it from the chat-scene modal (or the AI's `set_motion` tool), stored per-chat in chat settings. Resolution: per-chat motion > global pick > theme bundle default > none. Plugin motions are selectable in both pickers automatically; a per-chat pick also runs under `prefers-reduced-motion` (a pick is consent).
 
 ## Animated Backgrounds (JS) — DEPRECATED
 

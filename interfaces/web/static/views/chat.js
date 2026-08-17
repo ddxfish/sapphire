@@ -12,6 +12,7 @@ import { loadPersona, createFromChat, avatarImg, avatarFallback, avatarUrl } fro
 import { initAgentStatus } from '../features/agent-status.js';
 import { mountScenePicker } from '../shared/scene-picker.js';
 import { setupModalClose } from '../shared/modal.js';
+import { getMotions, setChatMotion, chatMotionId } from '../core/motions.js';
 import { initAccordions } from '../shared/accordion.js';
 import {
     renderScopeDropdowns,
@@ -124,6 +125,8 @@ export default {
         // model after she moves herself to a different (e.g. cloud/paid) provider.
         eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, (data) => {
             if (data && typeof data.background === 'string') applyBackground(data.background);
+            // set_motion tool — per-chat ambient motion, applied live
+            if (data && typeof data.motion === 'string') setChatMotion(data.motion);
             if (data?.settings?.llm_primary) loadSidebar();
         });
 
@@ -869,6 +872,9 @@ async function loadSidebar(overrideSettings = null, overrideChat = null) {
         // Scene background (resolved server-side: chat override > persona default > none)
         applyBackground(settings.background || '');
 
+        // Per-chat motion (resolution in core/motions.js: chat > global pick > theme)
+        setChatMotion(settings.motion || '');
+
         // Update labels
         const pitchLabel = container.querySelector('#sb-pitch-val');
         if (pitchLabel) pitchLabel.textContent = settings.pitch || 0.98;
@@ -955,7 +961,14 @@ function openSceneModal() {
     overlay.innerHTML = `
         <div class="modal-base">
             <div class="modal-header"><h3>Chat Scene</h3><button class="close-btn modal-x" type="button">&times;</button></div>
-            <div class="modal-body"><div id="scene-picker-mount"></div></div>
+            <div class="modal-body">
+                <div id="scene-picker-mount"></div>
+                <div class="scene-motion-sect">
+                    <h4>Motion</h4>
+                    <div id="scene-motion-row" class="motion-row"></div>
+                    <div class="scene-motion-help">A per-chat animation. Default follows your pick in Settings &gt; Visual; a chat pick runs even when your system prefers reduced motion.</div>
+                </div>
+            </div>
             <div class="modal-footer"><button class="btn btn-secondary modal-close" type="button">Done</button></div>
         </div>`;
     document.body.appendChild(overlay);
@@ -974,6 +987,29 @@ function openSceneModal() {
             if (chatName) api.updateChatSettings(chatName, { background: name }).catch(() => {});
         }
     });
+    _renderModalMotionRow(overlay);
+}
+
+// Per-chat motion cards in the scene modal. 'Default' clears the override
+// (falls through to the global Settings > Visual pick / theme default).
+// Registry is already loaded — main.js runs initMotions() at boot.
+function _renderModalMotionRow(overlay) {
+    const row = overlay.querySelector('#scene-motion-row');
+    if (!row) return;
+    const chatPick = chatMotionId();
+    const cards = [{ id: '', name: 'Default' }, ...getMotions()].map(mo => {
+        const active = (mo.id || '') === chatPick;
+        return `<div class="motion-card${active ? ' active' : ''}" data-motion="${escapeHtml(mo.id)}" title="${escapeHtml(mo.description || '')}">${escapeHtml(mo.name)}</div>`;
+    }).join('');
+    row.innerHTML = cards;
+    row.querySelectorAll('.motion-card').forEach(c => c.addEventListener('click', () => {
+        const id = c.dataset.motion || '';
+        // Apply live (visible behind the modal) + persist on the chat row.
+        setChatMotion(id);
+        const chatName = document.getElementById('chat-select')?.value;
+        if (chatName) api.updateChatSettings(chatName, { motion: id }).catch(() => {});
+        _renderModalMotionRow(overlay);
+    }));
 }
 
 async function saveSettings(container, chatNameOverride = null) {
