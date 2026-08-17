@@ -269,7 +269,7 @@ class ExecutionContext:
         # that personal bucket.
         #
         # The previous narrower fix gated this force-None only on
-        # `prompt == 'agent'`, but tasks can resolve to sapphire/rook/custom
+        # `prompt == 'agent'`, but tasks can resolve to sapphire/falcon/custom
         # personas (and spawn_agent(prompt='self') inherits non-agent
         # personas routinely). Three scouts converged on this exact gap.
         # Drop the gate — apply the stronger invariant universally. Any task

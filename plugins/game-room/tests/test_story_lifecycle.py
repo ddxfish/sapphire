@@ -118,22 +118,22 @@ def test_start_refuses_unknown_session(system, engine):
 
 def test_start_stashes_target_chats_own_clothes(system, engine):
     sm = system.llm_chat.session_manager
-    sm.settings["story-chat"] = {"prompt": "rook", "toolset": "mind",
+    sm.settings["story-chat"] = {"prompt": "falcon", "toolset": "mind",
                                  "extra_toolsets": ["x"]}
     sess.start(system, "goblin-den", session="story-chat")
     entry = st.get_active()["story-chat"]
-    assert entry["prev_prompt"] == "rook"        # not the live chat's 'sapphire'
+    assert entry["prev_prompt"] == "falcon"        # not the live chat's 'sapphire'
     assert entry["prev_toolset"] == "mind"
     assert entry["prev_extras"] == ["x"]
 
 
 def test_end_restores_only_with_return_prompt(system, engine):
     sess.start(system, "goblin-den", session="story-chat")
-    sess.set_mode(system, return_prompt="rook", session="story-chat")
+    sess.set_mode(system, return_prompt="falcon", session="story-chat")
     msg, ok = sess.end(system, session="story-chat")
     assert ok, msg
     sm = system.llm_chat.session_manager
-    assert sm.settings["story-chat"]["prompt"] == "rook"
+    assert sm.settings["story-chat"]["prompt"] == "falcon"
     assert sm.settings["story-chat"]["toolset"] == "all"
     assert st.get_active().get("story-chat") is None
     assert sm.settings["main"]["prompt"] == "sapphire"     # live chat untouched
@@ -152,7 +152,7 @@ def test_end_without_return_prompt_keeps_costume(system, engine):
 def test_end_clears_active_last(system, engine, monkeypatch):
     """A throw during restore must leave the story recoverable (finding 4.8)."""
     sess.start(system, "goblin-den", session="story-chat")
-    sess.set_mode(system, return_prompt="rook", session="story-chat")
+    sess.set_mode(system, return_prompt="falcon", session="story-chat")
     monkeypatch.setattr(sess, "_restore_pack",
                         lambda: (_ for _ in ()).throw(RuntimeError("disk full")))
     with pytest.raises(RuntimeError):

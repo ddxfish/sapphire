@@ -14,7 +14,7 @@
 
 import { applyBackground, setThemeBackground } from '../features/chat-settings.js';
 import { ensurePresetFont } from '../shared/fonts.js';
-import { setThemeMotion } from './motions.js';
+import { setThemeMotion, restartMotion } from './motions.js';
 
 let _themes = [];
 let _defaultId = 'dark';
@@ -110,7 +110,13 @@ export function applyTheme(theme, opts = {}) {
             link.rel = 'stylesheet';
             document.head.appendChild(link);
         }
-        if (link.href !== new URL(theme.css, location.origin).href) link.href = theme.css;
+        if (link.href !== new URL(theme.css, location.origin).href) {
+            link.href = theme.css;
+            // Remount the motion once the sheet actually LANDS — the
+            // data-theme observer fires before the CSS loads, so mount-time
+            // color sampling read the outgoing palette (hunt 2026-08-17).
+            link.addEventListener('load', () => restartMotion(), { once: true });
+        }
         link.disabled = false;
         document.getElementById('plugin-theme-css')?.remove();
     } else {
@@ -122,6 +128,9 @@ export function applyTheme(theme, opts = {}) {
             document.head.appendChild(pcss);
         }
         pcss.href = theme.css;
+        // Plugin sheets are never preloaded by the Visual grid — without
+        // this the motion keeps the outgoing palette until a later remount.
+        pcss.addEventListener('load', () => restartMotion(), { once: true });
         const coreLink = document.getElementById('theme-stylesheet');
         if (coreLink) coreLink.disabled = true;
     }

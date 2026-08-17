@@ -39,7 +39,9 @@ def _session(query=None, body=None):
 def _out(engine, state, session=None):
     view = engine.redact(state) if state else {'session': None}
     cfg = gc.session_cfg(session)
-    view['seat'] = {**cfg, 'resolved': gc.provider_info(cfg.get('provider'), cfg.get('model', ''))}
+    view['seat'] = {**cfg, 'resolved': gc.provider_info(
+        cfg.get('provider'), cfg.get('model', ''),
+        privacy_required=bool(cfg.get('privacy_required') or cfg.get('hidden')))}
     return view
 
 

@@ -301,8 +301,8 @@ def test_run_foreground_releases_voice_lock_on_success():
         "name": "test-fg",
         "chat_target": "lookout",
         "initial_message": "ping",
-        "prompt": "rook",
-        "toolset": "rook",
+        "prompt": "falcon",
+        "toolset": "falcon",
         "tts_enabled": False,
     }
     result = {"success": False, "errors": [], "responses": [], "iterations_completed": 0}
@@ -341,8 +341,8 @@ def test_run_foreground_releases_voice_lock_on_inner_exception():
         "name": "test-fg-err",
         "chat_target": "lookout",
         "initial_message": "ping",
-        "prompt": "rook",
-        "toolset": "rook",
+        "prompt": "falcon",
+        "toolset": "falcon",
         "tts_enabled": False,
     }
     result = {"success": False, "errors": [], "responses": [], "iterations_completed": 0}
@@ -376,8 +376,8 @@ def test_run_foreground_back_to_back_does_not_deadlock():
         "name": "test-fg-serial",
         "chat_target": "lookout",
         "initial_message": "ping",
-        "prompt": "rook",
-        "toolset": "rook",
+        "prompt": "falcon",
+        "toolset": "falcon",
         "tts_enabled": False,
     }
 
@@ -677,7 +677,7 @@ def test_openai_compat_low_max_tokens_does_not_stream(monkeypatch):
 #
 # `_build_scopes` used to gate the force-None-unlisted-scope invariant on
 # `task_settings.get('prompt') == 'agent'`. Any non-agent persona (sapphire,
-# rook, custom, `spawn_agent(prompt='self')` inheriting non-agent) with
+# falcon, custom, `spawn_agent(prompt='self')` inheriting non-agent) with
 # unlisted plugin scopes fell back to the registry default `'default'` —
 # which is a REAL scope where the user's memories live. Agent writes silently
 # landed in the user's bucket. These tests lock in the universal invariant:

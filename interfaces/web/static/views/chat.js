@@ -124,10 +124,27 @@ export default {
         // model dropdown + send-button badge from truth, or the UI keeps showing the old
         // model after she moves herself to a different (e.g. cloud/paid) provider.
         eventBus.on(eventBus.Events.CHAT_SETTINGS_CHANGED, (data) => {
-            if (data && typeof data.background === 'string') applyBackground(data.background);
-            // set_motion tool — per-chat ambient motion, applied live
-            if (data && typeof data.motion === 'string') setChatMotion(data.motion);
-            if (data?.settings?.llm_primary) loadSidebar();
+            if (!data) return;
+            // Foreign-chat guard (hunt 2026-08-17): publishes carry `chat`;
+            // a background lane's write (phone/cron/agent) must not repaint
+            // the chat the operator is looking at. No chat key = legacy
+            // payload — apply as before.
+            const cur = document.getElementById('chat-select')?.value;
+            const foreign = typeof data.chat === 'string' && data.chat
+                && cur && data.chat !== cur;
+            // Tools publish top-level {background|motion}; the settings PUT
+            // route and set_voice publish nested {settings:{...}} — read
+            // both, so a scene-modal change in one tab reaches the others.
+            const s = (data.settings && typeof data.settings === 'object') ? data.settings : {};
+            const bg = typeof data.background === 'string' ? data.background
+                : (typeof s.background === 'string' ? s.background : null);
+            const motion = typeof data.motion === 'string' ? data.motion
+                : (typeof s.motion === 'string' ? s.motion : null);
+            if (!foreign) {
+                if (bg !== null) applyBackground(bg);
+                if (motion !== null) setChatMotion(motion);
+            }
+            if (s.llm_primary) loadSidebar();
         });
 
         // Refresh sidebar scope dropdowns when scopes are created/deleted in

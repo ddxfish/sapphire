@@ -578,7 +578,7 @@ async def list_apps(_=Depends(require_login)):
     """List available plugin apps (plugins with an app/ directory)."""
     from core.plugin_loader import plugin_loader
     apps = []
-    for name, info in plugin_loader._plugins.items():
+    for name, info in list(plugin_loader._plugins.items()):
         if not info.get("loaded"):
             continue
         manifest = info.get("manifest", {})
@@ -720,7 +720,9 @@ async def list_themes(_=Depends(require_login)):
 
     # 2. Plugin manifest themes (capabilities.themes)
     from core.plugin_loader import plugin_loader
-    for pname, info in plugin_loader._plugins.items():
+    # list() snapshot: rescan/uninstall mutate _plugins mid-iteration
+    # (RuntimeError → 500 → the frontend registry silently stays empty).
+    for pname, info in list(plugin_loader._plugins.items()):
         if not info.get("loaded") or not info.get("enabled"):
             continue
         manifest = info.get("manifest", {})
@@ -809,10 +811,16 @@ def collect_motions():
             "description": str(entry.get("description", "")),
             "source": "core",
             "script": f"/static/motions/{mid}/motion.js?v={BOOT_VERSION}",
+            # Declared per-motion settings ride to mount() — motions.js
+            # spreads entry.settings; without this the key never existed.
+            **({"settings": entry["settings"]}
+               if isinstance(entry.get("settings"), dict) else {}),
         })
 
     from core.plugin_loader import plugin_loader
-    for pname, info in plugin_loader._plugins.items():
+    # list() snapshot: this also runs on LLM worker threads now (set_motion),
+    # racing rescan/uninstall mid-iteration.
+    for pname, info in list(plugin_loader._plugins.items()):
         if not info.get("loaded") or not info.get("enabled"):
             continue
         capabilities = info.get("manifest", {}).get("capabilities", {})
@@ -836,6 +844,8 @@ def collect_motions():
                 "source": "plugin",
                 "plugin": pname,
                 "script": f"/plugin-web/{pname}/{script}?v={BOOT_VERSION}",
+                **({"settings": md["settings"]}
+                   if isinstance(md.get("settings"), dict) else {}),
             })
 
     return motions

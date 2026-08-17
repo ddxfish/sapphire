@@ -33,7 +33,7 @@ def sm(tmp_path, monkeypatch):
         m = ChatSessionManager(history_dir=str(tmp_path))
         m.create_chat("pub")
         m.append_messages_to_chat("pub", [
-            {"role": "user", "content": "the gravy secret <<IMG::tool:img1>>"},
+            {"role": "user", "content": "the chutney secret <<IMG::tool:img1>>"},
             {"role": "assistant", "content": "simmer quietly"},
         ])
         m.save_tool_image("img1", b"\x89PNG-fake-bytes", "image/png", chat_name="pub")
@@ -234,11 +234,11 @@ class TestMetricsPrivacy:
         import core.metrics as m
         m.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         m.metrics._init_db()
-        m.metrics.record("gravychat", "prov", "model", "conversation",
+        m.metrics.record("chutneychat", "prov", "model", "conversation",
                          {"tokens": {"prompt": 1, "total": 2}})
         m.metrics.record("other", "prov", "model", "conversation",
                          {"tokens": {"prompt": 1, "total": 2}})
-        assert m.metrics.scrub_chat("gravychat") == 1
+        assert m.metrics.scrub_chat("chutneychat") == 1
         conn = sqlite3.connect(str(m.DB_PATH))
         names = sorted(r[0] for r in conn.execute(
             "SELECT chat_name FROM token_usage"))

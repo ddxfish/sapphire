@@ -1382,8 +1382,11 @@ class ChatSessionManager:
             logger.error(f"Failed to load chat '{chat_name}': {e}")
             return False
 
-    def _save_current_chat(self):
-        """Save current chat to SQLite atomically."""
+    def _save_current_chat(self) -> bool:
+        """Save current chat to SQLite atomically. Returns True only when the
+        write actually landed — every drop path (invariant breach, deleted
+        chat, sealed vault) returns False so callers can stop reporting
+        success for writes the DB never took (hunt 2026-08-17)."""
         self._ensure_db()
 
         # A1: save to the EFFECTIVE chat (a per-stream override's chat, else the
@@ -1406,7 +1409,7 @@ class ChatSessionManager:
                 f"but carries no history — dropping save to protect it. "
                 f"Fix the override producer to include 'history'."
             )
-            return
+            return False
 
         with self._lock:
             try:
@@ -1425,11 +1428,11 @@ class ChatSessionManager:
                             f"Save to chat '{eff_name}' — chat was deleted. "
                             f"Dropping save to avoid resurrecting it."
                         )
-                        return
+                        return False
 
                     if fmt_row["storage_format"] == "rows":
                         if not self._save_rows_chat(conn, eff_chat, eff_name, is_override):
-                            return
+                            return False
                     elif is_override:
                         cur = conn.execute(
                             """UPDATE chats SET messages = ?, updated_at = ? WHERE name = ?""",
@@ -1441,7 +1444,7 @@ class ChatSessionManager:
                                 f"Save to chat '{eff_name}' affected 0 rows — "
                                 f"chat was deleted. Dropping save to avoid resurrecting it."
                             )
-                            return
+                            return False
                     else:
                         cur = conn.execute(
                             """UPDATE chats SET settings = ?, messages = ?, updated_at = ?
@@ -1459,7 +1462,7 @@ class ChatSessionManager:
                                 f"Save to chat '{eff_name}' affected 0 rows — "
                                 f"chat was deleted. Dropping save to avoid resurrecting it."
                             )
-                            return
+                            return False
                 # Write-through (2026-07-05): the operator may be VIEWING the
                 # override's chat (watching a live call). Keep the in-memory
                 # singleton in sync so /api/history serves fresh turns and a
@@ -1469,6 +1472,7 @@ class ChatSessionManager:
                         and eff_name == self.active_chat_name:
                     self.current_chat.messages = [dict(m) for m in eff_chat.messages]
                 logger.debug(f"Saved chat '{eff_name}' ({len(eff_chat.messages)} messages)")
+                return True
             except Exception as e:
                 # The vault-sealed refusal is EXPECTED at lock time: eviction
                 # switches away from the private chat and the switch-away
@@ -1503,6 +1507,7 @@ class ChatSessionManager:
                     })
                 except Exception:
                     pass
+                return False
 
     def _save_rows_chat(self, conn, eff_chat, eff_name: str, is_override: bool) -> bool:
         """Persist a rows-format chat. Returns False if the chat was deleted.
@@ -2106,7 +2111,13 @@ class ChatSessionManager:
             try:
                 return bool(json.loads(s or "{}").get("private_chat"))
             except Exception:
-                return False
+                # Sealed world + plaintext settings that won't parse: this
+                # chat's privacy answer is unknowable, so hide it (matches
+                # search_chat_content's posture on the same condition — "a
+                # broken filter must not become the oracle"). The generic
+                # DB-error fail-open below is deliberate systemic posture
+                # and stays.
+                return True
         except Exception as e:
             logger.warning(f"_vault_hidden read failed — treating as visible: {e}")
             return False
@@ -2226,6 +2237,21 @@ class ChatSessionManager:
         semantics as put."""
         with self._lock, self._get_connection() as conn:
             self._plugin_data_writable(conn, chat_name)
+            if not values:
+                # An empty replace is a pure DELETE and never enters the
+                # encrypt funnel — probe the seal explicitly so a sealed
+                # chat's rows can't be wiped through the active-chat
+                # exemption ("temporarily unreadable" must not become
+                # "gone"; hunt 2026-08-17).
+                try:
+                    from core import prompt_vault
+                    keyless = prompt_vault.chat_data_key() is None
+                except Exception:
+                    keyless = True
+                if keyless and self._is_vaulted_conn(conn, chat_name):
+                    raise RuntimeError(
+                        "plugin data replace refused — chat sealed "
+                        "(empty replace would delete unreadable rows)")
             now = datetime.now().isoformat()
             payloads = [(plugin, chat_name, key, i + 1,
                          self._plugin_data_payload(conn, chat_name, v), now)
@@ -2265,9 +2291,13 @@ class ChatSessionManager:
         no plugin ever re-implements it."""
         try:
             with self._get_connection() as conn:
+                # JOIN on chats: rows whose owner is gone (orphans from any
+                # missed cleanup path) must not read as live chats —
+                # _vault_hidden answers False for a nonexistent chat.
                 rows = conn.execute(
-                    "SELECT chat_name, value FROM plugin_chat_data "
-                    "WHERE plugin = ? AND key = ? AND seq = 0",
+                    "SELECT p.chat_name AS chat_name, p.value AS value "
+                    "FROM plugin_chat_data p JOIN chats c ON c.name = p.chat_name "
+                    "WHERE p.plugin = ? AND p.key = ? AND p.seq = 0",
                     (plugin, key)).fetchall()
             out = {}
             for r in rows:
@@ -2785,10 +2815,11 @@ class ChatSessionManager:
                 # History is wiped on each landing: things left in the
                 # backrooms don't persist.
                 br = by_name.get('backrooms')
-                if br is not None and br.get('private_chat') \
-                        and br.get('mode') != 'limbo':
-                    # A USER-owned private chat happens to be named
-                    # 'backrooms' — not ours to overwrite, and no landing.
+                if br is not None and br.get('mode') != 'limbo':
+                    # An existing USER chat (public, private, or sealed-
+                    # unreadable) happens to be named 'backrooms' — only a
+                    # chat WE previously stamped mode:limbo is ours to
+                    # reclaim and wipe. Anything else: no landing.
                     logger.warning("[VAULT] no safe landing for private active "
                                    "chat — staying (sealed)")
                     return None
@@ -3202,6 +3233,34 @@ class ChatSessionManager:
         hist.messages = self.read_chat_messages(chat_name) or []
         return {"chat": chat_name, "settings": settings,
                 "system_prompt": None, "tools": None, "history": hist}
+
+    def make_agent_override(self, chat_name: str,
+                            privacy_required: bool = False) -> Dict[str, Any]:
+        """Complete stream-brain override for a background worker bound to
+        `chat_name`. ALWAYS a full carrier — an override with 'chat' but no
+        'history' makes _effective_chat() and _effective_chat_name()
+        disagree (the cross-chat clobber class closed 2026-08-17), and a
+        settings stub starves every get_chat_settings() consumer on the
+        worker thread (privacy-ratchet bypass, extras decay). Privacy
+        ratchets UP only: the caller's snapshot can add private_chat, never
+        remove it (the spawning chat may be hidden by run time). Unreadable
+        chat (sealed/missing) → empty seed; saves on a sealed chat raise
+        before touching rows, so the empty seed can't wipe anything."""
+        settings = None
+        try:
+            settings = self.read_chat_settings(chat_name)
+        except Exception:
+            pass
+        settings = dict(settings) if settings else {}
+        settings["private_chat"] = bool(privacy_required
+                                        or settings.get("private_chat"))
+        hist = ConversationHistory(max_history=self.max_history)
+        try:
+            hist.messages = self.read_chat_messages(chat_name) or []
+        except Exception:
+            hist.messages = []
+        return {"chat": chat_name, "settings": settings,
+                "system_prompt": "", "tools": None, "history": hist}
 
     def get_messages_for_llm(self, reserved_tokens: int = 0, provider: str = None) -> List[Dict[str, str]]:
         """Get messages for LLM with trimming applied."""
@@ -3650,6 +3709,14 @@ class ChatSessionManager:
                 # set_named_chat_settings also mirrors into current_settings
                 # when the override happens to target the active chat.
                 eff_name = _ov["chat"]
+                # R5 intent holds here too: a caller that named its target
+                # must not silently write a different chat.
+                if expected_active is not None and expected_active != eff_name:
+                    logger.warning(
+                        f"[VAULT] settings write refused — caller expected "
+                        f"'{expected_active}' but a stream override targets "
+                        f"'{eff_name}'")
+                    return False
                 ok = self.set_named_chat_settings(eff_name, settings)
                 if ok:
                     if _ov.get("settings") is not None:
@@ -3688,7 +3755,10 @@ class ChatSessionManager:
                         return False
                 old_prompt = self.current_settings.get('prompt') if 'prompt' in settings else None
                 self.current_settings.update(settings)
-                self._save_current_chat()
+                if not self._save_current_chat():
+                    # In-memory update stands (the resync latch replays it on
+                    # the next good save) but the caller must hear the truth.
+                    return False
                 logger.info(f"Updated settings for chat '{self.active_chat_name}'")
                 if 'prompt' in settings:
                     _vault_ref_sync(settings.get('prompt'), old_prompt)
@@ -3865,6 +3935,13 @@ class ChatSessionManager:
                     conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (name,))
                     try:
                         conn.execute("DELETE FROM tool_images WHERE chat_name = ?", (name,))
+                    except Exception:
+                        pass
+                    try:
+                        # v1.3 rows must die with the chat — orphans read as
+                        # live chats downstream and deterministic ephemeral
+                        # names would resurrect them on the next call.
+                        conn.execute("DELETE FROM plugin_chat_data WHERE chat_name = ?", (name,))
                     except Exception:
                         pass
                     self._rows_state.pop(name, None)

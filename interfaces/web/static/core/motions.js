@@ -42,6 +42,8 @@ let _hidden = document.hidden;
 let _offscreen = false;    // host not in viewport (other view active)
 let _reduced = false;
 let _wired = false;
+let _fetchRetries = 0;
+let _retryTimer = 0;
 
 export function getMotions() { return _registry; }
 
@@ -54,7 +56,11 @@ export function currentMotionId() {
     if (_chatMotion && _registry.some(m => m.id === _chatMotion)) return _chatMotion;
     const pick = _explicitPick();
     if (pick === 'none') return '';
-    const want = pick || _themeMotion;
+    // An orphan pick (its plugin uninstalled/disabled) must not block the
+    // chain — fall through to the theme default. The key is kept untouched:
+    // the pick comes back if its plugin returns.
+    const valid = pick && _registry.some(m => m.id === pick);
+    const want = valid ? pick : _themeMotion;
     return _registry.some(m => m.id === want) ? want : '';
 }
 
@@ -65,10 +71,18 @@ async function _sync() {
     // consent, and a per-chat pick is consent too (someone chose it for
     // this chat deliberately).
     const chatPick = _chatMotion && _registry.some(m => m.id === _chatMotion);
-    const gated = _reduced && !_explicitPick() && !chatPick;
+    // Consent = a VALID explicit pick (an orphan pick now falls through to
+    // the theme default in currentMotionId, and that fallback must stay
+    // gated under reduced motion; 'none' resolves to off either way).
+    const p = _explicitPick();
+    const pickConsent = p && _registry.some(m => m.id === p);
+    const gated = _reduced && !pickConsent && !chatPick;
     const want = (!gated && !_suppressed && !_hidden && !_offscreen) ? currentMotionId() : '';
-    if ((_mounted ? _mounted.id : '') === want) return;
+    // Supersede ANY in-flight import BEFORE the no-op check — an import
+    // launched under an older desired state must not land in a state that
+    // said 'off' (it would paint over a story room / loop offscreen).
     const gen = ++_gen;
+    if ((_mounted ? _mounted.id : '') === want) return;
     if (_mounted) {
         try { _mounted.mod.unmount(); }
         catch (e) { console.warn('[Motion] unmount failed:', e); }
@@ -118,7 +132,8 @@ function _restart() {
 // back to the global pick / theme default. Not persisted here: the chat's
 // settings row is the store, this is just the live value.
 export function setChatMotion(id) {
-    const v = (typeof id === 'string' && /^[a-z0-9:_-]{1,120}$/.test(id)) ? id : '';
+    // Uppercase allowed: plugin names are [a-zA-Z0-9_-] and mint into the id.
+    const v = (typeof id === 'string' && /^[a-zA-Z0-9:_-]{1,120}$/.test(id)) ? id : '';
     if (v === _chatMotion) return;
     _chatMotion = v;
     _sync();
@@ -146,9 +161,14 @@ export function setMotionIntensity(mult) {
 
 // Theme bundle default (set by core/theme.js _applyBundle, like setThemeBackground).
 export function setThemeMotion(id) {
-    _themeMotion = (typeof id === 'string' && /^[a-z0-9:_-]{1,120}$/.test(id)) ? id : '';
+    _themeMotion = (typeof id === 'string' && /^[a-zA-Z0-9:_-]{1,120}$/.test(id)) ? id : '';
     _sync();
 }
+
+// Public remount hook — theme.js calls it when a theme stylesheet finishes
+// LOADING (the data-theme observer fires before the CSS lands, so mount-time
+// color sampling would read the old palette).
+export function restartMotion() { _restart(); }
 
 export async function initMotions() {
     if (!_wired) {
@@ -187,10 +207,25 @@ export async function initMotions() {
         // Remount on theme switch so mount-time color sampling stays current.
         new MutationObserver(() => _restart())
             .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+        // Plugin enable/disable changes the registry — refetch, and the
+        // _sync below unmounts a motion whose plugin just went away
+        // (already-imported modules kept animating after disable).
+        document.addEventListener('sapphire:plugin_toggled', () => initMotions());
     }
+    let ok = false;
     try {
         const res = await fetch('/api/motions');
-        if (res.ok) _registry = (await res.json()).motions || [];
+        if (res.ok) { _registry = (await res.json()).motions || []; ok = true; }
     } catch {}
+    if (ok) {
+        _fetchRetries = 0;
+    } else if (_fetchRetries < 5 && !_retryTimer) {
+        // A boot-time blip (server mid-restart) otherwise kills motions for
+        // the whole session — the only other refetch is opening Visual.
+        _fetchRetries++;
+        console.warn(`[Motion] /api/motions unavailable — retry ${_fetchRetries}/5 in 10s`);
+        _retryTimer = setTimeout(() => { _retryTimer = 0; initMotions(); }, 10000);
+    }
     _sync();
 }

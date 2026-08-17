@@ -14,7 +14,7 @@ _STATIC_PERSONA_SETTINGS_KEYS = [
     "prompt", "toolset", "spice_set", "voice", "pitch", "speed",
     "spice_enabled", "spice_turns", "inject_datetime", "custom_context",
     "llm_primary", "llm_model",
-    "trim_color", "background",
+    "trim_color", "background", "motion",
 ]
 
 

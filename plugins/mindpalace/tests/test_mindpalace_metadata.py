@@ -275,7 +275,7 @@ def test_entities_save_makes_no_self_edge_and_no_link_echo(palace):
 
 def test_tool_context_flows_into_meta_and_absence_still_saves(palace):
     # WITH tool_context → chat/persona/model land in meta
-    fm.set_tool_context(chat="lookout", persona="rook", model="sonnet")
+    fm.set_tool_context(chat="lookout", persona="falcon", model="sonnet")
     _, ok = palace._save_memory("with provenance", scope="default")
     assert ok
     conn = _connect(palace)
@@ -283,7 +283,7 @@ def test_tool_context_flows_into_meta_and_absence_still_saves(palace):
         meta = json.loads(conn.execute(
             "SELECT meta FROM chunks WHERE content = 'with provenance'").fetchone()[0])
         assert meta["chat"] == "lookout"
-        assert meta["persona"] == "rook"
+        assert meta["persona"] == "falcon"
         assert meta["model"] == "sonnet"
     finally:
         conn.close()

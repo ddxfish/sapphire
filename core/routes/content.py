@@ -793,6 +793,10 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
     # Always stamp the scene explicitly (the persona's, or '' to clear) so activating a
     # persona fully sets the chat's background — no read-time inheritance. 2026-06-15.
     settings.setdefault("background", "")
+    # Motion is background's twin (hunt 2026-08-17): without the explicit
+    # stamp, update_chat_settings MERGES and the previous persona's motion
+    # kept running forever on this chat.
+    settings.setdefault("motion", "")
     # Reset scope keys to defaults if persona doesn't specify them,
     # otherwise old persona's scopes persist through dict merge
     from core.chat.function_manager import scope_setting_keys
@@ -810,7 +814,14 @@ async def load_persona(name: str, request: Request, _=Depends(require_login), sy
     # Apply all settings (prompt, toolset, voice, spice set, scopes, state engine)
     _apply_chat_settings(system, settings)
 
-    publish(Events.CHAT_SETTINGS_CHANGED, {"persona": name})
+    # chat + nested background/motion let the transcript view repaint the
+    # scene live instead of waiting for the next sidebar load.
+    publish(Events.CHAT_SETTINGS_CHANGED, {
+        "persona": name,
+        "chat": session_manager.active_chat_name,
+        "settings": {"background": settings.get("background", ""),
+                     "motion": settings.get("motion", "")},
+    })
     return {"status": "success", "persona": name, "settings": settings}
 
 

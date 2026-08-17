@@ -189,6 +189,17 @@ def execute(function_name, arguments, config_obj=None):
             "max_runs": 1 if one_shot else 0,
             "delete_after_run": one_shot,
         }
+        # Privacy rolls downhill: a task authored inside a private chat is
+        # private-derived text, and fire-time otherwise derives privacy from
+        # the PROMPT alone \u2014 the deferred-execution hole (hunt 2026-08-17).
+        # The scheduler + ExecutionContext already honor this flag end to end.
+        try:
+            from core.api_fastapi import get_system
+            if bool((get_system().llm_chat.session_manager
+                     .get_chat_settings() or {}).get('private_chat')):
+                task_data["privacy_required"] = True
+        except Exception:
+            pass
 
         task = scheduler.create_task(task_data)
 

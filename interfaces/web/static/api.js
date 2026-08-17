@@ -33,16 +33,21 @@ export const fetchStatus = async () => {
 let _lastHistoryChatName = null;
 export const getLastHistoryChatName = () => _lastHistoryChatName;
 
-export const fetchHistory = async () => {
+export const fetchHistoryFull = async () => {
     const response = await fetchWithTimeout('/api/history');
     // Update context bar if context info is present
     if (response && response.context) {
         updateContextBar(response.context);
     }
     _lastHistoryChatName = response?.chat_name || null;
-    // Return messages array for backward compatibility
-    return response.messages || response;
+    // chat_name rides the SAME response as the messages — painters must
+    // compare against this, not the module-global above, which any
+    // concurrent fetchHistory caller clobbers (hunt 2026-08-17 H12).
+    return { messages: response?.messages || response || [],
+             chat_name: response?.chat_name || null };
 };
+
+export const fetchHistory = async () => (await fetchHistoryFull()).messages;
 
 export const fetchRawHistory = () => fetchWithTimeout('/api/history/raw');
 export const removeFromUserMessage = (userMessage) => fetchWithTimeout('/api/history/messages', {

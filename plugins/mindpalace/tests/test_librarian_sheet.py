@@ -176,7 +176,7 @@ def test_update_self_folds_duplicate_values(palace):
 def test_update_self_folds_duplicate_relationships(palace):
     msg, ok = st.write_section(
         'default', 'relationships',
-        'Krem — builds the boat\nRook — the lookout\nkrem — again somehow')
+        'Krem — builds the boat\nFalcon — the lookout\nkrem — again somehow')
     assert ok, msg
     assert 'folded' in msg
     with pt._get_connection() as conn:

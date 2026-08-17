@@ -15,6 +15,8 @@ EMOJI = '✈️'
 TOOLS = [
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_send",
             "description": "Send a Telegram message. Uses sidebar-scoped account.",
@@ -36,6 +38,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_get_chats",
             "description": "Recent Telegram chats with last-message preview + unread count.",
@@ -54,6 +58,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_read_messages",
             "description": "Read recent messages from a Telegram chat. Get chat_id from telegram_get_chats.",
@@ -76,6 +82,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_send_image",
             "description": "Send the most recently generated image to a Telegram chat. You see it too and can comment.",
@@ -97,6 +105,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_send_voice",
             "description": "Send a TTS voice note to a Telegram chat (playable voice bubble).",
@@ -118,6 +128,8 @@ TOOLS = [
     },
     {
         "type": "function",
+        "network": True,
+        "is_local": False,
         "function": {
             "name": "telegram_add_contact",
             "description": "Add a Telegram contact (client mode only). Required to message someone new.",

@@ -1002,6 +1002,26 @@ def _switch_toolset(args):
     if not match:
         return f"Toolset '{name}' not found. Available: {', '.join(available)}", False
 
+    # Background lane (phone/cron/agent — a stream override is installed):
+    # the settings write targets the stream's own chat, and the RUNTIME
+    # palette is the operator's — swapping it out from under them (and
+    # dropping their extra_toolsets, which the stub override starved) was
+    # hunt finding M11 (2026-08-17). The stream's next turn re-resolves its
+    # tools from the chat settings it just wrote.
+    _ov = None
+    try:
+        from core.chat.stream_brain import get_override
+        _ov = get_override()
+    except Exception:
+        pass
+    if _ov and _ov.get("chat"):
+        if not system.llm_chat.session_manager.update_chat_settings({"toolset": match}):
+            return "Failed to update chat settings.", False
+        publish(Events.CHAT_SETTINGS_CHANGED,
+                {"chat": _ov["chat"], "settings": {"toolset": match}, "origin": None})
+        logger.info(f"AI switched toolset to '{match}' for chat '{_ov['chat']}'")
+        return f"Switched to toolset '{match}' for this chat (applies from its next turn).", True
+
     # The chat's extra_toolsets stay on across a deliberate toolset switch —
     # settings still claim them (the "include story tools" checkbox), so the
     # runtime must keep matching (extras-decay site #9, 2026-08-05).
@@ -1032,9 +1052,12 @@ def _set_motion(args):
     motions = collect_motions()
     current = (sm.get_chat_settings() or {}).get('motion', '')
 
-    name = (args.get('name') or '').strip()
+    raw = args.get('name')
+    name = raw.strip() if isinstance(raw, str) else ''
     if not name:
         cur_label = current or "(default — follows the user's global pick)"
+        if current and not any(m['id'] == current for m in motions):
+            cur_label = f"{current} (not available — its plugin may be disabled)"
         lines = [f"Current chat motion: {cur_label}",
                  "Available motions:"]
         for m in motions:
@@ -1059,8 +1082,11 @@ def _set_motion(args):
     # Per-chat override (merges; resolution = chat > user's global pick > theme).
     if not sm.update_chat_settings({"motion": target}):
         return "Failed to update chat settings.", False
-    # Tell the frontend to apply it live (same lane as set_scene).
-    publish(Events.CHAT_SETTINGS_CHANGED, {"motion": target, "origin": "set_motion"})
+    # Tell the frontend to apply it live. `chat` is load-bearing: without it
+    # a background-lane call (phone/cron/agent) repainted whatever chat the
+    # operator had open (hunt 2026-08-17).
+    publish(Events.CHAT_SETTINGS_CHANGED,
+            {"chat": sm._effective_chat_name(), "motion": target, "origin": "set_motion"})
 
     if target:
         return f"Motion set to '{target}' for this chat — the user sees it animating behind the conversation.", True

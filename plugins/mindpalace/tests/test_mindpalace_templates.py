@@ -19,7 +19,7 @@ def _db():
     conn.execute("INSERT INTO entities VALUES (1, 'Krem', 'default', ?)",
                  (json.dumps({'fields': {'nicknames': 'the boss, kremster'}}),))
     conn.execute("INSERT INTO entities VALUES (2, 'Sapphire', 'default', NULL)")
-    conn.execute("INSERT INTO entities VALUES (3, 'Rook', 'global', NULL)")
+    conn.execute("INSERT INTO entities VALUES (3, 'Falcon', 'global', NULL)")
     conn.execute("INSERT INTO entities VALUES (4, 'Tom', 'work', NULL)")
     return conn
 
@@ -31,7 +31,7 @@ def test_entity_aliases_includes_nicknames_and_overlay():
     assert (1, 'the boss') in pairs
     assert (1, 'kremster') in pairs
     assert (2, 'Sapphire') in pairs
-    assert (3, 'Rook') in pairs          # global overlay included
+    assert (3, 'Falcon') in pairs          # global overlay included
     assert all(i != 4 for i, _ in pairs)  # other scope excluded
 
 

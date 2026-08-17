@@ -35,12 +35,12 @@ def sm(tmp_path, monkeypatch):
         m = ChatSessionManager(history_dir=str(tmp_path))
         m.create_chat("pub")
         m.append_messages_to_chat("pub", [
-            {"role": "user", "content": "the gravy secret"},
+            {"role": "user", "content": "the chutney secret"},
             {"role": "assistant", "content": "simmer quietly"},
         ])
         m.create_chat("other")
         m.append_messages_to_chat("other", [
-            {"role": "user", "content": "public gravy talk"},
+            {"role": "user", "content": "public chutney talk"},
         ])
         yield m
     # The fixture registered the sealed-rows probe against this temp store —
@@ -80,7 +80,7 @@ class TestG1SearchSurvivesVaultedRows:
         assert ok, err
         _key_off(monkeypatch)
         _seal(monkeypatch, True)
-        hits = sm.search_chat_content("gravy")
+        hits = sm.search_chat_content("chutney")
         assert hits.get("other") == 1          # public content findable
         assert "pub" not in hits               # sealed content stays shut
 
@@ -90,7 +90,7 @@ class TestG1SearchSurvivesVaultedRows:
         ok, err = sm.vault_chat("pub")
         assert ok, err
         _seal(monkeypatch, False)
-        hits = sm.search_chat_content("gravy")
+        hits = sm.search_chat_content("chutney")
         assert hits.get("other") == 1          # public rows scan alive
         assert hits.get("pub") == 1            # decrypt-scan covers vaulted
 

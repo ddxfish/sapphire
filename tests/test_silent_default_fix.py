@@ -99,7 +99,7 @@ def test_executor_omits_missing_scope_keys_and_warns(caplog):
     from core.continuity.executor import ContinuityExecutor
     task = {
         "name": "test-missing-scopes",
-        "prompt": "rook",
+        "prompt": "falcon",
         "toolset": "all",
         # deliberately NO memory_scope / knowledge_scope / etc.
     }
@@ -124,12 +124,12 @@ def test_executor_silent_when_task_has_explicit_scopes(caplog):
     from core.continuity.executor import ContinuityExecutor
     task = {
         "name": "test-has-scopes",
-        "prompt": "rook",
+        "prompt": "falcon",
         "toolset": "all",
     }
     # Explicitly set every scope key the registry knows about
     for key in scope_setting_keys():
-        task[key] = "rook"
+        task[key] = "falcon"
     with caplog.at_level(logging.WARNING, logger='core.continuity.executor'):
         ContinuityExecutor._extract_task_settings(task)
     msgs = [r.message for r in caplog.records]

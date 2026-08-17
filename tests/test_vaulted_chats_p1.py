@@ -31,7 +31,7 @@ def sm(tmp_path, monkeypatch):
         m.create_chat("priv")
         m.set_named_chat_settings("priv", {"private_chat": True})
         m.append_messages_to_chat("priv", [
-            {"role": "user", "content": "the secret gravy recipe"},
+            {"role": "user", "content": "the secret chutney recipe"},
             {"role": "assistant", "content": "simmer quietly"},
         ])
         yield m
@@ -69,9 +69,9 @@ class TestListAndSearch:
 
     def test_search_oracle_closed_when_sealed(self, sm, monkeypatch):
         _seal(monkeypatch, False)
-        assert "priv" in sm.search_chat_content("gravy")
+        assert "priv" in sm.search_chat_content("chutney")
         _seal(monkeypatch, True)
-        assert "priv" not in sm.search_chat_content("gravy")
+        assert "priv" not in sm.search_chat_content("chutney")
 
 
 class TestByNameGates:

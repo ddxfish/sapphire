@@ -109,7 +109,7 @@ A theme can ship look-and-feel defaults beyond CSS. Each is a *default*: an expl
 
 - `font` — a font preset id (`system`, `rounded`, `serif`, `mono`, `handwriting`). Webfont presets download on first use.
 - `bg` — a background image, path relative to your `web/` dir. It sits at the BOTTOM of the background chain: a chat's own scene and the global underlay both cover it.
-- `motion` — a motion id to run by default (see Motions below). Use your own motion's **bare** id here — the runtime resolves it against your plugin's namespace first, or name a core motion (`stars`, `drift`, `fireflies`).
+- `motion` — a motion id to run by default (see Motions below). Use your own motion's **bare** id here — the runtime resolves it against your plugin's namespace first, or name a core motion (`snow`, `stars`, `fireflies`, `nibblers`, `triangles`, `coder`). An unknown id is a silent no-op.
 
 ## Motions (`capabilities.motions`)
 

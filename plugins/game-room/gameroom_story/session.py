@@ -199,12 +199,24 @@ def _prompt_is_private(name):
     return False
 
 
-def _inherits_privacy(entry):
+def _inherits_privacy(entry, chat=None):
     """The rendered story prompt inherits the send-gate of any prompt whose
     TEXT it embeds. In local/combined mode the local persona's own words go
     into the monolith — hardcoding privacy_required=False there silently
     stripped a private persona's gate, and end() kept the unflagged copy
-    registered forever (finding 2.10)."""
+    registered forever (finding 2.10). The session CHAT's own private flag
+    inherits too (hunt 2026-08-17): a private playthrough's rendered story
+    text is private content whatever identity mode it runs in — without
+    this, pure story mode registered it unflagged and any public chat
+    could wear it to a cloud provider."""
+    if chat:
+        try:
+            from core.api_fastapi import get_system
+            s = get_system().llm_chat.session_manager.get_settings_for(chat)
+            if isinstance(s, dict) and s.get("private_chat"):
+                return True
+        except Exception:
+            pass
     if (entry or {}).get("mode") not in ("local", "combined"):
         return False
     return _prompt_is_private((entry or {}).get("local"))
@@ -248,7 +260,7 @@ def _register_prompt(story, state, entry, chat):
                                    mode=mode, local_ctx=local_ctx,
                                    conduct=conduct_for(story))
     name = entry.get("prompt_name") or _prompt_name_for(story, mode or "local", chat)
-    private = _inherits_privacy(entry)
+    private = _inherits_privacy(entry, chat=chat)
     st.save_dynamic(name, rendered, privacy_required=private, chat=chat)
     monoliths[name] = {"content": rendered, "privacy_required": private}
     prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces)

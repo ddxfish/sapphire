@@ -270,12 +270,24 @@ def _create_llm_worker():
             # executor; the privacy bit is the F4 snapshot, not a live read
             # (the spawning chat may be hidden by the time we run).
             from core.chat import stream_brain
-            _brain_token = stream_brain.set_override({
-                "chat": self.chat_name,
-                "settings": {"private_chat": bool(self._privacy_required)},
-                "system_prompt": "",
-                "tools": None,
-            })
+            # Full carrier via core's factory (2026-08-17): a chat-name-only
+            # override made _effective_chat()/_effective_chat_name() disagree
+            # (cross-chat clobber class) and starved every settings reader on
+            # this thread with a 1-key stub (privacy-ratchet bypass). With no
+            # chat name, ship settings ONLY — a 'history' without a 'chat'
+            # diverts the object but not the name, the same asymmetry
+            # reversed.
+            sm = system.llm_chat.session_manager
+            if self.chat_name:
+                _override = sm.make_agent_override(
+                    self.chat_name,
+                    privacy_required=bool(self._privacy_required))
+            else:
+                _override = {
+                    "settings": {"private_chat": bool(self._privacy_required)},
+                    "system_prompt": "", "tools": None,
+                }
+            _brain_token = stream_brain.set_override(_override)
             try:
                 raw = ctx.run(self.mission)
             finally:
@@ -375,10 +387,14 @@ def _get_manager():
 
 
 def _get_active_chat():
-    """Get the current active chat name."""
+    """The chat THIS turn runs in — the stream override's chat when spawned
+    from a background lane (phone/cron/continuity), else the active chat.
+    The global name alone delivered agent results to whatever chat the
+    operator had open, private→public included (hunt 2026-08-17)."""
     from core.api_fastapi import get_system
     try:
-        return get_system().llm_chat.get_active_chat() or ''
+        sm = get_system().llm_chat.session_manager
+        return sm._effective_chat_name() or ''
     except Exception:
         return ''
 

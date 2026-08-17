@@ -443,6 +443,16 @@ async function _loadThemeGrid(el) {
         card.classList.add('active');
         // Show/hide theme settings
         _renderThemeSettings(settingsPanel, theme);
+        // The bundle may have swapped the running motion and font — repaint
+        // both pickers so they tell the truth (hunt 2026-08-17: Abyss
+        // started fireflies while the row still showed None; Paper switched
+        // the font while Type still highlighted System).
+        import('../../core/motions.js').then(m => _renderMotionRow(el, m)).catch(() => {});
+        let fPick = null;
+        try { fPick = localStorage.getItem('sapphire-font'); } catch {}
+        const effFont = fPick || theme.font || 'system';
+        el.querySelectorAll('#font-grid .font-card').forEach(c =>
+            c.classList.toggle('active', c.dataset.fontId === effFont));
     });
 
     // Show settings for currently active theme on load

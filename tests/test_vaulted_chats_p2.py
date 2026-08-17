@@ -29,7 +29,7 @@ def sm(tmp_path, monkeypatch):
         m = ChatSessionManager(history_dir=str(tmp_path))
         m.create_chat("pub")
         m.append_messages_to_chat("pub", [
-            {"role": "user", "content": "the gravy secret <<IMG::tool:img1>>"},
+            {"role": "user", "content": "the chutney secret <<IMG::tool:img1>>"},
             {"role": "assistant", "content": "simmer quietly"},
         ])
         m.save_tool_image("img1", b"\x89PNG-fake-bytes", "image/png", chat_name="pub")
@@ -107,7 +107,7 @@ class TestVaultChatMigration:
         _key_on(monkeypatch)
         sm.vault_chat("pub")
         msgs = sm.read_chat_messages("pub")
-        assert any("gravy" in str(m.get("content")) for m in msgs)
+        assert any("chutney" in str(m.get("content")) for m in msgs)
         s = sm.read_chat_settings("pub")
         assert s is not None
         exp = sm.export_chat("pub")
@@ -242,7 +242,7 @@ class TestSealedBehavior:
         _key_off(monkeypatch)
         _seal(monkeypatch, True)
         assert "pub" not in {c["name"] for c in sm.list_chat_files()}
-        assert sm.search_chat_content("gravy") == {}
+        assert sm.search_chat_content("chutney") == {}
         assert sm.read_chat_settings("pub") is None
         assert sm.read_chat_messages("pub") == []
         assert sm.get_tool_image("img1") is None
@@ -250,7 +250,7 @@ class TestSealedBehavior:
     def test_unlocked_search_decrypt_scan_finds(self, sm, monkeypatch):
         _key_on(monkeypatch)
         sm.vault_chat("pub")
-        hits = sm.search_chat_content("gravy")
+        hits = sm.search_chat_content("chutney")
         assert hits.get("pub") == 1
 
     def test_include_hidden_stub_for_eviction(self, sm, monkeypatch):
@@ -334,7 +334,7 @@ class TestCrossFeatureRoundTrips:
         assert raw(tmp_path, "SELECT vaulted FROM chats WHERE name='moved'")[0][0] == 1
         assert all(_rows_enc(tmp_path, "moved"))
         msgs = sm.read_chat_messages("moved")
-        assert any("gravy" in str(m.get("content")) for m in msgs)
+        assert any("chutney" in str(m.get("content")) for m in msgs)
         img = raw(tmp_path, "SELECT chat_name FROM tool_images WHERE id='img1'")[0]
         assert img["chat_name"] == "moved"
 

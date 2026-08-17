@@ -9,6 +9,8 @@ const handleError = (e, action) => {
     ui.showToast(e.message, 'error');
 };
 
+let _histPaintSeq = 0;
+
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // Hold the render while a message edit is open — renderHistory rebuilds the
     // whole transcript, so a background refresh (SSE event, autoRefresh poll)
@@ -18,12 +20,19 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
         return { hist: null, len: lastLen };
     }
     try {
-        const hist = await api.fetchHistory();
+        // Paint-seq + same-response binding (hunt 2026-08-17 H12): the old
+        // guard compared two globals that six concurrent fetchHistory
+        // callers clobber — a private chat's late fetch could paint its
+        // transcript into a tab showing another chat. Only the LATEST
+        // fetchAndRender paints, and the chat name comes from the same
+        // response as the messages it labels.
+        const seq = ++_histPaintSeq;
+        const { messages: hist, chat_name: returnedChat } = await api.fetchHistoryFull();
+        if (seq !== _histPaintSeq) return { hist: null, len: lastLen };
 
         // Guard: skip render if backend is temporarily on a different chat
         // (e.g. continuity foreground task switched the active chat)
         const expectedChat = document.getElementById('chat-select')?.value;
-        const returnedChat = api.getLastHistoryChatName();
         if (returnedChat && expectedChat && returnedChat !== expectedChat) {
             return { hist: null, len: lastLen };
         }

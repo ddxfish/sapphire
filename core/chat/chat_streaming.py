@@ -1185,14 +1185,19 @@ class StreamingChat:
             self.cancel_flag = False
             self.is_streaming = False
             self.active_chat_name = None
-            self.main_chat.session_manager.end_streaming()
-            # A1: drop the per-stream brain override LAST — after all cleanup that
-            # persists via the effective chat (tool-cycle close above). Restores the
-            # active-chat singletons for this context.
+            # A1: drop the per-stream brain override AFTER the cleanup that
+            # persists via the effective chat (tool-cycle close above) but
+            # BEFORE end_streaming — the 1→0 boundary inside end_streaming
+            # runs the vault eviction (set_active_chat → flush/load of the
+            # ACTIVE chat) and must not resolve through this stream's
+            # override: it would skip the outgoing chat's flush and resync
+            # the override chat's store from a trimmed in-memory window
+            # (day-ruiner hunt 2026-08-17).
             if _brain_token is not None:
                 try:
                     from core.chat import stream_brain
                     stream_brain.reset_override(_brain_token)
                 except Exception:
                     pass
+            self.main_chat.session_manager.end_streaming()
             publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})

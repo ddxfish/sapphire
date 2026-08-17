@@ -71,7 +71,8 @@ def execute(function_name, arguments, config=None):
     if function_name != "set_scene":
         return f"Unknown function: {function_name}", False
 
-    name = (arguments.get("name") or "").strip().lower()
+    raw = arguments.get("name")
+    name = raw.strip().lower() if isinstance(raw, str) else ""
     scenes = _list_scenes()
     menu = ", ".join(scenes) if scenes else "(none uploaded yet)"
 
@@ -88,10 +89,15 @@ def execute(function_name, arguments, config=None):
         if not system or not getattr(system, 'llm_chat', None):
             return "Could not reach the chat to set the scene.", False
         # Per-chat override (merges; resolution = chat > persona > none).
-        system.llm_chat.session_manager.update_chat_settings({"background": target})
-        # Tell the frontend to re-render #chatbg live.
+        sm = system.llm_chat.session_manager
+        if not sm.update_chat_settings({"background": target}):
+            return "Failed to update chat settings.", False
+        # Tell the frontend to re-render #chatbg live. `chat` is load-bearing:
+        # without it a background-lane call repainted the operator's open
+        # chat (hunt 2026-08-17).
         from core.event_bus import publish, Events
-        publish(Events.CHAT_SETTINGS_CHANGED, {"background": target, "origin": "set_scene"})
+        publish(Events.CHAT_SETTINGS_CHANGED,
+                {"chat": sm._effective_chat_name(), "background": target, "origin": "set_scene"})
     except Exception as e:
         logger.error(f"[SCENE] set_scene failed: {e}")
         return f"Failed to set the scene: {e}", False

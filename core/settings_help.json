@@ -414,7 +414,7 @@
   },
   "PRIVATE_ALLOW_UNFLAGGED_TOOLS": {
     "short": "Private chats: allow tools with no locality flag",
-    "long": "Tools declare is_local in their schema; private chats refuse any tool without it (fail-closed — an unknown tool might send data to the cloud). Many plugins predate the flag, so private mode blocks them. Enable to treat UNFLAGGED tools as local on your box. Tools that explicitly declare themselves non-local (web search, email, etc.) stay blocked in private chats regardless. Default off."
+    "long": "Tools declare is_local in their schema; private chats refuse any tool without it (fail-closed — an unknown tool might send data to the cloud). Many plugins predate the flag, so private mode blocks them. Enable to treat UNFLAGGED tools as local on your box — CAUTION: unflagged includes tools that talk out (e.g. Discord, MCP-server tools), which this setting also unblocks. Tools that explicitly declare themselves non-local (web search, email, Telegram, etc.) stay blocked in private chats regardless. Default off."
   },
   "VAULT_IDLE_MINUTES": {
     "short": "Minutes of vault inactivity before auto-lock",

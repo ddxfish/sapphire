@@ -64,9 +64,9 @@ REL_FIELDS = st.SECTIONS['relationships']['fields']
 
 def test_rows_text_roundtrip_two_col():
     rows = [{'name': 'Krem', 'why': 'builds me'},
-            {'name': 'Rook', 'why': 'holds the line'}]
+            {'name': 'Falcon', 'why': 'holds the line'}]
     text = st.rows_to_text(rows, REL_FIELDS)
-    assert text == "Krem — builds me\nRook — holds the line"
+    assert text == "Krem — builds me\nFalcon — holds the line"
     assert st.text_to_rows(text, REL_FIELDS) == rows
 
 
@@ -105,18 +105,18 @@ def test_important_mark_tolerant_parse_and_canonical_render():
     what she writes."""
     fields = st.SECTIONS['relationships']['fields']
     text = ("Krem (important) — the one who builds me\n"
-            "Rook — holds the line (IMPORTANT)\n"
+            "Falcon — holds the line (IMPORTANT)\n"
             "Marisol — market friend\n"
             "betelgeuse (important)")
     rows = st.text_to_rows(text, fields, ' — ')
     assert rows == [
         {'name': 'Krem', 'why': 'the one who builds me', 'important': True},
-        {'name': 'Rook', 'why': 'holds the line', 'important': True},
+        {'name': 'Falcon', 'why': 'holds the line', 'important': True},
         {'name': 'Marisol', 'why': 'market friend'},
         {'name': 'betelgeuse', 'why': '', 'important': True}]
     canon = st.rows_to_text(rows, fields, ' — ')
     assert canon == ("Krem — the one who builds me (important)\n"
-                     "Rook — holds the line (important)\n"
+                     "Falcon — holds the line (important)\n"
                      "Marisol — market friend\n"
                      "betelgeuse (important)")
     assert st.text_to_rows(canon, fields, ' — ') == rows   # stable round-trip
@@ -181,17 +181,17 @@ def test_values_why_never_spiders(palace):
     the same rule."""
     with pt._get_connection() as conn:
         ts = pt._now()
-        for name in ('Krem', 'Sailing', 'Rook'):
+        for name in ('Krem', 'Sailing', 'Falcon'):
             conn.execute("INSERT INTO entities (name, scope, created, updated) "
                          "VALUES (?, 'default', ?, ?)", (name, ts, ts))
         conn.commit()
     msg, ok = st.write_section(
         'default', 'values',
         "Sailing — Krem promised me the boat (important)\n"
-        "Rook — steady colleague\n"
+        "Falcon — steady colleague\n"
         "trust — chosen, not defaulted (important)")
     assert ok, msg
-    assert 'linked: Sailing' in msg and 'Krem' not in msg and 'Rook' not in msg
+    assert 'linked: Sailing' in msg and 'Krem' not in msg and 'Falcon' not in msg
     row = _chunk('default', 'values')
     assert row['meta']['link_fields'] == ['concept']
     assert row['meta']['rows'][0] == {'concept': 'Sailing',
@@ -203,7 +203,7 @@ def test_values_why_never_spiders(palace):
             "WHERE d.src_type = 'chunk' AND d.src_id = ? "
             "AND d.dst_type = 'entity'", (row['id'],))}
     assert linked == {'Sailing'}   # marked concept only — Krem (why) and
-    #                                Rook (unmarked concept) stay quiet
+    #                                Falcon (unmarked concept) stay quiet
     # Noun candidates harvest from marked concepts only — why-words never
     # breed future entities via the link pass.
     for word in ('boat', 'promised', 'defaulted', 'colleague'):

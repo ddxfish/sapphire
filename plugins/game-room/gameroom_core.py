@@ -514,10 +514,12 @@ def _get_provider(provider_key=None, model='', privacy_required=False):
     return None
 
 
-def provider_info(provider_key=None, model=''):
-    """Best-effort {provider, model} for display in the UI."""
+def provider_info(provider_key=None, model='', privacy_required=False):
+    """Best-effort {provider, model} for display in the UI. privacy_required
+    keeps the display honest for private sessions — without it the seat
+    showed a cloud provider _call_llm would refuse to use."""
     try:
-        p = _get_provider(provider_key, model)
+        p = _get_provider(provider_key, model, privacy_required)
         if p is None:
             return {'provider': None, 'model': None}
         key = (getattr(p, 'provider_key', None) or getattr(p, 'key', None)
@@ -648,7 +650,10 @@ def decide(engine, state, cfg, gcfg=None):
         return fallback
     data = _extract_json(content)
     if not isinstance(data, dict):
-        logger.warning(f'game-room: unparseable AI response: {content[:200]!r}')
+        # Length only, never content: this can be a PRIVATE session's reply,
+        # logs are plaintext for 30 days, and get_self_info feeds recent
+        # warnings back into (possibly cloud) chats (hunt 2026-08-17).
+        logger.warning(f'game-room: unparseable AI response ({len(content)} chars)')
         return fallback
     decision = engine.validate_decision(data, view)
     if not decision:

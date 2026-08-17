@@ -80,6 +80,26 @@ def _shipped_outside_git():
     return out
 
 
+def _owner_needles():
+    """Owner-defined beacon strings — user/megashark_needles.txt, one per
+    line, '#' comments allowed. The file lives in gitignored user/ so the
+    shipped test never carries the strings themselves (same principle as the
+    derived-at-runtime needles: the beacon must not be the shark). Matched
+    case-insensitively on word boundaries."""
+    path = REPO / 'user' / 'megashark_needles.txt'
+    out = []
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding='utf-8', errors='ignore').splitlines():
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        out.append((s, f'owner beacon "{s}"',
+                    re.compile(rf'(?<![A-Za-z0-9_]){re.escape(s)}'
+                               rf'(?![A-Za-z0-9_])', re.IGNORECASE)))
+    return out
+
+
 def test_no_developer_environment_leaks():
     needles = []
     home = str(Path.home())
@@ -93,6 +113,7 @@ def test_no_developer_environment_leaks():
         needles.append((user, 'developer username',
                         re.compile(rf'(?<![A-Za-z0-9_]){re.escape(user)}'
                                    rf'(?![A-Za-z0-9_])')))
+    needles.extend(_owner_needles())
     if not needles:
         return   # nothing derivable to hunt with on this box
 
