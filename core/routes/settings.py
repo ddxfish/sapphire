@@ -13,6 +13,7 @@ from core.auth import require_login
 from core.api_fastapi import get_system, _apply_chat_settings
 from core.event_bus import publish, Events
 from core import prompts
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -352,10 +353,16 @@ async def update_settings_batch(request: Request, _=Depends(require_login)):
             # aligned with what's actually persisted (the old value).
             if key in _PROVIDER_SWITCH_KEYS:
                 try:
-                    # settings.get falls back to _persisted / _defaults when
-                    # runtime isn't populated — we did NOT persist, so this
-                    # returns the pre-swap value.
-                    settings._runtime.pop(key, None)
+                    # set() wrote _config directly and get() READS _config —
+                    # popping the runtime layer alone left the failed value
+                    # live for every later reader (S4; the old comment here
+                    # claiming a fallback was wrong). Restore from the
+                    # persisted layers, which we did NOT touch.
+                    with settings._lock:
+                        settings._runtime.pop(key, None)
+                        _old = settings._user.get(key, settings._defaults.get(key))
+                        if _old is not None:
+                            settings._config[key] = _old
                 except Exception as rollback_err:
                     logger.warning(f"Runtime rollback for {key} failed: {rollback_err}")
             # Record the failure in results so the UI can surface it.
@@ -445,7 +452,7 @@ async def save_chat_defaults(request: Request, _=Depends(require_login)):
     tmp_path = defaults_path.with_suffix('.tmp')
     with open(tmp_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
-    tmp_path.replace(defaults_path)
+    replace_with_retry(tmp_path, defaults_path)
     return {"status": "success"}
 
 
@@ -522,6 +529,9 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
     # Without _skip_callbacks=True, the callback fires here AND the explicit
     # _do_*_switch fires later, double-running the switch (Kokoro restart
     # twice, STT recorder flap risk). Voice-prep review 2026-05-07 #J.
+    # Captured for honest rollback: toggle/switch failures below must be
+    # able to restore what the user actually had.
+    _prev_value = settings.get(key)
     settings.set(
         key, value,
         persist=(persist and not is_provider_switch),
@@ -623,6 +633,21 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
                 _apply_chat_settings(system, chat_settings)
             except Exception as e:
                 logger.warning(f"Failed to re-apply chat settings after TTS toggle: {e}")
+    # Audio toggles: switch_ok was SET here for two hunts but consumed by
+    # nobody — the value persisted at the top, HTTP said 200, and the
+    # checkbox stayed green on a dead feature (hunt 2026-08-17 S3).
+    if key in {'WAKE_WORD_ENABLED', 'STT_ENABLED', 'TTS_ENABLED'} and not switch_ok['value']:
+        try:
+            with settings._lock:
+                settings._config[key] = _prev_value
+                settings._runtime.pop(key, None)
+                if persist:
+                    settings._user[key] = _prev_value
+                    settings.save()
+        except Exception as e:
+            logger.error(f"Rollback after failed {key} toggle also failed: {e}")
+        raise HTTPException(status_code=500,
+                            detail=f"Toggle failed for {key} — setting reverted")
     # Provider keys: persist now (on success) or rollback runtime (on failure).
     # Async paths persisted optimistically above and skip this block.
     persisted = persist
@@ -633,11 +658,13 @@ async def update_setting(key: str, request: Request, _=Depends(require_login)):
                 settings._runtime.pop(key, None)
                 settings.save()
         else:
-            # Switch failed — drop the runtime override so the runtime layer
-            # stays aligned with the still-old persisted value.
+            # Switch failed — drop the runtime override AND restore _config
+            # (set() wrote it directly; get() reads _config, so popping the
+            # runtime layer alone left the failed value live — S4).
             try:
                 with settings._lock:
                     settings._runtime.pop(key, None)
+                    settings._config[key] = _prev_value
             except Exception:
                 pass
             persisted = False

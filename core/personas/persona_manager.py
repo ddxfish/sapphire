@@ -4,6 +4,7 @@ import json
 import shutil
 import threading
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class PersonaManager:
         if user_path.exists():
             # User file is authoritative — no re-seeding on boot
             try:
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 self._personas = {k: v for k, v in data.items() if not k.startswith('_')}
                 logger.info(f"Loaded {len(self._personas)} personas")
@@ -158,7 +159,7 @@ class PersonaManager:
             tmp_path = user_path.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
-            tmp_path.replace(user_path)
+            replace_with_retry(tmp_path, user_path)
             logger.debug(f"Saved {len(self._personas)} personas")
             return True
         except Exception as e:

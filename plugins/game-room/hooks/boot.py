@@ -28,20 +28,55 @@ def plugins_ready(event):
     import time
 
     def _merge_when_ready():
-        from gameroom_story import session
+        # Import inside its own try: a fault here previously killed the
+        # daemon thread with a raw stderr traceback and no logger line.
+        try:
+            from gameroom_story import session
+        except Exception as e:
+            logger.error(f"[STORY] boot re-merge cannot import session: {e}")
+            return
+        # Wait leg: ONLY the 503-poll is swallowed. _restore_pack faults
+        # were previously retried 30x and then misreported as "system not
+        # ready" — a completely different diagnosis (hunt 2026-08-17 P8).
+        system = None
         for _ in range(30):          # up to ~60s, then give up loudly
             try:
                 from core.api_fastapi import get_system
-                if get_system() is not None:
-                    session._restore_pack()
-                    logger.info("[STORY] boot costume re-merge done")
-                    return
+                system = get_system()
             except Exception:
-                pass
+                system = None
+            if system is not None:
+                break
             time.sleep(2)
-        logger.warning("[STORY] boot pack re-merge never ran (system not "
-                       "ready in 60s) — active story prompts won't resolve "
-                       "until a story action runs")
+        if system is None:
+            logger.warning("[STORY] boot pack re-merge never ran (system not "
+                           "ready in 60s) — active story prompts won't resolve "
+                           "until a story action runs")
+            return
+        # Stale-thread guard (P9): if game-room was toggled OFF while we
+        # waited, re-registering the pack would resurrect a disabled
+        # plugin's prompts until restart.
+        try:
+            from core.plugin_loader import plugin_loader
+            info = plugin_loader._plugins.get("game-room") or {}
+            if not (info.get("loaded") and info.get("enabled")):
+                logger.info("[STORY] boot re-merge skipped — plugin no longer loaded")
+                return
+        except Exception:
+            pass
+        try:
+            session._restore_pack()
+            logger.info("[STORY] boot costume re-merge done")
+        except Exception as e:
+            logger.error(f"[STORY] boot costume re-merge FAILED: {e}")
+            return
+        # The core post-scan re-prime ran before this thread could land —
+        # a chat wearing a dynamic costume ('rose') booted in the fallback
+        # prompt. Now that the names exist, resolve again (P1).
+        try:
+            system.reprime_pack_prompt(moment="story costume re-merge")
+        except Exception as e:
+            logger.warning(f"[STORY] post-merge prompt re-prime failed: {e}")
 
     try:
         threading.Thread(target=_merge_when_ready, daemon=True,

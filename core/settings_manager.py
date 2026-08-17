@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ class SettingsManager:
         user_path = self.BASE_DIR / 'user' / 'settings.json'
         if user_path.exists():
             try:
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
                 self._user = self._flatten_dict(nested)
                 logger.info(f"Loaded user settings from {user_path}")
@@ -206,7 +207,7 @@ class SettingsManager:
         # save()'s _deep_update_from_flat doesn't delete keys — it only adds/overwrites.
         user_path = self.BASE_DIR / 'user' / 'settings.json'
         try:
-            with open(user_path, 'r', encoding='utf-8') as f:
+            with open(user_path, 'r', encoding='utf-8-sig') as f:
                 nested = json.load(f)
             llm = nested.get('llm', {})
             if isinstance(llm.get('LLM_PROVIDERS'), dict):
@@ -218,7 +219,7 @@ class SettingsManager:
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(nested, f, indent=2)
                 _fsync_file(f)
-            tmp_path.replace(user_path)
+            replace_with_retry(tmp_path, user_path)
             _fsync_dir(user_path.parent)
             # Update mtime immediately — no gap for file watcher
             self._last_mtime = user_path.stat().st_mtime
@@ -439,7 +440,7 @@ class SettingsManager:
         try:
             # Load existing nested structure or start fresh
             if user_path.exists():
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     nested = json.load(f)
             else:
                 nested = {"_comment": "Your custom settings - edit freely or use web UI"}
@@ -447,13 +448,19 @@ class SettingsManager:
             # Deep update nested structure with flat changes
             nested = self._deep_update_from_flat(nested, self._user)
 
-            # Strip secrets — keys belong in credentials.json only
+            # Strip secrets — keys belong in credentials.json only.
+            # BOTH provider maps: LLM_CUSTOM_PROVIDERS is where every
+            # non-core provider lives post-migration, and leaving it out
+            # re-persisted plaintext api_keys on every save (the boot
+            # credentials sweep cleans the file once, then the next save
+            # wrote them straight back — hunt 2026-08-17 S9).
             llm_section = nested.get('llm', {})
-            providers = llm_section.get('LLM_PROVIDERS') if isinstance(llm_section, dict) else None
-            if isinstance(providers, dict):
-                for prov in providers.values():
-                    if isinstance(prov, dict):
-                        prov.pop('api_key', None)
+            for _pkey in ('LLM_PROVIDERS', 'LLM_CUSTOM_PROVIDERS'):
+                providers = llm_section.get(_pkey) if isinstance(llm_section, dict) else None
+                if isinstance(providers, dict):
+                    for prov in providers.values():
+                        if isinstance(prov, dict):
+                            prov.pop('api_key', None)
 
             # Strip service API keys that now live in credentials
             _CRED_KEYS = ('STT_FIREWORKS_API_KEY', 'TTS_ELEVENLABS_API_KEY', 'EMBEDDING_API_KEY')
@@ -469,7 +476,7 @@ class SettingsManager:
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(nested, f, indent=2)
                 _fsync_file(f)
-            tmp_path.replace(user_path)
+            replace_with_retry(tmp_path, user_path)
             _fsync_dir(user_path.parent)
             # Update mtime IMMEDIATELY after rename — no gap for the file watcher
             # to see a new mtime before _last_mtime is updated (fixes spurious reloads)
@@ -550,7 +557,7 @@ class SettingsManager:
                 with open(tmp_path, 'w', encoding='utf-8') as f:
                     json.dump({"_comment": "Your custom settings - edit freely or use web UI"}, f, indent=2)
                     _fsync_file(f)
-                tmp_path.replace(user_path)
+                replace_with_retry(tmp_path, user_path)
                 _fsync_dir(user_path.parent)
                 self._last_mtime = user_path.stat().st_mtime
                 logger.info("Settings reset to defaults")
@@ -854,7 +861,7 @@ class SettingsManager:
             if not user_path.exists():
                 return
             
-            with open(user_path, 'r', encoding='utf-8') as f:
+            with open(user_path, 'r', encoding='utf-8-sig') as f:
                 nested = json.load(f)
             
             # Find and remove the key from nested structure
@@ -865,7 +872,7 @@ class SettingsManager:
                 with open(tmp_path, 'w', encoding='utf-8') as f:
                     json.dump(nested, f, indent=2)
                     _fsync_file(f)
-                tmp_path.replace(user_path)
+                replace_with_retry(tmp_path, user_path)
                 _fsync_dir(user_path.parent)
                 self._last_mtime = user_path.stat().st_mtime
                 logger.debug(f"Removed '{key}' from settings file")

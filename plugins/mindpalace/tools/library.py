@@ -274,10 +274,18 @@ def _extract_epub(raw):
     try:
         import ebooklib
         from ebooklib import epub
-        with tempfile.NamedTemporaryFile(suffix='.epub') as tf:
+        # delete=False + close before reopen: Windows cannot open a
+        # NamedTemporaryFile by name while the first handle is live.
+        tf = tempfile.NamedTemporaryFile(suffix='.epub', delete=False)
+        try:
             tf.write(raw)
-            tf.flush()
+            tf.close()
             book = epub.read_epub(tf.name, options={'ignore_ncx': True})
+        finally:
+            try:
+                Path(tf.name).unlink(missing_ok=True)
+            except OSError:
+                pass
         parts = []
         for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
             text, head = _html_to_text(
@@ -409,6 +417,22 @@ def _write_image_working(scope, doc_id, title, description, meta):
     return working
 
 
+_WIN_RESERVED = ({'con', 'prn', 'aux', 'nul'}
+                 | {f'com{i}' for i in range(1, 10)}
+                 | {f'lpt{i}' for i in range(1, 10)})
+
+
+def _safe_filename(name, fallback):
+    """Cross-platform upload-name sanitizer. Path(...).name alone is not one:
+    a colon makes an NTFS alternate data stream and CON/NUL-class stems are
+    device files on Windows — and the doc row commits before the write."""
+    name = Path(name or fallback).name
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).strip(' .') or fallback
+    if Path(name).stem.lower() in _WIN_RESERVED:
+        name = '_' + name
+    return name[-120:] if len(name) > 120 else name
+
+
 def import_image(scope, filename, raw: bytes, title=None, description=None,
                  collection_id=None, importance=None, added_by='user'):
     """Typed add-modal 'Images': decode-verify FIRST (corrupt file creates
@@ -417,7 +441,7 @@ def import_image(scope, filename, raw: bytes, title=None, description=None,
     via the queue (I3). Returns (doc_id, error)."""
     import io
     from PIL import Image, ImageOps
-    filename = Path(filename or 'image.jpg').name
+    filename = _safe_filename(filename, 'image.jpg')
     ext = Path(filename).suffix.lower()
     if ext not in IMAGE_KINDS:
         return None, f"'{ext}' isn't an importable image — jpg, png, gif, webp, heic."
@@ -731,7 +755,9 @@ def _watch_files(root: Path):
                 st = f.stat()
             except OSError:
                 continue
-            files[str(rel)] = (st.st_mtime, st.st_size)
+            # as_posix: backslash keys on Windows would miss every stored
+            # posix-keyed row and re-ingest the whole folder after migration.
+            files[rel.as_posix()] = (st.st_mtime, st.st_size)
             if len(files) >= WATCH_MAX_FILES:
                 logger.warning(f"[LIBRARY] watch folder {root} hit the "
                                f"{WATCH_MAX_FILES}-file guard — truncating")
@@ -1329,7 +1355,7 @@ def import_file(scope, filename, raw: bytes, kind=None, title=None,
     Extraction runs FIRST — a refusal (scanned PDF, DRM epub) creates
     nothing. Title/author autofill from file metadata when the modal left
     them blank. Returns (doc_id, error)."""
-    filename = Path(filename or 'untitled.txt').name
+    filename = _safe_filename(filename, 'untitled.txt')
     ext = Path(filename).suffix.lower()
     if ext not in FILE_KINDS:
         return None, f"'{ext}' isn't importable — txt, md, pdf, epub."

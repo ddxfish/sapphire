@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +146,7 @@ class ContinuityScheduler:
             return
 
         try:
-            with open(self._tasks_path, 'r', encoding='utf-8') as f:
+            with open(self._tasks_path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             # Per-entry tolerance (scout, 2026-07-20): one malformed entry
             # (missing "id") used to KeyError the whole comprehension →
@@ -211,7 +212,7 @@ class ContinuityScheduler:
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
-                Path(tmp).replace(self._tasks_path)
+                replace_with_retry(Path(tmp), self._tasks_path)
             except Exception:
                 Path(tmp).unlink(missing_ok=True)
                 raise
@@ -225,7 +226,7 @@ class ContinuityScheduler:
             return
         
         try:
-            with open(self._activity_path, 'r', encoding='utf-8') as f:
+            with open(self._activity_path, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             self._activity = data.get("activity", [])[-50:]  # Keep last 50
         except Exception as e:
@@ -241,7 +242,7 @@ class ContinuityScheduler:
             try:
                 with os.fdopen(fd, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2)
-                Path(tmp).replace(self._activity_path)
+                replace_with_retry(Path(tmp), self._activity_path)
             except Exception:
                 Path(tmp).unlink(missing_ok=True)
                 raise

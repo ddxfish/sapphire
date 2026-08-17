@@ -14,7 +14,7 @@
     "gameroom_story/rooms.py": "sha256:460ec196ffee0ffad659a2d10d17510cc6cec038503a4f8f35cbcd7945fb9d9c",
     "gameroom_story/session.py": "sha256:7b3b27114ae05fcedc6a82f1d2bce23489450ed3967b8d1e79889c66783a5d23",
     "gameroom_story/state.py": "sha256:176af5608088372bd5cd9aa9d1cf1a7e226ace63ac066f4900fdbfe41b555443",
-    "hooks/boot.py": "sha256:271fd0fc7b5bf60c4f19e48ab87dd8b5ed3cb3b8ad093acc8009089c3469153b",
+    "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/ghost.py": "sha256:01c8adc35d89cb459881fd7353a011db373c7b1ac3a8daab0d1bd335e9942433",
     "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
     "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
@@ -38,5 +38,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:27e5e5fc07a5776cea24e629f9cb5e1d3462b2c52d61a573474f603f91c9e37c"
   },
-  "signature": "6ZsCG0ftWQF/9jVmupk/O9/7laO9YnU6Uy6JHIQJ7Sx5bRtqT2gTnAn1zS3mhaZgfqZ61oYQwTAp/uR0v80VAw=="
+  "signature": "R3JecdWDn8uUksocfmILBKhYxiqP9lFaJ/pybbdFeezDWa4V8WyjVe0bLtgCKhYU6JELT7lC5FtfHcjA4H9LDw=="
 }

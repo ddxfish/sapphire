@@ -43,18 +43,23 @@ class HookEvent:
         pre_tts:           Before speech — mutate `tts_text`, cancel with `skip_tts`. metadata['tts_client'] = calling TTSClient
         post_tts:          After playback — observational (`tts_text`, metadata has `duration`)
         provider_switched: After TTS/STT/embed provider hot-swap. metadata: `kind` (tts|stt|embed), `provider` (new key). Observational — plugins warm caches / reset state.
-        plugins_ready:     Once per plugin scan, after ALL enabled plugins have
-                           registered (tools, packs, games). The "after my own
-                           registration" moment — e.g. re-merging runtime-rendered
-                           prompt-pack entries so they resolve at boot. 2026-08-05.
+        plugins_ready:     After a registration wave settles. Fires on FOUR legs:
+                           the boot scan, reload_plugin, rescan (per newly loaded
+                           plugin), and toggle-ON — handlers must be idempotent
+                           and must re-check their plugin is still loaded (a
+                           handler thread can outlive a toggle-OFF). The "after
+                           my own registration" moment. 2026-08-05 / 2026-08-17.
         chat_renamed:      A chat was renamed. metadata: `old`, `new`. Any plugin
                            keying data by chat name MUST carry it across, or that
                            data strands and a later chat recycling the old name
                            inherits a ghost. Fires after the rename succeeds.
-        chat_deleted:      A chat was deleted. metadata: `name`. Plugins drop the
-                           chat's per-chat state here — otherwise recreating the
-                           name resurrects it. Fires after the delete succeeds,
-                           on EVERY path (single, bulk, manage). 2026-08-05.
+        chat_deleted:      A chat was deleted. metadata: `name`. NOTE (v1.3):
+                           core already deleted the chat's plugin_chat_data rows
+                           before this fires — PluginChatState reads here return
+                           nothing and archive-on-delete is not possible from
+                           this hook. Use it for state kept OUTSIDE the chat DB
+                           (files, caches, registries). Fires after the delete
+                           succeeds, on EVERY path (single, bulk, manage).
         chat_vaulted:      A chat was just encrypted into the vault (marked
                            private). metadata: `name`. Plugins holding plaintext
                            deposits keyed by or containing this chat's name
@@ -136,7 +141,7 @@ class HookRunner:
     # plaintext orphan the gate exists to prevent. The others carry no chat
     # content and no chat identity.
     ALWAYS_DELIVER = frozenset({
-        "chat_renamed", "chat_deleted", "plugins_ready",
+        "chat_renamed", "chat_deleted", "chat_cleared", "plugins_ready",
         "provider_switched", "on_wake",
     })
 

@@ -875,6 +875,8 @@ def _change_username(args):
     name = (args.get('name') or '').strip()
     if not name:
         return "Name is required.", False
+    if len(name) > 100:
+        return "That name is too long (max 100 characters) — it is injected into every prompt.", False
     settings.set('DEFAULT_USERNAME', name, persist=True)
     logger.info(f"Username changed to: {name}")
     return f"Username changed to {name}. This will appear in prompts using {{user_name}}.", True

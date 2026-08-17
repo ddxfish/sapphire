@@ -4,13 +4,13 @@
   "files": {
     "README.md": "sha256:8666a799a6241ba50482b3fb2637d235ebec328e0e42c8c167c7160bec32966c",
     "bone_mapper.py": "sha256:57aa0dc284effd5cc50d771550c8977aa81532ef1d5d0745ac9c7809f211784d",
-    "build_avatar.py": "sha256:4eee73a9cc27beb0ea76113e7f13c877da86bbe699be1e62138d460c8e1baf91",
-    "build_avatar_sapphire.py": "sha256:0f407c4ea52a28a540574611d3d075a8de3991b2422ce3db29d893782d42a4f8",
+    "build_avatar.py": "sha256:8435642192aeb0407aa847004d476f4cbc54504d951446ace549446558223ca5",
+    "build_avatar_sapphire.py": "sha256:a8d20c0efa8c8c3b7430f39882baee33a6fdbf3b6db4152172438343fabfda43",
     "glb_merger.py": "sha256:6baccd4aced1a2fb5d97bc0b679ea58b8f0bc35527abadbc1dd9b3ace99d13ca",
     "glb_parser.py": "sha256:e03aab34f4496a8f866c600e3b67d6d0c8305ac1a00c94cdfc4b809bc72ca09c",
     "hooks/prompt_inject.py": "sha256:e7616a10bc85c9e70d67fa4d5febaca8cddcb1ab5a711c9bb8a448bc424d0577",
     "plugin.json": "sha256:5b658545e4904102220fdf9da3b0dcb002524f13a22c30bfd0b0568f36ef8e82",
-    "routes/api.py": "sha256:60deb2c1889db69b9f23a0a0d493116a38ef572a56ab6f0bfda6c281549ae792",
+    "routes/api.py": "sha256:d3fda25fc359e11599a36283cd174a15cc141023dde06e55aecd032c3075b186",
     "web/camera-orbits.js": "sha256:9e401ad6f7207a805a5e507374788a2b1b5c444405a9303a43a97983851f87e7",
     "web/environment.js": "sha256:591e515585034d671f849bec899e70b01426fb7ea01e6a4085da4a383e8eaf99",
     "web/index.js": "sha256:a208ba9c362427a279213f1c8c36c4ea130b2614f4f3bfc16b88869ad081f510",
@@ -25,5 +25,5 @@
     "web/sidebar.html": "sha256:c0d25cc097f997c3413abd941e6bbbde238cb6c65e35a0d19885d75b40fc5e25",
     "web/sidebar.js": "sha256:d7d2142033c5ad7663d4a9224a73797c6ff4215c7e7b1bc2e346192a7f5e236d"
   },
-  "signature": "DpFHDai1xQjH9s/aMN5wCB5ayEHHrj6vwiiOdrkGsngBLJrYH02UnFu6UkYl1tQUd3TrCiRevvgk9NTzRsxpAQ=="
+  "signature": "MvsXvnFlGAxUW+9QC8u9SOg9c91qeEC+E+7/d9X+Yy7ESHiTHo3eRG5vDxn6EBKk7mm4KqShucsUsQf08yq5Cw=="
 }

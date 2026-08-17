@@ -139,9 +139,16 @@ class ColoredFormatter(logging.Formatter):
         msg = super().format(record)
         return f"{color}{msg}{self.RESET}" if color else msg
 
-# Console handler for terminal output
+# Console handler for terminal output. Windows: cmd.exe ships with VT
+# processing OFF, so raw ANSI renders as ←[97m garbage on every line —
+# plain formatter there (main.py strips its own ANSI for the same reason).
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+if sys.platform == 'win32':
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+else:
+    console_handler.setFormatter(
+        ColoredFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 
 # Configure root logger
 root_logger = logging.getLogger()

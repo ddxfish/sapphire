@@ -237,6 +237,10 @@ class RtpSession:
                               self._ts & 0xFFFFFFFF, self._ssrc)
             try:
                 self._sock.sendto(hdr + frame, self._remote)
+            except ConnectionResetError:
+                # Windows surfaces ICMP port-unreachable as WSAECONNRESET on
+                # UDP — transient, must not kill the outbound audio loop.
+                continue
             except OSError:
                 break
             self._seq += 1
@@ -647,7 +651,12 @@ class SipEndpoint:
                 r, _, _ = select.select([self.rtp], [], [], 0.2)
                 if not r:
                     continue
-                data, _addr = self.rtp.recvfrom(65535)
+                try:
+                    data, _addr = self.rtp.recvfrom(65535)
+                except ConnectionResetError:
+                    # Windows WSAECONNRESET on UDP (ICMP echo of a failed
+                    # send) — transient, not a call-ending error.
+                    continue
                 if len(data) > 12 and (data[0] & 0xC0) == 0x80:
                     _gap = time.time() - last_rtp          # TEMP probe: is Twilio RTP
                     if _gap > 3:                            # continuous during silence?

@@ -289,7 +289,10 @@ export async function openRealtimeEditor(task, refresh) {
         if (!name) { mirror.innerHTML = ''; return; }
         try {
             const res = await fetch(`/api/chats/${encodeURIComponent(name)}/settings`);
-            const s = await res.json();
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            // Route shape is {settings: {...}} — reading the top level made
+            // EVERY chat render "tools: none", including armed ones.
+            const s = (await res.json()).settings || {};
             const tools = s.toolset || 'none';
             const armed = tools && tools !== 'none';
             mirror.innerHTML = `runs as <b>${_esc(name)}</b> — prompt: ${_esc(s.prompt || 'default')} · ` +
@@ -307,16 +310,29 @@ export async function openRealtimeEditor(task, refresh) {
         if (!name || !name.trim()) return;
         const clean = name.trim();
         try {
-            await createChat(clean);
-            await fetch(`/api/chats/${encodeURIComponent(clean)}/settings`, {
+            // Server sanitizes the name — use ITS spelling or the settings
+            // PUT below targets a chat that doesn't exist.
+            const created = await createChat(clean);
+            const chatName = (created && created.name) || clean;
+            // Body must be {settings:{...}} and the response must be
+            // CHECKED: the old flat body 400'd silently and the chat
+            // answered the phone with the FULL default toolset while the
+            // toast said "no tools" (hunt 2026-08-17, the day-ruiner).
+            const res = await fetch(`/api/chats/${encodeURIComponent(chatName)}/settings`, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ toolset: 'none' }),
+                body: JSON.stringify({ settings: { toolset: 'none' } }),
             });
+            if (!res.ok) {
+                showToast(`Chat "${chatName}" created but DISARMING FAILED — `
+                    + `it has the default toolset. Edit the chat before pointing `
+                    + `a number at it.`, 'error', 8000);
+                return;
+            }
             const opt = document.createElement('option');
-            opt.value = clean; opt.textContent = clean;
-            chatSel.appendChild(opt); chatSel.value = clean;
-            showMirror(clean);
-            showToast(`Chat "${clean}" created (no tools)`, 'success', 2500);
+            opt.value = chatName; opt.textContent = chatName;
+            chatSel.appendChild(opt); chatSel.value = chatName;
+            showMirror(chatName);
+            showToast(`Chat "${chatName}" created (no tools)`, 'success', 2500);
         } catch (e) { showToast('Could not create chat', 'error'); }
     });
 

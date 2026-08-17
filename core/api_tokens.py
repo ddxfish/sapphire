@@ -28,6 +28,7 @@ from typing import List, Optional
 
 from core.setup import CONFIG_DIR
 from core.settings_manager import _fsync_file, _fsync_dir
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,7 @@ class ApiTokensManager:
             return
 
         try:
-            with open(API_TOKENS_FILE, 'r', encoding='utf-8') as f:
+            with open(API_TOKENS_FILE, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 self._tokens = data.get('tokens', []) or []
@@ -104,7 +105,7 @@ class ApiTokensManager:
                     _fsync_file(f)
                 if sys.platform != 'win32':
                     os.chmod(tmp_path, 0o600)
-                tmp_path.replace(API_TOKENS_FILE)
+                replace_with_retry(tmp_path, API_TOKENS_FILE)
                 _fsync_dir(API_TOKENS_FILE.parent)
                 return True
             except Exception as e:

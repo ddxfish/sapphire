@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class ToolsetManager:
         if user_path.exists():
             # User file is authoritative — no re-seeding on boot
             try:
-                with open(user_path, 'r', encoding='utf-8') as f:
+                with open(user_path, 'r', encoding='utf-8-sig') as f:
                     data = json.load(f)
                 self._toolsets = {k: v for k, v in data.items() if not k.startswith('_')}
             except Exception as e:
@@ -275,7 +276,7 @@ class ToolsetManager:
             tmp_path = user_path.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
-            tmp_path.replace(user_path)
+            replace_with_retry(tmp_path, user_path)
             
             # Update mtime after save to prevent watcher from triggering
             self._last_mtimes[str(user_path)] = user_path.stat().st_mtime

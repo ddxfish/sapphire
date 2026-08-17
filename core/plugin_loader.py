@@ -15,26 +15,14 @@ from typing import Dict, List, Optional, Any, Callable, Tuple
 
 from core.hooks import hook_runner
 from core.plugin_verify import verify_plugin
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
 
-def _rmtree_robust(path):
-    """shutil.rmtree that survives Windows read-only files.
-
-    Plain `shutil.rmtree` crashes on Windows the first time it hits a
-    read-only file (.pyc, git-set permissions, AV-locked caches). The
-    onerror handler clears the read-only bit and retries the single
-    delete — if that still fails, we swallow the exception so a broken
-    file doesn't abort the whole uninstall and leave a half-deleted tree.
-    """
-    def _on_error(func, p, exc_info):
-        try:
-            os.chmod(p, stat.S_IWRITE)
-            func(p)
-        except Exception as e:
-            logger.warning(f"[PLUGINS] rmtree could not remove {p}: {e}")
-    shutil.rmtree(path, onerror=_on_error)
+# Canonical copy moved to fs_utils so pre-boot code (restore.py) can use it
+# without importing the plugin loader; alias keeps every call site working.
+from core.fs_utils import rmtree_robust as _rmtree_robust
 
 # Plugin search paths (relative to project root)
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -124,7 +112,7 @@ class PluginState:
         tmp = self._path.with_suffix(f'.json.tmp.{_os.getpid()}.{id(self):x}')
         try:
             tmp.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
-            tmp.replace(self._path)
+            replace_with_retry(tmp, self._path)
         finally:
             if tmp.exists():
                 try: tmp.unlink()
@@ -426,27 +414,49 @@ class PluginLoader:
                 f"pages or missing features until the core is updated (git pull)."
             )
 
-    def _get_enabled_list(self) -> list:
-        """Read enabled plugins from user/webui/plugins.json."""
+    def _read_plugins_json(self, key: str) -> list:
+        """Read a list from user/webui/plugins.json, falling back to the
+        shipped static file. A corrupt USER file is quarantined at ERROR —
+        silently falling through to the static list (enabled: setup-wizard
+        only) would turn every explicitly-enabled plugin dark on next boot
+        with two WARNING lines as the only trace."""
         for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
             if path.exists():
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
-                    return data.get("enabled", [])
+                    return data.get(key, [])
                 except Exception as e:
-                    logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
+                    if path == USER_PLUGINS_JSON:
+                        from datetime import datetime
+                        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                        quarantine = path.with_name(path.name + f".bad-{stamp}")
+                        try:
+                            path.rename(quarantine)
+                            logger.error(f"[PLUGINS] CORRUPT {path.name} quarantined to "
+                                         f"{quarantine.name} — plugin enable state LOST, "
+                                         f"reverting to defaults: {e}")
+                        except OSError:
+                            logger.error(f"[PLUGINS] CORRUPT {path.name} (quarantine "
+                                         f"failed) — plugin enable state ignored: {e}")
+                        try:
+                            from core.event_bus import publish, Events
+                            publish(Events.PLUGIN_LOAD_ERROR, {
+                                "plugin": "plugins.json",
+                                "error": "Corrupt plugin enable-state file — reverted to defaults",
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
         return []
+
+    def _get_enabled_list(self) -> list:
+        """Read enabled plugins from user/webui/plugins.json."""
+        return self._read_plugins_json("enabled")
 
     def _get_disabled_list(self) -> list:
         """Read explicitly-disabled plugins (overrides default_enabled)."""
-        for path in (USER_PLUGINS_JSON, STATIC_PLUGINS_JSON):
-            if path.exists():
-                try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
-                    return data.get("disabled", [])
-                except Exception as e:
-                    logger.warning(f"[PLUGINS] Failed to read {path}: {e}")
-        return []
+        return self._read_plugins_json("disabled")
 
     def _install_pkg_alias(self, name: str, plugin_dir: Path, info: dict):
         """Make a user-band plugin importable as `plugins.<name>`.
@@ -884,7 +894,7 @@ class PluginLoader:
                     settings_file.parent.mkdir(parents=True, exist_ok=True)
                     tmp = settings_file.with_suffix('.json.tmp')
                     tmp.write_text(json.dumps(defaults, indent=2), encoding="utf-8")
-                    tmp.replace(settings_file)
+                    replace_with_retry(tmp, settings_file)
                     logger.debug(f"[PLUGINS] Seeded default settings for {name}")
 
         logger.info(f"[PLUGINS] Loaded: {name} (priority {base_priority}, {band})")
@@ -1184,7 +1194,7 @@ class PluginLoader:
             data["enabled"] = [n for n in enabled if n not in names]
             tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
             tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp_path.replace(USER_PLUGINS_JSON)
+            replace_with_retry(tmp_path, USER_PLUGINS_JSON)
         except Exception as e:
             logger.warning(f"[PLUGINS] Failed to update enabled list: {e}")
 
@@ -1224,7 +1234,21 @@ class PluginLoader:
                     self._plugins[name]["verified_author"] = verify_meta.get("author")
             if should_load:
                 try:
-                    self._load_plugin(name)
+                    if not self._load_plugin(name):
+                        # Signature block / load refusal: the old flow still
+                        # logged "Reloaded" and left the UI toggle ON while
+                        # every tool, hook and route was gone — the exact
+                        # edit-without-resign dev-watcher trap.
+                        logger.error(f"[PLUGINS] Reload BLOCKED for {name} — "
+                                     f"plugin did not load (unsigned/tampered or "
+                                     f"load failure); its tools, hooks and routes "
+                                     f"are now OFFLINE until a successful reload")
+                        from core.event_bus import publish, Events
+                        publish(Events.PLUGIN_LOAD_ERROR, {
+                            "plugin": name,
+                            "error": "Reload blocked — signature or load failure",
+                        })
+                        return
                     # Re-enable tools in active toolset. Capture the toolset
                     # name UNDER the function_manager's tools lock so a
                     # concurrent toolset save (dev-watcher fires while user
@@ -1780,7 +1804,19 @@ class PluginLoader:
                     continue
                 try:
                     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                except Exception:
+                except Exception as e:
+                    # "Can't parse" is not "gone": the removal sweep below
+                    # would otherwise classify it as removed-from-disk and
+                    # unload a plugin whose manifest is mid-save/corrupt.
+                    logger.warning(f"[PLUGINS] Rescan: unreadable plugin.json in "
+                                   f"{child.name} — keeping current state: {e}")
+                    with self._lock:
+                        for known, info in self._plugins.items():
+                            if info.get("path") == child:
+                                on_disk.add(known)
+                                break
+                        else:
+                            on_disk.add(child.name)
                     continue
                 name = manifest.get("name", child.name)
                 on_disk.add(name)
@@ -2112,7 +2148,9 @@ class PluginLoader:
 
     def get_all_plugin_info(self) -> List[dict]:
         """Get info for all discovered plugins."""
-        return [self.get_plugin_info(n) for n in self._plugins]
+        # list() snapshot: a concurrent rescan() pops from _plugins and an
+        # unsnapshotted iteration raises RuntimeError mid-listing.
+        return [self.get_plugin_info(n) for n in list(self._plugins)]
 
     _plugin_state_cache: dict = {}
     _plugin_state_cache_lock = threading.Lock()

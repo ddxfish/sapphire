@@ -159,10 +159,15 @@ def _execute_inner(function_name, arguments, config):
             if not new_lines:
                 return "No lines provided to append.", False
             
+            # Normalize: an element containing '\n' would write as multiple
+            # physical lines while counting as one, silently shifting the
+            # numbering every delete-by-number relies on.
+            new_lines = [seg for item in new_lines for seg in str(item).splitlines()] or ['']
+
             lines = _read_lines()
             lines.extend(new_lines)
             _write_lines(lines)
-            
+
             count = len(new_lines)
             total = len(lines)
             return f"Appended {count} line(s). Notepad now has {total} lines.", True
@@ -204,7 +209,8 @@ def _execute_inner(function_name, arguments, config):
             if after_line < 0 or after_line > max_line:
                 return f"Invalid after_line: {after_line}. Valid range: 0-{max_line}", False
             
-            lines.insert(after_line, content)
+            for i, seg in enumerate(str(content).splitlines() or ['']):
+                lines.insert(after_line + i, seg)
             _write_lines(lines)
             
             new_line_num = after_line + 1

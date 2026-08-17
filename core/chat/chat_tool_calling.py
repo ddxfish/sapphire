@@ -536,6 +536,18 @@ class ToolCallingEngine:
         if history:
             history.add_assistant_with_tool_calls(filtered_content, tool_calls_formatted)
 
+        # Executors expect a dict, but text formats can deliver `arguments` as
+        # a JSON-encoded string (common from local models). Unparsed, every
+        # tool on this path dies with "'str' object has no attribute 'get'"
+        # and the model retry-spirals. History above keeps the raw string.
+        if isinstance(function_args, str):
+            try:
+                parsed = json.loads(function_args)
+                function_args = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                logger.warning(f"[TOOL] Unparseable string arguments for {function_name}; executing with empty args")
+                function_args = {}
+
         try:
             function_result = self.function_manager.execute_function(function_name, function_args, scopes=scopes, allowed_tools=allowed_tools, executor_snapshot=executor_snapshot)
         except Exception as tool_error:

@@ -22,6 +22,7 @@ from core.auth import (
 from core.setup import get_password_hash, save_password_hash, verify_password, is_setup_complete
 from core.event_bus import publish, Events
 from core import prompts
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +348,7 @@ async def serve_cdn_cache(request: Request, path: str, _=Depends(require_login))
         CDN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = cache_file.with_suffix(".tmp")
         tmp.write_bytes(content)
-        tmp.replace(cache_file)
+        replace_with_retry(tmp, cache_file)
         meta_file.write_text(content_type, encoding="utf-8")
         return _Response(content=content, media_type=content_type)
     except HTTPException:
@@ -560,7 +561,7 @@ def _get_session_secret():
         if sys.platform != 'win32':
             import os as _os
             _os.chmod(tmp_path, 0o600)
-        tmp_path.replace(secret_file)
+        replace_with_retry(tmp_path, secret_file)
     except Exception:
         pass  # Falls back to ephemeral secret (session won't survive restart)
     return secret

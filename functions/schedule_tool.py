@@ -157,7 +157,9 @@ def execute(function_name, arguments, config_obj=None):
                 when_label = "today"
                 target = target_today
 
-            time_label = target.strftime("%-I:%M %p").lstrip("0")
+            # %I (not %-I): the glibc-only %- modifier raises ValueError on
+            # Windows; lstrip already removes the leading zero.
+            time_label = target.strftime("%I:%M %p").lstrip("0")
             one_shot = True
         else:
             # Recurring: use the cron as-is
@@ -172,6 +174,17 @@ def execute(function_name, arguments, config_obj=None):
             croniter(cron, now)
         except Exception as e:
             return f"Invalid cron expression '{cron}': {e}", False
+
+        # Interval floor for recurring tasks: each fire is a full LLM+TTS
+        # turn, and nothing else clamps frequency ('* * * * *' would talk
+        # every minute forever, surviving restarts).
+        if not one_shot:
+            it = croniter(cron, now)
+            fires = [it.get_next(datetime) for _ in range(4)]
+            gap = min((b - a).total_seconds() for a, b in zip(fires, fires[1:]))
+            if gap < 300:
+                return (f"That schedule fires every {int(gap)}s — too frequent for a "
+                        "recurring task. Minimum interval is 5 minutes (*/5 or slower)."), False
 
         # Build a short name from description
         name = description[:50] + ("..." if len(description) > 50 else "")

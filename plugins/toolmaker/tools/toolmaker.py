@@ -285,18 +285,28 @@ def execute(function_name, arguments, config):
             if not ok:
                 return f"FAILED: Validation failed ({strictness} mode): {err}", False
 
-            # Create plugin directory structure
+            # Create plugin directory structure. A re-save of an EXISTING
+            # plugin must never destroy it: back up the working code and
+            # restore it if the new code fails the smoke test — the old flow
+            # rmtree'd the whole dir (manifest, data and all) on failure.
             plugin_dir = _USER_PLUGINS / name
             tools_dir = plugin_dir / "tools"
+            is_new = not plugin_dir.exists()
             tools_dir.mkdir(parents=True, exist_ok=True)
             filepath = tools_dir / f"{name}.py"
+            old_code = filepath.read_text(encoding='utf-8') if filepath.exists() else None
             filepath.write_text(code, encoding='utf-8')
 
             # Smoke test
             ok, result = _smoke_test(filepath)
             if not ok:
-                shutil.rmtree(plugin_dir, ignore_errors=True)
-                return f"FAILED: Smoke test failed: {result}\nPlugin directory removed — fix and retry.", False
+                if is_new:
+                    shutil.rmtree(plugin_dir, ignore_errors=True)
+                    return f"FAILED: Smoke test failed: {result}\nPlugin directory removed — fix and retry.", False
+                if old_code is not None:
+                    filepath.write_text(old_code, encoding='utf-8')
+                return (f"FAILED: Smoke test failed: {result}\n"
+                        f"Existing plugin '{name}' left untouched — fix and retry."), False
 
             # Generate and write manifest
             manifest = _generate_manifest(name, result, code)

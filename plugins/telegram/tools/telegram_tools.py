@@ -347,7 +347,7 @@ def telegram_get_chats(args, config):
         return ready
     client, loop = ready
 
-    limit = args.get("limit", 15)
+    limit = min(max(int(args.get("limit", 15) or 15), 1), 100)
 
     try:
         async def _get():
@@ -405,7 +405,9 @@ def telegram_read_messages(args, config):
     client, loop = ready
 
     chat_id = args.get("chat_id")
-    limit = args.get("limit", 20)
+    # Clamp: an uncapped limit goes straight into iter_messages — 100k pulls
+    # one unbounded tool result and risks a Telegram flood-wait.
+    limit = min(max(int(args.get("limit", 20) or 20), 1), 100)
     if not chat_id:
         return "chat_id is required"
 

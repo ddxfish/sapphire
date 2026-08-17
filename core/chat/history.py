@@ -91,6 +91,14 @@ def __getattr__(name):
         return get_system_defaults()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+def sanitize_chat_name(name: str) -> str:
+    """The chat-name normal form. Single source: create_chat AND the route
+    that echoes the created name must agree, or frontends re-derive it
+    (each slightly differently) and target a chat that doesn't exist."""
+    safe = "".join(c for c in (name or '') if c.isalnum() or c in (' ', '-', '_')).strip()
+    return safe.replace(' ', '_').lower()
+
+
 def get_user_defaults() -> Dict[str, Any]:
     """
     Get user's custom chat defaults, falling back to system defaults.
@@ -799,6 +807,12 @@ class ChatSessionManager:
     def __init__(self, max_history: int = 30, history_dir: str = "user/history"):
         self.max_history = max_history
         self.history_dir = Path(history_dir)
+        if not self.history_dir.is_absolute():
+            # Anchor to the project root, never CWD: a Windows shortcut with
+            # a wrong "Start in" (or a service unit without WorkingDirectory)
+            # would otherwise create a fresh empty history DB wherever the
+            # shell happened to be — "all my chats are gone".
+            self.history_dir = Path(__file__).absolute().parent.parent.parent / self.history_dir
         self.history_dir.mkdir(parents=True, exist_ok=True)
         
         self._db_path = self.history_dir / "sapphire_history.db"
@@ -1537,6 +1551,22 @@ class ChatSessionManager:
                   or getattr(eff_chat, "_needs_full_resync", False)
                   or len(msgs) < state["count"])
 
+        # An empty-list resync is a pure DELETE and never enters the encrypt
+        # funnel (_enc_value's raise is what protects sealed rows) — probe
+        # the key explicitly or a sealed chat's rows would be destroyed
+        # keyless (e.g. reset_chat via an agent/continuity override while
+        # locked). Same guard as plugin_data_replace.
+        if vaulted and resync and not msgs:
+            try:
+                from core import prompt_vault
+                keyless = prompt_vault.chat_data_key() is None
+            except Exception:
+                keyless = True
+            if keyless:
+                raise RuntimeError(
+                    "rows save refused — chat sealed (empty resync would "
+                    "delete unreadable rows)")
+
         if is_override:
             if resync:
                 cur = conn.execute(
@@ -1794,8 +1824,11 @@ class ChatSessionManager:
             try:
                 from core.hooks import hook_runner, HookEvent
                 if hook_runner.has_handlers("chat_cleared"):
+                    # Pre-stamped: the fallback resolver reads the ACTIVE
+                    # chat, which is not the one being cleared.
                     hook_runner.fire("chat_cleared",
-                                     HookEvent(metadata={"chat": chat_name}))
+                                     HookEvent(metadata={"chat": chat_name},
+                                               chat_name=chat_name))
             except Exception as e:
                 logger.warning(f"chat_cleared hook dispatch failed: {e}")
             return True
@@ -1993,7 +2026,11 @@ class ChatSessionManager:
                     # including rows below a capped-load offset (same
                     # rationale as clear()).
                     self._rows_state[chat_name] = {"offset": 0, "count": 0}
-                    self._save_current_chat()
+                    if not self._save_current_chat():
+                        # The bool exists precisely so callers don't report
+                        # "compressed" while the store kept the old rows.
+                        return False, ("Save was dropped (sealed vault or a "
+                                       "concurrent chat operation) — nothing was written")
                     return True, ""
                 with self._get_connection() as conn:
                     row = conn.execute(
@@ -2581,10 +2618,8 @@ class ChatSessionManager:
         if not chat_name or not chat_name.strip():
             logger.error("Cannot create chat with empty name")
             return False
-        
-        # Sanitize name
-        safe_name = "".join(c for c in chat_name if c.isalnum() or c in (' ', '-', '_')).strip()
-        safe_name = safe_name.replace(' ', '_').lower()
+
+        safe_name = sanitize_chat_name(chat_name)
         
         self._ensure_db()
         
@@ -2688,11 +2723,23 @@ class ChatSessionManager:
                 # Ensure default exists
                 self._ensure_default_exists()
                 
-                # Switch to default if we deleted active
+                # Switch to default if we deleted active. Guarded like
+                # set_active_chat: _load_chat is all-or-nothing, and on
+                # failure (sealed default, no key) the buffer still holds
+                # the DELETED chat's messages — committing the name anyway
+                # would persist them INTO default after the next unlock.
                 if was_active:
-                    self._load_chat("default")
-                    self.active_chat_name = "default"
-                    logger.info("Switched to default after deleting active chat")
+                    if self._load_chat("default"):
+                        self.active_chat_name = "default"
+                        logger.info("Switched to default after deleting active chat")
+                    else:
+                        # Keep the deleted name (the deleted-chat guard drops
+                        # any save from this state) and empty the buffer.
+                        self.current_chat.messages = []
+                        self.current_settings = get_system_defaults()
+                        logger.error("Could not load 'default' after deleting the active "
+                                     "chat — in-memory state cleared; saves drop until a "
+                                     "chat loads")
 
                 # Safe under self._lock (RLock; the scan re-enters it) — and
                 # no path acquires scheduler._lock before history's, so the
@@ -2967,10 +3014,22 @@ class ChatSessionManager:
             if exports_dir.is_dir():
                 for f in exports_dir.iterdir():
                     if pat.fullmatch(f.name):
-                        f.unlink()
-                        logger.info("[VAULT] scrubbed a stale plaintext export")
+                        try:
+                            f.unlink()
+                            logger.info("[VAULT] scrubbed a stale plaintext export")
+                        except OSError:
+                            # Windows: an AV/indexer handle can refuse the
+                            # delete. Retry once, then say PLAINTEXT REMAINS
+                            # at ERROR — never report a seal over a survivor.
+                            time.sleep(0.2)
+                            try:
+                                f.unlink()
+                                logger.info("[VAULT] scrubbed a stale plaintext export (retry)")
+                            except OSError as e2:
+                                logger.error(f"[VAULT] PLAINTEXT EXPORT REMAINS "
+                                             f"at {f} — delete it manually: {e2}")
         except Exception as e:
-            logger.warning(f"[VAULT] export scrub failed: {e}")
+            logger.error(f"[VAULT] export scrub failed — plaintext exports may remain: {e}")
         try:
             from core.metrics import metrics as token_metrics
             token_metrics.scrub_chat(chat_name)
@@ -3634,8 +3693,11 @@ class ChatSessionManager:
         try:
             from core.hooks import hook_runner, HookEvent
             if hook_runner.has_handlers("chat_cleared"):
+                # Pre-stamped: the fallback resolver reads the ACTIVE chat,
+                # which under an override is not the one being cleared.
                 hook_runner.fire("chat_cleared",
-                                 HookEvent(metadata={"chat": eff_name}))
+                                 HookEvent(metadata={"chat": eff_name},
+                                           chat_name=eff_name))
         except Exception as e:
             logger.warning(f"chat_cleared hook dispatch failed: {e}")
 

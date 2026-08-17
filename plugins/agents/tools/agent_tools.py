@@ -576,6 +576,10 @@ def _spawn_agent(manager, arguments, ps):
         mission = arguments.get('context', '') or arguments.get('plugin_name', '')
     if not mission:
         return "Mission is required.", False
+    # A dict/list mission (LLMs structure these sometimes) would poison
+    # check_agents for EVERY agent — the listing slices mission[:100].
+    if not isinstance(mission, str):
+        mission = json.dumps(mission, ensure_ascii=False)
 
     agent_type = arguments.get('agent_type', 'llm')
     chat_name = _get_active_chat()
@@ -600,7 +604,10 @@ def _spawn_agent(manager, arguments, ps):
 
     if agent_type == 'llm':
         model_arg = arguments.get('model', '')
-        kwargs['toolset'] = arguments.get('toolset', ps.get('default_toolset', 'default'))
+        # `or` (not default=) for the same reason as `prompt` below: an
+        # explicit toolset='' would resolve to zero tools and the agent
+        # would run a silent, useless job.
+        kwargs['toolset'] = arguments.get('toolset') or ps.get('default_toolset') or 'default'
 
         # Phase 5: `prompt` resolution.
         # Default is 'agent' (lean background-worker persona with minimal scopes,
@@ -669,7 +676,7 @@ def _check_agents(manager):
     for a in agents:
         status_icon = {'running': '\U0001f7e1', 'done': '\U0001f7e2', 'failed': '\U0001f534', 'cancelled': '\u26aa'}.get(a['status'], '\u2753')
         lines.append(f"  {status_icon} {a['name']} [{a['id']}] \u2014 {a['status']} ({a['elapsed']}s)")
-        lines.append(f"      Mission: {a['mission'][:100]}")
+        lines.append(f"      Mission: {str(a['mission'])[:100]}")
         tools = a.get('tool_log', [])
         if tools:
             lines.append(f"      Tools called: {', '.join(tools)}")

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 from core.setup import CONFIG_DIR, SOCKS_CONFIG_FILE, CLAUDE_API_KEY_FILE
 from core.settings_manager import _fsync_file, _fsync_dir
+from core.fs_utils import replace_with_retry
 
 try:
     from cryptography.fernet import Fernet, InvalidToken
@@ -270,7 +271,7 @@ class CredentialsManager:
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(user_settings, f, indent=2)
                     _fsync_file(f)
-                tmp.replace(settings_file)
+                replace_with_retry(tmp, settings_file)
                 _fsync_dir(settings_file.parent)
                 logger.info("Cleared stale API keys from settings.json")
 
@@ -336,7 +337,7 @@ class CredentialsManager:
                 with open(tmp, 'w', encoding='utf-8') as f:
                     json.dump(user_settings, f, indent=2)
                     _fsync_file(f)
-                tmp.replace(settings_file)
+                replace_with_retry(tmp, settings_file)
                 _fsync_dir(settings_file.parent)
                 logger.info("Cleared service API keys from settings.json")
 
@@ -424,7 +425,7 @@ class CredentialsManager:
                 if sys.platform != 'win32':
                     os.chmod(tmp_path, 0o600)
 
-                tmp_path.replace(CREDENTIALS_FILE)
+                replace_with_retry(tmp_path, CREDENTIALS_FILE)
                 _fsync_dir(CREDENTIALS_FILE.parent)
 
                 logger.info(f"Saved credentials to {CREDENTIALS_FILE}")

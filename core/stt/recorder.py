@@ -395,8 +395,9 @@ class AudioRecorder:
         # Restore system volume
         system_audio.restore_system_volume()
         
-        # Close stream and reset state
-        self.stop()
+        # Close stream and reset state (we ARE the recording thread — the
+        # one context where closing is safe)
+        self._close_stream()
         publish(Events.STT_RECORDING_END)
         
         if not has_speech:
@@ -423,7 +424,16 @@ class AudioRecorder:
             return None
 
     def stop(self) -> None:
-        """Stop recording and clean up audio resources."""
+        """SIGNAL-ONLY stop, safe from any thread. Single-reader rule
+        (the UDP-socket lesson, 2026-07-03): closing a stream another
+        thread is blocked reading is Pa_CloseStream on a live reader — a
+        use-after-free, not an exception. The recording loop notices the
+        flag within one blocksize and closes its own stream on exit."""
+        self._recording = False
+
+    def _close_stream(self) -> None:
+        """Actually close the stream. Recording-thread / no-reader contexts
+        only — never call from another thread while a recording is live."""
         if self._stream:
             try:
                 self._stream.stop()
@@ -442,5 +452,7 @@ class AudioRecorder:
         pass
 
     def __del__(self):
-        """Clean up resources when object is destroyed."""
-        self.stop()
+        """Clean up resources when object is destroyed. A live recording
+        thread keeps the object referenced, so no reader can be mid-read
+        here — closing is safe."""
+        self._close_stream()

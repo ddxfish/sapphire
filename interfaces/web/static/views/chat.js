@@ -1001,7 +1001,11 @@ function openSceneModal() {
             // Apply live (instant preview behind the modal) + persist as a per-chat override.
             applyBackground(name);
             const chatName = document.getElementById('chat-select')?.value;
-            if (chatName) api.updateChatSettings(chatName, { background: name }).catch(() => {});
+            // Optimistic apply, but never a SILENT persist failure — a vault
+            // refusal here left the user seeing a scene that reverts on the
+            // next chat load.
+            if (chatName) api.updateChatSettings(chatName, { background: name })
+                .catch(() => ui.showToast('Scene shown but not saved — the chat refused the write', 'error', 4000));
         }
     });
     _renderModalMotionRow(overlay);
@@ -1024,7 +1028,8 @@ function _renderModalMotionRow(overlay) {
         // Apply live (visible behind the modal) + persist on the chat row.
         setChatMotion(id);
         const chatName = document.getElementById('chat-select')?.value;
-        if (chatName) api.updateChatSettings(chatName, { motion: id }).catch(() => {});
+        if (chatName) api.updateChatSettings(chatName, { motion: id })
+            .catch(() => ui.showToast('Motion shown but not saved — the chat refused the write', 'error', 4000));
         _renderModalMotionRow(overlay);
     }));
 }

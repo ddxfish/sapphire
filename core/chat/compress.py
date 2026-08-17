@@ -277,7 +277,17 @@ def _compress_chat(session_manager, chat_name: str, mode: str,
     cut = spans[len(spans) - keep_last][0]
     head, tail = msgs[:cut], msgs[cut:]
 
-    backup_path = _write_backup(session_manager, chat_name, exported) if backup else None
+    # A private chat's export is fully decrypted while the vault is open —
+    # writing it to exports/ would park PLAINTEXT on disk that outlives the
+    # next lock (the vault scrub only cleans at lock time). Unreadable
+    # settings fail closed.
+    try:
+        _private = bool((session_manager.read_chat_settings(chat_name) or {}).get("private_chat"))
+    except Exception:
+        _private = True
+    if backup and _private:
+        logger.info(f"[COMPRESS] Skipping plaintext backup for private chat '{chat_name}'")
+    backup_path = _write_backup(session_manager, chat_name, exported) if (backup and not _private) else None
     provider = make_provider(provider_key, model)  # fail BEFORE any LLM spend
     pairs = compress_messages(head, mode, provider, int(target_tokens),
                               on_progress=on_progress)

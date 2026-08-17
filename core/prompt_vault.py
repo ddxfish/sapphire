@@ -53,6 +53,7 @@ _key = None            # derived AES key while unlocked, else None
 _salt = None           # header salt cached so saves reuse the derived key
 _data = None           # decrypted {"monoliths", "components", "scenario_presets"}
 _timer = None          # idle-lock threading.Timer
+_defer_timer = None    # Ruling-B deferred-lock retry (cancelled on unlock/stop)
 _last_activity = 0.0   # time.monotonic() of last vault activity
 _refs = {}             # {name: "monolith"|"preset"} — referenced names only
 _refs_loaded = False
@@ -339,7 +340,7 @@ def setup(passphrase) -> tuple:
 def unlock(passphrase) -> tuple:
     """(ok, code) — code '' | 'no_vault' | 'wrong_key' | 'corrupt'.
     Corrupt files are quarantined (renamed .bad-<stamp>), never swallowed."""
-    global _key, _salt, _data
+    global _key, _salt, _data, _defer_timer
     if vault_unlocked():
         touch()
         return True, ''
@@ -366,6 +367,11 @@ def unlock(passphrase) -> tuple:
         return False, 'corrupt'
     with _lock:
         _key, _salt = key, salt
+        # A pending Ruling-B deferred lock must die here — firing after a
+        # successful unlock would re-seal a vault the user just opened.
+        if _defer_timer is not None:
+            _defer_timer.cancel()
+            _defer_timer = None
         try:
             _data = _normalize(raw)
         except VaultCorrupt as e:
@@ -407,7 +413,7 @@ def _fire_plugin_hook(name):
 def lock(reason="") -> bool:
     """Seal the vault: drop key + plaintext, cancel the idle timer, hand off
     the active preset if it was a vault name. Idempotent."""
-    global _key, _salt, _data, _timer
+    global _key, _salt, _data, _timer, _defer_timer
     # Ruling B (2026-08-17): a mid-stream seal can't flush the in-flight
     # turn (keyless saves raise) and the end-of-stream eviction would then
     # DISCARD it while the toast claimed it was safe — so a lock during a
@@ -423,9 +429,16 @@ def lock(reason="") -> bool:
             with _lock:
                 still_open = _key is not None
             if still_open:
-                t = threading.Timer(5.0, lambda: lock(reason=reason or "deferred"))
-                t.daemon = True
-                t.start()
+                # Tracked so unlock()/stop() can CANCEL it — an untracked
+                # timer would re-lock a vault the user just unlocked with
+                # their passphrase (hunt 2026-08-17 D4).
+                with _lock:
+                    if _defer_timer is not None:
+                        _defer_timer.cancel()
+                    t = threading.Timer(5.0, lambda: lock(reason=reason or "deferred"))
+                    t.daemon = True
+                    _defer_timer = t
+                    t.start()
                 logger.info("[VAULT] lock deferred — private chat mid-stream; "
                             "retrying in 5s so the turn flushes first")
                 return False
@@ -441,6 +454,9 @@ def lock(reason="") -> bool:
         if _timer is not None:
             _timer.cancel()
             _timer = None
+        if _defer_timer is not None:
+            _defer_timer.cancel()
+            _defer_timer = None
     logger.info(f"[VAULT] locked{f' ({reason})' if reason else ''}")
     # Vault hunt R6: the replay ring outlives the seal — pre-lock
     # chat_switched / settings events carry names that just became secrets.
@@ -589,12 +605,15 @@ def _warn_user_shadows():
 
 
 def stop():
-    """Teardown (sapphire.py stop list): cancel the idle timer. No events."""
-    global _timer
+    """Teardown (sapphire.py stop list): cancel the timers. No events."""
+    global _timer, _defer_timer
     with _lock:
         if _timer is not None:
             _timer.cancel()
             _timer = None
+        if _defer_timer is not None:
+            _defer_timer.cancel()
+            _defer_timer = None
 
 
 # ── idle auto-lock ──

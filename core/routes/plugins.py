@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse, Response
 import config
 from core.auth import require_login, check_endpoint_rate
 from core.api_fastapi import get_system
+from core.fs_utils import replace_with_retry
+from core.settings_manager import _fsync_file, _fsync_dir
 
 logger = logging.getLogger(__name__)
 
@@ -371,8 +373,10 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "has_prev": (info.get("band") == "user"
                                  and (PLUGIN_PREV_DIR / info["name"] / "plugin.json").exists()),
                 })
-    except Exception:
-        pass
+    except Exception as e:
+        # A throw mid-loop truncates the listing to core-UI entries only —
+        # if that ever happens the user must at least see why in the log.
+        logger.warning(f"[PLUGINS] Backend plugin listing failed mid-loop: {e}", exc_info=True)
 
     return {"plugins": result, "locked": LOCKED_PLUGINS}
 
@@ -468,7 +472,12 @@ async def toggle_plugin(plugin_name: str, request: Request, _=Depends(require_lo
             tmp_path = USER_PLUGINS_JSON.with_suffix('.tmp')
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(user_data, f, indent=2)
-            tmp_path.replace(USER_PLUGINS_JSON)
+                # fsync like settings/credentials got 2026-05-07: a power cut
+                # between rename and pagecache flush zeroes this file — every
+                # plugin then reverts to default_enabled on next boot.
+                _fsync_file(f)
+            replace_with_retry(tmp_path, USER_PLUGINS_JSON)
+            _fsync_dir(USER_PLUGINS_JSON.parent)
 
         # Live load/unload — no restart needed for backend plugins
         reload_required = True
@@ -1700,7 +1709,7 @@ async def update_plugin_settings(plugin_name: str, request: Request, _=Depends(r
         try:
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(merged, f, indent=2)
-            tmp_path.replace(settings_file)
+            replace_with_retry(tmp_path, settings_file)
         finally:
             if tmp_path.exists():
                 try: tmp_path.unlink()
@@ -2623,7 +2632,7 @@ def _check_plugin_bearer(plugin_name: str, request: Request) -> bool:
     if not key_file.exists():
         return False
     try:
-        expected = json.loads(key_file.read_text()).get('key', '')
+        expected = json.loads(key_file.read_text(encoding='utf-8')).get('key', '')
     except Exception:
         return False
     if not expected:

@@ -259,6 +259,46 @@ async def get_audio_devices(request: Request, _=Depends(require_login)):
     }
 
 
+def _quiesce_wakeword(system):
+    """Stop the LISTEN THREAD before touching its stream. The old flow
+    called pause_recording() straight from the HTTP worker — Pa_StopStream
+    landing on a reader blocked in Pa_ReadStream (which it is >90% of wall
+    time) is undefined behavior, not an exception (hunt 2026-08-17 K4).
+    Returns (listener_stopped, stream_paused) for _resume_wakeword."""
+    listener_stopped = False
+    try:
+        det = getattr(system, 'wake_detector', None)
+        if det is not None and getattr(det, 'running', False):
+            det.stop_listening()
+            listener_stopped = True
+    except Exception:
+        pass
+    paused = False
+    try:
+        rec = getattr(system, 'wake_word_recorder', None)
+        if rec and hasattr(rec, 'pause_recording'):
+            paused = rec.pause_recording()
+            if paused:
+                time.sleep(0.3)
+    except Exception:
+        pass
+    return listener_stopped, paused
+
+
+def _resume_wakeword(system, listener_stopped, paused):
+    if paused:
+        try:
+            time.sleep(0.2)
+            system.wake_word_recorder.resume_recording()
+        except Exception:
+            pass
+    if listener_stopped:
+        try:
+            system.wake_detector.start_listening()
+        except Exception:
+            pass
+
+
 @router.post("/api/audio/test-input")
 async def test_audio_input(request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Test audio input device."""
@@ -277,27 +317,14 @@ async def test_audio_input(request: Request, _=Depends(require_login), system=De
 
     def _test_input():
         from core.audio import get_device_manager, classify_audio_error
-        wakeword_paused = False
-        try:
-            if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
-                if hasattr(system.wake_word_recorder, 'pause_recording'):
-                    wakeword_paused = system.wake_word_recorder.pause_recording()
-                    if wakeword_paused:
-                        time.sleep(0.3)
-        except Exception:
-            pass
+        listener_stopped, wakeword_paused = _quiesce_wakeword(system)
         try:
             dm = get_device_manager()
             return dm.test_input_device_safe(device_index=device_index, duration=duration)
         except Exception as e:
             return {'success': False, 'error': classify_audio_error(e)}
         finally:
-            if wakeword_paused:
-                try:
-                    time.sleep(0.2)
-                    system.wake_word_recorder.resume_recording()
-                except Exception:
-                    pass
+            _resume_wakeword(system, listener_stopped, wakeword_paused)
 
     import asyncio
     return await asyncio.to_thread(_test_input)
@@ -325,15 +352,7 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
         import sounddevice as sd
 
         # Pause wakeword stream to avoid audio device conflict
-        wakeword_paused = False
-        try:
-            if hasattr(system, 'wake_word_recorder') and system.wake_word_recorder:
-                if hasattr(system.wake_word_recorder, 'pause_recording'):
-                    wakeword_paused = system.wake_word_recorder.pause_recording()
-                    if wakeword_paused:
-                        time.sleep(0.3)
-        except Exception:
-            pass
+        listener_stopped, wakeword_paused = _quiesce_wakeword(system)
 
         try:
             sample_rate = None
@@ -370,12 +389,7 @@ async def test_audio_output(request: Request, _=Depends(require_login), system=D
             sd.wait()
             return {'success': True, 'duration': duration, 'frequency': frequency, 'sample_rate': sample_rate}
         finally:
-            if wakeword_paused:
-                try:
-                    time.sleep(0.2)
-                    system.wake_word_recorder.resume_recording()
-                except Exception:
-                    pass
+            _resume_wakeword(system, listener_stopped, wakeword_paused)
 
     return await asyncio.to_thread(_test_output)
 

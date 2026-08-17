@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 
 AVATAR_DIR = Path(__file__).parent.parent.parent.parent / "user" / "avatar"
 MAX_SIZE = 50 * 1024 * 1024  # 50MB hard limit
+_WIN_RESERVED = ({'con', 'prn', 'aux', 'nul'}
+                 | {f'com{i}' for i in range(1, 10)}
+                 | {f'lpt{i}' for i in range(1, 10)})
 
 
 def _get_state():
@@ -104,6 +107,9 @@ async def upload_model(**kwargs):
         safe_name = 'avatar.glb'
     if not safe_name.lower().endswith('.glb'):
         safe_name += '.glb'
+    # CON/NUL-class stems are device files on Windows
+    if safe_name.split('.')[0].lower() in _WIN_RESERVED:
+        safe_name = '_' + safe_name
 
     # Read file with size check
     content = await file.read()
@@ -149,8 +155,10 @@ async def delete_model(**kwargs):
     """Delete an avatar model."""
     filename = kwargs.get('filename', '')
 
-    # Sanitize
-    if not filename or '/' in filename or '\\' in filename:
+    # Sanitize: charset check (not just slash check) — on Windows a ':' makes
+    # 'C:evil' drive-relative and escapes AVATAR_DIR entirely.
+    if (not filename or not all(c.isalnum() or c in '.-_' for c in filename)
+            or filename.split('.')[0].lower() in _WIN_RESERVED):
         return {'error': 'Invalid filename'}
 
     path = AVATAR_DIR / filename

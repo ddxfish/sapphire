@@ -419,12 +419,16 @@ def _file_push_directory(args, username, pat):
         # Memory: symlinked_plugins_resolve_trap.md. herring #24.
         project_root = Path(__file__).absolute().parents[3]
         user_dir = (project_root / 'user').absolute()
-        if not local.is_relative_to(project_root):
+        # `local` is fully resolved above but project_root deliberately
+        # isn't — when the install path itself is a symlink the two forms
+        # diverge, so containment checks both spellings of the root.
+        root_real = project_root.resolve()
+        if not (local.is_relative_to(project_root) or local.is_relative_to(root_real)):
             return (
                 f"local_path must be inside the Sapphire project root, not {local}",
                 False,
             )
-        if local.is_relative_to(user_dir):
+        if local.is_relative_to(user_dir) or local.is_relative_to(root_real / 'user'):
             return (
                 "local_path inside user/ is forbidden — that directory holds "
                 "private chats, credentials, and the plugin signing key.",

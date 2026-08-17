@@ -3,8 +3,8 @@
   "version": "2.0.0",
   "files": {
     "plugin.json": "sha256:8d698bfae1b14bb2a874e15a5a4952e1eab2cf4968b0f9978e990dfdd149d555",
-    "tools/agent_tools.py": "sha256:c67f8833b233ae7df5f423d26b73c3dea35642645d404fa4e6044172240b29ce",
+    "tools/agent_tools.py": "sha256:4e48cb468a89f9ab1e3bf9e935589604688c11d747959407d7f40449b2aa0cee",
     "web/index.js": "sha256:8a66bddf01321637bc67827108a67c87ef732f7569f9f6a43e939014bedd070c"
   },
-  "signature": "zm4DUpw5aOdsqQ4famS+zPr+2hjB6kIGY2rgOd/Wo0W/WZAtAJH37flgxyu6f2G1AA4Cka/uRQWjGfl5yyHICA=="
+  "signature": "K4HKmYV38VlB9ik9ghp3qDElIhGe/dsfSCZTih11nTzDVrUFU0e2Ym+PVa7fCgY/mKB6gg92IGnv8Ldxk58LAA=="
 }

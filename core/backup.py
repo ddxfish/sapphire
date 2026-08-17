@@ -7,6 +7,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 import config
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -221,14 +222,31 @@ class Backup:
                             return None
                 return tarinfo
             kept_files = [0]
+            skipped_files = [0]
             base_filter = _filter_with_busy if failed_checkpoints else _patterns_filter
             def _counting_filter(tarinfo):
                 ti = base_filter(tarinfo)
                 if ti is not None and ti.isfile():
+                    # Open-probe: one unreadable file (Windows exclusive
+                    # lock, AV handle) otherwise aborts the ENTIRE backup
+                    # from inside tar.add with a generic "Backup failed".
+                    # Skip it, keep the other thousands of files.
+                    if ti.name.startswith("user/"):
+                        src = self.user_dir / ti.name[len("user/"):]
+                        try:
+                            with open(src, 'rb'):
+                                pass
+                        except OSError as pe:
+                            skipped_files[0] += 1
+                            logger.warning(f"Backup skipping unreadable file {ti.name}: {pe}")
+                            return None
                     kept_files[0] += 1
                 return ti
             with tarfile.open(partial, "w:gz") as tar:
                 tar.add(self.user_dir, arcname="user", filter=_counting_filter)
+            if skipped_files[0]:
+                logger.warning(f"Backup completed with {skipped_files[0]} unreadable "
+                               f"file(s) skipped — see warnings above")
             if kept_files[0] == 0:
                 # 0 files after exclusions (a too-broad pattern like `*`, or an empty
                 # user/) — refuse the useless "successful" empty backup that rotation
@@ -247,7 +265,7 @@ class Backup:
                 os.chmod(partial, 0o600)
             except OSError as _e:
                 logger.warning(f"Could not chmod backup: {_e}")
-            partial.replace(filepath)   # atomic; list_backups skips .partial
+            replace_with_retry(partial, filepath)   # atomic; list_backups skips .partial
 
             size_mb = filepath.stat().st_size / (1024 * 1024)
             logger.info(f"Created backup: {filename} ({size_mb:.2f} MB)")

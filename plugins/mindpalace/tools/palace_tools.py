@@ -352,8 +352,10 @@ def _safe_rename_corrupted(db_path):
         db_path.rename(target)
         logger.error(f"[MINDPALACE] Corrupted DB preserved at {target} — "
                      f"fresh DB will be created; re-run import_v2 to recover copied data")
+        return True
     except Exception as e:
         logger.error(f"[MINDPALACE] Could not preserve corrupted DB at {target}: {e}")
+        return False
 
 
 def _setup_fts(cursor):
@@ -421,10 +423,14 @@ def _ensure_db():
                     conn.close()
                     if result[0] != 'ok':
                         logger.error(f"[MINDPALACE] Integrity check failed: {result[0]}")
-                        _safe_rename_corrupted(db_path)
+                        # Windows can refuse the rename (open handle) — do not
+                        # build a fresh schema on top of the corrupt file.
+                        if not _safe_rename_corrupted(db_path):
+                            return False
                 except sqlite3.DatabaseError as e:
                     logger.error(f"[MINDPALACE] Database corrupted: {e}")
-                    _safe_rename_corrupted(db_path)
+                    if not _safe_rename_corrupted(db_path):
+                        return False
 
             for suffix in ['-wal', '-shm', '-journal']:
                 stale = db_path.with_name(db_path.name + suffix)

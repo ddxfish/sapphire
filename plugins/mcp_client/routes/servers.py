@@ -12,6 +12,7 @@ def _get_settings():
 
 
 import threading as _threading
+from core.fs_utils import replace_with_retry
 _save_lock = _threading.Lock()
 
 
@@ -36,7 +37,7 @@ def _update_servers(mutator):
         tmp_path = settings_path.with_suffix(f'.tmp.{_os.getpid()}.{id(existing):x}')
         try:
             tmp_path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
-            tmp_path.replace(settings_path)
+            replace_with_retry(tmp_path, settings_path)
         finally:
             if tmp_path.exists():
                 try: tmp_path.unlink()

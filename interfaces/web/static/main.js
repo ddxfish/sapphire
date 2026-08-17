@@ -697,6 +697,12 @@ function initEventBus() {
             debouncedUpdateScene();
             return;
         }
+        // ui.js mirrors this setting at module level and only reads it at
+        // boot — cache-busting /api/init alone never reached the mirror, so
+        // the toggle needed a page reload (hunt 2026-08-17 S5).
+        if (data?.key === 'AVATARS_IN_CHAT') {
+            ui.setAvatarsInChat(data.value !== false && data.value !== 'false');
+        }
         refreshAndUpdateScene();
     });
     // Settings changes can move a chat between dropdown sections (the

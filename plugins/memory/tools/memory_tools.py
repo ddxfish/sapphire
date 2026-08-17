@@ -1,6 +1,7 @@
 # plugins/memory/tools/memory_tools.py
 # Long-term memory with FTS5 full-text search, semantic embeddings, and labels
 
+import os
 import sqlite3
 import logging
 import re
@@ -192,8 +193,10 @@ def _safe_rename_corrupted(db_path):
     try:
         db_path.rename(target)
         logger.info(f"[REPAIR] Original preserved at {target}")
+        return True
     except Exception as e:
         logger.error(f"[REPAIR] Could not preserve corrupted DB at {target}: {e}")
+        return False
 
 
 def _repair_db(db_path):
@@ -259,6 +262,7 @@ def _repair_db(db_path):
 
     # Build fresh DB at TMP path. Do NOT touch the original yet.
     tmp_path = db_path.with_suffix('.db.new')
+    in_swap = False
     if tmp_path.exists():
         try:
             tmp_path.unlink()
@@ -327,12 +331,22 @@ def _repair_db(db_path):
         # db_path doesn't exist — _ensure_db would create a fresh empty DB on
         # next boot if we crashed here, but the .corrupted sibling holds the
         # verified salvage + original user data.
-        _safe_rename_corrupted(db_path)
-        tmp_path.rename(db_path)
+        # On Windows the rename-away can fail (open handle) and rename-over
+        # raises FileExistsError — the old flow then deleted the verified
+        # salvage and kept the corrupt DB live. Never destroy the salvage.
+        if not _safe_rename_corrupted(db_path):
+            logger.error(f"[REPAIR] Could not move corrupt DB aside — verified "
+                         f"salvage kept at {tmp_path} for manual recovery")
+            return
+        in_swap = True
+        os.replace(tmp_path, db_path)
         logger.info(f"[REPAIR] Swap complete — fresh DB active at {db_path}")
 
     except Exception as e:
         logger.error(f"[REPAIR] Fresh DB build failed: {e}")
+        if in_swap:
+            logger.error(f"[REPAIR] Failure during swap — verified salvage kept at {tmp_path}")
+            return
         # Clean up tmp. Original is UNTOUCHED.
         try:
             if tmp_path.exists():
@@ -1120,11 +1134,15 @@ def execute(function_name: str, arguments: dict, config) -> tuple:
             return _save_memory(arguments.get("content", ""), arguments.get("label"),
                                 scope, private_key=arguments.get("private_key"))
         elif function_name == "search_memory":
-            return _search_memory(arguments.get("query", ""), arguments.get("limit", 10),
+            # Clamp: LIMIT -1 = unlimited in SQLite — a stray negative would
+            # dump the whole scope into one permanent history row.
+            limit = min(max(int(arguments.get("limit", 10) or 10), 1), 50)
+            return _search_memory(arguments.get("query", ""), limit,
                                   arguments.get("label"), scope,
                                   private_key=arguments.get("private_key"))
         elif function_name == "get_recent_memories":
-            return _get_recent_memories(arguments.get("count", 10), arguments.get("label"),
+            count = min(max(int(arguments.get("count", 10) or 10), 1), 50)
+            return _get_recent_memories(count, arguments.get("label"),
                                         scope, private_key=arguments.get("private_key"))
         elif function_name == "delete_memory":
             memory_id = arguments.get("memory_id")

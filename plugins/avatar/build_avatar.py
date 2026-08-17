@@ -42,15 +42,18 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 AVATAR_DIR = PROJECT_ROOT / "user" / "avatar"
 
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-RED = "\033[91m"
-CYAN = "\033[96m"
-DIM = "\033[2m"
-RESET = "\033[0m"
-CHECK = f"{GREEN}\u2713{RESET}"
-CROSS = f"{RED}\u2717{RESET}"
-ARROW = f"{CYAN}\u25b6{RESET}"
+# Windows cmd: cp1252 raises on the unicode glyphs and VT processing is
+# off by default \u2014 plain ASCII with no ANSI there.
+_WIN = sys.platform == "win32"
+GREEN = "" if _WIN else "\033[92m"
+YELLOW = "" if _WIN else "\033[93m"
+RED = "" if _WIN else "\033[91m"
+CYAN = "" if _WIN else "\033[96m"
+DIM = "" if _WIN else "\033[2m"
+RESET = "" if _WIN else "\033[0m"
+CHECK = f"{GREEN}{'+' if _WIN else '\u2713'}{RESET}"
+CROSS = f"{RED}{'x' if _WIN else '\u2717'}{RESET}"
+ARROW = f"{CYAN}{'>' if _WIN else '\u25b6'}{RESET}"
 
 
 def log(msg, color=""):

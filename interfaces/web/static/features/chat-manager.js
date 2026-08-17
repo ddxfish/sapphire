@@ -105,10 +105,13 @@ export async function handleNewChat() {
     const { chatSelect } = getElements();
     
     try {
-        await api.createChat(name);
+        const created = await api.createChat(name);
         await populateChatDropdown();
 
-        const normalizedName = name.toLowerCase().replace(/\s+/g, '_');
+        // Server echoes the sanitized name — re-deriving it here drifted
+        // (punctuation stripping was missed → dropdown select silently failed)
+        const normalizedName = (created && created.name)
+            || name.toLowerCase().replace(/\s+/g, '_');
         chatSelect.value = normalizedName;
         await handleChatChange();
         // Re-sync picker now that backend has correct active chat

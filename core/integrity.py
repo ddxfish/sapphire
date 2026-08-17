@@ -40,7 +40,7 @@ def _tracked_files():
     """Shipped fileset via `git ls-files` (generation/test only; needs git)."""
     out = subprocess.run(
         ["git", "ls-files"], cwd=str(ROOT),
-        capture_output=True, text=True, check=True, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, encoding='utf-8', errors='replace', check=True, stdin=subprocess.DEVNULL,
     ).stdout
     for line in out.splitlines():
         p = line.strip()
@@ -134,7 +134,7 @@ def _repair_git(rel: str):
     try:
         r = subprocess.run(
             ["git", "checkout", "HEAD", "--", rel], cwd=str(ROOT),
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30, stdin=subprocess.DEVNULL,
         )
         if r.returncode == 0:
             return True, "restored from HEAD"
@@ -151,7 +151,7 @@ def _dirty_files(rels):
     try:
         r = subprocess.run(
             ["git", "status", "--porcelain", "--"] + list(rels), cwd=str(ROOT),
-            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30, stdin=subprocess.DEVNULL,
         )
         if r.returncode != 0:
             return set(rels)

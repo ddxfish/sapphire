@@ -6,6 +6,7 @@ Install triggers the local plugin manager endpoint.
 """
 
 import logging
+import re
 import requests
 
 logger = logging.getLogger(__name__)
@@ -313,6 +314,12 @@ def _install(slug, plugin_settings=None):
 
             manifest = json.loads((plugin_root / "plugin.json").read_text(encoding="utf-8"))
             plugin_name = manifest.get("name", slug)
+            # Containment: the manifest name comes from a downloaded repo and
+            # goes straight into a path join — "../x", separators, drive
+            # letters or reserved device names must not escape user/plugins.
+            if (not isinstance(plugin_name, str)
+                    or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}', plugin_name)):
+                return f"Refusing install: unsafe plugin name in manifest ({plugin_name!r}).", False
             plugin_version = manifest.get("version", "?")
             plugin_author = manifest.get("author", "unknown")
 

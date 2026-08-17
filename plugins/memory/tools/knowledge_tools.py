@@ -1900,7 +1900,9 @@ def execute(function_name, arguments, config):
                 query=arguments.get('query'),
                 category=arguments.get('category'),
                 entry_id=arguments.get('id'),
-                limit=arguments.get('limit', 10),
+                # Clamp: LIMIT -1 = unlimited in SQLite — a stray negative
+                # would dump the whole scope into one permanent history row.
+                limit=min(max(int(arguments.get('limit', 10) or 10), 1), 50),
                 scope=scope or 'default',
                 people_scope=people_scope,
             )

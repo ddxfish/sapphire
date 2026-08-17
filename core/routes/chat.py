@@ -503,7 +503,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         # The 5 other plugins (email/bitcoin/gcal/telegram/discord) contribute their
         # own scope each. This loop is now the ONLY source of scope declarations.
         scope_declarations = []
-        for plugin_name, info in plugin_loader._plugins.items():
+        # list() snapshot: a concurrent rescan() pops from _plugins mid-iteration
+        for plugin_name, info in list(plugin_loader._plugins.items()):
             if not info.get("loaded") or not info.get("enabled"):
                 continue
             manifest = info.get("manifest", {}) or {}
@@ -542,9 +543,12 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         try:
             _user_settings_path = PROJECT_ROOT / 'user' / 'settings.json'
             if _user_settings_path.exists():
-                privacy_v2_notice = bool(json.loads(
-                    _user_settings_path.read_text(encoding='utf-8')
-                ).get('START_IN_PRIVACY_MODE'))
+                _uset = json.loads(_user_settings_path.read_text(encoding='utf-8'))
+                # The file is nested by category — a pre-v2.8.4 orphan lives
+                # under 'privacy', not at root (root check kept for safety).
+                privacy_v2_notice = bool(
+                    _uset.get('START_IN_PRIVACY_MODE')
+                    or (_uset.get('privacy') or {}).get('START_IN_PRIVACY_MODE'))
         except Exception:
             pass
 
@@ -782,7 +786,10 @@ async def create_chat(request: Request, _=Depends(require_login), system=Depends
         if not chat_name or not chat_name.strip():
             raise HTTPException(status_code=400, detail="Chat name required")
         if system.llm_chat.create_chat(chat_name):
-            return {"status": "success", "name": chat_name}
+            # Echo the SANITIZED name — the store lowercases/strips, and a
+            # frontend keying on the raw input targets a nonexistent chat.
+            from core.chat.history import sanitize_chat_name
+            return {"status": "success", "name": sanitize_chat_name(chat_name)}
         else:
             raise HTTPException(status_code=409, detail=f"Chat '{chat_name}' already exists")
     except HTTPException:

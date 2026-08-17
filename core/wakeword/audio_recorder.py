@@ -11,6 +11,7 @@ import numpy as np
 import sounddevice as sd
 import array
 import logging
+import threading
 
 from core.audio import (
     get_device_manager,
@@ -46,6 +47,8 @@ class AudioRecorder:
         self.available = False
         self._resample_ratio = 1.0
         self._needs_stereo_downmix = False
+        # Guards open/close/pause/resume — see start_recording's comment.
+        self._stream_lock = threading.Lock()
         
         # Frame skipping parameters (hardcoded to 1 - process every frame)
         self.frame_skip = 1
@@ -108,31 +111,38 @@ class AudioRecorder:
             logger.warning("Cannot start recording - no audio device available")
             return
 
-        if self.stream is not None:
-            logger.debug("Stream already open")
-            return
+        # _stream_lock: two unlocked concurrent opens both passed the None
+        # check, both opened an InputStream, and the attribute kept only the
+        # second — the first held the mic unreferenced until process exit
+        # (every later STT recording then failed mic_busy). Same lock covers
+        # stop/pause/resume so a double Pa_CloseStream (check-to-call gap =
+        # double free → unexplained SIGABRT) can't happen. Hunt 2026-08-17.
+        with self._stream_lock:
+            if self.stream is not None:
+                logger.debug("Stream already open")
+                return
 
-        try:
-            self._open_audio_stream()
-        except Exception as e:
-            logger.warning(f"Wakeword stream open failed: {classify_audio_error(e)}")
-            # Retry once — re-resolve device by name in case index shifted
-            if getattr(self, 'device_name', ''):
-                logger.info(f"Retrying with device re-resolution for '{self.device_name}'")
-                dm = get_device_manager()
-                new_config = dm.reopen_device(
-                    self.device_name,
-                    target_rate=self.target_rate,
-                    preferred_blocksize=self.chunk_size
-                )
-                if new_config:
-                    self._apply_device_config(new_config)
-                    try:
-                        self._open_audio_stream()
-                        return
-                    except Exception as e2:
-                        logger.error(f"Wakeword retry also failed: {classify_audio_error(e2)}")
-            self.stream = None
+            try:
+                self._open_audio_stream()
+            except Exception as e:
+                logger.warning(f"Wakeword stream open failed: {classify_audio_error(e)}")
+                # Retry once — re-resolve device by name in case index shifted
+                if getattr(self, 'device_name', ''):
+                    logger.info(f"Retrying with device re-resolution for '{self.device_name}'")
+                    dm = get_device_manager()
+                    new_config = dm.reopen_device(
+                        self.device_name,
+                        target_rate=self.target_rate,
+                        preferred_blocksize=self.chunk_size
+                    )
+                    if new_config:
+                        self._apply_device_config(new_config)
+                        try:
+                            self._open_audio_stream()
+                            return
+                        except Exception as e2:
+                            logger.error(f"Wakeword retry also failed: {classify_audio_error(e2)}")
+                self.stream = None
 
     def _open_audio_stream(self):
         """Open the underlying sd.InputStream. Raises on failure."""
@@ -150,36 +160,39 @@ class AudioRecorder:
 
     def stop_recording(self):
         """Close audio stream."""
-        if self.stream:
-            try:
-                self.stream.stop()
-                self.stream.close()
-            except Exception as e:
-                logger.debug(f"Error closing wakeword stream: {e}")
-            self.stream = None
-            logger.info("Wakeword audio stream closed")
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    self.stream.close()
+                except Exception as e:
+                    logger.debug(f"Error closing wakeword stream: {e}")
+                self.stream = None
+                logger.info("Wakeword audio stream closed")
 
     def pause_recording(self):
         """Pause audio stream without closing (safer for PipeWire)."""
-        if self.stream:
-            try:
-                self.stream.stop()
-                logger.debug("Wakeword audio stream paused")
-                return True
-            except Exception as e:
-                logger.debug(f"Error pausing wakeword stream: {e}")
-        return False
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    self.stream.stop()
+                    logger.debug("Wakeword audio stream paused")
+                    return True
+                except Exception as e:
+                    logger.debug(f"Error pausing wakeword stream: {e}")
+            return False
 
     def resume_recording(self):
         """Resume paused audio stream."""
-        if self.stream:
-            try:
-                self.stream.start()
-                logger.debug("Wakeword audio stream resumed")
-                return True
-            except Exception as e:
-                logger.debug(f"Error resuming wakeword stream: {e}")
-        return False
+        with self._stream_lock:
+            if self.stream:
+                try:
+                    self.stream.start()
+                    logger.debug("Wakeword audio stream resumed")
+                    return True
+                except Exception as e:
+                    logger.debug(f"Error resuming wakeword stream: {e}")
+            return False
 
     def get_stream(self):
         """Return the underlying stream (for compatibility)."""

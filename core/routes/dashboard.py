@@ -21,6 +21,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 
 from core.auth import require_login
 from core.dashboard_widgets import list_widgets, get_widget
+from core.fs_utils import replace_with_retry
 
 # Serialize PUTs to dashboard.json — without this, two near-simultaneous
 # saves (drag + delete in flight, multi-tab edits) can interleave at the
@@ -80,10 +81,12 @@ def _load() -> dict:
     if not DASHBOARD_FILE.exists():
         DASHBOARD_FILE.parent.mkdir(parents=True, exist_ok=True)
         data = _seed_defaults()
-        DASHBOARD_FILE.write_text(json.dumps(data, indent=2))
+        DASHBOARD_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
         return data
     try:
-        data = json.loads(DASHBOARD_FILE.read_text())
+        # utf-8-sig: locale-decoded reads on Windows + a PowerShell BOM
+        # otherwise fall into the reseed path and reset the user's layout
+        data = json.loads(DASHBOARD_FILE.read_text(encoding='utf-8-sig'))
         if not isinstance(data, dict) or "panels" not in data:
             raise ValueError("missing 'panels'")
         return data
@@ -98,7 +101,7 @@ def _load() -> dict:
             f"prior contents saved to {backup.name}"
         )
         data = _seed_defaults()
-        DASHBOARD_FILE.write_text(json.dumps(data, indent=2))
+        DASHBOARD_FILE.write_text(json.dumps(data, indent=2), encoding='utf-8')
         return data
 
 
@@ -106,8 +109,8 @@ def _save(data: dict) -> None:
     """Atomic-write the dashboard file."""
     DASHBOARD_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = DASHBOARD_FILE.with_suffix(DASHBOARD_FILE.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(DASHBOARD_FILE)
+    tmp.write_text(json.dumps(data, indent=2), encoding='utf-8')
+    replace_with_retry(tmp, DASHBOARD_FILE)
 
 
 def _validate_panel(p: dict) -> tuple[bool, str]:

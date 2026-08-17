@@ -60,6 +60,9 @@ class WakeWordDetector:
         self.system = None
         self.running = False
         self.listen_thread = None
+        # Serializes start/stop_listening — the band had zero locks and an
+        # unlocked start-after-timed-out-stop spawned a second reader.
+        self._lifecycle_lock = threading.Lock()
         
         # Output device setup for tone playback
         self.output_device = None
@@ -333,8 +336,12 @@ class WakeWordDetector:
             except Exception:
                 pass
 
-            # Restart wakeword audio stream after TTS is done (only if still enabled)
-            if self.audio_recorder and self.running:
+            # Restart wakeword audio stream after TTS is done (only if still
+            # enabled AND this thread is still THE listen thread — a
+            # superseded thread re-opening the mic is how two readers end up
+            # on one stream, hunt 2026-08-17 K1)
+            if (self.audio_recorder and self.running
+                    and threading.current_thread() is self.listen_thread):
                 logger.debug("Restarting wakeword audio stream after STT/TTS")
                 self.audio_recorder.start_recording()
 
@@ -347,7 +354,11 @@ class WakeWordDetector:
 
         logger.info(f"Listen loop started: frame_samples={frame_samples}, threshold={self.threshold}")
 
-        while self.running:
+        # Identity check beside the flag: after a toggle OFF (join timed out
+        # mid-turn) → ON, `running` is True again — the flag alone would let
+        # a SUPERSEDED thread fall back into the loop beside its replacement:
+        # two stream.read()ers + two OWW predict()ers on shared state.
+        while self.running and threading.current_thread() is self.listen_thread:
             try:
                 # Pause processing when disabled at runtime (save CPU)
                 if not config.WAKE_WORD_ENABLED:
@@ -405,6 +416,11 @@ class WakeWordDetector:
                     try:
                         self.audio_recorder.stop_recording()
                         time.sleep(1)
+                        # Teardown may have landed during the backoff — a
+                        # re-open here would leave an unowned InputStream
+                        # holding the mic with no thread to close it (K3).
+                        if not self.running or threading.current_thread() is not self.listen_thread:
+                            break
                         self.audio_recorder.start_recording()
                         # Verify recovery actually succeeded — start_recording
                         # swallows exceptions and leaves stream=None on failure.
@@ -435,8 +451,23 @@ class WakeWordDetector:
                         break
 
     def start_listening(self):
+        with self._lifecycle_lock:
+            return self._start_listening_locked()
+
+    def _start_listening_locked(self):
         if self.running:
             logger.warning("Wake detector already listening — skipping duplicate start")
+            return
+
+        # Previous listen thread still mid-turn (stop_listening's 2s join
+        # can't outlast a 10-90s voice turn): spawning a second thread here
+        # put TWO readers on one InputStream and one OWW model (hunt
+        # 2026-08-17 K1 — garbage scores, then double turns). Re-arm the
+        # flag instead; the surviving thread resumes when its turn ends.
+        if self.listen_thread and self.listen_thread.is_alive():
+            self.running = True
+            logger.info("Wake listener re-armed — previous listen thread is "
+                        "finishing a voice turn and will resume")
             return
 
         if not self.audio_recorder:
@@ -468,10 +499,19 @@ class WakeWordDetector:
         logger.info("Wake word detection started successfully")
 
     def stop_listening(self):
+        with self._lifecycle_lock:
+            self._stop_listening_locked()
+
+    def _stop_listening_locked(self):
         self.running = False
         if self.listen_thread:
             self.listen_thread.join(timeout=2.0)
-            logger.info("Listen thread stopped")
+            if self.listen_thread.is_alive():
+                logger.warning("Listen thread still mid-turn after 2s join — "
+                               "flag cleared; it will exit (or re-arm) when "
+                               "the turn finishes")
+            else:
+                logger.info("Listen thread stopped")
         try:
             sd.stop()  # Stop any playing audio
         except Exception:

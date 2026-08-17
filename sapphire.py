@@ -134,31 +134,7 @@ class VoiceChatSystem:
         # ran before the scan, so those names couldn't resolve yet and boot
         # fell to the hardcoded fallback until the next chat activation.
         # Mirrors the toolset resync plugin_loader already does. 2026-08-03.
-        try:
-            from core import prompts as _prompts
-            _want = (self.llm_chat.session_manager.get_chat_settings() or {}).get('prompt')
-            if _want and _prompts.get_active_preset_name() != _want:
-                _pd = _prompts.get_prompt(_want)
-                if isinstance(_pd, dict):
-                    self.llm_chat.set_system_prompt(_pd.get('content', '') or '')
-                    _prompts.set_active_preset_name(_want)
-                    # Pack-shipped assembled presets need their pieces in
-                    # _assembled_state too — without this the first spice
-                    # rotation reassembled from boot defaults.
-                    if _want in _prompts.prompt_manager.scenario_presets:
-                        if not _prompts.apply_scenario(_want):
-                            logger.warning(f"Pack preset '{_want}' failed to apply "
-                                           f"cleanly — pieces may be stale")
-                    logger.info(f"Re-primed prompt '{_want}' after plugin scan (pack prompt)")
-                else:
-                    # Never silent (Sapph-not-Rose bug, 2026-08-05): the chat
-                    # wants a name no pack registered — she wears the boot
-                    # fallback until something re-activates a real prompt.
-                    logger.warning(f"Post-scan re-prime: chat wants prompt '{_want}' "
-                                   f"but no such name is registered — wearing the "
-                                   f"boot fallback until re-activation")
-        except Exception as e:
-            logger.warning(f"Post-scan prompt re-prime failed: {e}")
+        self.reprime_pack_prompt(moment="after plugin scan")
 
         # Essential-plugin boot assertion — a plugin with manifest.essential=true
         # MUST be loaded or we scream loud. essential can also be a GROUP STRING
@@ -327,6 +303,39 @@ class VoiceChatSystem:
                             f"(tab closed mid-game) — handed Chat back to '{target}'")
         except Exception as e:
             logger.warning(f"Boot game-chat handback skipped: {e}")
+
+    def reprime_pack_prompt(self, moment="late registration"):
+        """Re-resolve the active chat's prompt against the CURRENT prompt
+        registry. Boot calls it after the plugin scan; late registrars
+        (game-room's costume re-merge lands on a retry thread AFTER this,
+        because costumes now live in the chat DB behind get_system — hunt
+        2026-08-17 P1) call it again once their names exist. Idempotent:
+        no-op when the active preset already matches."""
+        try:
+            from core import prompts as _prompts
+            _want = (self.llm_chat.session_manager.get_chat_settings() or {}).get('prompt')
+            if _want and _prompts.get_active_preset_name() != _want:
+                _pd = _prompts.get_prompt(_want)
+                if isinstance(_pd, dict):
+                    self.llm_chat.set_system_prompt(_pd.get('content', '') or '')
+                    _prompts.set_active_preset_name(_want)
+                    # Pack-shipped assembled presets need their pieces in
+                    # _assembled_state too — without this the first spice
+                    # rotation reassembled from boot defaults.
+                    if _want in _prompts.prompt_manager.scenario_presets:
+                        if not _prompts.apply_scenario(_want):
+                            logger.warning(f"Pack preset '{_want}' failed to apply "
+                                           f"cleanly — pieces may be stale")
+                    logger.info(f"Re-primed prompt '{_want}' ({moment})")
+                else:
+                    # Never silent (Sapph-not-Rose bug, 2026-08-05): the chat
+                    # wants a name no pack registered — she wears the boot
+                    # fallback until something re-activates a real prompt.
+                    logger.warning(f"Prompt re-prime ({moment}): chat wants "
+                                   f"'{_want}' but no such name is registered — "
+                                   f"wearing the boot fallback until re-activation")
+        except Exception as e:
+            logger.warning(f"Prompt re-prime ({moment}) failed: {e}")
 
     def _prime_default_prompt(self):
         try:
@@ -701,12 +710,32 @@ class VoiceChatSystem:
             self.wake_detector = NullWakeWordDetector(None)
             return False
 
+    def _quiesce_recorder(self, timeout=3.0):
+        """Signal the outgoing recorder and wait for its loop to exit before
+        replacing it — the TTS swap has always stopped-and-waited; STT never
+        did, so a mid-recording orphan kept the InputStream open and the NEW
+        recorder's constructor probed the same busy device (mic latched to
+        Null while every status surface said enabled — hunt 2026-08-17 K6)."""
+        old = getattr(self, 'whisper_recorder', None)
+        if old is None:
+            return
+        try:
+            old.stop()   # signal-only; the recording loop closes its own stream
+            deadline = time.time() + timeout
+            while getattr(old, '_recording', False) and time.time() < deadline:
+                time.sleep(0.05)
+            if getattr(old, '_recording', False):
+                logger.warning(f"Old STT recorder still mid-recording after {timeout}s — replacing anyway")
+        except Exception:
+            pass
+
     def switch_stt_provider(self, provider_name: str):
         """Hot-swap STT provider at runtime."""
         if not provider_name or provider_name == 'none':
             from core.stt.stt_null import NullAudioRecorder
             if not isinstance(self.whisper_client, NullWhisperClient):
                 logger.info("STT stopped, unloading provider")
+                self._quiesce_recorder()
                 self.whisper_client = NullWhisperClient()
                 self.whisper_recorder = NullAudioRecorder()
             return True
@@ -717,6 +746,7 @@ class VoiceChatSystem:
             # Ensure real recorder if switching from disabled (not needed for router)
             from core.stt.stt_null import NullAudioRecorder
             if provider_name == 'sapphire_router':
+                self._quiesce_recorder()
                 self.whisper_recorder = NullAudioRecorder()
             elif isinstance(self.whisper_recorder, NullAudioRecorder):
                 try:
@@ -1120,11 +1150,6 @@ def run():
     _tz = getattr(config, 'USER_TIMEZONE', '') or ''
     if not _tz or _tz == 'UTC':
         try:
-            from datetime import datetime
-            # Try ZoneInfo-based detection first (Python 3.9+)
-            import time as _time
-            _tz_name = _time.tzname[0] if _time.daylight == 0 else None
-            # tzname gives abbreviations like 'EST' — not IANA names. Use /etc/localtime instead.
             _tz_name = None
             # Read /etc/localtime symlink (Linux) — gives proper IANA name
             from pathlib import Path as _P
@@ -1132,12 +1157,24 @@ def run():
             if _link.is_symlink() and 'zoneinfo/' in str(_link.resolve()):
                 _tz_name = str(_link.resolve()).split('zoneinfo/')[-1]
             if not _tz_name:
-                # Last resort: try tzinfo.key (works with ZoneInfo, not with fixed-offset)
-                _detected = datetime.now().astimezone().tzinfo
-                _tz_name = getattr(_detected, 'key', None)
+                # Windows (and non-symlink Linux): tzlocal knows the IANA
+                # name. Optional dep — used when present, skipped quietly
+                # when not. (The old astimezone().tzinfo.key "last resort"
+                # was dead code: bare astimezone() returns a fixed-offset
+                # timezone on EVERY platform, .key never exists.)
+                try:
+                    from tzlocal import get_localzone_name
+                    _tz_name = get_localzone_name()
+                except Exception:
+                    _tz_name = None
             if _tz_name and _tz_name != 'UTC':
                 settings.set('USER_TIMEZONE', _tz_name, persist=True)
                 logger.info(f"Auto-detected timezone: {_tz_name}")
+            elif sys.platform == 'win32':
+                logger.warning("Timezone auto-detect unavailable on this box — "
+                               "USER_TIMEZONE is UTC; scheduled tasks and the "
+                               "prompt clock run in UTC until you set it in "
+                               "Settings (pip install tzlocal enables detection)")
         except Exception:
             pass
 

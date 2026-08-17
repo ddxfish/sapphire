@@ -21,6 +21,7 @@ import logging
 import re
 import urllib.request
 from pathlib import Path
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def _download(url: str, dest: Path, timeout: float = 20.0) -> bool:
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")
         tmp.write_bytes(data)
-        tmp.replace(dest)
+        replace_with_retry(tmp, dest)
         return True
     except Exception as e:
         logger.warning(f"font_bootstrap: download failed {url} -> {type(e).__name__}: {e}")

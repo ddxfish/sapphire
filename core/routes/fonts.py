@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from core.auth import require_login
+from core.fs_utils import replace_with_retry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -121,7 +122,7 @@ async def download_font(req: _DownloadReq, _=Depends(require_login)):
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        os.replace(tmp, path)
+        replace_with_retry(Path(tmp), path)
     except Exception:
         try: os.unlink(tmp)
         except OSError: pass

@@ -145,10 +145,15 @@ async def workspace_stop(req: RunRequest, _=Depends(require_login)):
 
     try:
         if _IS_WINDOWS:
-            proc.terminate()
+            # shell=True means proc.pid is cmd.exe — terminate() kills the
+            # shell and ORPHANS the real python/node child, which keeps the
+            # port while we report "stopped". taskkill /T walks the tree
+            # (the killpg equivalent; console apps have no graceful TERM).
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True)
         else:
             os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
+    except (ProcessLookupError, OSError):
         pass
     try:
         proc.wait(timeout=3)

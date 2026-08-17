@@ -12,6 +12,8 @@ import tarfile
 import time
 from pathlib import Path
 
+from core.fs_utils import replace_with_retry, rmtree_robust
+
 logger = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parent.parent
@@ -58,11 +60,30 @@ def validate_tar(path):
     member NAMES (the safety floor for the trusted/fully-trusted extract). Returns
     sorted top-level entries. Link/device safety is enforced at extract time by the
     tarfile filter (strict for uploads). Raises ValueError / tarfile.TarError."""
+    import sys
+    _WIN_RESERVED = ({'con', 'prn', 'aux', 'nul'}
+                     | {f'com{i}' for i in range(1, 10)}
+                     | {f'lpt{i}' for i in range(1, 10)})
     with tarfile.open(path, "r:gz") as t:
         names = t.getnames()
     for n in names:
         if n.startswith("/") or ".." in Path(n).parts:
             raise ValueError(f"unsafe path in archive: {n}")
+        # Windows shapes the POSIX check never sees: drive-relative names
+        # ('D:evil') escape containment, backslash '..' segments dodge the
+        # Path.parts test above.
+        if (len(n) > 1 and n[1] == ':') or '\\..' in n or n.startswith('..\\'):
+            raise ValueError(f"unsafe path in archive: {n}")
+        # Reserved device names (CON, NUL, COM1…) abort a Windows extract
+        # mid-way with a cryptic OSError — refuse up front with a real
+        # message. Linux restores of the same archive still work.
+        if sys.platform == 'win32':
+            for part in Path(n).parts:
+                if part.split('.')[0].lower() in _WIN_RESERVED:
+                    raise ValueError(
+                        f"archive contains a Windows-reserved filename "
+                        f"('{n}') — restore it on Linux, rename that file, "
+                        f"and re-create the backup")
     roots = sorted({n.split("/", 1)[0] for n in names if n})
     if "user" not in roots:
         raise ValueError("archive has no top-level user/ folder")
@@ -127,7 +148,7 @@ def apply_pending_restore(log=print):
 
     try:
         if USER_NEW.exists():
-            shutil.rmtree(USER_NEW)
+            rmtree_robust(USER_NEW)
         USER_NEW.mkdir(parents=True)
         try:
             USER_NEW.chmod(0o700)
@@ -142,17 +163,21 @@ def apply_pending_restore(log=print):
         # Snapshot current user/ → user.old (rollback). Rotate the previous
         # user.old → user.old.prev first, so restoring twice in a row doesn't
         # silently destroy the first rollback point (the panic-recovery footgun).
+        # Windows: a single open handle anywhere under these trees (Explorer,
+        # AV scan, an editor) fails a bare rename/rmtree — robust rmtree
+        # clears read-only bits, and the retried replaces outlast transient
+        # holders. A real lock still aborts, with the cause named.
         if USER_OLD.exists():
             if USER_OLD_PREV.exists():
-                shutil.rmtree(USER_OLD_PREV)
-            USER_OLD.replace(USER_OLD_PREV)
+                rmtree_robust(USER_OLD_PREV)
+            replace_with_retry(USER_OLD, USER_OLD_PREV)
         if USER.exists():
-            USER.replace(USER_OLD)
+            replace_with_retry(USER, USER_OLD)
             try:
                 USER_OLD.chmod(0o700)   # full plaintext copy of private data — owner-only
             except OSError:
                 pass
-        new_user.replace(USER)
+        replace_with_retry(new_user, USER)
 
         shutil.rmtree(USER_NEW, ignore_errors=True)
         MARKER.unlink(missing_ok=True)
@@ -167,12 +192,15 @@ def apply_pending_restore(log=print):
         # If we moved user aside but didn't finish, put it back.
         if USER_OLD.exists() and not USER.exists():
             try:
-                USER_OLD.replace(USER)
+                replace_with_retry(USER_OLD, USER)
             except Exception:
                 pass
         if USER_NEW.exists():
             shutil.rmtree(USER_NEW, ignore_errors=True)
         MARKER.unlink(missing_ok=True)  # never loop-retry a broken restore
-        log(f"[Restore] FAILED — kept existing user/: {e}")
+        hint = (" (a PermissionError here usually means something on Windows "
+                "holds a file open under user/ — close Explorer/editors and retry)"
+                if isinstance(e, PermissionError) else "")
+        log(f"[Restore] FAILED — kept existing user/: {e}{hint}")
         _write_result(False, source, str(e))
         return False
