@@ -116,7 +116,6 @@ def _chat_skeleton(chat_settings):
     from core.chat.chat import LLMChat
     with patch.object(LLMChat, '__init__', lambda self: None):
         chat = LLMChat()
-    chat._use_new_config = True
     chat.session_manager = MagicMock()
     chat.session_manager.get_chat_settings.return_value = chat_settings
     return chat

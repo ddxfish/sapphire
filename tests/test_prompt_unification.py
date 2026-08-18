@@ -311,7 +311,6 @@ class TestProviderPrivacyGate:
     def _chat(self, chat_settings):
         from core.chat.chat import LLMChat
         obj = LLMChat.__new__(LLMChat)
-        obj._use_new_config = True
         obj.session_manager = MagicMock()
         obj.session_manager.get_chat_settings.return_value = chat_settings
         return obj

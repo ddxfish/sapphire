@@ -544,8 +544,4 @@ class WakeWordDetector:
                                "the turn finishes")
             else:
                 logger.info("Listen thread stopped")
-        try:
-            sd.stop()  # Stop any playing audio
-        except Exception:
-            pass
         self.callback_pool.shutdown()

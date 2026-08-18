@@ -188,7 +188,7 @@ class CredentialsManager:
         # Migrate SOCKS credentials from socks_config file
         if SOCKS_CONFIG_FILE.exists():
             try:
-                lines = SOCKS_CONFIG_FILE.read_text().splitlines()
+                lines = SOCKS_CONFIG_FILE.read_text(encoding='utf-8-sig').splitlines()
                 if len(lines) >= 2:
                     username = self._parse_legacy_line(lines[0])
                     password = self._parse_legacy_line(lines[1])
@@ -203,7 +203,9 @@ class CredentialsManager:
         # Migrate Claude API key from dedicated file
         if CLAUDE_API_KEY_FILE.exists():
             try:
-                api_key = CLAUDE_API_KEY_FILE.read_text().strip()
+                # utf-8-sig: a PowerShell-written key file carries a BOM, and
+                # .strip() does NOT remove U+FEFF — the key 401s pointing nowhere.
+                api_key = CLAUDE_API_KEY_FILE.read_text(encoding='utf-8-sig').strip()
                 if api_key:
                     self._credentials['llm']['claude']['api_key'] = api_key
                     logger.info(f"Migrated Claude API key from {CLAUDE_API_KEY_FILE}")

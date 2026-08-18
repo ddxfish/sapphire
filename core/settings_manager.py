@@ -116,8 +116,11 @@ class SettingsManager:
             self._defaults = self._flatten_dict(nested)
             logger.info(f"Loaded default settings from {defaults_path}")
         except Exception as e:
+            # Fatal: without defaults every subsystem limps on empty config
+            # (LLM_PROVIDERS missing sent chat.py into a dead legacy branch
+            # that died with the wrong error). Die loudly with the real one.
             logger.error(f"Failed to load defaults: {e}")
-            self._defaults = {}
+            raise RuntimeError(f"Cannot load {defaults_path}: {e}") from e
     
     def _apply_construction(self):
         """Apply programmatic path/URL construction and platform-specific defaults"""

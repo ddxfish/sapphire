@@ -214,18 +214,8 @@ class LLMChat:
         # Provider cache - populated lazily
         self._provider_cache = {}
         
-        # Support both old and new config formats
-        if hasattr(config, 'LLM_PROVIDERS') and config.LLM_PROVIDERS:
-            # New format: LLM_PROVIDERS dict + LLM_FALLBACK_ORDER
-            self._use_new_config = True
-            logger.info(f"Using new LLM_PROVIDERS config with {len(config.LLM_PROVIDERS)} providers")
-        else:
-            # Legacy format: LLM_PRIMARY/LLM_FALLBACK
-            self._use_new_config = False
-            self.provider_primary = self._init_provider_legacy(getattr(config, 'LLM_PRIMARY', {}), "primary")
-            self.provider_fallback = self._init_provider_legacy(getattr(config, 'LLM_FALLBACK', {}), "fallback")
-            logger.info("Using legacy LLM_PRIMARY/LLM_FALLBACK config")
-        
+        logger.info(f"Using LLM_PROVIDERS config with {len(config.LLM_PROVIDERS)} providers")
+
         if isinstance(history, ChatSessionManager):
             self.session_manager = history
         elif isinstance(history, ConversationHistory):
@@ -346,26 +336,6 @@ class LLMChat:
             ids = list(self._streams_by_chat.get(chat_name, set()))
             return [self._streams_by_id[i] for i in ids if i in self._streams_by_id]
 
-    def _init_provider_legacy(self, llm_config, name):
-        """Initialize an LLM provider from legacy config dict."""
-        if not llm_config.get("enabled", False):
-            logger.info(f"LLM {name} is disabled")
-            return None
-        
-        if "provider" not in llm_config:
-            base_url = llm_config.get("base_url", "")
-            detected = get_provider_for_url(base_url)
-            llm_config = {**llm_config, "provider": detected}
-        
-        try:
-            provider = get_provider(llm_config, config.LLM_REQUEST_TIMEOUT)
-            if provider:
-                logger.info(f"Initialized {name} provider [{provider.provider_name}]: {llm_config.get('base_url', 'N/A')}")
-            return provider
-        except Exception as e:
-            logger.error(f"Failed to init {name} provider: {e}")
-            return None
-            
     def set_system_prompt(self, prompt_content: str) -> bool:
         self.current_system_prompt = prompt_content
         return True
@@ -726,142 +696,121 @@ class LLMChat:
     def _select_provider(self):
         """Select LLM provider using per-chat settings or fallback order. Returns (provider_key, provider, model_override) tuple or raises."""
         
-        if self._use_new_config:
-            providers_config = {**config.LLM_PROVIDERS, **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
-            fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
-            
-            # Check per-chat LLM settings
-            chat_settings = self.session_manager.get_chat_settings()
-            chat_primary = chat_settings.get('llm_primary', 'auto')
-            chat_model = chat_settings.get('llm_model', '')  # Per-chat model override
+        providers_config = {**config.LLM_PROVIDERS, **getattr(config, 'LLM_CUSTOM_PROVIDERS', {})}
+        fallback_order = getattr(config, 'LLM_FALLBACK_ORDER', list(providers_config.keys()))
+        
+        # Check per-chat LLM settings
+        chat_settings = self.session_manager.get_chat_settings()
+        chat_primary = chat_settings.get('llm_primary', 'auto')
+        chat_model = chat_settings.get('llm_model', '')  # Per-chat model override
 
-            # Prompt-privacy gate — server-side, ALL doors. A prompt flagged
-            # privacy_required refuses to run unless this chat has private_chat
-            # on (which then forces a local provider below). Lives here because
-            # every turn path converges on provider selection: web streaming,
-            # /api/chat, voice/wakeword, phone target-chats. The old pre-flight
-            # in chat_stream() covered only the web door and read the GLOBAL
-            # active prompt (wrong chat for phone streams). get_chat_settings
-            # is stream-override aware, so this reads the TARGET chat.
+        # Prompt-privacy gate — server-side, ALL doors. A prompt flagged
+        # privacy_required refuses to run unless this chat has private_chat
+        # on (which then forces a local provider below). Lives here because
+        # every turn path converges on provider selection: web streaming,
+        # /api/chat, voice/wakeword, phone target-chats. The old pre-flight
+        # in chat_stream() covered only the web door and read the GLOBAL
+        # active prompt (wrong chat for phone streams). get_chat_settings
+        # is stream-override aware, so this reads the TARGET chat.
+        try:
+            from core import prompts as _prompts
+            _pname = chat_settings.get('prompt')
+            if _pname:
+                _pdata = _prompts.get_prompt(_pname)
+                # Unresolvable name → the runtime falls back to the
+                # assembled default (never privacy_required), so the
+                # gate follows suit. Falling back to the GLOBAL active
+                # prompt here re-created the wrong-chat read this gate
+                # exists to prevent (false-blocked calls when the UI
+                # chat wore a private prompt).
+                _priv_required = bool(isinstance(_pdata, dict)
+                                      and _pdata.get('privacy_required', False))
+            else:
+                # No prompt setting at all → this chat runs whatever is
+                # globally active, so the global flag IS the right one.
+                _priv_required = _prompts.is_current_prompt_private()
+            if _priv_required and not chat_settings.get('private_chat', False):
+                raise ConnectionError(
+                    "This prompt is marked private — unlock the vault and "
+                    "send a message (talking marks the chat private), or "
+                    "use Chat Manager's \U0001F5DD on it first.")
+        except ConnectionError:
+            raise
+        except Exception as e:
+            logger.error(f"Prompt-privacy check failed (defaulting to BLOCK): {e}")
+            raise ConnectionError("Prompt-privacy check encountered an error — blocking for safety. Check logs.")
+
+        # Handle "none" - explicitly disabled
+        if chat_primary == 'none':
+            raise ConnectionError("LLM disabled for this chat (llm_primary=none)")
+        
+        # If chat has specific provider set (not "auto"), use ONLY that provider - no fallback
+        if chat_primary and chat_primary != 'auto':
+            # Private chat: provider must be marked local/private-safe
             try:
-                from core import prompts as _prompts
-                _pname = chat_settings.get('prompt')
-                if _pname:
-                    _pdata = _prompts.get_prompt(_pname)
-                    # Unresolvable name → the runtime falls back to the
-                    # assembled default (never privacy_required), so the
-                    # gate follows suit. Falling back to the GLOBAL active
-                    # prompt here re-created the wrong-chat read this gate
-                    # exists to prevent (false-blocked calls when the UI
-                    # chat wore a private prompt).
-                    _priv_required = bool(isinstance(_pdata, dict)
-                                          and _pdata.get('privacy_required', False))
-                else:
-                    # No prompt setting at all → this chat runs whatever is
-                    # globally active, so the global flag IS the right one.
-                    _priv_required = _prompts.is_current_prompt_private()
-                if _priv_required and not chat_settings.get('private_chat', False):
-                    raise ConnectionError(
-                        "This prompt is marked private — unlock the vault and "
-                        "send a message (talking marks the chat private), or "
-                        "use Chat Manager's \U0001F5DD on it first.")
+                from core.chat.llm_providers import PROVIDER_METADATA
+                if chat_settings.get('private_chat', False):
+                    pconf = providers_config.get(chat_primary, {})
+                    meta = PROVIDER_METADATA.get(chat_primary, {})
+                    if not pconf.get('is_local', meta.get('is_local', False)):
+                        raise ConnectionError(f"Provider '{chat_primary}' is not marked local/private-safe and is blocked in this private chat. Tick 'Local / private server' on the model or turn off private chat.")
             except ConnectionError:
                 raise
             except Exception as e:
-                logger.error(f"Prompt-privacy check failed (defaulting to BLOCK): {e}")
-                raise ConnectionError("Prompt-privacy check encountered an error — blocking for safety. Check logs.")
+                logger.error(f"Privacy check failed (defaulting to BLOCK): {e}")
+                raise ConnectionError("Privacy check encountered an error — blocking provider for safety. Check logs.")
 
-            # Handle "none" - explicitly disabled
-            if chat_primary == 'none':
-                raise ConnectionError("LLM disabled for this chat (llm_primary=none)")
-            
-            # If chat has specific provider set (not "auto"), use ONLY that provider - no fallback
-            if chat_primary and chat_primary != 'auto':
-                # Private chat: provider must be marked local/private-safe
+            # Per-chat first-token/read deadline (e.g. phone call chats get a
+            # snappy 20s from the twilio daemon; everything else keeps the
+            # 240s system default — slower chat models are unaffected).
+            try:
+                _rt = float(chat_settings.get('llm_request_timeout') or 0)
+            except (TypeError, ValueError):
+                _rt = 0.0
+            provider = get_provider_by_key(chat_primary, providers_config,
+                                           _rt if _rt > 0 else config.LLM_REQUEST_TIMEOUT,
+                                           model_override=chat_model)
+            if not provider:
+                raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
+
+            # Pinned-provider health TTL: this path re-runs EVERY turn, and
+            # the pre-flight models.list round-trip was pure added latency on
+            # phone turns (a pinned provider has no fallback — it just raises).
+            # A pass is trusted for 60s; between checks the completion call
+            # itself is the health signal. 2026-07-15.
+            import time as _time
+            _hc = getattr(self, "_pinned_health_cache", None)
+            if _hc is None:
+                _hc = self._pinned_health_cache = {}
+            healthy = _time.time() < _hc.get(chat_primary, 0)
+            if not healthy:
                 try:
-                    from core.chat.llm_providers import PROVIDER_METADATA
-                    if chat_settings.get('private_chat', False):
-                        pconf = providers_config.get(chat_primary, {})
-                        meta = PROVIDER_METADATA.get(chat_primary, {})
-                        if not pconf.get('is_local', meta.get('is_local', False)):
-                            raise ConnectionError(f"Provider '{chat_primary}' is not marked local/private-safe and is blocked in this private chat. Tick 'Local / private server' on the model or turn off private chat.")
-                except ConnectionError:
-                    raise
-                except Exception as e:
-                    logger.error(f"Privacy check failed (defaulting to BLOCK): {e}")
-                    raise ConnectionError("Privacy check encountered an error — blocking provider for safety. Check logs.")
-
-                # Per-chat first-token/read deadline (e.g. phone call chats get a
-                # snappy 20s from the twilio daemon; everything else keeps the
-                # 240s system default — slower chat models are unaffected).
-                try:
-                    _rt = float(chat_settings.get('llm_request_timeout') or 0)
-                except (TypeError, ValueError):
-                    _rt = 0.0
-                provider = get_provider_by_key(chat_primary, providers_config,
-                                               _rt if _rt > 0 else config.LLM_REQUEST_TIMEOUT,
-                                               model_override=chat_model)
-                if not provider:
-                    raise ConnectionError(f"Provider '{chat_primary}' not configured or disabled")
-
-                # Pinned-provider health TTL: this path re-runs EVERY turn, and
-                # the pre-flight models.list round-trip was pure added latency on
-                # phone turns (a pinned provider has no fallback — it just raises).
-                # A pass is trusted for 60s; between checks the completion call
-                # itself is the health signal. 2026-07-15.
-                import time as _time
-                _hc = getattr(self, "_pinned_health_cache", None)
-                if _hc is None:
-                    _hc = self._pinned_health_cache = {}
-                healthy = _time.time() < _hc.get(chat_primary, 0)
-                if not healthy:
-                    try:
-                        healthy = bool(provider.health_check())
-                    except Exception:
-                        healthy = False
-                    if healthy:
-                        _hc[chat_primary] = _time.time() + 60.0
+                    healthy = bool(provider.health_check())
+                except Exception:
+                    healthy = False
                 if healthy:
-                    logger.info(f"Using chat-specific provider '{chat_primary}'" +
-                               (f" with model '{chat_model}'" if chat_model else ""))
-                    return (chat_primary, provider, chat_model)
+                    _hc[chat_primary] = _time.time() + 60.0
+            if healthy:
+                logger.info(f"Using chat-specific provider '{chat_primary}'" +
+                           (f" with model '{chat_model}'" if chat_model else ""))
+                return (chat_primary, provider, chat_model)
 
-                raise ConnectionError(f"Provider '{chat_primary}' failed health check - no fallback for specific provider selection")
-            
-            # Auto mode - use global fallback order
-            result = get_first_available_provider(
-                providers_config,
-                fallback_order,
-                config.LLM_REQUEST_TIMEOUT,
-                force_privacy=chat_settings.get('private_chat', False)
-            )
-            
-            if result:
-                provider_key, provider = result
-                logger.info(f"Auto mode: using '{provider_key}' ({provider.model})")
-                return (provider_key, provider, '')  # No model override in auto mode
-            
-            raise ConnectionError("No LLM providers available")
+            raise ConnectionError(f"Provider '{chat_primary}' failed health check - no fallback for specific provider selection")
         
-        else:
-            # Legacy config: LLM_PRIMARY/LLM_FALLBACK
-            if self.provider_primary and getattr(config, 'LLM_PRIMARY', {}).get("enabled"):
-                try:
-                    if self.provider_primary.health_check():
-                        logger.info(f"Using primary LLM [{self.provider_primary.provider_name}]: {self.provider_primary.model}")
-                        return ('legacy_primary', self.provider_primary, '')
-                except Exception as e:
-                    logger.warning(f"Primary LLM health check failed: {e}")
-            
-            if self.provider_fallback and getattr(config, 'LLM_FALLBACK', {}).get("enabled"):
-                try:
-                    if self.provider_fallback.health_check():
-                        logger.info(f"Using fallback LLM [{self.provider_fallback.provider_name}]: {self.provider_fallback.model}")
-                        return ('legacy_fallback', self.provider_fallback, '')
-                except Exception as e:
-                    logger.error(f"Fallback LLM health check failed: {e}")
-            
-            raise ConnectionError("No LLM endpoints available")
+        # Auto mode - use global fallback order
+        result = get_first_available_provider(
+            providers_config,
+            fallback_order,
+            config.LLM_REQUEST_TIMEOUT,
+            force_privacy=chat_settings.get('private_chat', False)
+        )
+        
+        if result:
+            provider_key, provider = result
+            logger.info(f"Auto mode: using '{provider_key}' ({provider.model})")
+            return (provider_key, provider, '')  # No model override in auto mode
+        
+        raise ConnectionError("No LLM providers available")
 
     def reset(self):
         self.session_manager.clear()

@@ -183,8 +183,17 @@ class TTSClient:
         return True
     
     def set_pitch(self, pitch):
-        """Set the pitch shift"""
-        self.pitch_shift = float(pitch)
+        """Set the pitch shift, clamped to a sane range.
+
+        No provider declares pitch bounds (unlike SPEED_MIN/MAX) — UI
+        sliders span 0.5-1.5 (trigger editor 2.0), so [0.5, 2.0] covers
+        every surface while blocking unclamped legacy-path values."""
+        pitch = float(pitch)
+        if pitch < 0.5 or pitch > 2.0:
+            clamped = max(0.5, min(2.0, pitch))
+            logger.warning(f"Pitch {pitch} outside range [0.5-2.0], clamped to {clamped}")
+            pitch = clamped
+        self.pitch_shift = pitch
         logger.info(f"Pitch set to: {self.pitch_shift}")
         return True
 
@@ -703,10 +712,9 @@ class TTSClient:
         was_playing = False
         with self.lock:
             if self._is_playing:
-                try:
-                    sd.stop()
-                except Exception:
-                    pass
+                # Playback runs on dedicated OutputStreams that poll
+                # should_stop — sd.stop() couldn't reach them, it only
+                # stomped OTHER components' sd.play (wake tone, test tone).
                 self._is_playing = False
                 was_playing = True
         if was_playing:

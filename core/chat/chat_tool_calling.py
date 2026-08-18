@@ -505,10 +505,15 @@ class ToolCallingEngine:
             # Loop guard: count every attempt this turn (success, throw, or bad JSON).
             self.function_manager.bump_loop_count(loop_counts, function_name)
 
+            raw_args = tool_call["function"].get("arguments", "")
+            # Empty string is valid for no-arg tools — Claude/Anthropic sends
+            # arguments='' (not '{}') when a tool has no params. Streaming got
+            # this guard 2026-05-15; the engine copy never did, so agent-lane
+            # no-arg calls failed with "Invalid JSON arguments". 2026-08-17.
             try:
-                function_args = json.loads(tool_call["function"]["arguments"])
+                function_args = json.loads(raw_args) if raw_args not in ("", None) else {}
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse tool arguments: {tool_call['function']['arguments']}")
+                logger.error(f"Failed to parse tool arguments: {raw_args!r}")
                 error_result = "Error: Invalid JSON arguments."
                 # Loop-warn goes to the LLM message only — history keeps the raw error
                 # (else the warning persists and replays every future turn).
