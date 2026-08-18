@@ -5,6 +5,7 @@ import { PERSONA_TABS } from '../shared/persona-tabs.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
+import { openDeleteModal, openCleanupModal } from './prompts-cleanup.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
@@ -21,6 +22,8 @@ let vaultState = { exists: false, unlocked: false };
 let multiCheck = false;          // bulk store-move mode (assembled only)
 let checkedSections = new Set(); // 'prompt' + section types picked for the bulk move
 let multiCheckFor = null;        // prompt the mode was entered on — exits on switch
+let rosterCheck = false;         // roster multi-check (bulk prompt actions)
+let checkedPrompts = new Set();  // prompt names picked in roster multi-check
 let viewVisible = false;
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
@@ -241,7 +244,7 @@ function render() {
                 items: prompts,
                 selectedId: selected,
                 idKey: 'name',
-                listClass: 'pr-roster',
+                listClass: 'pr-roster pl-stacked',
                 itemClass: p => p.name === activePromptName ? 'active-prompt' : '',
                 renderItem: p => {
                     const d = promptDetails[p.name];
@@ -253,17 +256,26 @@ function render() {
                                   p.source ? '🧩 Plugin: ' + p.source : '',
                                   p.vault ? '\u{1F5DD} Vault' : ''].filter(Boolean).join(' · ');
                     const isActive = p.name === activePromptName;
+                    const check = rosterCheck
+                        ? `<span style="margin-right:6px">${p.source ? '—' : (checkedPrompts.has(p.name) ? '☑' : '☐')}</span>`
+                        : '';
                     return `<div class="pr-item-info">
-                        <span class="pr-item-name">${p.privacy_required ? '🔒 ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
+                        <span class="pr-item-name">${check}${p.privacy_required ? '🔒 ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
                         ${tokenStr ? `<span class="pr-item-tokens">${tokenStr}</span>` : ''}
                         <span class="pr-item-meta">${meta}</span>
                     </div>`;
                 },
                 addTitle: 'New prompt',
-                extraHeader: '<button class="btn-sm" id="pr-import" title="Import prompt">⬇</button>',
+                extraHeader: `<button class="btn-sm" id="pr-roster-check" title="Select prompts for bulk actions"${rosterCheck ? ' style="outline:1px solid var(--accent)"' : ''}>☑</button>`
+                    + '<button class="btn-sm" id="pr-cleanup" title="Cleanup tools (orphans, trash)">🧹</button>'
+                    + '<button class="btn-sm" id="pr-import" title="Import prompt">⬇</button>',
                 showDelete: true,
-                deletable: !!selected,
-                deleteTitle: `Delete "${selected || ''}"`,
+                deletable: rosterCheck ? checkedPrompts.size > 0 : !!selected,
+                deleteTitle: rosterCheck ? `Delete ${checkedPrompts.size} selected`
+                                         : `Delete "${selected || ''}"`,
+                footer: rosterCheck ? `<span>${checkedPrompts.size} selected</span>
+                    <button class="btn-sm danger" id="pr-bulk-delete"${checkedPrompts.size ? '' : ' disabled'}>Delete…</button>
+                    <button class="btn-sm" id="pr-roster-cancel">Cancel</button>` : '',
             })}
             <div class="panel-right">
                 <div class="pr-content">
@@ -505,6 +517,17 @@ function bindEvents() {
     // --- Roster (shared panel-list) ---
     bindPanelList(container, {
         onSelect: async (name) => {
+            if (rosterCheck) {
+                // Multi-check mode: row clicks toggle membership. Pack
+                // prompts can't be deleted, so they don't toggle.
+                const p = prompts.find(x => x.name === name);
+                if (p && !p.source) {
+                    checkedPrompts.has(name) ? checkedPrompts.delete(name)
+                                             : checkedPrompts.add(name);
+                    render();
+                }
+                return;
+            }
             selected = name;
             openAccordion = null;
             editTarget = {};
@@ -513,7 +536,26 @@ function bindEvents() {
             render();
         },
         onAdd: createPrompt,
-        onDelete: deleteCurrentPrompt,
+        onDelete: () => rosterCheck ? bulkDeletePrompts() : deleteCurrentPrompt(),
+    });
+
+    // --- Roster bulk mode + cleanup tools ---
+    layout.querySelector('#pr-roster-check')?.addEventListener('click', () => {
+        rosterCheck = !rosterCheck;
+        if (!rosterCheck) checkedPrompts = new Set();
+        render();
+    });
+    layout.querySelector('#pr-roster-cancel')?.addEventListener('click', () => {
+        rosterCheck = false;
+        checkedPrompts = new Set();
+        render();
+    });
+    layout.querySelector('#pr-bulk-delete')?.addEventListener('click', bulkDeletePrompts);
+    layout.querySelector('#pr-cleanup')?.addEventListener('click', () => {
+        openCleanupModal({
+            components, componentSources, vaultPieces,
+            onDone: async () => { await loadAll(); render(); },
+        });
     });
 
     // --- Header actions ---
@@ -1093,19 +1135,31 @@ async function activateCurrentPrompt() {
     }
 }
 
+async function afterPromptDelete() {
+    rosterCheck = false;
+    checkedPrompts = new Set();
+    selected = null;
+    selectedData = null;
+    openAccordion = null;
+    editTarget = {};
+    await loadAll();
+    render();
+    updateScene();
+}
+
+// Proper delete (session-1 build): the modal lists the prompt's pieces with
+// usage badges — sole-use pieces pre-checked, shared ones not — and checked
+// pieces move to the restorable trash alongside the record delete.
 async function deleteCurrentPrompt() {
-    if (!confirm(`Delete "${selected}"?`)) return;
-    try {
-        await deletePrompt(selected);
-        selected = null;
-        selectedData = null;
-        openAccordion = null;
-        editTarget = {};
-        await loadAll();
-        render();
-        updateScene();
-        ui.showToast('Deleted', 'success');
-    } catch (e) { ui.showToast(e.message || 'Failed', 'error'); }
+    if (!selected) return;
+    openDeleteModal({ names: [selected], componentSources, vaultPieces,
+                      onDone: afterPromptDelete });
+}
+
+function bulkDeletePrompts() {
+    if (!checkedPrompts.size) return;
+    openDeleteModal({ names: [...checkedPrompts], componentSources, vaultPieces,
+                      onDone: afterPromptDelete });
 }
 
 // ── Definition CRUD ──

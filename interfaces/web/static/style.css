@@ -1183,6 +1183,14 @@ body {
 }
 
 .panel-list { width: 240px; }
+/* Stacked header (persona-section rosters): title on line 1, toolbar wraps
+   to line 2, +20% column. Mobile full-width override below still wins. */
+.panel-list.pl-stacked { width: 288px; }
+.pl-stacked .panel-list-header { flex-wrap: wrap; row-gap: 6px; }
+.pl-stacked .panel-list-title { flex-basis: 100%; }
+.pl-stacked .panel-list-actions { margin-left: 0; }
+.panel-list-footer { border-top: 1px solid var(--border); padding: 8px 12px;
+    display: flex; align-items: center; gap: 8px; font-size: var(--font-xs); }
 .panel-roster { width: 240px; order: 1; border-right: none; border-left: 1px solid var(--border); }
 .panel-detail { order: 0; }
 

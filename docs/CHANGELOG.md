@@ -1,3 +1,8 @@
+# 2.12.1 - Prompt page cleanup
+- Added tidy up button to delete orphans and danglers
+- Make prompts multi-select for many delete
+- Delete can now do just the prompt or all pieces too
+- Can move all prompt pieces in a prompt to/from vault at once
 # 2.12.0 - Million Dollar Bug Hunt
 - Combined old blob chat into chat streaming, chat.py chat_streaming.py
 - Voice path folded into main chat streaming as listener

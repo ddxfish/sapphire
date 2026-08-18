@@ -102,6 +102,7 @@ function render() {
         <div class="two-panel">
             ${renderPanelList({
                 title: 'Toolsets',
+                listClass: 'pl-stacked',
                 items: toolsets,
                 selectedId: selectedName,
                 idKey: 'name',

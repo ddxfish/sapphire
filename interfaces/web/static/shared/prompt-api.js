@@ -89,3 +89,32 @@ export async function loadPrompt(name) {
 
   return data;
 }
+
+// ── cleanup & bulk tools ──
+
+// Usage index: {usage: {type: {key: [prompt names]}}, vault: {...},
+// vault_referenced?: {type: [keys]}} — see /api/prompts/piece-usage.
+export async function getPieceUsage() {
+  return await fetchWithTimeout('/api/prompts/piece-usage');
+}
+
+export async function trashPieces(items) {
+  return await fetchWithTimeout('/api/prompts/pieces/trash', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }) });
+}
+
+export async function restorePieces(items) {
+  return await fetchWithTimeout('/api/prompts/pieces/trash/restore', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }) });
+}
+
+export async function purgeTrash() {
+  return await fetchWithTimeout('/api/prompts/pieces/trash/purge', { method: 'POST' });
+}
+
+export async function listTrash() {
+  const data = await fetchWithTimeout('/api/prompts/pieces/trash');
+  return data.items || [];
+}

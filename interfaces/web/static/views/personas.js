@@ -137,6 +137,7 @@ function render() {
         <div class="two-panel">
             ${renderPanelList({
                 title: 'Personas',
+                listClass: 'pl-stacked',
                 items: personas,
                 selectedId: selectedName,
                 idKey: 'name',

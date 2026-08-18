@@ -1,4 +1,6 @@
+import json
 import logging
+import time
 from .prompt_manager import prompt_manager
 from . import prompt_state
 
@@ -801,3 +803,178 @@ def revalidate_active(system=None, reason: str = "") -> bool:
     except Exception as e:
         logger.warning(f"[PROMPTS] revalidate_active failed: {e}")
         return False
+
+# ── cleanup & bulk tools (usage index + piece trash) ──────────────────────
+# Two primitives the delete-modal and cleanup tools ride on. Trash is the
+# safety net for bulk deletes: plaintext pieces move to a sidecar store
+# instead of dying, and the vault-unlock reconcile restores anything a
+# hidden vault prompt still referenced. Vault/pack pieces never land here —
+# vault deletes stay inside the vault funnel, pack pieces are read-only.
+
+def piece_usage() -> dict:
+    """{type: {key: [prompt names]}} across ALL assembled prompts — user +
+    packs + vault overlay. Vault prompts are visible only while unlocked;
+    destructive callers must gate on vault state (or the piece-refs hashes)."""
+    usage = {}
+    for name, comps in prompt_manager.scenario_presets.items():
+        if not isinstance(comps, dict):
+            continue
+        for ctype, val in comps.items():
+            if ctype.startswith('_'):
+                continue
+            keys = val if isinstance(val, list) else ([val] if val else [])
+            for k in keys:
+                if isinstance(k, str) and k:
+                    usage.setdefault(ctype, {}).setdefault(k, []).append(name)
+    return usage
+
+
+def _trash_path():
+    return prompt_manager.USER_DIR / "prompt_pieces_trash.json"
+
+
+def _load_trash() -> list:
+    path = _trash_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding='utf-8-sig'))
+        items = data.get('items', []) if isinstance(data, dict) else []
+        return [it for it in items if isinstance(it, dict)
+                and isinstance(it.get('type'), str)
+                and isinstance(it.get('key'), str)]
+    except Exception as e:
+        logger.error(f"Trash store unreadable — treating as empty: {e}")
+        return []
+
+
+def _save_trash(items) -> bool:
+    try:
+        prompt_manager._write_json_atomic(
+            _trash_path(), {"version": 1, "items": items}, ensure_ascii=False)
+        return True
+    except Exception as e:
+        logger.error(f"Trash store save failed: {e}")
+        return False
+
+
+def _publish_components_changed(action):
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.COMPONENTS_CHANGED, {"action": action})
+    except Exception:
+        pass
+
+
+def trash_pieces(items, reason=None) -> tuple:
+    """Soft-delete plaintext user pieces: items = [(type, key)] move into the
+    trash store. Returns (trashed, skipped) — skipped rows carry a 'why'.
+    Ordering is fail-safe: trash persists BEFORE the store delete, and a
+    store-save failure rolls both back — a piece is never in neither place."""
+    with prompt_manager._lock:
+        trash = _load_trash()
+        original = list(trash)
+        pending, skipped = [], []
+        for ctype, key in items:
+            store = prompt_manager._components.get(ctype, {})
+            if key not in store:
+                skipped.append({'type': ctype, 'key': key,
+                                'why': 'not in the plaintext store'})
+                continue
+            trash.append({"type": ctype, "key": key, "text": store[key],
+                          "deleted_at": time.time()})
+            pending.append((ctype, key))
+        if not pending:
+            return [], skipped
+        if not _save_trash(trash):
+            return [], skipped + [{'type': t, 'key': k, 'why': 'trash save failed'}
+                                  for t, k in pending]
+        removed = {}
+        for ctype, key in pending:
+            removed[(ctype, key)] = prompt_manager._components[ctype].pop(key)
+        if not prompt_manager.save_components(
+                reason=reason or f"trashed {len(pending)} piece(s)"):
+            for (ctype, key), text in removed.items():
+                prompt_manager._components.setdefault(ctype, {})[key] = text
+            _save_trash(original)
+            return [], skipped + [{'type': t, 'key': k, 'why': 'store save failed'}
+                                  for t, k in pending]
+    _publish_components_changed('pieces_trashed')
+    logger.info(f"Trashed {len(pending)} piece(s): "
+                + ", ".join(f"{t}/{k}" for t, k in pending))
+    return [{'type': t, 'key': k} for t, k in pending], skipped
+
+
+def list_trash() -> list:
+    """Trash entries newest-first (type, key, text, deleted_at)."""
+    return sorted(_load_trash(), key=lambda it: it.get('deleted_at', 0),
+                  reverse=True)
+
+
+def restore_pieces(items) -> tuple:
+    """Restore trashed pieces (latest entry per type/key wins; all entries
+    for a restored key drop). Never overwrites a live piece — skipped with
+    'live piece exists' instead."""
+    with prompt_manager._lock:
+        trash = _load_trash()
+        restored, skipped, added = [], [], {}
+        for ctype, key in items:
+            entries = [it for it in trash
+                       if it['type'] == ctype and it['key'] == key]
+            if not entries:
+                skipped.append({'type': ctype, 'key': key,
+                                'why': 'not in trash'})
+                continue
+            if key in prompt_manager._components.get(ctype, {}):
+                skipped.append({'type': ctype, 'key': key,
+                                'why': 'live piece exists'})
+                continue
+            latest = max(entries, key=lambda it: it.get('deleted_at', 0))
+            prompt_manager._components.setdefault(ctype, {})[key] = \
+                latest.get('text', '')
+            added[(ctype, key)] = True
+            restored.append((ctype, key))
+            trash = [it for it in trash
+                     if not (it['type'] == ctype and it['key'] == key)]
+        if not restored:
+            return [], skipped
+        if not prompt_manager.save_components(
+                reason=f"restored {len(restored)} piece(s) from trash"):
+            for ctype, key in added:
+                prompt_manager._components.get(ctype, {}).pop(key, None)
+            return [], skipped + [{'type': t, 'key': k,
+                                   'why': 'store save failed'}
+                                  for t, k in restored]
+        _save_trash(trash)
+    _publish_components_changed('pieces_restored')
+    logger.info(f"Restored {len(restored)} piece(s) from trash: "
+                + ", ".join(f"{t}/{k}" for t, k in restored))
+    return [{'type': t, 'key': k} for t, k in restored], skipped
+
+
+def purge_trash() -> int:
+    """Empty the trash. Returns how many entries died. Hard delete —
+    the one place cleanup is allowed to be final, and the user asked."""
+    with prompt_manager._lock:
+        trash = _load_trash()
+        if trash and not _save_trash([]):
+            return 0
+    if trash:
+        logger.info(f"Purged {len(trash)} piece(s) from trash")
+    return len(trash)
+
+
+def reconcile_trash_with_vault() -> int:
+    """After unlock: restore any trashed piece a vault prompt still
+    references. Live-key collisions are skipped inside restore_pieces —
+    a live piece already satisfies the reference."""
+    from core import prompt_vault
+    pairs = prompt_vault.piece_ref_pairs()
+    if not pairs:
+        return 0
+    in_trash = {(it['type'], it['key']) for it in _load_trash()}
+    want = [(t, k) for t, k in pairs if (t, k) in in_trash]
+    if not want:
+        return 0
+    restored, _skipped = restore_pieces(want)
+    return len(restored)

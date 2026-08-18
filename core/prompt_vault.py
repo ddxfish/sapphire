@@ -27,6 +27,7 @@ ruling C amendment 2026-08-09). Stamping requires the vault unlocked (a
 locked name isn't in any dropdown, so references can't be created sealed);
 dropping works any time — the index can only shrink while locked.
 """
+import hashlib
 import json
 import logging
 import os
@@ -57,6 +58,8 @@ _defer_timer = None    # Ruling-B deferred-lock retry (cancelled on unlock/stop)
 _last_activity = 0.0   # time.monotonic() of last vault activity
 _refs = {}             # {name: "monolith"|"preset"} — referenced names only
 _refs_loaded = False
+_piece_salt = None     # random hex salt for the piece-refs hashes (sidecar)
+_piece_hashes = set()  # salted sha256 of plaintext piece keys vault presets use
 
 
 class VaultCorrupt(ValueError):
@@ -392,6 +395,17 @@ def unlock(passphrase) -> tuple:
     _warn_user_shadows()   # outside _lock — reads prompt_manager dicts
     _migrate_unvaulted_private_chats()   # Phase 2: encrypt stragglers
     _reeval_degraded_chats()   # F2 latch: decrypt-cause may have just healed
+    refs_reconcile()   # regen piece-refs hashes — migrates pre-index vaults
+    try:
+        # Restore trashed pieces a vault prompt still references (a locked-
+        # vault cleanup may have swept them on stale/absent piece-refs data).
+        from core import prompt_crud
+        restored = prompt_crud.reconcile_trash_with_vault()
+        if restored:
+            logger.info(f"[VAULT] unlock reconcile: restored {restored} "
+                        f"trashed piece(s) still referenced by vault prompts")
+    except Exception as e:
+        logger.warning(f"[VAULT] trash reconcile failed: {e}")
     _fire_plugin_hook("vault_unlocked")
     _publish("vault_changed")
     return True, ''
@@ -848,11 +862,12 @@ def delete_preset(name) -> tuple:
 # ── references index (in-use names ONLY — ruling C amendment) ──
 
 def _load_refs_locked():
-    global _refs, _refs_loaded
+    global _refs, _refs_loaded, _piece_salt, _piece_hashes
     if _refs_loaded:
         return
     _refs_loaded = True
     _refs = {}
+    _piece_salt, _piece_hashes = None, set()
     if not REFS_PATH.exists():
         return
     try:
@@ -861,6 +876,12 @@ def _load_refs_locked():
         if isinstance(names, dict):
             _refs = {k: v for k, v in names.items()
                      if isinstance(k, str) and isinstance(v, str)}
+        salt = data.get('piece_salt') if isinstance(data, dict) else None
+        if isinstance(salt, str) and salt:
+            _piece_salt = salt
+            hashes = data.get('piece_refs', [])
+            if isinstance(hashes, list):
+                _piece_hashes = {h for h in hashes if isinstance(h, str)}
     except Exception as e:
         logger.error(f"[VAULT] refs index unreadable — starting empty: {e}")
 
@@ -868,10 +889,13 @@ def _load_refs_locked():
 def _save_refs_locked() -> bool:
     try:
         REFS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        out = {"version": 2, "names": _refs}
+        if _piece_salt is not None:
+            out["piece_salt"] = _piece_salt
+            out["piece_refs"] = sorted(_piece_hashes)
         tmp = REFS_PATH.with_suffix('.json.tmp')
         with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump({"version": 1, "names": _refs}, f, indent=2,
-                      ensure_ascii=False)
+            json.dump(out, f, indent=2, ensure_ascii=False)
         replace_with_retry(tmp, REFS_PATH)
         return True
     except Exception as e:
@@ -929,15 +953,76 @@ def refs_reconcile(referenced=None) -> bool:
 
 
 def _reconcile_refs_locked(referenced=None) -> bool:
+    global _piece_salt, _piece_hashes
     _load_refs_locked()
     valid = set(_data['monoliths']) | set(_data['scenario_presets'])
     keep = {k: v for k, v in _refs.items()
             if k in valid and (referenced is None or k in referenced)}
-    if keep == _refs:
+    # Piece-refs snapshot: salted hashes of the PLAINTEXT piece keys vault
+    # presets reference. Regenerated on every save while unlocked, so it is
+    # exact-by-construction while locked (a sealed vault can't gain refs).
+    # This is the only surface that lets a locked-vault cleanup skip pieces
+    # a hidden prompt still needs — nothing readable leaks, only hashes.
+    if _piece_salt is None:
+        _piece_salt = os.urandom(16).hex()
+    new_hashes = {_hash_piece(_piece_salt, t, k) for t, k in _piece_pairs_locked()}
+    if keep == _refs and new_hashes == _piece_hashes:
         return True
     _refs.clear()
     _refs.update(keep)
+    _piece_hashes = new_hashes
     return _save_refs_locked()
+
+
+def _hash_piece(salt, ctype, key) -> str:
+    return hashlib.sha256(f"{salt}:{ctype}/{key}".encode("utf-8")).hexdigest()
+
+
+def _piece_pairs_locked():
+    """(ctype, key) refs from vault presets to pieces OUTSIDE the vault's own
+    store. Caller holds _lock, vault unlocked. A key present in both stores
+    counts as outside: deleting the plaintext shadow reveals the vault copy,
+    but the plaintext copy is what currently resolves."""
+    pairs = set()
+    vault_pieces = _data.get('components', {})
+    for comps in _data.get('scenario_presets', {}).values():
+        if not isinstance(comps, dict):
+            continue
+        for ctype, val in comps.items():
+            if ctype.startswith('_'):
+                continue
+            keys = val if isinstance(val, list) else ([val] if val else [])
+            for k in keys:
+                if isinstance(k, str) and k and k not in vault_pieces.get(ctype, {}):
+                    pairs.add((ctype, k))
+    return pairs
+
+
+def piece_ref_pairs():
+    """Actual (ctype, key) plaintext-piece refs from vault presets — UNLOCKED
+    only (returns None while locked). Trash reconcile uses this on unlock."""
+    with _lock:
+        if _key is None:
+            return None
+        return sorted(_piece_pairs_locked())
+
+
+def piece_refs_available() -> bool:
+    """Sidecar carries piece-refs data. False = vault predates the index and
+    hasn't been unlocked since — locked cleanups must fall back to warning."""
+    with _lock:
+        _load_refs_locked()
+        return _piece_salt is not None
+
+
+def piece_vault_referenced(ctype, key):
+    """Tri-state, works while LOCKED (consults only salted hashes):
+    True/False = sidecar answer; None = no data yet (needs one unlock)."""
+    with _lock:
+        _load_refs_locked()
+        if _piece_salt is None:
+            return None
+        return _hash_piece(_piece_salt, ctype, key) in _piece_hashes
 
 
 # ── events ──

@@ -104,6 +104,75 @@ async def get_prompt_components(request: Request, _=Depends(require_login)):
             "vault_pieces": {k: v for k, v in vault_pieces.items() if v}}
 
 
+# Registered BEFORE /api/prompts/{name} — the path-param route swallows any
+# single-segment path defined after it (same reason /components sits above).
+
+@router.get("/api/prompts/piece-usage")
+async def get_piece_usage(request: Request, _=Depends(require_login)):
+    """Usage index for the delete/cleanup tools: which prompts use each piece.
+    While the vault is LOCKED its prompts are invisible to the index, so
+    `vault_referenced` carries the salted-hash answer per plaintext piece —
+    present only when locked AND the sidecar has piece-refs data."""
+    from core import prompt_crud, prompt_vault
+    status = prompt_vault.vault_status()
+    refs_ok = prompt_vault.piece_refs_available()
+    resp = {"usage": prompt_crud.piece_usage(),
+            "vault": {**status, "piece_refs_available": refs_ok}}
+    if status.get('exists') and not status.get('unlocked') and refs_ok:
+        flagged = {}
+        for ctype, entries in prompts.prompt_manager._components.items():
+            hits = [k for k in entries
+                    if prompt_vault.piece_vault_referenced(ctype, k)]
+            if hits:
+                flagged[ctype] = hits
+        resp["vault_referenced"] = flagged
+    return resp
+
+
+def _piece_items(data):
+    raw = data.get('items') if isinstance(data, dict) else None
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=400,
+                            detail="items must be a non-empty list of {type, key}")
+    items = []
+    for it in raw:
+        if not isinstance(it, dict) or not it.get('type') or not it.get('key'):
+            raise HTTPException(status_code=400,
+                                detail="each item needs type and key")
+        items.append((str(it['type']), str(it['key'])))
+    return items
+
+
+@router.get("/api/prompts/pieces/trash")
+async def get_piece_trash(request: Request, _=Depends(require_login)):
+    from core import prompt_crud
+    return {"items": prompt_crud.list_trash()}
+
+
+@router.post("/api/prompts/pieces/trash")
+async def trash_prompt_pieces(request: Request, _=Depends(require_login)):
+    """Soft-delete plaintext pieces into the trash store. Body: {items:
+    [{type, key}]}. Vault/pack pieces are skipped here by design."""
+    from core import prompt_crud
+    trashed, skipped = prompt_crud.trash_pieces(_piece_items(await request.json()))
+    return {"trashed": trashed, "skipped": skipped}
+
+
+@router.post("/api/prompts/pieces/trash/restore")
+async def restore_prompt_pieces(request: Request, _=Depends(require_login)):
+    """Restore trashed pieces. Never overwrites a live key."""
+    from core import prompt_crud
+    restored, skipped = prompt_crud.restore_pieces(_piece_items(await request.json()))
+    return {"restored": restored, "skipped": skipped}
+
+
+@router.post("/api/prompts/pieces/trash/purge")
+async def purge_prompt_pieces_trash(request: Request, _=Depends(require_login)):
+    """Empty the piece trash (final)."""
+    from core import prompt_crud
+    return {"purged": prompt_crud.purge_trash()}
+
+
 @router.get("/api/prompts/{name}")
 async def get_prompt(name: str, request: Request, _=Depends(require_login)):
     """Get a specific prompt."""

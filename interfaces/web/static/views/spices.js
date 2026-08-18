@@ -70,6 +70,7 @@ function render() {
         <div class="two-panel">
             ${renderPanelList({
                 title: 'Spice Sets',
+                listClass: 'pl-stacked',
                 items: spiceSets,
                 selectedId: selectedSetName,
                 idKey: 'name',
