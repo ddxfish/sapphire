@@ -128,6 +128,11 @@ class StreamingChat:
         - {"type": "tool_end", "id": "...", "result": "...", "error": bool} when tool completes
         - {"type": "iteration_start", "iteration": N} before each LLM call
         - {"type": "reload"} for page reload signal
+        - {"type": "final", "text": str, "cancelled": bool, "error": bool}
+          terminal event on every clean exit — the definitive turn text for
+          blocking consumers (LLMChat.chat). Raise paths emit none; consumers
+          catch the raise instead. SSE drops it (clients already streamed
+          the content); the phone driver ignores it.
         - str for legacy compatibility (module responses, prefills)
 
         Args:
@@ -165,6 +170,12 @@ class StreamingChat:
             # first audio at the first sentence, not end-of-generation). None
             # everywhere else — global Settings > TTS behavior unchanged.
             split_override=getattr(self, "tts_split_override", None),
+            # Blocking consumer lane (LLMChat.chat, merge 2026-08-17): the
+            # door speaks the returned blob itself (process_llm_query →
+            # tts.speak), so the pump stays inert — no synth, no tts hooks,
+            # no double-speak. Must gate HERE, not via tts_stopped: the
+            # generator resets tts_stopped just below.
+            disabled=bool(getattr(self, "suppress_tts", False)),
         )
         self.tts_pump = tts_pump   # expose for stop_tts() (left-button voice mute)
 
@@ -208,10 +219,12 @@ class StreamingChat:
                         and _intended_chat != self.active_chat_name:
                     logger.warning("[VAULT] active chat changed during stream "
                                    "setup — turn refused")
-                    yield {"type": "content",
-                           "text": "🔒 The vault locked while this message was "
-                                   "in flight and the active chat changed. "
-                                   "Please resend."}
+                    _refusal = ("🔒 The vault locked while this message was "
+                                "in flight and the active chat changed. "
+                                "Please resend.")
+                    yield {"type": "content", "text": _refusal}
+                    yield {"type": "final", "text": _refusal,
+                           "cancelled": False, "error": True}
                     return
                 try:
                     from core import prompt_vault as _pv
@@ -220,10 +233,12 @@ class StreamingChat:
                             and self.main_chat.session_manager.get_chat_settings().get('private_chat'):
                         logger.warning("[VAULT] turn refused — active chat is "
                                        "private and the vault is sealed")
-                        yield {"type": "content",
-                               "text": "🔒 The vault is locked and this chat is "
-                                       "private — unlock the vault to continue "
-                                       "here."}
+                        _refusal = ("🔒 The vault is locked and this chat is "
+                                    "private — unlock the vault to continue "
+                                    "here.")
+                        yield {"type": "content", "text": _refusal}
+                        yield {"type": "final", "text": _refusal,
+                               "cancelled": False, "error": True}
                         return
                 except Exception:
                     pass
@@ -300,6 +315,8 @@ class StreamingChat:
                         else:
                             self.ephemeral = True
                         yield {"type": "content", "text": response}
+                    yield {"type": "final", "text": response,
+                           "cancelled": False, "error": False}
                     publish(Events.AI_TYPING_END, {"foreign": bool(self.target_chat), "chat": self.target_chat})
                     self.is_streaming = False
                     return
@@ -861,7 +878,10 @@ class StreamingChat:
                         tool_call_count += 1
                         full_content = prefill + current_content if has_prefill else current_content
 
-                        # Execute text-based tool call (function_manager returns error if not active)
+                        # Execute text-based tool call (function_manager returns error if not active).
+                        # allowed_tools + executor_snapshot were missing here for a year
+                        # (validation-bypass drift vs the native tool_calls path above and
+                        # the old blocking lane) — closed in the 2026-08-17 merge.
                         _, text_tool_images = self.tool_engine.execute_text_based_tool_call(
                             function_call_data,
                             full_content,
@@ -869,6 +889,8 @@ class StreamingChat:
                             self.main_chat.session_manager,
                             provider,
                             scopes=_scopes,
+                            allowed_tools=_allowed_tool_names,
+                            executor_snapshot=_executor_snapshot,
                             loop_counts=loop_counts
                         )
 
@@ -941,6 +963,8 @@ class StreamingChat:
                     for tts_ev in tts_pump.flush_and_close():
                         yield tts_ev
 
+                    yield {"type": "final", "text": full_content,
+                           "cancelled": False, "error": False}
                     return
             
             # If cancelled, KEEP whatever she generated before the interrupt (was:
@@ -949,6 +973,7 @@ class StreamingChat:
             # tool_use->tool_result contract is untouched. Then fall through. 2026-06-19.
             if self.cancel_flag:
                 partial = (current_content or "").strip()
+                save_content = ""
                 if partial:
                     save_content = prefill + current_content if has_prefill else current_content
                     try:
@@ -959,6 +984,8 @@ class StreamingChat:
                         )
                     except Exception as e:
                         logger.warning(f"[STREAMING] partial save on cancel failed: {e}")
+                yield {"type": "final", "text": save_content,
+                       "cancelled": True, "error": False}
                 return
 
             # Loop exhausted - force final response
@@ -1100,11 +1127,17 @@ class StreamingChat:
                 for tts_ev in tts_pump.flush_and_close():
                     yield tts_ev
 
+                _forced_text, _forced_error = full_final, False
+
             except Exception as final_error:
                 logger.error(f"[STREAMING] Forced final response failed: {final_error}")
                 error_msg = f"I completed {tool_call_count} tool calls but encountered an error generating the final response."
                 yield {"type": "content", "text": error_msg}
                 self.main_chat.session_manager.add_assistant_final(error_msg)
+                _forced_text, _forced_error = error_msg, True
+
+            yield {"type": "final", "text": _forced_text,
+                   "cancelled": False, "error": _forced_error}
 
         except ConnectionError as e:
             logger.warning(f"[STREAMING] {e}")

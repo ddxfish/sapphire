@@ -76,7 +76,8 @@ class StreamingTTSPump:
 
     def __init__(self, system, cancel_check: Optional[Callable[[], bool]] = None,
                  voice_override: Optional[str] = None,
-                 split_override: Optional[str] = None):
+                 split_override: Optional[str] = None,
+                 disabled: bool = False):
         self.system = system
         self.tts = getattr(system, "tts", None)
         self.provider = getattr(self.tts, "_provider", None) if self.tts else None
@@ -149,6 +150,13 @@ class StreamingTTSPump:
         # flush_and_close emits a single SSE `notice` if any present, so
         # the user sees "lost audio for N chunk(s)" instead of silent gap.
         self._dropped_chunks: list = []
+        # disabled=True: the pump's owner voices the final text itself (the
+        # blocking chat() consumer speaks the returned blob via tts.speak).
+        # Same state as a plugin tts_stream_start skip: push() no-ops,
+        # flush_and_close()/cancel() are silent, no tts hooks ever fire.
+        if disabled:
+            self._skip_turn = True
+            self._closed = True
 
     @property
     def enabled(self) -> bool:

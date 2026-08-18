@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock, PropertyMock
 
+import config
+
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -513,7 +515,12 @@ class TestChatReadsAllScopes:
     """chat() must read every scope key from settings and apply via apply_scopes()."""
 
     def test_chat_reads_all_scope_keys_from_settings(self):
-        """chat() must call apply_scopes with chat settings, then set_rag_scope."""
+        """chat() must apply every scope key from settings, then set_rag_scope.
+
+        Post-merge (2026-08-17 dual-path merge) chat() is a blocking consumer
+        of the ONE engine — chat_stream — so scope application happens inside
+        the streaming turn and this test drives the real merged path:
+        chat() → begin_stream → chat_stream → apply_scopes/set_rag_scope."""
         from core.chat.chat import LLMChat
         from core.chat.function_manager import FunctionManager
 
@@ -522,6 +529,7 @@ class TestChatReadsAllScopes:
             mgr._tools_lock = threading.Lock()
             mgr._enabled_tools = []
             mgr._mode_filters = {}
+            mgr._settings_gates = {}
             mgr.current_toolset_name = "none"
             mgr.function_modules = {}
             mgr.all_possible_tools = []
@@ -532,7 +540,8 @@ class TestChatReadsAllScopes:
         rag_calls = []
         mgr.set_rag_scope = lambda val: rag_calls.append(val)
         mgr.snapshot_scopes = lambda: {}
-        mgr._enabled_tools = []
+        mgr.snapshot_executors = lambda: {}
+        mgr.last_dangling_toolset = None
 
         chat_settings = {
             "memory_scope": "shared",
@@ -541,38 +550,58 @@ class TestChatReadsAllScopes:
             "people_scope": "team",
             "email_scope": "work_email",
             "bitcoin_scope": "wallet_a",
-            "private_chat": True,
+            # False (key still asserted below): True would trip the engine's
+            # REAL sealed-vault refusal on a box whose vault is locked.
+            "private_chat": False,
         }
 
-        # Build a mock LLMChat that skips real __init__
+        # Build a mock LLMChat that skips real __init__ but keeps the REAL
+        # begin_stream/end_stream registry + the real chat() consumer.
         with patch.object(LLMChat, '__init__', lambda self: None):
             chat_obj = LLMChat()
             chat_obj.function_manager = mgr
+            chat_obj.system = None
+            chat_obj.pending_notices = []
+            chat_obj._streams_by_id = {}
+            chat_obj._streams_by_chat = {}
+            chat_obj._streams_lock = threading.Lock()
 
             mock_session = MagicMock()
             mock_session.get_chat_settings.return_value = chat_settings
             mock_session.get_active_chat_name.return_value = "test_chat"
+            mock_session._effective_chat_name.return_value = "test_chat"
             mock_session.get_turn_count.return_value = 1
-            mock_session.add_user_message = MagicMock()
-            mock_session.add_assistant_final = MagicMock()
-            mock_session.get_messages_for_llm.return_value = []
+            mock_session._in_tool_cycle = False
             chat_obj.session_manager = mock_session
             chat_obj.history = mock_session
             chat_obj.current_system_prompt = "test prompt"
-            chat_obj._use_new_config = False
-            chat_obj.provider_primary = MagicMock()
-            chat_obj.provider_primary.health_check.return_value = True
-            chat_obj.provider_primary.provider_name = "test"
-            chat_obj.provider_primary.model = "test-model"
+            # Not under test; keeps the run off real spice/RAG/ghost state.
+            chat_obj.refresh_spice_if_needed = lambda: False
+            chat_obj._build_base_messages = lambda ui, images=None, files=None: [
+                {"role": "system", "content": "test prompt"},
+                {"role": "user", "content": ui},
+            ]
+
+            provider = MagicMock()
+            provider.provider_name = "test"
+            provider.model = "test-model"
+            provider.chat_completion_stream.return_value = iter([
+                {"type": "content", "text": "Hello!"},
+                {"type": "done", "response": None},
+            ])
+            chat_obj._select_provider = lambda: ("test", provider, "")
             chat_obj.tool_engine = MagicMock()
+            chat_obj.tool_engine.extract_function_call_from_text.return_value = None
 
-            mock_response = MagicMock()
-            mock_response.has_tool_calls = False
-            mock_response.content = "Hello!"
-            mock_response.usage = None
-            chat_obj.tool_engine.call_llm_with_metrics.return_value = mock_response
+            with patch('core.chat.chat_streaming.get_generation_params', return_value={}), \
+                 patch.object(config, 'FORCE_THINKING', False, create=True):
+                result = chat_obj.chat("test input")
 
-            chat_obj.chat("test input")
+        # The consumer returns the final event's text
+        assert result == "Hello!"
+        # The one engine counted this turn (F1 Stage A, now structural)
+        mock_session.begin_streaming.assert_called_once()
+        mock_session.end_streaming.assert_called_once()
 
         # apply_scopes must have been called with the full settings dict
         assert len(apply_calls) > 0, "apply_scopes was never called"

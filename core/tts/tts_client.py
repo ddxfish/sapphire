@@ -561,7 +561,15 @@ class TTSClient:
                     return
                 self._is_playing = True
 
-            chunk_iter = self._provider.generate_stream(text, self.voice_name, self.speed)
+            # Pitch parity with the blob path (_fetch_audio) and the SSE pump
+            # (stream_pump._synth): supports_pitch providers shift server-side
+            # via the payload. This call site was the ONE place that dropped
+            # the kwarg — wake/voice blob replies spoke at pitch 1.0 while
+            # browser turns honored the setting (found via Krem's 0.78 test,
+            # 2026-08-17; broken since supports_pitch landed 2026-08-08).
+            _provider_pitch = getattr(self._provider, "supports_pitch", False)
+            kw = {"pitch": self.pitch_shift} if _provider_pitch else {}
+            chunk_iter = self._provider.generate_stream(text, self.voice_name, self.speed, **kw)
 
             for chunk_bytes in chunk_iter:
                 if self.should_stop.is_set() or _stale():
@@ -578,6 +586,12 @@ class TTSClient:
 
                 if len(audio_data.shape) > 1:
                     audio_data = audio_data.mean(axis=1)
+                # Legacy client-side shift for providers that can't pitch at
+                # synthesis time — same double-shift guard as the blob path.
+                # Before the output-rate resample: the shift works at the
+                # chunk's native rate.
+                if self.pitch_shift != 1.0 and not _provider_pitch:
+                    audio_data, samplerate = self._apply_pitch_shift(audio_data, samplerate)
                 if samplerate != self.output_rate:
                     audio_data = self._resample(audio_data, samplerate, self.output_rate)
                     samplerate = self.output_rate

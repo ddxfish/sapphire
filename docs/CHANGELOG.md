@@ -1,3 +1,9 @@
+# 2.12.0 - Million Dollar Bug Hunt
+- Combined old blob chat into chat streaming, chat.py chat_streaming.py
+- Voice path folded into main chat streaming as listener
+- One engine now, major core changes
+- Wakeword compatibility: convert to 16khz, flatten stereo
+- Detect chat corruption and make read-only
 # 2.11.5 - Theme v2
 - Theme BG is a fallback when no per-chat bg is set
 - Wont crash on theme error, proper handling

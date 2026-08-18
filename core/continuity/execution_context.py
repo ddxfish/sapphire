@@ -401,7 +401,10 @@ class ExecutionContext:
                     provider vision support; non-vision falls back to a CLIP vibe
                     description. new_messages always persists the marker form.
         """
-        from core.chat.chat import filter_to_thinking_only, _inject_tool_images
+        # filter_to_thinking_only from its real home — chat.py stopped
+        # re-exporting it when the blocking engine died (merge 2026-08-17).
+        from core.chat.chat import _inject_tool_images
+        from core.chat.chat_tool_calling import filter_to_thinking_only
 
         # Stamp this thread's ContextVar with the running task's persona so
         # tools invoked during the loop (spawn_agent, etc.) can inherit the

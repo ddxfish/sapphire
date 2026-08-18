@@ -1,10 +1,11 @@
 """
-Wave 1 fixes (fork-scopes-20260817.md): F1 Stage A + F3.
+Wave 1 fixes (fork-scopes-20260817.md): F3 (and, historically, F1 Stage A).
 
-F1 Stage A: LLMChat.chat() — the non-streaming door used by wake voice,
-POST /api/chat, and body — must count as an active stream so every
-_is_streaming guard (switch/delete/rename refusals, append-wait, vault
-eviction deferral) sees voice turns.
+F1 Stage A's chat() wrapper — begin/end_streaming around the old blocking
+engine — was SUPERSEDED by the 2026-08-17 dual-path merge: chat() is now a
+consumer of chat_stream(), which counts itself at its own try-top, so the
+non-streaming doors count as active streams structurally. Its coverage
+lives in tests/test_dualpath_merge.py.
 
 F3: TOOL_RESULT_MAX_CHARS head-preserving cap on tool-result text.
 Head-preserving is mandatory: <<IMG::tool:id>> markers are PREPENDED and are
@@ -15,55 +16,10 @@ Run with: pytest tests/test_fork_wave1.py -v
 import base64
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 import config as config_module
 from core.chat.chat_tool_calling import cap_tool_result_text, _extract_tool_images
-
-
-# =============================================================================
-# F1 Stage A — streaming-counter wrap on the non-streaming lane
-# =============================================================================
-
-class TestStageAStreamCounter:
-    def _bare_chat(self):
-        from core.chat.chat import LLMChat
-        with patch.object(LLMChat, '__init__', lambda self: None):
-            obj = LLMChat()
-        obj.session_manager = MagicMock()
-        return obj
-
-    def test_chat_brackets_body_in_begin_end_streaming(self):
-        obj = self._bare_chat()
-        order = []
-        obj.session_manager.begin_streaming.side_effect = lambda: order.append('begin')
-        obj.session_manager.end_streaming.side_effect = lambda: order.append('end')
-        obj._chat_inner = lambda user_input: (order.append('body'), 'ok')[1]
-
-        assert obj.chat("hi") == 'ok'
-        assert order == ['begin', 'body', 'end']
-
-    def test_counter_released_even_if_body_raises(self):
-        """_chat_inner catches everything today, but the counter must never
-        leak — a stuck nonzero count wedges append-waiters forever."""
-        obj = self._bare_chat()
-        obj._chat_inner = MagicMock(side_effect=ValueError("boom"))
-
-        with pytest.raises(ValueError):
-            obj.chat("hi")
-        obj.session_manager.begin_streaming.assert_called_once()
-        obj.session_manager.end_streaming.assert_called_once()
-
-    def test_early_return_paths_still_counted(self):
-        """Any string return from the body (skip_llm hook, guard refusal,
-        error text) passes through the wrapper with the counter released."""
-        obj = self._bare_chat()
-        obj._chat_inner = lambda user_input: ""  # e.g. pre_chat skip_llm
-
-        assert obj.chat("hi") == ""
-        obj.session_manager.end_streaming.assert_called_once()
 
 
 # =============================================================================
