@@ -307,6 +307,11 @@ function renderEditor() {
             <div class="pr-privacy">
                 <label><input type="checkbox" id="pr-vault-toggle" ${vaultNames.has(selected) ? 'checked' : ''}>
                 \u{1F5DD} Keep in vault (encrypted at rest; private by construction)</label>
+                ${!isMonolith ? `
+                <div style="margin-top:6px;display:flex;gap:8px">
+                    <button class="btn-sm" id="pr-vault-all-in">\u{1F5DD} Move all to vault</button>
+                    <button class="btn-sm" id="pr-vault-all-out">Move all to plaintext</button>
+                </div>` : ''}
             </div>` : ''}
             ${p.privacy_required && !vaultNames.has(selected) ? `
             <div class="pr-privacy text-muted" style="font-size:var(--font-xs)">
@@ -664,6 +669,62 @@ function bindEvents() {
         await loadAll();
         render();
     });
+
+    // Batch store toggle (assembled only): the prompt record + every
+    // non-plugin piece it uses, one shot. Pieces are global, so the IN
+    // confirm warns that a sweep vaults them for every prompt using them.
+    // Partial failure is safe — each move is individually guarded server-
+    // side; clicking again finishes the job.
+    const moveAll = async (direction) => {
+        const goingIn = direction === 'in';
+        const pieces = [];
+        for (const [type, defs] of Object.entries(getUsedPieces())) {
+            for (const key of Object.keys(defs)) {
+                if (componentSources[type]?.[key]) continue;
+                if (goingIn === !!vaultPieces[type]?.has(key)) continue;
+                pieces.push({ type, key });
+            }
+        }
+        const movePrompt = goingIn !== vaultNames.has(selected);
+        if (!movePrompt && !pieces.length) {
+            ui.showToast(goingIn ? 'Everything here is already in the vault'
+                                 : 'Nothing here is in the vault', 'info');
+            return;
+        }
+        const what = [movePrompt ? `"${selected}"` : '',
+                      pieces.length ? `${pieces.length} piece(s)` : '']
+                     .filter(Boolean).join(' and ');
+        if (!confirm(goingIn
+            ? `Move ${what} into the vault?\n\nPieces are shared — any other ` +
+              `prompt using them will need the vault unlocked.`
+            : `Move ${what} OUT of the vault?\n\nAll of it will be written to ` +
+              `the regular store as plaintext on disk.`)) return;
+        const { vaultMove } = await import('../shared/vault-api.js');
+        let moved = 0;
+        const failed = [];
+        for (const { type, key } of pieces) {
+            try {
+                await vaultMove({ kind: 'piece', comp_type: type, key, direction });
+                moved++;
+            } catch (err) { failed.push(`${type}/${key}: ${err?.message || 'failed'}`); }
+        }
+        if (movePrompt) {
+            try {
+                await vaultMove({ kind: 'prompt', name: selected, direction });
+                moved++;
+            } catch (err) { failed.push(`${selected}: ${err?.message || 'failed'}`); }
+        }
+        const dest = goingIn ? 'the vault' : 'plaintext';
+        if (failed.length) {
+            ui.showToast(`Moved ${moved} to ${dest} · ${failed.length} failed — ${failed[0]}`, 'error');
+        } else {
+            ui.showToast(`Moved ${moved} to ${dest}`, 'success');
+        }
+        await loadAll();
+        render();
+    };
+    layout.querySelector('#pr-vault-all-in')?.addEventListener('click', () => moveAll('in'));
+    layout.querySelector('#pr-vault-all-out')?.addEventListener('click', () => moveAll('out'));
 
     // Monolith content
     const commitPromptReason = async () => {
