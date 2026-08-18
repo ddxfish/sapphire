@@ -264,6 +264,25 @@ class TestVoiceTurnEvents:
         # and the consumer got no observer to feed
         assert sys_obj.llm_chat.chat.call_args.kwargs.get("on_event") is None
 
+    def test_eviction_mid_turn_withholds_tts(self):
+        """F1 post-eviction cloud-TTS corner: a vault seal mid-turn evicts to
+        a public landing chat BEFORE the speak call — the reply was generated
+        in the private chat and must not reach TTS through the landing
+        chat's permissive gate."""
+        sys_obj = _bare_system(lambda query, on_event=None: "private reply")
+        # Turn starts in the private chat; by speak time the world moved.
+        sys_obj.llm_chat.get_active_chat.side_effect = ["secrets", "default"]
+        out = sys_obj.process_llm_query("hi")
+
+        assert out == "private reply"      # caller still gets the text
+        sys_obj.tts.speak.assert_not_called()
+
+    def test_stable_chat_speaks_normally(self):
+        sys_obj = _bare_system(lambda query, on_event=None: "hello")
+        sys_obj.llm_chat.get_active_chat.side_effect = ["default", "default"]
+        assert sys_obj.process_llm_query("hi") == "hello"
+        sys_obj.tts.speak.assert_called_once_with("hello")
+
     def test_end_event_fires_even_when_chat_raises(self):
         def fake_chat(query, on_event=None):
             raise RuntimeError("engine died unexpectedly")

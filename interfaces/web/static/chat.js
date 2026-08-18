@@ -11,6 +11,22 @@ const handleError = (e, action) => {
 
 let _histPaintSeq = 0;
 
+// F2 degraded latch: warn ONCE per chat per page-load when the open chat has
+// unreadable rows (server marks /api/history with `degraded`). Sticky toast —
+// the chat is read-only and new replies aren't persisting; that must not
+// scroll away. Healthy fetch clears the memo so a re-degraded chat warns again.
+const _degradedWarned = new Set();
+const noteDegraded = (name, deg) => {
+    if (!name) return;
+    if (!deg?.skipped) { _degradedWarned.delete(name); return; }
+    if (_degradedWarned.has(name)) return;
+    _degradedWarned.add(name);
+    ui.showToast(
+        `⚠ ${deg.skipped} message(s) in this chat could not be read — the chat `
+        + `is READ-ONLY and new replies are NOT being saved. Repair it in Chat `
+        + `Manager, or clear/start a new chat.`, 'warning', 0);
+};
+
 export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
     // Hold the render while a message edit is open — renderHistory rebuilds the
     // whole transcript, so a background refresh (SSE event, autoRefresh poll)
@@ -27,8 +43,9 @@ export const fetchAndRender = async (playAudio = false, audioFn, lastLen) => {
         // fetchAndRender paints, and the chat name comes from the same
         // response as the messages it labels.
         const seq = ++_histPaintSeq;
-        const { messages: hist, chat_name: returnedChat } = await api.fetchHistoryFull();
+        const { messages: hist, chat_name: returnedChat, degraded } = await api.fetchHistoryFull();
         if (seq !== _histPaintSeq) return { hist: null, len: lastLen };
+        noteDegraded(returnedChat, degraded);
 
         // Guard: skip render if backend is temporarily on a different chat
         // (e.g. continuity foreground task switched the active chat)

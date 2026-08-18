@@ -146,6 +146,11 @@ export const trimChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURI
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts)
 }, 60000);
+export const repairChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/repair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts)
+}, 60000);
 export const compressChat = (name, opts) => fetchWithTimeout(`/api/chats/${encodeURIComponent(name)}/compress`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

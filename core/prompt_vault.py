@@ -391,6 +391,7 @@ def unlock(passphrase) -> tuple:
     logger.info(f"[VAULT] unlocked: {counts}")
     _warn_user_shadows()   # outside _lock — reads prompt_manager dicts
     _migrate_unvaulted_private_chats()   # Phase 2: encrypt stragglers
+    _reeval_degraded_chats()   # F2 latch: decrypt-cause may have just healed
     _fire_plugin_hook("vault_unlocked")
     _publish("vault_changed")
     return True, ''
@@ -562,6 +563,18 @@ def _migrate_unvaulted_private_chats():
         get_system().llm_chat.session_manager.vault_pending_private()
     except Exception as e:
         logger.warning(f"[VAULT] private-chat encrypt sweep skipped: {e}")
+
+
+def _reeval_degraded_chats():
+    """F2 read-only-degraded latch: an unlock may make decrypt-cause latches
+    obsolete (the unreadable rows belonged to the vault that just opened).
+    The store drops those latches and reloads the active chat if it was one.
+    Parse-cause latches survive — a key heals nothing about corrupt JSON."""
+    try:
+        from core.api_fastapi import get_system
+        get_system().llm_chat.session_manager.reeval_degraded_chats()
+    except Exception as e:
+        logger.warning(f"[VAULT] degraded-chat re-eval skipped: {e}")
 
 
 def _handoff_active_chat():

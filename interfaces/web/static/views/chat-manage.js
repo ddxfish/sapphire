@@ -202,7 +202,7 @@ function render() {
         const canVault = !vaultState.exists || vaultState.unlocked;
         return `<tr data-name="${esc(c.name)}" class="${checked ? 'cm-sel' : ''}">
             <td><input type="checkbox" class="cm-check" ${checked}></td>
-            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
+            <td class="cm-name"><span class="cm-open" title="Open this chat">${esc(c.display_name)}</span>${(c.mode ?? c.settings?.mode) === 'game' ? (isStory(c) ? ' <span class="cm-badge">\u{1F4D6} story</span>' : ' <span class="cm-badge">\u{1F3B2} game</span>') : ''}${c.private_chat ? ` <span class="cm-badge">\u{1F5DD} ${c.vaulted ? 'encrypted' : 'private'}</span>` : ''}${c.degraded ? ' <span class="cm-badge" title="Some messages could not be read — chat is read-only until repaired">⚠ degraded</span>' : ''}${c.is_active ? ' <span class="cm-badge">active</span>' : ''}${hits ? ` <span class="cm-hits">${hits} hit${hits === 1 ? '' : 's'}</span>` : ''}</td>
             <td class="cm-num">${c.message_count}</td>
             <td class="cm-num">${c.turn_count ?? '—'}</td>
             <td class="cm-num">${humanSize(c.size_bytes)}</td>
@@ -212,6 +212,7 @@ function render() {
                 ${canVault ? `<button class="cm-act" data-act="private" title="${c.private_chat ? 'Make public (local-only + vault rules stop applying)' : 'Make private (local models only; hides when the vault locks)'}">${c.private_chat ? '\u{1F513}' : '\u{1F5DD}'}</button>` : ''}
                 <button class="cm-act" data-act="archive" title="${c.archived ? 'Unarchive (back to its tab + sidebar)' : 'Archive (tuck away in the Archive tab)'}">${c.archived ? '\u{1F4C2}' : '\u{1F4E6}'}</button>
                 <button class="cm-act" data-act="rename" title="Rename">✏️</button>
+                ${c.degraded ? '<button class="cm-act" data-act="repair" title="Repair — quarantine unreadable messages so the chat can save again">🔧</button>' : ''}
                 <button class="cm-act" data-act="export" title="Export JSON">⬇️</button>
                 ${gated ? '' : `<button class="cm-act" data-act="trim" title="Trim (keep first/last turns)">✂️</button>
                 <button class="cm-act" data-act="compress" title="Compress (summarize history)">\u{1F5DC}️</button>`}
@@ -389,6 +390,8 @@ async function doRowAction(act, name) {
         await refresh();
     } else if (act === 'trim') {
         openTrimModal(name);
+    } else if (act === 'repair') {
+        openRepairModal(name);
     } else if (act === 'compress') {
         openCompressModal(name);
     } else if (act === 'delete') {
@@ -505,6 +508,67 @@ function openTrimModal(name) {
             await refresh();
         } catch (e) {
             ui.showToast(`Trim failed: ${e.message}`, 'error');
+        }
+    });
+}
+
+function openRepairModal(name) {
+    const chat = chats.find(c => c.name === name);
+    const overlay = openModal(`
+        <h3>🔧 Repair "${esc(chat?.display_name || name)}"</h3>
+        <p class="cm-hint">Unreadable messages move to a quarantine (kept verbatim
+        — recoverable if a matching vault backup returns), the rest are kept and
+        re-numbered, and the chat can save again.</p>
+        <div id="cm-repair-preview" class="cm-hint">Diagnosing…</div>
+        <div class="cm-modal-btns">
+            <button class="cm-btn" id="cm-repair-cancel">Cancel</button>
+            <button class="cm-btn cm-danger" id="cm-repair-go" disabled>Repair</button>
+        </div>`);
+    let plan = null;
+    const goBtn = overlay.querySelector('#cm-repair-go');
+    const out = overlay.querySelector('#cm-repair-preview');
+    const preview = async () => {
+        try {
+            plan = await api.repairChat(name, { preview: true });
+            if (plan.vault_mismatch) {
+                out.innerHTML = `⚠ <b>Most of this chat can't be decrypted `
+                    + `(${plan.bad.length} of ${plan.total} rows).</b> That usually means `
+                    + `the vault changed — <b>restoring the matching vault backup recovers `
+                    + `everything</b>; repair would quarantine most of the chat. Only `
+                    + `proceed if you're sure there's no matching backup.`;
+            } else if (!plan.bad.length && !plan.gap_count) {
+                out.textContent = 'Nothing to repair — this chat reads clean now.';
+            } else {
+                const dec = plan.bad.filter(b => b.reason === 'decrypt').length;
+                const par = plan.bad.length - dec;
+                out.textContent = `${plan.total} rows: ${plan.ok} healthy · `
+                    + `${par} corrupt · ${dec} undecryptable`
+                    + (plan.gap_count ? ` · ${plan.gap_count} sequence gap(s)` : '')
+                    + `. Repair keeps ${plan.ok} messages and quarantines ${plan.bad.length}.`;
+            }
+            goBtn.disabled = false;
+        } catch (e) {
+            out.textContent = `Diagnosis failed: ${e.message}`;
+        }
+    };
+    preview();
+    overlay.querySelector('#cm-repair-cancel').addEventListener('click', closeModal);
+    goBtn.addEventListener('click', async () => {
+        if (!plan) return;
+        const force = !!plan.vault_mismatch;
+        if (force && !confirm(`Really quarantine ${plan.bad.length} of ${plan.total} `
+                + `messages in "${name}"? A matching vault backup would recover them all.`)) return;
+        if (!force && plan.bad.length
+                && !confirm(`Quarantine ${plan.bad.length} unreadable message(s) from "${name}"?`)) return;
+        try {
+            const r = await api.repairChat(name, { preview: false, force });
+            ui.showToast(r.no_op ? `${name}: nothing to repair`
+                : `Repaired ${name}: ${r.quarantined} quarantined, ${r.kept} kept`, 'success');
+            closeModal();
+            eventBus.dispatch('chat_repaired', { chat_name: name });
+            await refresh();
+        } catch (e) {
+            ui.showToast(`Repair failed: ${e.message}`, 'error');
         }
     });
 }

@@ -657,6 +657,7 @@ function initEventBus() {
     // chat, the transcript on screen is stale until refreshed.
     eventBus.on(eventBus.Events.CHAT_TRIMMED, () => debouncedRefresh());
     eventBus.on(eventBus.Events.CHAT_COMPRESSED, () => debouncedRefresh());
+    eventBus.on('chat_repaired', () => debouncedRefresh());
 
     // Debounced updateScene
     let sceneTimer = null;

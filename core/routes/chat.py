@@ -54,7 +54,7 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
     total_used = history_tokens + prompt_tokens
     percent = min(100, int((total_used / context_limit) * 100)) if context_limit > 0 else 0
 
-    return {
+    out = {
         "messages": display_messages,
         "chat_name": system.llm_chat.session_manager.get_active_chat_name(),
         "context": {
@@ -63,6 +63,12 @@ async def get_history(request: Request, _=Depends(require_login), system=Depends
             "percent": percent
         }
     }
+    # F2 latch: unreadable rows were skipped at load — chat is read-only.
+    # Absent key = healthy (additive; old frontends unaffected).
+    deg = system.llm_chat.session_manager.is_chat_degraded(out["chat_name"])
+    if deg:
+        out["degraded"] = deg
+    return out
 
 
 @router.post("/api/chat")
@@ -1059,6 +1065,36 @@ async def trim_chat(chat_name: str, request: Request, _=Depends(require_login), 
     if not preview and not result.get('no_op'):
         origin = request.headers.get('X-Session-ID')
         publish(Events.CHAT_TRIMMED, {"chat_name": chat_name, "report": result, "origin": origin})
+    return {"status": "success", "preview": preview, **result}
+
+
+@router.post("/api/chats/{chat_name}/repair")
+async def repair_chat(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """Diagnose/repair a chat's unreadable message rows (F2 Wave 4).
+
+    preview:true → classification report only, nothing written. Real run
+    quarantines unreadable rows (verbatim — recoverable if the matching
+    vault backup returns), re-sequences survivors, unlatches the degraded
+    flag. force:true overrides the vault-mismatch guard (>50% undecryptable
+    → the right fix is restoring the matching vault backup, not repair)."""
+    data = await request.json()
+    data = data or {}
+    preview = bool(data.get('preview', False))
+    force = bool(data.get('force', False))
+    if not preview and chat_name in _live_call_chats(system):
+        raise HTTPException(status_code=409,
+                            detail=f"'{chat_name}' has a live phone call — hang up before repairing.")
+    ok, result = system.llm_chat.session_manager.repair_chat_rows(
+        chat_name, preview=preview, force=force)
+    if not ok:
+        code = 404 if 'not found' in str(result) else 400
+        raise HTTPException(status_code=code, detail=result)
+    if not preview and not result.get('no_op'):
+        origin = request.headers.get('X-Session-ID')
+        publish(Events.CHAT_REPAIRED,
+                {"chat_name": chat_name,
+                 "quarantined": result.get("quarantined", 0),
+                 "kept": result.get("kept", 0), "origin": origin})
     return {"status": "success", "preview": preview, **result}
 
 

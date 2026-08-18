@@ -1024,13 +1024,21 @@ class VoiceChatSystem:
             return None
         on_event = None
         turn_state = {"cancelled": False}
+        # F1 post-eviction cloud-TTS corner (closed 2026-08-17): remember
+        # which chat this turn RUNS in. A vault seal mid-turn defers its
+        # eviction to end_streaming — i.e. it always completes before the
+        # speak below — and the TTS privacy gate would then read the PUBLIC
+        # landing chat and happily send a private chat's reply to cloud TTS.
+        # A mid-turn active-chat change can only be an eviction (user
+        # switches are refused while streaming), so: world moved → no speak.
+        try:
+            _turn_chat = self.llm_chat.get_active_chat()
+        except Exception:
+            _turn_chat = None
         if voice_turn:
             import uuid as _uuid
             _mid = _uuid.uuid4().hex
-            try:
-                _chat_name = self.llm_chat.get_active_chat()
-            except Exception:
-                _chat_name = None
+            _chat_name = _turn_chat
             publish(Events.VOICE_TURN_START,
                     {"message_id": _mid, "user_text": query,
                      "chat": _chat_name, "foreign": False})
@@ -1053,7 +1061,16 @@ class VoiceChatSystem:
 
             if response_text:
                 if not skip_tts and not turn_state["cancelled"]:
-                    self.tts.speak(response_text)
+                    try:
+                        _now_chat = self.llm_chat.get_active_chat()
+                    except Exception:
+                        _now_chat = _turn_chat
+                    if _turn_chat is not None and _now_chat != _turn_chat:
+                        logger.warning(
+                            "[VOICE] active chat changed during the turn "
+                            "(vault eviction) — reply withheld from TTS")
+                    else:
+                        self.tts.speak(response_text)
                 return response_text
             else:
                 logger.warning("Empty response from processing")

@@ -830,6 +830,20 @@ class ChatSessionManager:
         # at seq offset+i for i in [count, len). Missing entry or a set
         # _needs_full_resync flag → full window resync.
         self._rows_state = {}
+        # Read-only-degraded latch (F2 Wave 2, 2026-08-17): chats whose load
+        # skipped unreadable rows — {name: {skipped, causes{decrypt, parse},
+        # at}}. IN-MEMORY ONLY, never persisted: a reload/unlock re-evaluates
+        # (decrypt-cause may be transient); parse-cause stands until repair.
+        # Latched chats load READABLE but refuse every write path (save/
+        # append/replace/vault) so the corrupt-but-recoverable rows are never
+        # overwritten from a partial in-memory list. clear/delete stay
+        # allowed as escape hatches (they unlatch). Pre-latch behavior was
+        # WORSE both ways: a bad-JSON row bricked the whole chat (load →
+        # False), and undecryptable rows vanished silently.
+        self._rows_degraded = {}
+        # One degraded-save toast per chat per session — the log stays loud
+        # on every refusal, but a toast per turn would bury the operator.
+        self._degraded_toasted = set()
 
         # Track if we're in an active tool cycle (for Claude thinking_raw)
         self._in_tool_cycle = False
@@ -1094,6 +1108,28 @@ class ChatSessionManager:
                     ON plugin_chat_data(chat_name)
                 """)
 
+                # F2 Wave 4 (2026-08-17): repair quarantine — unreadable
+                # message rows move here VERBATIM (ciphertext stays
+                # ciphertext: if the matching vault backup ever returns,
+                # the rows decrypt again; a plaintext copy would break the
+                # vault's at-rest guarantee). Rides rename/delete with the
+                # chat. Never read on any hot path.
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS chat_messages_quarantine (
+                        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_name      TEXT NOT NULL,
+                        orig_seq       INTEGER NOT NULL,
+                        role           TEXT,
+                        message_json   TEXT NOT NULL,
+                        reason         TEXT NOT NULL,
+                        quarantined_at TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_quarantine_chat
+                    ON chat_messages_quarantine(chat_name)
+                """)
+
                 # Guarded ALTERs for pre-rowify databases (the CREATE above only
                 # shapes FRESH installs; ALTER isn't idempotent, hence the
                 # PRAGMA check). storage_format: 'blob' | 'rows'.
@@ -1275,11 +1311,18 @@ class ChatSessionManager:
             msg = {k: v for k, v in msg.items() if k != "thinking_raw"}
         return json.dumps(msg)
 
-    def _read_rows_messages(self, conn, chat_name: str) -> List[Dict[str, Any]]:
+    def _read_rows_messages(self, conn, chat_name: str):
         """Read a rows-format chat's messages from chat_messages, oldest first.
 
         Caps at the newest _ROWS_LOAD_CAP messages (DESC + reverse) so a huge
         chat can't OOM the load — same invariant as the blob path's 50MB guard.
+
+        Returns (messages, skip_info): skip_info counts rows the reader could
+        not surface — decrypt-cause (sealed / tampered / foreign-vault
+        ciphertext) and parse-cause (corrupt JSON, which used to THROW here
+        and brick the whole chat via _load_chat's blanket except).
+        _load_chat latches skipped > 0 as read-only-degraded; transient
+        readers may ignore the second element.
         """
         rows = conn.execute(
             "SELECT message_json FROM chat_messages WHERE chat_name = ? "
@@ -1287,12 +1330,22 @@ class ChatSessionManager:
             (chat_name, self._ROWS_LOAD_CAP)
         ).fetchall()
         out = []
+        skip_info = {"skipped": 0, "causes": {"decrypt": 0, "parse": 0}}
         for r in reversed(rows):
             v = self._dec_value(r["message_json"], "message row", chat_name)
             if v is None:
-                continue   # sealed/tampered — already logged in the funnel
-            out.append(json.loads(v))
-        return out
+                # sealed/tampered — already logged in the funnel
+                skip_info["skipped"] += 1
+                skip_info["causes"]["decrypt"] += 1
+                continue
+            try:
+                out.append(json.loads(v))
+            except Exception as e:
+                skip_info["skipped"] += 1
+                skip_info["causes"]["parse"] += 1
+                logger.error(f"corrupt message row in chat '{chat_name}' "
+                             f"skipped (bad JSON): {e}")
+        return out, skip_info
 
     def _load_chat(self, chat_name: str) -> bool:
         """Load chat from SQLite database (format-aware: blob or rows)."""
@@ -1317,7 +1370,7 @@ class ChatSessionManager:
                 # previous chat's name in the live singleton — and a later
                 # full-window resync could write it into that chat's rows.
                 if row["storage_format"] == "rows":
-                    new_messages = self._read_rows_messages(conn, chat_name)
+                    new_messages, row_skips = self._read_rows_messages(conn, chat_name)
                     # Watermark: memory now mirrors the store exactly. offset
                     # is non-zero when the load was capped (we hold only the
                     # newest window; older rows stay untouched on disk).
@@ -1337,6 +1390,7 @@ class ChatSessionManager:
                     else:
                         new_messages = json.loads(raw_messages)
                     new_rows_state = None
+                    row_skips = None
                 file_settings = self._settings_dict(row["settings"], chat_name)
                 if file_settings is None:
                     # Vaulted chat while sealed — must not become active with
@@ -1350,6 +1404,22 @@ class ChatSessionManager:
                     self._rows_state[chat_name] = new_rows_state
                 else:
                     self._rows_state.pop(chat_name, None)
+                # Degraded latch: unreadable rows were skipped — the chat is
+                # READABLE (that's the fix; this used to brick the load) but
+                # every write path refuses until repair so the bad-but-
+                # recoverable rows are never clobbered by a partial resync.
+                if row_skips and row_skips["skipped"]:
+                    self._rows_degraded[chat_name] = {
+                        **row_skips, "at": datetime.now().isoformat()}
+                    c = row_skips["causes"]
+                    logger.error(
+                        f"Chat '{chat_name}' loaded DEGRADED — "
+                        f"{row_skips['skipped']} unreadable row(s) skipped "
+                        f"(decrypt: {c['decrypt']}, parse: {c['parse']}). "
+                        f"Chat is READ-ONLY until repaired.")
+                else:
+                    self._rows_degraded.pop(chat_name, None)
+                    self._degraded_toasted.discard(chat_name)
                 # The assignment above tripped the setter's resync flag —
                 # memory matches the store right now, so clear it.
                 self.current_chat._needs_full_resync = False
@@ -1496,9 +1566,14 @@ class ChatSessionManager:
                 # after unlock. Calm words, not a data-loss scare
                 # (Krem live-hit this 2026-08-15).
                 sealed = "vault sealed" in str(e)
+                degraded = "chat degraded" in str(e)
                 if sealed:
                     logger.info(f"Chat save deferred — vault sealed mid-switch; "
                                 f"re-syncs on next unlocked save")
+                elif degraded:
+                    logger.error(f"Save refused — chat '{eff_name}' is degraded "
+                                 f"(unreadable rows on disk); read-only until "
+                                 f"repaired. This turn is NOT persisted.")
                 else:
                     logger.error(f"Failed to save chat '{eff_name}': {e}")
                 # Restore the blob path's self-healing property for rows
@@ -1512,13 +1587,26 @@ class ChatSessionManager:
                 except Exception:
                     pass
                 try:
-                    publish(Events.CONTINUITY_TASK_ERROR, {
-                        "task": "Chat Save",
-                        "error": ("Chat sealed before its final flush — everything "
-                                  "already written is encrypted at rest; it re-syncs "
-                                  "on your next unlock." if sealed else
-                                  f"Failed to save chat: {e}. Messages may be lost on restart.")
-                    })
+                    if degraded:
+                        # Once per chat per session — the log stays loud on
+                        # every refusal; a toast per turn would bury the user.
+                        if eff_name not in self._degraded_toasted:
+                            self._degraded_toasted.add(eff_name)
+                            publish(Events.CONTINUITY_TASK_ERROR, {
+                                "task": "Chat Save",
+                                "error": (f"Chat '{eff_name}' has unreadable rows and is "
+                                          f"READ-ONLY — new messages are NOT being saved. "
+                                          f"Repair it from Chat Manager, or clear/start a "
+                                          f"new chat.")
+                            })
+                    else:
+                        publish(Events.CONTINUITY_TASK_ERROR, {
+                            "task": "Chat Save",
+                            "error": ("Chat sealed before its final flush — everything "
+                                      "already written is encrypted at rest; it re-syncs "
+                                      "on your next unlock." if sealed else
+                                      f"Failed to save chat: {e}. Messages may be lost on restart.")
+                        })
                 except Exception:
                     pass
                 return False
@@ -1538,6 +1626,14 @@ class ChatSessionManager:
         chats (the frozen pre-conversion blob must not outlive the first
         mutation); a no-op '[]' for born-rows chats.
         """
+        # Degraded gate FIRST (F2 latch): a resync would DELETE the
+        # unreadable-but-recoverable rows and rebuild from the partial
+        # in-memory list — destroying exactly what repair needs. Raise so
+        # _save_current_chat's except surfaces the refusal.
+        if eff_name in self._rows_degraded:
+            raise RuntimeError(
+                f"chat degraded — read-only until repaired ('{eff_name}')")
+
         msgs = eff_chat.messages
         state = self._rows_state.get(eff_name)
         now = datetime.now().isoformat()
@@ -1800,6 +1896,11 @@ class ChatSessionManager:
             # sealed chat must be indestructible by stale name (bulk-clear
             # clicked across an idle-lock). Hidden = nonexistent, even here.
             return False
+        # F2 latch escape hatch: clear is ALLOWED on a degraded chat (the
+        # user explicitly discards it) and unlatches — pop BEFORE the wipe
+        # so the active-chat route's save isn't refused by the gate.
+        self._rows_degraded.pop(chat_name, None)
+        self._degraded_toasted.discard(chat_name)
         if chat_name == self.active_chat_name:
             self.clear()
             return True
@@ -1905,9 +2006,13 @@ class ChatSessionManager:
                              (safe_name, old_name))
                 conn.execute("UPDATE plugin_chat_data SET chat_name = ? WHERE chat_name = ?",
                              (safe_name, old_name))
+                conn.execute("UPDATE chat_messages_quarantine SET chat_name = ? WHERE chat_name = ?",
+                             (safe_name, old_name))
                 conn.commit()
                 if old_name in self._rows_state:
                     self._rows_state[safe_name] = self._rows_state.pop(old_name)
+                if old_name in self._rows_degraded:
+                    self._rows_degraded[safe_name] = self._rows_degraded.pop(old_name)
                 if old_name == self.active_chat_name:
                     self.active_chat_name = safe_name
                     self._save_last_active(safe_name)
@@ -1925,6 +2030,11 @@ class ChatSessionManager:
         while the chat could be mid-write. One transaction."""
         if self._is_streaming and chat_name == self.active_chat_name:
             logger.warning(f"revert_chat_to_blob('{chat_name}') refused — streaming in progress")
+            return False
+        if chat_name in self._rows_degraded:
+            # F2 latch: its raw row loads would throw on the corrupt rows
+            # anyway — refuse with a clear reason instead of a stack trace.
+            logger.warning(f"revert_chat_to_blob('{chat_name}') refused — chat is degraded")
             return False
         try:
             with self._get_connection() as conn:
@@ -2000,6 +2110,10 @@ class ChatSessionManager:
         write."""
         if self._is_streaming and chat_name == self.active_chat_name:
             return False, "Chat is streaming — try again in a moment"
+        if chat_name in self._rows_degraded:
+            # F2 latch: trim/compress must not rewrite over unreadable rows.
+            return False, (f"Chat '{chat_name}' is degraded (unreadable rows) "
+                           f"— repair it first (Chat Manager)")
         new_msgs = [dict(m) for m in new_msgs]
         try:
             with self._lock:
@@ -2169,6 +2283,179 @@ class ChatSessionManager:
         except Exception as e:
             logger.warning(f"_vault_hidden read failed — treating as visible: {e}")
             return False
+
+    def is_chat_degraded(self, chat_name: str):
+        """Degraded-latch info for a chat ({skipped, causes, at}) or None.
+
+        In-memory only — set when a LOAD skipped unreadable rows; cleared by
+        a clean load, clear, delete, repair, or the unlock re-eval."""
+        return self._rows_degraded.get(chat_name)
+
+    def reeval_degraded_chats(self):
+        """Vault-unlock hook: decrypt-cause latches may be transient (the
+        rows belong to the vault that just opened). Drop them so the next
+        load re-evaluates; reload the ACTIVE chat immediately if it was
+        latched (re-latches on its own if the rows are truly bad).
+        Parse-cause-only latches stay — corrupt JSON doesn't heal with a key."""
+        try:
+            drop = [n for n, info in list(self._rows_degraded.items())
+                    if (info.get("causes") or {}).get("decrypt")]
+            for n in drop:
+                self._rows_degraded.pop(n, None)
+                self._degraded_toasted.discard(n)
+            if drop:
+                logger.info(f"[VAULT] degraded re-eval on unlock — dropped "
+                            f"{len(drop)} decrypt-cause latch(es)")
+            if self.active_chat_name in drop:
+                self._load_chat(self.active_chat_name)
+        except Exception as e:
+            logger.warning(f"degraded re-eval on unlock failed: {e}")
+
+    # ── F2 Wave 4: chat row repair (quarantine — never destroy salvage) ──
+
+    def _diagnose_rows_conn(self, conn, chat_name: str):
+        """Classify every message row of a rows chat (read-only, caller holds
+        the lock+conn). reason: 'decrypt' (undecryptable — foreign vault /
+        tamper / keyless) | 'parse' (corrupt JSON). vault_mismatch: >50% of
+        rows undecryptable = wrong-vault situation — the three-laws tripwire
+        (restore the matching vault backup; quarantine recovers nothing)."""
+        rows = conn.execute(
+            "SELECT seq, message_json FROM chat_messages WHERE chat_name = ? "
+            "ORDER BY seq", (chat_name,)).fetchall()
+        bad = []
+        seqs = []
+        for r in rows:
+            seqs.append(r["seq"])
+            v = self._dec_value(r["message_json"], "message row", chat_name)
+            if v is None:
+                bad.append({"seq": r["seq"], "reason": "decrypt"})
+                continue
+            try:
+                json.loads(v)
+            except Exception:
+                bad.append({"seq": r["seq"], "reason": "parse"})
+        gap_count = (seqs[-1] - seqs[0] + 1) - len(seqs) if seqs else 0
+        n_dec = sum(1 for b in bad if b["reason"] == "decrypt")
+        from core import prompt_vault as _pv
+        return {
+            "total": len(seqs),
+            "ok": len(seqs) - len(bad),
+            "bad": bad,
+            "gap_count": gap_count,
+            "vault_mismatch": bool(seqs) and n_dec * 2 > len(seqs),
+            "key_absent": _pv.chat_data_key() is None,
+        }
+
+    def diagnose_chat_rows(self, chat_name: str):
+        """Read-only row diagnosis. Returns the report dict, or None when the
+        chat doesn't exist (or is sealed-hidden), or {'error': ...} for
+        non-rows chats."""
+        self._ensure_db()
+        if self._vault_hidden(chat_name):
+            return None
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute("SELECT storage_format FROM chats WHERE name = ?",
+                               (chat_name,)).fetchone()
+            if not row:
+                return None
+            if row["storage_format"] != "rows":
+                return {"error": "not a rows chat — repair applies to rows storage only"}
+            return self._diagnose_rows_conn(conn, chat_name)
+
+    def repair_chat_rows(self, chat_name: str, preview: bool = True,
+                         force: bool = False):
+        """(ok, report_or_error). Quarantine-then-reseq repair of a rows chat.
+
+        preview=True classifies and reports the plan — writes NOTHING.
+        Real run, ONE transaction under the lock: unreadable rows move to
+        chat_messages_quarantine VERBATIM (ciphertext stays ciphertext — a
+        returning vault backup can still decrypt them; a plaintext copy
+        would break at-rest), survivors re-INSERT contiguous from seq 0
+        (payload + role untouched, never re-encrypted), read-back verify,
+        commit. Then the watermark + degraded latch drop and the chat
+        reloads if active.
+
+        Guards: streaming refusal; keyless refusal when any row is
+        decrypt-bad (it may decrypt fine after unlock — quarantining then
+        would be theft); vault_mismatch requires force=True (three-laws:
+        restore the matching vault backup instead)."""
+        self._ensure_db()
+        if self._vault_hidden(chat_name):
+            return False, f"Chat '{chat_name}' not found"
+        if self._is_streaming and chat_name == self.active_chat_name:
+            return False, "Chat is streaming — try again in a moment"
+        try:
+            with self._lock, self._get_connection() as conn:
+                row = conn.execute("SELECT storage_format FROM chats WHERE name = ?",
+                                   (chat_name,)).fetchone()
+                if not row:
+                    return False, f"Chat '{chat_name}' not found"
+                if row["storage_format"] != "rows":
+                    return False, "not a rows chat — repair applies to rows storage only"
+                report = self._diagnose_rows_conn(conn, chat_name)
+                report["planned_quarantine"] = len(report["bad"])
+                report["planned_reseq"] = report["gap_count"] > 0
+                if preview:
+                    return True, report
+                if not report["bad"] and not report["gap_count"]:
+                    # Nothing to fix — clear any stale latch so the chat
+                    # resumes normal life without a reload dance.
+                    self._rows_degraded.pop(chat_name, None)
+                    self._degraded_toasted.discard(chat_name)
+                    return True, {**report, "no_op": True}
+                if report["key_absent"] and any(
+                        b["reason"] == "decrypt" for b in report["bad"]):
+                    return False, ("vault is locked — unlock before repairing: "
+                                   "encrypted rows may decrypt fine with the key")
+                if report["vault_mismatch"] and not force:
+                    return False, ("vault mismatch — most rows are undecryptable. "
+                                   "Restore the MATCHING vault backup instead (it "
+                                   "recovers everything; quarantine recovers "
+                                   "nothing). Re-run with force to proceed anyway.")
+
+                now = datetime.now().isoformat()
+                reason_by_seq = {b["seq"]: b["reason"] for b in report["bad"]}
+                all_rows = conn.execute(
+                    "SELECT seq, role, message_json FROM chat_messages "
+                    "WHERE chat_name = ? ORDER BY seq", (chat_name,)).fetchall()
+                survivors = [r for r in all_rows if r["seq"] not in reason_by_seq]
+                conn.executemany(
+                    "INSERT INTO chat_messages_quarantine "
+                    "(chat_name, orig_seq, role, message_json, reason, quarantined_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [(chat_name, r["seq"], r["role"], r["message_json"],
+                      reason_by_seq[r["seq"]], now)
+                     for r in all_rows if r["seq"] in reason_by_seq])
+                conn.execute("DELETE FROM chat_messages WHERE chat_name = ?",
+                             (chat_name,))
+                conn.executemany(
+                    "INSERT INTO chat_messages (chat_name, seq, role, message_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    [(chat_name, i, r["role"], r["message_json"])
+                     for i, r in enumerate(survivors)])
+                back = conn.execute(
+                    "SELECT COUNT(*) FROM chat_messages WHERE chat_name = ?",
+                    (chat_name,)).fetchone()[0]
+                if back != len(survivors):
+                    conn.rollback()
+                    return False, "read-back verify failed — nothing was changed"
+                conn.execute("UPDATE chats SET updated_at = ? WHERE name = ?",
+                             (now, chat_name))
+                conn.commit()
+                self._rows_state.pop(chat_name, None)
+                self._rows_degraded.pop(chat_name, None)
+                self._degraded_toasted.discard(chat_name)
+                report["quarantined"] = len(reason_by_seq)
+                report["kept"] = len(survivors)
+                logger.info(f"Repaired chat '{chat_name}': quarantined "
+                            f"{len(reason_by_seq)} row(s), kept {len(survivors)}, "
+                            f"reseq={report['planned_reseq']}")
+            if chat_name == self.active_chat_name:
+                self._load_chat(chat_name)
+            return True, report
+        except Exception as e:
+            logger.error(f"repair_chat_rows('{chat_name}') failed: {e}", exc_info=True)
+            return False, f"repair failed: {e}"
 
     def is_chat_hidden(self, chat_name: str) -> bool:
         """PUBLIC seam for plugins (P3): True when this chat must be treated
@@ -2497,6 +2784,10 @@ class ChatSessionManager:
                         # plugin surface; core surfaces them like private/archived
                         # and stays agnostic about what the modes mean.
                         "mode": settings.get("mode") or "",
+                        # F2 latch (in-memory — only chats loaded this session
+                        # can carry it; a never-activated corrupt chat shows
+                        # healthy here until first activation).
+                        "degraded": row["name"] in self._rows_degraded,
                         "settings": settings
                     }
                     if stats:
@@ -2704,6 +2995,11 @@ class ChatSessionManager:
                     conn.execute("DELETE FROM plugin_chat_data WHERE chat_name = ?", (chat_name,))
                 except Exception:
                     pass
+                # Quarantined rows die with the chat too (they ARE the chat).
+                try:
+                    conn.execute("DELETE FROM chat_messages_quarantine WHERE chat_name = ?", (chat_name,))
+                except Exception:
+                    pass
                 conn.commit()
                 # Reclaim freed pages now that we deleted a chat (potentially
                 # with megabytes of tool_images blobs). `auto_vacuum=INCREMENTAL`
@@ -2719,6 +3015,8 @@ class ChatSessionManager:
                     pass
                 logger.info(f"Deleted chat: {chat_name}")
                 self._rows_state.pop(chat_name, None)
+                self._rows_degraded.pop(chat_name, None)
+                self._degraded_toasted.discard(chat_name)
 
                 # Ensure default exists
                 self._ensure_default_exists()
@@ -2922,6 +3220,11 @@ class ChatSessionManager:
         from core import prompt_vault
         if prompt_vault.chat_data_key() is None:
             return False, "vault locked — unlock to encrypt"
+        if chat_name in self._rows_degraded:
+            # F2 latch: encrypting a chat with unreadable rows would seal
+            # garbage (or double-wrap foreign ciphertext) into the vault.
+            return False, (f"'{chat_name}' has unreadable rows — repair it "
+                           f"before vaulting")
         try:
             n_rows = 0
             with self._lock, self._get_connection() as conn:
@@ -3396,7 +3699,9 @@ class ChatSessionManager:
                 if not row:
                     return []
                 if row["storage_format"] == "rows":
-                    messages = self._read_rows_messages(conn, chat_name)
+                    # Transient read — skip_info ignored; the latch belongs
+                    # to activation (_load_chat).
+                    messages, _skips = self._read_rows_messages(conn, chat_name)
                 else:
                     messages = json.loads(row["messages"])
                 # Apply same trimming as get_messages_for_llm
@@ -3445,6 +3750,14 @@ class ChatSessionManager:
             # Sealed vault: a background writer must not touch (or reveal) a
             # hidden chat. Loud — this is the cron/daemon write path.
             logger.warning("append refused — target chat is sealed in a locked vault")
+            return False
+
+        if chat_name in self._rows_degraded:
+            # F2 latch: appending after unreadable rows interleaves new
+            # content into a corrupt region — and the next full resync would
+            # destroy the salvage. Read-only until repaired.
+            logger.warning(f"append refused — chat '{chat_name}' is degraded "
+                           f"(read-only until repaired)")
             return False
 
         # Defer if the target is the active chat and a stream is running.
@@ -3679,6 +3992,10 @@ class ChatSessionManager:
             # so the resync deletes every row — including rows below a capped-load
             # offset that aren't in memory. Privacy lever must be total.
             self._rows_state[eff_name] = {"offset": 0, "count": 0}
+            # F2 latch escape hatch: clearing a degraded chat is an explicit
+            # discard — unlatch first or the save below would be refused.
+            self._rows_degraded.pop(eff_name, None)
+            self._degraded_toasted.discard(eff_name)
             self._save_current_chat()  # already routes to the effective chat
 
             # Clear tool images for the effective chat
@@ -3973,6 +4290,9 @@ class ChatSessionManager:
                 conn.execute("DELETE FROM chat_messages WHERE chat_name = ?", (chat_name,))
                 conn.commit()
                 self._rows_state.pop(chat_name, None)
+                # F2 latch escape hatch — wipe unlatches (rows are gone).
+                self._rows_degraded.pop(chat_name, None)
+                self._degraded_toasted.discard(chat_name)
             if chat_name == self.active_chat_name:
                 self.current_chat.messages = []
             return True
