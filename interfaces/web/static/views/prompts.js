@@ -18,6 +18,9 @@ let componentSources = {};  // {type: {key: pluginName}} — plugin-pack pieces 
 let vaultNames = new Set(); // prompt names resolving from the vault (unlocked only)
 let vaultPieces = {};       // {type: Set(keys)} — vault pieces (unlocked only)
 let vaultState = { exists: false, unlocked: false };
+let multiCheck = false;          // bulk store-move mode (assembled only)
+let checkedSections = new Set(); // 'prompt' + section types picked for the bulk move
+let multiCheckFor = null;        // prompt the mode was entered on — exits on switch
 let viewVisible = false;
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
@@ -280,11 +283,25 @@ function render() {
 }
 
 
+// Sections of the selected prompt that actually use pieces — bulk-move
+// targets. Singles count when set, multis when any chip is active.
+function usedSections() {
+    const c = selectedData?.components || {};
+    return [...SINGLE_TYPES.filter(t => c[t]),
+            ...MULTI_TYPES.filter(t => (c[t] || []).length)];
+}
+
 function renderEditor() {
     if (!selectedData) return '<div class="view-placeholder"><p>Loading...</p></div>';
     const p = selectedData;
     const isActive = selected === activePromptName;
     const isMonolith = p.type === 'monolith';
+    // Multi-check is per-prompt — switching prompts (select, rename,
+    // duplicate, delete all land here) exits the mode.
+    if (multiCheck && multiCheckFor !== selected) {
+        multiCheck = false;
+        checkedSections = new Set();
+    }
 
     return `
         <div class="pr-header">
@@ -307,11 +324,25 @@ function renderEditor() {
             <div class="pr-privacy">
                 <label><input type="checkbox" id="pr-vault-toggle" ${vaultNames.has(selected) ? 'checked' : ''}>
                 \u{1F5DD} Keep in vault (encrypted at rest; private by construction)</label>
-                ${!isMonolith ? `
-                <div style="margin-top:6px;display:flex;gap:8px">
-                    <button class="btn-sm" id="pr-vault-all-in">\u{1F5DD} Move all to vault</button>
-                    <button class="btn-sm" id="pr-vault-all-out">Move all to plaintext</button>
-                </div>` : ''}
+                ${!isMonolith ? (multiCheck ? `
+                <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:var(--font-xs)">
+                        <label style="display:flex;gap:5px;align-items:center">
+                            <input type="checkbox" id="pr-bulk-prompt" ${checkedSections.has('prompt') ? 'checked' : ''}> Prompt record</label>
+                        <span style="opacity:0.5">·</span>
+                        <button class="btn-sm" id="pr-bulk-all">All</button>
+                        <button class="btn-sm" id="pr-bulk-none">None</button>
+                        <button class="btn-sm" id="pr-bulk-main">Main pieces</button>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="btn-sm" id="pr-vault-all-in">\u{1F5DD} Move selected to vault</button>
+                        <button class="btn-sm" id="pr-vault-all-out">Move selected to plaintext</button>
+                        <button class="btn-sm" id="pr-bulk-cancel">Cancel</button>
+                    </div>
+                </div>` : `
+                <div style="margin-top:6px">
+                    <button class="btn-sm" id="pr-bulk-enter">☑ Select & move…</button>
+                </div>`) : ''}
             </div>` : ''}
             ${p.privacy_required && !vaultNames.has(selected) ? `
             <div class="pr-privacy text-muted" style="font-size:var(--font-xs)">
@@ -355,6 +386,7 @@ function renderSingleAccordion(type, comps) {
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
             <div class="pr-accordion-header" data-type="${type}">
+                ${multiCheck ? `<input type="checkbox" class="pr-sec-check" data-type="${type}" ${checkedSections.has(type) ? 'checked' : ''} ${!current ? 'disabled' : ''} style="margin-right:4px">` : ''}
                 <span class="pr-acc-icon">${ICONS[type]}</span>
                 <div class="pr-acc-text">
                     <span class="pr-acc-label">${cap(type)}</span>
@@ -403,6 +435,7 @@ function renderMultiAccordion(type, comps) {
     return `
         <div class="pr-accordion${isOpen ? ' open' : ''}" data-type="${type}">
             <div class="pr-accordion-header" data-type="${type}">
+                ${multiCheck ? `<input type="checkbox" class="pr-sec-check" data-type="${type}" ${checkedSections.has(type) ? 'checked' : ''} ${!current.length ? 'disabled' : ''} style="margin-right:4px">` : ''}
                 <span class="pr-acc-icon">${ICONS[type]}</span>
                 <div class="pr-acc-text">
                     <span class="pr-acc-label">${cap(type)}</span>
@@ -670,25 +703,33 @@ function bindEvents() {
         render();
     });
 
-    // Batch store toggle (assembled only): the prompt record + every
-    // non-plugin piece it uses, one shot. Pieces are global, so the IN
-    // confirm warns that a sweep vaults them for every prompt using them.
-    // Partial failure is safe — each move is individually guarded server-
-    // side; clicking again finishes the job.
+    // Bulk store toggle (assembled only), WordPress-bulk-actions style:
+    // "Select & move…" opens per-section checkboxes; the move buttons act
+    // on checked sections' USED pieces only (the rest of each library is
+    // untouched) plus the prompt record when its row is checked. Pieces
+    // are global, so the IN confirm warns that vaulting them reaches every
+    // prompt using them. Partial failure is safe — each move is
+    // individually guarded server-side; clicking again finishes the job.
     const moveAll = async (direction) => {
         const goingIn = direction === 'in';
+        if (!checkedSections.size) {
+            ui.showToast('Nothing selected', 'info');
+            return;
+        }
         const pieces = [];
         for (const [type, defs] of Object.entries(getUsedPieces())) {
+            if (!checkedSections.has(type)) continue;
             for (const key of Object.keys(defs)) {
                 if (componentSources[type]?.[key]) continue;
                 if (goingIn === !!vaultPieces[type]?.has(key)) continue;
                 pieces.push({ type, key });
             }
         }
-        const movePrompt = goingIn !== vaultNames.has(selected);
+        const movePrompt = checkedSections.has('prompt')
+            && goingIn !== vaultNames.has(selected);
         if (!movePrompt && !pieces.length) {
-            ui.showToast(goingIn ? 'Everything here is already in the vault'
-                                 : 'Nothing here is in the vault', 'info');
+            ui.showToast(goingIn ? 'Everything selected is already in the vault'
+                                 : 'Nothing selected is in the vault', 'info');
             return;
         }
         const what = [movePrompt ? `"${selected}"` : '',
@@ -720,11 +761,59 @@ function bindEvents() {
         } else {
             ui.showToast(`Moved ${moved} to ${dest}`, 'success');
         }
+        multiCheck = false;
+        checkedSections = new Set();
         await loadAll();
         render();
     };
     layout.querySelector('#pr-vault-all-in')?.addEventListener('click', () => moveAll('in'));
     layout.querySelector('#pr-vault-all-out')?.addEventListener('click', () => moveAll('out'));
+
+    // Multi-check mode wiring. Presets flip DOM checkboxes in place — a
+    // full render() here would reset accordion scroll for a purely local
+    // selection change.
+    const applyPreset = (sections) => {
+        checkedSections = new Set(sections);
+        layout.querySelectorAll('.pr-sec-check').forEach(cb => {
+            cb.checked = !cb.disabled && checkedSections.has(cb.dataset.type);
+        });
+        const pb = layout.querySelector('#pr-bulk-prompt');
+        if (pb) pb.checked = checkedSections.has('prompt');
+    };
+    layout.querySelector('#pr-bulk-enter')?.addEventListener('click', () => {
+        multiCheck = true;
+        multiCheckFor = selected;
+        // Default preset = Main: the prompt + its single sections (story-
+        // specific), leaving the generic extras/emotions chips alone.
+        checkedSections = new Set(['prompt',
+            ...usedSections().filter(t => SINGLE_TYPES.includes(t))]);
+        render();
+    });
+    layout.querySelector('#pr-bulk-cancel')?.addEventListener('click', () => {
+        multiCheck = false;
+        checkedSections = new Set();
+        render();
+    });
+    layout.querySelector('#pr-bulk-all')?.addEventListener('click', () =>
+        applyPreset(['prompt', ...usedSections()]));
+    layout.querySelector('#pr-bulk-none')?.addEventListener('click', () =>
+        applyPreset([]));
+    layout.querySelector('#pr-bulk-main')?.addEventListener('click', () =>
+        applyPreset(['prompt',
+            ...usedSections().filter(t => SINGLE_TYPES.includes(t))]));
+    layout.querySelector('#pr-bulk-prompt')?.addEventListener('change', e => {
+        e.target.checked ? checkedSections.add('prompt')
+                         : checkedSections.delete('prompt');
+    });
+    layout.querySelectorAll('.pr-sec-check').forEach(cb => {
+        // The header's own click handler toggles the accordion — keep a
+        // checkbox click from opening/closing the section.
+        cb.addEventListener('click', e => e.stopPropagation());
+        cb.addEventListener('change', e => {
+            e.target.checked ? checkedSections.add(cb.dataset.type)
+                             : checkedSections.delete(cb.dataset.type);
+        });
+    });
 
     // Monolith content
     const commitPromptReason = async () => {
