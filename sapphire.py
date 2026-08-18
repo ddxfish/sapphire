@@ -1004,18 +1004,55 @@ class VoiceChatSystem:
         }
         self.tts.speak(error_messages.get(error_type, "Error"))
 
-    def process_llm_query(self, query, skip_tts=False):
+    def process_llm_query(self, query, skip_tts=False, voice_turn=False):
+        """Blocking turn for the non-streaming doors.
+
+        voice_turn=True (the wakeword door): publish the same
+        VOICE_TURN_START/CHUNK/END events the conversation driver publishes,
+        so an open web page streams the reply in live and the Stop button
+        works (/api/cancel reaches the turn's registered stream). The reply
+        still SPEAKS as one blob via tts.speak — unless the user cancelled,
+        in which case the partial is saved to history but not read aloud.
+        REST /api/chat and body keep voice_turn=False: their callers own the
+        response, and unsolicited live-render into whatever chat is open
+        would double-paint. Merge dividend, 2026-08-17 — pre-merge the old
+        blob engine had no events to publish, which is why wake turns never
+        streamed ("2 systems" bug).
+        """
         if not self._processing_lock.acquire(timeout=0.5):
             logger.warning("process_llm_query: already processing, skipping duplicate")
             return None
+        on_event = None
+        turn_state = {"cancelled": False}
+        if voice_turn:
+            import uuid as _uuid
+            _mid = _uuid.uuid4().hex
+            try:
+                _chat_name = self.llm_chat.get_active_chat()
+            except Exception:
+                _chat_name = None
+            publish(Events.VOICE_TURN_START,
+                    {"message_id": _mid, "user_text": query,
+                     "chat": _chat_name, "foreign": False})
+
+            def on_event(ev):
+                if not isinstance(ev, dict):
+                    return
+                et = ev.get("type")
+                if et == "content":
+                    publish(Events.VOICE_TURN_CHUNK,
+                            {"message_id": _mid, "text": ev.get("text", ""),
+                             "chat": _chat_name, "foreign": False})
+                elif et == "final" and ev.get("cancelled"):
+                    turn_state["cancelled"] = True
         try:
             # AI_TYPING_START/END ride the turn engine now (chat() consumes
             # chat_stream, which publishes both) — publishing here too
             # double-fired them after the 2026-08-17 dual-path merge.
-            response_text = self.llm_chat.chat(query)
+            response_text = self.llm_chat.chat(query, on_event=on_event)
 
             if response_text:
-                if not skip_tts:
+                if not skip_tts and not turn_state["cancelled"]:
                     self.tts.speak(response_text)
                 return response_text
             else:
@@ -1026,6 +1063,13 @@ class VoiceChatSystem:
             if not skip_tts:
                 self.speak_error('processing')
         finally:
+            if voice_turn:
+                # Always close the turn — the web UI's live bubble reconciles
+                # with saved history on END (error/cancel paths included).
+                publish(Events.VOICE_TURN_END,
+                        {"message_id": _mid, "chat": _chat_name,
+                         "foreign": False,
+                         "cancelled": turn_state["cancelled"]})
             # Voice path has no toast channel — drain notices so they don't
             # accumulate and leak into the next web turn as stale toasts
             # (e.g. user voice-chats with missing toolset, fixes it, opens

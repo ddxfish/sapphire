@@ -370,24 +370,36 @@ export function setupImageHandlers() {
 
 export async function handleStop() {
     const controller = getAbortController();
-    
+
     if (controller) {
         setIsCancelling(true);
         console.log('Cancellation flag set');
-        
+
         try {
             await api.cancelGeneration();
             console.log('Cancel request sent to backend');
         } catch (e) {
             console.error('Failed to send cancel request:', e);
         }
-        
+
         controller.abort();
         audio.stop(true);
         ui.cancelStreaming();
         ui.hideStatus();
         setProc(false);
         ui.showToast('Generation stopped', 'success');
+    } else {
+        // Voice turn (wake / local conversation): no fetch to abort — the
+        // turn is a server-side stream flagged via /api/cancel. Don't tear
+        // down the live bubble here; the backend saves the partial and the
+        // voice_turn_end event reconciles it with history + restores Send.
+        try {
+            await api.cancelGeneration();
+            console.log('Cancel request sent for voice turn');
+            ui.showToast('Generation stopped', 'success');
+        } catch (e) {
+            console.error('Failed to send cancel request:', e);
+        }
     }
 }
 

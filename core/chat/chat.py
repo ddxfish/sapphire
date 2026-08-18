@@ -675,7 +675,7 @@ class LLMChat:
             logger.error(f"[RAG] Failed to get context: {e}", exc_info=True)
             return f"[RAG documents are configured but failed to load: {e}]"
 
-    def chat(self, user_input: str):
+    def chat(self, user_input: str, on_event=None):
         """Blocking consumer of THE turn engine (chat_streaming.chat_stream).
 
         Runs the generator to completion, keeps the final text, discards the
@@ -684,6 +684,12 @@ class LLMChat:
         process_llm_query). TTS stays with the caller (it speaks the
         returned blob); suppress_tts keeps the engine's streaming pump
         inert so nothing double-speaks.
+
+        on_event: optional callback fired with EVERY engine event before the
+        consumer processes it — lets a door observe the live turn (the wake
+        door publishes VOICE_TURN_CHUNK to the web UI from it) without
+        growing a second consumer. Exceptions in the callback are logged and
+        never kill the turn.
 
         Million Dollar Bug Hunt merge, 2026-08-17: this replaced a second
         ~470-line blocking pipeline that had drifted from the streaming
@@ -699,6 +705,12 @@ class LLMChat:
         fallback_parts = []
         try:
             for event in stream.chat_stream(user_input):
+                if on_event is not None:
+                    try:
+                        on_event(event)
+                    except Exception as cb_err:
+                        logger.warning(f"chat on_event callback failed: {cb_err}")
+                        on_event = None   # broken observer: stop calling, keep the turn
                 if not isinstance(event, dict):
                     fallback_parts.append(str(event))
                     continue

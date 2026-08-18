@@ -161,6 +161,124 @@ class TestBlockingConsumer:
         assert obj.chat("hi") == "legacy module response"
 
 
+class TestConsumerOnEvent:
+    def test_on_event_sees_every_event_in_order(self):
+        events = [
+            {"type": "stream_started"},
+            {"type": "content", "text": "Hi"},
+            {"type": "final", "text": "Hi", "cancelled": False, "error": False},
+        ]
+        obj, _ = _consumer(FakeStream(events))
+        seen = []
+        assert obj.chat("hi", on_event=seen.append) == "Hi"
+        assert seen == events
+
+    def test_broken_on_event_does_not_kill_turn(self):
+        obj, _ = _consumer(FakeStream([
+            {"type": "content", "text": "Hi"},
+            {"type": "final", "text": "Hi", "cancelled": False, "error": False},
+        ]))
+        calls = []
+
+        def boom(ev):
+            calls.append(ev)
+            raise RuntimeError("observer died")
+
+        assert obj.chat("hi", on_event=boom) == "Hi"
+        assert len(calls) == 1   # dropped after first failure, turn unharmed
+
+
+# =============================================================================
+# The wake door — process_llm_query(voice_turn=True) event contract
+# =============================================================================
+
+def _bare_system(chat_side_effect):
+    import threading as _threading
+    from sapphire import VoiceChatSystem
+    sys_obj = VoiceChatSystem.__new__(VoiceChatSystem)
+    sys_obj._processing_lock = _threading.Lock()
+    sys_obj.llm_chat = MagicMock()
+    sys_obj.llm_chat.get_active_chat.return_value = "default"
+    sys_obj.llm_chat.chat.side_effect = chat_side_effect
+    sys_obj.llm_chat.pending_notices = []
+    sys_obj.tts = MagicMock()
+    return sys_obj
+
+
+class TestVoiceTurnEvents:
+    def test_voice_turn_publishes_start_chunks_end_and_speaks(self):
+        def fake_chat(query, on_event=None):
+            on_event({"type": "content", "text": "Hel"})
+            on_event({"type": "content", "text": "lo"})
+            on_event({"type": "final", "text": "Hello",
+                      "cancelled": False, "error": False})
+            return "Hello"
+
+        sys_obj = _bare_system(fake_chat)
+        published = []
+        with patch('sapphire.publish',
+                   side_effect=lambda et, data=None, **kw: published.append((et, data))):
+            out = sys_obj.process_llm_query("hi there", voice_turn=True)
+
+        assert out == "Hello"
+        types = [et for et, _ in published]
+        assert types == ["voice_turn_start", "voice_turn_chunk",
+                         "voice_turn_chunk", "voice_turn_end"]
+        start = published[0][1]
+        assert start["user_text"] == "hi there"
+        assert start["foreign"] is False
+        assert "".join(d["text"] for et, d in published
+                       if et == "voice_turn_chunk") == "Hello"
+        assert published[-1][1]["cancelled"] is False
+        sys_obj.tts.speak.assert_called_once_with("Hello")
+
+    def test_cancelled_voice_turn_does_not_speak(self):
+        def fake_chat(query, on_event=None):
+            on_event({"type": "content", "text": "partial"})
+            on_event({"type": "final", "text": "partial",
+                      "cancelled": True, "error": False})
+            return "partial"
+
+        sys_obj = _bare_system(fake_chat)
+        published = []
+        with patch('sapphire.publish',
+                   side_effect=lambda et, data=None, **kw: published.append((et, data))):
+            out = sys_obj.process_llm_query("hi", voice_turn=True)
+
+        assert out == "partial"          # partial still returned + in history
+        sys_obj.tts.speak.assert_not_called()
+        assert published[-1][0] == "voice_turn_end"
+        assert published[-1][1]["cancelled"] is True
+
+    def test_default_doors_publish_nothing(self):
+        """REST /api/chat and body keep the quiet path — no live paint of
+        another client's turn into whatever chat the operator has open."""
+        sys_obj = _bare_system(lambda query, on_event=None: "ok")
+        published = []
+        with patch('sapphire.publish',
+                   side_effect=lambda et, data=None, **kw: published.append(et)):
+            out = sys_obj.process_llm_query("hi", skip_tts=True)
+
+        assert out == "ok"
+        assert published == []
+        # and the consumer got no observer to feed
+        assert sys_obj.llm_chat.chat.call_args.kwargs.get("on_event") is None
+
+    def test_end_event_fires_even_when_chat_raises(self):
+        def fake_chat(query, on_event=None):
+            raise RuntimeError("engine died unexpectedly")
+
+        sys_obj = _bare_system(fake_chat)
+        sys_obj.speak_error = MagicMock()
+        published = []
+        with patch('sapphire.publish',
+                   side_effect=lambda et, data=None, **kw: published.append(et)):
+            sys_obj.process_llm_query("hi", voice_turn=True)
+
+        assert published[0] == "voice_turn_start"
+        assert published[-1] == "voice_turn_end"   # bubble always reconciles
+
+
 # =============================================================================
 # The engine — real chat_stream, mocked provider: final-event contract
 # =============================================================================

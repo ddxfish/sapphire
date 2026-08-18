@@ -1,7 +1,7 @@
 // main.js - Application orchestrator
 import * as audio from './audio.js';
 import * as ui from './ui.js';
-import { initElements, refresh, setHistLen, getElements, getIsProc } from './core/state.js';
+import { initElements, refresh, setHistLen, getElements, getIsProc, setProc, getAbortController } from './core/state.js';
 import { bindAllEvents, bindCleanupEvents } from './core/events.js';
 import { initVolumeControls } from './features/volume.js';
 import { startMicIconPolling, stopMicIconPolling, updateMicButtonState } from './features/mic.js';
@@ -629,6 +629,11 @@ function initEventBus() {
             if (data?.user_text) ui.addUserMessage(data.user_text);
             ui.startStreaming();
             _voiceTurnActive = true;
+            // Send→Stop for the live voice turn (wake/local conversation) —
+            // /api/cancel reaches it since the dual-path merge registered
+            // these turns as real streams. Skip if a typed turn owns the
+            // button (it has an abort controller).
+            if (!getAbortController()) setProc(true);
         } catch (e) { console.warn('[VOICE_TURN] start failed', e); }
     });
     eventBus.on('voice_turn_chunk', (data) => {
@@ -638,7 +643,10 @@ function initEventBus() {
     eventBus.on('voice_turn_end', async (data) => {
         if (data?.foreign || !_voiceTurnActive) return;
         _voiceTurnActive = false;
-        try { await ui.finishStreaming(); } catch (e) { console.warn('[VOICE_TURN] end failed', e); }
+        try {
+            if (!getAbortController()) setProc(false);
+            await ui.finishStreaming();
+        } catch (e) { console.warn('[VOICE_TURN] end failed', e); }
     });
 
     // Message events

@@ -320,7 +320,9 @@ class WakeWordDetector:
                 text = stt_event.input
 
             logger.info(f"Transcribed: user text hidden")
-            self.system.process_llm_query(text)
+            # voice_turn: stream the reply into any open web page live
+            # (VOICE_TURN events) + make the Stop button work on this turn.
+            self.system.process_llm_query(text, voice_turn=True)
 
         except Exception as e:
             logger.error(f"Error during recording: {e}")
