@@ -57,25 +57,30 @@ class ToolsetManager:
             except Exception as e:
                 logger.error(f"Failed to load user toolsets: {e}")
                 self._toolsets = {}
-            # Targeted migration: ensure 'default' exists. The agent persona
-            # (core/personas/personas.json) and the agents plugin default_toolset
-            # setting both reference `toolset='default'`. On installs that seeded
-            # their user file before 'default' was a shipped toolset, spawned
-            # agents resolve to 0 tools and silently run with no capability.
-            # Scout #8 — 2026-04-20. If the user deliberately deleted 'default'
-            # after this migration, they can remove it again; we only seed once
-            # per load pass when genuinely missing.
-            if 'default' not in self._toolsets:
+            # Targeted migration: ensure load-bearing toolsets exist. 'default'
+            # is referenced by the agent persona (core/personas/personas.json)
+            # and the agents plugin default_toolset setting; 'limited_web' is
+            # the factory new-chat default (chat_defaults.json). On installs
+            # that seeded their user file before these were shipped toolsets,
+            # the consumers resolve to 0 tools and silently run with no
+            # capability. Scout #8 — 2026-04-20; extended 2026-08-17. If the
+            # user deliberately deleted one after this migration, they can
+            # remove it again; we only seed when genuinely missing.
+            missing = [n for n in ('default', 'limited_web') if n not in self._toolsets]
+            if missing:
                 try:
                     with open(core_path, 'r', encoding='utf-8') as f:
                         core_data = json.load(f)
-                    core_default = core_data.get('default')
-                    if core_default:
-                        self._toolsets['default'] = core_default
+                    seeded = []
+                    for name in missing:
+                        if core_data.get(name):
+                            self._toolsets[name] = core_data[name]
+                            seeded.append(name)
+                    if seeded:
                         self._save_to_user()
-                        logger.info("Seeded missing 'default' toolset from core defaults (scout #8 migration)")
+                        logger.info(f"Seeded missing toolsets from core defaults (scout #8 migration): {seeded}")
                 except Exception as e:
-                    logger.warning(f"'default' toolset migration failed: {e}")
+                    logger.warning(f"Toolset seed migration failed: {e}")
             # Targeted migration: rewrite meta tools renamed in a365e37 (2026-07).
             # Seeded-before-the-rename user toolsets still list the old names,
             # which silently drop at resolve time (logged INFO) — e.g. the

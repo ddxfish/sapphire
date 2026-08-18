@@ -1,5 +1,17 @@
 {
-  "_comment": "Default starter toolsets - seeded into user file on first run. Also: 'default' is the lean background-worker baseline referenced by the agent persona and the agents plugin's default_toolset setting — missing it means agents resolve to 0 tools (scout #8). ToolsetManager ensures 'default' stays seeded even after the initial user-file seed.",
+  "_comment": "Default starter toolsets - seeded into user file on first run. Also: 'default' is the lean background-worker baseline referenced by the agent persona and the agents plugin's default_toolset setting, and 'limited_web' is the factory new-chat default (chat_defaults.json) — missing either means those consumers resolve to 0 tools (scout #8). ToolsetManager ensures both stay seeded even after the initial user-file seed.",
+  "limited_web": {
+    "emoji": "🌐",
+    "functions": [
+      "web_search",
+      "get_website",
+      "save_memory",
+      "search_memory",
+      "get_recent_memories",
+      "update_memory",
+      "delete_memory"
+    ]
+  },
   "default": {
     "emoji": "\uD83E\uDDF0",
     "functions": [
