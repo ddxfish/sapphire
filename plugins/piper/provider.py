@@ -56,6 +56,10 @@ class PiperTTSProvider(BaseTTSProvider):
     SPEED_MIN = 0.5
     SPEED_MAX = 2.0
     supports_streaming = True
+    # Native pitch via varispeed resample pre-encode (kokoro precedent).
+    # Without this the stream pump dropped pitch entirely — Piper streams
+    # spoke at 1.0 while the same voice was shifted on every other lane.
+    supports_pitch = True
 
     def __init__(self):
         self._voices = {}            # name -> PiperVoice (cached)
@@ -181,6 +185,15 @@ class PiperTTSProvider(BaseTTSProvider):
         x = np.linspace(0, len(audio), n, endpoint=False)
         return np.interp(x, np.arange(len(audio)), audio).astype("float32"), tgt
 
+    def _pitch_shift(self, audio: np.ndarray, sr: int, pitch) -> np.ndarray:
+        """Varispeed shift, same semantics as TTSClient._apply_pitch_shift:
+        pitch<1 = deeper and slightly longer. Stretch to len/pitch samples at
+        the same rate — expressed through _resample by faking the source rate."""
+        if not pitch or pitch == 1.0 or audio is None or len(audio) == 0:
+            return audio
+        shifted, _ = self._resample(audio, int(sr * float(pitch)), sr)
+        return shifted
+
     def _encode_opus(self, audio: np.ndarray, sr: int) -> bytes:
         if audio is None or len(audio) == 0:
             return b""
@@ -202,6 +215,7 @@ class PiperTTSProvider(BaseTTSProvider):
                 cfg = self._syn_config(speed)
                 chunks = [c.audio_float_array for c in v.synthesize(text.replace("*", ""), syn_config=cfg)]
             audio = np.concatenate(chunks) if chunks else np.zeros(1, dtype="float32")
+            audio = self._pitch_shift(audio, sr, kwargs.get("pitch"))
             return self._encode_opus(audio, sr)
         except Exception as e:
             logger.error(f"[piper] generate failed (voice={name}): {e!r}")
@@ -220,7 +234,10 @@ class PiperTTSProvider(BaseTTSProvider):
                 sr = v.config.sample_rate
                 cfg = self._syn_config(speed)
                 for chunk in v.synthesize(text.replace("*", ""), syn_config=cfg):
-                    blob = self._encode_opus(chunk.audio_float_array, sr)
+                    # Constant per-chunk ratio — concatenated shifted chunks
+                    # equal the shifted concatenation, so no boundary artifacts.
+                    blob = self._encode_opus(
+                        self._pitch_shift(chunk.audio_float_array, sr, kwargs.get("pitch")), sr)
                     if blob:
                         yielded += 1
                         yield blob

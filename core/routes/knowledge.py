@@ -561,9 +561,15 @@ async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Dep
     if len(raw) > 2 * 1024 * 1024:  # 2MB cap
         raise HTTPException(status_code=400, detail="File too large (max 2MB)")
 
-    # Try common encodings
+    # Decode: utf-8-sig FIRST — plain utf-8 also succeeds on BOM'd bytes but
+    # leaves ﻿ glued to the first word (poisoning the first chunk's
+    # embedding), so the old ('utf-8', 'utf-8-sig', ...) order made the sig
+    # entry dead code. cp1252 over latin-1 for the 8-bit fallback: same
+    # coverage, but Windows smart-quotes/em-dashes (the actual bytes in
+    # Krem's-world text files) map to the right characters instead of
+    # C1 control mojibake.
     text = None
-    for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
+    for enc in ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1'):
         try:
             text = raw.decode(enc)
             break
@@ -572,7 +578,10 @@ async def upload_knowledge_file(tab_id: int, file: UploadFile = File(...), _=Dep
     if text is None:
         raise HTTPException(status_code=400, detail="Could not decode file — unsupported encoding")
 
-    text = text.strip()
+    # Normalize newlines — raw bytes skip open()'s universal-newline
+    # translation, and CRLF text never matches the '\n\n' paragraph
+    # split in _chunk_text (whole file = one chunk).
+    text = text.replace('\r\n', '\n').replace('\r', '\n').strip()
     if not text:
         raise HTTPException(status_code=400, detail="File is empty")
 

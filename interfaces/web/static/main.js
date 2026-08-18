@@ -601,7 +601,11 @@ function initEventBus() {
             const winner = localStorage.getItem(claimKey);
             if (!winner || !winner.endsWith(claimId)) return; // lost the race
             console.log(`[BrowserTTS] Playing: "${data.text.substring(0, 60)}..." from task "${data.task || '?'}"`);
-            audio.playText(data.text).finally(() => {
+            // Pass the task's voice/pitch/speed from the payload — global
+            // voice is already restored by the time we fetch (see executor).
+            audio.playText(data.text, null, {
+                voice: data.voice, pitch: data.pitch, speed: data.speed
+            }).finally(() => {
                 localStorage.removeItem(claimKey);
             });
         }, 50);

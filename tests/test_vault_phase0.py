@@ -391,7 +391,7 @@ class TestChatCarrierForeground:
         captured = {}
 
         class _CaptureCtx:
-            def __init__(self, fm, engine, task_settings):
+            def __init__(self, fm, engine, task_settings, session_manager=None):
                 captured['ts'] = task_settings
                 raise _CtxAbort()
 

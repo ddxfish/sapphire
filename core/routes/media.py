@@ -33,6 +33,13 @@ async def serve_tool_image(image_id: str, request: Request, _=Depends(require_lo
     system = get_system()
     result = system.llm_chat.session_manager.get_tool_image(image_id)
     if not result:
+        # Disk fallback: history-less tool lanes without a stream-brain
+        # override save here (see _save_tool_image). image_id is already
+        # regex-validated above — no traversal possible.
+        disk = PROJECT_ROOT / "user" / "tool_images" / image_id
+        if disk.is_file():
+            media_type = "image/png" if image_id.endswith(".png") else "image/jpeg"
+            return Response(content=disk.read_bytes(), media_type=media_type)
         raise HTTPException(status_code=404, detail="Image not found")
 
     data, media_type = result

@@ -504,12 +504,18 @@ export const streamChat = async (text, onChunk, onComplete, onError, signal = nu
     }
 };
 
-export const fetchAudio = async (text, signal = null) => {
+export const fetchAudio = async (text, signal = null, opts = null) => {
     try {
+        // opts: {voice, pitch, speed} — task-TTS carries the task's values in
+        // the event payload because global voice is restored before we fetch.
+        const body = { text, output_mode: 'file' };
+        if (opts?.voice) body.voice = opts.voice;
+        if (opts?.pitch != null) body.pitch = opts.pitch;
+        if (opts?.speed != null) body.speed = opts.speed;
         return await fetchWithTimeout('/api/tts', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, output_mode: 'file' }),
+            body: JSON.stringify(body),
             signal
         }, 120000);
     } catch (e) {

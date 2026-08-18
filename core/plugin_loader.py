@@ -311,7 +311,7 @@ class PluginLoader:
                 continue
 
             try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
             except Exception as e:
                 logger.warning(f"[PLUGINS] Bad manifest in {child.name}: {e}")
                 continue
@@ -749,7 +749,7 @@ class PluginLoader:
                     continue
                 try:
                     ns = {"__file__": str(provider_path), "__name__": f"plugin_provider_{name}_{system_name}"}
-                    exec(compile(provider_path.read_text(encoding='utf-8'), str(provider_path), 'exec'), ns)
+                    exec(compile(provider_path.read_text(encoding='utf-8-sig'), str(provider_path), 'exec'), ns)
                     provider_class = ns.get(class_name)
                     if not provider_class:
                         logger.error(f"[PLUGINS] Class '{class_name}' not found in {provider_path}")
@@ -800,10 +800,10 @@ class PluginLoader:
                 monoliths, pieces = None, None
                 mono_rel = prompts_decl.get("monoliths")
                 if mono_rel:
-                    monoliths = json.loads((plugin_dir / mono_rel).read_text(encoding="utf-8"))
+                    monoliths = json.loads((plugin_dir / mono_rel).read_text(encoding="utf-8-sig"))
                 pieces_rel = prompts_decl.get("pieces")
                 if pieces_rel:
-                    pieces = json.loads((plugin_dir / pieces_rel).read_text(encoding="utf-8"))
+                    pieces = json.loads((plugin_dir / pieces_rel).read_text(encoding="utf-8-sig"))
                 counts = prompt_packs.register_pack(name, monoliths=monoliths, pieces=pieces)
                 info["registered_prompt_pack"] = True
                 logger.info(f"[PLUGINS] {name}: prompt pack registered {counts}")
@@ -969,7 +969,7 @@ class PluginLoader:
             return None
 
         try:
-            source = full_path.read_text(encoding="utf-8")
+            source = full_path.read_text(encoding="utf-8-sig")
             namespace = {"__file__": str(full_path), "__name__": f"plugin_{plugin_dir.name}_{full_path.stem}"}
             exec(compile(source, str(full_path), "exec"), namespace)
 
@@ -1223,7 +1223,7 @@ class PluginLoader:
                     if manifest_path.exists():
                         try:
                             self._plugins[name]["manifest"] = json.loads(
-                                manifest_path.read_text(encoding="utf-8")
+                                manifest_path.read_text(encoding="utf-8-sig")
                             )
                         except Exception as e:
                             logger.warning(f"[PLUGINS] Failed to re-read manifest for {name}: {e}")
@@ -1803,7 +1803,7 @@ class PluginLoader:
                 if not manifest_path.exists():
                     continue
                 try:
-                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
                 except Exception as e:
                     # "Can't parse" is not "gone": the removal sweep below
                     # would otherwise classify it as removed-from-disk and

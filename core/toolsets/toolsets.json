@@ -9,7 +9,15 @@
       "search_memory",
       "get_recent_memories",
       "update_memory",
-      "delete_memory"
+      "delete_memory",
+      "read_self",
+      "update_self",
+      "read_ledger",
+      "create_goal",
+      "list_goals",
+      "update_goal",
+      "read_document",
+      "view_image"
     ]
   },
   "default": {

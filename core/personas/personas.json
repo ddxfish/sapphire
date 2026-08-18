@@ -82,7 +82,7 @@
     "avatar_full": null,
     "settings": {
       "prompt": "claude",
-      "toolset": "all",
+      "toolset": "limited_web",
       "spice_set": "professional",
       "voice": "am_eric",
       "pitch": 0.95,
@@ -107,7 +107,7 @@
     "avatar_full": null,
     "settings": {
       "prompt": "alfred",
-      "toolset": "all",
+      "toolset": "limited_web",
       "spice_set": "professional",
       "voice": "bm_daniel",
       "pitch": 0.95,
@@ -277,7 +277,7 @@
   },
   "agent": {
     "name": "agent",
-    "tagline": "Background worker — lean, focused, no personality layer",
+    "tagline": "Background worker \u2014 lean, focused, no personality layer",
     "avatar": null,
     "avatar_full": null,
     "settings": {

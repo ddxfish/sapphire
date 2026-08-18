@@ -34,23 +34,32 @@ def filter_to_thinking_only(content: str) -> str:
     
     return filtered
 
-def strip_ui_markers(content: str) -> str:
+def strip_ui_markers(content: str, keep_img: bool = False) -> str:
     """
     Strip UI-only markers from content before sending to LLM.
-    
+
     Removes patterns like:
     - <<IMG::image_id>>
     - <<FILE::file_id>>
     - Any other <<MARKER::data>> patterns
-    
+
     These markers are kept in history for UI parsing but removed from LLM context.
+
+    keep_img: preserve <<IMG::...>> markers. Used by history-less lanes
+    (ExecutionContext) where the wire copy doubles as the persisted copy —
+    stripping IMG there makes tool images permanently invisible in the
+    transcript. The marker is bounded noise to the LLM within the same run;
+    the history read path cleans it before the next run's wire.
     """
     if not content:
         return content
-    
+
     # Pattern to match <<TYPE::data>> markers
-    marker_pattern = r'<<[A-Z]+::[^>]+>>\s*'
-    
+    if keep_img:
+        marker_pattern = r'<<(?!IMG::)[A-Z]+::[^>]+>>\s*'
+    else:
+        marker_pattern = r'<<[A-Z]+::[^>]+>>\s*'
+
     # Remove all markers
     clean = re.sub(marker_pattern, '', content)
     
@@ -72,11 +81,14 @@ def wrap_tool_result(tool_call_id: str, function_name: str, result: str) -> Dict
         tool_call_id: The tool call ID
         function_name: Name of the function that was called
         result: The result string from the function (ALREADY STRIPPED of UI markers)
-    
+
     Returns:
         Properly formatted message dict for the LLM
     """
-    clean_result = strip_ui_markers(result) if '<<' in result else result
+    # Defensive re-strip preserves IMG: history-less lanes deliberately keep
+    # IMG markers in the wire copy (it doubles as the persisted copy) and this
+    # layer must not undo that. Foreground callers pre-strip everything anyway.
+    clean_result = strip_ui_markers(result, keep_img=True) if '<<' in result else result
     
     return {
         "role": "tool",
@@ -300,6 +312,14 @@ def _save_tool_image(img, history=None):
             img_dir.mkdir(parents=True, exist_ok=True)
             (img_dir / full_id).write_bytes(img_bytes)
             logger.info(f"[TOOL] Saved tool image to disk (no history): {full_id}")
+            # Bound the fallback dir — it had no GC and grew forever
+            # (longevity: every history-less tool image since day one).
+            try:
+                files = sorted(img_dir.iterdir(), key=lambda p: p.stat().st_mtime)
+                for old in files[:-300]:
+                    old.unlink()
+            except Exception as gc_err:
+                logger.debug(f"[TOOL] tool_images GC skipped: {gc_err}")
 
         return full_id
     except Exception as e:
@@ -343,7 +363,39 @@ class ToolCallingEngine:
                 )
         except (AttributeError, ZeroDivisionError, TypeError):
             pass
-        
+
+        # Deposit token metrics — this method's only caller is the
+        # ExecutionContext loop (tasks/agents/wake), whose calls never hit the
+        # streaming lane's recorder, so until 2026-08-17 background LLM spend
+        # was invisible in token_usage.db. Label via metrics_chat_label():
+        # override-aware and fail-closed ('__private__') so a private task
+        # chat's name never lands in the plaintext metrics DB.
+        try:
+            usage = response.usage or {}
+            if usage.get("total_tokens") or usage.get("prompt_tokens"):
+                from core.metrics import metrics as _tm
+                try:
+                    from core.api_fastapi import get_system
+                    _label = get_system().llm_chat.session_manager.metrics_chat_label()
+                except Exception:
+                    _label = "__background__"
+                _tm.record(
+                    _label,
+                    getattr(provider, "provider_name", "?"),
+                    getattr(provider, "model", "?") or "?",
+                    "task",
+                    {"tokens": {
+                        "prompt": usage.get("prompt_tokens", 0),
+                        "content": usage.get("completion_tokens", 0),
+                        "thinking": usage.get("reasoning_tokens", 0),
+                        "cache_read_tokens": usage.get("cache_read_tokens", 0),
+                        "cache_write_tokens": usage.get("cache_write_tokens", 0),
+                        "total": usage.get("total_tokens", 0),
+                    }, "duration_seconds": elapsed},
+                )
+        except Exception:
+            pass  # Metrics are best-effort
+
         return response
 
     def extract_function_call_from_text(self, text: str) -> Optional[Dict]:
@@ -424,9 +476,14 @@ class ToolCallingEngine:
 
         return None
 
-    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None):
+    def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None, image_sink=None):
         """
         Execute tool calls and add results to messages array AND history.
+
+        image_sink: optional ChatSessionManager used ONLY for tool-image DB
+        writes when history is None (ExecutionContext lanes). Never used for
+        add_tool_result — those lanes persist via new_messages at the caller,
+        and a live-history write here would double or mis-target the transcript.
 
         Key behaviors:
         - Tool results sent to LLM have UI markers STRIPPED (clean context)
@@ -474,12 +531,14 @@ class ToolCallingEngine:
                 function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
 
             # Extract images if tool returned structured result
-            result_str, images = _extract_tool_images(function_result, history, provider, function_name)
+            result_str, images = _extract_tool_images(function_result, history or image_sink, provider, function_name)
             if images:
                 tool_images.extend(images)
                 logger.info(f"[TOOL] {function_name} returned {len(images)} image(s)")
 
-            clean_result = strip_ui_markers(result_str)
+            # No history ⇒ the wire copy IS the persisted copy (wire_to_canonical
+            # at the caller) — keep IMG markers so the transcript renders images.
+            clean_result = strip_ui_markers(result_str, keep_img=(history is None))
             clean_result += self.function_manager.loop_warn_suffix(function_name, loop_counts)
 
             if provider:
@@ -503,7 +562,7 @@ class ToolCallingEngine:
 
         return tools_executed, tool_images
 
-    def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None):
+    def execute_text_based_tool_call(self, function_call_data, filtered_content, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None, image_sink=None):
         """
         Execute text-based function call (LM Studio compatibility).
         
@@ -567,10 +626,12 @@ class ToolCallingEngine:
             logger.error(f"Text-based tool failed for {function_name}: {tool_error}")
             function_result = f"Tool '{function_name}' failed: {str(tool_error)}"
 
-        result_str, tool_images = _extract_tool_images(function_result, history, provider, function_name)
+        result_str, tool_images = _extract_tool_images(function_result, history or image_sink, provider, function_name)
         if tool_images:
             logger.info(f"[TOOL] {function_name} returned {len(tool_images)} image(s) (text-based)")
-        clean_result = strip_ui_markers(result_str)
+        # Same keep_img rationale as execute_tool_calls: no history ⇒ wire
+        # copy is the persisted copy.
+        clean_result = strip_ui_markers(result_str, keep_img=(history is None))
         clean_result += self.function_manager.loop_warn_suffix(function_name, loop_counts)
 
         if provider:

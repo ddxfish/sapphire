@@ -396,29 +396,23 @@ class VoiceChatSystem:
             logger.warning("System loaded with fallback prompt.")
 
     def _apply_initial_chat_settings(self):
-        """Apply chat settings for the active chat on startup."""
+        """Apply chat settings for the active chat via the SAME path the
+        runtime chat-switch uses (_apply_chat_settings): per-section failure
+        isolation, scopes+RAG alignment, spice set, toolset+extras. Before
+        2026-08-17 this was a hand-rolled one-try subset — no spice leg meant
+        the active chat ran on the previous session's last-saved spice state
+        until the first chat switch (cross-restart leak), and any section
+        failure aborted all later sections.
+
+        Prompt is deliberately stripped: _prime_default_prompt owns boot
+        prompt (plugin costume prompts may not be registered yet at this
+        point — Sapph-not-Rose class; the runtime prompt leg would flap to
+        'default' and publish a spurious fallback event)."""
         try:
             settings = self.llm_chat.session_manager.get_chat_settings()
-            
-            if "voice" in settings:
-                from core.tts.utils import validate_voice
-                voice = validate_voice(settings["voice"])
-                self.tts.set_voice(voice)
-            if "pitch" in settings:
-                self.tts.set_pitch(settings["pitch"])
-            if "speed" in settings:
-                self.tts.set_speed(settings["speed"])
-            
-            # Prompt already handled by _prime_default_prompt (checks chat settings first)
-
-            toolset_key = "toolset" if "toolset" in settings else "ability" if "ability" in settings else None
-            if toolset_key:
-                toolset_name = settings[toolset_key]
-                extras = settings.get("extra_toolsets") or None
-                self.llm_chat.function_manager.update_enabled_functions([toolset_name], extra_toolsets=extras)
-                logger.info(f"Applied toolset on startup: {toolset_name}" + (f" + extras {extras}" if extras else ""))
-            
-            logger.info(f"Applied chat settings on startup")
+            from core.api_fastapi import _apply_chat_settings
+            _apply_chat_settings(self, {k: v for k, v in settings.items() if k != "prompt"})
+            logger.info("Applied chat settings on startup (runtime apply path)")
         except Exception as e:
             logger.warning(f"Could not apply initial settings: {e}")
 

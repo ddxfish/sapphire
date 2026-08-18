@@ -100,7 +100,16 @@ async def handle_tts_speak(request: Request, _=Depends(require_login), system=De
         _gate = tts_gate_reason()
         if _gate:
             raise HTTPException(status_code=403, detail=_gate)
-        audio_data = await asyncio.to_thread(system.tts.generate_audio_data, text)
+        # Optional per-request voice/pitch/speed (browser task-TTS): the
+        # TTS_SPEAK payload carries the TASK's values because by the time this
+        # request lands, the executor's finally has already restored the
+        # operator's voice — reading global state here loses the race, always.
+        _voice = data.get('voice') or None
+        if _voice:
+            _voice = _validate_tts_voice(_voice)
+        audio_data = await asyncio.to_thread(
+            system.tts.generate_audio_data, text,
+            voice=_voice, speed=data.get('speed'), pitch=data.get('pitch'))
         if not audio_data:
             raise HTTPException(status_code=503, detail="TTS generation failed")
 
@@ -219,6 +228,15 @@ async def tts_preview(request: Request, _=Depends(require_login), system=Depends
 
     if not config.TTS_ENABLED:
         raise HTTPException(status_code=503, detail="TTS disabled")
+
+    # Voice privacy gate — same posture as /api/tts file-mode above. Preview
+    # takes arbitrary user text and hands it straight to the provider; with
+    # the active chat private + a cloud TTS provider that's text egress the
+    # main lane refuses. 403, never 401.
+    from core.voice_privacy import tts_gate_reason
+    _gate = tts_gate_reason()
+    if _gate:
+        raise HTTPException(status_code=403, detail=_gate)
 
     if voice:
         voice = _validate_tts_voice(voice)

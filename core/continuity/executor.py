@@ -406,7 +406,8 @@ class ContinuityExecutor:
                 ctx = ExecutionContext(
                     self.system.llm_chat.function_manager,
                     self.system.llm_chat.tool_engine,
-                    task_settings
+                    task_settings,
+                    session_manager=self.system.llm_chat.session_manager
                 )
 
                 # Set Discord reply channel for auto-reply targeting
@@ -626,7 +627,8 @@ class ContinuityExecutor:
             ctx = ExecutionContext(
                 self.system.llm_chat.function_manager,
                 self.system.llm_chat.tool_engine,
-                task_settings
+                task_settings,
+                session_manager=self.system.llm_chat.session_manager
             )
 
             # Set Discord reply channel for auto-reply targeting
@@ -774,7 +776,17 @@ class ContinuityExecutor:
                         if _priv_chat:
                             logger.info("[Continuity] browser TTS skipped — target chat is private")
                         else:
-                            publish(Events.TTS_SPEAK, {"text": response, "task": task.get("name", "")})
+                            # Carry the TASK's voice/pitch/speed in the payload:
+                            # they're still applied globally here, but the
+                            # finally below restores the operator's before the
+                            # browser's /api/tts request can possibly arrive —
+                            # a text-only payload always spoke the wrong voice.
+                            publish(Events.TTS_SPEAK, {
+                                "text": response, "task": task.get("name", ""),
+                                "voice": getattr(self.system.tts, "voice_name", None),
+                                "pitch": getattr(self.system.tts, "pitch_shift", None),
+                                "speed": getattr(self.system.tts, "speed", None),
+                            })
                     elif tts_enabled and hasattr(self.system, 'tts') and self.system.tts:
                         from core.voice_privacy import tts_gate_reason
                         _gate = tts_gate_reason({"private_chat": _priv_chat or

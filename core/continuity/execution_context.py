@@ -94,10 +94,17 @@ class ExecutionContext:
     Runs LLM + tool loop without touching any singleton state.
     """
 
-    def __init__(self, function_manager, tool_engine, task_settings: Dict[str, Any]):
+    def __init__(self, function_manager, tool_engine, task_settings: Dict[str, Any],
+                 session_manager=None):
         self.fm = function_manager
         self.tool_engine = tool_engine
         self.task_settings = task_settings
+        # Image sink only — tool images from this lane went to a dead-end disk
+        # fallback (user/tool_images, unserved, no GC) because execute_tool_calls
+        # got history=None. With a sink + an active stream-brain override the
+        # image lands in the chat DB keyed to the run's own chat. NEVER used
+        # for transcript writes (see execute_tool_calls docstring). 2026-08-17.
+        self.session_manager = session_manager
 
         # Resolve everything upfront — all read-only operations.
         # Provider BEFORE scopes: _build_scopes stamps tool provenance
@@ -490,6 +497,13 @@ class ExecutionContext:
         # the safety here by falling through to config defaults instead.
         # context_limit IS different: 0 there legitimately means "unlimited"
         # and the downstream `if context_limit > 0` check expects that.
+        # Tool-image sink: only when the caller set a stream-brain override is
+        # the effective chat genuinely this run's chat — without one, the sink
+        # would key images to the OPERATOR'S open chat (P3-T4 mis-cascade), so
+        # fall back to the old disk path instead.
+        from core.chat import stream_brain
+        _image_sink = self.session_manager if stream_brain.get_override() else None
+
         _rounds = self.task_settings.get("max_tool_rounds") or config.MAX_TOOL_ITERATIONS
         max_iterations = max(1, _rounds)
         _parallel = self.task_settings.get("max_parallel_tools") or config.MAX_PARALLEL_TOOLS
@@ -618,7 +632,8 @@ class ExecutionContext:
                 tools_executed, tool_images = _exec_with_loop_counts(
                     self.tool_engine.execute_tool_calls,
                     tool_calls, messages, None, self.provider, scopes=self.scopes,
-                    allowed_tools=self._allowed_tool_names, loop_counts=loop_counts
+                    allowed_tools=self._allowed_tool_names, loop_counts=loop_counts,
+                    image_sink=_image_sink
                 )
                 if tool_images:
                     _inject_tool_images(messages, tool_images, self.provider)
@@ -648,7 +663,8 @@ class ExecutionContext:
                     _, tool_images = _exec_with_loop_counts(
                         self.tool_engine.execute_text_based_tool_call,
                         fn_data, filtered, messages, None, self.provider, scopes=self.scopes,
-                        allowed_tools=self._allowed_tool_names, loop_counts=loop_counts
+                        allowed_tools=self._allowed_tool_names, loop_counts=loop_counts,
+                        image_sink=_image_sink
                     )
                     if tool_images:
                         _inject_tool_images(messages, tool_images, self.provider)

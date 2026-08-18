@@ -135,11 +135,14 @@ class TestWrapToolResult:
         assert result["content"] == "Found results"
     
     def test_strips_ui_markers_from_result(self):
-        """Should strip UI markers from result content."""
+        """Defensive strip kills non-IMG markers; IMG survives — history-less
+        lanes (ExecutionContext) persist the wire copy, so stripping IMG there
+        made tool images permanently invisible (2026-08-17)."""
         from core.chat.chat_tool_calling import wrap_tool_result
-        
-        result = wrap_tool_result("call_1", "test", "Result <<IMG::abc>> here")
-        
-        assert "<<IMG::" not in result["content"]
+
+        result = wrap_tool_result("call_1", "test", "Result <<FILE::abc>> <<IMG::x.jpg>> here")
+
+        assert "<<FILE::" not in result["content"]
+        assert "<<IMG::x.jpg>>" in result["content"]
         assert "Result" in result["content"]
         assert "here" in result["content"]

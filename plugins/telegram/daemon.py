@@ -412,13 +412,31 @@ async def _connect_single(account_name: str):
         logger.error(f"[TELEGRAM] Failed to hot-connect '{account_name}': {e}")
 
 
-def _generate_voice(text: str) -> bytes:
-    """Generate TTS audio bytes from text. Returns bytes or None."""
+def _generate_voice(text: str, gate_chat: str = None) -> bytes:
+    """Generate TTS audio bytes from text. Returns bytes or None.
+
+    gate_chat: chat name whose privacy settings gate this synthesis (the
+    reply handler runs after the stream-brain override is reset, so effective-
+    chat self-resolution would read the OPERATOR'S chat). None = self-resolve
+    (correct for the send_voice_note tool path, which runs inside the turn).
+    A voice note isn't the same egress as the text reply — text goes only to
+    Telegram, synthesis ships the text to the TTS provider too.
+    """
     try:
         from core.api_fastapi import get_system
         system = get_system()
         if not system or not hasattr(system, 'tts') or not system.tts:
             logger.warning("[TELEGRAM] TTS not available for voice generation")
+            return None
+        from core.voice_privacy import tts_gate_reason
+        _settings = None
+        if gate_chat:
+            _settings = system.llm_chat.session_manager.get_settings_for(gate_chat)
+            if _settings is None:
+                _settings = {"private_chat": True}  # unreadable — fail closed
+        _gate = tts_gate_reason(_settings)
+        if _gate:
+            logger.info(f"[TELEGRAM] Voice note skipped: {_gate}")
             return None
         # Strip avatar tags and other markup
         import re
@@ -489,7 +507,7 @@ def _reply_handler(task, event_data: dict, response_text: str):
         # Generate and send voice note
         if send_voice:
             try:
-                audio_bytes = _generate_voice(clean)
+                audio_bytes = _generate_voice(clean, gate_chat=(task.get("chat_target") or "").strip() or None)
                 if audio_bytes:
                     future = asyncio.run_coroutine_threadsafe(
                         send_voice_note(account, chat_id, audio_bytes),

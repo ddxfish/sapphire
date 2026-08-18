@@ -185,6 +185,21 @@ class ConversationDriver:
             if not (text and text.strip()):
                 logger.info("[CONV] turn: no usable speech, skipping")
                 return
+            # post_stt hook — same contract as the wakeword and /api/stt
+            # lanes (H8 class): plugins can correct/translate/normalize the
+            # transcription. Conversation mode was the only STT lane that
+            # bypassed it. Fires before start-word matching so a correction
+            # can rescue a mis-heard start word.
+            from core.hooks import hook_runner, HookEvent
+            if hook_runner.has_handlers("post_stt"):
+                import config as _config
+                stt_event = HookEvent(input=text, config=_config,
+                                      metadata={"system": self.system})
+                hook_runner.fire("post_stt", stt_event)
+                text = stt_event.input
+                if not (text and text.strip()):
+                    logger.info("[CONV] turn: post_stt hook emptied the utterance, skipping")
+                    return
             gated = match_start_word(text, self._start_word, self._start_word_fuzzy)
             if gated is None:
                 logger.info("[CONV] turn: start word not matched, ignoring utterance")

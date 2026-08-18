@@ -105,7 +105,7 @@ export const stop = (force = false) => {
 
 export const isTtsPlaying = () => isStreaming;
 
-export const playText = async (txt, cacheKey = null) => {
+export const playText = async (txt, cacheKey = null, voiceOpts = null) => {
     stop(true);
     isStreaming = true;
     ttsCtrl = new AbortController();
@@ -144,7 +144,7 @@ export const playText = async (txt, cacheKey = null) => {
             blob = ttsCache.get(cacheKey);
             ui.updateStatus('Playing cached TTS...');
         } else {
-            blob = await api.fetchAudio(clean, ttsCtrl.signal);
+            blob = await api.fetchAudio(clean, ttsCtrl.signal, voiceOpts);
             // Cache if key provided
             if (cacheKey !== null) {
                 // LRU eviction
