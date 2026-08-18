@@ -322,21 +322,22 @@ function renderEditor() {
             ${isMonolith ? renderMonolith(p) : renderAssembled(p)}
             ${vaultState.unlocked && !prompts.find(x => x.name === selected)?.source ? `
             <div class="pr-privacy">
+                ${!multiCheck ? `
                 <label><input type="checkbox" id="pr-vault-toggle" ${vaultNames.has(selected) ? 'checked' : ''}>
-                \u{1F5DD} Keep in vault (encrypted at rest; private by construction)</label>
+                \u{1F5DD} Keep in vault (encrypted at rest; private by construction)</label>` : ''}
                 ${!isMonolith ? (multiCheck ? `
-                <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:var(--font-xs)">
-                        <label style="display:flex;gap:5px;align-items:center">
-                            <input type="checkbox" id="pr-bulk-prompt" ${checkedSections.has('prompt') ? 'checked' : ''}> Prompt record</label>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:var(--font-xs)">
+                        <label style="display:flex;gap:5px;align-items:center" title="The prompt entry itself (its name + piece list). In the vault it disappears from the prompt list while locked.">
+                            <input type="checkbox" id="pr-bulk-prompt" ${checkedSections.has('prompt') ? 'checked' : ''}> This prompt ("${esc(selected)}")</label>
                         <span style="opacity:0.5">·</span>
-                        <button class="btn-sm" id="pr-bulk-all">All</button>
-                        <button class="btn-sm" id="pr-bulk-none">None</button>
-                        <button class="btn-sm" id="pr-bulk-main">Main pieces</button>
+                        <span id="pr-bulk-all" style="color:var(--accent);cursor:pointer;text-decoration:underline">All</span>
+                        <span id="pr-bulk-none" style="color:var(--accent);cursor:pointer;text-decoration:underline">None</span>
+                        <span id="pr-bulk-main" style="color:var(--accent);cursor:pointer;text-decoration:underline">Main pieces</span>
                     </div>
                     <div style="display:flex;gap:8px">
-                        <button class="btn-sm" id="pr-vault-all-in">\u{1F5DD} Move selected to vault</button>
-                        <button class="btn-sm" id="pr-vault-all-out">Move selected to plaintext</button>
+                        <button class="btn-sm" id="pr-vault-all-in">\u{1F5DD} Move to vault</button>
+                        <button class="btn-sm" id="pr-vault-all-out">Move to plaintext</button>
                         <button class="btn-sm" id="pr-bulk-cancel">Cancel</button>
                     </div>
                 </div>` : `
