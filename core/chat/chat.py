@@ -497,36 +497,6 @@ class LLMChat:
 
         return prompt, username, None
 
-    def resolve_stream_brain(self, chat_name):
-        """Resolve a non-active chat's brain — settings, base system prompt, tool
-        list — WITHOUT activating it or mutating any global state. For a conversation
-        stream that must run in its own chat concurrently with the UI. Returns the
-        override dict, or None when chat_name is the active chat (None = OFF-path, no
-        override needed, behavior identical to before)."""
-        try:
-            active = self.session_manager.get_active_chat_name()
-            if not chat_name or chat_name == active:
-                return None
-            settings = self.session_manager.get_settings_for(chat_name)
-            if settings is None:
-                return None
-            from core import prompts
-            pdata = prompts.get_prompt(settings.get("prompt", "default"))
-            if not isinstance(pdata, dict):
-                # Missing name (deleted prompt, pack not yet re-registered):
-                # run on the assembled default this turn — same heals-later
-                # stance as _apply_chat_settings. Before this, streams on such
-                # chats ran with the literal text "System prompt not loaded."
-                pdata = prompts.get_prompt("default")
-            system_prompt = (pdata.get("content", "") if isinstance(pdata, dict) else "") or ""
-            tools = self._resolve_toolset_tools(settings.get("toolset", "all"),
-                                                settings.get("extra_toolsets"))
-            return {"chat": chat_name, "settings": settings,
-                    "system_prompt": system_prompt, "tools": tools}
-        except Exception as e:
-            logger.warning(f"resolve_stream_brain('{chat_name}') failed: {e}")
-            return None
-
     def _resolve_toolset_tools(self, toolset_name, extra_toolsets=None):
         """Toolset name -> tool-schema list, READ-ONLY (mirrors
         ExecutionContext._resolve_tools; no function_manager mutation).
@@ -562,6 +532,12 @@ class LLMChat:
                 tools += [t for t in fm.all_possible_tools if t["function"]["name"] in extra_set]
             if hasattr(fm, "_apply_mode_filter"):
                 tools = fm._apply_mode_filter(tools)
+            # Settings gate: same pair ExecutionContext._resolve_tools applies.
+            # Without it, stream-brain streams (phone calls, driver/daemon
+            # targets) saw gated tools (switch_model et al) with their
+            # Settings > Tools toggles OFF. Silent-default class. 2026-08-17.
+            if hasattr(fm, "_apply_settings_gate"):
+                tools = fm._apply_settings_gate(tools)
             return tools or None
         except Exception as e:
             logger.warning(f"_resolve_toolset_tools('{toolset_name}') failed: {e}")

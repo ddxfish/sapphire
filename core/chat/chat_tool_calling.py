@@ -424,20 +424,6 @@ class ToolCallingEngine:
 
         return None
 
-    def format_tool_calls_for_conversation(self, tool_calls):
-        """Convert tool_calls to proper format."""
-        tool_calls_formatted = []
-        for tool_call in tool_calls:
-            tool_calls_formatted.append({
-                "id": tool_call.id,
-                "type": "function",
-                "function": {
-                    "name": tool_call.function.name,
-                    "arguments": tool_call.function.arguments
-                }
-            })
-        return tool_calls_formatted
-
     def execute_tool_calls(self, tool_calls, messages, history, provider: BaseProvider = None, scopes=None, allowed_tools=None, executor_snapshot=None, loop_counts=None):
         """
         Execute tool calls and add results to messages array AND history.

@@ -3598,7 +3598,7 @@ class ChatSessionManager:
     def make_stream_session(self, chat_name: str) -> Optional[Dict[str, Any]]:
         """Build a per-context stream session for `chat_name`: its settings + a
         ConversationHistory seeded from its stored messages. system_prompt/tools
-        are filled by the caller (LLMChat.resolve_stream_brain). None if missing."""
+        are filled by the caller (the A1 override block in chat_streaming). None if missing."""
         settings = self.read_chat_settings(chat_name)
         if settings is None:
             return None

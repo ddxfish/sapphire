@@ -645,49 +645,6 @@ def get_provider_for_url(base_url: str) -> str:
     return 'openai'
 
 
-def migrate_legacy_config(old_primary: Dict, old_fallback: Dict) -> tuple:
-    """Convert old LLM_PRIMARY/LLM_FALLBACK to new format."""
-    providers = {}
-    fallback_order = []
-
-    def detect_type(url: str) -> tuple:
-        url_lower = url.lower()
-        if 'anthropic.com' in url_lower:
-            return ('claude', 'claude')
-        elif '127.0.0.1' in url or 'localhost' in url_lower:
-            return ('lmstudio', 'openai')
-        else:
-            return ('openai', 'openai')
-
-    if old_primary.get('enabled'):
-        key, ptype = detect_type(old_primary.get('base_url', ''))
-        providers[key] = {
-            'provider': ptype,
-            'display_name': provider_registry._core_providers.get(key, {}).get('display_name', key),
-            'base_url': old_primary.get('base_url', ''),
-            'model': old_primary.get('model', ''),
-            'timeout': old_primary.get('timeout', 0.3),
-            'enabled': True,
-        }
-        fallback_order.append(key)
-
-    if old_fallback.get('enabled'):
-        key, ptype = detect_type(old_fallback.get('base_url', ''))
-        if key in providers:
-            key = f"{key}_fallback"
-        providers[key] = {
-            'provider': ptype,
-            'display_name': provider_registry._core_providers.get(key, {}).get('display_name', key),
-            'base_url': old_fallback.get('base_url', ''),
-            'model': old_fallback.get('model', ''),
-            'timeout': old_fallback.get('timeout', 0.3),
-            'enabled': True,
-        }
-        fallback_order.append(key)
-
-    return providers, fallback_order
-
-
 __all__ = [
     'provider_registry',
     'ProviderRegistry',
@@ -699,7 +656,6 @@ __all__ = [
     'get_generation_params',
     'get_provider',
     'get_provider_for_url',
-    'migrate_legacy_config',
     'BaseProvider',
     'LLMResponse',
     'ToolCall',
