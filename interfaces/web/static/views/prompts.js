@@ -5,7 +5,7 @@ import { PERSONA_TABS } from '../shared/persona-tabs.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
 import { showExportDialog, showImportDialog } from '../shared/import-export.js';
-import { openDeleteModal, openCleanupModal } from './prompts-cleanup.js';
+import { openDeleteModal, openCleanupModal, openBulkVaultModal } from './prompts-cleanup.js';
 import { setupModalClose } from '../shared/modal.js';
 import * as ui from '../ui.js';
 import { updateScene } from '../features/scene.js';
@@ -24,6 +24,9 @@ let checkedSections = new Set(); // 'prompt' + section types picked for the bulk
 let multiCheckFor = null;        // prompt the mode was entered on — exits on switch
 let rosterCheck = false;         // roster multi-check (bulk prompt actions)
 let checkedPrompts = new Set();  // prompt names picked in roster multi-check
+let lastToggledPrompt = null;    // shift-click range anchor (plain clicks move it)
+let lastShiftRange = null;       // names the previous shift-click applied — replaced, not stacked
+let stockNames = new Set();      // prompts shipped in core/prompt_defaults (roster 'Core' selector)
 let viewVisible = false;
 let promptDetails = {};     // { name: { char_count, components, type, ... } }
 let selected = null;
@@ -210,6 +213,7 @@ async function loadAll() {
         vaultPieces = Object.fromEntries(
             Object.entries(compData.vault_pieces || {}).map(([t, keys]) => [t, new Set(keys)]));
         vaultState = pList?.vaultState || { exists: false, unlocked: false };
+        stockNames = new Set(pList?.stock || []);
 
         const active = prompts.find(p => p.active);
         activePromptName = active?.name || null;
@@ -253,7 +257,7 @@ function render() {
         ${renderSectionTabs(PERSONA_TABS, 'prompts', helpPills('Prompts', { video: 'JxgNAk4Y2qI', doc: 'PROMPTS.md', inline: true }))}
         <div class="two-panel">
             ${renderPanelList({
-                title: 'Prompts',
+                title: rosterCheck ? `Prompts · ${checkedPrompts.size} selected` : 'Prompts',
                 items: prompts,
                 selectedId: selected,
                 idKey: 'name',
@@ -280,15 +284,22 @@ function render() {
                 },
                 addTitle: 'New prompt',
                 extraHeader: `<button class="btn-sm" id="pr-roster-check" title="Select prompts for bulk actions"${rosterCheck ? ' style="outline:1px solid var(--accent)"' : ''}>☑</button>`
+                    + (rosterCheck && vaultState.unlocked
+                        ? '<button class="btn-sm" id="pr-bulk-vault" title="Move selected prompts (and their pieces) into the vault">🗝</button>' : '')
                     + '<button class="btn-sm" id="pr-cleanup" title="Cleanup tools (orphans, trash)">🧹</button>'
                     + '<button class="btn-sm" id="pr-import" title="Import prompt">⬇</button>',
                 showDelete: true,
                 deletable: rosterCheck ? checkedPrompts.size > 0 : !!selected,
                 deleteTitle: rosterCheck ? `Delete ${checkedPrompts.size} selected`
                                          : `Delete "${selected || ''}"`,
-                footer: rosterCheck ? `<span>${checkedPrompts.size} selected</span>
-                    <button class="btn-sm danger" id="pr-bulk-delete"${checkedPrompts.size ? '' : ' disabled'}>Delete…</button>
-                    <button class="btn-sm" id="pr-roster-cancel">Cancel</button>` : '',
+                subheader: rosterCheck ? `
+                    <div style="display:flex;gap:12px;align-items:center;font-size:var(--font-xs);padding:6px 12px;border-bottom:1px solid var(--border)">
+                        <span>Select:</span>
+                        <span id="pr-sel-all" style="color:var(--accent);cursor:pointer;text-decoration:underline">All</span>
+                        <span id="pr-sel-none" style="color:var(--accent);cursor:pointer;text-decoration:underline">None</span>
+                        <span id="pr-sel-core" style="color:var(--accent);cursor:pointer;text-decoration:underline"
+                              title="The prompts that ship with Sapphire (stock personas)">Core</span>
+                    </div>` : '',
             })}
             <div class="panel-right">
                 <div class="pr-content">
@@ -529,16 +540,37 @@ function bindEvents() {
 
     // --- Roster (shared panel-list) ---
     bindPanelList(container, {
-        onSelect: async (name) => {
+        onSelect: async (name, e) => {
             if (rosterCheck) {
-                // Multi-check mode: row clicks toggle membership. Pack
-                // prompts can't be deleted, so they don't toggle.
+                // Multi-check mode: row clicks toggle membership; shift-click
+                // checks the whole range from the last toggled row. Pack
+                // prompts never join (they can't be deleted).
                 const p = prompts.find(x => x.name === name);
-                if (p && !p.source) {
+                if (!p || p.source) return;
+                const ai = prompts.findIndex(x => x.name === lastToggledPrompt);
+                const bi = prompts.findIndex(x => x.name === name);
+                if (e?.shiftKey && ai !== -1 && bi !== -1 && ai !== bi) {
+                    // File-manager semantics: the anchor stays put, and each
+                    // shift-click REPLACES the previous shift range — so
+                    // shrinking the range unchecks what fell outside it.
+                    if (lastShiftRange) {
+                        for (const n of lastShiftRange) checkedPrompts.delete(n);
+                    }
+                    const [a, b] = ai < bi ? [ai, bi] : [bi, ai];
+                    lastShiftRange = new Set();
+                    for (let i = a; i <= b; i++) {
+                        if (!prompts[i].source) {
+                            checkedPrompts.add(prompts[i].name);
+                            lastShiftRange.add(prompts[i].name);
+                        }
+                    }
+                } else {
                     checkedPrompts.has(name) ? checkedPrompts.delete(name)
                                              : checkedPrompts.add(name);
-                    render();
+                    lastToggledPrompt = name;
+                    lastShiftRange = null;
                 }
+                render();
                 return;
             }
             selected = name;
@@ -555,15 +587,35 @@ function bindEvents() {
     // --- Roster bulk mode + cleanup tools ---
     layout.querySelector('#pr-roster-check')?.addEventListener('click', () => {
         rosterCheck = !rosterCheck;
-        if (!rosterCheck) checkedPrompts = new Set();
+        if (!rosterCheck) { checkedPrompts = new Set(); lastToggledPrompt = null; lastShiftRange = null; }
         render();
     });
-    layout.querySelector('#pr-roster-cancel')?.addEventListener('click', () => {
-        rosterCheck = false;
-        checkedPrompts = new Set();
+    // Roster bulk selectors (multi-check only). 'Core' = the stock prompts
+    // shipped in core/prompt_defaults, per the server's stock list.
+    const rosterSelect = filter => {
+        checkedPrompts = new Set(prompts.filter(p => !p.source && filter(p))
+                                        .map(p => p.name));
+        lastShiftRange = null;
         render();
+    };
+    layout.querySelector('#pr-sel-all')?.addEventListener('click', () => rosterSelect(() => true));
+    layout.querySelector('#pr-sel-none')?.addEventListener('click', () => rosterSelect(() => false));
+    layout.querySelector('#pr-sel-core')?.addEventListener('click', () => rosterSelect(p => stockNames.has(p.name)));
+    layout.querySelector('#pr-bulk-vault')?.addEventListener('click', () => {
+        if (!checkedPrompts.size) { ui.showToast('Nothing selected', 'info'); return; }
+        openBulkVaultModal({
+            names: [...checkedPrompts], direction: 'in',
+            componentSources, vaultPieces, vaultNames,
+            onDone: async () => {
+                rosterCheck = false;
+                checkedPrompts = new Set();
+                lastToggledPrompt = null;
+                lastShiftRange = null;
+                await loadAll();
+                render();
+            },
+        });
     });
-    layout.querySelector('#pr-bulk-delete')?.addEventListener('click', bulkDeletePrompts);
     layout.querySelector('#pr-cleanup')?.addEventListener('click', () => {
         openCleanupModal({
             components, componentSources, vaultPieces,
@@ -1166,6 +1218,8 @@ async function activateCurrentPrompt() {
 async function afterPromptDelete() {
     rosterCheck = false;
     checkedPrompts = new Set();
+    lastToggledPrompt = null;
+    lastShiftRange = null;
     selected = null;
     selectedData = null;
     openAccordion = null;

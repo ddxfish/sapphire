@@ -72,7 +72,32 @@ async def list_prompts(request: Request, _=Depends(require_login)):
     from core import prompt_vault
     return {"prompts": prompt_list, "current": prompts.get_active_preset_name(),
             "vault_state": prompt_vault.vault_status(),
-            "vault_refs": prompt_vault.refs_names()}
+            "vault_refs": prompt_vault.refs_names(),
+            "stock": _stock_prompt_names()}
+
+
+_STOCK_PROMPT_NAMES = None
+
+
+def _stock_prompt_names():
+    """Names of prompts that ship with Sapphire (core/prompt_defaults) —
+    drives the roster's 'Core' bulk selector. Cached; the files are static
+    at runtime."""
+    global _STOCK_PROMPT_NAMES
+    if _STOCK_PROMPT_NAMES is None:
+        names = set()
+        base = Path(PROJECT_ROOT) / 'core' / 'prompt_defaults'
+        for fn, key in (('prompt_pieces.json', 'scenario_presets'),
+                        ('prompt_monoliths.json', None)):
+            try:
+                d = json.loads((base / fn).read_text(encoding='utf-8'))
+                src = d.get(key, {}) if key else d
+                names |= {k for k in src if isinstance(k, str)
+                          and not k.startswith('_')}
+            except Exception as e:
+                logger.warning(f"stock prompt names: {fn} unreadable ({e})")
+        _STOCK_PROMPT_NAMES = sorted(names)
+    return _STOCK_PROMPT_NAMES
 
 
 @router.post("/api/prompts/reload")

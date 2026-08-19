@@ -36,7 +36,7 @@ export function renderPanelList({
     title, items = [], selectedId = null, idKey = 'id', renderItem,
     addTitle, extraHeader = '', showDelete = false, deletable = false,
     deleteTitle = 'Delete selected', emptyHTML = '', listClass = '', itemClass = null,
-    footer = '',
+    footer = '', subheader = '',
 } = {}) {
     const add = addTitle
         ? `<button class="btn-sm" data-pl-action="add" title="${esc(addTitle)}">+</button>` : '';
@@ -54,6 +54,7 @@ export function renderPanelList({
                 <span class="panel-list-title">${esc(title)}</span>
                 <div class="panel-list-actions">${extraHeader}${add}${del}</div>
             </div>
+            ${subheader}
             <div class="panel-list-items">${rows}</div>
             ${footer ? `<div class="panel-list-footer">${footer}</div>` : ''}
         </div>`;
@@ -73,6 +74,8 @@ export function bindPanelList(container, { onSelect, onAdd, onDelete } = {}) {
             return;
         }
         const item = e.target.closest('.panel-list-item');
-        if (item && onSelect) onSelect(item.dataset.plId);
+        // Event passed through for modifier-aware hosts (shift-range select);
+        // existing single-arg callbacks ignore it.
+        if (item && onSelect) onSelect(item.dataset.plId, e);
     });
 }

@@ -28,6 +28,7 @@ export async function listPrompts() {
   // array, vault-aware ones (prompts view, trigger editor) read these.
   prompts.vaultState = data.vault_state || { exists: false, unlocked: false };
   prompts.vaultRefs = data.vault_refs || {};
+  prompts.stock = data.stock || [];
   return prompts;
 }
 

@@ -47,12 +47,13 @@ function presetsHTML() {
         </div>`;
 }
 
-// Flat-list preset wiring (delete modal — no sections, rows carry data-type).
+// Flat-list preset wiring (delete + bulk-vault modals — no sections, rows
+// carry data-type). Disabled rows (already in destination) never join.
 function wireFlatPresets(scope) {
     scope.querySelectorAll('.pc-preset').forEach(p =>
         p.addEventListener('click', () => {
             const mode = p.dataset.preset;
-            scope.querySelectorAll('.pc-row:not([data-flag])').forEach(cb => {
+            scope.querySelectorAll('.pc-row:not([data-flag]):not(:disabled)').forEach(cb => {
                 cb.checked = mode === 'all' ? true
                     : mode === 'none' ? false
                     : !GENERIC_TYPES.includes(cb.dataset.type);
@@ -396,4 +397,107 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
     };
 
     menu();
+}
+
+// ── bulk vault move (roster multi-check 🗝) ──────────────────────────────
+// One modal, one direction: the master prompt records on top, then the
+// UNION of their non-pack pieces in canonical order (a piece shared by two
+// selected prompts appears once — moving it serves both; Krem's ruling
+// 2026-08-19). Defaults to the Main preset: records + story pieces checked,
+// generic extras/emotions left. Rows already in the destination render
+// disabled. Rides /api/vault/move sequentially — same battle-tested lane
+// as the editor's per-prompt Select & move.
+
+export async function openBulkVaultModal({ names, direction = 'in',
+        componentSources, vaultPieces, vaultNames, onDone }) {
+    const goingIn = direction === 'in';
+    let usageResp;
+    try { usageResp = await getPieceUsage(); }
+    catch { ui.showToast('Could not load the usage index', 'error'); return; }
+    const usage = usageResp.usage || {};
+    if (!usageResp.vault?.unlocked) {
+        ui.showToast('The vault is locked — unlock it to move prompts', 'error');
+        return;
+    }
+
+    const pieces = new Map();
+    for (const name of names) {
+        let p = null;
+        try { p = await getPrompt(name); } catch { continue; }
+        if (p?.type !== 'assembled' || !p.components) continue;
+        for (const [type, val] of Object.entries(p.components)) {
+            if (type.startsWith('_')) continue;
+            const keys = Array.isArray(val) ? val : (val ? [val] : []);
+            for (const k of keys) {
+                if (!k || componentSources?.[type]?.[k]) continue;
+                pieces.set(`${type} ${k}`, { type, key: k });
+            }
+        }
+    }
+    const rows = [...pieces.values()].map(({ type, key }) => {
+        const inVault = !!vaultPieces?.[type]?.has?.(key);
+        const movable = goingIn ? !inVault : inVault;
+        const users = (usage[type]?.[key] || []).filter(n => !names.includes(n));
+        return { type, key, users, movable,
+                 checked: movable && !GENERIC_TYPES.includes(type) };
+    }).sort(byCanonical);
+
+    const already = goingIn ? 'already in vault' : 'already plaintext';
+    const promptRows = names.slice().sort().map(name => {
+        const movable = goingIn ? !vaultNames?.has?.(name) : !!vaultNames?.has?.(name);
+        return `
+        <label style="${ROW_STYLE}">
+            <input type="checkbox" class="pc-row" data-kind="prompt" data-type="__prompt"
+                   data-key="${esc(name)}" ${movable ? 'checked' : 'disabled'}>
+            <span><b>${esc(name)}</b> — prompt</span>
+            <span style="${BADGE_STYLE}">${movable ? '' : already}</span>
+        </label>`;
+    }).join('');
+    const pieceRows = rows.map(r => `
+        <label style="${ROW_STYLE}" title="${esc((r.users || []).join(', '))}">
+            <input type="checkbox" class="pc-row" data-kind="piece" data-type="${esc(r.type)}"
+                   data-key="${esc(r.key)}" ${r.movable ? '' : 'disabled'} ${r.checked ? 'checked' : ''}>
+            <span>${esc(r.type)}/${esc(r.key)}</span>
+            <span style="${BADGE_STYLE}">${r.movable
+                ? (r.users.length ? `in ${r.users.length} other prompt${r.users.length > 1 ? 's' : ''}` : '')
+                : already}</span>
+        </label>`).join('');
+
+    const title = goingIn ? `Move ${names.length} prompt${names.length > 1 ? 's' : ''} to the vault`
+                          : `Move ${names.length} prompt${names.length > 1 ? 's' : ''} to plaintext`;
+    const html = `
+        <p style="font-size:var(--font-xs)">${goingIn
+            ? 'Checked items are encrypted into the vault. Pieces are shared — ' +
+              'moving one vault-routes it for every prompt using it.'
+            : 'Checked items are written to the regular store as plaintext on disk.'}</p>
+        ${presetsHTML()}
+        <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+            ${promptRows}
+            ${pieceRows}
+        </div>`;
+    const modal = showModal(title, [{ type: 'html', value: html }], async () => {
+        const chosen = [...modal.element.querySelectorAll('.pc-row:checked')]
+            .map(cb => ({ kind: cb.dataset.kind, type: cb.dataset.type, key: cb.dataset.key }));
+        if (!chosen.length) { ui.showToast('Nothing checked', 'info'); return; }
+        const { vaultMove } = await import('../shared/vault-api.js');
+        let moved = 0;
+        const failed = [];
+        for (const c of chosen.filter(c => c.kind === 'piece')) {
+            try {
+                await vaultMove({ kind: 'piece', comp_type: c.type, key: c.key, direction });
+                moved++;
+            } catch (e) { failed.push(`${c.type}/${c.key}: ${e?.message || 'failed'}`); }
+        }
+        for (const c of chosen.filter(c => c.kind === 'prompt')) {
+            try {
+                await vaultMove({ kind: 'prompt', name: c.key, direction });
+                moved++;
+            } catch (e) { failed.push(`${c.key}: ${e?.message || 'failed'}`); }
+        }
+        const dest = goingIn ? 'the vault' : 'plaintext';
+        if (failed.length) ui.showToast(`Moved ${moved} to ${dest} · ${failed.length} failed — ${failed[0]}`, 'error');
+        else ui.showToast(`Moved ${moved} to ${dest}`, 'success');
+        onDone?.();
+    }, { wide: true, saveLabel: goingIn ? 'Move to vault' : 'Move to plaintext' });
+    wireFlatPresets(modal.element);
 }
