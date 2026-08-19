@@ -223,6 +223,13 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | GET | `/api/prompts/components` | List prompt components |
 | PUT | `/api/prompts/components/{type}/{key}` | Save prompt component |
 | DELETE | `/api/prompts/components/{type}/{key}` | Delete prompt component |
+| GET | `/api/prompts/piece-usage` | Usage index: which prompts use each piece (+ dangling refs, vault flags) |
+| POST | `/api/prompts/pieces/rename` | Safe rename: moves a piece in its store and repoints every reference |
+| POST | `/api/prompts/pieces/strip-danglers` | Strip all references to missing pieces (409 while vault locked) |
+| GET | `/api/prompts/pieces/trash` | List trashed pieces (plaintext + unlocked-vault stores) |
+| POST | `/api/prompts/pieces/trash` | Soft-delete pieces into the trash |
+| POST | `/api/prompts/pieces/trash/restore` | Restore trashed pieces (never overwrites a live key) |
+| POST | `/api/prompts/pieces/trash/purge` | Empty the piece trash (both stores while unlocked) |
 
 ### Toolsets
 
