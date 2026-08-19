@@ -36,7 +36,7 @@ export function renderPanelList({
     title, items = [], selectedId = null, idKey = 'id', renderItem,
     addTitle, extraHeader = '', showDelete = false, deletable = false,
     deleteTitle = 'Delete selected', emptyHTML = '', listClass = '', itemClass = null,
-    footer = '', subheader = '',
+    footer = '', subheader = '', headerExtra = '',
 } = {}) {
     const add = addTitle
         ? `<button class="btn-sm" data-pl-action="add" title="${esc(addTitle)}">+</button>` : '';
@@ -53,6 +53,7 @@ export function renderPanelList({
             <div class="panel-list-header">
                 <span class="panel-list-title">${esc(title)}</span>
                 <div class="panel-list-actions">${extraHeader}${add}${del}</div>
+                ${headerExtra}
             </div>
             ${subheader}
             <div class="panel-list-items">${rows}</div>

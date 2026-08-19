@@ -284,10 +284,14 @@ function render() {
                 },
                 addTitle: 'New prompt',
                 extraHeader: `<button class="btn-sm" id="pr-roster-check" title="Select prompts for bulk actions"${rosterCheck ? ' style="outline:1px solid var(--accent)"' : ''}>☑</button>`
-                    + (rosterCheck && vaultState.unlocked
-                        ? '<button class="btn-sm" id="pr-bulk-vault" title="Move selected prompts (and their pieces) into the vault">🗝</button>' : '')
                     + '<button class="btn-sm" id="pr-cleanup" title="Cleanup tools (orphans, trash)">🧹</button>'
                     + '<button class="btn-sm" id="pr-import" title="Import prompt">⬇</button>',
+                headerExtra: rosterCheck && vaultState.unlocked ? `
+                    <div style="flex-basis:100%;display:flex;gap:10px;align-items:center;font-size:var(--font-xs);margin-top:6px">
+                        <span>Vault:</span>
+                        <button class="btn-sm" id="pr-vault-in" title="Move selected prompts (and their pieces) into the vault">Move In</button>
+                        <button class="btn-sm" id="pr-vault-out" title="Move selected prompts (and their pieces) out to plaintext">Move Out</button>
+                    </div>` : '',
                 showDelete: true,
                 deletable: rosterCheck ? checkedPrompts.size > 0 : !!selected,
                 deleteTitle: rosterCheck ? `Delete ${checkedPrompts.size} selected`
@@ -601,10 +605,10 @@ function bindEvents() {
     layout.querySelector('#pr-sel-all')?.addEventListener('click', () => rosterSelect(() => true));
     layout.querySelector('#pr-sel-none')?.addEventListener('click', () => rosterSelect(() => false));
     layout.querySelector('#pr-sel-core')?.addEventListener('click', () => rosterSelect(p => stockNames.has(p.name)));
-    layout.querySelector('#pr-bulk-vault')?.addEventListener('click', () => {
+    const openBulkVault = direction => {
         if (!checkedPrompts.size) { ui.showToast('Nothing selected', 'info'); return; }
         openBulkVaultModal({
-            names: [...checkedPrompts], direction: 'in',
+            names: [...checkedPrompts], direction,
             componentSources, vaultPieces, vaultNames,
             onDone: async () => {
                 rosterCheck = false;
@@ -615,7 +619,9 @@ function bindEvents() {
                 render();
             },
         });
-    });
+    };
+    layout.querySelector('#pr-vault-in')?.addEventListener('click', () => openBulkVault('in'));
+    layout.querySelector('#pr-vault-out')?.addEventListener('click', () => openBulkVault('out'));
     layout.querySelector('#pr-cleanup')?.addEventListener('click', () => {
         openCleanupModal({
             components, componentSources, vaultPieces,
