@@ -906,6 +906,39 @@ def trash_purge() -> tuple:
     return True, n
 
 
+def rewrite_piece_refs(ctype, old_key, new_key=None):
+    """Repoint (new_key) or strip (None) every vault-preset reference to
+    ctype/old_key. UNLOCKED only. Repointing onto a key the list already
+    holds just drops the old one (no duplicates). Returns (changed_names,
+    code) — code '' | 'locked' | 'save_failed'; no-op saves nothing."""
+    with _lock:
+        if _key is None:
+            return [], 'locked'
+        changed = []
+        for name, comps in _data['scenario_presets'].items():
+            if not isinstance(comps, dict):
+                continue
+            val = comps.get(ctype)
+            if isinstance(val, list):
+                if old_key in val:
+                    if new_key and new_key not in val:
+                        comps[ctype] = [new_key if k == old_key else k for k in val]
+                    else:
+                        comps[ctype] = [k for k in val if k != old_key]
+                    changed.append(name)
+            elif val == old_key:
+                comps[ctype] = new_key or ''
+                changed.append(name)
+        if not changed:
+            return [], ''
+        if not _save_locked():
+            return [], 'save_failed'
+        _touch_locked()
+        _reconcile_refs_locked()
+    _publish("refs_rewritten")
+    return changed, ''
+
+
 def set_preset(name, preset) -> tuple:
     if not isinstance(name, str) or not name or name.startswith('_') \
             or name in _RESERVED_NAMES:

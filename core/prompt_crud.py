@@ -1040,3 +1040,128 @@ def reconcile_trash_with_vault() -> int:
         return 0
     restored, _skipped = restore_pieces(want)
     return len(restored)
+
+
+# ── ref-rewrite primitive + safe rename + dangler detection ──────────────
+# The rewrite is THE engine: safe rename and dangler-strip are thin wrappers.
+# It covers all three ref surfaces — user presets, unlocked-vault presets,
+# and the runtime assembled state — so a rename can't mint danglers.
+
+def _rewrite_assembled_ref(ctype, old_key, new_key=None) -> bool:
+    with prompt_state._state_lock:
+        st = prompt_state._assembled_state
+        val = st.get(ctype)
+        if isinstance(val, list):
+            if old_key not in val:
+                return False
+            if new_key and new_key not in val:
+                st[ctype] = [new_key if k == old_key else k for k in val]
+            else:
+                st[ctype] = [k for k in val if k != old_key]
+            return True
+        if val == old_key:
+            st[ctype] = new_key or ''
+            return True
+    return False
+
+
+def rewrite_piece_refs(ctype, old_key, new_key=None, reason=None) -> dict:
+    """Repoint (new_key) or strip (None) every reference to ctype/old_key.
+    Repointing onto a key a list already holds just drops the old one.
+    Returns {'changed': [user prompt names], 'vault_changed': [names],
+    'assembled': bool, 'vault_locked': bool} — vault_locked means a sealed
+    vault MIGHT still reference the old name (hash says yes or unknown)."""
+    from core import prompt_vault
+    changed = []
+    with prompt_manager._lock:
+        for name, comps in prompt_manager._scenario_presets.items():
+            if not isinstance(comps, dict):
+                continue
+            val = comps.get(ctype)
+            if isinstance(val, list):
+                if old_key in val:
+                    if new_key and new_key not in val:
+                        comps[ctype] = [new_key if k == old_key else k for k in val]
+                    else:
+                        comps[ctype] = [k for k in val if k != old_key]
+                    changed.append(name)
+            elif val == old_key:
+                comps[ctype] = new_key or ''
+                changed.append(name)
+        if changed:
+            prompt_manager.save_scenario_presets(
+                reason=reason or f"rewrote refs {ctype}/{old_key} -> {new_key or '(removed)'}")
+    vault_changed, vcode = prompt_vault.rewrite_piece_refs(ctype, old_key, new_key)
+    vault_locked = (vcode == 'locked'
+                    and prompt_vault.piece_vault_referenced(ctype, old_key) is not False)
+    assembled = _rewrite_assembled_ref(ctype, old_key, new_key)
+    if changed or vault_changed or assembled:
+        _publish_components_changed('refs_rewritten')
+        logger.info(f"Rewrote refs {ctype}/{old_key} -> {new_key or '(removed)'}: "
+                    f"{len(changed)} user, {len(vault_changed)} vault"
+                    + (", assembled state" if assembled else ""))
+    return {'changed': changed, 'vault_changed': vault_changed,
+            'assembled': assembled, 'vault_locked': vault_locked}
+
+
+def rename_piece(ctype, old_key, new_key, reason=None) -> tuple[bool, str]:
+    """Safe rename: move the piece text to the new key IN ITS OWN STORE,
+    then repoint every reference. Refuses when the new key exists anywhere
+    in the merged view (no silent shadowing)."""
+    from core import prompt_vault
+    new_key = (new_key or '').strip()
+    if not new_key or new_key.startswith('_'):
+        return False, "Invalid new name"
+    if new_key == old_key:
+        return False, "That's the same name"
+    if new_key in prompt_manager.components.get(ctype, {}):
+        return False, f"'{ctype}/{new_key}' already exists"
+    with prompt_manager._lock:
+        store = prompt_manager._components.get(ctype, {})
+        in_plain = old_key in store
+        if in_plain:
+            store[new_key] = store.pop(old_key)
+            if not prompt_manager.save_components(
+                    reason=reason or f"renamed {ctype}/{old_key} -> {new_key}"):
+                store[old_key] = store.pop(new_key)
+                return False, "Store save failed — nothing renamed"
+    if not in_plain:
+        if not prompt_vault.vault_unlocked() \
+                or not prompt_vault.vault_has_piece(ctype, old_key):
+            return False, f"'{ctype}/{old_key}' not found (pack-owned or sealed)"
+        val = prompt_vault.overlay_components().get(ctype, {}).get(old_key, '')
+        ok, code = prompt_vault.set_piece(ctype, new_key, val)
+        if not ok:
+            return False, f"Vault refused the rename ({code})"
+        prompt_vault.delete_piece(ctype, old_key)
+    res = rewrite_piece_refs(ctype, old_key, new_key,
+                             reason=f"rename {ctype}/{old_key} -> {new_key}")
+    n = len(res['changed']) + len(res['vault_changed'])
+    msg = f"Renamed to '{new_key}'" + (f" — updated {n} prompt(s)" if n else "")
+    if res['vault_locked']:
+        msg += " (a locked vault prompt may still use the old name)"
+    logger.info(f"Renamed piece {ctype}/{old_key} -> {new_key} ({n} refs updated)")
+    return True, msg
+
+
+def dangling_refs() -> dict:
+    """{prompt_name: [{'type','key'}]} — references to pieces missing from
+    the merged component view. Vault prompts join only while unlocked, and
+    a LOCKED vault makes plaintext refs to sealed pieces LOOK dangling —
+    destructive callers must refuse while a vault exists and is locked."""
+    comps = prompt_manager.components
+    out = {}
+    for name, pcomps in prompt_manager.scenario_presets.items():
+        if not isinstance(pcomps, dict):
+            continue
+        bad = []
+        for ctype, val in pcomps.items():
+            if ctype.startswith('_'):
+                continue
+            keys = val if isinstance(val, list) else ([val] if val else [])
+            for k in keys:
+                if isinstance(k, str) and k and k not in comps.get(ctype, {}):
+                    bad.append({'type': ctype, 'key': k})
+        if bad:
+            out[name] = bad
+    return out

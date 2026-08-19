@@ -142,6 +142,7 @@ async def get_piece_usage(request: Request, _=Depends(require_login)):
     status = prompt_vault.vault_status()
     refs_ok = prompt_vault.piece_refs_available()
     resp = {"usage": prompt_crud.piece_usage(),
+            "danglers": prompt_crud.dangling_refs(),
             "vault": {**status, "piece_refs_available": refs_ok}}
     if status.get('exists') and not status.get('unlocked') and refs_ok:
         flagged = {}
@@ -202,6 +203,44 @@ async def purge_prompt_pieces_trash(request: Request, _=Depends(require_login)):
     """Empty the piece trash (final)."""
     from core import prompt_crud
     return {"purged": prompt_crud.purge_trash()}
+
+
+@router.post("/api/prompts/pieces/rename")
+async def rename_prompt_piece(request: Request, _=Depends(require_login)):
+    """Safe rename: moves the piece in its own store and repoints every
+    reference (user presets, unlocked vault, assembled state)."""
+    from core import prompt_crud
+    data = await request.json()
+    ctype, old, new = (data.get('type') or '', data.get('old') or '',
+                       data.get('new') or '')
+    if not ctype or not old:
+        raise HTTPException(status_code=400, detail="type and old are required")
+    ok, msg = prompt_crud.rename_piece(ctype, old, new)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"status": "success", "message": msg}
+
+
+@router.post("/api/prompts/pieces/strip-danglers")
+async def strip_dangling_refs(request: Request, _=Depends(require_login)):
+    """Strip every reference to a missing piece. Recomputed server-side at
+    call time (idempotent). REFUSED while a vault exists and is locked —
+    sealed pieces look missing, and stripping would destroy valid refs."""
+    from core import prompt_crud, prompt_vault
+    status = prompt_vault.vault_status()
+    if status.get('exists') and not status.get('unlocked'):
+        raise HTTPException(status_code=409,
+                            detail="Vault is locked — sealed pieces look "
+                                   "missing. Unlock it before stripping.")
+    d = prompt_crud.dangling_refs()
+    pairs = {(r['type'], r['key']) for refs in d.values() for r in refs}
+    stripped = []
+    for ctype, key in sorted(pairs):
+        res = prompt_crud.rewrite_piece_refs(ctype, key, None,
+                                             reason="strip dangling refs")
+        stripped.append({'type': ctype, 'key': key,
+                         'prompts': res['changed'] + res['vault_changed']})
+    return {"stripped": stripped, "count": len(pairs)}
 
 
 @router.get("/api/prompts/{name}")

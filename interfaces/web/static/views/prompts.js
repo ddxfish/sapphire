@@ -1,6 +1,6 @@
 // views/prompts.js - Prompt editor view (accordion-based inline editing)
 import { listPrompts, getPrompt, getComponentsWithSources, savePrompt, deletePrompt,
-         saveComponent, deleteComponent, loadPrompt } from '../shared/prompt-api.js';
+         saveComponent, deleteComponent, loadPrompt, renamePiece } from '../shared/prompt-api.js';
 import { PERSONA_TABS } from '../shared/persona-tabs.js';
 import { renderSectionTabs, bindSectionTabs } from '../shared/section-tabs.js';
 import { renderPanelList, bindPanelList } from '../shared/panel-list.js';
@@ -276,10 +276,28 @@ function render() {
                     const check = rosterCheck
                         ? `<span style="margin-right:6px">${p.source ? '—' : (checkedPrompts.has(p.name) ? '☑' : '☐')}</span>`
                         : '';
+                    // ⚠ dangling-ref badge — suppressed while a vault exists
+                    // and is locked (sealed pieces LOOK missing; badging
+                    // them would be false alarms).
+                    const dangList = [];
+                    if (d?.components && !(vaultState.exists && !vaultState.unlocked)) {
+                        for (const [t, v] of Object.entries(d.components)) {
+                            if (t.startsWith('_')) continue;
+                            for (const k of (Array.isArray(v) ? v : (v ? [v] : []))) {
+                                // KEY MEMBERSHIP, not text truthiness — pieces
+                                // with empty text (shipped 'none', fresh
+                                // blanks) EXIST and must not badge as missing.
+                                if (typeof k === 'string' && k && !(k in (components[t] || {}))) {
+                                    dangList.push(`${t}/${k}`);
+                                }
+                            }
+                        }
+                    }
                     return `<div class="pr-item-info">
                         <span class="pr-item-name">${check}${p.privacy_required ? '🔒 ' : ''}${p.name}${isActive ? ' (Active)' : ''}</span>
                         ${tokenStr ? `<span class="pr-item-tokens">${tokenStr}</span>` : ''}
                         <span class="pr-item-meta">${meta}</span>
+                        ${dangList.length ? `<span class="pr-item-meta" style="color:#f59e0b" title="Missing: ${escAttr(dangList.join(', '))}">⚠ ${dangList.length} missing ref${dangList.length > 1 ? 's' : ''}</span>` : ''}
                     </div>`;
                 },
                 addTitle: 'New prompt',
@@ -303,6 +321,8 @@ function render() {
                         <span id="pr-sel-none" style="color:var(--accent);cursor:pointer;text-decoration:underline">None</span>
                         <span id="pr-sel-core" style="color:var(--accent);cursor:pointer;text-decoration:underline"
                               title="The prompts that ship with Sapphire (stock personas)">Core</span>
+                        <span id="pr-sel-custom" style="color:var(--accent);cursor:pointer;text-decoration:underline"
+                              title="Your prompts — everything except the stock ones">Custom</span>
                     </div>` : '',
             })}
             <div class="panel-right">
@@ -605,6 +625,7 @@ function bindEvents() {
     layout.querySelector('#pr-sel-all')?.addEventListener('click', () => rosterSelect(() => true));
     layout.querySelector('#pr-sel-none')?.addEventListener('click', () => rosterSelect(() => false));
     layout.querySelector('#pr-sel-core')?.addEventListener('click', () => rosterSelect(p => stockNames.has(p.name)));
+    layout.querySelector('#pr-sel-custom')?.addEventListener('click', () => rosterSelect(p => !stockNames.has(p.name)));
     const openBulkVault = direction => {
         if (!checkedPrompts.size) { ui.showToast('Nothing selected', 'info'); return; }
         openBulkVaultModal({
@@ -1327,6 +1348,11 @@ async function deleteDefinition(type, key) {
     } catch (e) { ui.showToast('Failed', 'error'); }
 }
 
+// Safe rename (2026-08-19): ONE server call moves the piece in its own
+// store and repoints EVERY reference — user presets, unlocked-vault
+// presets, and the assembled state. The old client-side dance (save-new +
+// delete-old + fix only the SELECTED prompt) was a dangler factory: every
+// other prompt using the piece kept the dead name.
 async function renameDefinition(type, oldKey, newKey) {
     const defs = components[type] || {};
     if (defs[newKey]) {
@@ -1334,36 +1360,20 @@ async function renameDefinition(type, oldKey, newKey) {
         return;
     }
     try {
-        const text = defs[oldKey] || '';
-        // Origin from the OLD key — renamed vault pieces stay vault-routed.
-        const res = await saveComponent(type, newKey, text, null, pieceOrigin(type, oldKey));
-        noteVaultRouted(type, newKey, res);
-        vaultPieces[type]?.delete(oldKey);
-        await deleteComponent(type, oldKey);
-
-        // Update local state
-        components[type][newKey] = text;
+        const res = await renamePiece(type, oldKey, newKey);
+        // Local mirrors stay coherent until the reload lands
+        components[type][newKey] = defs[oldKey] || '';
         delete components[type][oldKey];
-
-        // Update prompt reference
-        if (selectedData?.components) {
-            if (MULTI_TYPES.includes(type)) {
-                const arr = selectedData.components[type] || [];
-                const idx = arr.indexOf(oldKey);
-                if (idx >= 0) { arr[idx] = newKey; await savePrompt(selected, promptSaveData(selected, selectedData)); }
-            } else {
-                if (selectedData.components[type] === oldKey) {
-                    selectedData.components[type] = newKey;
-                    await savePrompt(selected, promptSaveData(selected, selectedData));
-                }
-            }
+        if (vaultPieces[type]?.has(oldKey)) {
+            vaultPieces[type].delete(oldKey);
+            vaultPieces[type].add(newKey);
         }
-
         editTarget[type] = newKey;
-        renderAccordionBody(type);
+        ui.showToast(res?.message || `Renamed to: ${newKey}`, 'success');
+        await loadAll();
+        render();
         refreshPreview();
-        ui.showToast(`Renamed to: ${newKey}`, 'success');
-    } catch (e) { ui.showToast('Rename failed', 'error'); }
+    } catch (e) { ui.showToast(e?.message || 'Rename failed', 'error'); }
 }
 
 // ── Auto-save ──
@@ -1454,16 +1464,19 @@ async function refreshPreview() {
 function getUsedPieces() {
     if (!selectedData?.components) return {};
     const used = {};
+    // Key membership, not text truthiness (same class as the ⚠ badge fix,
+    // 2026-08-19): empty-text pieces are real pieces — excluding them here
+    // hid them from the export gates and the delete modal's piece list.
     for (const type of SINGLE_TYPES) {
         const key = selectedData.components[type];
-        if (key && components[type]?.[key]) {
+        if (key && (key in (components[type] || {}))) {
             used[type] = { [key]: components[type][key] };
         }
     }
     for (const type of MULTI_TYPES) {
         const keys = selectedData.components[type] || [];
         for (const key of keys) {
-            if (components[type]?.[key]) {
+            if (key in (components[type] || {})) {
                 if (!used[type]) used[type] = {};
                 used[type][key] = components[type][key];
             }

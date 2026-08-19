@@ -55,7 +55,28 @@ def store(tmp_path, monkeypatch):
     # want a live vault stack the `vault` fixture after this one (its
     # setattr wins — fixture order in the test signature matters).
     monkeypatch.setattr(pv, 'VAULT_PATH', tmp_path / 'no_vault.enc')
+    monkeypatch.setattr(pv, 'REFS_PATH', tmp_path / 'no_refs.json')
+    monkeypatch.setattr(pv, '_refs_loaded', False)
+    monkeypatch.setattr(pv, '_piece_salt', None)
+    monkeypatch.setattr(pv, '_piece_hashes', set())
     return {'comps': comps, 'saves': saves, 'tmp': tmp_path}
+
+
+@pytest.fixture
+def presets(monkeypatch):
+    """Hermetic user presets + assembled state for the ref-rewrite lanes."""
+    import core.prompt_state as pst
+    ps = {'ronnie': {'character': 'ronnie', 'extras': ['fear', 'ghost'],
+                     '_privacy_required': False},
+          'beach': {'character': 'ronnie', 'extras': []}}
+    saves = []
+    monkeypatch.setattr(prompt_manager, '_scenario_presets', ps)
+    monkeypatch.setattr(prompt_manager, 'save_scenario_presets',
+                        lambda reason=None, audit=True: saves.append(reason) or True)
+    monkeypatch.setattr(pst, '_assembled_state',
+                        {'character': 'ronnie', 'extras': ['fear'],
+                         'spice': '', 'active_preset': 'default'})
+    return {'ps': ps, 'saves': saves}
 
 
 # ── usage index ──
@@ -265,3 +286,78 @@ class TestReconcile:
     def test_noop_when_locked_or_empty(self, store, monkeypatch):
         monkeypatch.setattr(pv, 'piece_ref_pairs', lambda: None)
         assert crud.reconcile_trash_with_vault() == 0
+
+
+# ── ref-rewrite primitive + safe rename + danglers ──
+
+class TestRewriteRefs:
+    def test_repoint_strip_dedup_and_assembled(self, store, presets):
+        import core.prompt_state as pst
+        res = crud.rewrite_piece_refs('character', 'ronnie', 'bobby')
+        assert sorted(res['changed']) == ['beach', 'ronnie']
+        assert presets['ps']['ronnie']['character'] == 'bobby'
+        assert res['assembled'] is True
+        assert pst._assembled_state['character'] == 'bobby'
+        assert presets['saves']
+        res = crud.rewrite_piece_refs('extras', 'ghost', None)
+        assert res['changed'] == ['ronnie']
+        assert presets['ps']['ronnie']['extras'] == ['fear']
+        # repoint onto a key the list already holds -> just drops the old
+        presets['ps']['ronnie']['extras'] = ['fear', 'fear2']
+        crud.rewrite_piece_refs('extras', 'fear', 'fear2')
+        assert presets['ps']['ronnie']['extras'] == ['fear2']
+
+    def test_noop_saves_nothing(self, store, presets):
+        n = len(presets['saves'])
+        res = crud.rewrite_piece_refs('character', 'nobody', 'anybody')
+        assert not res['changed'] and len(presets['saves']) == n
+
+
+class TestRenamePiece:
+    def test_plaintext_rename_repoints_everywhere(self, store, presets):
+        ok, msg = crud.rename_piece('extras', 'fear', 'terror')
+        assert ok, msg
+        assert 'terror' in store['comps']['extras']
+        assert 'fear' not in store['comps']['extras']
+        assert presets['ps']['ronnie']['extras'] == ['terror', 'ghost']
+
+    def test_collision_refused(self, store, presets):
+        ok, msg = crud.rename_piece('extras', 'fear', 'romantic')
+        assert not ok and 'already exists' in msg
+        assert store['comps']['extras']['fear'] == 'be afraid'
+
+    def test_vault_lane_rename(self, store, vault, presets):
+        vault.setup('hunter2')
+        vault.set_piece('extras', 'sealedname', 'shh')
+        vault.set_preset('vstory', {'character': 'x', 'extras': ['sealedname']})
+        ok, msg = crud.rename_piece('extras', 'sealedname', 'newname')
+        assert ok, msg
+        assert vault.overlay_components()['extras'].get('newname') == 'shh'
+        assert 'sealedname' not in vault.overlay_components().get('extras', {})
+        assert vault._data['scenario_presets']['vstory']['extras'] == ['newname']
+
+
+class TestVaultRewrite:
+    def test_rewrite_and_locked(self, vault):
+        vault.setup('hunter2')
+        vault.set_preset('s', {'character': 'a', 'extras': ['x', 'y']})
+        changed, code = vault.rewrite_piece_refs('extras', 'x', 'z')
+        assert code == '' and changed == ['s']
+        assert vault._data['scenario_presets']['s']['extras'] == ['z', 'y']
+        vault.lock(reason='t')
+        assert vault.rewrite_piece_refs('extras', 'y', None) == ([], 'locked')
+
+
+class TestDanglers:
+    def test_detection(self, monkeypatch):
+        monkeypatch.setattr(type(prompt_manager), 'components',
+                            property(lambda self: {'extras': {'fear': 'x'}}))
+        monkeypatch.setattr(type(prompt_manager), 'scenario_presets',
+                            property(lambda self: {
+                                'ok': {'extras': ['fear'], 'character': ''},
+                                'broken': {'extras': ['fear', 'gone'],
+                                           'character': 'missing'}}))
+        d = crud.dangling_refs()
+        assert 'ok' not in d
+        assert {(r['type'], r['key']) for r in d['broken']} \
+            == {('extras', 'gone'), ('character', 'missing')}

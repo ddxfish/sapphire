@@ -7,7 +7,7 @@
 // banner says to unlock once. The unlock-time reconcile restores any
 // trashed piece a vault prompt still references, as the last net.
 import { showModal } from '../shared/modal.js';
-import { getPrompt, deletePrompt, getPieceUsage,
+import { getPrompt, deletePrompt, getPieceUsage, stripDanglers,
          trashPieces, restorePieces, purgeTrash, listTrash } from '../shared/prompt-api.js';
 import * as ui from '../ui.js';
 
@@ -188,7 +188,7 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
             const keys = Array.isArray(val) ? val : (val ? [val] : []);
             for (const k of keys) {
                 if (!k || componentSources?.[type]?.[k]) continue;  // pack-owned
-                pieces.set(`${type} ${k}`, { type, key: k });
+                pieces.set(`${type} ${k}`, { type, key: k });
             }
         }
     }
@@ -278,6 +278,10 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
     modal.element.querySelector('.modal-close')?.addEventListener('click', done);
     modal.element.querySelector('.modal-x')?.addEventListener('click', done);
 
+    let danglers = usageResp.danglers || {};
+    const danglerCount = () =>
+        Object.values(danglers).reduce((n, refs) => n + refs.length, 0);
+
     const CARD = 'border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:6px 0';
     const menu = () => {
         body.innerHTML = `
@@ -289,13 +293,52 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
                 <button class="btn-sm" id="pc-open-orphans" ${orphans.length ? '' : 'disabled'}>Review…</button>
             </div>
             <div style="${CARD}">
+                <b>Dangling references (${danglerCount()})</b>
+                <p style="font-size:var(--font-xs);opacity:0.8;margin:4px 0">Prompts pointing at
+                pieces that no longer exist — the assembler skips them silently.</p>
+                <button class="btn-sm" id="pc-open-danglers" ${danglerCount() ? '' : 'disabled'}>Review…</button>
+            </div>
+            <div style="${CARD}">
                 <b>Piece trash (${trash.length})</b>
                 <p style="font-size:var(--font-xs);opacity:0.8;margin:4px 0">Soft-deleted pieces.
                 Restore, or empty the trash for good.</p>
                 <button class="btn-sm" id="pc-open-trash" ${trash.length ? '' : 'disabled'}>Review…</button>
             </div>`;
         body.querySelector('#pc-open-orphans')?.addEventListener('click', orphanView);
+        body.querySelector('#pc-open-danglers')?.addEventListener('click', danglerView);
         body.querySelector('#pc-open-trash')?.addEventListener('click', trashView);
+    };
+
+    // Danglers are read-only rows (nothing to preserve — the pieces are
+    // gone); one button strips all. STRIP is refused while a vault exists
+    // and is locked: sealed pieces LOOK missing, and stripping would
+    // destroy valid refs — the server 409s as belt and braces.
+    const danglerView = () => {
+        const vaultSealed = vault.exists && !vault.unlocked;
+        body.innerHTML = `
+            ${vaultSealed ? `<p style="font-size:var(--font-xs);color:#f59e0b;margin:4px 0">
+                \u{1F5DD} Vault locked — refs to sealed vault pieces look dangling,
+                so Strip will refuse until you unlock the vault.</p>` : ''}
+            <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:var(--font-xs)">
+                ${Object.keys(danglers).sort().map(name => `
+                    <div style="padding:3px 0">
+                        <b>${esc(name)}</b>:
+                        ${danglers[name].map(r => `${esc(r.type)}/${esc(r.key)}`).join(', ')}
+                    </div>`).join('')}
+            </div>
+            <div style="display:flex;gap:8px;margin-top:8px">
+                <button class="btn-sm danger" id="pc-strip">Strip all dead references</button>
+                <button class="btn-sm" id="pc-back">Back</button>
+            </div>`;
+        body.querySelector('#pc-back').addEventListener('click', () => refresh());
+        body.querySelector('#pc-strip')?.addEventListener('click', async () => {
+            try {
+                const res = await stripDanglers();
+                dirty = dirty || (res.count || 0) > 0;
+                ui.showToast(`Stripped ${res.count || 0} dead reference(s)`, 'success');
+            } catch (e) { ui.showToast(e?.message || 'Strip failed', 'error'); }
+            await refresh();
+        });
     };
 
     const orphanView = () => {
@@ -380,6 +423,7 @@ export async function openCleanupModal({ components, componentSources, vaultPiec
         } catch { /* keep stale rather than blank */ }
         const u = usageResp.usage || {};
         const vr = usageResp.vault_referenced || {};
+        danglers = usageResp.danglers || {};
         orphans.length = 0;
         for (const [type, entries] of Object.entries(components || {})) {
             for (const key of Object.keys(entries)) {

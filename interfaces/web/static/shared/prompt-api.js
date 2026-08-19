@@ -119,3 +119,15 @@ export async function listTrash() {
   const data = await fetchWithTimeout('/api/prompts/pieces/trash');
   return data.items || [];
 }
+
+// Safe rename: server moves the piece in its own store and repoints every
+// reference (user presets, unlocked vault, assembled state).
+export async function renamePiece(type, oldKey, newKey) {
+  return await fetchWithTimeout('/api/prompts/pieces/rename', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, old: oldKey, new: newKey }) });
+}
+
+export async function stripDanglers() {
+  return await fetchWithTimeout('/api/prompts/pieces/strip-danglers', { method: 'POST' });
+}
