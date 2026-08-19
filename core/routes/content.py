@@ -129,7 +129,7 @@ async def get_piece_usage(request: Request, _=Depends(require_login)):
     return resp
 
 
-def _piece_items(data):
+def _piece_items(data, with_store=False):
     raw = data.get('items') if isinstance(data, dict) else None
     if not isinstance(raw, list) or not raw:
         raise HTTPException(status_code=400,
@@ -139,7 +139,11 @@ def _piece_items(data):
         if not isinstance(it, dict) or not it.get('type') or not it.get('key'):
             raise HTTPException(status_code=400,
                                 detail="each item needs type and key")
-        items.append((str(it['type']), str(it['key'])))
+        if with_store:
+            items.append((str(it['type']), str(it['key']),
+                          str(it.get('store') or 'plain')))
+        else:
+            items.append((str(it['type']), str(it['key'])))
     return items
 
 
@@ -160,9 +164,11 @@ async def trash_prompt_pieces(request: Request, _=Depends(require_login)):
 
 @router.post("/api/prompts/pieces/trash/restore")
 async def restore_prompt_pieces(request: Request, _=Depends(require_login)):
-    """Restore trashed pieces. Never overwrites a live key."""
+    """Restore trashed pieces (store 'vault' rides the vault's own trash).
+    Never overwrites a live key."""
     from core import prompt_crud
-    restored, skipped = prompt_crud.restore_pieces(_piece_items(await request.json()))
+    restored, skipped = prompt_crud.restore_pieces(
+        _piece_items(await request.json(), with_store=True))
     return {"restored": restored, "skipped": skipped}
 
 

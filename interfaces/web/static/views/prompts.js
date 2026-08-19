@@ -148,6 +148,7 @@ function noteVaultRouted(type, key, res) {
 // focusout handler catches up as soon as the user leaves the field.
 let busBound = false;
 let pendingRefresh = false;
+let promptSaveInFlight = false;  // debounced prompt save scheduled/awaiting
 
 const _editableFocused = () => {
     const ae = document.activeElement;
@@ -176,7 +177,12 @@ function bindBus() {
         const refreshIfVisible = (data) => {
             if (!viewVisible) return;
             if (data?.action === 'loaded') return;  // activation side effect
-            if (_editableFocused()) { pendingRefresh = true; return; }
+            // In-flight guard (Bobby bug, 2026-08-18): while a debounced
+            // prompt save is pending, a bus refresh would re-fetch the OLD
+            // server copy, replace selectedData, and the debounce would then
+            // persist the clobbered state — piece +New/switches lost. Defer;
+            // the save's completion runs the catch-up.
+            if (_editableFocused() || promptSaveInFlight) { pendingRefresh = true; return; }
             doBusRefresh();
         };
         eventBus.on(eventBus.Events.PROMPT_CHANGED, refreshIfVisible);
@@ -1082,18 +1088,33 @@ function createPrompt() {
     const close = () => modal.remove();
     setupModalClose(modal, close);
     modal.querySelector('#pr-new-close').addEventListener('click', close);
-    modal.querySelector('#pr-new-name').addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+    modal.querySelector('#pr-new-name').addEventListener('keydown', e => {
+        if (e.key === 'Escape') close();
+        if (e.key === 'Enter') create('assembled');
+    });
 
     async function create(type) {
         const name = modal.querySelector('#pr-new-name').value.trim();
         if (!name) { modal.querySelector('#pr-new-name').focus(); return; }
+        // A new assembled prompt gets FRESH story-specific pieces named after
+        // it (character/location/scenario), so you land editing YOUR prompt —
+        // not a body full of 'sapphire' and 'default'. Same-named existing
+        // pieces are referenced, never overwritten. Generic sections stay
+        // 'default'; extras/emotions start empty.
         const data = type === 'monolith'
             ? { type: 'monolith', content: '', privacy_required: false }
-            : { type: 'assembled', components: { character: 'sapphire', location: 'default', goals: 'default', relationship: 'default', format: 'default', scenario: 'default', extras: [], emotions: [] }, privacy_required: false };
+            : { type: 'assembled', components: { character: name, location: name, goals: 'default', relationship: 'default', format: 'default', scenario: name, extras: [], emotions: [] }, privacy_required: false };
         try {
+            if (type === 'assembled') {
+                for (const t of ['character', 'location', 'scenario']) {
+                    if (!components[t]?.[name]) {
+                        await saveComponent(t, name, '', `piece for new prompt "${name}"`);
+                    }
+                }
+            }
             await savePrompt(name, data);
             selected = name;
-            openAccordion = null;
+            openAccordion = type === 'assembled' ? 'character' : null;
             editTarget = {};
             await loadAll();
             render();
@@ -1281,8 +1302,9 @@ async function renameDefinition(type, oldKey, newKey) {
 // ── Auto-save ──
 function debouncedSavePrompt() {
     clearTimeout(saveTimer);
+    promptSaveInFlight = true;
     saveTimer = setTimeout(async () => {
-        if (!selected || !selectedData) return;
+        if (!selected || !selectedData) { promptSaveInFlight = false; return; }
         try {
             const why = liveReason('prompt');
             await savePrompt(selected, promptSaveData(selected,
@@ -1292,6 +1314,10 @@ function debouncedSavePrompt() {
             refreshPreview();
         } catch (e) {
             ui.showToast('Save failed', 'error');
+        } finally {
+            promptSaveInFlight = false;
+            // Catch up the refresh this save deferred (guard above).
+            if (pendingRefresh && viewVisible && !_editableFocused()) doBusRefresh();
         }
     }, 600);
 }

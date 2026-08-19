@@ -867,15 +867,39 @@ def _publish_components_changed(action):
 
 
 def trash_pieces(items, reason=None) -> tuple:
-    """Soft-delete plaintext user pieces: items = [(type, key)] move into the
-    trash store. Returns (trashed, skipped) — skipped rows carry a 'why'.
-    Ordering is fail-safe: trash persists BEFORE the store delete, and a
-    store-save failure rolls both back — a piece is never in neither place."""
+    """Soft-delete pieces: items = [(type, key)]. Plaintext pieces move into
+    the sidecar trash store; pieces living in the UNLOCKED vault move into
+    the vault's own encrypted trash (content never lands on plaintext disk).
+    Returns (trashed, skipped) — trashed rows carry 'store', skipped a 'why'.
+    Plaintext ordering is fail-safe: trash persists BEFORE the store delete,
+    and a store-save failure rolls both back — a piece is never in neither
+    place. Lock order is pm→pv, same as the move funnels."""
+    from core import prompt_vault
+    vault_ok = []
+    vault_skipped = []
+    plain_items = []
+    for ctype, key in items:
+        if key in prompt_manager._components.get(ctype, {}):
+            plain_items.append((ctype, key))
+        elif prompt_vault.vault_unlocked():
+            ok, code = prompt_vault.trash_piece(ctype, key)
+            if ok:
+                vault_ok.append({'type': ctype, 'key': key, 'store': 'vault'})
+            else:
+                vault_skipped.append({'type': ctype, 'key': key,
+                                      'why': 'not in the plaintext store or unlocked vault'})
+        elif prompt_vault.vault_exists():
+            # Sealed vault: can't tell a vault piece from a typo — honest skip.
+            vault_skipped.append({'type': ctype, 'key': key,
+                                  'why': 'vault is locked'})
+        else:
+            vault_skipped.append({'type': ctype, 'key': key,
+                                  'why': 'not in the plaintext store'})
     with prompt_manager._lock:
         trash = _load_trash()
         original = list(trash)
-        pending, skipped = [], []
-        for ctype, key in items:
+        pending, skipped = [], list(vault_skipped)
+        for ctype, key in plain_items:
             store = prompt_manager._components.get(ctype, {})
             if key not in store:
                 skipped.append({'type': ctype, 'key': key,
@@ -885,10 +909,13 @@ def trash_pieces(items, reason=None) -> tuple:
                           "deleted_at": time.time()})
             pending.append((ctype, key))
         if not pending:
-            return [], skipped
+            if vault_ok:
+                _publish_components_changed('pieces_trashed')
+            return vault_ok, skipped
         if not _save_trash(trash):
-            return [], skipped + [{'type': t, 'key': k, 'why': 'trash save failed'}
-                                  for t, k in pending]
+            return vault_ok, skipped + [{'type': t, 'key': k,
+                                         'why': 'trash save failed'}
+                                        for t, k in pending]
         removed = {}
         for ctype, key in pending:
             removed[(ctype, key)] = prompt_manager._components[ctype].pop(key)
@@ -897,28 +924,52 @@ def trash_pieces(items, reason=None) -> tuple:
             for (ctype, key), text in removed.items():
                 prompt_manager._components.setdefault(ctype, {})[key] = text
             _save_trash(original)
-            return [], skipped + [{'type': t, 'key': k, 'why': 'store save failed'}
-                                  for t, k in pending]
+            return vault_ok, skipped + [{'type': t, 'key': k,
+                                         'why': 'store save failed'}
+                                        for t, k in pending]
     _publish_components_changed('pieces_trashed')
-    logger.info(f"Trashed {len(pending)} piece(s): "
-                + ", ".join(f"{t}/{k}" for t, k in pending))
-    return [{'type': t, 'key': k} for t, k in pending], skipped
+    logger.info(f"Trashed {len(pending)} plaintext piece(s): "
+                + ", ".join(f"{t}/{k}" for t, k in pending)
+                + (f" + {len(vault_ok)} vault piece(s)" if vault_ok else ""))
+    return (vault_ok
+            + [{'type': t, 'key': k, 'store': 'plain'} for t, k in pending]), skipped
 
 
 def list_trash() -> list:
-    """Trash entries newest-first (type, key, text, deleted_at)."""
-    return sorted(_load_trash(), key=lambda it: it.get('deleted_at', 0),
-                  reverse=True)
+    """Trash entries newest-first, both stores: plaintext sidecar entries
+    carry store='plain'; the vault's encrypted trash (store='vault') joins
+    only while unlocked — sealed content stays invisible."""
+    from core import prompt_vault
+    merged = [{**it, 'store': 'plain'} for it in _load_trash()] \
+        + [{**it, 'store': 'vault'} for it in prompt_vault.trash_list()]
+    return sorted(merged, key=lambda it: it.get('deleted_at', 0), reverse=True)
 
 
 def restore_pieces(items) -> tuple:
     """Restore trashed pieces (latest entry per type/key wins; all entries
     for a restored key drop). Never overwrites a live piece — skipped with
-    'live piece exists' instead."""
+    'live piece exists' instead. items: (type, key) or (type, key, store) —
+    store 'vault' routes through the vault's encrypted trash (unlocked only),
+    default 'plain' hits the sidecar store."""
+    from core import prompt_vault
+    plain_items, vault_ok, vault_skipped = [], [], []
+    for it in items:
+        ctype, key = it[0], it[1]
+        store = it[2] if len(it) > 2 else 'plain'
+        if store != 'vault':
+            plain_items.append((ctype, key))
+            continue
+        ok, code = prompt_vault.trash_restore(ctype, key)
+        if ok:
+            vault_ok.append({'type': ctype, 'key': key, 'store': 'vault'})
+        else:
+            why = {'locked': 'vault is locked',
+                   'exists': 'live piece exists'}.get(code, 'not in trash')
+            vault_skipped.append({'type': ctype, 'key': key, 'why': why})
     with prompt_manager._lock:
         trash = _load_trash()
-        restored, skipped, added = [], [], {}
-        for ctype, key in items:
+        restored, skipped, added = [], list(vault_skipped), {}
+        for ctype, key in plain_items:
             entries = [it for it in trash
                        if it['type'] == ctype and it['key'] == key]
             if not entries:
@@ -937,31 +988,42 @@ def restore_pieces(items) -> tuple:
             trash = [it for it in trash
                      if not (it['type'] == ctype and it['key'] == key)]
         if not restored:
-            return [], skipped
+            if vault_ok:
+                _publish_components_changed('pieces_restored')
+            return vault_ok, skipped
         if not prompt_manager.save_components(
                 reason=f"restored {len(restored)} piece(s) from trash"):
             for ctype, key in added:
                 prompt_manager._components.get(ctype, {}).pop(key, None)
-            return [], skipped + [{'type': t, 'key': k,
-                                   'why': 'store save failed'}
-                                  for t, k in restored]
+            return vault_ok, skipped + [{'type': t, 'key': k,
+                                         'why': 'store save failed'}
+                                        for t, k in restored]
         _save_trash(trash)
     _publish_components_changed('pieces_restored')
-    logger.info(f"Restored {len(restored)} piece(s) from trash: "
-                + ", ".join(f"{t}/{k}" for t, k in restored))
-    return [{'type': t, 'key': k} for t, k in restored], skipped
+    logger.info(f"Restored {len(restored)} plaintext piece(s) from trash: "
+                + ", ".join(f"{t}/{k}" for t, k in restored)
+                + (f" + {len(vault_ok)} vault piece(s)" if vault_ok else ""))
+    return (vault_ok
+            + [{'type': t, 'key': k, 'store': 'plain'} for t, k in restored]), skipped
 
 
 def purge_trash() -> int:
-    """Empty the trash. Returns how many entries died. Hard delete —
-    the one place cleanup is allowed to be final, and the user asked."""
+    """Empty the trash — both stores while the vault is unlocked; a locked
+    vault's trash survives untouched (sealed content can't be purged blind).
+    Returns how many entries died. Hard delete — the one place cleanup is
+    allowed to be final, and the user asked."""
+    from core import prompt_vault
     with prompt_manager._lock:
         trash = _load_trash()
         if trash and not _save_trash([]):
             return 0
-    if trash:
-        logger.info(f"Purged {len(trash)} piece(s) from trash")
-    return len(trash)
+    ok, v = prompt_vault.trash_purge()
+    vault_n = v if ok and isinstance(v, int) else 0
+    total = len(trash) + vault_n
+    if total:
+        logger.info(f"Purged {total} piece(s) from trash "
+                    f"({len(trash)} plaintext, {vault_n} vault)")
+    return total
 
 
 def reconcile_trash_with_vault() -> int:

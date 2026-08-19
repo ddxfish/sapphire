@@ -160,8 +160,19 @@ def _normalize(raw):
             presets[k] = {**v, '_privacy_required': True}
         else:
             logger.warning(f"[VAULT] skipping preset '{k}' (bad shape)")
+    # Vault-side piece trash (soft delete): rides the encrypted frame so
+    # trashed private content never touches plaintext disk. Old vaults
+    # simply lack the key — everything defaults it via .get/setdefault.
+    trash = []
+    for it in (raw.get('trash') or []):
+        if isinstance(it, dict) and isinstance(it.get('type'), str) \
+                and isinstance(it.get('key'), str) \
+                and isinstance(it.get('text'), str):
+            trash.append({'type': it['type'], 'key': it['key'],
+                          'text': it['text'],
+                          'deleted_at': it.get('deleted_at', 0)})
     out = {'monoliths': monoliths, 'components': components,
-           'scenario_presets': presets}
+           'scenario_presets': presets, 'trash': trash}
     # Vaulted chats Phase 2: the chat DATA key rides inside the vault frame
     # (wrapped by the passphrase key — rekey re-wraps it for free, chat rows
     # never re-encrypt). Normalization must carry it or unlock drops it and
@@ -832,6 +843,67 @@ def delete_piece(ctype, key) -> tuple:
             del d['components'][ctype]
         return ''
     return _mutate(fn, {'item': 'piece', 'comp_type': ctype, 'key': key, 'action': 'deleted'})
+
+
+def trash_piece(ctype, key) -> tuple:
+    """Vault-side soft delete: move a vault piece into the vault's OWN trash
+    (encrypted with everything else — content never lands on plaintext disk).
+    Visible/restorable only while unlocked, by construction."""
+    def fn(d):
+        if key not in d['components'].get(ctype, {}):
+            return 'not_found'
+        d.setdefault('trash', []).append({
+            'type': ctype, 'key': key,
+            'text': d['components'][ctype].pop(key),
+            'deleted_at': time.time()})
+        if not d['components'][ctype]:
+            del d['components'][ctype]
+        return ''
+    return _mutate(fn, {'item': 'piece', 'comp_type': ctype, 'key': key,
+                        'action': 'trashed'})
+
+
+def trash_list() -> list:
+    """Vault trash entries — [] while locked (sealed content stays sealed)."""
+    with _lock:
+        if _key is None:
+            return []
+        return [dict(it) for it in _data.get('trash', [])]
+
+
+def trash_restore(ctype, key) -> tuple:
+    """Restore the newest vault-trash entry for type/key; all entries for the
+    key drop. Never overwrites a live vault piece ('exists')."""
+    def fn(d):
+        entries = [it for it in d.get('trash', [])
+                   if it['type'] == ctype and it['key'] == key]
+        if not entries:
+            return 'not_found'
+        if key in d['components'].get(ctype, {}):
+            return 'exists'
+        latest = max(entries, key=lambda it: it.get('deleted_at', 0))
+        d['components'].setdefault(ctype, {})[key] = latest.get('text', '')
+        d['trash'] = [it for it in d.get('trash', [])
+                      if not (it['type'] == ctype and it['key'] == key)]
+        return ''
+    return _mutate(fn, {'item': 'piece', 'comp_type': ctype, 'key': key,
+                        'action': 'restored'})
+
+
+def trash_purge() -> tuple:
+    """Empty the vault trash. (ok, count) on success, (False, code) else."""
+    with _lock:
+        if _key is None:
+            return False, 'locked'
+        n = len(_data.get('trash', []))
+        if not n:
+            return True, 0
+        _data['trash'] = []
+        if not _save_locked():
+            return False, 'save_failed'
+        _touch_locked()
+    logger.info(f"[VAULT] purged {n} trashed piece(s)")
+    return True, n
 
 
 def set_preset(name, preset) -> tuple:

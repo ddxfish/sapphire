@@ -50,6 +50,11 @@ def store(tmp_path, monkeypatch):
                         lambda reason=None, audit=True: saves.append(reason) or True)
     monkeypatch.setattr(crud, '_trash_path', lambda: tmp_path / 'trash.json')
     monkeypatch.setattr(crud, '_publish_components_changed', lambda action: None)
+    # Hermetic vault view: without this, the host's REAL vault file decides
+    # vault_exists() and skip reasons become machine-dependent. Tests that
+    # want a live vault stack the `vault` fixture after this one (its
+    # setattr wins — fixture order in the test signature matters).
+    monkeypatch.setattr(pv, 'VAULT_PATH', tmp_path / 'no_vault.enc')
     return {'comps': comps, 'saves': saves, 'tmp': tmp_path}
 
 
@@ -76,7 +81,7 @@ class TestPieceUsage:
 class TestTrash:
     def test_trash_moves_piece(self, store):
         trashed, skipped = crud.trash_pieces([('extras', 'fear')])
-        assert trashed == [{'type': 'extras', 'key': 'fear'}]
+        assert trashed == [{'type': 'extras', 'key': 'fear', 'store': 'plain'}]
         assert not skipped
         assert 'fear' not in store['comps']['extras']
         entries = crud.list_trash()
@@ -104,7 +109,7 @@ class TestTrash:
         time.sleep(0.01)
         crud.trash_pieces([('extras', 'fear')])
         restored, skipped = crud.restore_pieces([('extras', 'fear')])
-        assert restored == [{'type': 'extras', 'key': 'fear'}]
+        assert restored == [{'type': 'extras', 'key': 'fear', 'store': 'plain'}]
         assert store['comps']['extras']['fear'] == 'newer text'
         assert crud.list_trash() == []  # all entries for the key dropped
         # Live key now exists → second restore skips
@@ -175,6 +180,75 @@ class TestVaultPieceRefs:
         assert ('extras', 'vaultonly') not in pairs
         vault.lock(reason='test')
         assert vault.piece_ref_pairs() is None
+
+
+# ── vault-side trash (encrypted, sealed while locked) ──
+
+class TestVaultTrash:
+    def test_full_cycle_and_sealed_while_locked(self, vault):
+        vault.setup('hunter2')
+        assert vault.set_piece('extras', 'secret', 'sealed text')[0]
+        ok, _ = vault.trash_piece('extras', 'secret')
+        assert ok
+        assert 'secret' not in vault.overlay_components().get('extras', {})
+        assert [it['key'] for it in vault.trash_list()] == ['secret']
+        vault.lock(reason='test')
+        assert vault.trash_list() == []                       # sealed
+        assert vault.trash_piece('extras', 'x') == (False, 'locked')
+        assert vault.trash_restore('extras', 'secret') == (False, 'locked')
+        assert vault.trash_purge() == (False, 'locked')
+        ok, _ = vault.unlock('hunter2')
+        assert ok
+        assert [it['key'] for it in vault.trash_list()] == ['secret']  # survived
+        ok, _ = vault.trash_restore('extras', 'secret')
+        assert ok
+        assert vault.overlay_components()['extras']['secret'] == 'sealed text'
+        assert vault.trash_list() == []
+        vault.trash_piece('extras', 'secret')
+        assert vault.trash_purge() == (True, 1)
+        assert vault.trash_list() == []
+
+    def test_restore_never_overwrites(self, vault):
+        vault.setup('hunter2')
+        vault.set_piece('extras', 'k', 'v1')
+        vault.trash_piece('extras', 'k')
+        vault.set_piece('extras', 'k', 'v2')
+        assert vault.trash_restore('extras', 'k') == (False, 'exists')
+
+
+class TestCrudVaultLane:
+    def test_trash_routes_by_store(self, store, vault):
+        vault.setup('hunter2')
+        vault.set_piece('extras', 'sealed', 'shh')
+        trashed, skipped = crud.trash_pieces([('extras', 'sealed'),
+                                              ('extras', 'fear')])
+        assert not skipped
+        stores = {(t['type'], t['key']): t['store'] for t in trashed}
+        assert stores[('extras', 'sealed')] == 'vault'
+        assert stores[('extras', 'fear')] == 'plain'
+        merged = crud.list_trash()
+        assert {(it['key'], it['store']) for it in merged} \
+            == {('sealed', 'vault'), ('fear', 'plain')}
+        restored, skipped = crud.restore_pieces(
+            [('extras', 'sealed', 'vault'), ('extras', 'fear', 'plain')])
+        assert not skipped and len(restored) == 2
+        assert vault.overlay_components()['extras']['sealed'] == 'shh'
+        assert store['comps']['extras']['fear'] == 'be afraid'
+
+    def test_locked_vault_honest_skip(self, store, vault):
+        vault.setup('hunter2')
+        vault.set_piece('extras', 'sealed', 'shh')
+        vault.lock(reason='test')
+        trashed, skipped = crud.trash_pieces([('extras', 'sealed')])
+        assert not trashed
+        assert skipped[0]['why'] == 'vault is locked'
+
+    def test_purge_covers_both_stores(self, store, vault):
+        vault.setup('hunter2')
+        vault.set_piece('extras', 'sealed', 'shh')
+        crud.trash_pieces([('extras', 'sealed'), ('extras', 'fear')])
+        assert crud.purge_trash() == 2
+        assert crud.list_trash() == []
 
 
 # ── unlock-time trash reconcile ──
