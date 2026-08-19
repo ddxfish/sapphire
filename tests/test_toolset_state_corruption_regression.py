@@ -96,39 +96,64 @@ def test_toolsets_js_debouncedSave_does_not_double_post():
     )
 
 
-def test_sapphire_post_scan_reapply_unguarded_on_none_state():
-    """ROOT CAUSE #2 — boot reapply guard blocks recovery.
+def test_sapphire_post_scan_apply_reads_chat_settings_not_fm_state():
+    """ROOT CAUSE #2 — boot toolset apply must come from CHAT SETTINGS.
 
-    sapphire.py's post-scan toolset reapply runs `update_enabled_functions`
-    only when `current != "none"`. When initial apply hit the dangling
-    branch (toolset referenced plugin tools not yet loaded), state IS
-    "none" — and the guard skips recovery. Remove the guard so the
-    reapply runs unconditionally; calling with "none" is a safe no-op,
-    calling with a previously-dangling name now resolves correctly.
+    History: the 2026-05-16/20 post-scan block captured
+    fm.current_toolset_name and re-applied it. That healed the common case
+    (name resolved early, plugin tools filtered out — current kept the
+    name) but NOT the dangling case: an unresolvable name at the early
+    apply rewrites current to 'none', and re-applying 'none' cements zero
+    tools until a human toggles the chat's toolset — while the UI still
+    shows the stored setting (Prime 'Enabled: []', 2026-08-19).
+
+    Contract now: the pre-scan apply STRIPS the toolset keys entirely
+    (plugin tools don't exist yet — same dependency the prompt leg has),
+    and the post-scan apply resolves the toolset from the chat's STORED
+    settings (intent), never from fm state (a runtime echo that may
+    already be the fallback).
     """
     src = (ROOT / "sapphire.py").read_text(encoding="utf-8")
 
-    # Find the post-scan reapply block — anchored to the comment. The call's
-    # ARGUMENTS are not this test's business (it also carries extra_toolsets
-    # since 2026-08-05, the extras-decay fix); only the absence of the
-    # `!= "none"` guard is.
+    # Post-scan block: anchored to its comment, must read get_chat_settings
+    # and must NOT re-apply a captured fm.current_toolset_name.
     m = re.search(
-        r'#\s*Re-apply toolset now that plugin tools are registered[\s\S]+?'
-        r'fm\.update_enabled_functions\(\[current\][^)]*\)',
+        r'#\s*Apply the toolset now that plugin tools are registered'
+        r'[\s\S]+?update_enabled_functions\([^)]*\)',
         src,
     )
-    assert m, "Couldn't find post-scan reapply block in sapphire.py"
+    assert m, "Couldn't find post-scan toolset apply block in sapphire.py"
     block = m.group(0)
+    assert "get_chat_settings" in block, (
+        "sapphire.py post-scan toolset apply no longer reads the chat's "
+        "stored settings. It must resolve the toolset name from "
+        "get_chat_settings() — fm.current_toolset_name is a runtime echo "
+        "that reads 'none' after a dangling fallback, and re-applying it "
+        "cements zero tools until a human toggles the chat's toolset."
+    )
+    assert "update_enabled_functions([current]" not in block, (
+        "sapphire.py post-scan toolset apply re-applies a captured "
+        "fm.current_toolset_name again. That value is 'none' whenever the "
+        "early apply hit the dangling fallback — re-applying it cements "
+        "zero enabled tools (Prime 'Enabled: []', 2026-08-19). Apply from "
+        "the chat's stored settings instead."
+    )
 
-    # Before fix: contains `if current and current != "none":` guard
-    assert 'current != "none"' not in block and "current != 'none'" not in block, (
-        "sapphire.py post-scan reapply still has the `current != 'none'` "
-        "guard. When the initial toolset apply lands in 'none' state (because "
-        "a saved toolset references plugin tools that haven't loaded yet), "
-        "this guard blocks the recovery call. Change the guard to just "
-        "`if current:` — reapply with 'none' is a safe no-op, reapply with "
-        "the named toolset now correctly re-resolves with plugin tools "
-        "registered."
+    # Pre-scan apply: _apply_initial_chat_settings must strip toolset keys
+    # so the only boot toolset apply happens post-scan.
+    m2 = re.search(
+        r'def _apply_initial_chat_settings\(self\):[\s\S]+?'
+        r'_apply_chat_settings\([^)]*\)',
+        src,
+    )
+    assert m2, "Couldn't find _apply_initial_chat_settings in sapphire.py"
+    body = m2.group(0)
+    assert '"toolset"' in body and '"ability"' in body, (
+        "_apply_initial_chat_settings no longer strips the toolset/ability "
+        "keys. Applying the toolset before plugin_loader.scan() drops every "
+        "plugin-provided function ('references N unavailable function(s)' "
+        "each boot) and can land in the dangling fallback. The post-scan "
+        "apply owns the toolset leg."
     )
 
 

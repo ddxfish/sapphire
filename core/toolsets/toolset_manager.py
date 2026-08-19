@@ -55,8 +55,21 @@ class ToolsetManager:
                     data = json.load(f)
                 self._toolsets = {k: v for k, v in data.items() if not k.startswith('_')}
             except Exception as e:
-                logger.error(f"Failed to load user toolsets: {e}")
-                self._toolsets = {}
+                # Fail-safe (2026-08-19): an unreadable file must not run the
+                # migrations below — they seed factory defaults and SAVE,
+                # clobbering a file the user might still hand-recover. On a
+                # reload (watcher mid-write race, transient corruption), keep
+                # the previous in-memory registry: wiping to {} made every
+                # toolset name dangle, so the next apply fell to 'none' —
+                # zero tools, cemented until restart. On first load there is
+                # nothing to keep — empty registry, file left untouched.
+                if self._toolsets:
+                    logger.error(f"Failed to load user toolsets: {e} — keeping "
+                                 f"{len(self._toolsets)} previously loaded toolsets")
+                else:
+                    logger.error(f"Failed to load user toolsets: {e} — no toolsets "
+                                 f"available; file left untouched for recovery")
+                return
             # Targeted migration: ensure load-bearing toolsets exist. 'default'
             # is referenced by the agent persona (core/personas/personas.json)
             # and the agents plugin default_toolset setting; 'limited_web' is

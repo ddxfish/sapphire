@@ -184,36 +184,33 @@ class VoiceChatSystem:
         except Exception as _e:
             logger.warning(f"Essential-plugin check failed: {_e}")
 
-        # Re-apply toolset now that plugin tools are registered
-        # (toolset was applied before plugins loaded, so plugin tools were missed).
-        # Capture the name UNDER _tools_lock so a concurrent mutation can't slip
-        # a stale value past us. Mirrors plugin_loader.py:902-905. 2026-05-16.
+        # Apply the toolset now that plugin tools are registered — this is the
+        # ONE boot apply for the toolset leg (_apply_initial_chat_settings
+        # strips it; plugin tools don't exist that early — same dependency
+        # the prompt leg has).
         #
-        # 2026-05-20: removed `!= "none"` guard. The initial apply at line 97
-        # runs BEFORE plugins load — if the saved toolset references plugin
-        # tools, those names are filtered out and update_enabled_functions can
-        # land in the "none" fallback. The guard then SKIPPED recovery,
-        # letting the bad state escape boot. User had to re-activate the chat
-        # to trigger a fresh apply with plugin tools now registered.
-        # Re-applying with the name now correctly re-resolves; if the captured
-        # name is genuinely "none" (no chat or user-disabled toolset), the
-        # update is a safe no-op.
-        fm = self.llm_chat.function_manager
-        with fm._tools_lock:
-            current = fm.current_toolset_name
-        if current:
-            # Carry extra_toolsets: a by-name-only re-apply drops them, so a
-            # reboot mid-story left her without story_act — narrating while
-            # nothing advanced (extras-decay site #5, 2026-08-05).
-            extras = None
-            try:
-                extras = (self.llm_chat.session_manager.get_chat_settings()
-                          or {}).get('extra_toolsets') or None
-            except Exception:
-                pass
-            fm.update_enabled_functions([current], extra_toolsets=extras)
-            logger.info(f"Toolset '{current}' re-applied after plugin scan"
-                        + (f" + extras {extras}" if extras else ""))
+        # Source of truth is the CHAT'S STORED SETTINGS, never
+        # fm.current_toolset_name. History: the 2026-05-16/20 block here
+        # captured fm.current and re-applied it, which healed the common case
+        # (name resolved early, plugin tools filtered out) but NOT the
+        # dangling case — an unresolvable name rewrites current to 'none',
+        # and re-applying 'none' cements zero tools until a human toggles
+        # the chat's toolset while the UI still shows the stored setting
+        # (Prime 'Enabled: []', 2026-08-19). Settings are intent; fm state
+        # is a runtime echo that may already be the fallback.
+        # extra_toolsets ride from the same settings read (extras-decay
+        # class, 2026-08-05).
+        try:
+            _cs = self.llm_chat.session_manager.get_chat_settings() or {}
+            _tk = "toolset" if "toolset" in _cs else "ability" if "ability" in _cs else None
+            if _tk:
+                fm = self.llm_chat.function_manager
+                fm.update_enabled_functions([_cs[_tk]],
+                                            extra_toolsets=_cs.get("extra_toolsets") or None)
+                logger.info(f"Toolset '{_cs[_tk]}' applied after plugin scan "
+                            f"({len(fm.get_enabled_function_names())} functions)")
+        except Exception as e:
+            logger.warning(f"Post-scan toolset apply failed: {e}")
 
         # RAG orphan cleanup runs AFTER plugin_loader.scan() (Phase 4 reorder).
         # Previously this ran at line 100, BEFORE plugin loading, which meant it
@@ -398,20 +395,31 @@ class VoiceChatSystem:
     def _apply_initial_chat_settings(self):
         """Apply chat settings for the active chat via the SAME path the
         runtime chat-switch uses (_apply_chat_settings): per-section failure
-        isolation, scopes+RAG alignment, spice set, toolset+extras. Before
-        2026-08-17 this was a hand-rolled one-try subset — no spice leg meant
-        the active chat ran on the previous session's last-saved spice state
-        until the first chat switch (cross-restart leak), and any section
-        failure aborted all later sections.
+        isolation, scopes+RAG alignment, spice set. Before 2026-08-17 this
+        was a hand-rolled one-try subset — no spice leg meant the active
+        chat ran on the previous session's last-saved spice state until the
+        first chat switch (cross-restart leak), and any section failure
+        aborted all later sections.
 
         Prompt is deliberately stripped: _prime_default_prompt owns boot
         prompt (plugin costume prompts may not be registered yet at this
         point — Sapph-not-Rose class; the runtime prompt leg would flap to
-        'default' and publish a spurious fallback event)."""
+        'default' and publish a spurious fallback event).
+
+        Toolset is stripped for the SAME reason (2026-08-19): plugin tools
+        aren't registered yet, so an early apply drops every plugin-provided
+        function ("references N unavailable function(s)" each boot) — and if
+        the name lands in the dangling fallback, current_toolset_name is
+        rewritten to 'none', which the old capture-from-fm post-scan reapply
+        then faithfully re-applied, cementing zero tools until a human
+        toggled the chat's toolset (Prime 'Enabled: []' bug). The post-scan
+        resync owns the toolset leg — applied once, from the chat's stored
+        settings, after its dependencies exist."""
         try:
             settings = self.llm_chat.session_manager.get_chat_settings()
             from core.api_fastapi import _apply_chat_settings
-            _apply_chat_settings(self, {k: v for k, v in settings.items() if k != "prompt"})
+            _skip = ("prompt", "toolset", "ability", "extra_toolsets")
+            _apply_chat_settings(self, {k: v for k, v in settings.items() if k not in _skip})
             logger.info("Applied chat settings on startup (runtime apply path)")
         except Exception as e:
             logger.warning(f"Could not apply initial settings: {e}")
