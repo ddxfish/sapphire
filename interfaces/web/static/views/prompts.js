@@ -225,8 +225,15 @@ async function loadAll() {
             }
         });
 
-        // Use already-fetched data for selected prompt
-        if (selected && promptDetails[selected]) {
+        // Use already-fetched data for selected prompt — UNLESS a debounced
+        // prompt save is pending: the local copy is then AHEAD of the server
+        // and overwriting it loses the un-persisted change (Bobby bug round
+        // 2: an SSE echo arriving inside the await window started this load
+        // BEFORE the in-flight flag went up, and this line clobbered the new
+        // piece selection with the server's old copy at completion).
+        if (promptSaveInFlight) {
+            // keep local selectedData — the save persists it in <600ms
+        } else if (selected && promptDetails[selected]) {
             selectedData = promptDetails[selected];
         } else if (selected) {
             try { selectedData = await getPrompt(selected); } catch { selectedData = null; }

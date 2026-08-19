@@ -24,6 +24,41 @@ const LINK_STYLE = 'color:var(--accent);cursor:pointer;text-decoration:underline
 // Library-chip sections — the Main preset keeps these (same split as the
 // prompt editor's Main: generic extras/emotions aren't junk when unused).
 const GENERIC_TYPES = ['extras', 'emotions'];
+// Canonical section order — MUST match the editor's accordion order
+// (SINGLE_TYPES then MULTI_TYPES in prompts.js). Unknown types sort after.
+const TYPE_ORDER = ['character', 'location', 'goals', 'relationship',
+                    'format', 'scenario', 'extras', 'emotions'];
+const typeRank = t => {
+    const i = TYPE_ORDER.indexOf(t);
+    return i === -1 ? TYPE_ORDER.length : i;
+};
+const byCanonical = (a, b) =>
+    typeRank(a.type) - typeRank(b.type)
+    || a.type.localeCompare(b.type) || a.key.localeCompare(b.key);
+
+function presetsHTML() {
+    return `
+        <div style="display:flex;gap:12px;align-items:center;font-size:var(--font-xs);margin:4px 0">
+            <span>Select:</span>
+            <span class="pc-preset" data-preset="all" style="${LINK_STYLE}">All</span>
+            <span class="pc-preset" data-preset="none" style="${LINK_STYLE}">None</span>
+            <span class="pc-preset" data-preset="main" style="${LINK_STYLE}"
+                  title="Everything except extras and emotions">Main</span>
+        </div>`;
+}
+
+// Flat-list preset wiring (delete modal — no sections, rows carry data-type).
+function wireFlatPresets(scope) {
+    scope.querySelectorAll('.pc-preset').forEach(p =>
+        p.addEventListener('click', () => {
+            const mode = p.dataset.preset;
+            scope.querySelectorAll('.pc-row:not([data-flag])').forEach(cb => {
+                cb.checked = mode === 'all' ? true
+                    : mode === 'none' ? false
+                    : !GENERIC_TYPES.includes(cb.dataset.type);
+            });
+        }));
+}
 
 function pieceRow(r) {
     const badges = [];
@@ -77,15 +112,10 @@ function checkedRows(element) {
 // a header checkbox driving every selectable row inside, and the
 // All/None/Main presets (Main skips the generic extras/emotions).
 function sectionedHTML(byType, rowFn) {
-    const types = Object.keys(byType).sort();
+    const types = Object.keys(byType)
+        .sort((a, b) => typeRank(a) - typeRank(b) || a.localeCompare(b));
     return `
-        <div style="display:flex;gap:12px;align-items:center;font-size:var(--font-xs);margin:4px 0">
-            <span>Select:</span>
-            <span class="pc-preset" data-preset="all" style="${LINK_STYLE}">All</span>
-            <span class="pc-preset" data-preset="none" style="${LINK_STYLE}">None</span>
-            <span class="pc-preset" data-preset="main" style="${LINK_STYLE}"
-                  title="Everything except extras and emotions">Main</span>
-        </div>
+        ${presetsHTML()}
         <div style="max-height:45vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
             ${types.map(t => `
             <div class="pc-sec" data-type="${esc(t)}">
@@ -167,7 +197,7 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
         const vaultFlag = (vaultRef[type] || []).includes(key);
         return { type, key, users, isVaultPiece, vaultFlag,
                  checked: !users.length && !vaultFlag && !lockedNoData };
-    }).sort((a, b) => (a.type + a.key).localeCompare(b.type + b.key));
+    }).sort(byCanonical);
 
     const title = names.length > 1 ? `Delete ${names.length} prompts` : `Delete "${names[0]}"`;
     const html = `
@@ -175,7 +205,8 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
         (${names.map(esc).join(', ')}) will be deleted. Checked pieces below move to the
         piece <b>trash</b> (restorable); unchecked pieces stay.</p>
         ${vaultBanner(vault)}
-        ${rows.length ? `<div style="max-height:40vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
+        ${rows.length ? `${presetsHTML()}
+        <div style="max-height:40vh;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:6px 10px">
             ${rows.map(pieceRow).join('')}
         </div>` : '<p style="font-size:var(--font-xs);opacity:0.7">No deletable pieces (monolith or pack-owned pieces only).</p>'}
     `;
@@ -203,6 +234,7 @@ export async function openDeleteModal({ names, componentSources, vaultPieces, on
         else ui.showToast(msg, 'success');
         onDone?.();
     }, { wide: true, saveLabel: 'Delete' });
+    wireFlatPresets(modal.element);
 }
 
 // ── cleanup modal (menu → tool views, one modal, no stacking) ──
