@@ -1,5 +1,179 @@
-<!-- AI_INCLUDE_FULL: Common issues and fixes for audio, LLM, web UI, and performance -->
+<!-- AI_INCLUDE_FULL: Common issues and fixes for audio, LLM, web UI, plugins, and performance, plus reset and reinstall procedures -->
 # Troubleshooting
+
+Contents:
+- [Where to Look First](#where-to-look-first)
+- [Reset Procedures](#reset-procedures) — light reset, package reinstall, nuclear reset, password, delete all data
+- [Startup Issues](#startup-issues)
+- [Update Issues](#update-issues)
+- [Web UI Issues](#web-ui-issues)
+- [Audio Issues](#audio-issues)
+- [Prompt issues](#prompt-issues)
+- [Vault / private chat issues](#vault--private-chat-issues)
+- [Chat Database Issues](#chat-database-issues)
+- [LLM issues](#llm-issues)
+- [Tool/Function Issues](#toolfunction-issues)
+- [Plugin Issues](#plugin-issues)
+- [Continuity Issues](#continuity-issues)
+- [Home Assistant Issues](#home-assistant-issues)
+- [Performance Issues](#performance-issues)
+- [Boot crash: malloc() on multi-GPU Linux](#boot-crash-with-malloc-invalid-size-on-linux-multi-gpu-systems)
+
+## Where to Look First
+
+- **Main log**: `user/logs/sapphire.log` (rotates daily). Most problems leave a line here — search for `ERROR` or the feature name.
+- **Browser console** (F12) for web UI problems — JS errors and failed requests show up there, not in the server log.
+- **Running as a systemd service?** `journalctl --user -u sapphire -f`
+- **Sapphire Launcher users**: the launcher's **Troubleshoot** tab checks whether Sapphire responds, verifies package versions and dependency health, scans voice features (STT/TTS/wake word), and detects your GPU — with fix buttons for common issues.
+- **Settings > System** has a core install integrity check — it verifies every shipped file against the manifest and can restore modified ones (git installs).
+
+## Reset Procedures
+
+Ordered lightest to heaviest. Start at the top.
+
+### Light Reset (settings + password only)
+
+Resets all settings to defaults and clears the login password. **Keeps everything else** — chats, memories, prompts, personas, knowledge, and your API keys (those live in a separate credentials file outside `settings.json`). The setup wizard runs again on next start.
+
+Stop Sapphire first, then from the `sapphire/` folder:
+
+**Linux:**
+```bash
+rm user/settings.json
+rm ~/.config/sapphire/secret_key
+python main.py
+```
+
+**macOS:**
+```bash
+rm user/settings.json
+rm ~/Library/Application\ Support/Sapphire/secret_key
+python main.py
+```
+
+**Windows (PowerShell):**
+```powershell
+Remove-Item user\settings.json
+Remove-Item "$env:APPDATA\Sapphire\secret_key"
+python main.py
+```
+
+**Docker:**
+```bash
+docker exec sapphire rm /home/sapphire/.config/sapphire/secret_key
+docker compose down
+rm ~/sapphire/user/settings.json
+docker compose up -d
+```
+
+If only your prompts are broken, you don't need this — see [Prompt issues](#prompt-issues) for the prompt-only reset.
+
+### Reinstall Packages (conda env only)
+
+Nuke the conda environment and reinstall from scratch. App files and your `user/` data are untouched. Use this if your pip packages are messed up — it just reinstalls the packages, doesn't touch Sapphire.
+
+```bash
+conda deactivate && conda remove -n sapphire --all -y && conda create -n sapphire python=3.11 -y && conda activate sapphire && pip install -r requirements.txt && python main.py
+```
+
+### Nuclear Reset (full reinstall, data preserved)
+
+Full app reinstall: fresh clone, fresh conda environment. Your `user/` directory is **moved aside and restored** — never deleted. Stop Sapphire first, then run from the directory *containing* `sapphire/`:
+
+**Linux/macOS:**
+```bash
+mv sapphire/user ~/sapphire-user-backup
+rm -rf sapphire
+conda deactivate && conda remove -n sapphire --all -y
+conda create -n sapphire python=3.11 -y && conda activate sapphire
+git clone https://github.com/ddxfish/sapphire.git
+mv ~/sapphire-user-backup sapphire/user
+cd sapphire && pip install -r requirements.txt
+python main.py
+```
+
+**Windows (PowerShell):**
+```powershell
+Move-Item sapphire\user "$env:USERPROFILE\sapphire-user-backup"
+Remove-Item -Recurse -Force sapphire
+conda deactivate; conda remove -n sapphire --all -y
+conda create -n sapphire python=3.11 -y; conda activate sapphire
+git clone https://github.com/ddxfish/sapphire.git
+Move-Item "$env:USERPROFILE\sapphire-user-backup" sapphire\user
+cd sapphire; pip install -r requirements.txt
+python main.py
+```
+
+Notes:
+- Your password is **not** reset by this — it lives outside the app folder. Add the `secret_key` line from [Light Reset](#light-reset-settings--password-only) if you want that too.
+- Want fresh data as well? That's [Reset Everything](#reset-everything-delete-data) below — don't just skip the `mv`/`Move-Item` lines, back up first.
+- [Sapphire Launcher](https://github.com/ddxfish/sapphire-launcher) can do this without a terminal — its Uninstall tab removes the env or the whole install, then **Go** reinstalls.
+- Docker installs: recreating the container is the equivalent — see [DOCKER.md](DOCKER.md). Your data lives in the mounted `user/` dir and the config volume.
+
+### Reset Password
+
+Delete the password hash file and restart Sapphire. This resets your login — you'll set a new password on next visit. Your chats, settings, and user data are untouched.
+
+**Linux:**
+```bash
+rm ~/.config/sapphire/secret_key
+```
+
+**macOS:**
+```bash
+rm ~/Library/Application\ Support/Sapphire/secret_key
+```
+
+**Windows (PowerShell):**
+```powershell
+Remove-Item "$env:APPDATA\Sapphire\secret_key"
+```
+
+**Docker:**
+```bash
+docker exec sapphire rm /home/sapphire/.config/sapphire/secret_key
+docker restart sapphire
+```
+
+Then restart Sapphire (or just the container for Docker).
+
+### Reset Everything (Delete data)
+
+Nuclear option - fresh start. Deletes all user data including chats, settings, and password.
+
+**Linux:**
+```bash
+pkill -f "python main.py"
+rm -rf user/
+rm ~/.config/sapphire/secret_key
+python main.py
+```
+
+**macOS:**
+```bash
+pkill -f "python main.py"
+rm -rf user/
+rm ~/Library/Application\ Support/Sapphire/secret_key
+python main.py
+```
+
+**Windows (PowerShell):**
+```powershell
+# Stop Sapphire first (close the terminal or Ctrl+C)
+Remove-Item -Recurse -Force user\
+Remove-Item "$env:APPDATA\Sapphire\secret_key"
+python main.py
+```
+
+**Docker:**
+```bash
+docker compose down
+rm -rf ~/sapphire/user/
+docker compose up -d
+```
+The config dir is a **persistent** volume (`sapphire-config` → `/home/sapphire/.config/sapphire`), so recreating the container does NOT reset the password. To reset it, delete the `secret_key` (the Docker command above) or remove the `sapphire-config` volume.
+
+You'll need to re-run setup and reconfigure settings.
 
 ## Startup Issues
 
@@ -12,19 +186,42 @@
 - Usually harmless to core functionality. Missing optional dependencies for optional features.
 - If a specific feature is broken, check logs for the actual error.
 
+**Port 8073 already in use / web UI never comes up**
+- Another Sapphire instance (or another app) holds the port. Linux: `ss -tlnp | grep 8073`. Windows: `netstat -ano | findstr 8073`
+- Stop the other process, or change `WEB_UI_PORT` in `user/settings.json` and restart.
+
+**Crash at boot with `malloc(): invalid size` (Linux, multi-GPU)**
+- See the [deep dive at the bottom](#boot-crash-with-malloc-invalid-size-on-linux-multi-gpu-systems) — TTS and STT grabbing the same GPU during boot.
+
+## Update Issues
+
+**`git pull` fails with "your local changes would be overwritten"**
+- You (or a tool) modified core files. `git status` shows what changed; `git stash` sets the changes aside, then pull again.
+
+**Boot log shows `[INTEGRITY]` warnings / files don't match the manifest**
+- Core files drifted from the shipped set (edits, a partial update, disk corruption). Settings > System → integrity check shows per-file status, and Repair (git installs) restores only the offending files.
+- Repair refuses files with uncommitted work-in-progress changes on dev trees — deliberate. It fixes drift, it doesn't eat your edits.
+
+**Updated but the UI looks broken or old**
+- Hard-refresh the browser (Ctrl+Shift+R). Browsers cache the JS even when asked not to.
+
+**Errors about missing packages after an update**
+- Run `pip install -r requirements.txt` after every pull. Major version jumps may need a fresh env — see [Reinstall Packages](#reinstall-packages-conda-env-only).
+- Launcher users: the **Update** button does the pull and the pip install together.
+
 ## Web UI Issues
 
 **403 Forbidden**
 - Try http:// and https://
 - Delete cookies for this site
 - Test in private browsing window
-- Reset password (see [Reset Password](#reset-password) below)
+- Reset password (see [Reset Password](#reset-password) above)
 - Restart Sapphire app
 
 **Blank page or "Unauthorized"**
 - Clear browser cookies for localhost:8073
 - Try incognito window
-- Reset password (see [Reset Password](#reset-password) below) and restart
+- Reset password (see [Reset Password](#reset-password) above) and restart
 
 **Certificate warning on first visit**
 - Expected with self-signed certs. Accept once (Advanced → Proceed) and the browser remembers it.
@@ -123,6 +320,17 @@
 - The bad file is renamed `prompt_vault.enc.bad-<timestamp>` beside itself, never deleted.
 - Restore the vault file from a backup, paired with the chat database from the same backup.
 
+## Chat Database Issues
+
+**A chat shows "⚠ degraded" and became read-only**
+- Some of its messages could not be read (corruption, or a vault key mismatch). The chat latches read-only so nothing else gets damaged.
+- Chat Manager → the chat's row → 🔧 Repair. Unreadable messages move to a quarantine (kept verbatim — recoverable if, say, the matching vault backup returns) and the rest of the chat becomes writable again.
+- The repair preview shows how many messages it keeps vs. quarantines before you commit.
+
+**Database acting strange / checking health**
+- Sapphire backs up your data on a schedule — see [BACKUPS.md](BACKUPS.md) for what's covered and how to restore.
+- Manual integrity check (needs the sqlite3 CLI, Sapphire stopped): `sqlite3 user/history/sapphire_history.db "PRAGMA quick_check;"` — should print `ok`.
+
 ## LLM issues
 **LM Studio (simple) test failing**
 - Open LM studio, click Developer in lower left to show advanced options, click green Developer tab, toggle server on, load a model
@@ -167,6 +375,17 @@
 - Rate limited by DuckDuckGo. Wait and retry.
 - If using SOCKS proxy, verify it's working (see SOCKS.md)
 - Enable verbose tool debugging in settings for more logging
+
+## Plugin Issues
+
+**Plugin is enabled but its tools/features are missing**
+- Almost always a signature failure — plugins are signed, and a modified or unsigned plugin is blocked at boot. Sapphire still starts fine, so it looks silent.
+- Check the boot log for `[PLUGINS] Enabled but blocked (intent preserved, retry next restart): [...]` — blocked plugins are listed there, and each verified plugin logs `signature verified`.
+- If you edited a plugin on purpose: re-sign it (see [SIGNING.md](SIGNING.md)), or set `ALLOW_UNSIGNED_PLUGINS` to true — dev machines only, it turns off tamper protection.
+- A plugin whose signature file itself was tampered with is always blocked, regardless of that setting.
+
+**Plugin acting stale after an update**
+- Plugins load at boot only — restart Sapphire, then hard-refresh the browser (Ctrl+Shift+R) if the plugin has UI.
 
 ## Continuity Issues
 
@@ -243,79 +462,6 @@ Try Sapphire first. Most won't need this. Only do this if STT and TTS are not us
 ```bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 ```
-
-## Clean Reinstall
-
-Nuke the conda environment and reinstall from scratch. Your `user/` data is preserved. Use this if your pip packages are messed up. It just reinstalls the packages, doesn't touch Sapphire.
-
-```bash
-conda deactivate && conda remove -n sapphire --all -y && conda create -n sapphire python=3.11 -y && conda activate sapphire && pip install -r requirements.txt && python main.py
-```
-
-## Reset Password
-
-Delete the password hash file and restart Sapphire. This resets your login — you'll set a new password on next visit. Your chats, settings, and user data are untouched.
-
-**Linux:**
-```bash
-rm ~/.config/sapphire/secret_key
-```
-
-**macOS:**
-```bash
-rm ~/Library/Application\ Support/Sapphire/secret_key
-```
-
-**Windows (PowerShell):**
-```powershell
-Remove-Item "$env:APPDATA\Sapphire\secret_key"
-```
-
-**Docker:**
-```bash
-docker exec sapphire rm /home/sapphire/.config/sapphire/secret_key
-docker restart sapphire
-```
-
-Then restart Sapphire (or just the container for Docker).
-
-## Reset Everything (Delete data)
-
-Nuclear option - fresh start. Deletes all user data including chats, settings, and password.
-
-**Linux:**
-```bash
-pkill -f "python main.py"
-rm -rf user/
-rm ~/.config/sapphire/secret_key
-python main.py
-```
-
-**macOS:**
-```bash
-pkill -f "python main.py"
-rm -rf user/
-rm ~/Library/Application\ Support/Sapphire/secret_key
-python main.py
-```
-
-**Windows (PowerShell):**
-```powershell
-# Stop Sapphire first (close the terminal or Ctrl+C)
-Remove-Item -Recurse -Force user\
-Remove-Item "$env:APPDATA\Sapphire\secret_key"
-python main.py
-```
-
-**Docker:**
-```bash
-docker compose down
-rm -rf ~/sapphire/user/
-docker compose up -d
-```
-The config dir is a **persistent** volume (`sapphire-config` → `/home/sapphire/.config/sapphire`), so recreating the container does NOT reset the password. To reset it, delete the `secret_key` (the Docker command above) or remove the `sapphire-config` volume.
-
-You'll need to re-run setup and reconfigure settings.
 
 ---
 

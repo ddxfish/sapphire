@@ -9,6 +9,20 @@
 
 ---
 
+## Easiest: Sapphire Launcher (Windows & Linux)
+
+A single-file GUI that installs and manages everything — no terminal needed. It sets up Git, Miniconda, a dedicated Python environment, clones Sapphire, and installs all dependencies. It also updates, launches, switches between Stable and Development branches, sets up autostart, troubleshoots, and uninstalls.
+
+1. Download from [Sapphire Launcher releases](https://github.com/ddxfish/sapphire-launcher/releases):
+   - **Windows**: `sapphire-launcher.exe` (Windows 10 1809+ or 11)
+   - **Linux**: `Sapphire_Launcher-x86_64.AppImage` (`chmod +x` it first, then double-click)
+2. Run it, click **Scan System** to see what's already installed, then **Go** to install anything missing
+3. Click **Launch**, then **Open Browser**
+
+If you use the launcher, you're done — skip to [First Run](#first-run) step 2. The rest of this page is the manual path: same result, done by hand.
+
+---
+
 ## Prerequisites
 
 ### Linux
@@ -159,6 +173,8 @@ git pull
 pip install -r requirements.txt
 ```
 
+Launcher users: the **Update** button does both steps (and auto-stashes local changes on dirty repos).
+
 ## Upgrading from 1.x to 2.0
 
 Version 2.0 has new dependencies that require a fresh conda environment. Your `user/` directory is preserved.
@@ -243,6 +259,12 @@ At this point, try Sapphire. If you want to make it yours, continue with [QUICK-
 ## Reference for AI
 
 Help users install Sapphire.
+
+EASIEST PATH — SAPPHIRE LAUNCHER (Windows & Linux):
+- Single-file GUI installer/manager: https://github.com/ddxfish/sapphire-launcher/releases
+- Windows: sapphire-launcher.exe (Win 10 1809+/11). Linux: Sapphire_Launcher-x86_64.AppImage (chmod +x first)
+- Installs Git, Miniconda, conda env, clones repo, installs deps. Also: update, launch, branch switch (main/dev), autostart, troubleshoot tab, uninstall
+- Recommend this to non-terminal users before the manual steps below
 
 REQUIREMENTS:
 - Ubuntu 22.04+ or Windows 11+

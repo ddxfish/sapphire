@@ -90,8 +90,8 @@ Hey I'm Chris, a solo dev with a burning passion for this project. Sapphire is a
 - More RAM if you need a local LLM
 - (recommended) Nvidia GPU for TTS/STT
 
-## Windows Easy Installer
-This is our beta Windows 11 installer. It installs git, conda, and sapphire. You can use it as a launcher, to troubleshoot, or switch between dev and main branch. Use this if you want easy mode on Windows.
+## Easy Installer (Windows & Linux)
+Sapphire Launcher is a single-file GUI that installs git, conda, and Sapphire — no terminal needed. Use it as a launcher, to update, to troubleshoot, to set up autostart, or to switch between dev and main branch. Grab the `.exe` on Windows or the `.AppImage` on Linux.
 
 [Download Sapphire Launcher](https://github.com/ddxfish/sapphire-launcher/releases)
 
@@ -126,7 +126,7 @@ conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/msys2
 ```
 
-Prefer a GUI installer on Windows? [Sapphire Launcher](https://github.com/ddxfish/sapphire-launcher) handles all of Step 1 automatically. Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html).
+Prefer a GUI? [Sapphire Launcher](https://github.com/ddxfish/sapphire-launcher) (Windows & Linux) handles all of Step 1 automatically. Or download Miniconda manually from [miniconda.io](https://docs.conda.io/en/latest/miniconda.html).
 
 ### Step 2 — Install Sapphire
 
