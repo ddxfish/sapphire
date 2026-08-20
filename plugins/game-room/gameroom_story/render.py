@@ -41,10 +41,13 @@ def ghost_block(story, state, room):
         exits.append(f"{ex.get('label')}{d}")
     lines.append("Exits: " + ("; ".join(exits) if exits else "none"))
 
+    from . import referee
     objs = []
     for name, obj in (room.get("objects") or {}).items():
         if obj.get("hidden") and name not in state["found"]:
             continue  # unfound hidden objects stay engine-side
+        if not referee.check_condition(obj.get("condition"), state):
+            continue  # condition-gated (zork-line) objects don't exist yet
         bits = [obj.get("desc", "")]
         if obj.get("puzzle"):
             solved = name in state["solved"]

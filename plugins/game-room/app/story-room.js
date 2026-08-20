@@ -121,6 +121,33 @@ async function api(path, method, body) {
 
 // ------------------------------------------------------------------ open/close
 
+// Start a story, routing through the Mad-Libs setup form when the story
+// declares slots/presets/sets (open-mansion v1). Returns true = started,
+// false = server refused, null = player cancelled the form.
+async function startWithSetup(slug) {
+    const mod = await import(`./settings-modal.js?v=${bootV()}`);
+    const setup = await mod.storyNeedsSetup(slug);
+    let payload = { story: slug };
+    let sealedFills = [];
+    if (setup) {
+        const choice = await mod.openStorySetup(slug, setup);
+        if (choice === null) return null;
+        payload = { story: slug, slots: choice.slots, objset: choice.objset || undefined };
+        sealedFills = choice.sealed || [];
+    }
+    const r = await api('story/start', 'POST', payload);
+    if (!r.success) { ui.showToast(r.detail || 'story start failed', 'error'); return false; }
+    // Sealed slot values ride the seal machinery — written at turn 0,
+    // never through her (the whole mechanic).
+    for (const f of sealedFills) {
+        try {
+            const fr = await api('story/fill', 'POST', { key: f.key, text: f.text });
+            if (!fr.success) ui.showToast(`Seal '${f.key}': ${fr.detail}`, 'warning', 4000);
+        } catch (e) { ui.showToast(`Seal '${f.key}': ${e.message}`, 'warning', 4000); }
+    }
+    return true;
+}
+
 export async function openStoryRoom(root, story, sessionName, opts) {
     if (!room) room = await import(`./room.js?v=${bootV()}`);
     if (getIsProc()) {
@@ -161,8 +188,16 @@ export async function openStoryRoom(root, story, sessionName, opts) {
         if (!(status.active && status.active.slug === story.slug)) {
             const sess = (await room.listSessions()).find(c => c.name === sessionName);
             if (!sess || !sess.message_count) {
-                const r = await api('story/start', 'POST', { story: story.slug });
-                if (!r.success) throw new Error(r.detail || 'story start failed');
+                // Mad-Libs gate (open-mansion v1): a story that declares
+                // slots/presets/sets gets its setup form BEFORE room 1;
+                // plain stories keep the zero-friction auto-start.
+                const started = await startWithSetup(story.slug);
+                if (_root !== root || _session !== sessionName) return;   // superseded
+                if (started === null) {                    // player cancelled
+                    const back = _back; close(); if (back) back();
+                    return;
+                }
+                if (!started) throw new Error('story start failed');
             }
         } else {
             // Resume path: assert the costume. After a reboot the role prompt
@@ -666,11 +701,17 @@ function paintPanel() {
 function paintControls(a) {
     const row = _root?.querySelector('#st-ctl-row');
     if (!row) return;
-    const gearHtml = `<button class="btn-sm" id="st-gm-settings" title="GM Settings — story style and DM guide">&#x2699;&#xFE0E;</button>`;
+    const gearHtml = `<button class="btn-sm" id="st-gm-settings" title="Story settings — setup, story text, objects, GM style">&#x2699;&#xFE0E;</button>`;
     const bindGear = () => {
         row.querySelector('#st-gm-settings').onclick = async () => {
             const mod = await import(`./settings-modal.js?v=${bootV()}`);
-            mod.openStorySettings(_story?.slug);
+            // In-game gear: the full modal family — Setup (this run) +
+            // Objects tabs join when a playthrough is live (open-mansion v1).
+            mod.openStorySettings(_story?.slug, {
+                session: _session,
+                active: !!(_status && _status.slug === _story?.slug),
+                slots: _status?.slots || {},
+            });
         };
     };
     if (!a || a.slug !== _story.slug) {
@@ -678,8 +719,9 @@ function paintControls(a) {
         bindGear();
         row.querySelector('#st-start').onclick = async () => {
             try {
-                const r = await api('story/start', 'POST', { story: _story.slug });
-                if (!r.success) throw new Error(r.detail || 'start failed');
+                const started = await startWithSetup(_story.slug);
+                if (started === null) return;              // player cancelled
+                if (!started) throw new Error('start failed');
                 _status = (await api('story/status')).active;
                 paintPanel();
             } catch (e) { ui.showToast(e.message, 'error'); }

@@ -377,7 +377,11 @@ def _activate_prompt_for(system, chat, prompt_name):
 
 def load_active(chat):
     """(story, state) for a chat's active playthrough, or (None, None).
-    Generated rooms merge over canonical ones."""
+    Generated rooms merge over canonical ones; then the playthrough's user
+    layer (placed objects + room-text overrides) and Mad-Libs slot
+    substitution — ONE seam, so the referee, the ghost block, full_state,
+    and the seal scans all see the same world (plan tmp/open-mansion-plan.md
+    keystones K1/K2)."""
     entry = st.get_active().get(chat)
     if not entry:
         return None, None
@@ -387,15 +391,147 @@ def load_active(chat):
         logger.warning(f"[STORY] active story '{entry.get('story')}' failed to load: {e}")
         return None, None
     story["rooms"].update(rooms.load_generated_rooms(entry["story"], chat))
-    return story, st.replay(entry["story"], chat)
+    state = st.replay(entry["story"], chat)
+    _merge_user_layer(story, entry["story"], chat, state)
+    _apply_slots(story, entry.get("slots") or {})
+    return story, state
 
 
-def start(system, slug, character=None, mode=None, local=None, session=None):
+def _merge_user_layer(story, slug, chat, state):
+    """K1 — merge once, at load. User-placed objects join the room dicts
+    (shipped names win collisions: a user object never silently shadows
+    authored content). Objects carry their own per-object `condition`
+    (stamped at set-import), checked by the referee's visibility funnel —
+    no gating here. Room TEXT overrides apply only past the zork-line
+    (meta.open_flag; no flag declared = no line = apply always)."""
+    try:
+        data = st.get_user_layer(slug, chat)
+    except Exception as e:
+        logger.warning(f"[STORY] user layer read failed for '{slug}': {e}")
+        return
+    if not data:
+        return
+    for rid, objs in (data.get("objects") or {}).items():
+        try:
+            room = story["rooms"].get(int(rid))
+        except (TypeError, ValueError):
+            room = None
+        if not room or not isinstance(objs, dict):
+            continue
+        target = room.setdefault("objects", {})
+        for name, spec in objs.items():
+            if not isinstance(spec, dict):
+                continue
+            if name in target:
+                logger.info(f"[STORY] user object '{name}' shadows shipped in room {rid} — skipped")
+                continue
+            target[name] = spec
+    open_flag = (story["meta"].get("open_flag") or "").strip()
+    if open_flag and not state["flags"].get(open_flag):
+        return
+    for rid, txt in (data.get("rooms") or {}).items():
+        try:
+            room = story["rooms"].get(int(rid))
+        except (TypeError, ValueError):
+            room = None
+        if not room or not isinstance(txt, dict):
+            continue
+        if str(txt.get("template") or "").strip():
+            room["template"] = str(txt["template"])
+        if str(txt.get("player_desc") or "").strip():
+            room["player_desc"] = str(txt["player_desc"])
+
+
+def _apply_slots(story, slots):
+    """K2 — substitute once, at load: {slot_key} tokens in the story's meta
+    text and every string a room dict carries. Values are brace-stripped at
+    start, so a slot can't smuggle {ai_name} into core's later template
+    pass. Role NAME and title stay literal (prompt names derive from them)."""
+    vals = {k: str(v) for k, v in (slots or {}).items() if str(v).strip()}
+    if not vals:
+        return
+
+    def sub(text):
+        for k, v in vals.items():
+            text = text.replace("{" + k + "}", v)
+        return text
+
+    def walk(node):
+        if isinstance(node, str):
+            return sub(node) if "{" in node else node
+        if isinstance(node, dict):
+            return {k: walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        return node
+
+    meta = story["meta"]
+    if isinstance(meta.get("role"), dict) and meta["role"].get("text"):
+        meta["role"] = dict(meta["role"], text=sub(meta["role"]["text"]))
+    for f in ("premise", "player_role", "dm_guide"):
+        if isinstance(meta.get(f), str) and "{" in meta[f]:
+            meta[f] = sub(meta[f])
+    for rid in list(story["rooms"]):
+        story["rooms"][rid] = walk(story["rooms"][rid])
+
+
+def _clean_slots(story, slots):
+    """Submitted slot values → validated dict. Unknown keys drop; declared-
+    but-missing slots take their defaults so no raw {token} ever reaches
+    her prompt. Sealed slots ride the seal machinery, never substitution."""
+    out = {}
+    for decl in rooms.story_slots(story["meta"]):
+        if decl["sealed"]:
+            continue
+        v = str((slots or {}).get(decl["key"], "")).strip() or decl["default"]
+        v = v.replace("{", "").replace("}", "")[:500].strip()
+        if v:
+            out[decl["key"]] = v
+    return out
+
+
+def start(system, slug, character=None, mode=None, local=None, session=None,
+          slots=None, objset=None):
     with _lifecycle_lock:
-        return _start(system, slug, character, mode, local, session)
+        return _start(system, slug, character, mode, local, session,
+                      slots=slots, objset=objset)
 
 
-def _start(system, slug, character, mode, local, session):
+def _import_objset(chat, slug, story, name):
+    """Copy a saved object set into this playthrough's user layer. Objects
+    without their own condition get the implicit zork-line stamp (Krem's
+    ruling: sets materialize when the house opens). Room-text overrides
+    ride along un-stamped — the merge gates them on the same flag."""
+    sets = _store().get(f"storyobjsets:{slug}") or {}
+    data = sets.get(name)
+    if not isinstance(data, dict):
+        raise KeyError(name)
+    open_flag = (story["meta"].get("open_flag") or "").strip()
+    layer = st.get_user_layer(slug, chat)
+    merged_objects = dict(layer.get("objects") or {})
+    for rid, objs in (data.get("objects") or {}).items():
+        if not isinstance(objs, dict):
+            continue
+        cur = dict(merged_objects.get(str(rid)) or {})
+        for oname, spec in objs.items():
+            if not isinstance(spec, dict):
+                continue
+            spec = dict(spec)
+            if open_flag and "condition" not in spec:
+                spec["condition"] = {"flag": open_flag}
+            spec.setdefault("_author", "player")
+            cur[oname] = spec
+        if cur:
+            merged_objects[str(rid)] = cur
+    merged_rooms = dict(layer.get("rooms") or {})
+    for rid, txt in (data.get("rooms") or {}).items():
+        if isinstance(txt, dict):
+            merged_rooms[str(rid)] = txt
+    st.save_user_layer(slug, chat, {"objects": merged_objects,
+                                    "rooms": merged_rooms})
+
+
+def _start(system, slug, character, mode, local, session, slots=None, objset=None):
     chat = _chat_name(system, session)
     if session and not _chat_exists(system, chat):
         return f"No chat named '{chat}' — a story's session must be a real chat.", False
@@ -431,11 +567,23 @@ def _start(system, slug, character, mode, local, session):
     # Local persona defaults to whatever the chat was wearing pre-story
     local = local or prev_prompt
 
+    slot_vals = _clean_slots(story, slots)
     st.set_active(chat, slug, prev_prompt)
     st.update_active(chat, character=character, mode=mode, local=local,
                      prompt_name=_prompt_name_for(story, mode, chat),
                      prev_toolset=cur.get("toolset", "all"),
-                     prev_extras=cur.get("extra_toolsets") or [])
+                     prev_extras=cur.get("extra_toolsets") or [],
+                     slots=slot_vals)
+    if objset:
+        try:
+            _import_objset(chat, slug, story, str(objset))
+        except KeyError:
+            logger.warning(f"[STORY] object set '{objset}' not found for '{slug}' — starting without it")
+        except Exception as e:
+            logger.warning(f"[STORY] object set '{objset}' import failed: {e}")
+    # The local story object must render with slots applied — the first
+    # costume and room 1's on_enter narration carry the player's words.
+    _apply_slots(story, slot_vals)
 
     # Stamp the story cockpit: none of hers + the referee (ruling 2026-08-03).
     # Users change it after via the sidebar; the checkbox is extra_toolsets.
@@ -939,9 +1087,15 @@ def full_state(system, session=None):
         return None
     entry = st.get_active().get(chat, {})
     room = story["rooms"].get(state["room"])
+    _open_flag = (story["meta"].get("open_flag") or "").strip()
     return {
         "story": story["meta"].get("title", story["meta"]["slug"]),
         "slug": story["meta"]["slug"],
+        # Mad-Libs layer (open-mansion v1): this run's slot values, the
+        # zork-line flag, and whether the house has opened.
+        "slots": entry.get("slots") or {},
+        "open_flag": _open_flag,
+        "house_open": (not _open_flag) or bool(state["flags"].get(_open_flag)),
         "mode": entry.get("mode"),
         "local": entry.get("local"),
         "prompt_name": entry.get("prompt_name"),
@@ -1036,6 +1190,139 @@ def last_played(system, session=None):
     except Exception as e:
         logger.warning(f"[STORY] last_played('{slug}') failed: {e}")
         return None
+
+
+def update_slots(system, slots, session=None):
+    """Edit the RUNNING playthrough's slot values (the gear's Setup tab) —
+    re-cleans against the declarations and re-bakes the costume, so the
+    change lands on her very next turn."""
+    chat = _chat_name(system, session)
+    story, state = load_active(chat)
+    if not story:
+        return "No story is active in this chat.", False
+    st.update_active(chat, slots=_clean_slots(story, slots))
+    try:
+        refresh_prompt(system, session=chat)
+    except Exception as e:
+        logger.warning(f"[STORY] slot refresh failed: {e}")
+    return "Setup updated — it lands on her next turn.", True
+
+
+# ── User layer CRUD (open-mansion v1) — routes + the AI's placement tool ────
+
+_OBJ_CAP = 80          # per playthrough — sanity, not a feature
+_OBJ_BYTES = 8192      # per object spec
+
+
+def upsert_user_object(chat, slug, room_id, name, spec, author="player"):
+    """Place/update one authored object in the playthrough's user layer.
+    Soft validation only — the referee is already defensive about every
+    field it reads; we cap size/count and stamp authorship."""
+    name = str(name or "").strip()
+    if not name:
+        return "Object needs a name.", False
+    if not isinstance(spec, dict):
+        return "Object spec must be an object.", False
+    try:
+        if len(json.dumps(spec)) > _OBJ_BYTES:
+            return f"Object too large ({_OBJ_BYTES // 1024}KB cap).", False
+    except (TypeError, ValueError):
+        return "Object spec isn't JSON-serializable.", False
+    spec = dict(spec)
+    spec["_author"] = str(author)
+    layer = st.get_user_layer(slug, chat)
+    objects = dict(layer.get("objects") or {})
+    room_objs = dict(objects.get(str(room_id)) or {})
+    total = sum(len(v) for v in objects.values() if isinstance(v, dict))
+    if name not in room_objs and total >= _OBJ_CAP:
+        return f"Placed-object cap reached ({_OBJ_CAP} per playthrough).", False
+    room_objs[name] = spec
+    objects[str(room_id)] = room_objs
+    st.save_user_layer(slug, chat, {"objects": objects,
+                                    "rooms": layer.get("rooms") or {}})
+    return f"'{name}' placed.", True
+
+
+def delete_user_object(chat, slug, room_id, name):
+    layer = st.get_user_layer(slug, chat)
+    objects = dict(layer.get("objects") or {})
+    room_objs = dict(objects.get(str(room_id)) or {})
+    if name not in room_objs:
+        return "No placed object by that name in that room.", False
+    room_objs.pop(name)
+    if room_objs:
+        objects[str(room_id)] = room_objs
+    else:
+        objects.pop(str(room_id), None)
+    st.save_user_layer(slug, chat, {"objects": objects,
+                                    "rooms": layer.get("rooms") or {}})
+    return f"'{name}' removed.", True
+
+
+def set_room_text(chat, slug, room_id, template=None, player_desc=None):
+    """Store per-room text overrides. Empty/whitespace value clears that
+    field (routes apply verbatim-equals-shipped upstream, same house rule
+    as story settings)."""
+    layer = st.get_user_layer(slug, chat)
+    rooms_ov = dict(layer.get("rooms") or {})
+    cur = dict(rooms_ov.get(str(room_id)) or {})
+    if template is not None:
+        cur["template"] = str(template)
+    if player_desc is not None:
+        cur["player_desc"] = str(player_desc)
+    cur = {k: v for k, v in cur.items() if str(v).strip()}
+    if cur:
+        rooms_ov[str(room_id)] = cur
+    else:
+        rooms_ov.pop(str(room_id), None)
+    st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
+                                    "rooms": rooms_ov})
+    return "Room text saved.", True
+
+
+def _resolve_room(story, ref, state):
+    """Room by id, title (separator/case-forgiving), or current room when
+    the ref is empty."""
+    if ref is None or not str(ref).strip():
+        return story["rooms"].get(state["room"])
+    s = str(ref).strip()
+    if s.isdigit():
+        return story["rooms"].get(int(s))
+    for room in story["rooms"].values():
+        if referee._key(room.get("title")) == referee._key(s):
+            return room
+    return None
+
+
+def place_object(system, room_ref, name, desc=None, verb=None, response=None,
+                 hidden=False, session=None):
+    """The AI seeds the house too (Krem's ruling 2026-08-20): an object she
+    authors lands in the user layer marked _author='ai' — excluded from
+    saved object sets (fork 2), otherwise a full citizen of the world."""
+    chat = _chat_name(system, session)
+    story, state = load_active(chat)
+    if not story:
+        return "No story is active in this chat.", False
+    room = _resolve_room(story, room_ref, state)
+    if not room:
+        titles = ", ".join(f"'{r.get('title')}'" for r in story["rooms"].values())
+        return f"No room matches '{room_ref}'. Rooms: {titles}.", False
+    if referee._find(room.get("objects") or {}, name)[1] is not None:
+        return f"Something named '{name}' is already there.", False
+    spec = {"desc": str(desc or "").strip() or "something left here"}
+    if hidden:
+        spec["hidden"] = True
+    v = referee._norm(verb or "")
+    if v and v not in referee.GENERIC_VERBS:
+        spec["interactions"] = {v: {"message":
+                                    str(response or "").strip() or f"You {v} the {name}."}}
+    slug = story["meta"]["slug"]
+    msg, ok = upsert_user_object(chat, slug, room["id"], name, spec, author="ai")
+    if not ok:
+        return msg, False
+    st.append(slug, chat, {"event": "placed", "target": str(name).strip(),
+                           "room": room["id"], "turn": state["turn"]})
+    return f"Placed '{name}' in {room['title']} — it's part of the world now.", True
 
 
 def revert(system, turn, session=None):

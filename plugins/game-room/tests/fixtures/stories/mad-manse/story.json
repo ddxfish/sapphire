@@ -1,0 +1,22 @@
+{
+  "slug": "mad-manse",
+  "title": "The Mad Manse",
+  "description": "Engine fixture for open-mansion v1 (slots, zork-line, user layer).",
+  "premise": "We arrive at the manse together as {relationship}.",
+  "player_role": "My {relationship} on this job.",
+  "start": 1,
+  "open_flag": "chest_opened",
+  "role": {
+    "name": "Vex",
+    "text": "I am Vex, your {relationship}. Our watchword is {watchword}."
+  },
+  "slots": [
+    {"key": "relationship", "label": "Our relationship",
+     "options": ["partner", "rival"], "allow_custom": true, "default": "partner"},
+    {"key": "watchword", "label": "Watchword", "options": [],
+     "allow_custom": true, "default": "lantern"},
+    {"key": "combo", "label": "The chest combo", "sealed": true,
+     "seal_key": "1:chest:open"},
+    {"key": "", "label": "malformed — dropped"}
+  ]
+}

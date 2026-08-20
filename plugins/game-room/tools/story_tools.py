@@ -21,7 +21,7 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "story_act",
-            "description": "Resolve ONE player-chosen act against the current room — the engine is the referee, you narrate its verdict. NEVER call this to orient or look around: the current room (scene, exits, objects, state) is already in your turn context every turn. Verbs: 'move' (target = exit label), 'search' (uncover hidden things), 'solve' (target = puzzle object, answer = the player's attempt), 'look' (target REQUIRED — a specific object the player examines), or any verb a room object declares. Never decide mechanical outcomes yourself.",
+            "description": "Resolve ONE player-chosen act against the current room — the engine is the referee, you narrate its verdict. The current room (scene, exits, objects, state) is already in your turn context every turn; call 'look' with target 'room' only to re-read a room that may have CHANGED. Verbs: 'move' (target = exit label), 'search' (uncover hidden things), 'solve' (target = puzzle object, answer = the player's attempt), 'look' (target = a specific object, or 'room'), or any verb a room object declares. Never decide mechanical outcomes yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -30,6 +30,26 @@ TOOLS = [
                     "answer": {"type": "string", "description": "solve only: the player's attempted solution"}
                 },
                 "required": ["verb"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "is_local": True,
+        "function": {
+            "name": "story_place",
+            "description": "Author a NEW object into a story room — it becomes part of the tracked world (visible in room context, actable via story_act). Use for things YOU introduce into the fiction that should persist: a note you leave, a gift you hide, a tool you fashion. One verb per call; call again on the same object to add more. Not for objects the room already tracks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room": {"type": "string", "description": "Room title or id (empty = current room)"},
+                    "name": {"type": "string", "description": "Object name, e.g. 'folded_note'"},
+                    "desc": {"type": "string", "description": "What one sees looking at it"},
+                    "verb": {"type": "string", "description": "Optional custom verb it responds to, e.g. 'read'"},
+                    "response": {"type": "string", "description": "What that verb returns when performed"},
+                    "hidden": {"type": "boolean", "description": "True = found only by searching"}
+                },
+                "required": ["name"]
             }
         }
     },
@@ -62,6 +82,14 @@ def execute(function_name, arguments, config):
                                arguments.get("verb"),
                                arguments.get("target"),
                                arguments.get("answer"))
+        if function_name == "story_place":
+            return session.place_object(system,
+                                        arguments.get("room"),
+                                        arguments.get("name"),
+                                        desc=arguments.get("desc"),
+                                        verb=arguments.get("verb"),
+                                        response=arguments.get("response"),
+                                        hidden=bool(arguments.get("hidden")))
         if function_name == "story_end":
             return session.end(system)
         return f"Unknown function: {function_name}", False

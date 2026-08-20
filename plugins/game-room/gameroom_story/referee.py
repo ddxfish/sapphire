@@ -94,7 +94,9 @@ def answers_of(puzzle):
 
 def check_condition(cond, state):
     """Edge/object condition: {"has": item} and/or {"flags": {k: expected}}
-    (also accepts {"flag": name} as a truthy check)."""
+    (also accepts {"flag": name} as a truthy check, and {"flag_gte":
+    {k: n}} for numeric thresholds — 'love over 50' gates everywhere
+    conditions do: exits, blockers, endings, object visibility)."""
     if not cond:
         return True
     if cond.get("has") and cond["has"] not in state["inventory"]:
@@ -104,6 +106,13 @@ def check_condition(cond, state):
         return False
     for k, expected in (cond.get("flags") or {}).items():
         if state["flags"].get(k) != expected:
+            return False
+    for k, n in (cond.get("flag_gte") or {}).items():
+        try:
+            if float(state["flags"].get(k) or 0) < float(n):
+                return False
+        except (TypeError, ValueError):
+            # author-typed junk threshold: gate stays closed, never crashes
             return False
     return True
 
@@ -157,9 +166,16 @@ def blockers(room, state):
 
 
 def _visible_objects(room, state):
+    """The one visibility funnel. Besides hidden/found, an object may carry
+    a top-level `condition` — it does not EXIST until the condition holds
+    (the zork-line: imported object sets materialize when the house opens).
+    Distinct from per-interaction conditions, which gate verbs on a visible
+    object."""
     out = {}
     for name, obj in (room.get("objects") or {}).items():
         if obj.get("hidden") and name not in state["found"]:
+            continue
+        if not check_condition(obj.get("condition"), state):
             continue
         out[name] = obj
     return out
@@ -176,7 +192,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     target_n = _norm(target)
 
     if verb == "look":
-        if target_n:
+        if target_n and target_n not in ("room", "around", "here"):
             _name, obj = _find(_visible_objects(room, state), target_n)
             if not obj:
                 return [], f"There is no '{target}' here to look at.", False
@@ -189,7 +205,16 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
             if verbs:
                 bits.append(f"It responds to: {', '.join(verbs)}")
             return [], f"{target}: " + " — ".join(bits), True
-        return [], "The room's full details are in my turn context — narrate from them.", True
+        # look room — on-demand re-read (Krem 2026-08-20): the ghost block
+        # already carries this each turn, but a single room that CHANGES
+        # (placed objects, zork-line reveals) deserves an explicit read.
+        vis = _visible_objects(room, state)
+        bits = [f"{room['title']}: {(room.get('template') or '').strip()}"]
+        if vis:
+            bits.append("Here: " + ", ".join(vis))
+        labels = ", ".join(f"'{e.get('label')}'" for e in room.get("exits", []))
+        bits.append(f"Exits: {labels or 'none'}")
+        return [], " — ".join(bits), True
 
     if verb == "move":
         if not target_n:
@@ -218,6 +243,10 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     if verb == "search":
         found = []
         for name, obj in (room.get("objects") or {}).items():
+            # condition-gated objects don't EXIST yet — search can't find
+            # what the zork-line hasn't materialized.
+            if not check_condition(obj.get("condition"), state):
+                continue
             if obj.get("hidden") and name not in state["found"] and _norm(obj.get("found_by", "search")) == "search":
                 ev = {"event": "found", "target": name}
                 if obj.get("gives"):
@@ -236,7 +265,8 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
         name, obj = _find(_visible_objects(room, state), target_n)
         if not obj:
             name, obj = _find(room.get("objects") or {}, target_n)
-        if not obj or (obj.get("hidden") and name not in state["found"]):
+        if not obj or (obj.get("hidden") and name not in state["found"]) \
+                or not check_condition(obj.get("condition"), state):
             return [], f"There is no '{target}' here to solve.", False
         # Journal under the AUTHOR's key, not the player's spelling — state
         # lookups elsewhere (solved/found lists, conditions) use the

@@ -1,0 +1,293 @@
+# Open-mansion v1 — Mad-Libs slots, object visibility conditions, the user
+# layer (placed objects + room-text overrides), object sets, presets.
+# Plan: tmp/open-mansion-plan.md. Fixture pack: fixtures/stories/mad-manse.
+import sys
+from pathlib import Path
+
+import pytest
+
+PLUGIN_DIR = Path(__file__).parent.parent
+if str(PLUGIN_DIR) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_DIR))
+
+from gameroom_story import rooms, referee, render, session, state as st  # noqa: E402
+
+FIXTURES = Path(__file__).parent / "fixtures" / "stories"
+CHAT = "manse-test-chat"
+
+
+class FakeStore:
+    def __init__(self):
+        self.d = {}
+
+    def get(self, k):
+        return self.d.get(k)
+
+    def save(self, k, v):
+        self.d[k] = v
+
+
+@pytest.fixture
+def story(monkeypatch):
+    monkeypatch.setattr(rooms, "_story_roots", lambda: [FIXTURES])
+    return rooms.load_story("mad-manse")
+
+
+@pytest.fixture
+def cfg_store(monkeypatch):
+    fake = FakeStore()
+    monkeypatch.setattr(session, "_cfg_store", fake, raising=False)
+    from core.plugin_loader import plugin_loader
+    monkeypatch.setattr(plugin_loader, "get_plugin_state", lambda name: fake)
+    return fake
+
+
+def _fresh(story):
+    state = st.initial_state()
+    state["room"] = story["meta"]["start"]
+    return state
+
+
+# ── flag_gte condition ───────────────────────────────────────────────────────
+
+def test_flag_gte_threshold():
+    state = st.initial_state()
+    cond = {"flag_gte": {"love": 50}}
+    assert not referee.check_condition(cond, state)          # absent → 0
+    state["flags"]["love"] = 49
+    assert not referee.check_condition(cond, state)
+    state["flags"]["love"] = 50
+    assert referee.check_condition(cond, state)
+
+
+def test_flag_gte_junk_threshold_stays_closed():
+    state = st.initial_state()
+    state["flags"]["love"] = 99
+    assert not referee.check_condition({"flag_gte": {"love": "plenty"}}, state)
+
+
+# ── Object visibility conditions (the zork-line) ────────────────────────────
+
+def test_gated_object_does_not_exist_before_flag(story):
+    state = _fresh(story)
+    hall = story["rooms"][1]
+    assert "ghost_bell" not in referee._visible_objects(hall, state)
+    assert "ghost_bell" not in render.ghost_block(story, state, hall)
+    _, msg, ok = referee.resolve(story, state, hall, story["rooms"],
+                                 "ring", "ghost_bell")
+    assert "tracked" in msg           # off-script: nothing by that name
+    _, msg, _ = referee.resolve(story, state, hall, story["rooms"], "search")
+    assert "ghost_bell" not in msg
+
+
+def test_gated_object_materializes_on_flag(story):
+    state = _fresh(story)
+    state["flags"]["chest_opened"] = True
+    hall = story["rooms"][1]
+    assert "ghost_bell" in referee._visible_objects(hall, state)
+    assert "ghost_bell" in render.ghost_block(story, state, hall)
+    events, msg, ok = referee.resolve(story, state, hall, story["rooms"],
+                                      "ring", "ghost_bell")
+    assert ok and "answers" in msg
+
+
+def test_flag_gte_gated_object(story):
+    state = _fresh(story)
+    hall = story["rooms"][1]
+    assert "warm_feeling" not in referee._visible_objects(hall, state)
+    state["flags"]["love"] = 60
+    assert "warm_feeling" in referee._visible_objects(hall, state)
+
+
+# ── look room ────────────────────────────────────────────────────────────────
+
+def test_look_room_reads_current_truth(story):
+    state = _fresh(story)
+    hall = story["rooms"][1]
+    for target in (None, "room", "around"):
+        _, msg, ok = referee.resolve(story, state, hall, story["rooms"],
+                                     "look", target)
+        assert ok and "The Hall" in msg and "chest" in msg and "Exits" in msg
+        assert "ghost_bell" not in msg      # still gated
+
+
+def test_look_named_object_still_works(story):
+    state = _fresh(story)
+    _, msg, ok = referee.resolve(story, state, story["rooms"][1],
+                                 story["rooms"], "look", "chest")
+    assert ok and "brass dial" in msg
+
+
+# ── Slots: declaration, cleaning, substitution ──────────────────────────────
+
+def test_story_slots_normalized(story):
+    slots = rooms.story_slots(story["meta"])
+    keys = [s["key"] for s in slots]
+    assert keys == ["relationship", "watchword", "combo"]   # malformed dropped
+    rel = slots[0]
+    assert rel["default"] == "partner" and rel["options"] == ["partner", "rival"]
+    assert slots[2]["sealed"] and slots[2]["seal_key"] == "1:chest:open"
+
+
+def test_clean_slots_defaults_and_hygiene(story):
+    vals = session._clean_slots(story, {"relationship": " {ai_name} wife ",
+                                        "unknown": "x", "combo": "1234"})
+    assert vals["relationship"] == "ai_name wife"       # braces stripped
+    assert vals["watchword"] == "lantern"               # default fills
+    assert "unknown" not in vals and "combo" not in vals  # sealed excluded
+
+
+def test_apply_slots_substitutes_everywhere(story):
+    session._apply_slots(story, {"relationship": "wife", "watchword": "ember"})
+    assert story["meta"]["role"]["text"] == \
+        "I am Vex, your wife. Our watchword is ember."
+    assert "as wife" in story["meta"]["premise"]
+    assert "My wife stands" in story["rooms"][1]["template"]
+    assert "whispered ember" in story["rooms"][2]["template"]
+    assert story["meta"]["role"]["name"] == "Vex"       # names stay literal
+
+
+# ── User layer: placed objects + room text ──────────────────────────────────
+
+def test_user_object_merges_and_acts(story):
+    msg, ok = session.upsert_user_object(
+        CHAT, "mad-manse", 1, "rare_pepes",
+        {"desc": "A display case of rare pepes.",
+         "interactions": {"look_inside": {"message": "You see a paper..."}}})
+    assert ok
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)
+    session._merge_user_layer(fresh, "mad-manse", CHAT, state)
+    hall = fresh["rooms"][1]
+    assert "rare_pepes" in hall["objects"]
+    events, msg, ok = referee.resolve(fresh, state, hall, fresh["rooms"],
+                                      "look_inside", "rare_pepes")
+    assert ok and "You see a paper" in msg
+
+
+def test_user_object_never_shadows_shipped(story):
+    session.upsert_user_object(CHAT, "mad-manse", 1, "chest",
+                               {"desc": "an impostor chest"})
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)
+    session._merge_user_layer(fresh, "mad-manse", CHAT, state)
+    assert fresh["rooms"][1]["objects"]["chest"]["desc"] == \
+        "An old chest with a brass dial."
+
+
+def test_room_text_override_gated_by_zork_line(story):
+    session.set_room_text(CHAT, "mad-manse", 2,
+                          template="A backyard BBQ. Only cheetos remain.")
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)
+    session._merge_user_layer(fresh, "mad-manse", CHAT, state)
+    assert "parlor" in fresh["rooms"][2]["template"].lower()   # gated: shipped
+    state["flags"]["chest_opened"] = True
+    fresh2 = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh2, "mad-manse", CHAT, state)
+    assert "cheetos" in fresh2["rooms"][2]["template"]
+
+
+def test_delete_user_object(story):
+    session.upsert_user_object(CHAT, "mad-manse", 1, "temp", {"desc": "x"})
+    msg, ok = session.delete_user_object(CHAT, "mad-manse", 1, "temp")
+    assert ok
+    assert (st.get_user_layer("mad-manse", CHAT).get("objects") or {}) \
+        .get("1", {}).get("temp") is None
+
+
+def test_place_object_marks_ai_and_journals(story):
+    st.set_active(CHAT, "mad-manse", None)
+    st.append("mad-manse", CHAT, {"event": "started", "story": "mad-manse",
+                                  "room": 1, "turn": 0})
+    msg, ok = session.place_object(None, "the hall", "folded_note",
+                                   desc="A folded note.", verb="read",
+                                   response="It says: apples.",
+                                   session=CHAT)
+    assert ok, msg
+    layer = st.get_user_layer("mad-manse", CHAT)
+    spec = layer["objects"]["1"]["folded_note"]
+    assert spec["_author"] == "ai"
+    assert any(e.get("event") == "placed"
+               for e in st.read_journal("mad-manse", CHAT))
+    st.clear_active(CHAT)
+
+
+# ── Object sets ─────────────────────────────────────────────────────────────
+
+def test_import_objset_stamps_zork_condition(story, cfg_store):
+    cfg_store.save("storyobjsets:mad-manse", {
+        "bbq": {"objects": {"1": {"grill": {"desc": "A hot grill."},
+                                  "banner": {"desc": "A banner.",
+                                             "condition": {"flag": "own"}}}},
+                "rooms": {"2": {"template": "BBQ parlor."}}}})
+    session._import_objset(CHAT, "mad-manse", story, "bbq")
+    layer = st.get_user_layer("mad-manse", CHAT)
+    assert layer["objects"]["1"]["grill"]["condition"] == \
+        {"flag": "chest_opened"}                       # implicit stamp
+    assert layer["objects"]["1"]["banner"]["condition"] == {"flag": "own"}
+    assert layer["rooms"]["2"]["template"] == "BBQ parlor."
+
+
+def test_objset_save_excludes_ai_objects(story, cfg_store, monkeypatch):
+    session.upsert_user_object(CHAT, "mad-manse", 1, "mine", {"desc": "x"},
+                               author="player")
+    session.upsert_user_object(CHAT, "mad-manse", 1, "hers", {"desc": "y"},
+                               author="ai")
+    st.set_active(CHAT, "mad-manse", None)
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    r = story_routes.set_objset("mad-manse",
+                                body={"name": "snap", "session": CHAT})
+    assert r["success"], r
+    saved = cfg_store.d["storyobjsets:mad-manse"]["snap"]
+    assert "mine" in saved["objects"]["1"]
+    assert "hers" not in saved["objects"]["1"]
+    st.clear_active(CHAT)
+
+
+# ── Presets + setup routes ──────────────────────────────────────────────────
+
+def test_preset_roundtrip(story, cfg_store):
+    from routes import story_routes
+    r = story_routes.set_preset("mad-manse",
+                                body={"name": "ghost-run",
+                                      "slots": {"relationship": "wife",
+                                                "empty": "  "}})
+    assert r["success"]
+    got = story_routes.get_presets("mad-manse")["presets"]["ghost-run"]
+    assert got["slots"] == {"relationship": "wife"}
+    r = story_routes.set_preset("mad-manse", body={"name": "ghost-run",
+                                                   "delete": True})
+    assert r["success"]
+    assert story_routes.get_presets("mad-manse")["presets"] == {}
+
+
+def test_setup_route_shape(story, cfg_store):
+    from routes import story_routes
+    r = story_routes.get_setup("mad-manse")
+    assert r["open_flag"] == "chest_opened"
+    assert [s["key"] for s in r["slots"]] == ["relationship", "watchword", "combo"]
+    assert r["objsets"] == [] and r["presets"] == {}
+
+
+# ── Pre-seeded seal at turn 0 (the sealed Mad-Libs slot lane) ───────────────
+
+def test_seal_preseed_right_after_start(story):
+    st.set_active(CHAT, "mad-manse", None)
+    st.append("mad-manse", CHAT, {"event": "started", "story": "mad-manse",
+                                  "room": 1, "turn": 0})
+    # sealed interaction lives on the chest only for this test's purposes —
+    # declare one via the user layer, then pre-seed it
+    session.upsert_user_object(
+        CHAT, "mad-manse", 1, "letter",
+        {"desc": "A wax-sealed letter.",
+         "interactions": {"read": {"sealed": {"ask": "What does it say?"}}}})
+    msg, ok = session.fill_seal(None, "1:letter:read",
+                                text="Free energy is real.", session=CHAT)
+    assert ok, msg
+    story2, state2 = session.load_active(CHAT)
+    events, msg, ok = referee.resolve(story2, state2, story2["rooms"][1],
+                                      story2["rooms"], "read", "letter")
+    assert ok and "Free energy is real." in msg
+    st.clear_active(CHAT)

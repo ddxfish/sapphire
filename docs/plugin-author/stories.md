@@ -36,6 +36,25 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 | `dm_guide` | No | Per-story GM guidance (user-editable in ⚙ GM Settings; your text is the shipped default) |
 | `initial_flags` | No | `{"jack_hp": 10}` — starting stats, seeded as replayable events |
 | `tags`, `facts`, `tile` | No | Library tile metadata; `tile` is a filename in `backdrops/` |
+| `open_flag` | No | The **zork-line**: the flag that "opens the house". Player-imported object sets and room-text overrides materialize when it turns truthy (any flag your effects set: `chest_opened`, `killed_goblin`, a `flag_gte` threshold…) |
+| `slots` | No | Mad-Libs setup form, shown before room 1 — see below |
+
+## Setup slots (Mad-Libs)
+
+```json
+"slots": [
+  {"key": "relationship", "label": "We are…",
+   "options": ["coworkers", "married", "old war buddies"],
+   "allow_custom": true, "default": "coworkers"},
+  {"key": "combo", "label": "The chest combo", "sealed": true,
+   "seal_key": "3:chest:open"}
+]
+```
+
+- Declared slots make the story open with a setup form (dropdowns + "Other"); stories without slots keep zero-friction auto-start.
+- `{key}` tokens substitute into role text, premise, `player_role`, `dm_guide`, and every string in every room — once, at load, per playthrough.
+- `sealed: true` slots never substitute: the player's text is written into the sealed blank named by `seal_key` (the room-scoped `"{room_id}:{object}:{verb}"` key of a `sealed` interaction you declare) — she discovers it in play.
+- Players can save filled forms as per-story **setup presets**, and save/load **object sets** (rooms stocked with their own objects + room-text overrides, materializing at the zork-line). Both live user-side; your pack never changes.
 
 ## Room JSON
 
@@ -98,7 +117,10 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 | `emotions` / `emotions_remove` | live emotion layers in her prompt |
 | `extras` / `extras_remove` | extra prompt pieces on / off |
 
-**Conditions** (on exits, interactions, blockers, ending cards): `{"has": "item"}`, `{"flag": "name"}` (truthy), `{"flags": {"k": expected}}` — all listed clauses must hold.
+**Conditions** (on exits, interactions, blockers, ending cards): `{"has": "item"}`, `{"flag": "name"}` (truthy), `{"flags": {"k": expected}}`, `{"flag_gte": {"k": 50}}` (numeric threshold) — all listed clauses must hold.
+
+- An object may also carry a **top-level** `condition`: until it holds, the object doesn't exist at all (invisible, unsearchable, unactable). This is how imported object sets stay dormant until the zork-line.
+- `look` with no target (or target `room`) returns the room's current truth — title, scene text, visible objects, exits. Useful in single-room stories whose contents change.
 
 ## Dice
 

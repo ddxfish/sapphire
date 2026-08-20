@@ -128,6 +128,24 @@ def clear_active(chat):
         return entry
 
 
+# ── User layer: placed objects + room-text overrides (open-mansion v1) ──────
+# One seq-0 row per (chat, slug): {"objects": {room_id_str: {name: spec}},
+# "rooms": {room_id_str: {template, player_desc}}}. put-only (never append —
+# history.py's mixing rule). Rides vault/rename/delete like the journal.
+
+def _okey(story):
+    return f"story:objects:{story}"
+
+
+def get_user_layer(story, chat):
+    row = _cs().get(chat, _okey(story))
+    return row if isinstance(row, dict) else {}
+
+
+def save_user_layer(story, chat, data):
+    _cs().put(chat, _okey(story), data)
+
+
 # ── Journal ──────────────────────────────────────────────────────────────────
 
 def append(story, chat, event):

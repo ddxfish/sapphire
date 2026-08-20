@@ -166,6 +166,34 @@ def _apply_overrides(slug, meta):
         meta["player_role"] = ov["player_role"]
 
 
+def story_slots(meta):
+    """Normalized Mad-Libs slot declarations from story.json `slots` (plan
+    tmp/open-mansion-plan.md). Soft: malformed entries warn + drop, never
+    break the story. Each: {key, label, options[], allow_custom, default,
+    sealed, seal_key}. `default` falls back to the first option so an
+    unanswered slot never leaks a raw {token} into her prompt."""
+    out = []
+    for s in (meta.get("slots") or []):
+        if not isinstance(s, dict):
+            continue
+        key = str(s.get("key") or "").strip()
+        if not key or not key.replace("_", "").isalnum():
+            logger.warning(f"[STORY] slot with bad key {s.get('key')!r} dropped")
+            continue
+        options = [str(o) for o in (s.get("options") or []) if str(o).strip()]
+        default = str(s.get("default") or "").strip() or (options[0] if options else "")
+        out.append({
+            "key": key,
+            "label": str(s.get("label") or key.replace("_", " ")),
+            "options": options,
+            "allow_custom": bool(s.get("allow_custom", True)),
+            "default": default,
+            "sealed": bool(s.get("sealed")),
+            "seal_key": str(s.get("seal_key") or "").strip().lower(),
+        })
+    return out
+
+
 def load_story(slug, raw=False):
     """Full story: meta + all canonical rooms. Raises on missing/invalid.
     raw=True skips user overrides — the settings routes need the SHIPPED

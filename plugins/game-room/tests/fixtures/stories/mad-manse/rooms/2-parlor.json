@@ -1,0 +1,10 @@
+{
+  "id": 2,
+  "title": "The Parlor",
+  "template": "A parlor. Someone whispered {watchword} here once.",
+  "player_desc": "A faded parlor.",
+  "exits": [
+    {"label": "the hall", "to": 1}
+  ],
+  "objects": {}
+}
