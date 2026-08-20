@@ -15,23 +15,46 @@ import threading
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-# plugin_name -> {"monoliths": {name: {content, privacy_required}},
+# plugin_name -> {"monoliths": {name: {content, privacy_required, kind}},
 #                 "components": {type: {key: text}},
-#                 "scenario_presets": {name: {component: value}}}
+#                 "scenario_presets": {name: {component: value}},
+#                 "kind": pack-level kind for pieces/presets}
 _packs = {}
 
+# kind taxonomy — visibility is DERIVED (kind != 'user' hides from pickers):
+#   user     — default; visible everywhere
+#   story    — rendered story costumes (game-room); hidden from all pickers
+#   internal — engine scaffolding pieces; hidden from accordions
+KINDS = ('user', 'story', 'internal')
 
-def register_pack(plugin_name, monoliths=None, pieces=None):
+
+def _norm_kind(kind, plugin_name, where=''):
+    """Coerce unknown kinds to 'user' (fail-open to VISIBLE — a typo should
+    not silently vanish someone's prompts)."""
+    if kind is None:
+        return 'user'
+    if kind in KINDS:
+        return kind
+    logger.warning(f"[PROMPT-PACKS] {plugin_name}: unknown kind '{kind}'{where} — treating as 'user'")
+    return 'user'
+
+
+def register_pack(plugin_name, monoliths=None, pieces=None, kind=None):
     """Register a plugin's prompt pack. `monoliths` and `pieces` use the same
     JSON shapes as the user files (pieces = {"components": ..., "scenario_presets": ...}).
+    `kind` is the pack-level default for every entry; a monolith dict may
+    carry its own 'kind' to override it (dynamic story costumes do).
     Returns (counts dict, message). Re-registration replaces the pack."""
+    pack_kind = _norm_kind(kind, plugin_name)
     norm_monoliths = {}
     for k, v in (monoliths or {}).items():
         if k.startswith('_'):
             continue
         if isinstance(v, str):
-            norm_monoliths[k] = {'content': v, 'privacy_required': False}
+            norm_monoliths[k] = {'content': v, 'privacy_required': False, 'kind': pack_kind}
         elif isinstance(v, dict) and isinstance(v.get('content'), str):
+            v = dict(v)
+            v['kind'] = _norm_kind(v.get('kind', pack_kind), plugin_name, f" (monolith '{k}')")
             norm_monoliths[k] = v
         else:
             logger.warning(f"[PROMPT-PACKS] {plugin_name}: skipping monolith '{k}' (bad shape)")
@@ -50,6 +73,7 @@ def register_pack(plugin_name, monoliths=None, pieces=None):
             'monoliths': norm_monoliths,
             'components': components,
             'scenario_presets': presets,
+            'kind': pack_kind,
         }
 
     counts = {'monoliths': len(norm_monoliths),
@@ -161,6 +185,31 @@ def component_sources():
                 slot = out.setdefault(ctype, {})
                 for k in entries:
                     slot.setdefault(k, pname)
+    return out
+
+
+def get_kinds():
+    """{name: kind} for monoliths + presets across all packs. First
+    registrant wins, matching the overlay collision rule."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for k, v in pack['monoliths'].items():
+                out.setdefault(k, v.get('kind', 'user'))
+            for k in pack['scenario_presets']:
+                out.setdefault(k, pack.get('kind', 'user'))
+    return out
+
+
+def component_kinds():
+    """{type: {key: kind}} for every pack piece (pack-level kind)."""
+    out = {}
+    with _lock:
+        for pname, pack in _packs.items():
+            for ctype, entries in pack['components'].items():
+                slot = out.setdefault(ctype, {})
+                for k in entries:
+                    slot.setdefault(k, pack.get('kind', 'user'))
     return out
 
 

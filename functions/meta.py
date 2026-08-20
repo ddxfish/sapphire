@@ -332,7 +332,7 @@ def _require_component(component):
 
 def _unknown_key_msg(component, key):
     from core import prompts
-    available = list(prompts.prompt_manager.components.get(component, {}).keys())[:15]
+    available = list(prompts.visible_components().get(component, {}).keys())[:15]
     return f"'{key}' not found in {component}. Available: {', '.join(available)}"
 
 
@@ -596,7 +596,9 @@ def _prompt_pieces(args):
 
     action = (args.get('action') or '').lower().strip()
     component = _normalize_component(args.get('component', ''))
-    comps = prompts.prompt_manager.components
+    # Visible view — hidden pack scaffolding (kind != 'user') stays out of
+    # her piece tool, same world the UI sees. The renderer reads the full merge.
+    comps = prompts.visible_components()
     key = args.get('key', '')
     key = _resolve_name(key, comps.get(component, {})) or _normalize_name(key)
 

@@ -211,7 +211,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/prompts` | List prompts |
+| GET | `/api/prompts` | List prompts (pack entries with `kind` != `user` are omitted; a `hidden` {name: kind} map rides along for dropdown labels) |
 | GET | `/api/prompts/{name}` | Get prompt details |
 | PUT | `/api/prompts/{name}` | Create or update prompt |
 | DELETE | `/api/prompts/{name}` | Delete prompt |
@@ -220,7 +220,7 @@ Chat privacy is per-chat: `PUT /api/chats/{name}/settings` with `private_chat`. 
 | POST | `/api/prompts/reset` | Reset to defaults |
 | POST | `/api/prompts/merge` | Merge defaults into current |
 | POST | `/api/prompts/reset-chat-defaults` | Reset chat defaults to factory |
-| GET | `/api/prompts/components` | List prompt components |
+| GET | `/api/prompts/components` | List prompt components (hidden pack scaffolding omitted; `hidden_keys` carries their names for missing-ref checks) |
 | PUT | `/api/prompts/components/{type}/{key}` | Save prompt component |
 | DELETE | `/api/prompts/components/{type}/{key}` | Delete prompt component |
 | GET | `/api/prompts/piece-usage` | Usage index: which prompts use each piece (+ dangling refs, vault flags) |

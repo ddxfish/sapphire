@@ -73,6 +73,11 @@ async def list_prompts(request: Request, _=Depends(require_login)):
     return {"prompts": prompt_list, "current": prompts.get_active_preset_name(),
             "vault_state": prompt_vault.vault_status(),
             "vault_refs": prompt_vault.refs_names(),
+            # Hidden pack prompts ({name: kind}) — not in the list, but a
+            # chat may still point at one (story costume); dropdown
+            # synthesizers use this to label the value instead of showing
+            # a bare mystery name.
+            "hidden": prompts.hidden_prompt_kinds(),
             "stock": _stock_prompt_names()}
 
 
@@ -113,9 +118,14 @@ async def get_prompt_components(request: Request, _=Depends(require_login)):
     A user piece shadowing a pack key carries no source (the user copy wins)."""
     from core import prompt_packs, prompt_vault
     user_components = prompts.prompt_manager._components
+    # Visible view: hidden pack pieces (kind != 'user', unshadowed) are
+    # dropped — engine scaffolding never reaches the piece accordions. The
+    # renderer keeps reading the full prompt_manager.components merge.
+    visible = prompts.visible_components()
     sources = {
         ctype: {k: v for k, v in entries.items()
-                if k not in user_components.get(ctype, {})}
+                if k not in user_components.get(ctype, {})
+                and k in visible.get(ctype, {})}
         for ctype, entries in prompt_packs.component_sources().items()
     }
     # Vault piece markers (unlocked only, unshadowed only) — 🗝 badge lane +
@@ -124,9 +134,18 @@ async def get_prompt_components(request: Request, _=Depends(require_login)):
         ctype: [k for k in entries if k not in user_components.get(ctype, {})]
         for ctype, entries in prompt_vault.overlay_components().items()
     }
-    return {"components": prompts.prompt_manager.components,
+    # Hidden piece NAMES (no text) — membership checks only. A user prompt
+    # referencing engine scaffolding still renders (the merge is intact), so
+    # the ⚠ missing-ref badge must not flag it as dangling.
+    merged = prompts.prompt_manager.components
+    hidden_keys = {
+        ctype: [k for k in entries if k not in visible.get(ctype, {})]
+        for ctype, entries in merged.items()
+    }
+    return {"components": visible,
             "sources": {k: v for k, v in sources.items() if v},
-            "vault_pieces": {k: v for k, v in vault_pieces.items() if v}}
+            "vault_pieces": {k: v for k, v in vault_pieces.items() if v},
+            "hidden_keys": {k: v for k, v in hidden_keys.items() if v}}
 
 
 # Registered BEFORE /api/prompts/{name} — the path-param route swallows any
@@ -341,7 +360,7 @@ async def save_prompt_component(comp_type: str, key: str, request: Request, _=De
     # vault flag: tells the editor where the piece landed so it can badge
     # 🗝 immediately (the SSE echo may be deferred while the user is typing).
     return {"status": "success", "vault": msg.endswith("(vault)"),
-            "components": prompts.prompt_manager.components}
+            "components": prompts.visible_components()}
 
 
 @router.delete("/api/prompts/components/{comp_type}/{key}")
@@ -353,7 +372,7 @@ async def delete_prompt_component(comp_type: str, key: str, request: Request,
     ok, code = prompts.delete_component(comp_type, key,
                                         reason=(reason or '').strip() or None)
     if ok:
-        return {"status": "success", "components": prompts.prompt_manager.components}
+        return {"status": "success", "components": prompts.visible_components()}
     if code == 'store_latch':
         raise HTTPException(status_code=500,
                             detail="Delete not persisted — the prompt store failed to "

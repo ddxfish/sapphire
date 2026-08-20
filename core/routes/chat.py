@@ -436,6 +436,7 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
         # Prompts data
         from core import prompt_packs
         prompt_names = prompts.list_prompts()
+        _hidden_prompts = prompts.hidden_prompt_kinds()
         pack_sources = prompt_packs.get_sources()
         user_prompt_names = set(prompts.prompt_manager._monoliths) | set(prompts.prompt_manager._scenario_presets)
         prompt_list = []
@@ -450,7 +451,8 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
             })
         current_prompt_name = prompts.get_active_preset_name()
         current_prompt_data = prompts.get_prompt(current_prompt_name) if current_prompt_name else None
-        prompt_components = prompts.prompt_manager.components if hasattr(prompts.prompt_manager, 'components') else {}
+        # Visible view — hidden pack scaffolding stays out of UI payloads
+        prompt_components = prompts.visible_components()
 
         # Spices data
         spice_data = _build_spice_response()
@@ -577,12 +579,16 @@ async def get_init_data(request: Request, _=Depends(require_login), system=Depen
                 "current_name": current_prompt_name,
                 "current": current_prompt_data,
                 "components": prompt_components,
-                "presets": dict(prompts.prompt_manager.scenario_presets),
+                "presets": {k: v for k, v in prompts.prompt_manager.scenario_presets.items()
+                            if k not in _hidden_prompts},
                 # Referenced vault names ONLY (ruling C amendment) — lets
                 # dropdown synthesizers label dangling names "(vault 🗝)"
                 # while locked instead of a bare mystery name.
                 "vault_refs": _vault_refs,
-                "vault": _vault_state
+                "vault": _vault_state,
+                # Hidden pack prompts ({name: kind}, e.g. story costumes) —
+                # dropdown synthesizers label a chat still pointing at one.
+                "hidden": _hidden_prompts
             },
             "spices": spice_data,
             "spice_sets": {

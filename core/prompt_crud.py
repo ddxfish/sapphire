@@ -22,7 +22,49 @@ def list_prompts():
     # Remove duplicates and filter out internal keys
     all_prompts = [p for p in set(all_prompts) if not p.startswith('_')]
 
+    hidden = hidden_prompt_kinds()
+    if hidden:
+        all_prompts = [p for p in all_prompts if p not in hidden]
+
     return sorted(all_prompts)
+
+
+def hidden_prompt_kinds():
+    """{name: kind} for pack prompts hidden from pickers (kind != 'user'),
+    minus any shadowed by a user or vault entry — a shadow is the user's own
+    copy and stays visible. LIST-level only: get_prompt/activation resolve
+    the full merge, so the story engine keeps activating costumes by exact
+    name. UI payloads carry this map so dropdown synthesizers can label a
+    chat still pointing at a hidden name (e.g. a story costume) honestly."""
+    from core import prompt_packs, prompt_vault
+    hidden = {n: k for n, k in prompt_packs.get_kinds().items() if k != 'user'}
+    if not hidden:
+        return hidden
+    shadow = (set(prompt_manager._monoliths) | set(prompt_manager._scenario_presets)
+              | set(prompt_vault.overlay_monoliths()) | set(prompt_vault.overlay_presets()))
+    return {n: k for n, k in hidden.items() if n not in shadow}
+
+
+def visible_components():
+    """Merged components minus hidden pack pieces (kind != 'user',
+    unshadowed) — the UI/tool view of the piece library. Rendering must keep
+    reading the full prompt_manager.components merge; this filter is
+    list-level only."""
+    from core import prompt_packs, prompt_vault
+    merged = prompt_manager.components
+    kinds = prompt_packs.component_kinds()
+    if not kinds:
+        return merged
+    user = prompt_manager._components
+    vault = prompt_vault.overlay_components()
+    out = {}
+    for ctype, entries in merged.items():
+        drop = {k for k, kind in kinds.get(ctype, {}).items()
+                if kind != 'user'
+                and k not in user.get(ctype, {})
+                and k not in vault.get(ctype, {})}
+        out[ctype] = {k: v for k, v in entries.items() if k not in drop} if drop else entries
+    return out
 
 
 def _monolith_result(name: str, mono) -> dict:

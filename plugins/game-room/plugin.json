@@ -17,7 +17,8 @@
     },
     "prompts": {
       "monoliths": "prompts/monoliths.json",
-      "pieces": "prompts/pieces.json"
+      "pieces": "prompts/pieces.json",
+      "kind": "internal"
     },
     "tools": [
       "tools/story_tools.py",

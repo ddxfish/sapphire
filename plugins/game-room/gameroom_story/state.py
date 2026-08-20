@@ -56,6 +56,9 @@ def get_dynamic():
                 out[row["name"]] = {
                     "content": row.get("content", ""),
                     "privacy_required": bool(row.get("privacy_required")),
+                    # kind 'story': hidden from every prompt picker; the
+                    # engine activates costumes by exact name (unfiltered).
+                    "kind": "story",
                 }
     except Exception as e:
         logger.warning(f"[STORY] dynamic monolith read failed: {e}")

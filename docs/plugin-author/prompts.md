@@ -11,15 +11,31 @@ Prompts UI beside the user's own, badged with your plugin name.
   "capabilities": {
     "prompts": {
       "monoliths": "prompts/monoliths.json",
-      "pieces": "prompts/pieces.json"
+      "pieces": "prompts/pieces.json",
+      "kind": "user"
     }
   }
 }
 ```
 
-Both keys are optional — ship either or both. Paths are relative to the
+Both file keys are optional — ship either or both. Paths are relative to the
 plugin directory and the files are signed content like everything else
 (edit → re-sign).
+
+`kind` declares what your pack entries ARE, and visibility derives from it:
+
+- `user` (default) — user-facing prompts/pieces; listed in the Prompts UI,
+  prompt pickers, and the AI's prompt tools, badged with your plugin name.
+- `internal` — engine scaffolding your own plugin consumes when rendering
+  (format blocks, machine-selected emotion texts). Hidden from every picker
+  and accordion; still fully resolvable by name, so rendering and existing
+  references keep working.
+- `story` — reserved for rendered story prompts (the game-room engine stamps
+  this on dynamic entries; manifests normally don't need it). Hidden like
+  `internal`, and pickers label a chat still pointing at one with 📖.
+
+An unknown `kind` is coerced to `user` with a boot warning — a typo makes
+your prompts visible, never silently missing.
 
 ## File shapes
 

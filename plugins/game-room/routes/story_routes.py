@@ -130,38 +130,62 @@ def end(body=None, **_):
 
 
 def get_story_settings(slug, **_):
-    """Dual-layer GM conduct settings (schema shape drives the shared modal):
-    universal style (all stories, per-story toggle) + this story's DM guide."""
+    """Story settings (schema shape drives the shared modal): the story's
+    own text (role backstory / premise / player role — user overrides of the
+    SHIPPED pack text, stored in storycfg:{slug}) + dual-layer GM conduct
+    (universal style with per-story toggle, this story's DM guide). Shipped
+    meta is read raw — defaults must show the pack's text, not an override."""
     from gameroom_story import rooms
     sess = _session()
     if slug not in rooms.list_stories():
         return ({'error': f'Unknown story: {slug}'}, 404)
-    meta = rooms.load_story(slug)['meta']
+    meta = rooms.load_story(slug, raw=True)['meta']
     uni = sess._store().get('storycfg:universal') or {}
     mine = sess._store().get(f'storycfg:{slug}') or {}
-    schema = [
+    role = meta.get('role') or {}
+    role_name = (role.get('name') or '').strip()
+    schema = []
+    settings = {}
+    if role_name:  # a story with no shipped role gets no half-role editor
+        schema.append(
+            {'key': 'role_text', 'label': f'{role_name} — backstory & character '
+             '(the pack ships this default)',
+             'type': 'text', 'rows': 9, 'tab': 'This story',
+             'default': role.get('text') or ''})
+        settings['role_text'] = (mine.get('role_text') or '').strip() \
+            or (role.get('text') or '')
+    schema += [
+        {'key': 'premise', 'label': 'Premise — the setup (the pack ships this default)',
+         'type': 'text', 'rows': 4, 'tab': 'This story',
+         'default': meta.get('premise') or ''},
+        {'key': 'player_role', 'label': 'Player role — who the player is in the tale',
+         'type': 'text', 'rows': 2, 'tab': 'This story',
+         'default': meta.get('player_role') or ''},
+        {'key': 'dm_guide', 'label': 'DM guide — this story only (the pack ships this default)',
+         'type': 'text', 'rows': 9, 'tab': 'This story',
+         'default': meta.get('dm_guide') or ''},
         {'key': 'use_universal', 'label': 'Use the shared GM style in this story',
          'type': 'checkbox', 'tab': 'GM Style (all stories)', 'default': True},
         {'key': 'gm_universal', 'label': 'GM style — shared by ALL stories',
          'type': 'text', 'rows': 9, 'tab': 'GM Style (all stories)',
          'default': sess.UNIVERSAL_GM_DEFAULT},
-        {'key': 'dm_guide', 'label': 'DM guide — this story only (the pack ships this default)',
-         'type': 'text', 'rows': 9, 'tab': 'This story',
-         'default': meta.get('dm_guide') or ''},
     ]
-    settings = {
+    settings.update({
+        'premise': (mine.get('premise') or '').strip() or (meta.get('premise') or ''),
+        'player_role': (mine.get('player_role') or '').strip() or (meta.get('player_role') or ''),
+        'dm_guide': (mine.get('dm_guide') or '').strip() or (meta.get('dm_guide') or ''),
         'use_universal': sess._as_bool(mine.get('use_universal'), True),
         'gm_universal': (uni.get('text') or '').strip() or sess.UNIVERSAL_GM_DEFAULT,
-        'dm_guide': (mine.get('dm_guide') or '').strip() or (meta.get('dm_guide') or ''),
-    }
+    })
     return {'story': slug, 'title': meta.get('title', slug),
             'schema': schema, 'settings': settings}
 
 
 def set_story_settings(slug, body=None, **_):
-    """Save the GM layers. Storing the shipped DM text verbatim = no override
-    (pack updates keep flowing). Active story re-renders immediately — the
-    tuning loop lands on the very next turn."""
+    """Save story text overrides + GM layers. Storing the shipped text
+    verbatim = no override (pack updates keep flowing) — same rule for every
+    text field. Active story re-renders immediately — the tuning loop lands
+    on the very next turn."""
     from gameroom_story import rooms
     sess = _session()
     if slug not in rooms.list_stories():
@@ -172,10 +196,15 @@ def set_story_settings(slug, body=None, **_):
     mine = sess._store().get(f'storycfg:{slug}') or {}
     if 'use_universal' in vals:
         mine['use_universal'] = sess._as_bool(vals['use_universal'], True)
-    if 'dm_guide' in vals:
-        shipped = (rooms.load_story(slug)['meta'].get('dm_guide') or '').strip()
-        dm = str(vals['dm_guide']).strip()
-        mine['dm_guide'] = '' if dm == shipped else dm
+    shipped_meta = rooms.load_story(slug, raw=True)['meta']
+    for key, shipped in (
+            ('dm_guide', shipped_meta.get('dm_guide') or ''),
+            ('role_text', (shipped_meta.get('role') or {}).get('text') or ''),
+            ('premise', shipped_meta.get('premise') or ''),
+            ('player_role', shipped_meta.get('player_role') or '')):
+        if key in vals:
+            v = str(vals[key]).strip()
+            mine[key] = '' if v == shipped.strip() else v
     sess._store().save(f'storycfg:{slug}', mine)
     refreshed = False
     try:

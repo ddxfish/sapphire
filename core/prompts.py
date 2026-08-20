@@ -44,6 +44,8 @@ from .prompt_state import (
 # Import all CRUD functions
 from .prompt_crud import (
     list_prompts,
+    hidden_prompt_kinds,
+    visible_components,
     get_prompt,
     save_prompt,
     delete_prompt,
@@ -93,6 +95,8 @@ __all__ = [
 
     # CRUD functions
     'list_prompts',
+    'hidden_prompt_kinds',
+    'visible_components',
     'get_prompt',
     'save_prompt',
     'delete_prompt',

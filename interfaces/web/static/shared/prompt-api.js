@@ -15,7 +15,10 @@ export async function getComponents() {
 export async function getComponentsWithSources() {
   const data = await fetchWithTimeout('/api/prompts/components');
   return { components: data.components || {}, sources: data.sources || {},
-           vault_pieces: data.vault_pieces || {} };
+           vault_pieces: data.vault_pieces || {},
+           // Hidden pack piece NAMES (engine scaffolding) — membership
+           // checks only: a ref to one still renders, so it isn't "missing".
+           hidden_keys: data.hidden_keys || {} };
 }
 
 export async function listPrompts() {
@@ -29,6 +32,8 @@ export async function listPrompts() {
   prompts.vaultState = data.vault_state || { exists: false, unlocked: false };
   prompts.vaultRefs = data.vault_refs || {};
   prompts.stock = data.stock || [];
+  // {name: kind} for pack prompts hidden from the list (story costumes etc.)
+  prompts.hidden = data.hidden || {};
   return prompts;
 }
 

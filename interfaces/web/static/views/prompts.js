@@ -16,6 +16,8 @@ let container = null;
 let prompts = [];
 let components = {};
 let componentSources = {};  // {type: {key: pluginName}} — plugin-pack pieces (🧩 badge)
+let hiddenPieceKeys = {};   // {type: Set(keys)} — hidden pack scaffolding; refs to
+                            // these still render, so the ⚠ badge must not flag them
 let vaultNames = new Set(); // prompt names resolving from the vault (unlocked only)
 let vaultPieces = {};       // {type: Set(keys)} — vault pieces (unlocked only)
 let vaultState = { exists: false, unlocked: false };
@@ -209,6 +211,8 @@ async function loadAll() {
         prompts = (pList || []).sort((a, b) => a.name.localeCompare(b.name));
         components = compData.components || {};
         componentSources = compData.sources || {};
+        hiddenPieceKeys = Object.fromEntries(
+            Object.entries(compData.hidden_keys || {}).map(([t, keys]) => [t, new Set(keys)]));
         vaultNames = new Set(prompts.filter(p => p.vault).map(p => p.name));
         vaultPieces = Object.fromEntries(
             Object.entries(compData.vault_pieces || {}).map(([t, keys]) => [t, new Set(keys)]));
@@ -287,7 +291,10 @@ function render() {
                                 // KEY MEMBERSHIP, not text truthiness — pieces
                                 // with empty text (shipped 'none', fresh
                                 // blanks) EXIST and must not badge as missing.
-                                if (typeof k === 'string' && k && !(k in (components[t] || {}))) {
+                                // Hidden scaffolding pieces also exist (the
+                                // render merge is intact) — not missing either.
+                                if (typeof k === 'string' && k && !(k in (components[t] || {}))
+                                        && !hiddenPieceKeys[t]?.has(k)) {
                                     dangList.push(`${t}/${k}`);
                                 }
                             }

@@ -804,7 +804,8 @@ class PluginLoader:
                 pieces_rel = prompts_decl.get("pieces")
                 if pieces_rel:
                     pieces = json.loads((plugin_dir / pieces_rel).read_text(encoding="utf-8-sig"))
-                counts = prompt_packs.register_pack(name, monoliths=monoliths, pieces=pieces)
+                counts = prompt_packs.register_pack(name, monoliths=monoliths, pieces=pieces,
+                                                    kind=prompts_decl.get("kind"))
                 info["registered_prompt_pack"] = True
                 logger.info(f"[PLUGINS] {name}: prompt pack registered {counts}")
             except Exception as e:

@@ -86,15 +86,16 @@ def list_stories():
             slug = meta.get("slug") or d.name
             if slug in out or slug.startswith("_"):
                 continue  # _template and friends stay out of the picker
+            ov = _overrides(slug)  # tiles show what the story will actually say
             out[slug] = {
                 "title": meta.get("title", slug),
                 "description": meta.get("description", ""),
                 "role": (meta.get("role") or {}).get("name"),
-                "player_role": meta.get("player_role"),
+                "player_role": ov.get("player_role") or meta.get("player_role"),
                 "tags": meta.get("tags") or [],
                 "facts": meta.get("facts") or [],
                 "tile_file": meta.get("tile") or "",
-                "premise": meta.get("premise") or "",
+                "premise": ov.get("premise") or meta.get("premise") or "",
                 "stats": _story_stats(d),
                 "path": str(d),
             }
@@ -128,14 +129,55 @@ def _story_stats(story_dir):
     return stats
 
 
-def load_story(slug):
-    """Full story: meta + all canonical rooms. Raises on missing/invalid."""
+# ── user story-text overrides (storycfg:{slug}, the DM-guide pattern) ──────
+# Shipped story.json is SIGNED — user edits live in the plugin store and
+# merge at load time. Non-empty override wins; empty means shipped text
+# shows through (reset = save the shipped text verbatim, same as dm_guide).
+_OVERRIDE_FIELDS = ("role_text", "premise", "player_role")
+
+
+def _overrides(slug):
+    try:
+        from core.plugin_loader import plugin_loader
+        cfg = plugin_loader.get_plugin_state("game-room").get(f"storycfg:{slug}") or {}
+    except Exception as e:
+        logger.warning(f"[STORY] override read failed for '{slug}': {e}")
+        return {}
+    out = {}
+    for k in _OVERRIDE_FIELDS:
+        v = str(cfg.get(k) or "").strip()
+        if v:
+            out[k] = v
+    return out
+
+
+def _apply_overrides(slug, meta):
+    ov = _overrides(slug)
+    if not ov:
+        return
+    # role_text only when the pack ships a role — half a role (text without
+    # a name) would flip the identity-mode fallbacks in render.story_prompt.
+    if ov.get("role_text") and isinstance(meta.get("role"), dict) \
+            and (meta["role"].get("name") or "").strip():
+        meta["role"] = dict(meta["role"], text=ov["role_text"])
+    if ov.get("premise"):
+        meta["premise"] = ov["premise"]
+    if ov.get("player_role"):
+        meta["player_role"] = ov["player_role"]
+
+
+def load_story(slug, raw=False):
+    """Full story: meta + all canonical rooms. Raises on missing/invalid.
+    raw=True skips user overrides — the settings routes need the SHIPPED
+    text for defaults and the verbatim-equals-shipped comparison."""
     entry = list_stories().get(slug)
     if not entry:
         raise KeyError(f"Unknown story '{slug}'")
     path = Path(entry["path"])
     meta = json.loads((path / "story.json").read_text(encoding="utf-8"))
     meta.setdefault("slug", slug)
+    if not raw:
+        _apply_overrides(slug, meta)
     rooms = {}
     rooms_dir = path / "rooms"
     if rooms_dir.is_dir():

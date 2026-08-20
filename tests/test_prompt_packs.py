@@ -52,7 +52,8 @@ def test_register_counts_and_overlay():
 def test_string_monolith_normalized():
     _register(monoliths={"plain": "Just a string"})
     mono = prompt_packs.overlay_monoliths()["plain"]
-    assert mono == {"content": "Just a string", "privacy_required": False}
+    assert mono == {"content": "Just a string", "privacy_required": False,
+                    "kind": "user"}
 
 
 def test_manager_properties_merge_pack_entries():
@@ -182,3 +183,112 @@ def test_user_shadow_survives_unregister_handoff():
     finally:
         prompt_state.set_active_preset_name(prev)
         prompt_manager._monoliths.pop("pack_mono", None)
+
+
+# ── kind taxonomy (story-prompt-kinds, 2026-08-19) ──────────────────────────
+# kind: 'user' (default, visible) | 'story' (costumes) | 'internal'
+# (scaffolding). Visibility is DERIVED: non-'user' entries vanish from
+# list_prompts()/visible_components() but stay in the render merge, and a
+# user/vault shadow of a hidden name is visible (it's the user's copy).
+
+def test_kind_defaults_and_pack_level():
+    _register()  # no kind → 'user'
+    assert prompt_packs.get_kinds() == {"pack_mono": "user"}
+    assert prompt_packs.component_kinds()["emotions"]["pack_emotion"] == "user"
+
+
+def test_pack_kind_internal_applies_to_entries():
+    prompt_packs.register_pack(
+        PLUGIN,
+        monoliths={"scaff_mono": "text"},
+        pieces={"components": {"format": {"scaff_fmt": "fmt text"}},
+                "scenario_presets": {"scaff_preset": {"character": "x"}}},
+        kind="internal")
+    kinds = prompt_packs.get_kinds()
+    assert kinds["scaff_mono"] == "internal"
+    assert kinds["scaff_preset"] == "internal"
+    assert prompt_packs.component_kinds()["format"]["scaff_fmt"] == "internal"
+
+
+def test_per_monolith_kind_overrides_pack_kind():
+    prompt_packs.register_pack(
+        PLUGIN,
+        monoliths={"costume": {"content": "rendered", "kind": "story"},
+                   "plain_one": "text"},
+        kind="internal")
+    kinds = prompt_packs.get_kinds()
+    assert kinds["costume"] == "story"
+    assert kinds["plain_one"] == "internal"
+
+
+def test_unknown_kind_coerces_to_user():
+    prompt_packs.register_pack(PLUGIN, monoliths={"m": "t"}, kind="banana")
+    assert prompt_packs.get_kinds()["m"] == "user"
+
+
+def test_hidden_prompts_leave_list_but_resolve():
+    prompt_packs.register_pack(
+        PLUGIN, monoliths={"costume": {"content": "rendered", "kind": "story"}})
+    assert "costume" not in prompt_crud.list_prompts()
+    assert prompt_crud.hidden_prompt_kinds() == {"costume": "story"}
+    # Activation path resolves the full merge — engine keeps working
+    got = prompt_crud.get_prompt("costume")
+    assert got and got["content"] == "rendered"
+
+
+def test_user_kind_pack_prompt_stays_listed():
+    _register()  # kind 'user'
+    assert "pack_mono" in prompt_crud.list_prompts()
+    assert prompt_crud.hidden_prompt_kinds() == {}
+
+
+def test_user_shadow_of_hidden_name_is_visible():
+    prompt_packs.register_pack(
+        PLUGIN, monoliths={"costume": {"content": "rendered", "kind": "story"}})
+    prompt_manager._monoliths["costume"] = {"content": "my copy", "privacy_required": False}
+    try:
+        assert "costume" in prompt_crud.list_prompts()
+        assert prompt_crud.hidden_prompt_kinds() == {}
+    finally:
+        del prompt_manager._monoliths["costume"]
+    assert "costume" not in prompt_crud.list_prompts()
+
+
+def test_visible_components_drops_internal_keeps_merge():
+    prompt_packs.register_pack(
+        PLUGIN,
+        pieces={"components": {"format": {"scaff_fmt": "fmt text"}},
+                "scenario_presets": {}},
+        kind="internal")
+    visible = prompt_crud.visible_components()
+    assert "scaff_fmt" not in visible.get("format", {})
+    # The render merge is untouched — refs to scaffolding still resolve
+    assert prompt_manager.components["format"]["scaff_fmt"] == "fmt text"
+
+
+def test_visible_components_user_shadow_shows():
+    prompt_packs.register_pack(
+        PLUGIN,
+        pieces={"components": {"format": {"scaff_fmt": "pack text"}},
+                "scenario_presets": {}},
+        kind="internal")
+    prompt_manager._components.setdefault("format", {})["scaff_fmt"] = "my text"
+    try:
+        assert prompt_crud.visible_components()["format"]["scaff_fmt"] == "my text"
+    finally:
+        del prompt_manager._components["format"]["scaff_fmt"]
+
+
+def test_internal_scaffolding_ref_is_not_dangling():
+    """A user preset referencing hidden scaffolding still renders (merge is
+    intact) — dangler detection must not flag it."""
+    prompt_packs.register_pack(
+        PLUGIN,
+        pieces={"components": {"format": {"scaff_fmt": "fmt text"}},
+                "scenario_presets": {}},
+        kind="internal")
+    prompt_manager._scenario_presets["uses_scaff"] = {"format": "scaff_fmt"}
+    try:
+        assert "uses_scaff" not in prompt_crud.dangling_refs()
+    finally:
+        del prompt_manager._scenario_presets["uses_scaff"]

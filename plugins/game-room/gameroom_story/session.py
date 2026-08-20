@@ -262,8 +262,10 @@ def _register_prompt(story, state, entry, chat):
     name = entry.get("prompt_name") or _prompt_name_for(story, mode or "local", chat)
     private = _inherits_privacy(entry, chat=chat)
     st.save_dynamic(name, rendered, privacy_required=private, chat=chat)
-    monoliths[name] = {"content": rendered, "privacy_required": private}
-    prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces)
+    monoliths[name] = {"content": rendered, "privacy_required": private,
+                       "kind": "story"}
+    prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces,
+                               kind="internal")
     return name
 
 
@@ -291,7 +293,8 @@ def _restore_pack():
     via the plugins_ready hook (reboot-proofing active story prompts)."""
     from core import prompt_packs
     monoliths, pieces = _manifest_prompts()
-    prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces)
+    prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces,
+                               kind="internal")
 
 
 # ── Which chat does this call operate on? (findings 1.1 + 1.2) ──────────────

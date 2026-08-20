@@ -388,9 +388,13 @@ function renderPromptOptions(current) {
     );
     // Dangling vault name (locked): label the synthesized option so the
     // reference reads as asleep, not broken — and stays removable here.
+    // Hidden pack names (story costumes) get a 📖 label the same way.
     if (current && !list.some(p => p.name === current)) {
         const vrefs = initData?.prompts?.vault_refs || {};
-        const label = current in vrefs ? `${current} \u{1F5DD} (vault)` : current;
+        const hidden = initData?.prompts?.hidden || {};
+        const label = current in vrefs ? `${current} \u{1F5DD} (vault)`
+            : hidden[current] === 'story' ? `${current} \u{1F4D6} (story)`
+            : current;
         opts.unshift(`<option value="${current}" selected>${label}</option>`);
         return opts.join('');
     }
