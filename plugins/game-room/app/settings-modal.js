@@ -1,7 +1,9 @@
 // Game Settings — large modal for ONE game; tabs come from the engine's
 // SETTINGS schema ('tab' per field — e.g. poker: Rules / Start). All tabs
-// render at once (hidden/shown), one Save writes everything, Reset restores
-// schema defaults into the form. A new game ships settings by exporting
+// render at once (hidden/shown). GAME modals keep a Save/Reset pair; the
+// STORY gear has neither (Krem 2026-08-21): schema + slots autosave as you
+// edit, rooms/objects/exits save through their own lanes, and the scenario
+// 💾 is the one deliberate save. A new game ships settings by exporting
 // SETTINGS — zero UI code here.
 //
 // Open-mansion v1 (2026-08-20, plan tmp/open-mansion-plan.md): ONE modal
@@ -434,7 +436,9 @@ function buildModal(title, tabs, actionsHtml, barHtml, opts = {}) {
         if (t.init) t.init(pane, overlay);
     }
     baseline = fingerprint();   // post-init = the form's clean state
-    return { overlay, close, tryClose, dirty };
+    // rebaseline: autosave lanes call this at commit time — what's saved
+    // needs no discard-guard (no-Save-button model, Krem 2026-08-21)
+    return { overlay, close, tryClose, dirty, rebaseline: () => { baseline = fingerprint(); } };
 }
 
 export async function openGameSettings(gameId) {
@@ -470,7 +474,7 @@ export async function openStorySettings(slug, opts = {}) {
     if (setup && slots.length) {
         const st = slotTabs(slots, [], f => (opts.slots || {})[f.key]);
         if (st.length) st[0].html +=
-            '<div style="opacity:.7;font-size:.85em">Changes land on her next turn after Save. Sealed blanks are edited from the ✍ chips in the scene panel.</div>';
+            '<div style="opacity:.7;font-size:.85em">Changes save as you type — live on her next turn. Sealed blanks are edited from the ✍ chips in the scene panel.</div>';
         tabs.push(...st);
     }
 
@@ -495,15 +499,24 @@ export async function openStorySettings(slug, opts = {}) {
     // State — the old 🔍 inspector as a read-only last tab (Krem 2026-08-21).
     if (opts.state && opts.active) tabs.push(stateTab(opts.state));
 
+    // No header Save/Reset (Krem 2026-08-21: two save buttons = one too
+    // many). The gear applies as you edit: schema + this-run slots autosave
+    // debounced; rooms/objects/exits already save through their own lanes;
+    // the scenario 💾 stays the one DELIBERATE save (a named snapshot).
     let modal = null;
+    let saveTimer = null;
+    let saveAll = async () => {};        // bound below, needs the overlay
     modal = buildModal(
         `&#x2699;&#xFE0E; ${esc(data.title || slug)} settings`, tabs,
-        `<button type="button" class="pk-btn pk-btn-primary grs-save">Save</button>
-         <button type="button" class="pk-btn grs-reset" title="Restore defaults into the form (Save to apply)">Reset</button>`,
+        '',
         setup ? scenarioBarHtml(Object.keys(setup.scenarios || {})) : '',
         { guard: () => {
-            const d = modal.dirty() || envTab?.dirty?.();
-            return !d || confirm('Discard your unsaved changes?');
+            // closing COMMITS: in-flight autosave fires now, pending room
+            // text flushes (fire-and-forget) — nothing here is discardable.
+            if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; saveAll(); }
+            if (envTab?.flush) envTab.flush();
+            // what's left dirty is a sub-form (typed, unplaced object/exit)
+            return !modal.dirty() || confirm('Discard your unsaved changes?');
         } });
     const { overlay, close } = modal;
     const scnState = setup
@@ -532,7 +545,14 @@ export async function openStorySettings(slug, opts = {}) {
         await opts.onEndStory();
     };
 
-    overlay.querySelector('.grs-save').onclick = async () => {
+    // Autosave (debounced): the exact writes the old Save button made —
+    // schema settings + this-run slots — minus the close. rebaseline runs
+    // at commit time so the close-guard never prompts over saved work.
+    // Quiet by design: the ● dot tracks scenario divergence, the scenario
+    // 💾 toast is the deliberate-save receipt (Krem's call, 2026-08-21).
+    saveAll = async () => {
+        saveTimer = null;
+        modal.rebaseline();
         const out = {};
         for (const f of schema) {
             const v = readField(overlay, f.key);
@@ -545,15 +565,17 @@ export async function openStorySettings(slug, opts = {}) {
                 for (const s of slots) vals[s.key] = readField(overlay, s.key) ?? '';
                 await api('story/slots', 'POST', { session: opts.session, slots: vals });
             }
-            if (envTab?.flush) await envTab.flush();   // pending room edits
-            ui.showToast('Settings saved — live on the next turn', 'success', 2500);
-            close();
         } catch (e) { ui.showToast(e.message, 'error'); }
     };
-    overlay.querySelector('.grs-reset').onclick = () => {
-        for (const f of schema) writeField(overlay, f.key, f.default ?? (f.type === 'checkbox' ? false : ''));
-        for (const s of slots) writeField(overlay, s.key, s.default);
+    const queueSave = (e) => {
+        // .grs-field = schema + slot inputs only; the rooms pane, the
+        // object/exit sub-forms and the scenario bar run their own lanes
+        if (!e.target.closest('.grs-field, .grs-custom')) return;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveAll, 700);
     };
+    overlay.addEventListener('input', queueSave);
+    overlay.addEventListener('change', queueSave);
 }
 
 // ── Fresh-launch setup (Mad-Libs) ───────────────────────────────────────────
@@ -684,6 +706,423 @@ function stateTab(a) {
         <button type="button" class="pk-btn danger grs-end-story" title="The journal is kept; the chat returns per your return settings">⏹ End story</button>` };
 }
 
+// ── locks grammar (Krem 2026-08-20; DRYed for the exits editor 2026-08-21):
+// (type, value) rows compiling into the referee's SHIPPED grammar. The
+// widget is grammar-NEUTRAL: readVis/readLocks return {hidden, cond} /
+// {cond, puzzle, dice, fx, msg} descriptors and prefill() takes one back;
+// each host form (objects: per-verb interactions; exits: top-level exit
+// fields) does its own compile. First row of each kind wins.
+// Visible-when = EXISTENCE (she doesn't know it's there — surprise);
+// Requirements = USABLE-when (she sees it, it refuses — tension).
+const VIS_TYPES = [
+    ['searched', 'when searched for', '', ''],
+    ['has', 'when carrying item', 'item name, e.g. uv_lamp', ''],
+    ['did', 'after another object is used', 'object name, e.g. door1', ''],
+    ['flag', 'when a flag is set', 'flag name, e.g. house_open', ''],
+];
+const REQ_TYPES = [
+    ['has', 'needs item', 'item name, e.g. bronze_key', ''],
+    ['did', 'needs opened/used', 'object name, e.g. door1', ''],
+    ['flag', 'flag is set', 'flag name, e.g. ballroom_unlocked', ''],
+    ['password', 'password / riddle', 'the answer, e.g. 1234', 'riddle / prompt she sees (optional)'],
+    ['d20', 'd20 chance', 'roll needed, e.g. 11', ''],
+    ['d100', 'd100 chance', 'roll needed, e.g. 51', ''],
+];
+const FX_TYPES = [
+    ['set', 'set flag', 'flag name, e.g. ballroom_unlocked', ''],
+    ['give', 'give item', 'item name, e.g. bronze_key', ''],
+    ['adjust', 'adjust number', 'name, e.g. love', 'amount, e.g. 10 or -5'],
+];
+// Exits: no password (a riddle door = a door OBJECT with a password; the
+// exit then Requires "needs opened/used" on it) and no searched (search
+// finds objects; a found lever's flag makes the passage appear).
+const EXIT_VIS = VIS_TYPES.filter(t => t[0] !== 'searched');
+const EXIT_REQ = REQ_TYPES.filter(t => t[0] !== 'password');
+const EXIT_FAIL_MSG = 'Not this time — the way defeats the attempt.';
+const EXIT_MECH = ['condition', 'roll', 'effects', 'visible_when'];
+
+// ── Fidelity gate (2026-08-21): shipped door machinery prefills as
+// EDITABLE only when the widget speaks it losslessly — a lossy save would
+// silently strip pack grammar (flags dicts, flag_gte, custom roll
+// branches, generation). Richer doors show a read-only plain-words
+// summary instead; text edits still shadow.
+const _condFits = (c) => !c || Object.entries(c).every(([k, v]) =>
+    ['has', 'did', 'flag'].includes(k) && typeof v === 'string');
+const _fxFits = (f) => !f || Object.entries(f).every(([k, v]) =>
+    (k === 'set' && Object.values(v).every(x => x === true))
+    || (k === 'gives' && typeof v === 'string')
+    || (k === 'adjust' && Object.values(v).every(x => typeof x === 'number')));
+const _rollFits = (r) => !r || (
+    (r.sides === 20 || r.sides === 100) && Number.isFinite(r.beat)
+    && Object.keys(r).every(k => ['sides', 'beat', 'success', 'failure'].includes(k))
+    && _fxFits(r.success)
+    && (!r.failure || JSON.stringify(r.failure) === JSON.stringify({ message: EXIT_FAIL_MSG })));
+const exitMechFits = (se, m) => !se.generate && se.to != null
+    && !(m.roll && m.effects)
+    && _condFits(m.condition) && _condFits(m.visible_when)
+    && _rollFits(m.roll) && _fxFits(m.effects);
+// Effective machinery for a shipped row: the shadow's mechanics unit
+// wholesale if present, else the pack's own fields.
+const exitMech = (se, sh) => (sh && sh.mechanics)
+    || Object.fromEntries(EXIT_MECH.filter(k => se[k] != null).map(k => [k, se[k]]));
+const exitMarks = (m) => {
+    const fxOnRoll = m.roll && m.roll.success
+        && Object.keys(m.roll.success).some(k => k !== 'message');
+    return (m.visible_when ? ' \u{1F32B}\u{FE0F}' : '') + (m.condition ? ' \u{1F512}' : '')
+        + (m.roll ? ' \u{1F3B2}' : '') + (m.effects || fxOnRoll ? ' ⚡' : '');
+};
+// Plain-words rendering for the read-only case — the old "story mechanics
+// ride along" mystery note dies either way.
+const _condWords = (c) => Object.entries(c || {}).map(([k, v]) =>
+    k === 'has' ? `carrying ${v}` : k === 'did' ? `used ${v}`
+    : k === 'flag' ? `flag ${v}` : k === 'solved' ? `solved ${v}`
+    : k === 'flag_gte' ? Object.entries(v).map(([f, n]) => `${f} ≥ ${n}`).join(', ')
+    : `${k} ${JSON.stringify(v)}`).join(', ');
+const exitMechWords = (se, m) => {
+    const bits = [];
+    if (se.generate || se.to == null) bits.push('leads somewhere unwritten (generation)');
+    if (m.visible_when) bits.push(`appears when ${_condWords(m.visible_when)}`);
+    if (m.condition) bits.push(`needs ${_condWords(m.condition)}`);
+    if (m.roll) bits.push(`\u{1F3B2} d${m.roll.sides || '?'} beat ${m.roll.beat ?? '?'}`);
+    const fx = m.effects || (m.roll && m.roll.success) || null;
+    if (fx && Object.keys(fx).length) bits.push('⚡ ' + [
+        ...Object.keys(fx.set || {}).map(k => `sets ${k}`),
+        ...(fx.gives ? [`gives ${fx.gives}`] : []),
+        ...Object.entries(fx.adjust || {}).map(([k, n]) => `${k} ${n > 0 ? '+' : ''}${n}`)].join(', '));
+    return bits.join(' · ');
+};
+
+// ── Objects fidelity gate (2026-08-21, same law as exits — but object
+// grammar is BRAIDED: messages live inside the same verb specs as rolls
+// and conditions, so instead of shape rules the gate is the round trip
+// itself: a shipped object edits live iff compile(descriptor(spec), spec)
+// equals spec verbatim. The compile IS the fits check — nothing to drift.
+// PASSENGERS: fields the editor neither shows nor edits (per-verb aliases
+// + emotions, the object's search rewards) reattach verbatim from the
+// source on compile, so they survive a gated save and ride their carrier
+// (delete the verb, its passengers go too). `sealed` is NOT a passenger —
+// sealed blanks never edit through this lane.
+const OBJ_FAIL_MSG = 'Not this time — the attempt fails.';
+const OBJ_RIDDLE_DEFAULT = 'It waits for the right answer — solve it.';
+const deepEq = (a, b) => {
+    if (a === b) return true;
+    if (typeof a !== 'object' || typeof b !== 'object' || !a || !b) return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const ka = Object.keys(a);
+    return ka.length === Object.keys(b).length && ka.every(k => deepEq(a[k], b[k]));
+};
+// shipped spec + user override → the effective object (mirror of the
+// server merge law: _replace swaps wholesale; else desc/hidden replace
+// and per-verb message overlay)
+const objMerged = (sspec, ov) => {
+    if (!ov) return sspec || {};
+    if (ov._replace) {
+        const m = { ...ov };
+        delete m._replace;
+        delete m._author;
+        return m;
+    }
+    const m = { ...(sspec || {}) };
+    if ('desc' in ov) m.desc = ov.desc;
+    if ('hidden' in ov) m.hidden = !!ov.hidden;
+    const ints = { ...(m.interactions || {}) };
+    for (const [v, s] of Object.entries(ov.interactions || {})) {
+        if (!s || typeof s !== 'object') continue;
+        ints[v] = (v in ints)
+            ? { ...ints[v], ...('message' in s ? { message: s.message } : {}) }
+            : s;
+    }
+    if (Object.keys(ints).length) m.interactions = ints;
+    return m;
+};
+// spec → the editor's neutral descriptor (what the form fields hold);
+// mirrors what the DOM prefill can express — v0's locks speak for all
+// verbs, puzzle collapses to one solution, solved is the password row's
+const objToDescriptor = (spec) => {
+    const ints = spec.interactions || {};
+    const vspecs = Object.values(ints).filter(s => s && typeof s === 'object');
+    const v0 = vspecs[0] || {};
+    const fxSrc = v0.roll ? (v0.roll.success || {})
+        : (vspecs.length ? v0 : (spec.on_solve || {}));
+    const fx = {};
+    for (const k of ['set', 'gives', 'adjust']) if (fxSrc[k] != null) fx[k] = fxSrc[k];
+    const cond = { ...(v0.condition || {}) };
+    delete cond.solved;
+    const puz = spec.puzzle;
+    return {
+        desc: spec.desc || '', take: !!spec.takeable,
+        hidden: !!spec.hidden, visCond: spec.condition || null,
+        cond: Object.keys(cond).length ? cond : null,
+        puzzle: puz ? { riddle: puz.riddle || OBJ_RIDDLE_DEFAULT,
+                        solution: (puz.solutions || [])[0] ?? puz.solution ?? '' } : null,
+        dice: v0.roll ? { sides: v0.roll.sides, beat: v0.roll.beat } : null,
+        fx: Object.keys(fx).length ? fx : null,
+        msg: v0.blocked_message || '',
+        acts: Object.entries(ints).filter(([, s]) => s && typeof s === 'object')
+            .map(([v, s]) => [v, s.message
+                ?? (s.roll && s.roll.success && s.roll.success.message) ?? '']),
+    };
+};
+// descriptor (+ passenger source) → spec. ONE compile for the user-object
+// lane (src null), the gated shipped lane, and the fits check.
+const compileObj = (name, d, src) => {
+    const spec = { desc: d.desc };
+    const acts = {};
+    for (const [verb, resp] of d.acts) {
+        if (!verb) continue;
+        acts[verb] = { message: resp || `You ${verb} the ${name}.` };
+    }
+    if (d.take) spec.takeable = true;
+    if (d.hidden) spec.hidden = true;
+    if (d.visCond) spec.condition = d.visCond;
+    const cond = { ...(d.cond || {}), ...(d.puzzle ? { solved: name } : {}) };
+    const fxHas = d.fx && Object.keys(d.fx).length;
+    if (Object.keys(cond).length || d.puzzle || d.dice || fxHas) {
+        if (d.puzzle) spec.puzzle = { ...d.puzzle };
+        for (const v of Object.values(acts)) {
+            if (Object.keys(cond).length) {
+                v.condition = cond;
+                if (d.msg) v.blocked_message = d.msg;
+            }
+            if (d.dice) {
+                // chance replaces the flat outcome: response + effects
+                // ride the success branch
+                v.roll = { sides: d.dice.sides, beat: d.dice.beat,
+                           success: { message: v.message, ...(d.fx || {}) },
+                           failure: { message: OBJ_FAIL_MSG } };
+                delete v.message;
+            } else if (fxHas) {
+                Object.assign(v, d.fx);
+            }
+        }
+        if (!Object.keys(acts).length && d.puzzle && fxHas)
+            spec.on_solve = { ...d.fx };   // pure riddle: effects on solve
+    }
+    if (src) {                             // passengers ride their carrier
+        for (const k of ['found_by', 'gives'])
+            if (src[k] != null) spec[k] = src[k];
+        if (spec.on_solve && src.on_solve)
+            for (const k of ['message', 'emotions', 'emotions_remove'])
+                if (src.on_solve[k] != null) spec.on_solve[k] = src.on_solve[k];
+        const sints = src.interactions || {};
+        for (const [verb, v] of Object.entries(acts)) {
+            const sv = sints[verb];
+            if (!sv || typeof sv !== 'object') continue;
+            if (sv.aliases != null) v.aliases = sv.aliases;
+            if (v.roll && sv.roll && typeof sv.roll === 'object') {
+                if (sv.roll.failure) v.roll.failure = { ...sv.roll.failure };
+                for (const k of ['emotions', 'emotions_remove'])
+                    if (sv.roll.success && sv.roll.success[k] != null)
+                        v.roll.success[k] = sv.roll.success[k];
+            } else {
+                for (const k of ['emotions', 'emotions_remove'])
+                    if (sv[k] != null) v[k] = sv[k];
+            }
+        }
+    }
+    if (Object.keys(acts).length) spec.interactions = acts;
+    return spec;
+};
+const objFits = (name, spec) =>
+    deepEq(compileObj(name, objToDescriptor(spec), spec), spec);
+const objMarks = (spec) => {
+    const ints = Object.values(spec.interactions || {}).filter(s => s && typeof s === 'object');
+    return (spec.hidden || spec.condition ? ' \u{1F32B}\u{FE0F}' : '')
+        + (spec.takeable ? ' \u{1F392}' : '')
+        + (spec.puzzle || ints.some(v => v.condition) ? ' \u{1F512}' : '')
+        + (ints.some(v => v.roll) ? ' \u{1F3B2}' : '');
+};
+const objMechWords = (spec) => {
+    const bits = [];
+    if (spec.hidden) bits.push('hidden until found');
+    if (spec.condition) bits.push(`appears when ${_condWords(spec.condition)}`);
+    if (spec.gives) bits.push(`finding gives ${spec.gives}`);
+    if (spec.puzzle) bits.push('\u{1F9E9} riddle'
+        + (spec.puzzle.solutions ? ` (${spec.puzzle.solutions.length} answers)` : ''));
+    for (const [v, s] of Object.entries(spec.interactions || {})) {
+        if (!s || typeof s !== 'object') continue;
+        const b = [];
+        if (s.sealed) b.push('holds a sealed reveal');
+        if (s.condition) b.push(`needs ${_condWords(s.condition)}`);
+        if (s.roll) b.push(`\u{1F3B2} d${s.roll.sides || '?'} beat ${s.roll.beat ?? '?'}`);
+        const fx = [...Object.keys(s.set || {}).map(k => `sets ${k}`),
+                    ...(s.gives ? [`gives ${s.gives}`] : []),
+                    ...Object.entries(s.adjust || {}).map(([k, n]) => `${k} ${n > 0 ? '+' : ''}${n}`),
+                    ...((s.emotions || []).length || (s.emotions_remove || []).length
+                        ? ['emotions shift'] : [])];
+        if (fx.length) b.push('⚡ ' + fx.join(', '));
+        if (b.length) bits.push(`${v}: ${b.join('; ')}`);
+    }
+    return bits.join(' · ');
+};
+
+function locksWidget(form, opts) {
+    const types = opts.types;
+    const q = (sel) => form.querySelector(sel);
+    const visToggle = q('.grs-vis-toggle'), reqToggle = q('.grs-req-toggle'), fxToggle = q('.grs-fx-toggle');
+    const visLabel = q('.grs-vis-label'), reqLabel = q('.grs-req-label'), fxLabel = q('.grs-fx-label');
+    const visBody = q('.grs-vis-body'), reqBody = q('.grs-req-body'), fxBody = q('.grs-fx-body');
+    const visRows = q('.grs-vis-rows'), reqRows = q('.grs-req-rows'), fxRows = q('.grs-fx-rows');
+    const lockMsg = q('.grs-lock-msg');
+    visToggle.onchange = () => { visBody.style.display = visToggle.checked ? '' : 'none'; };
+    reqToggle.onchange = () => {
+        reqBody.style.display = reqToggle.checked ? '' : 'none';
+        if (reqToggle.checked && opts.onReqOpen) opts.onReqOpen();
+    };
+    fxToggle.onchange = () => {
+        fxBody.style.display = fxToggle.checked ? '' : 'none';
+        if (fxToggle.checked && opts.onFxOpen) opts.onFxOpen();
+    };
+    const pickRow = (host, tlist, kind, val, extra) => {
+        const row = document.createElement('div');
+        row.className = 'grs-act-row';
+        row.innerHTML = `
+            <select class="grs-pick-kind">${tlist.map(t =>
+                `<option value="${t[0]}"${t[0] === kind ? ' selected' : ''}>${t[1]}</option>`).join('')}</select>
+            <input type="text" class="grs-pick-val">
+            <input type="text" class="grs-pick-extra">
+            <button type="button" class="sb-icon-btn grs-act-del" title="Remove">✕</button>`;
+        const sel = row.querySelector('.grs-pick-kind');
+        const vIn = row.querySelector('.grs-pick-val');
+        const xIn = row.querySelector('.grs-pick-extra');
+        const paint = () => {
+            const t = tlist.find(x => x[0] === sel.value) || tlist[0];
+            vIn.placeholder = t[2];
+            xIn.placeholder = t[3];
+            vIn.style.display = t[2] ? '' : 'none';   // value-less kinds (searched)
+            xIn.style.display = t[3] ? '' : 'none';
+        };
+        sel.onchange = paint;
+        paint();
+        vIn.value = val || '';
+        xIn.value = extra || '';
+        row.querySelector('.grs-act-del').onclick = () => row.remove();
+        host.appendChild(row);
+        return row;
+    };
+    q('.grs-vis-add').onclick = () =>
+        pickRow(visRows, types.vis).querySelector('.grs-pick-kind').focus();
+    q('.grs-req-add').onclick = () =>
+        pickRow(reqRows, types.req).querySelector('.grs-pick-val').focus();
+    q('.grs-fx-add').onclick = () =>
+        pickRow(fxRows, types.fx).querySelector('.grs-pick-val').focus();
+
+    const rawRows = (host) => [...host.querySelectorAll('.grs-act-row')].map(row => ({
+        kind: row.querySelector('.grs-pick-kind').value,
+        val: row.querySelector('.grs-pick-val').value.trim(),
+        extra: row.querySelector('.grs-pick-extra').value.trim(),
+    }));
+    const rowsOf = (host) => rawRows(host).filter(x => x.val);
+
+    const clear = () => {
+        for (const t of [visToggle, reqToggle, fxToggle]) t.checked = false;
+        for (const b of [visBody, reqBody, fxBody]) b.style.display = 'none';
+        for (const l of [visLabel, reqLabel, fxLabel]) l.style.display = '';
+        for (const h of [visRows, reqRows, fxRows]) h.innerHTML = '';
+        lockMsg.value = '';
+    };
+    const showAuthoring = (on) => {
+        for (const l of [visLabel, reqLabel, fxLabel]) l.style.display = on ? '' : 'none';
+        if (!on) for (const b of [visBody, reqBody, fxBody]) b.style.display = 'none';
+    };
+
+    // Visible-when rows → the existence gate: `hidden` (search reveal)
+    // and/or a condition {has, did, flag}.
+    const readVis = () => {
+        if (!visToggle.checked) return null;
+        const out = { hidden: false, cond: {} };
+        for (const x of rawRows(visRows)) {
+            if (x.kind === 'searched') out.hidden = true;
+            else if (!x.val) continue;
+            else if (x.kind === 'has' && !out.cond.has) out.cond.has = x.val;
+            else if (x.kind === 'did' && !out.cond.did) out.cond.did = x.val;
+            else if (x.kind === 'flag' && !out.cond.flag) out.cond.flag = x.val;
+        }
+        if (!Object.keys(out.cond).length) out.cond = null;
+        return (out.hidden || out.cond) ? out : null;
+    };
+
+    const readLocks = (name) => {
+        if (!reqToggle.checked && !fxToggle.checked) return null;
+        const cond = {};
+        let puzzle = null, dice = null;
+        if (reqToggle.checked) for (const x of rowsOf(reqRows)) {
+            if (x.kind === 'has' && !cond.has) cond.has = x.val;
+            else if (x.kind === 'did' && !cond.did) cond.did = x.val;
+            else if (x.kind === 'flag' && !cond.flag) cond.flag = x.val;
+            else if (x.kind === 'password' && !puzzle) {
+                puzzle = { riddle: x.extra || OBJ_RIDDLE_DEFAULT,
+                           solution: x.val };
+                cond.solved = name;
+            } else if ((x.kind === 'd20' || x.kind === 'd100') && !dice) {
+                const sides = x.kind === 'd20' ? 20 : 100;
+                const beat = parseInt(x.val, 10);
+                dice = { sides, beat: Number.isFinite(beat)
+                         ? Math.max(1, Math.min(sides, beat)) : sides / 2 + 1 };
+            }
+        }
+        const fx = {};
+        if (fxToggle.checked) for (const x of rowsOf(fxRows)) {
+            if (x.kind === 'set') (fx.set = fx.set || {})[x.val] = true;
+            else if (x.kind === 'give' && !fx.gives) fx.gives = x.val;
+            else if (x.kind === 'adjust') {
+                const n = parseFloat(x.extra);
+                if (Number.isFinite(n)) (fx.adjust = fx.adjust || {})[x.val] = n;
+            }
+        }
+        const out = { cond: Object.keys(cond).length ? cond : null,
+                      puzzle, dice,
+                      fx: Object.keys(fx).length ? fx : null,
+                      msg: lockMsg.value.trim() };
+        return (out.cond || out.puzzle || out.dice || out.fx) ? out : null;
+    };
+
+    // descriptor → rows (edit round-trip)
+    const prefill = (d) => {
+        let anyReq = false, anyFx = false, anyVis = false;
+        if (d.hidden) { pickRow(visRows, types.vis, 'searched'); anyVis = true; }
+        const tc = d.visCond || {};
+        if (tc.has) { pickRow(visRows, types.vis, 'has', tc.has); anyVis = true; }
+        if (tc.did) { pickRow(visRows, types.vis, 'did', tc.did); anyVis = true; }
+        if (tc.flag) { pickRow(visRows, types.vis, 'flag', tc.flag); anyVis = true; }
+        const cond = d.cond || {};
+        if (cond.has) { pickRow(reqRows, types.req, 'has', cond.has); anyReq = true; }
+        if (cond.did) { pickRow(reqRows, types.req, 'did', cond.did); anyReq = true; }
+        if (cond.flag) { pickRow(reqRows, types.req, 'flag', cond.flag); anyReq = true; }
+        if (d.puzzle) {
+            pickRow(reqRows, types.req, 'password',
+                    (d.puzzle.solutions || [])[0] || d.puzzle.solution || '',
+                    d.puzzle.riddle || '');
+            anyReq = true;
+        }
+        if (d.roll) {
+            pickRow(reqRows, types.req, d.roll.sides === 20 ? 'd20' : 'd100',
+                    String(d.roll.beat ?? ''));
+            anyReq = true;
+        }
+        const src = d.fx || {};
+        for (const k of Object.keys(src.set || {})) { pickRow(fxRows, types.fx, 'set', k); anyFx = true; }
+        if (src.gives) { pickRow(fxRows, types.fx, 'give', src.gives); anyFx = true; }
+        for (const [k, n] of Object.entries(src.adjust || {})) {
+            pickRow(fxRows, types.fx, 'adjust', k, String(n));
+            anyFx = true;
+        }
+        // A refusal message alone is dead data — it only shows when a
+        // lock fails. Stage it in the field (recoverable if a lock is
+        // re-added) but let real locks own the checkbox; counting it made
+        // Requirements re-check on stripped doors (Krem 2026-08-21).
+        if (d.msg) lockMsg.value = d.msg;
+        visToggle.checked = anyVis;
+        visBody.style.display = anyVis ? '' : 'none';
+        reqToggle.checked = anyReq;
+        reqBody.style.display = anyReq ? '' : 'none';
+        fxToggle.checked = anyFx;
+        fxBody.style.display = anyFx ? '' : 'none';
+    };
+
+    return { readVis, readLocks, prefill, clear, showAuthoring };
+}
+
 // ── Environment tab (the open-world editor) ─────────────────────────────────
 function objectsTab(slug, session, data) {
     const rooms = data.rooms || [];
@@ -698,6 +1137,7 @@ function objectsTab(slug, session, data) {
             <div class="grs-room-stats">
                 <div class="grs-room-stats-head">In this room</div>
                 <div class="grs-room-stats-line"></div>
+                <div class="grs-room-stats-line grs-room-stats-from"></div>
             </div>
         </div>
         <div class="grs-room-desc-row">
@@ -712,14 +1152,41 @@ function objectsTab(slug, session, data) {
             <textarea class="grs-obj-pdesc" rows="2" title="the one-liner in your scene strip"></textarea>
         </div>
         <div class="sb-field sb-field-stack">
-            <label>Exits</label>
-            <input type="text" class="grs-exit-add" list="grs-exit-rooms"
-                   placeholder="type a room name to add an exit…"
-                   title="Additive only — shipped doors, their locks and conditions are never touched. New exits open with the house (zork-line).">
-            <datalist id="grs-exit-rooms">
-                ${rooms.map(r => `<option value="${esc(r.title)}"></option>`).join('')}
-            </datalist>
+            <div class="grs-exit-head">
+                <label>Exits</label>
+                <span class="grs-exit-badge grs-exit-addchip" role="button" tabindex="0">+ Add exit</span>
+            </div>
             <div class="grs-exit-badges"></div>
+        </div>
+        <div class="grs-exit-form grs-obj-add-form" style="display:none">
+            <div style="display:flex;gap:6px">
+                <select class="grs-ex-to" title="where this way leads"></select>
+                <input type="text" class="grs-ex-label" placeholder="what the player calls it, e.g. oak door">
+            </div>
+            <div class="grs-ex-mech-note" style="display:none;color:var(--text-secondary,#8a8fa3);font-size:var(--font-sm,0.85em)">\u{2699}\u{FE0E} This door has story mechanics — your edits reword it; the machinery stays.</div>
+            <input type="text" class="grs-ex-desc" placeholder="short description — what the way looks like">
+            <label class="st-tools-check grs-vis-label" style="margin:0"><input type="checkbox" class="grs-vis-toggle"> Visible when — until then the way doesn't exist</label>
+            <div class="grs-lock-body grs-vis-body" style="display:none">
+                <div class="grs-vis-rows"></div>
+                <button type="button" class="pk-btn grs-vis-add">+ Add condition</button>
+            </div>
+            <label class="st-tools-check grs-req-label" style="margin:0"><input type="checkbox" class="grs-req-toggle"> Requirements — what it takes to pass</label>
+            <div class="grs-lock-body grs-req-body" style="display:none">
+                <div class="grs-req-rows"></div>
+                <button type="button" class="pk-btn grs-req-add">+ Add requirement</button>
+                <input type="text" class="grs-lock-msg" placeholder="blocked message (optional) — what she sees while the way refuses">
+            </div>
+            <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Effects — what passing through changes</label>
+            <div class="grs-lock-body grs-fx-body" style="display:none">
+                <div class="grs-fx-rows"></div>
+                <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+            </div>
+            <label class="st-tools-check grs-ex-return-label" style="margin:0"><input type="checkbox" class="grs-ex-return"> Also add the return exit (one-time — the two sides stay independent after)</label>
+            <div style="display:flex;gap:6px">
+                <button type="button" class="pk-btn pk-btn-primary grs-ex-save">Add</button>
+                <button type="button" class="pk-btn grs-ex-cancel">Cancel</button>
+                <button type="button" class="pk-btn grs-ex-reset" style="display:none" title="Drop your edits — back to the pack's door">↩ Reset to shipped</button>
+            </div>
         </div>
         <div class="grs-section-title">Placed objects</div>
         <div class="sb-field sb-field-stack">
@@ -761,8 +1228,9 @@ function objectsTab(slug, session, data) {
         // Room-text edits are PENDING until the modal's Save/▶ Start (or a
         // preset save) flushes them — no third save button (Krem 2026-08-20).
         // Pending survives room switches; closing the modal discards it.
+        // Exits save IMMEDIATELY through their own form (2026-08-21), same
+        // as objects — no pending lane.
         const pending = {};
-        const pendingExits = {};   // rid → add_exits list (same save verbs)
         const roomSel = pane.querySelector('.grs-obj-room');
         const tArea = pane.querySelector('.grs-obj-template');
         const pArea = pane.querySelector('.grs-obj-pdesc');
@@ -779,23 +1247,20 @@ function objectsTab(slug, session, data) {
         };
 
         tab.flush = async () => {
-            const rids = new Set([...Object.keys(pending), ...Object.keys(pendingExits)]);
-            for (const rid of rids) {
-                const body = { session, slug, room_id: Number(rid) };
-                if (pending[rid]) {
-                    body.template = pending[rid].template;
-                    body.player_desc = pending[rid].player_desc;
-                }
-                if (pendingExits[rid]) body.add_exits = pendingExits[rid];
-                await api('story/room-text', 'POST', body);
+            for (const rid of Object.keys(pending)) {
+                await api('story/room-text', 'POST',
+                          { session, slug, room_id: Number(rid),
+                            template: pending[rid].template,
+                            player_desc: pending[rid].player_desc });
             }
-            [pending, pendingExits].forEach(m => Object.keys(m).forEach(k => delete m[k]));
+            Object.keys(pending).forEach(k => delete pending[k]);
         };
-        tab.dirty = () => !!(Object.keys(pending).length || Object.keys(pendingExits).length);
+        tab.dirty = () => !!Object.keys(pending).length;
         tab.hasContent = () =>
             Object.values(world.objects || {}).some(o => Object.keys(o || {}).length)
             || (world.rooms || []).some(r => r.template || r.player_desc
-                                             || (r.add_exits || []).length);
+                                             || (r.add_exits || []).length
+                                             || Object.keys(r.exit_shadows || {}).length);
         // Divergence, not existence (Krem 2026-08-20: "prompt only when the
         // current values don't match the loaded scenario"). markClean stamps
         // the canvas right after a swap/save; diverged() compares against it.
@@ -803,8 +1268,8 @@ function objectsTab(slug, session, data) {
         const canvasFp = () => JSON.stringify([
             world.objects || {},
             (world.rooms || []).map(r => [r.template || '', r.player_desc || '',
-                                          r.add_exits || []]),
-            pending, pendingExits]);
+                                          r.add_exits || [], r.exit_shadows || {}]),
+            pending]);
         let cleanFp = null;
         tab.markClean = () => { cleanFp = canvasFp(); };
         tab.diverged = () => cleanFp === null
@@ -813,22 +1278,23 @@ function objectsTab(slug, session, data) {
         // A scenario swap replaced the canvas: pendings are stale, repaint,
         // and the fresh canvas IS the scenario — stamp it clean.
         tab.swapped = async () => {
-            [pending, pendingExits].forEach(m => Object.keys(m).forEach(k => delete m[k]));
+            Object.keys(pending).forEach(k => delete pending[k]);
             await refresh();
             tab.markClean();
         };
 
-        // Effective object view: shipped spec + user shadow (desc/hidden
-        // replace, verb messages overlay) — mirrors the server merge law.
+        // Effective object view — the card/form face of objMerged (2026-
+        // 08-21: rows now carry the full shipped spec, replace shadows and
+        // roll-success messages render truthfully).
         const effective = (so, ov) => {
-            const verbs = { ...(so?.verbs || {}) };
-            for (const [v, s] of Object.entries(ov?.interactions || {}))
-                verbs[v] = String((s || {}).message ?? verbs[v] ?? '');
-            return { desc: ov?.desc ?? so?.desc ?? '',
-                     verbs, has_mechanics: !!so?.has_mechanics };
+            const m = objMerged(so?.spec || {}, ov);
+            const verbs = {};
+            for (const [v, s] of Object.entries(m.interactions || {}))
+                if (s && typeof s === 'object')
+                    verbs[v] = String(s.message
+                        ?? (s.roll && s.roll.success && s.roll.success.message) ?? '');
+            return { desc: m.desc ?? '', verbs, merged: m };
         };
-        const roomExits = (r) => pendingExits[r.id] ?? r.add_exits ?? [];
-
         const paintRoom = () => {
             const r = curRoom();
             if (!r) return;
@@ -861,7 +1327,7 @@ function objectsTab(slug, session, data) {
                 items += 1; actions += Object.keys(eff.verbs).length;
                 cards.push(`<div class="grs-obj-card grs-obj-editable" data-name="${esc(n)}" data-shipped="1">
                     <button type="button" class="sb-icon-btn grs-obj-del" data-name="${esc(n)}" title="Remove from this room (restorable)">✕</button>
-                    <div class="grs-obj-card-title">${esc(n)} \u{1F4E6}${ov ? ' ✏' : ''}</div>
+                    <div class="grs-obj-card-title">${esc(n)} \u{1F4E6}${ov ? ' ✏' : ''}${objMarks(eff.merged)}</div>
                     <div class="grs-obj-card-desc">${esc(eff.desc)}</div>
                     ${verbs ? `<div class="grs-obj-card-verbs">${esc(verbs)}</div>` : ''}
                 </div>`);
@@ -870,14 +1336,9 @@ function objectsTab(slug, session, data) {
                 if (shippedObjs[n]) continue;   // shadows/tombstones decorate above
                 const verbs = Object.keys(spec.interactions || {}).join(', ');
                 items += 1; actions += Object.keys(spec.interactions || {}).length;
-                const ints = Object.values(spec.interactions || {});
-                const marks = (spec.hidden || spec.condition ? ' \u{1F32B}\u{FE0F}' : '')
-                    + (spec.takeable ? ' \u{1F392}' : '')
-                    + (spec.puzzle || ints.some(v => v && v.condition) ? ' \u{1F512}' : '')
-                    + (ints.some(v => v && v.roll) ? ' \u{1F3B2}' : '');
                 cards.push(`<div class="grs-obj-card grs-obj-editable" data-name="${esc(n)}">
                     <button type="button" class="sb-icon-btn grs-obj-del" data-name="${esc(n)}" title="Remove">✕</button>
-                    <div class="grs-obj-card-title">${esc(n)}${authorOf(spec)}${marks}</div>
+                    <div class="grs-obj-card-title">${esc(n)}${authorOf(spec)}${objMarks(spec)}</div>
                     <div class="grs-obj-card-desc">${esc(spec.desc || '')}</div>
                     ${verbs ? `<div class="grs-obj-card-verbs">${esc(verbs)}</div>` : ''}
                 </div>`);
@@ -908,32 +1369,82 @@ function objectsTab(slug, session, data) {
                 } catch (e) { ui.showToast(e.message, 'error'); }
             });
 
-            // Exits: shipped = fixed badges; user-added = removable, pending
-            // until Save/Start. New ones open with the house (zork-line).
-            const added = roomExits(r);
+            // Exits (exits editor 2026-08-21): shipped badges are editable
+            // (✏ shadow, ✕ tombstone, ghost ↩ restore) and user-added ones
+            // carry the full grammar — same laws as the object cards.
+            const added = r.add_exits || [];
+            const shadows = r.exit_shadows || {};
             const badges = pane.querySelector('.grs-exit-badges');
             // ONE ground truth for names (Krem 2026-08-20): badges show the
             // DESTINATION ROOM'S TITLE — same names as the Room dropdown.
             // The author's flavor label ("the parlor door") lives in the
             // tooltip; in play she still moves by that label.
             const roomTitle = (id) => (world.rooms.find(x => x.id === id) || {}).title;
-            badges.innerHTML = (r.shipped_exits || []).map(e =>
-                `<span class="grs-exit-badge" title="${esc(e.label || '')}">${esc(roomTitle(e.to) || e.label || e.to)}</span>`).join('')
-                + added.map((e, i) =>
-                `<span class="grs-exit-badge grs-exit-user" title="${esc(e.label)}">${esc(roomTitle(e.to) || e.label)}
-                    <button type="button" class="grs-exit-x" data-i="${i}" title="Remove this exit">✕</button></span>`).join('');
-            badges.querySelectorAll('.grs-exit-x').forEach(b => b.onclick = () => {
-                const next = added.filter((_, i) => i !== Number(b.dataset.i));
-                const saved = JSON.stringify(r.add_exits || []);
-                if (JSON.stringify(next) === saved) delete pendingExits[r.id];
-                else pendingExits[r.id] = next;
-                paintRoom();
+            let exitCount = 0;
+            const chips = [];
+            for (const e of (r.shipped_exits || [])) {
+                // Unwritten doors (generation) — inert badge, nothing to
+                // edit or tombstone by destination yet.
+                if (e.to == null || e.generate) {
+                    exitCount += 1;
+                    chips.push(`<span class="grs-exit-badge" title="unwritten — room generation arrives in a future build">${esc(e.label || '???')} \u{1F6A7}</span>`);
+                    continue;
+                }
+                const sh = shadows[String(e.to)];
+                if (sh && sh._removed) {
+                    chips.push(`<span class="grs-exit-badge grs-exit-ghost" title="walled off">${esc(roomTitle(e.to) || e.label || e.to)}
+                        <button type="button" class="grs-exit-x grs-exit-restore" data-to="${e.to}" title="Bring the way back">↩</button></span>`);
+                    continue;
+                }
+                exitCount += 1;
+                const label = (sh && sh.label) || e.label || '';
+                chips.push(`<span class="grs-exit-badge grs-exit-editable" data-to="${e.to}" title="${esc(label)}">${esc(roomTitle(e.to) || label || e.to)}${sh ? ' ✏' : ''}${exitMarks(exitMech(e, sh))}
+                    <button type="button" class="grs-exit-x" data-to="${e.to}" title="Wall this way off (restorable)">✕</button></span>`);
+            }
+            for (const e of added) {
+                exitCount += 1;
+                chips.push(`<span class="grs-exit-badge grs-exit-user grs-exit-editable" data-to="${e.to}" title="${esc(e.label || '')}">${esc(roomTitle(e.to) || e.label)}${exitMarks(e)}
+                    <button type="button" class="grs-exit-x" data-to="${e.to}" title="Remove this exit">✕</button></span>`);
+            }
+            badges.innerHTML = chips.join('');
+            badges.querySelectorAll('.grs-exit-editable').forEach(c => c.onclick = (e) => {
+                if (e.target.closest('.grs-exit-x')) return;
+                openExit(Number(c.dataset.to));
+            });
+            badges.querySelectorAll('.grs-exit-x:not(.grs-exit-restore)').forEach(b => b.onclick = async () => {
+                try {
+                    const res = await api('story/exits/delete', 'POST',
+                        { session, slug, room_id: r.id, to: Number(b.dataset.to) });
+                    if (res.detail) ui.showToast(res.detail, res.success ? 'success' : 'error', 2000);
+                    await refresh();
+                } catch (e2) { ui.showToast(e2.message, 'error'); }
+            });
+            badges.querySelectorAll('.grs-exit-restore').forEach(b => b.onclick = async () => {
+                try {
+                    await api('story/exits/delete', 'POST',
+                        { session, slug, room_id: r.id, to: Number(b.dataset.to), restore: true });
+                    await refresh();
+                } catch (e2) { ui.showToast(e2.message, 'error'); }
             });
 
             // "In this room" blurb — the dropdown reads as THE room
             // selector, not another item picker (Krem 2026-08-20)
             pane.querySelector('.grs-room-stats-line').textContent =
-                `Exits: ${(r.exits || 0) + added.length} · Items: ${items} · Actions: ${actions}`;
+                `Exits: ${exitCount} · Items: ${items} · Actions: ${actions}`;
+            // Reverse map (Krem 2026-08-21): which rooms' EFFECTIVE exits
+            // point at this one — tombstoned shipped doors don't count.
+            const inbound = [];
+            for (const o of world.rooms) {
+                if (o.id === r.id) continue;
+                const osh = o.exit_shadows || {};
+                if ((o.shipped_exits || []).some(e => e.to === r.id
+                        && !((osh[String(e.to)] || {})._removed))
+                    || (o.add_exits || []).some(e => e.to === r.id))
+                    inbound.push(o.title);
+            }
+            const fromLine = pane.querySelector('.grs-room-stats-from');
+            fromLine.textContent = `Rooms that lead here: ${inbound.join(', ') || 'none'}`;
+            fromLine.title = inbound.join(', ');
             if (tab.onCanvasPaint) tab.onCanvasPaint();   // scenario bar's ● dot
         };
 
@@ -947,34 +1458,153 @@ function objectsTab(slug, session, data) {
         tArea.addEventListener('input', () => { count.textContent = tArea.value.length; stash(); });
         pArea.addEventListener('input', stash);
 
-        // Exits: type a room name (datalist autocompletes) → badge appends.
-        const exitAdd = pane.querySelector('.grs-exit-add');
-        const tryAddExit = () => {
-            const r = curRoom();
-            const val = exitAdd.value.trim().toLowerCase();
-            if (!val || !r) return;
-            const target = world.rooms.find(x => (x.title || '').trim().toLowerCase() === val);
-            if (!target) return;   // not a room (yet) — keep typing
-            exitAdd.value = '';
-            if (target.id === r.id) return;
-            const added = roomExits(r);
-            if ((r.shipped_exits || []).some(e => e.to === target.id)
-                || added.some(e => e.to === target.id)) {
-                ui.showToast('That exit already exists', 'error', 1500);
-                return;
-            }
-            pendingExits[r.id] = [...added, { label: target.title, to: target.id }];
-            paintRoom();
+        // ── Exit form (2026-08-21): the + chip adds, clicking a badge
+        // edits. Shipped doors save as SHADOWS — text diff-only, and
+        // through the fidelity gate their MECHANICS edit live too (the
+        // shadow's `mechanics` unit replaces the pack's wholesale); user
+        // doors carry the full grammar via the shared widget.
+        const exitForm = pane.querySelector('.grs-exit-form');
+        const exTo = exitForm.querySelector('.grs-ex-to');
+        const exLabel = exitForm.querySelector('.grs-ex-label');
+        const exDesc = exitForm.querySelector('.grs-ex-desc');
+        const exMech = exitForm.querySelector('.grs-ex-mech-note');
+        const exReturn = exitForm.querySelector('.grs-ex-return');
+        const exReturnLabel = exitForm.querySelector('.grs-ex-return-label');
+        const exSave = exitForm.querySelector('.grs-ex-save');
+        const exReset = exitForm.querySelector('.grs-ex-reset');
+        const xw = locksWidget(exitForm, { types: { vis: EXIT_VIS, req: EXIT_REQ, fx: FX_TYPES } });
+        let exEditing = null;   // destination id while editing, else null
+
+        const closeExit = () => {
+            exitForm.style.display = 'none';
+            exEditing = null;
+            exLabel.value = ''; exDesc.value = '';
+            exReturn.checked = false;
+            // empty the select too — leftover options would trip the
+            // modal's dirty fingerprint (the spurious-confirm class)
+            exTo.innerHTML = ''; exTo.disabled = false;
+            xw.clear();
         };
-        exitAdd.addEventListener('change', tryAddExit);
-        exitAdd.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); tryAddExit(); }
-        });
+        const openExit = (to) => {
+            const r = curRoom();
+            closeAdd();                      // one form at a time
+            closeExit();
+            exEditing = to ?? null;
+            exTo.innerHTML = world.rooms.filter(x => x.id !== r.id)
+                .map(x => `<option value="${x.id}">${esc(x.title)}</option>`).join('');
+            exTo.disabled = to != null;
+            if (to != null) exTo.value = String(to);
+            const se = to != null ? (r.shipped_exits || []).find(e => e.to === to) : null;
+            const sh = to != null ? (r.exit_shadows || {})[String(to)] : null;
+            const ue = to != null && !se ? (r.add_exits || []).find(e => e.to === to) : null;
+            exReturnLabel.style.display = to == null ? '' : 'none';
+            if (se) {
+                exLabel.value = (sh && sh.label) || se.label || '';
+                exDesc.value = (sh && sh.desc) || se.desc || '';
+                const mech = exitMech(se, sh);
+                if (exitMechFits(se, mech)) {
+                    // Gate passed: the door's machinery IS the widget
+                    // grammar — prefill it live (2026-08-21).
+                    xw.showAuthoring(true);
+                    xw.prefill({ visCond: mech.visible_when || null,
+                                 cond: mech.condition || null,
+                                 roll: mech.roll || null,
+                                 fx: mech.roll ? (mech.roll.success || {}) : (mech.effects || {}),
+                                 msg: (sh && sh.blocked_message) || se.blocked_message || '' });
+                    exMech.style.display = 'none';
+                } else {
+                    xw.showAuthoring(false);
+                    exMech.textContent = '⚙\u{FE0E} Story machinery richer than this editor — '
+                        + 'shown read-only, your text edits reword the door: '
+                        + (exitMechWords(se, mech) || 'unnamed machinery');
+                    exMech.style.display = '';
+                }
+                exReset.style.display = (sh && !sh._removed) ? '' : 'none';
+                exSave.textContent = 'Save';
+            } else if (ue) {
+                exLabel.value = ue.label || '';
+                exDesc.value = ue.desc || '';
+                xw.prefill({ visCond: ue.visible_when || null, cond: ue.condition || null,
+                             roll: ue.roll || null,
+                             fx: ue.roll ? (ue.roll.success || {}) : (ue.effects || {}),
+                             msg: ue.blocked_message || '' });
+                exMech.style.display = 'none';
+                exReset.style.display = 'none';
+                exSave.textContent = 'Save';
+            } else {
+                exMech.style.display = 'none';
+                exReset.style.display = 'none';
+                exSave.textContent = 'Add';
+            }
+            exitForm.style.display = '';
+            (to == null ? exTo : exLabel).focus();
+        };
+        // static chip on the label line (Krem 2026-08-21: trim-colored,
+        // above the list) — bound once; openExit reads curRoom() at click
+        const addChip = pane.querySelector('.grs-exit-addchip');
+        addChip.onclick = () => openExit();
+        addChip.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openExit(); } };
+        exitForm.querySelector('.grs-ex-cancel').onclick = closeExit;
+        exReset.onclick = async () => {
+            const r = curRoom();
+            if (exEditing == null) return;
+            try {
+                await api('story/exits/delete', 'POST',
+                          { session, slug, room_id: r.id, to: exEditing, restore: true });
+                closeExit();
+                await refresh();
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+        exSave.onclick = async () => {
+            const r = curRoom();
+            const to = Number(exTo.value);
+            if (!Number.isFinite(to)) { ui.showToast('Pick a destination room', 'error'); return; }
+            const body = { session, slug, room_id: r.id, to,
+                           label: exLabel.value.trim(), desc: exDesc.value.trim() };
+            const se = (r.shipped_exits || []).find(e => e.to === to);
+            // User exits always author; shipped ones only through the
+            // fidelity gate — edit_mechanics marks the compile as
+            // authoritative (replaces the pack's machinery as a unit).
+            if (!se || exitMechFits(se, exitMech(se, (r.exit_shadows || {})[String(to)]))) {
+                const vis = xw.readVis();
+                if (vis && vis.cond) body.visible_when = vis.cond;
+                const lk = xw.readLocks(body.label || String(to));
+                if (lk) {
+                    if (lk.cond) body.condition = lk.cond;
+                    if (lk.msg) body.blocked_message = lk.msg;
+                    if (lk.dice) body.roll = {
+                        ...lk.dice,
+                        success: { ...(lk.fx || {}) },
+                        failure: { message: EXIT_FAIL_MSG } };
+                    else if (lk.fx) body.effects = lk.fx;
+                }
+                if (se) body.edit_mechanics = true;
+            }
+            try {
+                const res = await api('story/exits', 'POST', body);
+                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
+                // One-shot return door (F4): mirrored once at creation,
+                // skipped if the far side already leads back. Never linked
+                // after — each side stays its own exit.
+                if (exEditing == null && exReturn.checked) {
+                    const dest = world.rooms.find(x => x.id === to);
+                    const destHas = dest && [...(dest.shipped_exits || []), ...(dest.add_exits || [])]
+                        .some(e => e.to === r.id);
+                    if (!destHas)
+                        await api('story/exits', 'POST',
+                                  { session, slug, room_id: to, to: r.id, label: r.title || '' });
+                }
+                closeExit();
+                ui.showToast('Exit saved', 'success', 1500);
+                await refresh();
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
 
         // ── Add/edit-object form (the + tile adds; clicking a card edits;
         // shipped objects save as SHADOWS — verbatim-equals-shipped clears,
         // same house rule as room text) ─────────────────────────────────
-        const addForm = pane.querySelector('.grs-obj-add-form');
+        // :not — the exit form shares the styling class and sits earlier
+        const addForm = pane.querySelector('.grs-obj-add-form:not(.grs-exit-form)');
         const objName = addForm.querySelector('.grs-obj-name');
         const objDesc = addForm.querySelector('.grs-obj-desc');
         const actRows = addForm.querySelector('.grs-act-rows');
@@ -998,6 +1628,7 @@ function objectsTab(slug, session, data) {
 
         const openAdd = (name) => {
             const r = curRoom();
+            closeExit();                     // one form at a time
             editing = name || null;
             actRows.innerHTML = '';
             clearLocks();
@@ -1007,21 +1638,24 @@ function objectsTab(slug, session, data) {
             const ov = editing ? ((world.objects || {})[String(r.id)] || {})[editing] : null;
             if (so) {
                 const eff = effective(so, ov);
-                objDesc.value = eff.desc;
-                for (const [v, m] of Object.entries(eff.verbs)) addActRow(v, m);
-                mechNote.style.display = so.has_mechanics ? '' : 'none';
+                if (objFits(editing, eff.merged)) {
+                    // Fidelity gate passed (2026-08-21): the machinery IS
+                    // the widget grammar — prefill it live.
+                    prefillFromSpec(eff.merged);
+                    mechNote.style.display = 'none';
+                } else {
+                    objDesc.value = eff.desc;
+                    for (const [v, m] of Object.entries(eff.verbs)) addActRow(v, m);
+                    mechNote.textContent = '\u{2699}\u{FE0E} Story machinery richer than this '
+                        + 'editor — shown read-only, your text edits reword it: '
+                        + (objMechWords(eff.merged) || 'unnamed machinery');
+                    mechNote.style.display = '';
+                    lw.showAuthoring(false);
+                    takeLabel.style.display = 'none';
+                }
                 resetBtn.style.display = ov ? '' : 'none';
-                // pack mechanics stay pack-side — no lock authoring on shipped
-                visLabel.style.display = 'none';
-                reqLabel.style.display = 'none';
-                fxLabel.style.display = 'none';
-                takeLabel.style.display = 'none';
             } else if (editing && ov) {
-                objDesc.value = ov.desc || '';
-                for (const [v, s] of Object.entries(ov.interactions || {}))
-                    addActRow(v, (s || {}).message
-                        || ((s || {}).roll && s.roll.success && s.roll.success.message) || '');
-                prefillLocks(ov);
+                prefillFromSpec(ov);
                 mechNote.style.display = 'none';
                 resetBtn.style.display = 'none';
             } else {
@@ -1043,204 +1677,55 @@ function objectsTab(slug, session, data) {
         };
         addForm.querySelector('.grs-act-add').onclick = () => addActRow().querySelector('.grs-act-verb').focus();
 
-        // ── Locks & effects (Krem 2026-08-20): (type, value) rows compiling
-        // into the referee's SHIPPED grammar — condition {has,did}, puzzle +
-        // {solved}, roll, set/adjust/gives. First row of each kind wins.
-        const visToggle = addForm.querySelector('.grs-vis-toggle');
-        const reqToggle = addForm.querySelector('.grs-req-toggle');
-        const fxToggle = addForm.querySelector('.grs-fx-toggle');
-        const visLabel = addForm.querySelector('.grs-vis-label');
-        const reqLabel = addForm.querySelector('.grs-req-label');
-        const fxLabel = addForm.querySelector('.grs-fx-label');
-        const visBody = addForm.querySelector('.grs-vis-body');
-        const reqBody = addForm.querySelector('.grs-req-body');
-        const fxBody = addForm.querySelector('.grs-fx-body');
-        const visRows = addForm.querySelector('.grs-vis-rows');
-        const reqRows = addForm.querySelector('.grs-req-rows');
-        const fxRows = addForm.querySelector('.grs-fx-rows');
-        const lockMsg = addForm.querySelector('.grs-lock-msg');
+        // ── Locks & effects — the shared widget carries the machinery
+        // (exits editor DRY, 2026-08-21); this form maps its object grammar
+        // in and out around it.
         const objTake = addForm.querySelector('.grs-obj-take');
         const takeLabel = addForm.querySelector('.grs-take-label');
-        visToggle.onchange = () => { visBody.style.display = visToggle.checked ? '' : 'none'; };
-        reqToggle.onchange = () => {
-            reqBody.style.display = reqToggle.checked ? '' : 'none';
-            // A lock wants a verb — offer 'open' as a visible, editable
-            // action row (Krem's clown_chest, 2026-08-20: requiring the
-            // user to hand-author the obvious verb was friction, not law).
-            if (reqToggle.checked && !actRows.children.length)
-                addActRow('open', '');
-        };
-        fxToggle.onchange = () => {
-            fxBody.style.display = fxToggle.checked ? '' : 'none';
-            // Effects need a carrier verb — offer 'use' as a visible,
-            // editable action row rather than implying one silently
-            // (Krem 2026-08-20: the response field IS the return message).
-            if (fxToggle.checked && !actRows.children.length)
-                addActRow('use', '').querySelector('.grs-act-resp').focus();
-        };
-
-        // Visible-when = EXISTENCE (she doesn't know it's there — surprise);
-        // Requirements = USABLE-when (she sees it, it refuses — tension).
-        // Both compile to the referee's shipped condition grammar.
-        const VIS_TYPES = [
-            ['searched', 'when searched for', '', ''],
-            ['has', 'when carrying item', 'item name, e.g. uv_lamp', ''],
-            ['did', 'after another object is used', 'object name, e.g. door1', ''],
-            ['flag', 'when a flag is set', 'flag name, e.g. house_open', ''],
-        ];
-        const REQ_TYPES = [
-            ['has', 'needs item', 'item name, e.g. bronze_key', ''],
-            ['did', 'needs opened/used', 'object name, e.g. door1', ''],
-            ['flag', 'flag is set', 'flag name, e.g. ballroom_unlocked', ''],
-            ['password', 'password / riddle', 'the answer, e.g. 1234', 'riddle / prompt she sees (optional)'],
-            ['d20', 'd20 chance', 'roll needed, e.g. 11', ''],
-            ['d100', 'd100 chance', 'roll needed, e.g. 51', ''],
-        ];
-        const FX_TYPES = [
-            ['set', 'set flag', 'flag name, e.g. ballroom_unlocked', ''],
-            ['give', 'give item', 'item name, e.g. bronze_key', ''],
-            ['adjust', 'adjust number', 'name, e.g. love', 'amount, e.g. 10 or -5'],
-        ];
-        const pickRow = (host, types, kind, val, extra) => {
-            const row = document.createElement('div');
-            row.className = 'grs-act-row';
-            row.innerHTML = `
-                <select class="grs-pick-kind">${types.map(t =>
-                    `<option value="${t[0]}"${t[0] === kind ? ' selected' : ''}>${t[1]}</option>`).join('')}</select>
-                <input type="text" class="grs-pick-val">
-                <input type="text" class="grs-pick-extra">
-                <button type="button" class="sb-icon-btn grs-act-del" title="Remove">✕</button>`;
-            const sel = row.querySelector('.grs-pick-kind');
-            const vIn = row.querySelector('.grs-pick-val');
-            const xIn = row.querySelector('.grs-pick-extra');
-            const paint = () => {
-                const t = types.find(x => x[0] === sel.value) || types[0];
-                vIn.placeholder = t[2];
-                xIn.placeholder = t[3];
-                vIn.style.display = t[2] ? '' : 'none';   // value-less kinds (searched)
-                xIn.style.display = t[3] ? '' : 'none';
-            };
-            sel.onchange = paint;
-            paint();
-            vIn.value = val || '';
-            xIn.value = extra || '';
-            row.querySelector('.grs-act-del').onclick = () => row.remove();
-            host.appendChild(row);
-            return row;
-        };
-        addForm.querySelector('.grs-vis-add').onclick = () =>
-            pickRow(visRows, VIS_TYPES).querySelector('.grs-pick-kind').focus();
-        addForm.querySelector('.grs-req-add').onclick = () =>
-            pickRow(reqRows, REQ_TYPES).querySelector('.grs-pick-val').focus();
-        addForm.querySelector('.grs-fx-add').onclick = () =>
-            pickRow(fxRows, FX_TYPES).querySelector('.grs-pick-val').focus();
-
-        const rawRows = (host) => [...host.querySelectorAll('.grs-act-row')].map(row => ({
-            kind: row.querySelector('.grs-pick-kind').value,
-            val: row.querySelector('.grs-pick-val').value.trim(),
-            extra: row.querySelector('.grs-pick-extra').value.trim(),
-        }));
-        const rowsOf = (host) => rawRows(host).filter(x => x.val);
+        const lw = locksWidget(addForm, {
+            types: { vis: VIS_TYPES, req: REQ_TYPES, fx: FX_TYPES },
+            // A lock/effect wants a carrier verb — offer 'open'/'use' as
+            // visible, editable action rows (Krem's clown_chest 2026-08-20:
+            // hand-authoring the obvious verb was friction, not law).
+            onReqOpen: () => { if (!actRows.children.length) addActRow('open', ''); },
+            onFxOpen: () => {
+                if (!actRows.children.length)
+                    addActRow('use', '').querySelector('.grs-act-resp').focus();
+            },
+        });
 
         const clearLocks = () => {
-            for (const t of [visToggle, reqToggle, fxToggle, objTake]) t.checked = false;
-            for (const b of [visBody, reqBody, fxBody]) b.style.display = 'none';
-            for (const l of [visLabel, reqLabel, fxLabel, takeLabel]) l.style.display = '';
-            for (const h of [visRows, reqRows, fxRows]) h.innerHTML = '';
-            lockMsg.value = '';
+            lw.clear();
+            objTake.checked = false;
+            takeLabel.style.display = '';
         };
-
-        // Visible-when rows → the object's top-level existence gate:
-        // `hidden` (search reveal) and/or `condition` {has, did, flag}.
-        const readVis = () => {
-            if (!visToggle.checked) return null;
-            const out = { hidden: false, cond: {} };
-            for (const q of rawRows(visRows)) {
-                if (q.kind === 'searched') out.hidden = true;
-                else if (!q.val) continue;
-                else if (q.kind === 'has' && !out.cond.has) out.cond.has = q.val;
-                else if (q.kind === 'did' && !out.cond.did) out.cond.did = q.val;
-                else if (q.kind === 'flag' && !out.cond.flag) out.cond.flag = q.val;
-            }
-            if (!Object.keys(out.cond).length) out.cond = null;
-            return (out.hidden || out.cond) ? out : null;
+        const readVis = lw.readVis;
+        const readLocks = lw.readLocks;
+        // spec → form (one prefill for user objects AND gated shipped
+        // ones — objToDescriptor is the single spec reader)
+        const prefillFromSpec = (spec) => {
+            const d = objToDescriptor(spec);
+            objDesc.value = d.desc;
+            for (const [v, m] of d.acts) addActRow(v, m);
+            objTake.checked = d.take;
+            lw.prefill({ hidden: d.hidden, visCond: d.visCond, cond: d.cond,
+                         puzzle: d.puzzle, roll: d.dice, fx: d.fx || {}, msg: d.msg });
         };
-
-        const readLocks = (name) => {
-            if (!reqToggle.checked && !fxToggle.checked) return null;
-            const cond = {};
-            let puzzle = null, dice = null;
-            if (reqToggle.checked) for (const q of rowsOf(reqRows)) {
-                if (q.kind === 'has' && !cond.has) cond.has = q.val;
-                else if (q.kind === 'did' && !cond.did) cond.did = q.val;
-                else if (q.kind === 'flag' && !cond.flag) cond.flag = q.val;
-                else if (q.kind === 'password' && !puzzle) {
-                    puzzle = { riddle: q.extra || 'It waits for the right answer — solve it.',
-                               solution: q.val };
-                    cond.solved = name;
-                } else if ((q.kind === 'd20' || q.kind === 'd100') && !dice) {
-                    const sides = q.kind === 'd20' ? 20 : 100;
-                    const beat = parseInt(q.val, 10);
-                    dice = { sides, beat: Number.isFinite(beat)
-                             ? Math.max(1, Math.min(sides, beat)) : sides / 2 + 1 };
-                }
-            }
-            const fx = {};
-            if (fxToggle.checked) for (const q of rowsOf(fxRows)) {
-                if (q.kind === 'set') (fx.set = fx.set || {})[q.val] = true;
-                else if (q.kind === 'give' && !fx.gives) fx.gives = q.val;
-                else if (q.kind === 'adjust') {
-                    const n = parseFloat(q.extra);
-                    if (Number.isFinite(n)) (fx.adjust = fx.adjust || {})[q.val] = n;
-                }
-            }
-            const out = { cond: Object.keys(cond).length ? cond : null,
-                          puzzle, dice,
-                          fx: Object.keys(fx).length ? fx : null,
-                          msg: lockMsg.value.trim() };
-            return (out.cond || out.puzzle || out.dice || out.fx) ? out : null;
-        };
-
-        // spec → rows (edit round-trip for user-placed objects)
-        const prefillLocks = (spec) => {
-            const v0 = Object.values(spec.interactions || {})[0] || {};
-            const cond = v0.condition || {};
-            const src = v0.roll ? (v0.roll.success || {})
-                : (spec.interactions ? v0 : (spec.on_solve || {}));
-            let anyReq = false, anyFx = false, anyVis = false;
-            objTake.checked = !!spec.takeable;
-            if (spec.hidden) { pickRow(visRows, VIS_TYPES, 'searched'); anyVis = true; }
-            const tc = spec.condition || {};   // top-level = existence gate
-            if (tc.has) { pickRow(visRows, VIS_TYPES, 'has', tc.has); anyVis = true; }
-            if (tc.did) { pickRow(visRows, VIS_TYPES, 'did', tc.did); anyVis = true; }
-            if (tc.flag) { pickRow(visRows, VIS_TYPES, 'flag', tc.flag); anyVis = true; }
-            if (cond.has) { pickRow(reqRows, REQ_TYPES, 'has', cond.has); anyReq = true; }
-            if (cond.did) { pickRow(reqRows, REQ_TYPES, 'did', cond.did); anyReq = true; }
-            if (cond.flag) { pickRow(reqRows, REQ_TYPES, 'flag', cond.flag); anyReq = true; }
-            if (spec.puzzle) {
-                pickRow(reqRows, REQ_TYPES, 'password',
-                        (spec.puzzle.solutions || [])[0] || spec.puzzle.solution || '',
-                        spec.puzzle.riddle || '');
-                anyReq = true;
-            }
-            if (v0.roll) {
-                pickRow(reqRows, REQ_TYPES, v0.roll.sides === 20 ? 'd20' : 'd100',
-                        String(v0.roll.beat ?? ''));
-                anyReq = true;
-            }
-            for (const k of Object.keys(src.set || {})) { pickRow(fxRows, FX_TYPES, 'set', k); anyFx = true; }
-            if (src.gives) { pickRow(fxRows, FX_TYPES, 'give', src.gives); anyFx = true; }
-            for (const [k, n] of Object.entries(src.adjust || {})) {
-                pickRow(fxRows, FX_TYPES, 'adjust', k, String(n));
-                anyFx = true;
-            }
-            if (v0.blocked_message) { lockMsg.value = v0.blocked_message; anyReq = true; }
-            visToggle.checked = anyVis;
-            visBody.style.display = anyVis ? '' : 'none';
-            reqToggle.checked = anyReq;
-            reqBody.style.display = anyReq ? '' : 'none';
-            fxToggle.checked = anyFx;
-            fxBody.style.display = anyFx ? '' : 'none';
+        // form → descriptor (compileObj's input; solved is stripped — the
+        // compile re-stamps it from the puzzle, matching the password row)
+        const readObjDescriptor = (name) => {
+            const acts = [...actRows.querySelectorAll('.grs-act-row')].map(row => [
+                row.querySelector('.grs-act-verb').value.trim(),
+                row.querySelector('.grs-act-resp').value.trim()]).filter(a => a[0]);
+            const vis = readVis() || {};
+            const lk = readLocks(name) || {};
+            const cond = { ...(lk.cond || {}) };
+            delete cond.solved;
+            return { desc: objDesc.value.trim(), take: objTake.checked,
+                     hidden: !!vis.hidden, visCond: vis.cond || null,
+                     cond: Object.keys(cond).length ? cond : null,
+                     puzzle: lk.puzzle || null, dice: lk.dice || null,
+                     fx: lk.fx || null, msg: lk.msg || '', acts };
         };
 
         addForm.querySelector('.grs-obj-cancel').onclick = closeAdd;
@@ -1259,85 +1744,58 @@ function objectsTab(slug, session, data) {
             const name = editing || objName.value.trim();
             if (!name) { ui.showToast('Object needs a name', 'error'); return; }
             const so = (r.shipped_objs || {})[name];
+            const ovNow = ((world.objects || {})[String(r.id)] || {})[name];
+            const d = readObjDescriptor(name);
+            const fxHas = d.fx && Object.keys(d.fx).length;
+            // Locks want a carrier verb (widget hidden = fields empty, so
+            // the read-only shipped lane never trips this).
+            if ((d.cond || d.dice || fxHas) && !d.acts.length && !d.puzzle) {
+                ui.showToast('Requirements & effects need at least one action — or a password to solve.',
+                             'error', 3500);
+                return;
+            }
+            const restoreAndClose = async () => {
+                try {
+                    if (ovNow)
+                        await api('story/objects/delete', 'POST',
+                                  { session, slug, room_id: r.id, name, restore: true });
+                    closeAdd();
+                    await refresh();
+                } catch (e) { ui.showToast(e.message, 'error'); }
+            };
             // Hand-placed objects appear immediately; gating is the
             // author's explicit choice via Visible-when (scenario loads are
             // verbatim — no implicit zork-line stamp since 2026-08-20).
-            let spec;
-            if (so) {
-                // Shadow: store only the DIFF vs shipped. Nothing changed →
-                // clear the override entirely (verbatim-equals-shipped).
-                spec = {};
+            let body;
+            if (so && objFits(name, objMerged(so.spec || {}, ovNow))) {
+                // Fidelity-gate lane: the compile replaces the shipped
+                // object wholesale; verbatim-equals-shipped clears.
+                const spec = compileObj(name, d, objMerged(so.spec || {}, ovNow));
+                if (deepEq(spec, so.spec || {})) { await restoreAndClose(); return; }
+                body = { session, slug, room_id: r.id, name, spec, replace: true };
+            } else if (so) {
+                // Text-shadow lane (machinery rides pack-side): store only
+                // the DIFF vs shipped; nothing changed → clear entirely.
+                const spec = {};
                 const desc = objDesc.value.trim();
                 if (desc !== (so.desc || '')) spec.desc = desc;
                 const ints = {};
-                actRows.querySelectorAll('.grs-act-row').forEach(row => {
-                    const verb = row.querySelector('.grs-act-verb').value.trim();
-                    if (!verb) return;
-                    const resp = row.querySelector('.grs-act-resp').value.trim();
+                for (const [verb, resp] of d.acts) {
                     if (verb in (so.verbs || {})) {
                         if (resp !== so.verbs[verb]) ints[verb] = { message: resp };
                     } else {
                         ints[verb] = { message: resp || `You ${verb} the ${name}.` };
                     }
-                });
+                }
                 if (Object.keys(ints).length) spec.interactions = ints;
-                if (!Object.keys(spec).length) {
-                    try {
-                        if (((world.objects || {})[String(r.id)] || {})[name])
-                            await api('story/objects/delete', 'POST',
-                                      { session, slug, room_id: r.id, name, restore: true });
-                        closeAdd();
-                        await refresh();
-                    } catch (e) { ui.showToast(e.message, 'error'); }
-                    return;
-                }
+                if (!Object.keys(spec).length) { await restoreAndClose(); return; }
+                body = { session, slug, room_id: r.id, name, spec };
             } else {
-                spec = { desc: objDesc.value.trim() };
-                const acts = {};
-                actRows.querySelectorAll('.grs-act-row').forEach(row => {
-                    const verb = row.querySelector('.grs-act-verb').value.trim();
-                    if (!verb) return;
-                    const resp = row.querySelector('.grs-act-resp').value.trim();
-                    acts[verb] = { message: resp || `You ${verb} the ${name}.` };
-                });
-                if (objTake.checked) spec.takeable = true;
-                const vis = readVis();
-                if (vis) {
-                    if (vis.hidden) spec.hidden = true;
-                    if (vis.cond) spec.condition = vis.cond;
-                }
-                const lk = readLocks(name);
-                if (lk) {
-                    if (!Object.keys(acts).length && !lk.puzzle) {
-                        ui.showToast('Requirements & effects need at least one action — or a password to solve.',
-                                     'error', 3500);
-                        return;
-                    }
-                    if (lk.puzzle) spec.puzzle = lk.puzzle;
-                    for (const v of Object.values(acts)) {
-                        if (lk.cond) {
-                            v.condition = lk.cond;
-                            if (lk.msg) v.blocked_message = lk.msg;
-                        }
-                        if (lk.dice) {
-                            // chance replaces the flat outcome: response +
-                            // effects ride the success branch
-                            v.roll = { ...lk.dice,
-                                       success: { message: v.message, ...(lk.fx || {}) },
-                                       failure: { message: 'Not this time — the attempt fails.' } };
-                            delete v.message;
-                        } else if (lk.fx) {
-                            Object.assign(v, lk.fx);
-                        }
-                    }
-                    if (!Object.keys(acts).length && lk.puzzle && lk.fx)
-                        spec.on_solve = { ...lk.fx };   // pure riddle: effects on solve
-                }
-                if (Object.keys(acts).length) spec.interactions = acts;
+                body = { session, slug, room_id: r.id, name,
+                         spec: compileObj(name, d, null) };
             }
             try {
-                const res = await api('story/objects', 'POST',
-                                      { session, slug, room_id: r.id, name, spec });
+                const res = await api('story/objects', 'POST', body);
                 if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
                 closeAdd();
                 ui.showToast(`'${name}' ${so ? 'saved' : 'placed'}`, 'success', 2000);

@@ -36,13 +36,13 @@ def ghost_block(story, state, room):
         tmpl = tmpl[:_TEMPLATE_CAP] + "…"
     lines.append(f"Scene: {tmpl}")
 
+    from . import referee
     exits = []
-    for ex in room.get("exits", []):
+    for ex in referee.visible_exits(room, state):
         d = f" — {ex['desc']}" if ex.get("desc") else ""
         exits.append(f"{ex.get('label')}{d}")
     lines.append("Exits: " + ("; ".join(exits) if exits else "none"))
 
-    from . import referee
     objs = []
     taken = {referee._key(t) for t in state.get("taken") or []}
     for name, obj in (room.get("objects") or {}).items():

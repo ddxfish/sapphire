@@ -36,7 +36,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 | `dm_guide` | No | Per-story GM guidance (user-editable in ⚙ GM Settings; your text is the shipped default) |
 | `initial_flags` | No | `{"jack_hp": 10}` — starting stats, seeded as replayable events |
 | `tags`, `facts`, `tile` | No | Library tile metadata; `tile` is a filename in `backdrops/` |
-| `open_flag` | No | The **zork-line**: the flag that "opens the house". Player room-text overrides and added exits apply when it turns truthy (any flag your effects set: `chest_opened`, `killed_goblin`, a `flag_gte` threshold…) |
+| `open_flag` | No | The **zork-line**: the flag that "opens the house". Player room-text overrides apply when it turns truthy (any flag your effects set: `chest_opened`, `killed_goblin`, a `flag_gte` threshold…). Player objects and exits are NOT gated — they exist as authored. |
 | `slots` | No | Mad-Libs setup form, shown before room 1 — see below |
 
 ## Setup slots (Mad-Libs)
@@ -59,7 +59,10 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 - Players save **scenarios** — one named thing per story holding the filled setup form (slots) AND the environment (placed objects, room-text overrides, added exits). One dropdown in the setup/gear modal; picking one SWAPS the playthrough to it, right then (blank = the shipped story), verbatim — an object gates only if its own Visible-when says so. Scenarios live user-side; your pack never changes.
 - **Takeable objects**: `"takeable": true` lets the generic `take` verb (grab/get/pocket aliases) move the object itself into inventory — journaled `taken` event, the object leaves the room (visibility, search, and her room text all exclude it). Optional `take_message`. A declared `take` interaction on the object overrides the generic verb; non-takeable objects keep the off-script narrate-freely license.
 - **Conditions** also accept `{"did": "door1"}` (the object has been used — replayed interaction history, verb-agnostic) and `{"solved": "vault"}` (its puzzle is answered) — no flag wiring needed for has-opened / password gates. The in-app editor's sections compile to exactly this grammar — **Visible when** → the object's top-level `condition` (+ `hidden` for search-reveal), **Requirements** → condition + blocked_message per verb (usable-when), `puzzle` + `{solved}` for passwords/riddles, `roll` for d20/d100 chances, and **Effects** → `set`/`adjust`/`gives`.
-- **Shadow law** (editor v2): the Environment editor also shows your SHIPPED objects. A player editing one stores a same-name override that field-merges at load — desc/hidden replace, interaction *messages* overlay per-verb, and your mechanics (effects, seals, dice, conditions) always survive the reword. Deleting a shipped object writes a restorable tombstone. Players can also ADD exits (never edit yours — conditions and blocked doors are untouchable); added exits open past the zork-line. All of it lives in the user layer; the pack stays canonical.
+- **Shadow law** (editor v2): the Environment editor also shows your SHIPPED objects. A player editing one stores a same-name override that field-merges at load — desc/hidden replace, interaction *messages* overlay per-verb, and your mechanics (effects, seals, dice, conditions) always survive the reword. Deleting a shipped object writes a restorable tombstone. All of it lives in the user layer; the pack stays canonical.
+- **Exits follow the same law** (exits editor, 2026-08-21): players edit a shipped exit's *text* (label/desc — a keyed-by-destination shadow), wall one off (restorable tombstone), or add their own exits carrying the full grammar (visible_when / requirements / dice / effects). Added exits are NOT zork-gated — they exist as authored; gating is the author's explicit Visible-when choice.
+- **Shipped OBJECT mechanics edit through the same gate** (2026-08-21): an object whose spec round-trips through the editor losslessly prefills live; a save stores a `_replace` entry that swaps your object **wholesale** for that playthrough (verbatim-equals-shipped clears it; restore lifts it). Fields the editor doesn't show — per-verb `aliases`, `emotions`/`emotions_remove`, `found_by`/`gives` — are *passengers*: they ride a gated save verbatim, attached to their verb (delete the verb and they go with it). `sealed` interactions, multi-answer `solutions`, per-verb-divergent locks, and custom roll shapes fail the gate and show read-only in plain words; text rewording still shadows those, machinery riding untouched.
+- **Shipped exit mechanics edit through a fidelity gate** (2026-08-21): when your door's machinery fits the editor grammar (single-clause has/did/flag conditions, d20/d100 rolls in the editor's own idiom, set/gives/adjust effects), the editor prefills it live and a save stores a `mechanics` unit on the shadow that **replaces yours wholesale** for that playthrough (`{}` = stripped bare; editing back to your verbatim grammar clears it). Richer grammar — `flags` dicts, `flag_gte`, custom roll branches, `generate` — shows read-only as a plain-words summary instead; text edits still shadow and your machinery rides untouched. Restore-to-shipped clears mechanics along with text.
 
 ## Room JSON
 
@@ -85,6 +88,22 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 - `template` is what SHE sees (per-turn context block); `player_desc` is what the player sees in the sidebar. Write both.
 - A room with **no exits is an ending**. `ending_cards` picks outcome-specific THE END art — first entry whose condition matches wins.
 - Hints gate on `turns_in_room >= after_turns`; player hints are click-to-reveal, never auto-spoiled.
+
+**Exits carry the full grammar** (2026-08-21): besides `condition` +
+`blocked_message` (visible but refusing — tension), an exit may declare:
+
+- `visible_when` — a condition gating its *existence* (secret doors): until it
+  holds the exit isn't listed, isn't traversable, and never shows as blocked.
+  Classic compose: search reveals a lever object → its effect sets a flag →
+  the passage appears.
+- `effects` — fires on a successful traverse, *before* the destination's
+  `on_enter` ("the rope ladder snaps behind you": `{"set": {"ladder_gone": true}}`).
+- `roll` — dice-gated traversal, same shape as interaction rolls
+  (`{"sides": 20, "beat": 11, "once": false, "success": {…effects},
+  "failure": {"message": "A plank gives way."}}`). The rolled value is
+  journaled either way; branch effects fire either way; only success moves.
+- No `puzzle` on exits — a riddle door is a door *object* with a password,
+  and the exit then requires `{"did": "door1"}` (or `{"solved": "door1"}`).
 
 ## Objects
 

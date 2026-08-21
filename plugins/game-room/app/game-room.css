@@ -121,7 +121,10 @@
     margin: 0 0 14px;
 }
 .grs-room-row select { flex: 1 1 50%; max-width: 50%; min-width: min(100%, 14em); }
-.grs-room-stats { flex: 1 1 auto; min-width: 12em; }
+/* basis 0, not auto: a long "Rooms that lead here" list must WRAP inside
+   the column, not demand max-content width and shove the block onto its
+   own row (Krem 2026-08-21, the 8-exit hallway) */
+.grs-room-stats { flex: 1 1 0; min-width: 12em; max-width: 100%; }
 .grs-room-stats-head { font-weight: 600; font-size: var(--font-sm, 0.85em); }
 .grs-room-stats-line { color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); }
 
@@ -158,7 +161,21 @@
     background: none; border: none; color: inherit; cursor: pointer;
     padding: 0 2px; font-size: 1em; line-height: 1;
 }
-.grs-exit-add { max-width: 24em; }
+/* Exits editor (2026-08-21): badges click-to-edit, ghost = walled-off
+   shipped door (↩ restores), + chip mirrors the object add-tile */
+.grs-exit-editable { cursor: pointer; }
+.grs-exit-editable:hover { border-color: var(--text-secondary, #8a8fa3); }
+.grs-exit-ghost { opacity: .55; border-style: dashed; }
+.grs-exit-addchip {
+    border-style: dashed; cursor: pointer; user-select: none;
+    color: var(--trim, #8ab8ff); border-color: var(--trim, #8ab8ff);
+    font-weight: 600;
+}
+.grs-exit-addchip:hover { background: var(--trim-light, var(--bg-hover, #1c2230)); }
+.grs-exit-head { display: flex; align-items: center; gap: 10px; }
+.grs-exit-head label { margin: 0; }
+.grs-ex-to { flex: 1 1 0; min-width: 0; }
+.grs-ex-label { flex: 1 1 0; min-width: 0; }
 .grs-obj-addtile {
     display: flex; align-items: center; justify-content: center;
     border-style: dashed; cursor: pointer; padding: 8px 10px;
@@ -394,6 +411,13 @@
     margin-top: 6px; font-size: 0.8em; color: var(--text-secondary, #8a8fa3);
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
 }
+/* Section headings (Exits / Here / Carrying) — emoji rides the heading,
+   badges below stay compact (Krem 2026-08-21) */
+.st-scene-h {
+    margin-top: 9px; font-weight: 600; font-size: 0.95em;
+    color: var(--text, #e1e1e6);
+}
+.st-scene-h + .st-scene-exits { margin-top: 3px; }
 .st-exit {
     padding: 2px 9px; border: 1px solid var(--border, #2a3040);
     border-radius: 999px; background: var(--bg-primary, #0f1020); cursor: help;
@@ -424,6 +448,11 @@
 .st-ctl-row { display: flex; gap: 6px; }
 .st-ctl-row .btn-sm { flex: 1 1 auto; white-space: nowrap; }
 .st-ctl-row .st-ctl-wide { flex: 3 1 auto; }   /* ▶ Start Story next to ⚙ */
+/* ⏸/⚙ glyphs 50% bigger (Krem 2026-08-21) — tracks the theme's --font-sm */
+.st-ctl-row #st-pause, .st-ctl-row #st-gm-settings {
+    font-size: calc(var(--font-sm, 0.75rem) * 1.5);
+    line-height: 1; padding: 4px 10px;
+}
 
 /* ---------------- tap-to-draft cards ---------------- */
 .st-tap { cursor: pointer; }

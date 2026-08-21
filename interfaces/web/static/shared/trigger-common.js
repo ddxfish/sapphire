@@ -146,7 +146,7 @@ export function renderTaskCard(t) {
     let statusText = '';
     if (t.running) statusText = `<span class="sched-progress">Running...</span>`;
     const meta = [
-        isPlugin ? `<span class="sched-plugin-badge" title="Managed by ${esc(pluginName)} plugin">plugin</span>` : '',
+        isPlugin ? `<span class="sched-plugin-badge" title="Managed by ${esc(pluginName)} plugin">${esc(pluginName)}</span>` : '',
         t.chance < 100 ? `${t.chance}%` : '',
         t.active_hours_start != null ? `🕓 ${formatHourRange(t.active_hours_start, t.active_hours_end)}` : '',
         statusText,

@@ -877,7 +877,11 @@ function paintStatus(a) {
         return;
     }
     const exits = (a.room_exits || []).map((x, i) =>
-        `<span class="st-exit st-tap" data-exit="${i}" title="${esc(x.desc)}">\u{1F6AA} ${esc(x.label)}</span>`).join('');
+        `<span class="st-exit st-tap" data-exit="${i}" title="${esc(x.desc)}">${esc(x.label)}</span>`).join('');
+    // Section = emoji heading + badge row (Krem 2026-08-21). The door moved
+    // from every badge onto the heading — compact badges, one glyph up top.
+    const sect = (icon, label, body) => body
+        ? `<div class="st-scene-h">${icon} ${label}</div><div class="st-scene-exits">${body}</div>` : '';
     // Icon language (Krem 2026-08-03): ✓ done-something, 🧩 unsolved puzzle,
     // ✋ has do-verbs, 👁 look-only. One glyph carries the affordance.
     const objIcon = o => o.solved || o.used ? '✓ '
@@ -911,9 +915,9 @@ function paintStatus(a) {
         ${a.room_backdrop ? `<div class="st-status-img"><img src="${esc(a.room_backdrop)}" alt=""></div>` : ''}
         <div class="st-scene-title">${esc(a.room)}</div>
         ${a.room_desc ? `<div class="st-scene-desc">${esc(a.room_desc)}</div>` : ''}
-        ${exits ? `<div class="st-scene-exits">exits: ${exits}</div>` : ''}
-        ${objs ? `<div class="st-scene-exits">here: ${objs}</div>` : ''}
-        ${carrying ? `<div class="st-scene-exits">carrying: ${carrying}</div>` : ''}
+        ${sect('\u{1F6AA}', 'Exits', exits)}
+        ${sect('\u{1F4CD}', 'Here', objs)}
+        ${sect('\u{1F392}', 'Carrying', carrying)}
         ${stats.length ? `<div class="st-scene-exits">${esc(stats.join(' · '))}</div>` : ''}
         ${(a.blockers || []).length ? `<div class="st-scene-exits" style="color:var(--text-muted)">${a.blockers.map(b => {
             const i = b.indexOf(' — ');

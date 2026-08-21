@@ -401,14 +401,16 @@ def _merge_user_layer(story, slug, chat, state):
     """K1 — merge once, at load. User-placed objects join the room dicts.
     Shadow law (2026-08-20, editor v2): a user entry matching a SHIPPED
     name is a deliberate override — `{"_removed": true}` tombstones the
-    shipped object; anything else field-merges over it (desc/hidden
+    shipped object; `{"_replace": true, ...}` swaps it wholesale (the
+    editor's fidelity-gate lane); anything else field-merges over it (desc/hidden
     replace; interactions overlay per-verb, replacing only `message` so
     shipped mechanics — effects, seals, dice, conditions — survive a
     reword). New names add wholesale, carrying their own per-object
     `condition` (stamped at set-import for non-shipped names), checked by
-    the referee's visibility funnel — no gating here. Room TEXT overrides
-    and user-added exits apply only past the zork-line (meta.open_flag;
-    no flag declared = no line = apply always)."""
+    the referee's visibility funnel — no gating here. Exits follow the same
+    law (shadow + additive, ungated — F2 2026-08-21). Room TEXT overrides
+    alone stay zork-gated (meta.open_flag; no flag declared = no line =
+    apply always)."""
     try:
         data = st.get_user_layer(slug, chat)
     except Exception as e:
@@ -429,6 +431,13 @@ def _merge_user_layer(story, slug, chat, state):
                 continue
             if spec.get("_removed"):
                 target.pop(name, None)
+                continue
+            # Fidelity-gate lane (2026-08-21): a _replace entry swaps the
+            # shipped object WHOLESALE — machinery included ({} strips it
+            # to nothing but what the entry carries). Editor-only marker;
+            # the field-merge below stays the law for plain shadows.
+            if spec.get("_replace"):
+                target[name] = {k: v for k, v in spec.items() if k != "_replace"}
                 continue
             if name in target and isinstance(target[name], dict):
                 base = dict(target[name])
@@ -452,6 +461,50 @@ def _merge_user_layer(story, slug, chat, state):
                 target[name] = base
                 continue
             target[name] = spec
+    # Exits (exits editor, 2026-08-21) — UNGATED like objects (F2, the
+    # clown_key law: no implicit zork stamps; authors gate explicitly via
+    # visible_when). exit_shadows field-merge over the shipped exit with
+    # matching `to` (label/desc/blocked_message replace; shipped mechanics
+    # ride UNLESS the shadow carries a `mechanics` unit, which replaces
+    # them wholesale — {} strips the door bare); {"_removed": true} walls
+    # the door off. add_exits append, dedup by destination, enriched
+    # fields (condition/roll/effects/visible_when) verbatim.
+    for rid, txt in (data.get("rooms") or {}).items():
+        try:
+            room = story["rooms"].get(int(rid))
+        except (TypeError, ValueError):
+            room = None
+        if not room or not isinstance(txt, dict):
+            continue
+        shadows = txt.get("exit_shadows") or {}
+        if shadows and room.get("exits"):
+            kept = []
+            for ex in room["exits"]:
+                sh = shadows.get(str(ex.get("to"))) if isinstance(ex, dict) else None
+                if not isinstance(sh, dict):
+                    kept.append(ex)
+                    continue
+                if sh.get("_removed"):
+                    continue
+                merged = dict(ex)
+                for f in ("label", "desc", "blocked_message"):
+                    if str(sh.get(f) or "").strip():
+                        merged[f] = str(sh[f])
+                mech = sh.get("mechanics")
+                if isinstance(mech, dict):
+                    for f in ("condition", "roll", "effects", "visible_when"):
+                        merged.pop(f, None)
+                        if isinstance(mech.get(f), dict) and mech[f]:
+                            merged[f] = mech[f]
+                kept.append(merged)
+            room["exits"] = kept
+        have = {e.get("to") for e in (room.get("exits") or []) if isinstance(e, dict)}
+        for ex in (txt.get("add_exits") or []):
+            if isinstance(ex, dict) and ex.get("to") not in have:
+                room.setdefault("exits", []).append(dict(ex))
+                have.add(ex.get("to"))
+    # Room TEXT overrides stay zork-gated: pre-open, the shipped tutorial
+    # corridor reads as shipped (a different animal from user CONTENT).
     open_flag = (story["meta"].get("open_flag") or "").strip()
     if open_flag and not state["flags"].get(open_flag):
         return
@@ -466,13 +519,6 @@ def _merge_user_layer(story, slug, chat, state):
             room["template"] = str(txt["template"])
         if str(txt.get("player_desc") or "").strip():
             room["player_desc"] = str(txt["player_desc"])
-        # User-added exits (additive only — shipped exits, their conditions
-        # and blocked doors are never touched). Dedupe by destination.
-        have = {e.get("to") for e in (room.get("exits") or []) if isinstance(e, dict)}
-        for ex in (txt.get("add_exits") or []):
-            if isinstance(ex, dict) and ex.get("to") not in have:
-                room.setdefault("exits", []).append(dict(ex))
-                have.add(ex.get("to"))
 
 
 def _apply_slots(story, slots):
@@ -1176,7 +1222,7 @@ def full_state(system, session=None):
         "room_backdrop": _backdrop_url(story, room),
         "ending_card": _ending_card_url(story, state, room),
         "room_exits": [{"label": ex.get("label"), "desc": ex.get("desc") or ""}
-                       for ex in (room.get("exits") or [])] if room else [],
+                       for ex in referee.visible_exits(room, state)] if room else [],
         # Visible interactables (hidden-and-unfound stay engine-side) and
         # turn-gated player hints — both feed the scene strip, never answers.
         "room_objects": [{"name": name, "desc": obj.get("desc") or "",
@@ -1340,8 +1386,7 @@ def set_room_text(chat, slug, room_id, template=None, player_desc=None,
         cur["player_desc"] = str(player_desc)
     if add_exits is not None:
         cur["add_exits"] = list(add_exits)
-    cur = {k: v for k, v in cur.items()
-           if (v if k == "add_exits" else str(v).strip())}
+    cur = _prune_room_layer(cur)
     if cur:
         rooms_ov[str(room_id)] = cur
     else:
@@ -1350,6 +1395,81 @@ def set_room_text(chat, slug, room_id, template=None, player_desc=None,
                                     "rooms": rooms_ov,
                                     "scenario": layer.get("scenario") or ""})
     return "Room saved.", True
+
+
+def _prune_room_layer(cur):
+    """Drop empty fields from one room's layer dict: text by strip,
+    exit containers by truthiness (empty list/dict = gone)."""
+    return {k: v for k, v in cur.items()
+            if (v if k in ("add_exits", "exit_shadows") else str(v).strip())}
+
+
+def _mutate_room_layer(chat, slug, room_id, mutate):
+    """Load the layer, apply mutate(cur) to one room's dict, prune, save —
+    the one write path for exit storage (scenario tag rides, same as the
+    object savers)."""
+    layer = st.get_user_layer(slug, chat)
+    rooms_ov = dict(layer.get("rooms") or {})
+    cur = dict(rooms_ov.get(str(room_id)) or {})
+    mutate(cur)
+    cur = _prune_room_layer(cur)
+    if cur:
+        rooms_ov[str(room_id)] = cur
+    else:
+        rooms_ov.pop(str(room_id), None)
+    st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
+                                    "rooms": rooms_ov,
+                                    "scenario": layer.get("scenario") or ""})
+
+
+def set_user_exit(chat, slug, room_id, to, spec):
+    """Upsert one user-added exit (exits editor, 2026-08-21). Enriched
+    fields (condition/roll/effects/visible_when/blocked_message) ride
+    verbatim — the referee is defensive about every field it reads. Keyed
+    by destination: one user exit per (room, to)."""
+    if not isinstance(spec, dict):
+        return "Exit spec must be an object.", False
+    try:
+        if len(json.dumps(spec)) > _OBJ_BYTES:
+            return f"Exit too large ({_OBJ_BYTES // 1024}KB cap).", False
+    except (TypeError, ValueError):
+        return "Exit spec isn't JSON-serializable.", False
+    def mutate(cur):
+        ax = [e for e in (cur.get("add_exits") or [])
+              if isinstance(e, dict) and e.get("to") != to]
+        ax.append(dict(spec))
+        cur["add_exits"] = ax[:12]
+    _mutate_room_layer(chat, slug, room_id, mutate)
+    return f"Exit to room {to} saved.", True
+
+
+def remove_user_exit(chat, slug, room_id, to):
+    found = []
+    def mutate(cur):
+        ax = [e for e in (cur.get("add_exits") or []) if isinstance(e, dict)]
+        kept = [e for e in ax if e.get("to") != to]
+        if len(kept) != len(ax):
+            found.append(True)
+        cur["add_exits"] = kept
+    _mutate_room_layer(chat, slug, room_id, mutate)
+    if not found:
+        return "No user-added exit to that room here.", False
+    return "Exit removed.", True
+
+
+def set_exit_shadow(chat, slug, room_id, to, shadow):
+    """Shadow (or tombstone) one SHIPPED exit, keyed by destination.
+    shadow = field overrides, {"_removed": True}, or None to clear the
+    entry (restore to shipped)."""
+    def mutate(cur):
+        sh = dict(cur.get("exit_shadows") or {})
+        if shadow is None:
+            sh.pop(str(to), None)
+        else:
+            sh[str(to)] = dict(shadow)
+        cur["exit_shadows"] = sh
+    _mutate_room_layer(chat, slug, room_id, mutate)
+    return "Exit updated.", True
 
 
 def _resolve_room(story, ref, state):

@@ -139,7 +139,11 @@ def test_end_restores_only_with_return_prompt(system, engine):
     assert sm.settings["main"]["prompt"] == "sapphire"     # live chat untouched
 
 
-def test_end_without_return_prompt_keeps_costume(system, engine):
+def test_end_without_return_prompt_keeps_costume(system, engine, monkeypatch):
+    # Isolate from the DEV BOX's Game Room sidebar setting — end() now falls
+    # back to the room's return_prompt config (2026-08-20), which reads live
+    # plugin state; a configured prompt there would leak into this assert.
+    monkeypatch.setattr(sess, "_room_return_prompt", lambda: "")
     sess.start(system, "goblin-den", session="story-chat")
     sess.end(system, session="story-chat")
     sm = system.llm_chat.session_manager

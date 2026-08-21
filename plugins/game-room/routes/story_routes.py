@@ -332,11 +332,29 @@ def get_objects(query=None, **_):
                                   'hidden': bool((o or {}).get('hidden')),
                                   'verbs': {v: str((s or {}).get('message') or '')
                                             for v, s in ((o or {}).get('interactions') or {}).items()},
-                                  'has_mechanics': _mech(o or {})}
+                                  'has_mechanics': _mech(o or {}),
+                                  # Full spec VERBATIM (2026-08-21): the
+                                  # editor's fidelity gate round-trips it;
+                                  # this gear is the GM console — spoilers
+                                  # (riddle answers) are the GM's to see.
+                                  'spec': o}
                               for n, o in objs.items() if isinstance(o, dict)},
+                          # Exits, editor view (exits editor 2026-08-21):
+                          # shipped rows carry the editable text fields +
+                          # the door's actual machinery VERBATIM (mechanics
+                          # editing rides the fidelity gate client-side);
+                          # shadows/tombstones ride so badges paint ✏/ghosts.
                           'shipped_exits': [
-                              {'label': e.get('label') or '', 'to': e.get('to')}
+                              {'label': e.get('label') or '', 'to': e.get('to'),
+                               'desc': e.get('desc') or '',
+                               'blocked_message': e.get('blocked_message') or '',
+                               'has_mechanics': bool(e.get('condition') or e.get('roll')
+                                                     or e.get('effects') or e.get('visible_when')
+                                                     or e.get('generate') or e.get('to') is None),
+                               **{k: e[k] for k in _MECH_FIELDS + ('generate',)
+                                  if e.get(k) is not None}}
                               for e in (room.get('exits') or []) if isinstance(e, dict)],
+                          'exit_shadows': dict(ov.get('exit_shadows') or {}),
                           'add_exits': list(ov.get('add_exits') or []),
                           'exits': len(room.get('exits') or []),
                           'shipped_objects': len(objs),
@@ -381,6 +399,12 @@ def set_object(body=None, **_):
         return {'success': False, 'detail': 'spec must be an object.'}
     spec.pop('_author', None)
     spec.pop('_removed', None)   # tombstoning goes through delete, not upsert
+    spec.pop('_replace', None)   # the replace lane is the explicit flag below
+    # Fidelity-gate lane (2026-08-21): with the flag, the compiled spec
+    # REPLACES the shipped object wholesale at merge. Shipped names only —
+    # on user names the marker would be inert noise.
+    if body.get('replace') and name in (room.get('objects') or {}):
+        spec['_replace'] = True
     msg, ok = _session().upsert_user_object(chat, slug, rid, name, spec,
                                             author='player')
     return {'success': ok, 'detail': msg}
@@ -455,6 +479,143 @@ def set_room_text(body=None, **_):
                 add_exits.append({'label': label, 'to': to})
     msg, ok = _session().set_room_text(chat, slug, rid, template=t,
                                        player_desc=p, add_exits=add_exits)
+    return {'success': ok, 'detail': msg}
+
+
+def _clean_cond(c):
+    """Light whitelist for an editor-authored condition dict — the referee
+    is defensive, this just keeps junk shapes out of the layer."""
+    if not isinstance(c, dict):
+        return None
+    out = {k: c[k] for k in ('has', 'did', 'flag', 'solved') if str(c.get(k) or '').strip()}
+    for k in ('flags', 'flag_gte'):
+        if isinstance(c.get(k), dict) and c[k]:
+            out[k] = c[k]
+    return out or None
+
+
+_MECH_FIELDS = ('condition', 'roll', 'effects', 'visible_when')
+
+
+def _mech_from_body(body):
+    """Compile the editor's mechanics fields into an exit-grammar dict —
+    one compile shared by the user-exit lane and the shipped-exit
+    mechanics shadow (2026-08-21)."""
+    m = {}
+    cond = _clean_cond(body.get('condition'))
+    if cond:
+        m['condition'] = cond
+    vis = _clean_cond(body.get('visible_when'))
+    if vis:
+        m['visible_when'] = vis
+    roll = body.get('roll')
+    if isinstance(roll, dict) and roll.get('sides'):
+        m['roll'] = roll
+    fx = body.get('effects')
+    if isinstance(fx, dict) and fx:
+        m['effects'] = fx
+    return m
+
+
+def set_exit(body=None, **_):
+    """Upsert one exit (exits editor, 2026-08-21). A `to` matching a
+    SHIPPED exit is the shadow path — text fields (label/desc/blocked
+    message) diff-only over the pack; with the `edit_mechanics` marker the
+    compiled grammar REPLACES the shipped mechanics as a unit (fidelity
+    gate lives client-side — the marker only rides when the widget could
+    express the door losslessly), verbatim-equals-shipped stores nothing.
+    Without the marker any existing mechanics shadow rides forward. Any
+    other `to` is a user-added exit carrying the full editor grammar
+    (visible_when/condition/roll/effects) verbatim. Never passes through
+    the AI — on her side it's the world."""
+    import json
+    from gameroom_story import rooms, state as st
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    try:
+        rid = int(body.get('room_id'))
+        to = int(body.get('to'))
+    except (TypeError, ValueError):
+        return {'success': False, 'detail': 'room_id and to must be room numbers.'}
+    all_rooms = rooms.load_story(slug)['rooms']
+    room = all_rooms.get(rid)
+    if not room:
+        return {'success': False, 'detail': f'No room {rid} in this story.'}
+    if to == rid or to not in all_rooms:
+        return {'success': False, 'detail': 'Destination must be a different, real room.'}
+    label = str(body.get('label') or all_rooms[to].get('title') or to).strip()[:80]
+    desc = str(body.get('desc') or '').strip()[:300]
+    blocked = str(body.get('blocked_message') or '').strip()[:300]
+    sess = _session()
+    shipped_ex = next((e for e in (room.get('exits') or [])
+                       if isinstance(e, dict) and e.get('to') == to), None)
+    if shipped_ex:
+        shadow = {}
+        if label and label != str(shipped_ex.get('label') or '').strip():
+            shadow['label'] = label
+        if desc != str(shipped_ex.get('desc') or '').strip():
+            if desc:
+                shadow['desc'] = desc
+        if blocked != str(shipped_ex.get('blocked_message') or '').strip():
+            if blocked:
+                shadow['blocked_message'] = blocked
+        prev = (((st.get_user_layer(slug, chat).get('rooms') or {})
+                 .get(str(rid)) or {}).get('exit_shadows') or {}).get(str(to)) or {}
+        if body.get('edit_mechanics'):
+            mech = _mech_from_body(body)
+            if mech != {k: shipped_ex[k] for k in _MECH_FIELDS
+                        if shipped_ex.get(k) is not None}:
+                shadow['mechanics'] = mech      # {} = door stripped bare
+        elif isinstance(prev.get('mechanics'), dict):
+            shadow['mechanics'] = prev['mechanics']
+        try:
+            if len(json.dumps(shadow)) > sess._OBJ_BYTES:
+                return {'success': False, 'detail': 'Exit override too large.'}
+        except (TypeError, ValueError):
+            return {'success': False, 'detail': "Exit override isn't JSON-serializable."}
+        msg, ok = sess.set_exit_shadow(chat, slug, rid, to, shadow or None)
+        return {'success': ok,
+                'detail': msg if shadow else 'Exit matches shipped — override cleared.'}
+    spec = {'to': to, 'label': label}
+    if desc:
+        spec['desc'] = desc
+    if blocked:
+        spec['blocked_message'] = blocked
+    spec.update(_mech_from_body(body))
+    msg, ok = sess.set_user_exit(chat, slug, rid, to, spec)
+    return {'success': ok, 'detail': msg}
+
+
+def delete_exit(body=None, **_):
+    """Remove one exit. Shipped destination → tombstone (restorable);
+    `restore: true` clears the shadow/tombstone instead. User-added →
+    plain removal."""
+    from gameroom_story import rooms
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    try:
+        rid = int(body.get('room_id'))
+        to = int(body.get('to'))
+    except (TypeError, ValueError):
+        return {'success': False, 'detail': 'room_id and to must be room numbers.'}
+    room = rooms.load_story(slug)['rooms'].get(rid)
+    if not room:
+        return {'success': False, 'detail': f'No room {rid} in this story.'}
+    sess = _session()
+    shipped_ex = any(isinstance(e, dict) and e.get('to') == to
+                     for e in (room.get('exits') or []))
+    if shipped_ex:
+        if body.get('restore'):
+            msg, ok = sess.set_exit_shadow(chat, slug, rid, to, None)
+            return {'success': ok, 'detail': 'Exit restored to shipped.' if ok else msg}
+        msg, ok = sess.set_exit_shadow(chat, slug, rid, to, {'_removed': True})
+        return {'success': ok,
+                'detail': 'Exit walled off (restorable).' if ok else msg}
+    msg, ok = sess.remove_user_exit(chat, slug, rid, to)
     return {'success': ok, 'detail': msg}
 
 

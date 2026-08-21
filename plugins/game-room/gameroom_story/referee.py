@@ -163,7 +163,7 @@ def blockers(room, state):
             order.append(msg)
         if label:
             labels[msg].append(label)
-    for ex in room.get("exits", []):
+    for ex in visible_exits(room, state):
         cond = ex.get("condition")
         if cond and not check_condition(cond, state):
             if ex.get("blocked_message"):
@@ -206,6 +206,16 @@ def _visible_objects(room, state):
     return out
 
 
+def visible_exits(room, state):
+    """Exits that EXIST right now (exits editor, 2026-08-21): an exit may
+    carry `visible_when` — a condition gating its existence (secret doors;
+    the passage appears when the lever's flag sets). Distinct from
+    `condition`, which BLOCKS traversal of a visible exit. The one exit
+    funnel — look, move, blockers, ghost and sidebar all drink here."""
+    return [ex for ex in (room.get("exits") or []) if isinstance(ex, dict)
+            and check_condition(ex.get("visible_when"), state)]
+
+
 def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     """Adjudicate one act. Returns (events, message, ok).
 
@@ -237,7 +247,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
         bits = [f"{room['title']}: {(room.get('template') or '').strip()}"]
         if vis:
             bits.append("Here: " + ", ".join(vis))
-        labels = ", ".join(f"'{e.get('label')}'" for e in room.get("exits", []))
+        labels = ", ".join(f"'{e.get('label')}'" for e in visible_exits(room, state))
         bits.append(f"Exits: {labels or 'none'}")
         return [], " — ".join(bits), True
 
@@ -245,25 +255,63 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
         if not target_n:
             return [], "move needs a target — one of the exit labels.", False
         exit_match = None
-        for ex in room.get("exits", []):
+        exits_now = visible_exits(room, state)
+        for ex in exits_now:
             if _key(ex.get("label")) == _key(target_n) or (target_n.isdigit() and ex.get("to") == int(target_n)):
                 exit_match = ex
                 break
         if not exit_match:
-            labels = ", ".join(f"'{e.get('label')}'" for e in room.get("exits", []))
+            labels = ", ".join(f"'{e.get('label')}'" for e in exits_now)
             return [], f"No exit matches '{target}'. Exits here: {labels or 'none'}.", False
         if not check_condition(exit_match.get("condition"), state):
             return [], exit_match.get("blocked_message",
                                       f"The way '{exit_match['label']}' is closed to you — something is still required."), False
+        # Dice on exits (F1, 2026-08-21) — same law as interaction rolls:
+        # the ROLLED VALUE is journaled even on failure (replay never
+        # re-rolls), branch effects fire either way, `once` spends the
+        # chance under the same room-scoped key.
+        pre_events, dice_line = [], ""
+        roll = exit_match.get("roll")
+        if roll is not None and not isinstance(roll, dict):
+            logger.warning(f"[STORY] roll on exit '{exit_match.get('label')}' is "
+                           f"{type(roll).__name__}, not an object — ignored")
+            roll = None
+        if roll:
+            key = seal_key(room, exit_match.get("label"), "move")
+            if roll.get("once") and key in state.get("rolled", []):
+                return [], roll.get("retry_message",
+                                    f"That chance is spent — the way '{exit_match['label']}' won't yield to another try."), False
+            try:
+                sides = max(2, int(roll.get("sides", 100)))
+                beat = int(roll.get("beat", sides // 2 + 1))
+            except (TypeError, ValueError):
+                logger.warning(f"[STORY] non-numeric roll bounds on exit "
+                               f"'{exit_match.get('label')}' — using d100")
+                sides, beat = 100, 51
+            value = random.randint(1, sides)
+            won = value >= beat
+            branch = roll.get("success" if won else "failure") or {}
+            pre_events = [{"event": "rolled", "target": exit_match.get("label"),
+                           "verb": "move", "room": room.get("id"),
+                           "value": value, "beat": beat, "sides": sides, "success": won}]
+            pre_events += _effect_events(branch, state)
+            if not won:
+                msg = branch.get("message") or (f"The way '{exit_match['label']}' "
+                                                f"defeats the attempt this time.")
+                return pre_events, f"\U0001F3B2 Rolled {value} of {sides} (needed {beat}+) — {msg}", False
+            dice_line = f"\U0001F3B2 Rolled {value} of {sides} (needed {beat}+) — "
         if exit_match.get("to") is None or exit_match.get("generate"):
-            return [], ("That way leads somewhere no one has written yet — room generation "
-                        "arrives in the next build. Narrate it as impassable for now."), False
+            return pre_events, ("That way leads somewhere no one has written yet — room generation "
+                                "arrives in the next build. Narrate it as impassable for now."), False
         dest = all_rooms.get(exit_match["to"])
         if not dest:
-            return [], f"Exit '{exit_match['label']}' leads to a missing room ({exit_match['to']}) — author error; treat as blocked.", False
-        events = [{"event": "moved", "to": dest["id"]}]
+            return pre_events, f"Exit '{exit_match['label']}' leads to a missing room ({exit_match['to']}) — author error; treat as blocked.", False
+        events = pre_events + [{"event": "moved", "to": dest["id"]}]
+        # Per-exit effects (the rope ladder snaps behind you) fire on the
+        # traverse, before the destination's own on_enter.
+        events += _effect_events(exit_match.get("effects") or {}, state)
         events += _effect_events(dest.get("on_enter") or {}, state)
-        return events, f"Moved to '{dest['title']}'. The new room's details arrive in your turn context.", True
+        return events, dice_line + f"Moved to '{dest['title']}'. The new room's details arrive in your turn context.", True
 
     if verb == "search":
         found = []

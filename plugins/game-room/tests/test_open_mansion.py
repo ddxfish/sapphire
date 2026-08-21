@@ -313,21 +313,131 @@ def test_tombstone_removes_shipped_and_restores(story):
         "An old chest with a brass dial."
 
 
-def test_added_exits_gated_and_deduped(story):
+def test_object_replace_shadow_wholesale(story):
+    # Fidelity-gate lane (2026-08-21): _replace swaps the shipped object
+    # wholesale at merge — machinery included; restore lifts it.
+    session.upsert_user_object(CHAT, "mad-manse", 1, "chest",
+                               {"_replace": True, "desc": "a plain crate",
+                                "interactions": {"open": {"message": "It creaks open."}}})
+    fresh = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh, "mad-manse", CHAT, _fresh(fresh))
+    chest = fresh["rooms"][1]["objects"]["chest"]
+    assert chest["desc"] == "a plain crate"
+    assert "_replace" not in chest
+    assert set(chest["interactions"]) == {"open"}
+    assert chest["interactions"]["open"] == {"message": "It creaks open."}
+    session.delete_user_object(CHAT, "mad-manse", 1, "chest")
+    fresh2 = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh2, "mad-manse", CHAT, _fresh(fresh2))
+    assert fresh2["rooms"][1]["objects"]["chest"]["desc"] == \
+        "An old chest with a brass dial."
+
+
+def test_added_exits_ungated_and_deduped(story):
+    # F2 (2026-08-21): user exits merge like objects — no implicit zork
+    # gate; authors gate explicitly via visible_when. Dedup-by-to holds.
     session.set_room_text(CHAT, "mad-manse", 1,
                           add_exits=[{"label": "the parlor again", "to": 2},
                                      {"label": "the void", "to": 99}])
     fresh = rooms.load_story("mad-manse")
-    state = _fresh(fresh)
+    state = _fresh(fresh)                                # pre-line: flag unset
     session._merge_user_layer(fresh, "mad-manse", CHAT, state)
-    assert len(fresh["rooms"][1]["exits"]) == 1          # pre-line: gated
-    state["flags"]["chest_opened"] = True
-    fresh2 = rooms.load_story("mad-manse")
-    session._merge_user_layer(fresh2, "mad-manse", CHAT, state)
-    exits = fresh2["rooms"][1]["exits"]
-    assert len(exits) == 2                               # to=2 deduped, void added
+    exits = fresh["rooms"][1]["exits"]
+    assert len(exits) == 2                               # UNGATED; to=2 deduped
     assert exits[-1] == {"label": "the void", "to": 99}
     session.set_room_text(CHAT, "mad-manse", 1, add_exits=[])
+
+
+def test_exit_shadow_tombstone_restore(story):
+    # Exits editor (2026-08-21): shadow text over a shipped door, mechanics
+    # ride; tombstone walls it off; clearing the shadow restores the pack.
+    session.set_exit_shadow(CHAT, "mad-manse", 1, 2, {"label": "the red door"})
+    fresh = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh, "mad-manse", CHAT, _fresh(fresh))
+    ex = fresh["rooms"][1]["exits"][0]
+    assert ex["label"] == "the red door" and ex["to"] == 2
+    session.set_exit_shadow(CHAT, "mad-manse", 1, 2, {"_removed": True})
+    fresh2 = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh2, "mad-manse", CHAT, _fresh(fresh2))
+    assert fresh2["rooms"][1]["exits"] == []
+    session.set_exit_shadow(CHAT, "mad-manse", 1, 2, None)   # restore
+    fresh3 = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh3, "mad-manse", CHAT, _fresh(fresh3))
+    assert fresh3["rooms"][1]["exits"][0]["to"] == 2
+
+
+def test_exit_shadow_mechanics_replace(story):
+    # Mechanics shadow (2026-08-21): a shadow carrying a `mechanics` unit
+    # REPLACES the shipped door's machinery wholesale — {} strips it bare,
+    # a dict swaps it; text fields keep field-merging beside it.
+    session.set_exit_shadow(CHAT, "mad-manse", 1, 2, {"mechanics": {}})
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)                            # chest_opened unset
+    session._merge_user_layer(fresh, "mad-manse", CHAT, state)
+    ex = fresh["rooms"][1]["exits"][0]
+    assert "condition" not in ex                     # stripped: door swings free
+    assert referee.blockers(fresh["rooms"][1], state) == []
+    session.set_exit_shadow(CHAT, "mad-manse", 1, 2,
+                            {"label": "the bone door",
+                             "mechanics": {"condition": {"has": "skeleton_key"}}})
+    fresh2 = rooms.load_story("mad-manse")
+    state2 = _fresh(fresh2)
+    session._merge_user_layer(fresh2, "mad-manse", CHAT, state2)
+    ex2 = fresh2["rooms"][1]["exits"][0]
+    assert ex2["label"] == "the bone door"
+    assert ex2["condition"] == {"has": "skeleton_key"}   # replaced, not merged
+    assert referee.blockers(fresh2["rooms"][1], state2)  # new lock bites
+    session.set_exit_shadow(CHAT, "mad-manse", 1, 2, None)
+
+
+def test_visible_when_gates_exits(story):
+    # F3: an exit with visible_when doesn't EXIST until the condition holds
+    # — not listed, not traversable, never a blocker.
+    room = {"id": 7, "title": "Hall", "exits": [
+        {"label": "the stair", "to": 2},
+        {"label": "shimmer door", "to": 3,
+         "visible_when": {"flag": "portal_up"}}]}
+    state = st.initial_state()
+    state["room"] = 7
+    assert [e["label"] for e in referee.visible_exits(room, state)] == ["the stair"]
+    _, msg, ok = referee.resolve(story, state, room, {7: room},
+                                 "move", "shimmer door")
+    assert not ok and "No exit matches" in msg
+    assert referee.blockers(room, state) == []           # hidden ≠ blocked
+    state["flags"]["portal_up"] = True
+    assert len(referee.visible_exits(room, state)) == 2
+    dest = {"id": 3, "title": "Beyond", "exits": []}
+    _, msg, ok = referee.resolve(story, state, room, {7: room, 3: dest},
+                                 "move", "shimmer door")
+    assert ok and "Beyond" in msg
+
+
+def test_exit_dice_and_effects(story, monkeypatch):
+    # F1: roll gates traversal — value journaled either way, branch effects
+    # fire, per-exit effects ride a successful traverse before on_enter.
+    room = {"id": 7, "title": "Ledge", "exits": [
+        {"label": "rickety bridge", "to": 3,
+         "roll": {"sides": 20, "beat": 11,
+                  "failure": {"message": "A plank gives way."}},
+         "effects": {"set": {"bridge_crossed": True}}}]}
+    dest = {"id": 3, "title": "Far side", "exits": [],
+            "on_enter": {"set": {"arrived": True}}}
+    state = st.initial_state()
+    state["room"] = 7
+    monkeypatch.setattr(referee.random, "randint", lambda a, b: 4)
+    events, msg, ok = referee.resolve(story, state, room, {7: room, 3: dest},
+                                      "move", "rickety bridge")
+    assert not ok and "plank gives way" in msg
+    assert any(e["event"] == "rolled" and not e["success"] for e in events)
+    assert not any(e["event"] == "moved" for e in events)
+    monkeypatch.setattr(referee.random, "randint", lambda a, b: 17)
+    events, msg, ok = referee.resolve(story, state, room, {7: room, 3: dest},
+                                      "move", "rickety bridge")
+    assert ok and "Rolled 17" in msg and "Far side" in msg
+    kinds = [(e["event"], e.get("key")) for e in events]
+    assert ("moved", None) in kinds
+    assert ("state_set", "bridge_crossed") in kinds      # per-exit effects
+    assert ("state_set", "arrived") in kinds             # dest on_enter
 
 
 def test_apply_scenario_env_never_stamps(story, cfg_store):
@@ -476,6 +586,11 @@ def test_prestart_environment_edits(story, cfg_store, monkeypatch):
     # 1-hall ships 1 exit, 3 objects, 2 interactions (chest:open, bell:ring)
     hall = world["rooms"][0]
     assert (hall["exits"], hall["shipped_objects"], hall["shipped_actions"]) == (1, 3, 2)
+    # Mechanics ride the rows verbatim (2026-08-21) — the editor's
+    # fidelity gate needs the actual machinery, not just a flag.
+    assert hall["shipped_exits"][0]["condition"] == {"flag": "chest_opened"}
+    assert hall["shipped_objs"]["chest"]["spec"]["desc"] == \
+        "An old chest with a brass dial."
     refused = story_routes.get_objects(query={"session": chat})
     assert refused["active"] is False
     bogus = story_routes.get_objects(query={"session": chat, "slug": "no-such"})
@@ -500,6 +615,103 @@ def test_route_shadow_tombstone_restore(story, cfg_store, monkeypatch):
     assert r["success"]
     assert "chest" not in (st.get_user_layer("mad-manse", chat)
                            .get("objects") or {}).get("1", {})
+
+
+def test_exit_routes_shadow_add_delete(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-exit-chat"
+    base = {"session": chat, "slug": "mad-manse", "room_id": 1}
+    # shipped destination (1→2) = shadow path, diff-only
+    r = story_routes.set_exit(body={**base, "to": 2, "label": "the red door",
+                                    "condition": {"has": "key"}})   # no marker: ignored
+    assert r["success"], r
+    sh = st.get_user_layer("mad-manse", chat)["rooms"]["1"]["exit_shadows"]["2"]
+    assert sh == {"label": "the red door"}     # locks shadow only via edit_mechanics
+    # verbatim-equals-shipped clears the shadow
+    r = story_routes.set_exit(body={**base, "to": 2, "label": "the parlor"})
+    assert r["success"]
+    assert "exit_shadows" not in (st.get_user_layer("mad-manse", chat)
+                                  .get("rooms") or {}).get("1", {})
+    # new destination = user exit, full grammar rides verbatim
+    r = story_routes.set_exit(body={**base, "to": 3, "label": "hatch",
+                                    "visible_when": {"flag": "found_hatch"},
+                                    "condition": {"has": "crowbar"},
+                                    "effects": {"set": {"below": True}}})
+    assert r["success"], r
+    ue = st.get_user_layer("mad-manse", chat)["rooms"]["1"]["add_exits"][0]
+    assert ue["visible_when"] == {"flag": "found_hatch"}
+    assert ue["condition"] == {"has": "crowbar"}
+    # guards: self-loop and unknown rooms refused
+    assert not story_routes.set_exit(body={**base, "to": 1})["success"]
+    assert not story_routes.set_exit(body={**base, "to": 99})["success"]
+    # delete: user exit drops; shipped tombstones then restores
+    assert story_routes.delete_exit(body={**base, "to": 3})["success"]
+    assert not (st.get_user_layer("mad-manse", chat)["rooms"]
+                .get("1", {}).get("add_exits"))
+    r = story_routes.delete_exit(body={**base, "to": 2})
+    assert r["success"] and "restorable" in r["detail"]
+    assert st.get_user_layer("mad-manse", chat)["rooms"]["1"]["exit_shadows"]["2"]["_removed"]
+    assert story_routes.delete_exit(body={**base, "to": 2, "restore": True})["success"]
+    assert "1" not in (st.get_user_layer("mad-manse", chat).get("rooms") or {})
+
+
+def test_object_route_replace_flag(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-obj-replace-chat"
+    base = {"session": chat, "slug": "mad-manse", "room_id": 1}
+    # replace flag on a shipped name stamps the wholesale marker
+    r = story_routes.set_object(body={**base, "name": "chest", "replace": True,
+                                      "spec": {"desc": "a crate"}})
+    assert r["success"], r
+    ov = st.get_user_layer("mad-manse", chat)["objects"]["1"]["chest"]
+    assert ov["_replace"] is True
+    # a smuggled marker without the flag is stripped (shadow law holds)
+    r = story_routes.set_object(body={**base, "name": "chest",
+                                      "spec": {"_replace": True, "desc": "x"}})
+    assert r["success"]
+    ov = st.get_user_layer("mad-manse", chat)["objects"]["1"]["chest"]
+    assert "_replace" not in ov
+    # replace flag on a NON-shipped name is inert
+    r = story_routes.set_object(body={**base, "name": "crowbar", "replace": True,
+                                      "spec": {"desc": "a crowbar"}})
+    assert r["success"]
+    assert "_replace" not in st.get_user_layer("mad-manse", chat)["objects"]["1"]["crowbar"]
+
+
+def test_exit_routes_mechanics_shadow(story, cfg_store, monkeypatch):
+    # The edit_mechanics marker (2026-08-21): present = the compiled
+    # grammar is authoritative and replaces shipped machinery as a unit;
+    # absent = any existing mechanics shadow rides forward untouched.
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-exit-mech-chat"
+    base = {"session": chat, "slug": "mad-manse", "room_id": 1}
+    r = story_routes.set_exit(body={**base, "to": 2, "label": "the parlor",
+                                    "edit_mechanics": True,
+                                    "condition": {"has": "skeleton_key"}})
+    assert r["success"], r
+    sh = st.get_user_layer("mad-manse", chat)["rooms"]["1"]["exit_shadows"]["2"]
+    assert sh == {"mechanics": {"condition": {"has": "skeleton_key"}}}
+    # text-only save (no marker) rides the mechanics forward
+    r = story_routes.set_exit(body={**base, "to": 2, "label": "the red door"})
+    assert r["success"]
+    sh = st.get_user_layer("mad-manse", chat)["rooms"]["1"]["exit_shadows"]["2"]
+    assert sh == {"label": "the red door",
+                  "mechanics": {"condition": {"has": "skeleton_key"}}}
+    # marker + empty grammar = door stripped bare ({} is meaningful)
+    r = story_routes.set_exit(body={**base, "to": 2, "label": "the red door",
+                                    "edit_mechanics": True})
+    assert r["success"]
+    sh = st.get_user_layer("mad-manse", chat)["rooms"]["1"]["exit_shadows"]["2"]
+    assert sh == {"label": "the red door", "mechanics": {}}
+    # marker + verbatim-shipped grammar and text = everything clears
+    r = story_routes.set_exit(body={**base, "to": 2, "label": "the parlor",
+                                    "edit_mechanics": True,
+                                    "condition": {"flag": "chest_opened"}})
+    assert r["success"]
+    assert "1" not in (st.get_user_layer("mad-manse", chat).get("rooms") or {})
 
 
 def test_setup_route_shape(story, cfg_store):

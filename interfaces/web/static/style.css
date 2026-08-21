@@ -525,7 +525,7 @@ body {
    ============================================================================= */
 
 .chat-sidebar {
-    width: 260px;
+    width: var(--sb-w, 260px);
     flex-shrink: 0;
     background: var(--bg-secondary);
     border-left: 1px solid var(--border);
@@ -540,6 +540,17 @@ body {
     overflow: hidden;
     border-left: none;
 }
+
+/* Drag-to-resize gutter (surface.js) — every Surface page shares --sb-w */
+.sb-resizer {
+    flex: 0 0 6px;
+    cursor: ew-resize;
+    background: transparent;
+    transition: background 0.15s;
+}
+.sb-resizer:hover { background: var(--trim-light, var(--bg-hover)); }
+.chat-sidebar.resizing { transition: none; }
+.chat-body:has(.chat-sidebar.collapsed) .sb-resizer { display: none; }
 
 /* Expand tab - visible only when sidebar is collapsed */
 .sb-expand-tab {
@@ -570,7 +581,7 @@ body {
 
 .chat-sidebar-inner {
     padding: 12px;
-    min-width: 236px; /* Prevent content reflow during collapse */
+    min-width: calc(var(--sb-w, 260px) - 24px); /* Prevent content reflow during collapse */
 }
 
 /* Sidebar chat header: accent circle + chat picker + add/delete */
@@ -5151,6 +5162,8 @@ a.gallery-caption:hover {
         width: 280px;
         box-shadow: -4px 0 16px var(--shadow-medium);
     }
+
+    .sb-resizer { display: none; }   /* overlay mode: fixed width, no drag */
 
     .chat-sidebar.collapsed {
         width: 0;
