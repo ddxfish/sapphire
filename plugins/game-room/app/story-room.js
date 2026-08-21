@@ -727,6 +727,8 @@ function paintControls(a) {
                 active: !!(_status && _status.slug === _story?.slug),
                 slots: _status?.slots || {},
                 state: _status || null,   // read-only State tab (the old 🔍)
+                onEndStory: endStory,
+                storyTitle: _story?.title || _story?.slug,
             });
         };
     };
@@ -745,29 +747,33 @@ function paintControls(a) {
         return;
     }
     row.innerHTML = `
-        <button class="btn-sm" id="st-pause" title="${a.paused ? 'Resume the story' : 'Pause — intermission'}">${a.paused ? '&#x25B6;' : '&#x23F8;'}</button>
-        <button class="btn-sm danger" id="st-end" title="End story (journal kept)">&#x23F9;</button>
+        <button class="btn-sm" id="st-pause" title="${a.paused ? 'Resume — back into the story costume' : 'Pause — intermission; chat returns to your persona (Game Room sidebar setting)'}">${a.paused ? '&#x25B6;' : '&#x23F8;'}</button>
         ${gearHtml}`;
     bindGear();
     row.querySelector('#st-pause').onclick = async () => {
         try {
-            await api('story/pause', 'POST', { paused: !a.paused });
+            const r = await api('story/pause', 'POST', { paused: !a.paused });
+            if (r.detail) ui.showToast(r.detail, 'success', 3500);
             _status = (await api('story/status')).active;
+            await resyncSettingsUI();   // pause may have swapped the persona
             paintPanel();
         } catch (e) { ui.showToast(e.message, 'error'); }
     };
-    row.querySelector('#st-end').onclick = async () => {
-        if (!confirm(`End "${_story.title || _story.slug}"?\n\nThe journal is kept. Prompt/toolset follow the "return to" checkbox.`)) return;
-        try {
-            const r = await api('story/end', 'POST');
-            if (r.detail) ui.showToast(r.detail, 'success', 5000);
-            const s = await api('story/status');
-            _status = s.active;
-            if (!_status && s.last && s.last.slug === _story.slug) _lastActive = s.last;
-            await resyncSettingsUI();
-            paintPanel();
-        } catch (e) { ui.showToast(e.message, 'error'); }
-    };
+}
+
+// End the playthrough — lives in the gear's State tab now (Krem 2026-08-21:
+// the toolbar keeps only ⏸ and ⚙; ending is a deliberate act, not a button
+// next to pause). The gear passes this as opts.onEndStory.
+async function endStory() {
+    try {
+        const r = await api('story/end', 'POST');
+        if (r.detail) ui.showToast(r.detail, 'success', 5000);
+        const s = await api('story/status');
+        _status = s.active;
+        if (!_status && s.last && s.last.slug === _story.slug) _lastActive = s.last;
+        await resyncSettingsUI();
+        paintPanel();
+    } catch (e) { ui.showToast(e.message, 'error'); }
 }
 
 // Player-facing scene strip — the establishing shot the transcript alone

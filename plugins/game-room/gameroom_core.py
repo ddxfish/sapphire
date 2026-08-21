@@ -379,6 +379,10 @@ def save_room_config(patch):
         # Room model override (Krem 2026-08-20): provider key stamped onto
         # session chats on entry; '' = persona's model, never touch.
         rc['llm_primary'] = str(patch['llm_primary'] or '').strip()[:80]
+    if isinstance(patch, dict) and 'return_prompt' in patch:
+        # Who the chat becomes on story pause / after end (Krem 2026-08-21);
+        # '' = stay in the story costume (the classic behavior).
+        rc['return_prompt'] = str(patch['return_prompt'] or '').strip()[:80]
     store.save('roomcfg', rc)
     return rc
 

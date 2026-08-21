@@ -880,10 +880,11 @@ def _end(system, session):
     story_prompt_name = entry.get("prompt_name") or f"story_{entry['story']}"
     from core import prompts
     # Checkbox semantics (Krem's ruling 2026-08-03, post-first-full-play):
-    # return_prompt SET → revert to it. NOT set → STAY in the story prompt —
-    # the tale leaves a wearable costume behind (dynamic monolith stays
-    # registered via the sidecar; user switches prompts whenever they like).
-    ret = entry.get("return_prompt")
+    # return_prompt SET → revert to it. NOT set → the ROOM's return prompt
+    # (sidebar default, 2026-08-21) if configured, else STAY in the story
+    # prompt — the tale leaves a wearable costume behind (dynamic monolith
+    # stays registered; user switches prompts whenever they like).
+    ret = entry.get("return_prompt") or _room_return_prompt() or None
     if ret:
         st.drop_dynamic(story_prompt_name)
         st.drop_dynamic(f"story_{entry['story']}")   # legacy key, harmless if absent
@@ -932,12 +933,37 @@ def status(system, session=None):
             f"Solved: {', '.join(state['solved']) or 'none'}"), True
 
 
+def _room_return_prompt():
+    """The room-wide return prompt (Game Room sidebar, Krem 2026-08-21):
+    who the chat becomes on pause, and the default after end. '' = the old
+    behavior (costume stays / end's stay-in-costume ruling)."""
+    try:
+        import gameroom_core as gc
+        return (gc.room_config().get('return_prompt') or '').strip()
+    except Exception:
+        return ""
+
+
 def set_paused(system, paused, session=None):
-    """Intermission: ghost block + turn ticks stop, story_act refuses; the
-    story prompt STAYS active (still 'in' the story). Flag in active.json."""
+    """Intermission: ghost block + turn ticks stop, story_act refuses.
+    With a room return-prompt configured, pausing also hands the chat back
+    to that persona — talk to your own Sapphire mid-story — and resuming
+    re-dresses the story costume (the reassert law). No prompt configured =
+    the costume stays on, as before (Krem's ruling 2026-08-21)."""
     chat = _chat_name(system, session)
     if not st.update_active(chat, paused=bool(paused)):
         return "No story is active in this chat.", False
+    ret = _room_return_prompt()
+    if paused and ret:
+        ok, msg = _activate_prompt_for(system, chat, ret)
+        if ok:
+            return f"Story paused — intermission (back to '{ret}').", True
+        logger.warning(f"[STORY] pause return-prompt '{ret}' failed: {msg}")
+    if not paused:
+        try:
+            refresh_prompt(system, session=session)
+        except Exception as e:
+            logger.warning(f"[STORY] resume costume re-assert failed: {e}")
     return ("Story paused — intermission." if paused else "Story resumed."), True
 
 

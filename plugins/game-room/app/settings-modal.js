@@ -391,9 +391,14 @@ function buildModal(title, tabs, actionsHtml, barHtml, opts = {}) {
     // backdrop NEVER closes these modals — a mis-click outside a form
     // holding 30 minutes of writing is not a close request. ✕/Escape route
     // through a guard; the default guard confirms when any field changed.
+    // Excluded from the fingerprint: room-browse fields (pendings track
+    // real edits) and the SCENARIO PICKER — picks are applied instantly
+    // (pure swap) and both the preselect and post-save select-set happen
+    // after the baseline stamp, which made every open→close prompt
+    // "discard changes?" with nothing changed (Krem 2026-08-21).
     const fingerprint = () => JSON.stringify(
         [...overlay.querySelectorAll(
-            'input, select:not(.grs-obj-room), textarea:not(.grs-obj-template):not(.grs-obj-pdesc)')]
+            'input, select:not(.grs-obj-room):not(.grs-scn-pick), textarea:not(.grs-obj-template):not(.grs-obj-pdesc)')]
             .map(el => el.type === 'checkbox' ? !!el.checked : el.value));
     let baseline = null;   // stamped after inits run (below)
     const dirty = () => fingerprint() !== baseline;
@@ -517,6 +522,15 @@ export async function openStorySettings(slug, opts = {}) {
         const btn = [...overlay.querySelectorAll('.grs-tab')].find(t => t.dataset.tab === opts.tab);
         if (btn) btn.click();
     }
+
+    // ⏹ End story — moved from the toolbar into State (Krem 2026-08-21)
+    const endBtn = overlay.querySelector('.grs-end-story');
+    if (endBtn && opts.onEndStory) endBtn.onclick = async () => {
+        if (!confirm(`End "${opts.storyTitle || slug}"?\n\nThe journal is kept. `
+                     + 'The chat returns per your return settings.')) return;
+        close();
+        await opts.onEndStory();
+    };
 
     overlay.querySelector('.grs-save').onclick = async () => {
         const out = {};
@@ -665,7 +679,9 @@ function stateTab(a) {
         `<tr><td style="padding:3px 14px 3px 0;color:var(--text-muted,#8a8fa3)">${esc(k)}</td><td style="padding:3px 0">${esc(String(v))}</td></tr>`).join('');
     return { title: 'State', html: `
         <div class="grs-section-title" style="margin-top:0">Behind the scenes — read-only snapshot at open</div>
-        <table style="border-collapse:collapse;font-size:var(--font-sm,13px)">${rows}</table>` };
+        <table style="border-collapse:collapse;font-size:var(--font-sm,13px)">${rows}</table>
+        <div class="grs-section-title">End of the tale</div>
+        <button type="button" class="pk-btn danger grs-end-story" title="The journal is kept; the chat returns per your return settings">⏹ End story</button>` };
 }
 
 // ── Environment tab (the open-world editor) ─────────────────────────────────

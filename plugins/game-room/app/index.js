@@ -122,6 +122,17 @@ async function renderLibrary() {
         const res = await fetch('/api/llm/providers', { headers: { 'X-CSRF-Token': csrfTok() } });
         if (res.ok) llmProviders = (await res.json()).providers || [];
     } catch { /* default-only picker */ }
+    // Prompts for the return-prompt picker (Krem 2026-08-21): who the chat
+    // becomes on story pause / after end. Hidden pack costumes excluded.
+    let promptNames = [];
+    try {
+        const res = await fetch('/api/prompts', { headers: { 'X-CSRF-Token': csrfTok() } });
+        if (res.ok) {
+            const d = await res.json();
+            const hidden = d.hidden || {};
+            promptNames = (d.prompts || []).map(p => p.name).filter(n => n && !hidden[n]);
+        }
+    } catch { /* default-only picker */ }
     // Stories are chat-gear games — scanned server-side across story packs
     // (story-samples plugin, user/story_presets/, any plugin's stories/)
     try {
@@ -188,7 +199,15 @@ async function renderLibrary() {
                             }).join('')}
                         </select>
                     </div>
-                    <div class="gr-seat-note">Override for game &amp; story sessions — stamped when you enter one. Default leaves each chat on the persona's model.</div>`,
+                    <div class="gr-seat-note">Override for game &amp; story sessions — stamped when you enter one. Default leaves each chat on the persona's model.</div>
+                    <div class="sb-field">
+                        <label>return prompt</label>
+                        <select id="gr-room-return">
+                            <option value="">stay in story costume</option>
+                            ${promptNames.map(n => `<option value="${esc(n)}"${roomCfg.return_prompt === n ? ' selected' : ''}>${esc(n)}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="gr-seat-note">Who the chat becomes when you ⏸ pause a story — and the default after it ends.</div>`,
             })}`,
     });
 
@@ -243,6 +262,17 @@ async function renderLibrary() {
                 body: JSON.stringify({ config: { llm_primary: modelSel.value } }),
             });
         } catch (e) { console.warn('[GameRoom] room model save failed', e); }
+    });
+    // Return prompt — pause hands the chat to this persona; end defaults to it
+    const returnSel = _root.querySelector('#gr-room-return');
+    returnSel.addEventListener('change', async () => {
+        try {
+            await fetch('/api/plugin/game-room/room/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok() },
+                body: JSON.stringify({ config: { return_prompt: returnSel.value } }),
+            });
+        } catch (e) { console.warn('[GameRoom] return prompt save failed', e); }
     });
 
     paintShelf();
