@@ -36,7 +36,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 | `dm_guide` | No | Per-story GM guidance (user-editable in ⚙ GM Settings; your text is the shipped default) |
 | `initial_flags` | No | `{"jack_hp": 10}` — starting stats, seeded as replayable events |
 | `tags`, `facts`, `tile` | No | Library tile metadata; `tile` is a filename in `backdrops/` |
-| `open_flag` | No | The **zork-line**: the flag that "opens the house". Player-imported object sets and room-text overrides materialize when it turns truthy (any flag your effects set: `chest_opened`, `killed_goblin`, a `flag_gte` threshold…) |
+| `open_flag` | No | The **zork-line**: the flag that "opens the house". Player room-text overrides and added exits apply when it turns truthy (any flag your effects set: `chest_opened`, `killed_goblin`, a `flag_gte` threshold…) |
 | `slots` | No | Mad-Libs setup form, shown before room 1 — see below |
 
 ## Setup slots (Mad-Libs)
@@ -56,7 +56,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 - `{key}` tokens substitute into role name AND text, premise, `player_role`, `dm_guide`, and every string in every room — once, at load, per playthrough.
 - The assembled-setup-as-role pattern: declare `"role": {"name": "{ai_character}", "text": "{ai_backstory}"}` and the setup form becomes the story's whole identity — story mode activates (a role now ships), and the costume registers under the resolved name. Give every such slot a solid `default` so an untouched form still plays.
 - `sealed: true` slots never substitute: the player's text is written into the sealed blank named by `seal_key` (the room-scoped `"{room_id}:{object}:{verb}"` key of a `sealed` interaction you declare) — she discovers it in play.
-- Players save **scenarios** — one named thing per story holding the filled setup form (slots) AND the environment (placed objects, room-text overrides, added exits). One dropdown in the setup/gear modal; picking one stages it, ▶ Start/Save applies it; imported objects materialize at the zork-line. Scenarios live user-side; your pack never changes.
+- Players save **scenarios** — one named thing per story holding the filled setup form (slots) AND the environment (placed objects, room-text overrides, added exits). One dropdown in the setup/gear modal; picking one SWAPS the playthrough to it, right then (blank = the shipped story), verbatim — an object gates only if its own Visible-when says so. Scenarios live user-side; your pack never changes.
 - **Takeable objects**: `"takeable": true` lets the generic `take` verb (grab/get/pocket aliases) move the object itself into inventory — journaled `taken` event, the object leaves the room (visibility, search, and her room text all exclude it). Optional `take_message`. A declared `take` interaction on the object overrides the generic verb; non-takeable objects keep the off-script narrate-freely license.
 - **Conditions** also accept `{"did": "door1"}` (the object has been used — replayed interaction history, verb-agnostic) and `{"solved": "vault"}` (its puzzle is answered) — no flag wiring needed for has-opened / password gates. The in-app editor's sections compile to exactly this grammar — **Visible when** → the object's top-level `condition` (+ `hidden` for search-reveal), **Requirements** → condition + blocked_message per verb (usable-when), `puzzle` + `{solved}` for passwords/riddles, `roll` for d20/d100 chances, and **Effects** → `set`/`adjust`/`gives`.
 - **Shadow law** (editor v2): the Environment editor also shows your SHIPPED objects. A player editing one stores a same-name override that field-merges at load — desc/hidden replace, interaction *messages* overlay per-verb, and your mechanics (effects, seals, dice, conditions) always survive the reword. Deleting a shipped object writes a restorable tombstone. Players can also ADD exits (never edit yours — conditions and blocked doors are untouchable); added exits open past the zork-line. All of it lives in the user layer; the pack stays canonical.
@@ -124,7 +124,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 
 **Conditions** (on exits, interactions, blockers, ending cards): `{"has": "item"}`, `{"flag": "name"}` (truthy), `{"flags": {"k": expected}}`, `{"flag_gte": {"k": 50}}` (numeric threshold) — all listed clauses must hold.
 
-- An object may also carry a **top-level** `condition`: until it holds, the object doesn't exist at all (invisible, unsearchable, unactable). This is how imported object sets stay dormant until the zork-line.
+- An object may also carry a **top-level** `condition`: until it holds, the object doesn't exist at all (invisible, unsearchable, unactable). This is what the editor's Visible-when section writes — e.g. dormant-until-the-zork-line objects.
 - `look` with no target (or target `room`) returns the room's current truth — title, scene text, visible objects, exits. Useful in single-room stories whose contents change.
 
 ## Dice

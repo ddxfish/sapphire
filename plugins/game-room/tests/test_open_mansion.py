@@ -87,6 +87,42 @@ def test_password_gates_verb_via_solved(story):
                for e in events)
 
 
+def test_ghost_block_self_budgets_to_cap(story):
+    # Core truncates ghost contributions blind at 2048 (qwen finding,
+    # 2026-08-21) — the block must fit ITSELF, mechanics intact.
+    room = {"id": 7, "title": "Big hall",
+            "template": "x" * 890,
+            "exits": [{"label": f"door {i}", "to": i, "desc": "d" * 40,
+                       "condition": {"flag": "no"},
+                       "blocked_message": "m" * 80} for i in range(2, 10)],
+            "objects": {f"obj_{i}": {"desc": "o" * 60,
+                                     "interactions": {"poke": {"message": "p"}}}
+                        for i in range(8)},
+            "ghost_hints": [{"after_turns": 0, "whisper": "w" * 200}]}
+    state = st.initial_state()
+    state["room"] = 7
+    block = render.ghost_block(rooms.load_story("mad-manse"), state, room)
+    assert len(block) <= 2048
+    for must in ("Exits:", "Objects:", "Inventory:"):
+        assert must in block                      # mechanics never cut
+    assert "obj_7" in block                       # objects list intact
+
+
+def test_blockers_dedupe_same_message(story):
+    # Six lockboxed doors read as ONE fact (Krem 2026-08-20).
+    room = {"id": 7, "exits": [
+        {"label": "the library", "to": 2, "condition": {"flag": "x"},
+         "blocked_message": "A steel lockbox hangs on the handle."},
+        {"label": "the kitchen", "to": 3, "condition": {"flag": "x"},
+         "blocked_message": "A steel lockbox hangs on the handle."},
+        {"label": "the stair", "to": 4, "condition": {"flag": "x"},
+         "blocked_message": "A velvet rope closes the stair."}]}
+    out = referee.blockers(room, st.initial_state())
+    assert out == [
+        "'the library', 'the kitchen' — A steel lockbox hangs on the handle.",
+        "'the stair' — A velvet rope closes the stair."]
+
+
 def test_take_moves_object_to_inventory(story):
     room = {"id": 8, "title": "Table room", "objects": {
         "bronze_key": {"desc": "A small key.", "takeable": True},
@@ -294,14 +330,15 @@ def test_added_exits_gated_and_deduped(story):
     session.set_room_text(CHAT, "mad-manse", 1, add_exits=[])
 
 
-def test_import_scenario_skips_stamp_for_shipped_names(story, cfg_store):
+def test_apply_scenario_env_never_stamps(story, cfg_store):
+    # Verbatim law: neither shadows nor new names gain a condition on load.
     cfg_store.save("storyscenarios:mad-manse",
                    {"mix": {"objects": {"1": {"chest": {"desc": "gilded"},
                                               "lamp": {"desc": "a lamp"}}}}})
     session._apply_scenario_env(CHAT, "mad-manse", story, "mix")
     layer = st.get_user_layer("mad-manse", CHAT)["objects"]["1"]
-    assert "condition" not in layer["chest"]             # shadow: no deadlock stamp
-    assert layer["lamp"]["condition"] == {"flag": "chest_opened"}
+    assert "condition" not in layer["chest"]
+    assert "condition" not in layer["lamp"]
     session.delete_user_object(CHAT, "mad-manse", 1, "chest")
     session.delete_user_object(CHAT, "mad-manse", 1, "lamp")
 
@@ -347,8 +384,9 @@ def test_place_object_marks_ai_and_journals(story):
 # ── Object sets ─────────────────────────────────────────────────────────────
 
 def test_apply_scenario_env_is_pure_swap(story, cfg_store):
-    # PURE SWAP (Krem 2026-08-20): canvas BECOMES the scenario — prior
-    # content is gone, not merged; stamps still applied; "" = reset.
+    # PURE SWAP (Krem 2026-08-20): canvas BECOMES the scenario VERBATIM —
+    # prior content gone, no implicit zork-line stamp (clown_key finding:
+    # what you saved is what you get); "" = reset to shipped.
     session.upsert_user_object(CHAT, "mad-manse", 1, "leftover", {"desc": "x"})
     cfg_store.save("storyscenarios:mad-manse", {
         "bbq": {"objects": {"1": {"grill": {"desc": "A hot grill."},
@@ -358,13 +396,16 @@ def test_apply_scenario_env_is_pure_swap(story, cfg_store):
     session._apply_scenario_env(CHAT, "mad-manse", story, "bbq")
     layer = st.get_user_layer("mad-manse", CHAT)
     assert "leftover" not in layer["objects"]["1"]      # swap, not merge
-    assert layer["objects"]["1"]["grill"]["condition"] == \
-        {"flag": "chest_opened"}                       # implicit stamp
+    assert "condition" not in layer["objects"]["1"]["grill"]   # verbatim
     assert layer["objects"]["1"]["banner"]["condition"] == {"flag": "own"}
     assert layer["rooms"]["2"]["template"] == "BBQ parlor."
+    assert layer["scenario"] == "bbq"                   # gear reopens on it
+    session.upsert_user_object(CHAT, "mad-manse", 1, "extra", {"desc": "x"})
+    assert st.get_user_layer("mad-manse", CHAT)["scenario"] == "bbq"  # survives edits
     session._apply_scenario_env(CHAT, "mad-manse", story, "")
     layer = st.get_user_layer("mad-manse", CHAT)
     assert not layer.get("objects") and not layer.get("rooms")   # reset
+    assert layer.get("scenario") == ""
 
 
 # ── Scenarios (unified: slots + environment, Krem 2026-08-20) ───────────────

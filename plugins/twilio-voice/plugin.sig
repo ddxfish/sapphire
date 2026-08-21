@@ -6,7 +6,7 @@
     "codec.py": "sha256:8bea0022c1fac3aa023ca275446a96ca647901217e28a4b0919c614a93f29abb",
     "daemon.py": "sha256:16feb793ed3a16022e616a6e7ca5980928ad3238647215f6e7dc367e4b3321ba",
     "hooks/hangup_sentinel.py": "sha256:0be92f34fb02d297449841a728ad73de9fdee9f5d95cb04a640d9bf586bd2da3",
-    "hooks/phone_context.py": "sha256:b4ebef55237b31ca577efadfb72d81b874fce7c1add1b3fac76d18dde9555425",
+    "hooks/phone_context.py": "sha256:0cdc659a3ad719966057f675ab1ca04f0bfcb5076285197dd7be5c060c8f8bd9",
     "plugin.json": "sha256:2d4df1cfef7c48b37218c64a5b573c4fd9f1837a9189f584f9eaf2147d7c4e9e",
     "routes/accounts.py": "sha256:237fbc3328642e35ec99f695554dddef1924a1c0c7708d64b3d6fa499de711a8",
     "sip_endpoint.py": "sha256:d658719ab58749af691ad5c527bffd6b6d6ec295324ee8b4176a7b663622d8c0",
@@ -20,5 +20,5 @@
     "twilio_source.py": "sha256:7a9a0b6d7c8589a18011b2ccd130275a03c090a70065a3e5ac6f2337666db65d",
     "web/index.js": "sha256:ccc6882ecc8a0d35db67dac0a22c39bc1612db3d9807995cbaa1f6bd480ac70d"
   },
-  "signature": "iEdKS/4MRr0BiiKwkkLm/10iGfLv7etSShVxrmeyCWake+hBDi8F+u5TTq0KQYYyWqfRvGPUZ6YQw3lgq2EaBw=="
+  "signature": "EeES3jzUqfrD7aZQLxqAt2Oso6EXHbq8w76GfoP+9xTbMd7qkx4zDPf+160LCzBJXRi2JWQcZNa0x00p4HL0Aw=="
 }

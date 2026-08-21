@@ -538,42 +538,37 @@ def start(system, slug, character=None, mode=None, local=None, session=None,
 
 def _apply_scenario_env(chat, slug, story, name):
     """PURE SWAP (Krem's ruling 2026-08-20): the playthrough's environment
-    BECOMES the named scenario — canvas = snapshot, nothing merges. Empty
-    name = reset to the shipped-only house. Objects on new names still get
-    the implicit zork-line stamp (sets materialize when the house opens);
-    shipped-name shadows/tombstones are exempt (stamping a chest shadow
-    would hide the chest until the chest opens — deadlock)."""
+    BECOMES the named scenario — canvas = snapshot, VERBATIM. Empty name =
+    reset to the shipped-only house. No implicit zork-line stamp anymore
+    (clown_key finding, same day): under swap the scenario IS the house
+    from turn 0 — what you saw when you saved is what you get when you
+    load. At-open materialization is the author's explicit choice via a
+    Visible-when condition on the object."""
     if not name:
-        st.save_user_layer(slug, chat, {"objects": {}, "rooms": {}})
+        st.save_user_layer(slug, chat, {"objects": {}, "rooms": {},
+                                        "scenario": ""})
         return
     sets = _store().get(f"storyscenarios:{slug}") or {}
     data = sets.get(name)
     if not isinstance(data, dict):
         raise KeyError(name)
-    open_flag = (story["meta"].get("open_flag") or "").strip()
     objects = {}
     for rid, objs in (data.get("objects") or {}).items():
         if not isinstance(objs, dict):
             continue
-        try:
-            shipped_objs = (story["rooms"].get(int(rid)) or {}).get("objects") or {}
-        except (TypeError, ValueError):
-            shipped_objs = {}
         cur = {}
         for oname, spec in objs.items():
             if not isinstance(spec, dict):
                 continue
             spec = dict(spec)
-            if (open_flag and "condition" not in spec
-                    and oname not in shipped_objs and not spec.get("_removed")):
-                spec["condition"] = {"flag": open_flag}
             spec.setdefault("_author", "player")
             cur[oname] = spec
         if cur:
             objects[str(rid)] = cur
     rooms_ov = {str(rid): txt for rid, txt in (data.get("rooms") or {}).items()
                 if isinstance(txt, dict)}
-    st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov})
+    st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
+                                    "scenario": name})
 
 
 def _start(system, slug, character, mode, local, session, slots=None):
@@ -1282,7 +1277,8 @@ def upsert_user_object(chat, slug, room_id, name, spec, author="player"):
     room_objs[name] = spec
     objects[str(room_id)] = room_objs
     st.save_user_layer(slug, chat, {"objects": objects,
-                                    "rooms": layer.get("rooms") or {}})
+                                    "rooms": layer.get("rooms") or {},
+                                    "scenario": layer.get("scenario") or ""})
     return f"'{name}' placed.", True
 
 
@@ -1298,7 +1294,8 @@ def delete_user_object(chat, slug, room_id, name):
     else:
         objects.pop(str(room_id), None)
     st.save_user_layer(slug, chat, {"objects": objects,
-                                    "rooms": layer.get("rooms") or {}})
+                                    "rooms": layer.get("rooms") or {},
+                                    "scenario": layer.get("scenario") or ""})
     return f"'{name}' removed.", True
 
 
@@ -1324,7 +1321,8 @@ def set_room_text(chat, slug, room_id, template=None, player_desc=None,
     else:
         rooms_ov.pop(str(room_id), None)
     st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
-                                    "rooms": rooms_ov})
+                                    "rooms": rooms_ov,
+                                    "scenario": layer.get("scenario") or ""})
     return "Room saved.", True
 
 

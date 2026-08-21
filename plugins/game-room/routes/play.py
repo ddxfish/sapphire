@@ -174,6 +174,25 @@ def set_room_config(body=None, **_):
     return {'status': 'ok', 'config': gc.save_room_config((body or {}).get('config') or {})}
 
 
+def apply_room_model(body=None, **_):
+    """Stamp the room's model override onto a session chat, called by the
+    client on every game/story session entry (Krem 2026-08-20: room-level
+    provider picker — Sapph stays on her persona's model everywhere else;
+    '' = persona default = this route touches nothing)."""
+    override = (gc.room_config().get('llm_primary') or '').strip()
+    if not override:
+        return {'success': True, 'applied': ''}
+    sess_name = str((body or {}).get('session') or '').strip()
+    if not sess_name:
+        return {'success': False, 'detail': 'session required'}
+    from core.api_fastapi import get_system
+    from gameroom_story import session as story_session
+    story_session._stamp_settings(get_system(), sess_name,
+                                  {'llm_primary': override},
+                                  runtime_toolset=False)
+    return {'success': True, 'applied': override}
+
+
 def forget(game, body=None, query=None, **_):
     """Drop a session's saved game state — called by the room right before it
     deletes the session chat, so nothing orphans in plugin state.

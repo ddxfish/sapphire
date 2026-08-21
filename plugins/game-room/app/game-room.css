@@ -229,6 +229,8 @@
 /* The Scenario bar — modal-level, between header and tabs */
 .grs-bar { padding: 12px 30px 0; }
 .grs-bar .grs-preset-row { margin-bottom: 0; }
+/* ● = canvas/form drifted from the loaded scenario — a 💾 re-save is due */
+.grs-scn-unsaved { color: var(--warning, #e0a836); font-size: 1.1em; cursor: help; }
 
 /* Full description 75% + baked-in room art 25% (view-only thumbnail);
    the thumb hides on narrow screens. */

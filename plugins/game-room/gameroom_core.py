@@ -366,7 +366,7 @@ def save_game_settings(game_id, patch):
 
 
 def room_config():
-    """Room-wide config (player name; future room-level knobs)."""
+    """Room-wide config (player name, model override; future knobs)."""
     rc = store.get('roomcfg')
     return rc if isinstance(rc, dict) else {}
 
@@ -375,6 +375,10 @@ def save_room_config(patch):
     rc = room_config()
     if isinstance(patch, dict) and 'player_name' in patch:
         rc['player_name'] = str(patch['player_name'] or '').strip()[:40]
+    if isinstance(patch, dict) and 'llm_primary' in patch:
+        # Room model override (Krem 2026-08-20): provider key stamped onto
+        # session chats on entry; '' = persona's model, never touch.
+        rc['llm_primary'] = str(patch['llm_primary'] or '').strip()[:80]
     store.save('roomcfg', rc)
     return rc
 

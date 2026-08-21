@@ -351,6 +351,7 @@ def get_objects(query=None, **_):
         pass
     return {'active': True, 'slug': slug,
             'open_flag': (shipped['meta'].get('open_flag') or '').strip(),
+            'scenario': layer.get('scenario') or '',
             'current_room': cur_room,
             'rooms': room_rows,
             'objects': layer.get('objects') or {}}
@@ -522,6 +523,10 @@ def set_scenario(slug, body=None, **_):
     cur[name] = {'slots': slots, 'objects': objects,
                  'rooms': layer.get('rooms') or {}}
     store.save(key, cur)
+    # The canvas IS this scenario now — remember it (gear reopens on it).
+    st.save_user_layer(slug, chat, {'objects': layer.get('objects') or {},
+                                    'rooms': layer.get('rooms') or {},
+                                    'scenario': name})
     return {'success': True, 'scenarios': sorted(cur)}
 
 

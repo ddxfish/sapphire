@@ -152,13 +152,22 @@ def blockers(room, state):
     """What stands between the player and continuing — derived from failing
     exit conditions (author blocked_message or an auto line) plus any
     room-declared 'blockers' entries whose 'until' condition is unmet.
-    Feeds the ghost block and the sidebar accordion."""
-    out = []
+    Feeds the ghost block and the sidebar. Exits sharing one message merge
+    into a single entry (Krem 2026-08-20: six lockboxed doors read as one
+    fact, not six paragraphs)."""
+    order = []     # messages in first-seen order
+    labels = {}    # message -> [exit labels] ([] = room-declared blocker)
+    def _add(label, msg):
+        if msg not in labels:
+            labels[msg] = []
+            order.append(msg)
+        if label:
+            labels[msg].append(label)
     for ex in room.get("exits", []):
         cond = ex.get("condition")
         if cond and not check_condition(cond, state):
             if ex.get("blocked_message"):
-                out.append(f"'{ex.get('label')}' — {ex['blocked_message']}")
+                _add(f"'{ex.get('label')}'", ex["blocked_message"])
             else:
                 needs = []
                 if cond.get("has"):
@@ -171,11 +180,11 @@ def blockers(room, state):
                     needs.append(f"needs {str(cond['solved']).replace('_', ' ')} solved")
                 for k, v in (cond.get("flags") or {}).items():
                     needs.append(f"needs {k.replace('_', ' ')} = {v}")
-                out.append(f"'{ex.get('label')}' — {', '.join(needs) or 'blocked'}")
+                _add(f"'{ex.get('label')}'", ", ".join(needs) or "blocked")
     for b in room.get("blockers", []):
         if not check_condition(b.get("until"), state):
-            out.append(str(b.get("text", "an unmet requirement")))
-    return out
+            _add(None, str(b.get("text", "an unmet requirement")))
+    return [f"{', '.join(labels[m])} — {m}" if labels[m] else m for m in order]
 
 
 def _visible_objects(room, state):

@@ -84,6 +84,11 @@
       },
       {
         "method": "POST",
+        "path": "room/apply-model",
+        "handler": "routes/play.py:apply_room_model"
+      },
+      {
+        "method": "POST",
         "path": "room/config",
         "handler": "routes/play.py:set_room_config"
       },

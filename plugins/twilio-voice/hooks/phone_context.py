@@ -27,10 +27,15 @@ def ghost_inject(event):
     calls = getattr(system, "_twilio_active_calls", None)
     if not calls:
         return
-    try:
-        current = system.llm_chat.session_manager._effective_chat_name()
-    except Exception:
-        return
+    # This turn's chat: the hook runner's stamp first (event.chat_name, F2
+    # resolver) — the system walk broke silently on streaming turns
+    # (ghost-rail finding 2026-08-21); keep it only as fallback.
+    current = getattr(event, "chat_name", None)
+    if not current:
+        try:
+            current = system.llm_chat.session_manager._effective_chat_name()
+        except Exception:
+            return
     call = calls.get(current)
     if not call:
         return

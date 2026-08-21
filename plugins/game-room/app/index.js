@@ -115,6 +115,13 @@ async function renderLibrary() {
         const res = await fetch('/api/plugin/game-room/room/config', { headers: { 'X-CSRF-Token': csrfTok() } });
         if (res.ok) roomCfg = (await res.json()).config || {};
     } catch (e) { /* sidebar shows blank name */ }
+    // Providers for the room model override (Krem 2026-08-20) — same list
+    // the chat sidebar offers; fail quiet = picker shows default only.
+    let llmProviders = [];
+    try {
+        const res = await fetch('/api/llm/providers', { headers: { 'X-CSRF-Token': csrfTok() } });
+        if (res.ok) llmProviders = (await res.json()).providers || [];
+    } catch { /* default-only picker */ }
     // Stories are chat-gear games — scanned server-side across story packs
     // (story-samples plugin, user/story_presets/, any plugin's stories/)
     try {
@@ -170,7 +177,18 @@ async function renderLibrary() {
                         <label>player name</label>
                         <input type="text" id="gr-player-name" maxlength="40" placeholder="Krem" value="${esc(roomCfg.player_name || '')}">
                     </div>
-                    <div class="gr-seat-note">Your seat name in new sessions.</div>`,
+                    <div class="gr-seat-note">Your seat name in new sessions.</div>
+                    <div class="sb-field">
+                        <label>model</label>
+                        <select id="gr-room-model">
+                            <option value="">persona's model (default)</option>
+                            ${llmProviders.map(p => {
+                                const m = p.model ? ` (${esc(String(p.model).split('/').pop())})` : '';
+                                return `<option value="${esc(p.key)}"${roomCfg.llm_primary === p.key ? ' selected' : ''}>${esc(p.display_name || p.key)}${m}${p.is_local ? ' \u{1F3E0}' : ' ☁️'}</option>`;
+                            }).join('')}
+                        </select>
+                    </div>
+                    <div class="gr-seat-note">Override for game &amp; story sessions — stamped when you enter one. Default leaves each chat on the persona's model.</div>`,
             })}`,
     });
 
@@ -214,6 +232,17 @@ async function renderLibrary() {
                 body: JSON.stringify({ config: { player_name: nameInput.value } }),
             });
         } catch (e) { console.warn('[GameRoom] player name save failed', e); }
+    });
+    // Room model override — stamped onto sessions as you enter them
+    const modelSel = _root.querySelector('#gr-room-model');
+    modelSel.addEventListener('change', async () => {
+        try {
+            await fetch('/api/plugin/game-room/room/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfTok() },
+                body: JSON.stringify({ config: { llm_primary: modelSel.value } }),
+            });
+        } catch (e) { console.warn('[GameRoom] room model save failed', e); }
     });
 
     paintShelf();

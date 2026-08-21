@@ -181,6 +181,7 @@ export async function openStoryRoom(root, story, sessionName, opts) {
         return;
     }
     if (_root !== root || _session !== sessionName) return;    // superseded mid-load
+    room.applyRoomModel(sessionName);
     _chatSettings = act?.settings || {};
 
     // Resume-aware start: auto-start ONLY a virgin session (zero messages).
@@ -698,8 +699,8 @@ function paintPanel() {
     // open house never re-toasts.
     if (a && a.open_flag) {
         if (_houseWasOpen === false && a.house_open) {
-            ui.showToast('\u{1F3E0} The house is open — the Objects panel is live. '
-                + 'Stock rooms, load a set, be the ghost. (\u{1F3E0} button or ⚙)', 'success', 8000);
+            ui.showToast('\u{1F3E0} The house is open — the Rooms panel is live. '
+                + 'Stock rooms, load a set, be the ghost. (⚙ → Rooms)', 'success', 8000);
         }
         _houseWasOpen = !!a.house_open;
     }
@@ -725,6 +726,7 @@ function paintControls(a) {
                 session: _session,
                 active: !!(_status && _status.slug === _story?.slug),
                 slots: _status?.slots || {},
+                state: _status || null,   // read-only State tab (the old 🔍)
             });
         };
     };
@@ -745,18 +747,8 @@ function paintControls(a) {
     row.innerHTML = `
         <button class="btn-sm" id="st-pause" title="${a.paused ? 'Resume the story' : 'Pause — intermission'}">${a.paused ? '&#x25B6;' : '&#x23F8;'}</button>
         <button class="btn-sm danger" id="st-end" title="End story (journal kept)">&#x23F9;</button>
-        <button class="btn-sm" id="st-inspect" title="Inspect raw state">&#x1F50D;</button>
-        ${a.open_flag && a.house_open ? '<button class="btn-sm" id="st-house" title="The house is open — place objects, load sets">&#x1F3E0;</button>' : ''}
         ${gearHtml}`;
     bindGear();
-    const houseBtn = row.querySelector('#st-house');
-    if (houseBtn) houseBtn.onclick = async () => {
-        const mod = await import(`./settings-modal.js?v=${bootV()}`);
-        mod.openStorySettings(_story?.slug, {
-            session: _session, active: true,
-            slots: _status?.slots || {}, tab: 'Rooms',
-        });
-    };
     row.querySelector('#st-pause').onclick = async () => {
         try {
             await api('story/pause', 'POST', { paused: !a.paused });
@@ -776,7 +768,6 @@ function paintControls(a) {
             paintPanel();
         } catch (e) { ui.showToast(e.message, 'error'); }
     };
-    row.querySelector('#st-inspect').onclick = () => inspectModal(a);
 }
 
 // Player-facing scene strip — the establishing shot the transcript alone
@@ -918,7 +909,12 @@ function paintStatus(a) {
         ${objs ? `<div class="st-scene-exits">here: ${objs}</div>` : ''}
         ${carrying ? `<div class="st-scene-exits">carrying: ${carrying}</div>` : ''}
         ${stats.length ? `<div class="st-scene-exits">${esc(stats.join(' · '))}</div>` : ''}
-        ${(a.blockers || []).length ? `<div class="st-scene-exits" style="color:var(--text-muted)">blocked: ${a.blockers.map(esc).join(' · ')}</div>` : ''}
+        ${(a.blockers || []).length ? `<div class="st-scene-exits" style="color:var(--text-muted)">${a.blockers.map(b => {
+            const i = b.indexOf(' — ');
+            const who = i > 0 ? b.slice(0, i) : b;
+            const why = i > 0 ? b.slice(i + 3) : '';
+            return `<span${why ? ` title="${esc(why)}"` : ''}>\u{1F512} ${esc(who)}</span>`;
+        }).join(' · ')}</div>` : ''}
         ${sealsRow ? `<div class="st-scene-exits">${sealsRow}</div>` : ''}
         ${hintBtn ? `<div class="st-scene-exits">${hintBtn}</div>` : ''}
         ${shown != null ? `<div class="st-hint">\u{1F4A1} ${esc(shown)}${hints.length > 1 && shownIdx < hints.length - 1
@@ -1157,32 +1153,3 @@ function sceneCard(title, desc, actions) {
     document.body.appendChild(wrap);
 }
 
-function inspectModal(a) {
-    const esc = room.esc;
-    document.getElementById('st-modal')?.remove();
-    const wrap = document.createElement('div');
-    wrap.id = 'st-modal';
-    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:10000';
-    const flat = {
-        story: a.story, paused: a.paused, ended: a.ended, room: a.room,
-        room_id: a.room_id, turn: a.turn, turns_in_room: a.turns_in_room,
-        inventory: (a.inventory || []).join(', ') || 'NULL',
-        emotions: (a.emotions || []).join(', ') || 'NULL',
-        solved: (a.solved || []).join(', ') || 'NULL',
-        found: (a.found || []).join(', ') || 'NULL',
-        ...(a.flags || {}),
-    };
-    const rows = Object.entries(flat).map(([k, v]) =>
-        `<tr><td style="padding:3px 14px 3px 0;color:var(--text-muted)">${esc(k)}</td><td style="padding:3px 0">${esc(String(v))}</td></tr>`).join('');
-    wrap.innerHTML = `
-        <div style="background:var(--bg-primary,#0f1020);color:var(--text,#e1e1e6);padding:20px 24px;border-radius:10px;min-width:320px;max-width:80vw;max-height:70vh;overflow:auto;border:1px solid var(--border,#333)">
-            <h3 style="margin:0 0 10px">&#x1F4D6; Story state</h3>
-            <table style="border-collapse:collapse;font-size:var(--font-sm,13px)">${rows}</table>
-            <div style="display:flex;justify-content:flex-end;margin-top:14px">
-                <button class="btn-sm" id="st-modal-close">Close</button>
-            </div>
-        </div>`;
-    wrap.addEventListener('click', e => { if (e.target === wrap) wrap.remove(); });
-    wrap.querySelector('#st-modal-close').onclick = () => wrap.remove();
-    document.body.appendChild(wrap);
-}

@@ -9,8 +9,9 @@ logger = logging.getLogger(__name__)
 
 # build_ghost_message caps a plugin contribution at 2048 chars — trim the
 # room template before we hit the cliff so the cap never truncates
-# mid-structure.
+# mid-structure, and self-budget the whole block (see ghost_block tail).
 _TEMPLATE_CAP = 900
+_BLOCK_CAP = 2048
 
 
 def ghost_block(story, state, room):
@@ -69,11 +70,13 @@ def ghost_block(story, state, room):
     for k, v in state["flags"].items():
         lines.append(f"{k.replace('_', ' ').capitalize()}: {v}")
 
-    # Unmet requirements — the "you can't continue without" section
-    from . import referee
+    # Unmet requirements — the "you can't continue without" section.
+    # Blockers and hints are the OPTIONAL tail: they only join while the
+    # block fits core's cap (self-budget below).
+    optional = []
     blocked = referee.blockers(room, state)
     if blocked:
-        lines.append("Blocked paths: " + " | ".join(blocked))
+        optional.append("Blocked paths: " + " | ".join(blocked))
 
     # Author-declared hints, gated on time-stuck-in-room (per-hint threshold).
     # Coerced like _due_hints, never trusted: this renders inside the ghost
@@ -91,7 +94,26 @@ def ghost_block(story, state, room):
         if state["turns_in_room"] >= after:
             w = str(hint.get("whisper", "")).strip()
             if w:
-                lines.append(f"Hint (weave it in, don't announce it): {w}")
+                optional.append(f"Hint (weave it in, don't announce it): {w}")
+
+    # ── Self-budget to core's 2048/plugin ghost cap (qwen finding,
+    # 2026-08-21): core truncates BLIND from the tail — hints/blockers died
+    # first and Objects could chop mid-sentence, and a mangled block reads
+    # as NO block to the model. We fit ourselves instead: optional lines
+    # join only while there's room, then Scene flavor shrinks — mechanics
+    # (exits, objects, inventory, flags) are never cut.
+    def _size(ls):
+        return len("\n".join(ls))
+    for ln in optional:
+        if _size(lines + [ln]) <= _BLOCK_CAP:
+            lines.append(ln)
+    if _size(lines) > _BLOCK_CAP:
+        for i, ln in enumerate(lines):
+            if ln.startswith("Scene: "):
+                over = _size(lines) - _BLOCK_CAP
+                keep = max(120, len(ln) - over - 1)
+                lines[i] = ln[:keep] + "…"
+                break
 
     return "\n".join(lines)
 

@@ -205,6 +205,7 @@ function scenarioBarHtml(names) {
             <option value="">— the default story —</option>
             ${names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}
         </select>
+        <span class="grs-scn-unsaved" style="display:none" title="Your setup/house differs from this scenario — 💾 Save to keep the changes">●</span>
         <button type="button" class="pk-btn grs-scn-save" title="Save the current setup + environment as a named scenario">\u{1F4BE} Save</button>
         <button type="button" class="pk-btn grs-scn-del" title="Delete the selected scenario">\u{1F5D1}\u{FE0E} Delete</button>
         <span class="grs-preset-namer" style="display:none">
@@ -225,6 +226,12 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
     const sel = bar.querySelector('.grs-scn-pick');
     const state = {};
     let last = '';   // revert target when a swap is refused or declined
+    // Reopen on the scenario the playthrough is ON (persisted on the user
+    // layer — Krem 2026-08-20: the gear opened showing 'default' amnesia).
+    if (opts.current && (setup.scenarios || {})[opts.current]) {
+        sel.value = opts.current;
+        last = opts.current;
+    }
     // Slot fields diverged from the LOADED scenario's values (unsaved
     // form edits a swap would silently overwrite — draft restores included).
     const slotsDiverged = () => {
@@ -233,6 +240,18 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
         return slotList.some(s =>
             String(readField(overlay, s.key) ?? '') !== String(base[s.key] ?? s.default ?? ''));
     };
+    // ● unsaved dot: visible whenever the canvas/form has drifted from the
+    // loaded scenario — the visible cue that a 💾 re-save is due (clown_key
+    // fossil lesson, 2026-08-20).
+    const updateDot = () => {
+        bar.querySelector('.grs-scn-unsaved').style.display =
+            (slotsDiverged() || (opts.envDiverged && opts.envDiverged())) ? '' : 'none';
+    };
+    state.updateDot = updateDot;
+    overlay.addEventListener('input', updateDot);
+    overlay.addEventListener('change', updateDot);
+    setTimeout(updateDot, 0);   // after callers finish wiring/prefill
+
     // PURE SWAP (Krem's ruling 2026-08-20): picking a scenario makes the
     // house BECOME it, right then — blank = back to the shipped story.
     // Guard rule (Krem): prompt ONLY when current values have DIVERGED from
@@ -258,6 +277,7 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
         for (const s of slotList) writeField(overlay, s.key, base[s.key] ?? s.default);
         last = name;
         if (opts.onSwap) await opts.onSwap();   // repaint the Rooms tab NOW
+        updateDot();
         ui.showToast(name ? `'${name}' loaded` : 'Back to the default story', 'success', 2000);
     };
     wireNamer(bar, bar.querySelector('.grs-scn-save'), () => sel.value, async (name) => {
@@ -278,6 +298,7 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
             sel.value = name;
             last = name;   // saved = the canvas IS this scenario now
             if (opts.onSaved) opts.onSaved();
+            updateDot();
             ui.showToast(`Scenario '${name}' saved`, 'success', 2000);
         } catch (e) { ui.showToast(e.message, 'error'); return false; }
     });
@@ -448,6 +469,11 @@ export async function openStorySettings(slug, opts = {}) {
         tabs.push(...st);
     }
 
+    // Rooms — the open-world pane (active playthrough only). Order ruling
+    // (Krem 2026-08-21): Story, Characters, Rooms first; GM + State last.
+    const envTab = objData ? objectsTab(slug, opts.session, objData) : null;
+    if (envTab) tabs.push(envTab);
+
     // Schema tabs (This story / GM Style) — unchanged behavior.
     const byTab = {};
     const schemaTabs = [];
@@ -461,9 +487,8 @@ export async function openStorySettings(slug, opts = {}) {
                     html: byTab[t].map(f => fieldHtml(f, data.settings?.[f.key])).join('') });
     }
 
-    // Objects — the open-world pane (active playthrough only).
-    const envTab = objData ? objectsTab(slug, opts.session, objData) : null;
-    if (envTab) tabs.push(envTab);
+    // State — the old 🔍 inspector as a read-only last tab (Krem 2026-08-21).
+    if (opts.state && opts.active) tabs.push(stateTab(opts.state));
 
     let modal = null;
     modal = buildModal(
@@ -476,13 +501,16 @@ export async function openStorySettings(slug, opts = {}) {
             return !d || confirm('Discard your unsaved changes?');
         } });
     const { overlay, close } = modal;
-    if (setup)
-        wireScenarioBar(overlay, slug, setup, slots, opts.slots || {},
+    const scnState = setup
+        ? wireScenarioBar(overlay, slug, setup, slots, opts.slots || {},
                           { session: opts.session,
+                            current: objData?.scenario || '',
                             envFlush: () => envTab?.flush?.(),
                             envDiverged: () => !!(envTab && envTab.diverged()),
                             onSwap: () => envTab?.swapped?.(),
-                            onSaved: () => envTab?.markClean?.() });
+                            onSaved: () => envTab?.markClean?.() })
+        : null;
+    if (envTab && scnState) envTab.onCanvasPaint = scnState.updateDot;
 
     // Deep link (the 🏠 button lands on the Objects tab directly)
     if (opts.tab) {
@@ -570,12 +598,14 @@ export async function openStorySetup(slug, setup, session) {
             },
               onClose: () => finish(null) });
         const { overlay, close } = modal;
-        wireScenarioBar(overlay, slug, setup, open, {},
+        const scnState = wireScenarioBar(overlay, slug, setup, open, {},
                               { session,
+                                current: objData?.scenario || '',
                                 envFlush: () => envTab?.flush?.(),
                                 envDiverged: () => !!(envTab && envTab.diverged()),
                                 onSwap: () => envTab?.swapped?.(),
                                 onSaved: () => envTab?.markClean?.() });
+        if (envTab && scnState) envTab.onCanvasPaint = scnState.updateDot;
 
         try {
             const d = JSON.parse(sessionStorage.getItem(draftKey) || 'null');
@@ -618,6 +648,24 @@ export async function openStorySetup(slug, setup, session) {
             finish({ slots: vals, sealed: sealedFills });
         };
     });
+}
+
+// ── State tab — the old 🔍 inspector, read-only (Krem 2026-08-21) ──────────
+function stateTab(a) {
+    const flat = {
+        story: a.story, paused: a.paused, ended: a.ended, room: a.room,
+        room_id: a.room_id, turn: a.turn, turns_in_room: a.turns_in_room,
+        inventory: (a.inventory || []).join(', ') || 'NULL',
+        emotions: (a.emotions || []).join(', ') || 'NULL',
+        solved: (a.solved || []).join(', ') || 'NULL',
+        found: (a.found || []).join(', ') || 'NULL',
+        ...(a.flags || {}),
+    };
+    const rows = Object.entries(flat).map(([k, v]) =>
+        `<tr><td style="padding:3px 14px 3px 0;color:var(--text-muted,#8a8fa3)">${esc(k)}</td><td style="padding:3px 0">${esc(String(v))}</td></tr>`).join('');
+    return { title: 'State', html: `
+        <div class="grs-section-title" style="margin-top:0">Behind the scenes — read-only snapshot at open</div>
+        <table style="border-collapse:collapse;font-size:var(--font-sm,13px)">${rows}</table>` };
 }
 
 // ── Environment tab (the open-world editor) ─────────────────────────────────
@@ -870,6 +918,7 @@ function objectsTab(slug, session, data) {
             // selector, not another item picker (Krem 2026-08-20)
             pane.querySelector('.grs-room-stats-line').textContent =
                 `Exits: ${(r.exits || 0) + added.length} · Items: ${items} · Actions: ${actions}`;
+            if (tab.onCanvasPaint) tab.onCanvasPaint();   // scenario bar's ● dot
         };
 
         const refresh = async () => {
@@ -1194,9 +1243,9 @@ function objectsTab(slug, session, data) {
             const name = editing || objName.value.trim();
             if (!name) { ui.showToast('Object needs a name', 'error'); return; }
             const so = (r.shipped_objs || {})[name];
-            // Hand-placed objects appear immediately (the at-open toggle was
-            // noise — post-line placement IS the normal case; presets still
-            // materialize at the zork-line on import).
+            // Hand-placed objects appear immediately; gating is the
+            // author's explicit choice via Visible-when (scenario loads are
+            // verbatim — no implicit zork-line stamp since 2026-08-20).
             let spec;
             if (so) {
                 // Shadow: store only the DIFF vs shipped. Nothing changed →

@@ -186,10 +186,27 @@ export function bindVaultWatch() {
     });
 }
 
+// Stamp the room's model override onto a session (fire-and-forget; the
+// server no-ops when the picker says "persona's model"). Krem 2026-08-20.
+// The send-button LLM label repaints from the stamp's RESPONSE — syncCore
+// painted it from the activate response, which predates the stamp (the
+// "Send still says Claude" race, 2026-08-21).
+export function applyRoomModel(session) {
+    fetch('/api/plugin/game-room/room/apply-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json',
+                   'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+        body: JSON.stringify({ session }),
+    }).then(r => r.json()).then(d => {
+        if (d && d.success && d.applied) updateSendButtonLLM(d.applied, '');
+    }).catch(() => { /* model override is best-effort */ });
+}
+
 // Activate a session chat + repaint core (rail/scene/trim/picker) — the same
 // post-activate sequence openRoom runs, exported for the library's story tiles.
 export async function activateSession(name) {
     const act = await coreApi.activateChat(name);
+    applyRoomModel(name);
     syncCore(name, act?.settings || {});
     return act;
 }
@@ -230,6 +247,7 @@ export async function openRoom(root, gameMeta, sessionName, opts) {
     history.replaceState(null, '', '#app-game-room/' + encodeURIComponent(gameMeta.id));
 
     const act = await coreApi.activateChat(sessionName);
+    applyRoomModel(sessionName);
     _chatSettings = act?.settings || {};
     syncCore(sessionName, _chatSettings);
     bindVaultWatch();
