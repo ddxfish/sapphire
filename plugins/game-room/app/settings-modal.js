@@ -12,7 +12,6 @@
 //   Objects           — custom pane: placed objects + room-text overrides
 // Fresh launch uses openStorySetup(): ONLY the Setup tab, Start Story button.
 
-import { setupModalClose } from '/static/shared/modal.js';
 import * as ui from '/static/ui.js';
 
 const PLUGIN_API = '/api/plugin/game-room/';
@@ -202,7 +201,7 @@ function slotsHtml(fields, valueOf) {
 function scenarioBarHtml(names) {
     return `<div class="grs-preset-row grs-scenario-bar">
         <label class="grs-section-title" style="margin:0">Scenario:</label>
-        <select class="grs-scn-pick" title="Pick to stage a scenario — it applies on ▶ Start / Save">
+        <select class="grs-scn-pick" title="Picking swaps the house to that scenario, right then — blank = the shipped story">
             <option value="">— the default story —</option>
             ${names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}
         </select>
@@ -224,13 +223,42 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
     const bar = overlay.querySelector('.grs-scenario-bar');
     if (!bar) return null;
     const sel = bar.querySelector('.grs-scn-pick');
-    const state = { staged: '' };
-    const setStaged = (name) => { state.staged = name || ''; };
-    sel.onchange = () => {
-        const sc = (setup.scenarios || {})[sel.value];
+    const state = {};
+    let last = '';   // revert target when a swap is refused or declined
+    // Slot fields diverged from the LOADED scenario's values (unsaved
+    // form edits a swap would silently overwrite — draft restores included).
+    const slotsDiverged = () => {
+        const sc = (setup.scenarios || {})[last];
+        const base = sc ? (sc.slots || {}) : (baseVals || {});
+        return slotList.some(s =>
+            String(readField(overlay, s.key) ?? '') !== String(base[s.key] ?? s.default ?? ''));
+    };
+    // PURE SWAP (Krem's ruling 2026-08-20): picking a scenario makes the
+    // house BECOME it, right then — blank = back to the shipped story.
+    // Guard rule (Krem): prompt ONLY when current values have DIVERGED from
+    // the loaded scenario — matching content swaps silently.
+    sel.onchange = async () => {
+        const name = sel.value;
+        const sc = (setup.scenarios || {})[name];
+        if (name && !sc) { sel.value = last; return; }
+        if ((slotsDiverged() || (opts.envDiverged && opts.envDiverged()))
+            && !confirm((name
+                ? `Swap to '${name}'?`
+                : 'Reset to the shipped story?')
+                + ' You have unsaved changes here — they will be replaced.')) {
+            sel.value = last;
+            return;
+        }
+        try {
+            const r = await api('story/scenarios/load', 'POST',
+                                { session: opts.session, slug, name });
+            if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); sel.value = last; return; }
+        } catch (e) { ui.showToast(e.message, 'error'); sel.value = last; return; }
         const base = sc ? (sc.slots || {}) : (baseVals || {});
         for (const s of slotList) writeField(overlay, s.key, base[s.key] ?? s.default);
-        setStaged(sc ? sel.value : '');
+        last = name;
+        if (opts.onSwap) await opts.onSwap();   // repaint the Rooms tab NOW
+        ui.showToast(name ? `'${name}' loaded` : 'Back to the default story', 'success', 2000);
     };
     wireNamer(bar, bar.querySelector('.grs-scn-save'), () => sel.value, async (name) => {
         try {
@@ -248,7 +276,8 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
             setup.scenarios = setup.scenarios || {};
             setup.scenarios[name] = { slots: vals };
             sel.value = name;
-            setStaged('');   // just saved FROM current state — nothing to apply
+            last = name;   // saved = the canvas IS this scenario now
+            if (opts.onSaved) opts.onSaved();
             ui.showToast(`Scenario '${name}' saved`, 'success', 2000);
         } catch (e) { ui.showToast(e.message, 'error'); return false; }
     });
@@ -266,7 +295,7 @@ function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
                 delete (setup.scenarios || {})[name];
                 [...sel.options].find(o => o.value === name)?.remove();
                 sel.value = '';
-                if (state.staged === name) setStaged('');
+                last = '';   // the canvas keeps its content — only the save died
                 ui.showToast(`Scenario '${name}' deleted`, 'success', 2000);
             } catch (e) { ui.showToast(e.message, 'error'); }
         });
@@ -318,7 +347,7 @@ function armDelete(btn, label, guard, onDelete) {
 // tabs: [{title, html, init(pane, overlay)}]; actionsHtml renders in the
 // header (left of ✕); barHtml (optional) renders as a modal-level bar
 // between header and tabs — the Scenario line. Returns {overlay, close}.
-function buildModal(title, tabs, actionsHtml, barHtml) {
+function buildModal(title, tabs, actionsHtml, barHtml, opts = {}) {
     const overlay = document.createElement('div');
     overlay.className = 'pr-modal-overlay';
     overlay.innerHTML = `
@@ -337,9 +366,29 @@ function buildModal(title, tabs, actionsHtml, barHtml) {
             </div>
         </div>`;
     document.body.appendChild(overlay);
-    const close = () => overlay.remove();
-    setupModalClose(overlay, close);
-    overlay.querySelector('.grs-close').onclick = close;
+    // CLICK GUARD (Krem 2026-08-20, after three lost setups): clicking the
+    // backdrop NEVER closes these modals — a mis-click outside a form
+    // holding 30 minutes of writing is not a close request. ✕/Escape route
+    // through a guard; the default guard confirms when any field changed.
+    const fingerprint = () => JSON.stringify(
+        [...overlay.querySelectorAll(
+            'input, select:not(.grs-obj-room), textarea:not(.grs-obj-template):not(.grs-obj-pdesc)')]
+            .map(el => el.type === 'checkbox' ? !!el.checked : el.value));
+    let baseline = null;   // stamped after inits run (below)
+    const dirty = () => fingerprint() !== baseline;
+    const escHandler = (e) => { if (e.key === 'Escape') tryClose(); };
+    const close = () => {
+        document.removeEventListener('keydown', escHandler);
+        overlay.remove();
+    };
+    const tryClose = () => {
+        const guard = opts.guard || (() => !dirty() || confirm('Discard your changes?'));
+        if (!guard()) return;
+        close();
+        if (opts.onClose) opts.onClose();
+    };
+    document.addEventListener('keydown', escHandler);
+    overlay.querySelector('.grs-close').onclick = tryClose;
     overlay.querySelectorAll('.grs-tab').forEach(t => {
         t.onclick = () => {
             overlay.querySelectorAll('.grs-tab').forEach(x => x.classList.toggle('active', x === t));
@@ -358,7 +407,8 @@ function buildModal(title, tabs, actionsHtml, barHtml) {
         wireSelects(pane);
         if (t.init) t.init(pane, overlay);
     }
-    return { overlay, close };
+    baseline = fingerprint();   // post-init = the form's clean state
+    return { overlay, close, tryClose, dirty };
 }
 
 export async function openGameSettings(gameId) {
@@ -415,15 +465,24 @@ export async function openStorySettings(slug, opts = {}) {
     const envTab = objData ? objectsTab(slug, opts.session, objData) : null;
     if (envTab) tabs.push(envTab);
 
-    const { overlay, close } = buildModal(
+    let modal = null;
+    modal = buildModal(
         `&#x2699;&#xFE0E; ${esc(data.title || slug)} settings`, tabs,
         `<button type="button" class="pk-btn pk-btn-primary grs-save">Save</button>
          <button type="button" class="pk-btn grs-reset" title="Restore defaults into the form (Save to apply)">Reset</button>`,
-        setup ? scenarioBarHtml(Object.keys(setup.scenarios || {})) : '');
-    const scn = setup
-        ? wireScenarioBar(overlay, slug, setup, slots, opts.slots || {},
-                          { session: opts.session, envFlush: () => envTab?.flush?.() })
-        : null;
+        setup ? scenarioBarHtml(Object.keys(setup.scenarios || {})) : '',
+        { guard: () => {
+            const d = modal.dirty() || envTab?.dirty?.();
+            return !d || confirm('Discard your unsaved changes?');
+        } });
+    const { overlay, close } = modal;
+    if (setup)
+        wireScenarioBar(overlay, slug, setup, slots, opts.slots || {},
+                          { session: opts.session,
+                            envFlush: () => envTab?.flush?.(),
+                            envDiverged: () => !!(envTab && envTab.diverged()),
+                            onSwap: () => envTab?.swapped?.(),
+                            onSaved: () => envTab?.markClean?.() });
 
     // Deep link (the 🏠 button lands on the Objects tab directly)
     if (opts.tab) {
@@ -444,9 +503,6 @@ export async function openStorySettings(slug, opts = {}) {
                 for (const s of slots) vals[s.key] = readField(overlay, s.key) ?? '';
                 await api('story/slots', 'POST', { session: opts.session, slots: vals });
             }
-            if (scn?.staged)   // scenario ENV half, then pendings on top
-                await api('story/scenarios/load', 'POST',
-                          { session: opts.session, slug, name: scn.staged });
             if (envTab?.flush) await envTab.flush();   // pending room edits
             ui.showToast('Settings saved — live on the next turn', 'success', 2500);
             close();
@@ -491,27 +547,59 @@ export async function openStorySetup(slug, setup, session) {
         const envTab = objData ? objectsTab(slug, session, objData) : null;
         if (envTab) tabs.push(envTab);
 
-        const { overlay, close } = buildModal(
+        // Draft net (Krem 2026-08-20, three lost setups): every edit lands
+        // in sessionStorage; reopening the form — same tab, even after a
+        // refresh — restores it. Cleared on ▶ Start or a CONFIRMED discard.
+        const draftKey = 'grs-setup-draft:' + slug;
+        const clearDraft = () => { try { sessionStorage.removeItem(draftKey); } catch { /* blocked */ } };
+
+        let modal = null;
+        modal = buildModal(
             `\u{1F4D6} ${esc(setup.title || slug)} — set the stage`, tabs,
             `<button type="button" class="pk-btn pk-btn-primary grs-start" title="Start the story with this setup">▶ Start</button>
              <button type="button" class="pk-btn grs-cancel">Cancel</button>`,
-            scenarioBarHtml(Object.keys(setup.scenarios || {})));
-        const scn = wireScenarioBar(overlay, slug, setup, open, {},
-                                    { session, envFlush: () => envTab?.flush?.() });
+            scenarioBarHtml(Object.keys(setup.scenarios || {})),
+            { guard: () => {
+                const d = modal.dirty() || envTab?.dirty?.();
+                if (!d) { clearDraft(); return true; }
+                if (confirm('Discard this setup? Your entries will be lost.')) {
+                    clearDraft();
+                    return true;
+                }
+                return false;
+            },
+              onClose: () => finish(null) });
+        const { overlay, close } = modal;
+        wireScenarioBar(overlay, slug, setup, open, {},
+                              { session,
+                                envFlush: () => envTab?.flush?.(),
+                                envDiverged: () => !!(envTab && envTab.diverged()),
+                                onSwap: () => envTab?.swapped?.(),
+                                onSaved: () => envTab?.markClean?.() });
 
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) finish(null);
-        });
-        overlay.querySelector('.grs-close').addEventListener('click', () => finish(null));
-        overlay.querySelector('.grs-cancel').onclick = () => { close(); finish(null); };
+        try {
+            const d = JSON.parse(sessionStorage.getItem(draftKey) || 'null');
+            if (d && Object.keys(d).length) {
+                for (const [k, v] of Object.entries(d)) writeField(overlay, k, v);
+                ui.showToast('Restored your unsaved setup draft', 'success', 3000);
+            }
+        } catch { /* corrupt draft — start clean */ }
+        const saveDraft = () => {
+            const vals = {};
+            for (const s of slots) {
+                const v = readField(overlay, s.key);
+                if (v !== undefined) vals[s.key] = v;
+            }
+            try { sessionStorage.setItem(draftKey, JSON.stringify(vals)); } catch { /* full */ }
+        };
+        overlay.addEventListener('input', saveDraft);
+        overlay.addEventListener('change', saveDraft);
+
+        overlay.querySelector('.grs-cancel').onclick = modal.tryClose;
         overlay.querySelector('.grs-start').onclick = async () => {
-            // ▶ Start applies everything staged: the scenario's environment
-            // half first, then pending room edits on top (your explicit
-            // edits outrank the scenario's).
+            // Scenario swaps already applied on pick — Start just flushes
+            // pending room edits on top.
             try {
-                if (scn?.staged)
-                    await api('story/scenarios/load', 'POST',
-                              { session, slug, name: scn.staged });
                 if (envTab?.flush) await envTab.flush();
             } catch (e) {
                 ui.showToast('Environment failed to save: ' + e.message, 'error');
@@ -526,6 +614,7 @@ export async function openStorySetup(slug, setup, session) {
                 .map(s => ({ key: s.seal_key, text: String(readField(overlay, s.key) || '').trim() }))
                 .filter(f => f.text);
             close();
+            clearDraft();
             finish({ slots: vals, sealed: sealedFills });
         };
     });
@@ -578,7 +667,23 @@ function objectsTab(slug, session, data) {
             <input type="text" class="grs-obj-desc" placeholder="what looking at it shows her">
             <div class="grs-act-rows"></div>
             <button type="button" class="pk-btn grs-act-add" title="One more verb it responds to — 'eat' → 'You shrink to very small.'">+ Add action</button>
-            <label class="st-tools-check" style="margin:0"><input type="checkbox" class="grs-obj-hidden"> Hidden — she can't see it until it's found by searching the room</label>
+            <label class="st-tools-check grs-take-label" style="margin:0"><input type="checkbox" class="grs-obj-take"> Can be picked up — goes into her inventory and leaves the room</label>
+            <label class="st-tools-check grs-vis-label" style="margin:0"><input type="checkbox" class="grs-vis-toggle"> Visible when — until then it doesn't exist for her</label>
+            <div class="grs-lock-body grs-vis-body" style="display:none">
+                <div class="grs-vis-rows"></div>
+                <button type="button" class="pk-btn grs-vis-add">+ Add condition</button>
+            </div>
+            <label class="st-tools-check grs-req-label" style="margin:0"><input type="checkbox" class="grs-req-toggle"> Requirements — what it takes to use this</label>
+            <div class="grs-lock-body grs-req-body" style="display:none">
+                <div class="grs-req-rows"></div>
+                <button type="button" class="pk-btn grs-req-add">+ Add requirement</button>
+                <input type="text" class="grs-lock-msg" placeholder="locked message (optional) — what she sees while it refuses">
+            </div>
+            <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Effects — what using it changes</label>
+            <div class="grs-lock-body grs-fx-body" style="display:none">
+                <div class="grs-fx-rows"></div>
+                <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+            </div>
             <div style="display:flex;gap:6px">
                 <button type="button" class="pk-btn pk-btn-primary grs-obj-place">Place</button>
                 <button type="button" class="pk-btn grs-obj-cancel">Cancel</button>
@@ -622,6 +727,32 @@ function objectsTab(slug, session, data) {
             }
             [pending, pendingExits].forEach(m => Object.keys(m).forEach(k => delete m[k]));
         };
+        tab.dirty = () => !!(Object.keys(pending).length || Object.keys(pendingExits).length);
+        tab.hasContent = () =>
+            Object.values(world.objects || {}).some(o => Object.keys(o || {}).length)
+            || (world.rooms || []).some(r => r.template || r.player_desc
+                                             || (r.add_exits || []).length);
+        // Divergence, not existence (Krem 2026-08-20: "prompt only when the
+        // current values don't match the loaded scenario"). markClean stamps
+        // the canvas right after a swap/save; diverged() compares against it.
+        // Before any stamp the baseline is unknown — protect if content.
+        const canvasFp = () => JSON.stringify([
+            world.objects || {},
+            (world.rooms || []).map(r => [r.template || '', r.player_desc || '',
+                                          r.add_exits || []]),
+            pending, pendingExits]);
+        let cleanFp = null;
+        tab.markClean = () => { cleanFp = canvasFp(); };
+        tab.diverged = () => cleanFp === null
+            ? (tab.hasContent() || tab.dirty())
+            : canvasFp() !== cleanFp;
+        // A scenario swap replaced the canvas: pendings are stale, repaint,
+        // and the fresh canvas IS the scenario — stamp it clean.
+        tab.swapped = async () => {
+            [pending, pendingExits].forEach(m => Object.keys(m).forEach(k => delete m[k]));
+            await refresh();
+            tab.markClean();
+        };
 
         // Effective object view: shipped spec + user shadow (desc/hidden
         // replace, verb messages overlay) — mirrors the server merge law.
@@ -630,7 +761,6 @@ function objectsTab(slug, session, data) {
             for (const [v, s] of Object.entries(ov?.interactions || {}))
                 verbs[v] = String((s || {}).message ?? verbs[v] ?? '');
             return { desc: ov?.desc ?? so?.desc ?? '',
-                     hidden: ov?.hidden ?? so?.hidden ?? false,
                      verbs, has_mechanics: !!so?.has_mechanics };
         };
         const roomExits = (r) => pendingExits[r.id] ?? r.add_exits ?? [];
@@ -676,9 +806,14 @@ function objectsTab(slug, session, data) {
                 if (shippedObjs[n]) continue;   // shadows/tombstones decorate above
                 const verbs = Object.keys(spec.interactions || {}).join(', ');
                 items += 1; actions += Object.keys(spec.interactions || {}).length;
+                const ints = Object.values(spec.interactions || {});
+                const marks = (spec.hidden || spec.condition ? ' \u{1F32B}\u{FE0F}' : '')
+                    + (spec.takeable ? ' \u{1F392}' : '')
+                    + (spec.puzzle || ints.some(v => v && v.condition) ? ' \u{1F512}' : '')
+                    + (ints.some(v => v && v.roll) ? ' \u{1F3B2}' : '');
                 cards.push(`<div class="grs-obj-card grs-obj-editable" data-name="${esc(n)}">
                     <button type="button" class="sb-icon-btn grs-obj-del" data-name="${esc(n)}" title="Remove">✕</button>
-                    <div class="grs-obj-card-title">${esc(n)}${authorOf(spec)}</div>
+                    <div class="grs-obj-card-title">${esc(n)}${authorOf(spec)}${marks}</div>
                     <div class="grs-obj-card-desc">${esc(spec.desc || '')}</div>
                     ${verbs ? `<div class="grs-obj-card-verbs">${esc(verbs)}</div>` : ''}
                 </div>`);
@@ -713,10 +848,15 @@ function objectsTab(slug, session, data) {
             // until Save/Start. New ones open with the house (zork-line).
             const added = roomExits(r);
             const badges = pane.querySelector('.grs-exit-badges');
+            // ONE ground truth for names (Krem 2026-08-20): badges show the
+            // DESTINATION ROOM'S TITLE — same names as the Room dropdown.
+            // The author's flavor label ("the parlor door") lives in the
+            // tooltip; in play she still moves by that label.
+            const roomTitle = (id) => (world.rooms.find(x => x.id === id) || {}).title;
             badges.innerHTML = (r.shipped_exits || []).map(e =>
-                `<span class="grs-exit-badge">${esc(e.label || e.to)}</span>`).join('')
+                `<span class="grs-exit-badge" title="${esc(e.label || '')}">${esc(roomTitle(e.to) || e.label || e.to)}</span>`).join('')
                 + added.map((e, i) =>
-                `<span class="grs-exit-badge grs-exit-user">${esc(e.label)}
+                `<span class="grs-exit-badge grs-exit-user" title="${esc(e.label)}">${esc(roomTitle(e.to) || e.label)}
                     <button type="button" class="grs-exit-x" data-i="${i}" title="Remove this exit">✕</button></span>`).join('');
             badges.querySelectorAll('.grs-exit-x').forEach(b => b.onclick = () => {
                 const next = added.filter((_, i) => i !== Number(b.dataset.i));
@@ -772,7 +912,6 @@ function objectsTab(slug, session, data) {
         const addForm = pane.querySelector('.grs-obj-add-form');
         const objName = addForm.querySelector('.grs-obj-name');
         const objDesc = addForm.querySelector('.grs-obj-desc');
-        const objHidden = addForm.querySelector('.grs-obj-hidden');
         const actRows = addForm.querySelector('.grs-act-rows');
         const resetBtn = addForm.querySelector('.grs-obj-reset');
         const mechNote = addForm.querySelector('.grs-obj-mech-note');
@@ -796,6 +935,7 @@ function objectsTab(slug, session, data) {
             const r = curRoom();
             editing = name || null;
             actRows.innerHTML = '';
+            clearLocks();
             objName.value = editing || '';
             objName.disabled = !!editing;
             const so = editing ? (r.shipped_objs || {})[editing] : null;
@@ -803,20 +943,24 @@ function objectsTab(slug, session, data) {
             if (so) {
                 const eff = effective(so, ov);
                 objDesc.value = eff.desc;
-                objHidden.checked = !!eff.hidden;
                 for (const [v, m] of Object.entries(eff.verbs)) addActRow(v, m);
                 mechNote.style.display = so.has_mechanics ? '' : 'none';
                 resetBtn.style.display = ov ? '' : 'none';
+                // pack mechanics stay pack-side — no lock authoring on shipped
+                visLabel.style.display = 'none';
+                reqLabel.style.display = 'none';
+                fxLabel.style.display = 'none';
+                takeLabel.style.display = 'none';
             } else if (editing && ov) {
                 objDesc.value = ov.desc || '';
-                objHidden.checked = !!ov.hidden;
                 for (const [v, s] of Object.entries(ov.interactions || {}))
-                    addActRow(v, (s || {}).message || '');
+                    addActRow(v, (s || {}).message
+                        || ((s || {}).roll && s.roll.success && s.roll.success.message) || '');
+                prefillLocks(ov);
                 mechNote.style.display = 'none';
                 resetBtn.style.display = 'none';
             } else {
                 objDesc.value = '';
-                objHidden.checked = false;
                 mechNote.style.display = 'none';
                 resetBtn.style.display = 'none';
             }
@@ -828,10 +972,212 @@ function objectsTab(slug, session, data) {
             addForm.style.display = 'none';
             editing = null;
             objName.value = ''; objName.disabled = false;
-            objDesc.value = ''; objHidden.checked = false;
+            objDesc.value = '';
             actRows.innerHTML = '';
+            clearLocks();
         };
         addForm.querySelector('.grs-act-add').onclick = () => addActRow().querySelector('.grs-act-verb').focus();
+
+        // ── Locks & effects (Krem 2026-08-20): (type, value) rows compiling
+        // into the referee's SHIPPED grammar — condition {has,did}, puzzle +
+        // {solved}, roll, set/adjust/gives. First row of each kind wins.
+        const visToggle = addForm.querySelector('.grs-vis-toggle');
+        const reqToggle = addForm.querySelector('.grs-req-toggle');
+        const fxToggle = addForm.querySelector('.grs-fx-toggle');
+        const visLabel = addForm.querySelector('.grs-vis-label');
+        const reqLabel = addForm.querySelector('.grs-req-label');
+        const fxLabel = addForm.querySelector('.grs-fx-label');
+        const visBody = addForm.querySelector('.grs-vis-body');
+        const reqBody = addForm.querySelector('.grs-req-body');
+        const fxBody = addForm.querySelector('.grs-fx-body');
+        const visRows = addForm.querySelector('.grs-vis-rows');
+        const reqRows = addForm.querySelector('.grs-req-rows');
+        const fxRows = addForm.querySelector('.grs-fx-rows');
+        const lockMsg = addForm.querySelector('.grs-lock-msg');
+        const objTake = addForm.querySelector('.grs-obj-take');
+        const takeLabel = addForm.querySelector('.grs-take-label');
+        visToggle.onchange = () => { visBody.style.display = visToggle.checked ? '' : 'none'; };
+        reqToggle.onchange = () => {
+            reqBody.style.display = reqToggle.checked ? '' : 'none';
+            // A lock wants a verb — offer 'open' as a visible, editable
+            // action row (Krem's clown_chest, 2026-08-20: requiring the
+            // user to hand-author the obvious verb was friction, not law).
+            if (reqToggle.checked && !actRows.children.length)
+                addActRow('open', '');
+        };
+        fxToggle.onchange = () => {
+            fxBody.style.display = fxToggle.checked ? '' : 'none';
+            // Effects need a carrier verb — offer 'use' as a visible,
+            // editable action row rather than implying one silently
+            // (Krem 2026-08-20: the response field IS the return message).
+            if (fxToggle.checked && !actRows.children.length)
+                addActRow('use', '').querySelector('.grs-act-resp').focus();
+        };
+
+        // Visible-when = EXISTENCE (she doesn't know it's there — surprise);
+        // Requirements = USABLE-when (she sees it, it refuses — tension).
+        // Both compile to the referee's shipped condition grammar.
+        const VIS_TYPES = [
+            ['searched', 'when searched for', '', ''],
+            ['has', 'when carrying item', 'item name, e.g. uv_lamp', ''],
+            ['did', 'after another object is used', 'object name, e.g. door1', ''],
+            ['flag', 'when a flag is set', 'flag name, e.g. house_open', ''],
+        ];
+        const REQ_TYPES = [
+            ['has', 'needs item', 'item name, e.g. bronze_key', ''],
+            ['did', 'needs opened/used', 'object name, e.g. door1', ''],
+            ['flag', 'flag is set', 'flag name, e.g. ballroom_unlocked', ''],
+            ['password', 'password / riddle', 'the answer, e.g. 1234', 'riddle / prompt she sees (optional)'],
+            ['d20', 'd20 chance', 'roll needed, e.g. 11', ''],
+            ['d100', 'd100 chance', 'roll needed, e.g. 51', ''],
+        ];
+        const FX_TYPES = [
+            ['set', 'set flag', 'flag name, e.g. ballroom_unlocked', ''],
+            ['give', 'give item', 'item name, e.g. bronze_key', ''],
+            ['adjust', 'adjust number', 'name, e.g. love', 'amount, e.g. 10 or -5'],
+        ];
+        const pickRow = (host, types, kind, val, extra) => {
+            const row = document.createElement('div');
+            row.className = 'grs-act-row';
+            row.innerHTML = `
+                <select class="grs-pick-kind">${types.map(t =>
+                    `<option value="${t[0]}"${t[0] === kind ? ' selected' : ''}>${t[1]}</option>`).join('')}</select>
+                <input type="text" class="grs-pick-val">
+                <input type="text" class="grs-pick-extra">
+                <button type="button" class="sb-icon-btn grs-act-del" title="Remove">✕</button>`;
+            const sel = row.querySelector('.grs-pick-kind');
+            const vIn = row.querySelector('.grs-pick-val');
+            const xIn = row.querySelector('.grs-pick-extra');
+            const paint = () => {
+                const t = types.find(x => x[0] === sel.value) || types[0];
+                vIn.placeholder = t[2];
+                xIn.placeholder = t[3];
+                vIn.style.display = t[2] ? '' : 'none';   // value-less kinds (searched)
+                xIn.style.display = t[3] ? '' : 'none';
+            };
+            sel.onchange = paint;
+            paint();
+            vIn.value = val || '';
+            xIn.value = extra || '';
+            row.querySelector('.grs-act-del').onclick = () => row.remove();
+            host.appendChild(row);
+            return row;
+        };
+        addForm.querySelector('.grs-vis-add').onclick = () =>
+            pickRow(visRows, VIS_TYPES).querySelector('.grs-pick-kind').focus();
+        addForm.querySelector('.grs-req-add').onclick = () =>
+            pickRow(reqRows, REQ_TYPES).querySelector('.grs-pick-val').focus();
+        addForm.querySelector('.grs-fx-add').onclick = () =>
+            pickRow(fxRows, FX_TYPES).querySelector('.grs-pick-val').focus();
+
+        const rawRows = (host) => [...host.querySelectorAll('.grs-act-row')].map(row => ({
+            kind: row.querySelector('.grs-pick-kind').value,
+            val: row.querySelector('.grs-pick-val').value.trim(),
+            extra: row.querySelector('.grs-pick-extra').value.trim(),
+        }));
+        const rowsOf = (host) => rawRows(host).filter(x => x.val);
+
+        const clearLocks = () => {
+            for (const t of [visToggle, reqToggle, fxToggle, objTake]) t.checked = false;
+            for (const b of [visBody, reqBody, fxBody]) b.style.display = 'none';
+            for (const l of [visLabel, reqLabel, fxLabel, takeLabel]) l.style.display = '';
+            for (const h of [visRows, reqRows, fxRows]) h.innerHTML = '';
+            lockMsg.value = '';
+        };
+
+        // Visible-when rows → the object's top-level existence gate:
+        // `hidden` (search reveal) and/or `condition` {has, did, flag}.
+        const readVis = () => {
+            if (!visToggle.checked) return null;
+            const out = { hidden: false, cond: {} };
+            for (const q of rawRows(visRows)) {
+                if (q.kind === 'searched') out.hidden = true;
+                else if (!q.val) continue;
+                else if (q.kind === 'has' && !out.cond.has) out.cond.has = q.val;
+                else if (q.kind === 'did' && !out.cond.did) out.cond.did = q.val;
+                else if (q.kind === 'flag' && !out.cond.flag) out.cond.flag = q.val;
+            }
+            if (!Object.keys(out.cond).length) out.cond = null;
+            return (out.hidden || out.cond) ? out : null;
+        };
+
+        const readLocks = (name) => {
+            if (!reqToggle.checked && !fxToggle.checked) return null;
+            const cond = {};
+            let puzzle = null, dice = null;
+            if (reqToggle.checked) for (const q of rowsOf(reqRows)) {
+                if (q.kind === 'has' && !cond.has) cond.has = q.val;
+                else if (q.kind === 'did' && !cond.did) cond.did = q.val;
+                else if (q.kind === 'flag' && !cond.flag) cond.flag = q.val;
+                else if (q.kind === 'password' && !puzzle) {
+                    puzzle = { riddle: q.extra || 'It waits for the right answer — solve it.',
+                               solution: q.val };
+                    cond.solved = name;
+                } else if ((q.kind === 'd20' || q.kind === 'd100') && !dice) {
+                    const sides = q.kind === 'd20' ? 20 : 100;
+                    const beat = parseInt(q.val, 10);
+                    dice = { sides, beat: Number.isFinite(beat)
+                             ? Math.max(1, Math.min(sides, beat)) : sides / 2 + 1 };
+                }
+            }
+            const fx = {};
+            if (fxToggle.checked) for (const q of rowsOf(fxRows)) {
+                if (q.kind === 'set') (fx.set = fx.set || {})[q.val] = true;
+                else if (q.kind === 'give' && !fx.gives) fx.gives = q.val;
+                else if (q.kind === 'adjust') {
+                    const n = parseFloat(q.extra);
+                    if (Number.isFinite(n)) (fx.adjust = fx.adjust || {})[q.val] = n;
+                }
+            }
+            const out = { cond: Object.keys(cond).length ? cond : null,
+                          puzzle, dice,
+                          fx: Object.keys(fx).length ? fx : null,
+                          msg: lockMsg.value.trim() };
+            return (out.cond || out.puzzle || out.dice || out.fx) ? out : null;
+        };
+
+        // spec → rows (edit round-trip for user-placed objects)
+        const prefillLocks = (spec) => {
+            const v0 = Object.values(spec.interactions || {})[0] || {};
+            const cond = v0.condition || {};
+            const src = v0.roll ? (v0.roll.success || {})
+                : (spec.interactions ? v0 : (spec.on_solve || {}));
+            let anyReq = false, anyFx = false, anyVis = false;
+            objTake.checked = !!spec.takeable;
+            if (spec.hidden) { pickRow(visRows, VIS_TYPES, 'searched'); anyVis = true; }
+            const tc = spec.condition || {};   // top-level = existence gate
+            if (tc.has) { pickRow(visRows, VIS_TYPES, 'has', tc.has); anyVis = true; }
+            if (tc.did) { pickRow(visRows, VIS_TYPES, 'did', tc.did); anyVis = true; }
+            if (tc.flag) { pickRow(visRows, VIS_TYPES, 'flag', tc.flag); anyVis = true; }
+            if (cond.has) { pickRow(reqRows, REQ_TYPES, 'has', cond.has); anyReq = true; }
+            if (cond.did) { pickRow(reqRows, REQ_TYPES, 'did', cond.did); anyReq = true; }
+            if (cond.flag) { pickRow(reqRows, REQ_TYPES, 'flag', cond.flag); anyReq = true; }
+            if (spec.puzzle) {
+                pickRow(reqRows, REQ_TYPES, 'password',
+                        (spec.puzzle.solutions || [])[0] || spec.puzzle.solution || '',
+                        spec.puzzle.riddle || '');
+                anyReq = true;
+            }
+            if (v0.roll) {
+                pickRow(reqRows, REQ_TYPES, v0.roll.sides === 20 ? 'd20' : 'd100',
+                        String(v0.roll.beat ?? ''));
+                anyReq = true;
+            }
+            for (const k of Object.keys(src.set || {})) { pickRow(fxRows, FX_TYPES, 'set', k); anyFx = true; }
+            if (src.gives) { pickRow(fxRows, FX_TYPES, 'give', src.gives); anyFx = true; }
+            for (const [k, n] of Object.entries(src.adjust || {})) {
+                pickRow(fxRows, FX_TYPES, 'adjust', k, String(n));
+                anyFx = true;
+            }
+            if (v0.blocked_message) { lockMsg.value = v0.blocked_message; anyReq = true; }
+            visToggle.checked = anyVis;
+            visBody.style.display = anyVis ? '' : 'none';
+            reqToggle.checked = anyReq;
+            reqBody.style.display = anyReq ? '' : 'none';
+            fxToggle.checked = anyFx;
+            fxBody.style.display = anyFx ? '' : 'none';
+        };
+
         addForm.querySelector('.grs-obj-cancel').onclick = closeAdd;
         resetBtn.onclick = async () => {
             const r = curRoom();
@@ -858,7 +1204,6 @@ function objectsTab(slug, session, data) {
                 spec = {};
                 const desc = objDesc.value.trim();
                 if (desc !== (so.desc || '')) spec.desc = desc;
-                if (objHidden.checked !== !!so.hidden) spec.hidden = objHidden.checked;
                 const ints = {};
                 actRows.querySelectorAll('.grs-act-row').forEach(row => {
                     const verb = row.querySelector('.grs-act-verb').value.trim();
@@ -882,7 +1227,7 @@ function objectsTab(slug, session, data) {
                     return;
                 }
             } else {
-                spec = { desc: objDesc.value.trim(), hidden: objHidden.checked };
+                spec = { desc: objDesc.value.trim() };
                 const acts = {};
                 actRows.querySelectorAll('.grs-act-row').forEach(row => {
                     const verb = row.querySelector('.grs-act-verb').value.trim();
@@ -890,6 +1235,39 @@ function objectsTab(slug, session, data) {
                     const resp = row.querySelector('.grs-act-resp').value.trim();
                     acts[verb] = { message: resp || `You ${verb} the ${name}.` };
                 });
+                if (objTake.checked) spec.takeable = true;
+                const vis = readVis();
+                if (vis) {
+                    if (vis.hidden) spec.hidden = true;
+                    if (vis.cond) spec.condition = vis.cond;
+                }
+                const lk = readLocks(name);
+                if (lk) {
+                    if (!Object.keys(acts).length && !lk.puzzle) {
+                        ui.showToast('Requirements & effects need at least one action — or a password to solve.',
+                                     'error', 3500);
+                        return;
+                    }
+                    if (lk.puzzle) spec.puzzle = lk.puzzle;
+                    for (const v of Object.values(acts)) {
+                        if (lk.cond) {
+                            v.condition = lk.cond;
+                            if (lk.msg) v.blocked_message = lk.msg;
+                        }
+                        if (lk.dice) {
+                            // chance replaces the flat outcome: response +
+                            // effects ride the success branch
+                            v.roll = { ...lk.dice,
+                                       success: { message: v.message, ...(lk.fx || {}) },
+                                       failure: { message: 'Not this time — the attempt fails.' } };
+                            delete v.message;
+                        } else if (lk.fx) {
+                            Object.assign(v, lk.fx);
+                        }
+                    }
+                    if (!Object.keys(acts).length && lk.puzzle && lk.fx)
+                        spec.on_solve = { ...lk.fx };   // pure riddle: effects on solve
+                }
                 if (Object.keys(acts).length) spec.interactions = acts;
             }
             try {

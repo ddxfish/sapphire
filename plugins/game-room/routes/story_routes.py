@@ -470,6 +470,9 @@ def set_scenario(slug, body=None, **_):
     name = str(body.get('name') or '').strip()[:60]
     if not name:
         return {'success': False, 'detail': 'Scenario needs a name.'}
+    if name.strip('—- ').lower() == 'default':
+        return {'success': False,
+                'detail': "'default' is the shipped story — pick another name."}
     sess = _session()
     store = sess._store()
     key = f'storyscenarios:{slug}'
@@ -531,9 +534,10 @@ def set_slots(body=None, **_):
 
 
 def load_scenario(body=None, **_):
-    """Apply a scenario's ENVIRONMENT half to this playthrough (staged by
-    the form, flushed on Save/\u25b6 Start — also works pre-start via the
-    slug fallback). The slots half rides the form/start path."""
+    """PURE SWAP: this playthrough's environment BECOMES the named scenario
+    (empty name = reset to the shipped-only house). Applied the moment the
+    dropdown changes — also works pre-start via the slug fallback. The
+    slots half rides the form/start path."""
     from gameroom_story import rooms
     body = body or {}
     chat, slug, err = _active_ctx(body=body)
@@ -543,12 +547,14 @@ def load_scenario(body=None, **_):
     story = rooms.load_story(slug)
     sess = _session()
     try:
-        sess._import_scenario_env(chat, slug, story, name)
+        sess._apply_scenario_env(chat, slug, story, name)
     except KeyError:
         return {'success': False, 'detail': f"No scenario named '{name}'."}
     except Exception as e:
         return {'success': False, 'detail': str(e)}
-    return {'success': True, 'detail': f"'{name}' loaded into this playthrough."}
+    return {'success': True,
+            'detail': (f"'{name}' loaded — the house is now this scenario."
+                       if name else 'Back to the default story.')}
 
 
 def inspect(query=None, **_):

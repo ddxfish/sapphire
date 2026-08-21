@@ -43,7 +43,10 @@ def ghost_block(story, state, room):
 
     from . import referee
     objs = []
+    taken = {referee._key(t) for t in state.get("taken") or []}
     for name, obj in (room.get("objects") or {}).items():
+        if referee._key(name) in taken:
+            continue  # pocketed — it left the room (takeable, 2026-08-20)
         if obj.get("hidden") and name not in state["found"]:
             continue  # unfound hidden objects stay engine-side
         if not referee.check_condition(obj.get("condition"), state):
@@ -52,6 +55,8 @@ def ghost_block(story, state, room):
         if obj.get("puzzle"):
             solved = name in state["solved"]
             bits.append(f"puzzle{' (SOLVED)' if solved else ''}: {obj['puzzle'].get('riddle', 'unmarked')}")
+        if obj.get("takeable"):
+            bits.append("can be taken")
         if obj.get("interactions"):
             bits.append("responds to: " + ", ".join(sorted(obj["interactions"])))
         objs.append(f"{name} — " + "; ".join(b for b in bits if b))

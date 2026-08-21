@@ -8,7 +8,7 @@ import random
 
 logger = logging.getLogger(__name__)
 
-GENERIC_VERBS = ("move", "look", "search", "solve")
+GENERIC_VERBS = ("move", "look", "search", "solve", "take")
 
 
 def _norm(s):
@@ -94,12 +94,21 @@ def answers_of(puzzle):
 
 def check_condition(cond, state):
     """Edge/object condition: {"has": item} and/or {"flags": {k: expected}}
-    (also accepts {"flag": name} as a truthy check, and {"flag_gte":
-    {k: n}} for numeric thresholds — 'love over 50' gates everywhere
-    conditions do: exits, blockers, endings, object visibility)."""
+    (also accepts {"flag": name} as a truthy check, {"flag_gte": {k: n}}
+    for numeric thresholds — 'love over 50' — plus the editor pair
+    (2026-08-20): {"did": obj} = the player/she has USED that object
+    (replayed interaction history, verb-agnostic) and {"solved": obj} =
+    its puzzle is answered. Gates everywhere conditions do: exits,
+    blockers, endings, object visibility, per-verb locks)."""
     if not cond:
         return True
     if cond.get("has") and cond["has"] not in state["inventory"]:
+        return False
+    did = cond.get("did")
+    if did and _key(did) not in {_key(u) for u in state.get("used") or []}:
+        return False
+    solved = cond.get("solved")
+    if solved and _key(solved) not in {_key(s) for s in state.get("solved") or []}:
         return False
     flag = cond.get("flag")
     if flag and not state["flags"].get(flag):
@@ -156,6 +165,10 @@ def blockers(room, state):
                     needs.append(f"needs {cond['has'].replace('_', ' ')}")
                 if cond.get("flag"):
                     needs.append(f"needs {cond['flag'].replace('_', ' ')}")
+                if cond.get("did"):
+                    needs.append(f"needs {str(cond['did']).replace('_', ' ')} used first")
+                if cond.get("solved"):
+                    needs.append(f"needs {str(cond['solved']).replace('_', ' ')} solved")
                 for k, v in (cond.get("flags") or {}).items():
                     needs.append(f"needs {k.replace('_', ' ')} = {v}")
                 out.append(f"'{ex.get('label')}' — {', '.join(needs) or 'blocked'}")
@@ -172,7 +185,10 @@ def _visible_objects(room, state):
     Distinct from per-interaction conditions, which gate verbs on a visible
     object."""
     out = {}
+    taken = {_key(t) for t in state.get("taken") or []}
     for name, obj in (room.get("objects") or {}).items():
+        if _key(name) in taken:
+            continue                      # pocketed — it left the room
         if obj.get("hidden") and name not in state["found"]:
             continue
         if not check_condition(obj.get("condition"), state):
@@ -242,7 +258,10 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
 
     if verb == "search":
         found = []
+        taken = {_key(t) for t in state.get("taken") or []}
         for name, obj in (room.get("objects") or {}).items():
+            if _key(name) in taken:
+                continue                  # pocketed — can't be re-found
             # condition-gated objects don't EXIST yet — search can't find
             # what the zork-line hasn't materialized.
             if not check_condition(obj.get("condition"), state):
@@ -395,6 +414,18 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
             events = [{"event": "interacted", "target": target_n, "verb": canon}]
             events += _effect_events(spec, state)
             return events, spec.get("message", f"You {canon} the {target}."), True
+
+    # Takeable (Krem 2026-08-20): the object ITSELF moves into inventory and
+    # leaves the room — the classic verb, journaled so replay stays pure.
+    # Declared 'take' interactions win (the loop above already returned);
+    # non-takeable objects fall through to the off-script license so
+    # narrative pick-ups stay free.
+    if obj and obj.get("takeable") \
+            and _key(verb) in ("take", "grab", "get", "pickup", "pocket"):
+        events = [{"event": "taken", "target": target_n}]
+        return events, obj.get(
+            "take_message",
+            f"You take the {target} — it's in the inventory now."), True
 
     # Off-script acts are a FEATURE (Krem 2026-08-03, the bracelet-overboard
     # incident): no mechanical hook means the DM improvises — a license, not

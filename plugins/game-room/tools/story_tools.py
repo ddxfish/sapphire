@@ -21,11 +21,11 @@ TOOLS = [
         "is_local": True,
         "function": {
             "name": "story_act",
-            "description": "Resolve ONE player-chosen act against the current room — the engine is the referee, you narrate its verdict. The current room (scene, exits, objects, state) is already in your turn context every turn; call 'look' with target 'room' only to re-read a room that may have CHANGED. Verbs: 'move' (target = exit label), 'search' (uncover hidden things), 'solve' (target = puzzle object, answer = the player's attempt), 'look' (target = a specific object, or 'room'), or any verb a room object declares. Never decide mechanical outcomes yourself.",
+            "description": "Resolve ONE player-chosen act against the current room — the engine is the referee, you narrate its verdict. The current room (scene, exits, objects, state) is already in your turn context every turn; call 'look' with target 'room' only to re-read a room that may have CHANGED. Verbs: 'move' (target = exit label), 'search' (uncover hidden things), 'solve' (target = puzzle object, answer = the player's attempt), 'look' (target = a specific object, or 'room'), 'take' (target = an object marked 'can be taken' — it joins the inventory and leaves the room), or any verb a room object declares. Never decide mechanical outcomes yourself.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "verb": {"type": "string", "description": "move | search | solve | look | <object-declared verb>"},
+                    "verb": {"type": "string", "description": "move | search | solve | look | take | <object-declared verb>"},
                     "target": {"type": "string", "description": "Exit label or object name"},
                     "answer": {"type": "string", "description": "solve only: the player's attempted solution"}
                 },

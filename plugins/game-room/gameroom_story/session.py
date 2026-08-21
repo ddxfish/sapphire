@@ -536,20 +536,22 @@ def start(system, slug, character=None, mode=None, local=None, session=None,
                       slots=slots)
 
 
-def _import_scenario_env(chat, slug, story, name):
-    """Copy a saved scenario's ENVIRONMENT (objects + room overrides) into
-    this playthrough's user layer — the slots half rides the form/start
-    path. Objects without their own condition get the implicit zork-line
-    stamp (Krem's ruling: sets materialize when the house opens); shipped-
-    name shadows/tombstones are exempt (deadlock guard). Room-text + exits
-    ride un-stamped — the merge gates them on the same flag."""
+def _apply_scenario_env(chat, slug, story, name):
+    """PURE SWAP (Krem's ruling 2026-08-20): the playthrough's environment
+    BECOMES the named scenario — canvas = snapshot, nothing merges. Empty
+    name = reset to the shipped-only house. Objects on new names still get
+    the implicit zork-line stamp (sets materialize when the house opens);
+    shipped-name shadows/tombstones are exempt (stamping a chest shadow
+    would hide the chest until the chest opens — deadlock)."""
+    if not name:
+        st.save_user_layer(slug, chat, {"objects": {}, "rooms": {}})
+        return
     sets = _store().get(f"storyscenarios:{slug}") or {}
     data = sets.get(name)
     if not isinstance(data, dict):
         raise KeyError(name)
     open_flag = (story["meta"].get("open_flag") or "").strip()
-    layer = st.get_user_layer(slug, chat)
-    merged_objects = dict(layer.get("objects") or {})
+    objects = {}
     for rid, objs in (data.get("objects") or {}).items():
         if not isinstance(objs, dict):
             continue
@@ -557,27 +559,21 @@ def _import_scenario_env(chat, slug, story, name):
             shipped_objs = (story["rooms"].get(int(rid)) or {}).get("objects") or {}
         except (TypeError, ValueError):
             shipped_objs = {}
-        cur = dict(merged_objects.get(str(rid)) or {})
+        cur = {}
         for oname, spec in objs.items():
             if not isinstance(spec, dict):
                 continue
             spec = dict(spec)
-            # Shadow/tombstone entries for SHIPPED names never get the
-            # zork-line stamp — stamping a chest shadow would hide the
-            # chest until the chest opens (deadlock).
             if (open_flag and "condition" not in spec
                     and oname not in shipped_objs and not spec.get("_removed")):
                 spec["condition"] = {"flag": open_flag}
             spec.setdefault("_author", "player")
             cur[oname] = spec
         if cur:
-            merged_objects[str(rid)] = cur
-    merged_rooms = dict(layer.get("rooms") or {})
-    for rid, txt in (data.get("rooms") or {}).items():
-        if isinstance(txt, dict):
-            merged_rooms[str(rid)] = txt
-    st.save_user_layer(slug, chat, {"objects": merged_objects,
-                                    "rooms": merged_rooms})
+            objects[str(rid)] = cur
+    rooms_ov = {str(rid): txt for rid, txt in (data.get("rooms") or {}).items()
+                if isinstance(txt, dict)}
+    st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov})
 
 
 def _start(system, slug, character, mode, local, session, slots=None):
@@ -629,8 +625,8 @@ def _start(system, slug, character, mode, local, session, slots=None):
                      prev_toolset=cur.get("toolset", "all"),
                      prev_extras=cur.get("extra_toolsets") or [],
                      slots=slot_vals)
-    # (Scenario ENV imports happen via story/scenarios/load — staged by the
-    # setup form and flushed before start; no start-time param anymore.)
+    # (Scenario ENV swaps happen via story/scenarios/load — applied the
+    # moment the setup form's dropdown changes; no start-time param.)
 
     # Stamp the story cockpit: none of hers + the referee (ruling 2026-08-03).
     # Users change it after via the sidebar; the checkbox is extra_toolsets.

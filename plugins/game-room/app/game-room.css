@@ -173,12 +173,22 @@
     padding: 10px; margin-top: 8px;
     display: flex; flex-direction: column; gap: 6px; align-items: stretch;
 }
-.grs-obj-add-form input[type="text"] {
-    /* bare inputs (no .sb-field wrapper) — mirror core's field skin */
+.grs-obj-add-form input[type="text"],
+.grs-obj-add-form select {
+    /* bare fields (no .sb-field wrapper) — mirror core's field skin */
     width: 100%; box-sizing: border-box; min-width: 0; padding: 5px 6px;
     background: var(--input-bg); border: 1px solid var(--border);
     border-radius: var(--radius-sm); color: var(--text); font-size: var(--font-sm);
 }
+/* Locks & effects expander */
+.grs-lock-body {
+    display: flex; flex-direction: column; gap: 6px;
+    padding-left: 10px; border-left: 2px solid var(--border, #2a3040);
+}
+.grs-lock-head { font-weight: 600; font-size: var(--font-sm, 0.85em); }
+.grs-act-row .grs-pick-kind { flex: 0 0 11em; }
+.grs-act-row .grs-pick-val { flex: 1 1 auto; }
+.grs-act-row .grs-pick-extra { flex: 1 1 auto; }
 .grs-obj-add-form .pk-btn { align-self: flex-start; }
 .grs-act-row { display: flex; gap: 6px; align-items: center; }
 .grs-act-row .grs-act-verb { flex: 0 1 9em; min-width: 5em; }

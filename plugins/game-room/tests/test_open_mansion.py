@@ -50,6 +50,72 @@ def _fresh(story):
 
 # ── flag_gte condition ───────────────────────────────────────────────────────
 
+def test_did_and_solved_conditions():
+    # Editor pair (2026-08-20): has_opened → {did}, password → {solved}.
+    state = st.initial_state()
+    assert not referee.check_condition({"did": "door1"}, state)
+    state["used"].append("door1")
+    assert referee.check_condition({"did": "Door 1"}, state)    # forgiving
+    assert not referee.check_condition({"solved": "vault"}, state)
+    state["solved"].append("vault")
+    assert referee.check_condition({"solved": "VAULT"}, state)   # case/sep only
+
+
+def test_password_gates_verb_via_solved(story):
+    # The exact spec the Add Object form compiles for (password, 1234):
+    # puzzle on the object + {solved} condition on its verbs. No flag wiring.
+    room = {"id": 9, "title": "Vault room", "objects": {
+        "vault": {"desc": "A steel vault.",
+                  "puzzle": {"riddle": "It wants a code.", "solution": "1234"},
+                  "interactions": {"open": {
+                      "message": "It swings wide.",
+                      "condition": {"solved": "vault"},
+                      "blocked_message": "The dial spins uselessly.",
+                      "set": {"vault_opened": True}}}}}}
+    state = st.initial_state()
+    state["room"] = 9
+    _, msg, ok = referee.resolve(story, state, room, {9: room}, "open", "vault")
+    assert not ok and "dial spins" in msg
+    events, msg, ok = referee.resolve(story, state, room, {9: room},
+                                      "solve", "vault", answer="1234")
+    assert ok
+    for ev in events:
+        st.apply_event(state, ev)
+    events, msg, ok = referee.resolve(story, state, room, {9: room}, "open", "vault")
+    assert ok and "swings wide" in msg
+    assert any(e["event"] == "state_set" and e["key"] == "vault_opened"
+               for e in events)
+
+
+def test_take_moves_object_to_inventory(story):
+    room = {"id": 8, "title": "Table room", "objects": {
+        "bronze_key": {"desc": "A small key.", "takeable": True},
+        "lamp": {"desc": "A lamp.", "takeable": True},
+        "vase": {"desc": "A vase."}}}
+    state = st.initial_state()
+    state["room"] = 8
+    events, msg, ok = referee.resolve(story, state, room, {8: room},
+                                      "take", "bronze_key")
+    assert ok and events == [{"event": "taken", "target": "bronze_key"}]
+    for ev in events:
+        st.apply_event(state, ev)
+    assert "bronze_key" in state["inventory"]
+    assert "bronze_key" not in referee._visible_objects(room, state)
+    assert referee.check_condition({"has": "bronze_key"}, state)
+    # grab is an alias
+    events, _, ok = referee.resolve(story, state, room, {8: room}, "grab", "lamp")
+    assert ok and events[0]["event"] == "taken"
+    # non-takeable falls to the off-script license (narrate freely, no events)
+    events, msg, ok = referee.resolve(story, state, room, {8: room}, "take", "vase")
+    assert ok and not events and "narrate" in msg
+    # declared take interactions still win over the generic verb
+    room["objects"]["coin"] = {"desc": "A coin.", "takeable": True,
+                               "interactions": {"take": {"message": "It bites you!"}}}
+    events, msg, ok = referee.resolve(story, state, room, {8: room}, "take", "coin")
+    assert ok and "bites" in msg
+    assert all(e["event"] != "taken" for e in events)
+
+
 def test_flag_gte_threshold():
     state = st.initial_state()
     cond = {"flag_gte": {"love": 50}}
@@ -232,7 +298,7 @@ def test_import_scenario_skips_stamp_for_shipped_names(story, cfg_store):
     cfg_store.save("storyscenarios:mad-manse",
                    {"mix": {"objects": {"1": {"chest": {"desc": "gilded"},
                                               "lamp": {"desc": "a lamp"}}}}})
-    session._import_scenario_env(CHAT, "mad-manse", story, "mix")
+    session._apply_scenario_env(CHAT, "mad-manse", story, "mix")
     layer = st.get_user_layer("mad-manse", CHAT)["objects"]["1"]
     assert "condition" not in layer["chest"]             # shadow: no deadlock stamp
     assert layer["lamp"]["condition"] == {"flag": "chest_opened"}
@@ -280,18 +346,25 @@ def test_place_object_marks_ai_and_journals(story):
 
 # ── Object sets ─────────────────────────────────────────────────────────────
 
-def test_import_scenario_env_stamps_zork_condition(story, cfg_store):
+def test_apply_scenario_env_is_pure_swap(story, cfg_store):
+    # PURE SWAP (Krem 2026-08-20): canvas BECOMES the scenario — prior
+    # content is gone, not merged; stamps still applied; "" = reset.
+    session.upsert_user_object(CHAT, "mad-manse", 1, "leftover", {"desc": "x"})
     cfg_store.save("storyscenarios:mad-manse", {
         "bbq": {"objects": {"1": {"grill": {"desc": "A hot grill."},
                                   "banner": {"desc": "A banner.",
                                              "condition": {"flag": "own"}}}},
                 "rooms": {"2": {"template": "BBQ parlor."}}}})
-    session._import_scenario_env(CHAT, "mad-manse", story, "bbq")
+    session._apply_scenario_env(CHAT, "mad-manse", story, "bbq")
     layer = st.get_user_layer("mad-manse", CHAT)
+    assert "leftover" not in layer["objects"]["1"]      # swap, not merge
     assert layer["objects"]["1"]["grill"]["condition"] == \
         {"flag": "chest_opened"}                       # implicit stamp
     assert layer["objects"]["1"]["banner"]["condition"] == {"flag": "own"}
     assert layer["rooms"]["2"]["template"] == "BBQ parlor."
+    session._apply_scenario_env(CHAT, "mad-manse", story, "")
+    layer = st.get_user_layer("mad-manse", CHAT)
+    assert not layer.get("objects") and not layer.get("rooms")   # reset
 
 
 # ── Scenarios (unified: slots + environment, Krem 2026-08-20) ───────────────
@@ -320,6 +393,12 @@ def test_scenario_roundtrip_and_ai_filter(story, cfg_store, monkeypatch):
     st.clear_active(CHAT)
     session.delete_user_object(CHAT, "mad-manse", 1, "mine")
     session.delete_user_object(CHAT, "mad-manse", 1, "hers")
+
+
+def test_scenario_default_name_reserved(story, cfg_store):
+    from routes import story_routes
+    r = story_routes.set_scenario("mad-manse", body={"name": "default"})
+    assert not r["success"] and "shipped" in r["detail"]
 
 
 def test_scenario_migration_folds_old_stores(story, cfg_store):

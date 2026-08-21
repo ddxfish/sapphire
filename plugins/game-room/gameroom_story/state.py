@@ -230,7 +230,8 @@ def initial_state():
     return {
         "room": None, "turn": 0, "turns_in_room": 0,
         "inventory": [], "flags": {}, "emotions": [], "extras": [],
-        "solved": [], "found": [], "used": [], "rolled": [], "ended": False,
+        "solved": [], "found": [], "used": [], "rolled": [], "taken": [],
+        "ended": False,
         "seals": {}, "seal_skipped": [], "seal_holds": {}, "revealed": [],
     }
 
@@ -286,6 +287,13 @@ def apply_event(state, ev):
         for e in ev.get("remove", []):
             if e in state["extras"]:
                 state["extras"].remove(e)
+    elif kind == "taken":
+        # The object left the room and became inventory (takeable, 2026-08-20)
+        taken = state.setdefault("taken", [])
+        if ev.get("target") and ev["target"] not in taken:
+            taken.append(ev["target"])
+        if ev.get("target") and ev["target"] not in state["inventory"]:
+            state["inventory"].append(ev["target"])
     elif kind == "interacted":
         # Touched-object memory (Krem 2026-08-03: the sketchbook checkmark).
         # Journals always carried these events — old playthroughs get their
