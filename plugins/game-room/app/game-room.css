@@ -216,6 +216,21 @@
 /* flex-basis 0 = the dropdown always shrinks to fit — buttons never wrap */
 .grs-preset-row > select { flex: 1 1 0; min-width: 0; }
 .grs-preset-row .pk-btn { flex: 0 0 auto; white-space: nowrap; }
+/* The Scenario bar — modal-level, between header and tabs */
+.grs-bar { padding: 12px 30px 0; }
+.grs-bar .grs-preset-row { margin-bottom: 0; }
+
+/* Full description 75% + baked-in room art 25% (view-only thumbnail);
+   the thumb hides on narrow screens. */
+.grs-room-desc-row { display: flex; gap: 12px; align-items: flex-start; }
+.grs-room-desc-row .grs-room-desc { flex: 3 1 0; min-width: 0; }
+.grs-room-thumb {
+    flex: 1 1 0; width: 25%; min-width: 0; height: auto;
+    margin-top: 1.5em;   /* optical align with the textarea top (label height) */
+    border: 1px solid var(--border, #2a3040);
+    border-radius: var(--radius-sm, 6px);
+}
+@media (max-width: 640px) { .grs-room-thumb { display: none !important; } }
 .grs-preset-namer { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; }
 .grs-preset-namer input { flex: 1 1 auto; min-width: 8em; }
 

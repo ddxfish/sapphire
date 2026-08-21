@@ -156,6 +156,26 @@ function slotField(s, includeSealed) {
     return { key: s.key, label: s.label, type: undefined, default: s.default, ...lay };
 }
 
+// Open slots → ONE TAB PER SECTION (declaration order; sectionless slots
+// land on 'Story') — Krem 2026-08-20: tabs are Story / Characters / Rooms.
+// The tab title carries the section, so in-pane headers are suppressed.
+// Sealed slots ride the first tab.
+function slotTabs(open, sealed, valueOf) {
+    const groups = [], byName = {};
+    for (const s of open) {
+        const f = slotField(s, false);
+        const title = f._section || 'Story';
+        if (!byName[title]) { byName[title] = { title, fields: [] }; groups.push(byName[title]); }
+        f._section = '';
+        byName[title].fields.push(f);
+    }
+    return groups.map((g, i) => ({
+        title: g.title,
+        html: slotsHtml(g.fields, valueOf)
+            + (i === 0 ? (sealed || []).map(s => fieldHtml(slotField(s, true), undefined)).join('') : '')
+    }));
+}
+
 // Fields → sectioned, responsive rows. Consecutive fields sharing _section
 // render under one header; _width (% of the row) lets a 20% name sit beside
 // its 80% backstory. Rows flex-wrap, so narrow screens stack naturally.
@@ -174,26 +194,83 @@ function slotsHtml(fields, valueOf) {
     return html + (open ? '</div>' : '');
 }
 
-// Preset section: "Preset" heading, then ONE line — [dropdown][💾 Save]
-// [🗑 Delete] (Krem 2026-08-20). Save swaps in an inline name input
-// (prefilled with the selection — keep the name to overwrite, change it to
-// fork a new one). Delete is two-click armed. Shared by the fresh-launch
-// setup form and the in-game gear's Story tab.
-function presetRowHtml(names, placeholder) {
-    return `<div class="grs-section-title" style="margin-top:0">Preset</div>
-    <div class="grs-preset-row">
-        <select class="grs-setup-preset">
-            <option value="">${esc(placeholder)}</option>
+// ── The Scenario bar (Krem 2026-08-20: ONE dropdown for the whole
+// authored world — slots + environment — under the modal header). Picking
+// STAGES: slots fill the form, the env half is remembered and applied on
+// Save/▶ Start alongside pending room edits. 💾 Save snapshots form slots
+// + the playthrough's environment under a name (namer = save-as).
+function scenarioBarHtml(names) {
+    return `<div class="grs-preset-row grs-scenario-bar">
+        <label class="grs-section-title" style="margin:0">Scenario:</label>
+        <select class="grs-scn-pick" title="Pick to stage a scenario — it applies on ▶ Start / Save">
+            <option value="">— the default story —</option>
             ${names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')}
         </select>
-        <button type="button" class="pk-btn grs-preset-save" title="Save the form below as a named preset for this story">\u{1F4BE} Save</button>
-        <button type="button" class="pk-btn grs-preset-del" title="Delete the selected preset">\u{1F5D1}\u{FE0E} Delete</button>
+        <button type="button" class="pk-btn grs-scn-save" title="Save the current setup + environment as a named scenario">\u{1F4BE} Save</button>
+        <button type="button" class="pk-btn grs-scn-del" title="Delete the selected scenario">\u{1F5D1}\u{FE0E} Delete</button>
         <span class="grs-preset-namer" style="display:none">
-            <input type="text" class="grs-preset-name" placeholder="preset name" maxlength="60">
+            <input type="text" class="grs-preset-name" placeholder="scenario name" maxlength="60">
             <button type="button" class="pk-btn pk-btn-primary grs-preset-ok">✓ Save</button>
             <button type="button" class="pk-btn grs-preset-no">✕</button>
         </span>
     </div>`;
+}
+
+// Wire the bar. Returns state {staged} — the scenario name whose ENV half
+// still needs story/scenarios/load at flush time. baseVals = what the
+// blank option restores into the slot form; envFlush = the Environment
+// tab's pending flush (so a snapshot includes textarea/exit edits).
+function wireScenarioBar(overlay, slug, setup, slotList, baseVals, opts = {}) {
+    const bar = overlay.querySelector('.grs-scenario-bar');
+    if (!bar) return null;
+    const sel = bar.querySelector('.grs-scn-pick');
+    const state = { staged: '' };
+    const setStaged = (name) => { state.staged = name || ''; };
+    sel.onchange = () => {
+        const sc = (setup.scenarios || {})[sel.value];
+        const base = sc ? (sc.slots || {}) : (baseVals || {});
+        for (const s of slotList) writeField(overlay, s.key, base[s.key] ?? s.default);
+        setStaged(sc ? sel.value : '');
+    };
+    wireNamer(bar, bar.querySelector('.grs-scn-save'), () => sel.value, async (name) => {
+        try {
+            if (opts.envFlush) await opts.envFlush();   // snapshot includes pendings
+            const vals = {};
+            for (const s of slotList) vals[s.key] = readField(overlay, s.key) ?? '';
+            const r = await api(`story/${encodeURIComponent(slug)}/scenarios`, 'POST',
+                                { name, slots: vals, session: opts.session, slug });
+            if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return false; }
+            if (![...sel.options].some(o => o.value === name)) {
+                const opt = document.createElement('option');
+                opt.value = opt.textContent = name;
+                sel.appendChild(opt);
+            }
+            setup.scenarios = setup.scenarios || {};
+            setup.scenarios[name] = { slots: vals };
+            sel.value = name;
+            setStaged('');   // just saved FROM current state — nothing to apply
+            ui.showToast(`Scenario '${name}' saved`, 'success', 2000);
+        } catch (e) { ui.showToast(e.message, 'error'); return false; }
+    });
+    armDelete(bar.querySelector('.grs-scn-del'), '\u{1F5D1}\u{FE0E} Delete',
+        () => {
+            if (!sel.value) { ui.showToast('Pick a scenario to delete first', 'error', 2000); return false; }
+            return true;
+        },
+        async () => {
+            const name = sel.value;
+            try {
+                const r = await api(`story/${encodeURIComponent(slug)}/scenarios`, 'POST',
+                                    { name, delete: true });
+                if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return; }
+                delete (setup.scenarios || {})[name];
+                [...sel.options].find(o => o.value === name)?.remove();
+                sel.value = '';
+                if (state.staged === name) setStaged('');
+                ui.showToast(`Scenario '${name}' deleted`, 'success', 2000);
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        });
+    return state;
 }
 
 // The namer span (shared by preset + object-set rows): 💾 swaps in an
@@ -237,55 +314,11 @@ function armDelete(btn, label, guard, onDelete) {
     };
 }
 
-// baseVals = what the blank option restores (defaults on the setup form,
-// the run's current values on the gear).
-function wirePresetRow(pane, slug, setup, slotList, baseVals) {
-    const row = pane.querySelector('.grs-preset-row');
-    const sel = pane.querySelector('.grs-setup-preset');
-    sel.onchange = () => {
-        const p = (setup.presets || {})[sel.value];
-        const base = p ? (p.slots || {}) : (baseVals || {});
-        for (const s of slotList) writeField(pane, s.key, base[s.key] ?? s.default);
-    };
-    wireNamer(row, pane.querySelector('.grs-preset-save'), () => sel.value, async (name) => {
-        const vals = {};
-        for (const s of slotList) vals[s.key] = readField(pane, s.key) ?? '';
-        try {
-            const r = await api(`story/${encodeURIComponent(slug)}/presets`, 'POST', { name, slots: vals });
-            if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return false; }
-            if (![...sel.options].some(o => o.value === name)) {
-                const opt = document.createElement('option');
-                opt.value = opt.textContent = name;
-                sel.appendChild(opt);
-            }
-            setup.presets = setup.presets || {};
-            setup.presets[name] = { slots: vals };
-            sel.value = name;
-            ui.showToast(`Preset '${name}' saved`, 'success', 2000);
-        } catch (e) { ui.showToast(e.message, 'error'); return false; }
-    });
-    armDelete(pane.querySelector('.grs-preset-del'), '\u{1F5D1}\u{FE0E} Delete',
-        () => {
-            if (!sel.value) { ui.showToast('Pick a preset to delete first', 'error', 2000); return false; }
-            return true;
-        },
-        async () => {
-            const name = sel.value;
-            try {
-                const r = await api(`story/${encodeURIComponent(slug)}/presets`, 'POST', { name, delete: true });
-                if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return; }
-                delete (setup.presets || {})[name];
-                [...sel.options].find(o => o.value === name)?.remove();
-                sel.value = '';   // form keeps its values — only the saved copy dies
-                ui.showToast(`Preset '${name}' deleted`, 'success', 2000);
-            } catch (e) { ui.showToast(e.message, 'error'); }
-        });
-}
-
 // ── shared modal chrome ─────────────────────────────────────────────────────
 // tabs: [{title, html, init(pane, overlay)}]; actionsHtml renders in the
-// footer; returns {overlay, close}.
-function buildModal(title, tabs, actionsHtml) {
+// header (left of ✕); barHtml (optional) renders as a modal-level bar
+// between header and tabs — the Scenario line. Returns {overlay, close}.
+function buildModal(title, tabs, actionsHtml, barHtml) {
     const overlay = document.createElement('div');
     overlay.className = 'pr-modal-overlay';
     overlay.innerHTML = `
@@ -295,6 +328,7 @@ function buildModal(title, tabs, actionsHtml) {
                 <div class="grs-actions">${actionsHtml}</div>
                 <button type="button" class="sb-icon-btn grs-close" title="Close">✕</button>
             </div>
+            ${barHtml ? `<div class="grs-bar">${barHtml}</div>` : ''}
             ${tabs.length > 1 ? `<div class="sb-mode-tabs grs-tabs">
                 ${tabs.map((t, i) => `<button class="sb-mode-tab grs-tab${i === 0 ? ' active' : ''}" data-tab="${esc(t.title)}">${esc(t.title)}</button>`).join('')}
             </div>` : ''}
@@ -353,23 +387,15 @@ export async function openStorySettings(slug, opts = {}) {
     const schema = data.schema || [];
     const tabs = [];
 
-    // Setup (this run) — editable slot values, presets. Sealed blanks are
-    // edited from the scene strip's ✍ chips, not here.
+    // Setup (this run) — editable slot values, one tab per slot section.
+    // Sealed blanks are edited from the scene strip's ✍ chips, not here.
+    // Scenarios live in the modal-level bar, not a tab.
     const slots = (setup?.slots || []).filter(s => !s.sealed);
-    let setupPane = null;
     if (setup && slots.length) {
-        const presetNames = Object.keys(setup.presets || {});
-        tabs.push({
-            title: 'Story',
-            html: `
-                ${presetRowHtml(presetNames, '— current values —')}
-                ${slotsHtml(slots.map(s => slotField(s, false)), f => (opts.slots || {})[f.key])}
-                <div style="opacity:.7;font-size:.85em">Changes land on her next turn after Save. Sealed blanks are edited from the ✍ chips in the scene panel.</div>`,
-            init(pane) {
-                setupPane = pane;
-                wirePresetRow(pane, slug, setup, slots, opts.slots || {});
-            }
-        });
+        const st = slotTabs(slots, [], f => (opts.slots || {})[f.key]);
+        if (st.length) st[0].html +=
+            '<div style="opacity:.7;font-size:.85em">Changes land on her next turn after Save. Sealed blanks are edited from the ✍ chips in the scene panel.</div>';
+        tabs.push(...st);
     }
 
     // Schema tabs (This story / GM Style) — unchanged behavior.
@@ -392,7 +418,12 @@ export async function openStorySettings(slug, opts = {}) {
     const { overlay, close } = buildModal(
         `&#x2699;&#xFE0E; ${esc(data.title || slug)} settings`, tabs,
         `<button type="button" class="pk-btn pk-btn-primary grs-save">Save</button>
-         <button type="button" class="pk-btn grs-reset" title="Restore defaults into the form (Save to apply)">Reset</button>`);
+         <button type="button" class="pk-btn grs-reset" title="Restore defaults into the form (Save to apply)">Reset</button>`,
+        setup ? scenarioBarHtml(Object.keys(setup.scenarios || {})) : '');
+    const scn = setup
+        ? wireScenarioBar(overlay, slug, setup, slots, opts.slots || {},
+                          { session: opts.session, envFlush: () => envTab?.flush?.() })
+        : null;
 
     // Deep link (the 🏠 button lands on the Objects tab directly)
     if (opts.tab) {
@@ -408,31 +439,33 @@ export async function openStorySettings(slug, opts = {}) {
         }
         try {
             await api(`story/${encodeURIComponent(slug)}/settings`, 'POST', { settings: out });
-            if (setupPane) {
+            if (setup && slots.length) {
                 const vals = {};
-                for (const s of slots) vals[s.key] = readField(setupPane, s.key) ?? '';
+                for (const s of slots) vals[s.key] = readField(overlay, s.key) ?? '';
                 await api('story/slots', 'POST', { session: opts.session, slots: vals });
             }
-            if (envTab?.flush) await envTab.flush();   // pending room-text edits
+            if (scn?.staged)   // scenario ENV half, then pendings on top
+                await api('story/scenarios/load', 'POST',
+                          { session: opts.session, slug, name: scn.staged });
+            if (envTab?.flush) await envTab.flush();   // pending room edits
             ui.showToast('Settings saved — live on the next turn', 'success', 2500);
             close();
         } catch (e) { ui.showToast(e.message, 'error'); }
     };
     overlay.querySelector('.grs-reset').onclick = () => {
         for (const f of schema) writeField(overlay, f.key, f.default ?? (f.type === 'checkbox' ? false : ''));
-        if (setupPane) for (const s of slots) writeField(setupPane, s.key, s.default);
+        for (const s of slots) writeField(overlay, s.key, s.default);
     };
 }
 
 // ── Fresh-launch setup (Mad-Libs) ───────────────────────────────────────────
-// ONLY the Setup tab + Start Story. Resolves {slots, sealed, objset} on
-// Start, null on cancel. Returns undefined-equivalent {} start when the
-// story declares nothing (callers should check needsSetup first).
+// Story + Environment tabs under the Scenario bar. Resolves {slots, sealed}
+// on Start, null on cancel. Callers check needsSetup first.
 export async function storyNeedsSetup(slug) {
     try {
         const s = await api(`story/${encodeURIComponent(slug)}/setup`);
-        return (s.slots || []).length || Object.keys(s.presets || {}).length
-            || (s.objsets || []).length ? s : null;
+        return (s.slots || []).length
+            || Object.keys(s.scenarios || {}).length ? s : null;
     } catch { return null; }
 }
 
@@ -451,27 +484,20 @@ export async function openStorySetup(slug, setup, session) {
         const slots = setup.slots || [];
         const open = slots.filter(s => !s.sealed);
         const sealed = slots.filter(s => s.sealed && s.seal_key);
-        const presetNames = Object.keys(setup.presets || {});
         let done = false;
         const finish = (v) => { if (!done) { done = true; resolve(v); } };
 
-        const tabs = [{
-            title: 'Story',
-            html: `
-                ${presetRowHtml(presetNames, '— the default story —')}
-                ${slotsHtml(open.map(s => slotField(s, false)), () => undefined)}
-                ${sealed.map(s => fieldHtml(slotField(s, true), undefined)).join('')}`,
-            init(pane) {
-                wirePresetRow(pane, slug, setup, open, {});
-            }
-        }];
+        const tabs = slotTabs(open, sealed, () => undefined);
         const envTab = objData ? objectsTab(slug, session, objData) : null;
         if (envTab) tabs.push(envTab);
 
         const { overlay, close } = buildModal(
             `\u{1F4D6} ${esc(setup.title || slug)} — set the stage`, tabs,
             `<button type="button" class="pk-btn pk-btn-primary grs-start" title="Start the story with this setup">▶ Start</button>
-             <button type="button" class="pk-btn grs-cancel">Cancel</button>`);
+             <button type="button" class="pk-btn grs-cancel">Cancel</button>`,
+            scenarioBarHtml(Object.keys(setup.scenarios || {})));
+        const scn = wireScenarioBar(overlay, slug, setup, open, {},
+                                    { session, envFlush: () => envTab?.flush?.() });
 
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay) finish(null);
@@ -479,11 +505,17 @@ export async function openStorySetup(slug, setup, session) {
         overlay.querySelector('.grs-close').addEventListener('click', () => finish(null));
         overlay.querySelector('.grs-cancel').onclick = () => { close(); finish(null); };
         overlay.querySelector('.grs-start').onclick = async () => {
-            // Pending room-text edits save on Start — the only save verb
-            // here besides a preset save (Krem 2026-08-20).
-            if (envTab?.flush) {
-                try { await envTab.flush(); }
-                catch (e) { ui.showToast('Room edits failed to save: ' + e.message, 'error'); return; }
+            // ▶ Start applies everything staged: the scenario's environment
+            // half first, then pending room edits on top (your explicit
+            // edits outrank the scenario's).
+            try {
+                if (scn?.staged)
+                    await api('story/scenarios/load', 'POST',
+                              { session, slug, name: scn.staged });
+                if (envTab?.flush) await envTab.flush();
+            } catch (e) {
+                ui.showToast('Environment failed to save: ' + e.message, 'error');
+                return;
             }
             const vals = {};
             for (const s of open) {
@@ -505,18 +537,7 @@ function objectsTab(slug, session, data) {
     const authorOf = (spec) => spec?._author === 'ai' ? ' \u{1F916}' : '';
     const curId = data.current_room;
     const html = `
-        <div class="grs-section-title" style="margin-top:0">Preset</div>
-        <div class="grs-preset-row">
-            <select class="grs-set-pick" title="Picking a preset loads it into this playthrough (materializes at the zork-line)"><option value="">— the default environment —</option></select>
-            <button type="button" class="pk-btn grs-set-save" title="Save your placed objects + room text as a named preset for this story">\u{1F4BE} Save</button>
-            <button type="button" class="pk-btn grs-set-del" title="Delete the selected preset">\u{1F5D1}\u{FE0E} Delete</button>
-            <span class="grs-preset-namer" style="display:none">
-                <input type="text" class="grs-preset-name" placeholder="preset name" maxlength="60">
-                <button type="button" class="pk-btn pk-btn-primary grs-preset-ok">✓ Save</button>
-                <button type="button" class="pk-btn grs-preset-no">✕</button>
-            </span>
-        </div>
-        <div class="grs-section-title">Room</div>
+        <div class="grs-section-title" style="margin-top:0">Room</div>
         <div class="grs-room-row">
             <select class="grs-obj-room">
                 ${rooms.map(r => `<option value="${r.id}"${r.id === curId ? ' selected' : ''}>${r.id === curId ? '\u{1F4CD} ' : ''}${esc(r.title)}${r.id === curId ? ' — you are here' : ''}</option>`).join('')}
@@ -526,9 +547,12 @@ function objectsTab(slug, session, data) {
                 <div class="grs-room-stats-line"></div>
             </div>
         </div>
-        <div class="sb-field sb-field-stack">
-            <label>Full description (<span class="grs-obj-count">0</span>/900)</label>
-            <textarea class="grs-obj-template" rows="6" title="what she reads — the room's reality"></textarea>
+        <div class="grs-room-desc-row">
+            <div class="sb-field sb-field-stack grs-room-desc">
+                <label>Full description (<span class="grs-obj-count">0</span>/900)</label>
+                <textarea class="grs-obj-template" rows="6" title="what she reads — the room's reality"></textarea>
+            </div>
+            <img class="grs-room-thumb" style="display:none" alt="room image" title="the room's baked-in art (view only)">
         </div>
         <div class="sb-field sb-field-stack">
             <label>Short description</label>
@@ -562,7 +586,7 @@ function objectsTab(slug, session, data) {
             </div>
         </div>`;
 
-    const tab = { title: 'Environment', html };
+    const tab = { title: 'Rooms', html };
     tab.init = (pane) => {
         let world = data;
         // Room-text edits are PENDING until the modal's Save/▶ Start (or a
@@ -575,7 +599,6 @@ function objectsTab(slug, session, data) {
         const pArea = pane.querySelector('.grs-obj-pdesc');
         const count = pane.querySelector('.grs-obj-count');
         const curRoom = () => world.rooms.find(r => String(r.id) === roomSel.value) || world.rooms[0];
-        const dirty = () => Object.keys(pending).length || Object.keys(pendingExits).length;
 
         const stash = () => {
             const r = curRoom();
@@ -619,6 +642,9 @@ function objectsTab(slug, session, data) {
             tArea.value = px ? px.template : (r.template || r.shipped_template || '');
             pArea.value = px ? px.player_desc : (r.player_desc || r.shipped_player_desc || '');
             count.textContent = tArea.value.length;
+            const thumb = pane.querySelector('.grs-room-thumb');
+            if (r.backdrop) { thumb.src = r.backdrop; thumb.style.display = ''; }
+            else { thumb.style.display = 'none'; }
             const layerObjs = (world.objects || {})[String(r.id)] || {};
             const shippedObjs = r.shipped_objs || {};
 
@@ -878,76 +904,6 @@ function objectsTab(slug, session, data) {
 
         roomSel.onchange = paintRoom;
         paintRoom();
-
-        const setPick = pane.querySelector('.grs-set-pick');
-        let lastSet = '';   // revert target when a load is refused/declined
-        const loadSets = async () => {
-            try {
-                const d = await api(`story/${encodeURIComponent(slug)}/objsets`);
-                const names = Object.keys(d.objsets || {});
-                setPick.innerHTML = '<option value="">— the default environment —</option>'
-                    + names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-                setPick.value = lastSet;
-            } catch { /* leave as-is */ }
-        };
-        loadSets();
-        // No Load button — picking a preset loads it right then (Krem
-        // 2026-08-20); unsaved room edits get a yes/no before they're lost.
-        setPick.onchange = async () => {
-            const name = setPick.value;
-            if (!name) { lastSet = ''; return; }
-            if (dirty()
-                && !confirm('You have unsaved room edits — loading a preset discards them.\n\nContinue?')) {
-                setPick.value = lastSet;
-                return;
-            }
-            try {
-                const res = await api('story/objsets/load', 'POST', { session, slug, name });
-                if (!res.success) {
-                    ui.showToast(res.detail || 'refused', 'error');
-                    setPick.value = lastSet;
-                    return;
-                }
-                [pending, pendingExits].forEach(m => Object.keys(m).forEach(k => delete m[k]));
-                lastSet = name;
-                ui.showToast(res.detail || `'${name}' loaded`, 'success', 2500);
-                await refresh();
-            } catch (e) { ui.showToast(e.message, 'error'); setPick.value = lastSet; }
-        };
-        const setRow = setPick.closest('.grs-preset-row');
-        wireNamer(setRow, pane.querySelector('.grs-set-save'), () => setPick.value, async (name) => {
-            try {
-                await tab.flush();   // the preset snapshot must include textarea edits
-                const res = await api(`story/${encodeURIComponent(slug)}/objsets`, 'POST',
-                                      { name, session, slug });
-                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return false; }
-                if (![...setPick.options].some(o => o.value === name)) {
-                    const opt = document.createElement('option');
-                    opt.value = opt.textContent = name;
-                    setPick.appendChild(opt);
-                }
-                setPick.value = name;
-                lastSet = name;
-                ui.showToast(`Preset '${name}' saved (your objects only)`, 'success', 2500);
-            } catch (e) { ui.showToast(e.message, 'error'); return false; }
-        });
-        armDelete(pane.querySelector('.grs-set-del'), '\u{1F5D1}\u{FE0E} Delete',
-            () => {
-                if (!setPick.value) { ui.showToast('Pick a preset to delete first', 'error', 2000); return false; }
-                return true;
-            },
-            async () => {
-                const name = setPick.value;
-                try {
-                    const res = await api(`story/${encodeURIComponent(slug)}/objsets`, 'POST',
-                                          { name, delete: true });
-                    if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
-                    [...setPick.options].find(o => o.value === name)?.remove();
-                    setPick.value = '';   // placed objects stay — only the saved preset dies
-                    lastSet = '';
-                    ui.showToast(`Preset '${name}' deleted`, 'success', 2000);
-                } catch (e) { ui.showToast(e.message, 'error'); }
-            });
     };
     return tab;
 }

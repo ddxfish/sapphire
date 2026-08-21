@@ -4,7 +4,7 @@
   "short_display_name": "Game Room",
   "display_name": "Game Room",
   "description": "The Game Room host: Surface rooms, sealed-seat rails, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "emoji": "🎲",
   "author": "Krem & Claude",
   "default_enabled": true,
@@ -168,29 +168,14 @@
         "handler": "routes/story_routes.py:set_room_text"
       },
       {
-        "method": "GET",
-        "path": "story/{slug}/presets",
-        "handler": "routes/story_routes.py:get_presets"
+        "method": "POST",
+        "path": "story/{slug}/scenarios",
+        "handler": "routes/story_routes.py:set_scenario"
       },
       {
         "method": "POST",
-        "path": "story/{slug}/presets",
-        "handler": "routes/story_routes.py:set_preset"
-      },
-      {
-        "method": "GET",
-        "path": "story/{slug}/objsets",
-        "handler": "routes/story_routes.py:get_objsets"
-      },
-      {
-        "method": "POST",
-        "path": "story/{slug}/objsets",
-        "handler": "routes/story_routes.py:set_objset"
-      },
-      {
-        "method": "POST",
-        "path": "story/objsets/load",
-        "handler": "routes/story_routes.py:load_objset"
+        "path": "story/scenarios/load",
+        "handler": "routes/story_routes.py:load_scenario"
       },
       {
         "method": "POST",

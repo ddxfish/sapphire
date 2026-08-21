@@ -228,11 +228,11 @@ def test_added_exits_gated_and_deduped(story):
     session.set_room_text(CHAT, "mad-manse", 1, add_exits=[])
 
 
-def test_import_objset_skips_stamp_for_shipped_names(story, cfg_store):
-    cfg_store.save("storyobjsets:mad-manse",
+def test_import_scenario_skips_stamp_for_shipped_names(story, cfg_store):
+    cfg_store.save("storyscenarios:mad-manse",
                    {"mix": {"objects": {"1": {"chest": {"desc": "gilded"},
                                               "lamp": {"desc": "a lamp"}}}}})
-    session._import_objset(CHAT, "mad-manse", story, "mix")
+    session._import_scenario_env(CHAT, "mad-manse", story, "mix")
     layer = st.get_user_layer("mad-manse", CHAT)["objects"]["1"]
     assert "condition" not in layer["chest"]             # shadow: no deadlock stamp
     assert layer["lamp"]["condition"] == {"flag": "chest_opened"}
@@ -280,13 +280,13 @@ def test_place_object_marks_ai_and_journals(story):
 
 # ── Object sets ─────────────────────────────────────────────────────────────
 
-def test_import_objset_stamps_zork_condition(story, cfg_store):
-    cfg_store.save("storyobjsets:mad-manse", {
+def test_import_scenario_env_stamps_zork_condition(story, cfg_store):
+    cfg_store.save("storyscenarios:mad-manse", {
         "bbq": {"objects": {"1": {"grill": {"desc": "A hot grill."},
                                   "banner": {"desc": "A banner.",
                                              "condition": {"flag": "own"}}}},
                 "rooms": {"2": {"template": "BBQ parlor."}}}})
-    session._import_objset(CHAT, "mad-manse", story, "bbq")
+    session._import_scenario_env(CHAT, "mad-manse", story, "bbq")
     layer = st.get_user_layer("mad-manse", CHAT)
     assert layer["objects"]["1"]["grill"]["condition"] == \
         {"flag": "chest_opened"}                       # implicit stamp
@@ -294,7 +294,9 @@ def test_import_objset_stamps_zork_condition(story, cfg_store):
     assert layer["rooms"]["2"]["template"] == "BBQ parlor."
 
 
-def test_objset_save_excludes_ai_objects(story, cfg_store, monkeypatch):
+# ── Scenarios (unified: slots + environment, Krem 2026-08-20) ───────────────
+
+def test_scenario_roundtrip_and_ai_filter(story, cfg_store, monkeypatch):
     session.upsert_user_object(CHAT, "mad-manse", 1, "mine", {"desc": "x"},
                                author="player")
     session.upsert_user_object(CHAT, "mad-manse", 1, "hers", {"desc": "y"},
@@ -302,30 +304,37 @@ def test_objset_save_excludes_ai_objects(story, cfg_store, monkeypatch):
     st.set_active(CHAT, "mad-manse", None)
     from routes import story_routes
     monkeypatch.setattr(story_routes, "_system", lambda: None)
-    r = story_routes.set_objset("mad-manse",
-                                body={"name": "snap", "session": CHAT})
+    r = story_routes.set_scenario("mad-manse",
+                                  body={"name": "snap", "session": CHAT,
+                                        "slots": {"relationship": "wife",
+                                                  "empty": "  "}})
     assert r["success"], r
-    saved = cfg_store.d["storyobjsets:mad-manse"]["snap"]
+    saved = cfg_store.d["storyscenarios:mad-manse"]["snap"]
+    assert saved["slots"] == {"relationship": "wife"}     # env + slots in ONE
     assert "mine" in saved["objects"]["1"]
-    assert "hers" not in saved["objects"]["1"]
+    assert "hers" not in saved["objects"]["1"]            # fork 2: AI excluded
+    r = story_routes.set_scenario("mad-manse", body={"name": "snap",
+                                                     "delete": True})
+    assert r["success"]
+    assert cfg_store.d["storyscenarios:mad-manse"] == {}
     st.clear_active(CHAT)
+    session.delete_user_object(CHAT, "mad-manse", 1, "mine")
+    session.delete_user_object(CHAT, "mad-manse", 1, "hers")
 
 
-# ── Presets + setup routes ──────────────────────────────────────────────────
-
-def test_preset_roundtrip(story, cfg_store):
+def test_scenario_migration_folds_old_stores(story, cfg_store):
     from routes import story_routes
-    r = story_routes.set_preset("mad-manse",
-                                body={"name": "ghost-run",
-                                      "slots": {"relationship": "wife",
-                                                "empty": "  "}})
-    assert r["success"]
-    got = story_routes.get_presets("mad-manse")["presets"]["ghost-run"]
-    assert got["slots"] == {"relationship": "wife"}
-    r = story_routes.set_preset("mad-manse", body={"name": "ghost-run",
-                                                   "delete": True})
-    assert r["success"]
-    assert story_routes.get_presets("mad-manse")["presets"] == {}
+    cfg_store.save("storypresets:mad-manse",
+                   {"ghost-run": {"slots": {"relationship": "wife"}}})
+    cfg_store.save("storyobjsets:mad-manse",
+                   {"ghost-run": {"objects": {"1": {"orb": {"desc": "o"}}},
+                                  "rooms": {}},
+                    "bbq-only": {"objects": {}, "rooms": {"2": {"template": "B."}}}})
+    scen = story_routes._scenarios(cfg_store, "mad-manse")
+    assert scen["ghost-run"]["slots"] == {"relationship": "wife"}   # merged pair
+    assert "orb" in scen["ghost-run"]["objects"]["1"]
+    assert scen["bbq-only"]["rooms"]["2"]["template"] == "B."
+    assert cfg_store.d["storyscenarios:mad-manse"] == scen          # persisted once
 
 
 def test_prestart_environment_edits(story, cfg_store, monkeypatch):
@@ -378,7 +387,7 @@ def test_setup_route_shape(story, cfg_store):
     r = story_routes.get_setup("mad-manse")
     assert r["open_flag"] == "chest_opened"
     assert [s["key"] for s in r["slots"]] == ["relationship", "watchword", "combo"]
-    assert r["objsets"] == [] and r["presets"] == {}
+    assert r["scenarios"] == {}
 
 
 def test_settings_schema_slot_story_gm_only(story, cfg_store):

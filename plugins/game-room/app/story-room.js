@@ -754,7 +754,7 @@ function paintControls(a) {
         const mod = await import(`./settings-modal.js?v=${bootV()}`);
         mod.openStorySettings(_story?.slug, {
             session: _session, active: true,
-            slots: _status?.slots || {}, tab: 'Environment',
+            slots: _status?.slots || {}, tab: 'Rooms',
         });
     };
     row.querySelector('#st-pause').onclick = async () => {

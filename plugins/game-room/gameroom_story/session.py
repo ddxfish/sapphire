@@ -530,18 +530,20 @@ def _clean_slots(story, slots):
 
 
 def start(system, slug, character=None, mode=None, local=None, session=None,
-          slots=None, objset=None):
+          slots=None):
     with _lifecycle_lock:
         return _start(system, slug, character, mode, local, session,
-                      slots=slots, objset=objset)
+                      slots=slots)
 
 
-def _import_objset(chat, slug, story, name):
-    """Copy a saved object set into this playthrough's user layer. Objects
-    without their own condition get the implicit zork-line stamp (Krem's
-    ruling: sets materialize when the house opens). Room-text overrides
-    ride along un-stamped — the merge gates them on the same flag."""
-    sets = _store().get(f"storyobjsets:{slug}") or {}
+def _import_scenario_env(chat, slug, story, name):
+    """Copy a saved scenario's ENVIRONMENT (objects + room overrides) into
+    this playthrough's user layer — the slots half rides the form/start
+    path. Objects without their own condition get the implicit zork-line
+    stamp (Krem's ruling: sets materialize when the house opens); shipped-
+    name shadows/tombstones are exempt (deadlock guard). Room-text + exits
+    ride un-stamped — the merge gates them on the same flag."""
+    sets = _store().get(f"storyscenarios:{slug}") or {}
     data = sets.get(name)
     if not isinstance(data, dict):
         raise KeyError(name)
@@ -578,7 +580,7 @@ def _import_objset(chat, slug, story, name):
                                     "rooms": merged_rooms})
 
 
-def _start(system, slug, character, mode, local, session, slots=None, objset=None):
+def _start(system, slug, character, mode, local, session, slots=None):
     chat = _chat_name(system, session)
     if session and not _chat_exists(system, chat):
         return f"No chat named '{chat}' — a story's session must be a real chat.", False
@@ -627,13 +629,8 @@ def _start(system, slug, character, mode, local, session, slots=None, objset=Non
                      prev_toolset=cur.get("toolset", "all"),
                      prev_extras=cur.get("extra_toolsets") or [],
                      slots=slot_vals)
-    if objset:
-        try:
-            _import_objset(chat, slug, story, str(objset))
-        except KeyError:
-            logger.warning(f"[STORY] object set '{objset}' not found for '{slug}' — starting without it")
-        except Exception as e:
-            logger.warning(f"[STORY] object set '{objset}' import failed: {e}")
+    # (Scenario ENV imports happen via story/scenarios/load — staged by the
+    # setup form and flushed before start; no start-time param anymore.)
 
     # Stamp the story cockpit: none of hers + the referee (ruling 2026-08-03).
     # Users change it after via the sidebar; the checkbox is extra_toolsets.

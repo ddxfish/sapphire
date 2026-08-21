@@ -65,13 +65,12 @@ def start(body=None, **_):
     character = ((body or {}).get("character") or "").strip() or None
     mode = ((body or {}).get("mode") or "").strip() or None
     local = ((body or {}).get("local") or "").strip() or None
-    # Open-mansion v1: Mad-Libs slot values + optional object set to stock
-    # the house with (plan tmp/open-mansion-plan.md).
+    # Open-mansion v1: Mad-Libs slot values (plan tmp/open-mansion-plan.md).
+    # Scenario ENV rides story/scenarios/load, flushed by the form pre-start.
     slots = (body or {}).get("slots")
     slots = slots if isinstance(slots, dict) else None
-    objset = str((body or {}).get("objset") or "").strip() or None
     msg, ok = _session().start(_system(), slug, character, mode=mode, local=local,
-                               session=_sess_arg(body), slots=slots, objset=objset)
+                               session=_sess_arg(body), slots=slots)
     return {"success": ok, "detail": msg}
 
 
@@ -243,13 +242,36 @@ def get_setup(slug, **_):
     if slug not in rooms.list_stories():
         return ({'error': f'Unknown story: {slug}'}, 404)
     meta = rooms.load_story(slug)['meta']
-    presets = sess._store().get(f'storypresets:{slug}') or {}
-    objsets = sess._store().get(f'storyobjsets:{slug}') or {}
+    scen = _scenarios(sess._store(), slug)
     return {'slug': slug, 'title': meta.get('title', slug),
             'slots': rooms.story_slots(meta),
             'open_flag': (meta.get('open_flag') or '').strip(),
-            'presets': presets,
-            'objsets': sorted(objsets)}
+            # Slim view: the form needs names + slot values; the env half
+            # stays server-side and applies via story/scenarios/load.
+            'scenarios': {n: {'slots': (e or {}).get('slots') or {}}
+                          for n, e in scen.items()}}
+
+
+def _scenarios(store, slug):
+    """The unified per-story scenario store (Krem 2026-08-20: one dropdown,
+    slots + environment = one authored thing). Lazy one-time migration
+    folds the old setup presets and object sets in — same-named pairs merge
+    into one scenario; the old keys stay behind untouched."""
+    key = f'storyscenarios:{slug}'
+    cur = store.get(key)
+    if cur is not None:
+        return cur if isinstance(cur, dict) else {}
+    cur = {}
+    for name, p in (store.get(f'storypresets:{slug}') or {}).items():
+        if isinstance(p, dict):
+            cur[str(name)] = {'slots': p.get('slots') or {}}
+    for name, o in (store.get(f'storyobjsets:{slug}') or {}).items():
+        if isinstance(o, dict):
+            ent = cur.setdefault(str(name), {})
+            ent['objects'] = o.get('objects') or {}
+            ent['rooms'] = o.get('rooms') or {}
+    store.save(key, cur)
+    return cur
 
 
 def _active_ctx(query=None, body=None):
@@ -291,11 +313,13 @@ def get_objects(query=None, **_):
                    for v in (o.get('interactions') or {}).values()
                    if isinstance(v, dict))
 
+    sess = _session()
     for rid in sorted(shipped['rooms']):
         room = shipped['rooms'][rid]
         ov = (layer.get('rooms') or {}).get(str(rid)) or {}
         objs = room.get('objects') or {}
         room_rows.append({'id': rid, 'title': room.get('title'),
+                          'backdrop': sess._backdrop_url(shipped, room) or '',
                           'shipped_template': room.get('template') or '',
                           'shipped_player_desc': room.get('player_desc') or '',
                           'template': ov.get('template') or '',
@@ -436,52 +460,24 @@ def set_room_text(body=None, **_):
 _PRESET_CAP = 50
 
 
-def get_presets(slug, **_):
-    return {'presets': _session()._store().get(f'storypresets:{slug}') or {}}
-
-
-def set_preset(slug, body=None, **_):
-    """Save/delete one setup preset (slot values only — the who-we-are
-    axis). Object sets are the separate what-the-house-holds axis."""
-    body = body or {}
-    name = str(body.get('name') or '').strip()[:60]
-    if not name:
-        return {'success': False, 'detail': 'Preset needs a name.'}
-    sess = _session()
-    key = f'storypresets:{slug}'
-    cur = sess._store().get(key) or {}
-    if body.get('delete'):
-        cur.pop(name, None)
-    else:
-        if name not in cur and len(cur) >= _PRESET_CAP:
-            return {'success': False, 'detail': f'Preset cap reached ({_PRESET_CAP}).'}
-        slots = body.get('slots') if isinstance(body.get('slots'), dict) else {}
-        cur[name] = {'slots': {str(k)[:60]: str(v)[:500]
-                               for k, v in slots.items() if str(v).strip()}}
-    sess._store().save(key, cur)
-    return {'success': True, 'presets': sorted(cur)}
-
-
-def get_objsets(slug, **_):
-    return {'objsets': _session()._store().get(f'storyobjsets:{slug}') or {}}
-
-
-def set_objset(slug, body=None, **_):
-    """Save/delete one object set. Save snapshots the SESSION's current user
-    layer — minus AI-placed objects (fork 2: hers were that run's surprise).
-    Import back happens at story start (objset param) or mid-run via load."""
+def set_scenario(slug, body=None, **_):
+    """Save/delete one scenario — slots (from the form) + the playthrough's
+    current ENVIRONMENT (user layer minus AI-placed objects; fork 2: hers
+    were that run's surprise). One named thing = the whole authored world
+    (Krem 2026-08-20)."""
     from gameroom_story import state as st
     body = body or {}
     name = str(body.get('name') or '').strip()[:60]
     if not name:
-        return {'success': False, 'detail': 'Object set needs a name.'}
+        return {'success': False, 'detail': 'Scenario needs a name.'}
     sess = _session()
-    key = f'storyobjsets:{slug}'
-    cur = sess._store().get(key) or {}
+    store = sess._store()
+    key = f'storyscenarios:{slug}'
+    cur = dict(_scenarios(store, slug))
     if body.get('delete'):
         cur.pop(name, None)
-        sess._store().save(key, cur)
-        return {'success': True, 'objsets': sorted(cur)}
+        store.save(key, cur)
+        return {'success': True, 'scenarios': sorted(cur)}
     chat, active_slug, err = _active_ctx(body=body)
     if err:
         return err
@@ -489,7 +485,7 @@ def set_objset(slug, body=None, **_):
         return {'success': False,
                 'detail': f"This session is playing '{active_slug}', not '{slug}'."}
     # Privacy gate (plan care point): the plugin store is NOT encrypted — a
-    # private playthrough's authored objects must not leak into it. Fails
+    # private playthrough's authored world must not leak into it. Fails
     # CLOSED on a settings-read error (silent-default class rule).
     sm = None
     try:
@@ -501,14 +497,16 @@ def set_objset(slug, body=None, **_):
             s = sm.get_settings_for(chat)
             if isinstance(s, dict) and s.get('private_chat'):
                 return {'success': False, 'detail':
-                        'This playthrough is private — object sets save to '
+                        'This playthrough is private — scenarios save to '
                         'unencrypted storage. Release the chat first if you '
-                        'really want this set shared.'}
+                        'really want this scenario shared.'}
         except Exception:
             return {'success': False,
                     'detail': 'Could not verify chat privacy — refusing to save.'}
     if name not in cur and len(cur) >= _PRESET_CAP:
-        return {'success': False, 'detail': f'Object-set cap reached ({_PRESET_CAP}).'}
+        return {'success': False, 'detail': f'Scenario cap reached ({_PRESET_CAP}).'}
+    slots = body.get('slots') if isinstance(body.get('slots'), dict) else {}
+    slots = {str(k)[:60]: str(v)[:1200] for k, v in slots.items() if str(v).strip()}
     layer = st.get_user_layer(slug, chat)
     objects = {}
     for rid, objs in (layer.get('objects') or {}).items():
@@ -518,9 +516,10 @@ def set_objset(slug, body=None, **_):
                 if isinstance(s, dict) and s.get('_author') != 'ai'}
         if keep:
             objects[rid] = keep
-    cur[name] = {'objects': objects, 'rooms': layer.get('rooms') or {}}
-    sess._store().save(key, cur)
-    return {'success': True, 'objsets': sorted(cur)}
+    cur[name] = {'slots': slots, 'objects': objects,
+                 'rooms': layer.get('rooms') or {}}
+    store.save(key, cur)
+    return {'success': True, 'scenarios': sorted(cur)}
 
 
 def set_slots(body=None, **_):
@@ -531,9 +530,10 @@ def set_slots(body=None, **_):
     return {'success': ok, 'detail': msg}
 
 
-def load_objset(body=None, **_):
-    """Mid-run set import — the live transform: load 'Backyard BBQ' while
-    she's three rooms deep; it materializes at the zork-line."""
+def load_scenario(body=None, **_):
+    """Apply a scenario's ENVIRONMENT half to this playthrough (staged by
+    the form, flushed on Save/\u25b6 Start — also works pre-start via the
+    slug fallback). The slots half rides the form/start path."""
     from gameroom_story import rooms
     body = body or {}
     chat, slug, err = _active_ctx(body=body)
@@ -543,9 +543,9 @@ def load_objset(body=None, **_):
     story = rooms.load_story(slug)
     sess = _session()
     try:
-        sess._import_objset(chat, slug, story, name)
+        sess._import_scenario_env(chat, slug, story, name)
     except KeyError:
-        return {'success': False, 'detail': f"No object set named '{name}'."}
+        return {'success': False, 'detail': f"No scenario named '{name}'."}
     except Exception as e:
         return {'success': False, 'detail': str(e)}
     return {'success': True, 'detail': f"'{name}' loaded into this playthrough."}
