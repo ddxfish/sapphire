@@ -184,6 +184,10 @@ class PluginChatState:
     def append(self, chat_name: str, key: str, value) -> int:
         return self._sm().plugin_data_append(self._name, chat_name, key, value)
 
+    def append_many(self, chat_name: str, key: str, values: list) -> list:
+        """Append several rows in ONE transaction — all land or none."""
+        return self._sm().plugin_data_append_many(self._name, chat_name, key, values)
+
     def read_all(self, chat_name: str, key: str) -> list:
         return self._sm().plugin_data_read_all(self._name, chat_name, key)
 

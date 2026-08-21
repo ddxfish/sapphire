@@ -148,34 +148,54 @@ def save_user_layer(story, chat, data):
 
 # ── Journal ──────────────────────────────────────────────────────────────────
 
-def append(story, chat, event):
-    """Append one resolved event. Caller supplies {'event': ..., ...};
-    the current turn number is stamped in by the caller via 'turn'.
-
-    Turn anchor (Krem's ruling 2026-08-03): every event records the chat's
+def _stamp_anchor(chat, event):
+    """Turn anchor (Krem's ruling 2026-08-03): every event records the chat's
     message count at write time, so a future revert can trim the transcript
     back to the matching point. Time-machine rule — anchors must exist
     before anyone can travel to them. Best-effort; replay ignores it."""
-    if "msg_index" not in event:
-        try:
-            from core.api_fastapi import get_system
-            system = get_system()
-            # `is not None`, never truthiness: SessionManager defines __len__,
-            # so an empty chat makes the whole manager falsy (found 2026-08-03).
-            sm = system.llm_chat.session_manager if system else None
-            if sm is not None and sm.get_active_chat_name() == chat:
-                event["msg_index"] = len(sm.get_messages_for_display())
-        except Exception as e:
-            global _anchor_warned
-            if not _anchor_warned:
-                _anchor_warned = True
-                logger.warning(f"[STORY] turn anchors not recording (first failure: {e}) — revert-to-message will lack alignment for this run")
+    if "msg_index" in event:
+        return
+    try:
+        from core.api_fastapi import get_system
+        system = get_system()
+        # `is not None`, never truthiness: SessionManager defines __len__,
+        # so an empty chat makes the whole manager falsy (found 2026-08-03).
+        sm = system.llm_chat.session_manager if system else None
+        if sm is not None and sm.get_active_chat_name() == chat:
+            event["msg_index"] = len(sm.get_messages_for_display())
+    except Exception as e:
+        global _anchor_warned
+        if not _anchor_warned:
+            _anchor_warned = True
+            logger.warning(f"[STORY] turn anchors not recording (first failure: {e}) — revert-to-message will lack alignment for this run")
+
+
+def append(story, chat, event):
+    """Append one resolved event. Caller supplies {'event': ..., ...};
+    the current turn number is stamped in by the caller via 'turn'."""
+    _stamp_anchor(chat, event)
     # Sealed-vault backstop (P3-T9, now core-enforced): the store RAISES on
     # a hidden chat's write — catch and warn to keep this rail no-raise for
     # its per-turn callers. Loud, matching the fail-loudly ruling.
     with _lock:
         try:
             _cs().append(chat, _jkey(story), event)
+        except Exception as e:
+            logger.warning(f"[STORY] journal write refused: {e}")
+
+
+def append_many(story, chat, events):
+    """Append a resolve's events in ONE transaction — all land or none
+    (2026-08-21 torn-commit incident: per-event appends journaled `hold`
+    but died before its set-flag, leaving replay half a turn). Same anchor
+    stamping and no-raise rail as append."""
+    if not events:
+        return
+    for ev in events:
+        _stamp_anchor(chat, ev)
+    with _lock:
+        try:
+            _cs().append_many(chat, _jkey(story), events)
         except Exception as e:
             logger.warning(f"[STORY] journal write refused: {e}")
 

@@ -852,7 +852,7 @@ const REQ_TYPES = [
     ['has', 'needs item', 'item name, e.g. bronze_key', ''],
     ['did', 'needs opened/used', 'object name, e.g. door1', ''],
     ['flag', 'flag is set', 'flag name, e.g. ballroom_unlocked', ''],
-    ['password', 'password / riddle', 'the answer, e.g. 1234', 'riddle / prompt she sees (optional)'],
+    ['solved', 'riddle solved', 'object with the riddle — usually this one', ''],
     ['d20', 'd20 chance', 'roll needed, e.g. 11', ''],
     ['d100', 'd100 chance', 'roll needed, e.g. 51', ''],
 ];
@@ -865,11 +865,11 @@ const FX_TYPES = [
     ['xrem', 'remove prompt piece', 'piece name, e.g. hostile', ''],
     ['goto', 'move player to room', 'room number, e.g. 3', ''],
 ];
-// Exits: no password (a riddle door = a door OBJECT with a password; the
-// exit then Requires "needs opened/used" on it) and no searched (search
-// finds objects; a found lever's flag makes the passage appear).
+// Exits: no riddle-solved (a riddle door = a door OBJECT with a riddle;
+// the exit then Requires "needs opened/used" on it) and no searched
+// (search finds objects; a found lever's flag makes the passage appear).
 const EXIT_VIS = VIS_TYPES.filter(t => t[0] !== 'searched');
-const EXIT_REQ = REQ_TYPES.filter(t => t[0] !== 'password');
+const EXIT_REQ = REQ_TYPES.filter(t => t[0] !== 'solved');
 const EXIT_FAIL_MSG = 'Not this time — the way defeats the attempt.';
 const EXIT_MECH = ['condition', 'roll', 'effects', 'visible_when'];
 
@@ -970,76 +970,90 @@ const objMerged = (sspec, ov) => {
     if (Object.keys(ints).length) m.interactions = ints;
     return m;
 };
-// spec → the editor's neutral descriptor (what the form fields hold);
-// mirrors what the DOM prefill can express — v0's locks speak for all
-// verbs, puzzle collapses to one solution, solved is the password row's
-const objToDescriptor = (spec) => {
-    const ints = spec.interactions || {};
-    const vspecs = Object.values(ints).filter(s => s && typeof s === 'object');
-    const v0 = vspecs[0] || {};
-    const fxSrc = v0.roll ? (v0.roll.success || {})
-        : (vspecs.length ? v0 : (spec.on_solve || {}));
+// spec → the editor's neutral descriptor (what the form fields hold).
+// THE FLIP (Krem 2026-08-21): the ACTION is the unit — each verb carries
+// its own cond/dice/fx/msg, matching the engine's real per-verb grammar.
+// The object owns desc/take/visibility/riddle; solve effects live on the
+// riddle (on_solve — the engine fires it at solve time regardless of
+// interactions, referee solve path); `solved` is a plain condition key
+// (the 'riddle solved' req row), so cross-object solves express too.
+const FX_KEYS = ['set', 'gives', 'adjust', 'extras', 'extras_remove', 'goto'];
+const _fxOf = (src) => {
     const fx = {};
-    for (const k of ['set', 'gives', 'adjust', 'extras', 'extras_remove', 'goto'])
-        if (fxSrc[k] != null) fx[k] = fxSrc[k];
-    const cond = { ...(v0.condition || {}) };
-    delete cond.solved;
+    for (const k of FX_KEYS) if (src[k] != null) fx[k] = src[k];
+    return Object.keys(fx).length ? fx : null;
+};
+const _fxWords = (f) => [
+    ...Object.entries(f.set || {}).map(([k, v]) => `${v === false ? 'clears' : 'sets'} ${k}`),
+    ...(f.gives ? [`gives ${f.gives}`] : []),
+    ...Object.entries(f.adjust || {}).map(([k, n]) => `${k} ${n > 0 ? '+' : ''}${n}`),
+    ...(f.extras || []).map(e => `+${e}`),
+    ...(f.extras_remove || []).map(e => `−${e}`),
+    ...(f.goto != null ? [`→ room ${f.goto}`] : [])].join(', ');
+const objToDescriptor = (spec) => {
     const puz = spec.puzzle;
     return {
         desc: spec.desc || '', take: !!spec.takeable,
         hidden: !!spec.hidden, visCond: spec.condition || null,
-        cond: Object.keys(cond).length ? cond : null,
         puzzle: puz ? { riddle: puz.riddle || OBJ_RIDDLE_DEFAULT,
                         solution: (puz.solutions || [])[0] ?? puz.solution ?? '' } : null,
-        dice: v0.roll ? { sides: v0.roll.sides, beat: v0.roll.beat } : null,
-        fx: Object.keys(fx).length ? fx : null,
-        msg: v0.blocked_message || '',
-        acts: Object.entries(ints).filter(([, s]) => s && typeof s === 'object')
-            .map(([v, s]) => [v, s.message
-                ?? (s.roll && s.roll.success && s.roll.success.message) ?? '']),
+        // solve effects only make sense with a riddle to solve; an
+        // on_solve on a puzzle-less object is unexpressible → gated out
+        solveFx: puz ? _fxOf(spec.on_solve || {}) : null,
+        acts: Object.entries(spec.interactions || {})
+            .filter(([, s]) => s && typeof s === 'object')
+            .map(([verb, s]) => ({
+                verb,
+                resp: s.message
+                    ?? (s.roll && s.roll.success && s.roll.success.message) ?? '',
+                cond: Object.keys(s.condition || {}).length ? { ...s.condition } : null,
+                dice: s.roll ? { sides: s.roll.sides, beat: s.roll.beat } : null,
+                fx: _fxOf(s.roll ? (s.roll.success || {}) : s),
+                msg: s.blocked_message || '',
+            })),
     };
 };
 // descriptor (+ passenger source) → spec. ONE compile for the user-object
 // lane (src null), the gated shipped lane, and the fits check.
 const compileObj = (name, d, src) => {
     const spec = { desc: d.desc };
-    const acts = {};
-    for (const [verb, resp] of d.acts) {
-        if (!verb) continue;
-        acts[verb] = { message: resp || `You ${verb} the ${name}.` };
-    }
     if (d.take) spec.takeable = true;
     if (d.hidden) spec.hidden = true;
     if (d.visCond) spec.condition = d.visCond;
-    const cond = { ...(d.cond || {}), ...(d.puzzle ? { solved: name } : {}) };
-    const fxHas = d.fx && Object.keys(d.fx).length;
-    if (Object.keys(cond).length || d.puzzle || d.dice || fxHas) {
-        if (d.puzzle) spec.puzzle = { ...d.puzzle };
-        for (const v of Object.values(acts)) {
-            if (Object.keys(cond).length) {
-                v.condition = cond;
-                if (d.msg) v.blocked_message = d.msg;
-            }
-            if (d.dice) {
-                // chance replaces the flat outcome: response + effects
-                // ride the success branch
-                v.roll = { sides: d.dice.sides, beat: d.dice.beat,
-                           success: { message: v.message, ...(d.fx || {}) },
-                           failure: { message: OBJ_FAIL_MSG } };
-                delete v.message;
-            } else if (fxHas) {
-                Object.assign(v, d.fx);
-            }
+    if (d.puzzle) spec.puzzle = { ...d.puzzle };
+    if (d.solveFx) spec.on_solve = { ...d.solveFx };
+    const acts = {};
+    for (const a of d.acts) {
+        if (!a.verb) continue;
+        const v = {};
+        const resp = a.resp || `You ${a.verb} the ${name}.`;
+        if (a.cond && Object.keys(a.cond).length) {
+            v.condition = { ...a.cond };
+            if (a.msg) v.blocked_message = a.msg;
         }
-        if (!Object.keys(acts).length && d.puzzle && fxHas)
-            spec.on_solve = { ...d.fx };   // pure riddle: effects on solve
+        if (a.dice) {
+            // chance replaces the flat outcome: response + effects
+            // ride the success branch
+            v.roll = { sides: a.dice.sides, beat: a.dice.beat,
+                       success: { message: resp, ...(a.fx || {}) },
+                       failure: { message: OBJ_FAIL_MSG } };
+        } else {
+            v.message = resp;
+            if (a.fx) Object.assign(v, a.fx);
+        }
+        acts[a.verb] = v;
     }
     if (src) {                             // passengers ride their carrier
         for (const k of ['found_by', 'gives'])
             if (src[k] != null) spec[k] = src[k];
-        if (spec.on_solve && src.on_solve)
+        if (src.on_solve) {
+            // message/emotions are passengers even when the fx half was
+            // edited away — or was never there (message-only on_solve)
+            const os = spec.on_solve || {};
             for (const k of ['message', 'emotions', 'emotions_remove'])
-                if (src.on_solve[k] != null) spec.on_solve[k] = src.on_solve[k];
+                if (src.on_solve[k] != null) os[k] = src.on_solve[k];
+            if (Object.keys(os).length) spec.on_solve = os;
+        }
         const sints = src.interactions || {};
         for (const [verb, v] of Object.entries(acts)) {
             const sv = sints[verb];
@@ -1047,6 +1061,10 @@ const compileObj = (name, d, src) => {
             if (sv.aliases != null) v.aliases = sv.aliases;
             if (v.roll && sv.roll && typeof sv.roll === 'object') {
                 if (sv.roll.failure) v.roll.failure = { ...sv.roll.failure };
+                // once-dice metadata rides the roll it belongs to (the
+                // authoring checkbox is a W3 rider — passenger until then)
+                for (const k of ['once', 'retry_message'])
+                    if (sv.roll[k] != null) v.roll[k] = sv.roll[k];
                 for (const k of ['emotions', 'emotions_remove'])
                     if (sv.roll.success && sv.roll.success[k] != null)
                         v.roll.success[k] = sv.roll.success[k];
@@ -1095,20 +1113,17 @@ const objMechWords = (spec) => {
 function locksWidget(form, opts) {
     const types = opts.types;
     const q = (sel) => form.querySelector(sel);
+    // Sections are OPTIONAL (the flip, 2026-08-21): the widget wires
+    // whichever of the vis/req/fx blocks exist inside `form` — the object
+    // section hosts vis alone, each action card hosts req+fx, the riddle
+    // body hosts fx alone, the exit form hosts all three.
     const visToggle = q('.grs-vis-toggle'), reqToggle = q('.grs-req-toggle'), fxToggle = q('.grs-fx-toggle');
     const visLabel = q('.grs-vis-label'), reqLabel = q('.grs-req-label'), fxLabel = q('.grs-fx-label');
     const visBody = q('.grs-vis-body'), reqBody = q('.grs-req-body'), fxBody = q('.grs-fx-body');
     const visRows = q('.grs-vis-rows'), reqRows = q('.grs-req-rows'), fxRows = q('.grs-fx-rows');
     const lockMsg = q('.grs-lock-msg');
-    visToggle.onchange = () => { visBody.style.display = visToggle.checked ? '' : 'none'; };
-    reqToggle.onchange = () => {
-        reqBody.style.display = reqToggle.checked ? '' : 'none';
-        if (reqToggle.checked && opts.onReqOpen) opts.onReqOpen();
-    };
-    fxToggle.onchange = () => {
-        fxBody.style.display = fxToggle.checked ? '' : 'none';
-        if (fxToggle.checked && opts.onFxOpen) opts.onFxOpen();
-    };
+    for (const [t, b] of [[visToggle, visBody], [reqToggle, reqBody], [fxToggle, fxBody]])
+        if (t) t.onchange = () => { b.style.display = t.checked ? '' : 'none'; };
     const pickRow = (host, tlist, kind, val, extra) => {
         const row = document.createElement('div');
         row.className = 'grs-act-row';
@@ -1140,12 +1155,13 @@ function locksWidget(form, opts) {
         host.appendChild(row);
         return row;
     };
-    q('.grs-vis-add').onclick = () =>
-        pickRow(visRows, types.vis).querySelector('.grs-pick-kind').focus();
-    q('.grs-req-add').onclick = () =>
-        pickRow(reqRows, types.req).querySelector('.grs-pick-val').focus();
-    q('.grs-fx-add').onclick = () =>
-        pickRow(fxRows, types.fx).querySelector('.grs-pick-val').focus();
+    for (const [sel, host, tlist, focus] of [
+        ['.grs-vis-add', visRows, types.vis, '.grs-pick-kind'],
+        ['.grs-req-add', reqRows, types.req, '.grs-pick-val'],
+        ['.grs-fx-add', fxRows, types.fx, '.grs-pick-val']]) {
+        const btn = q(sel);
+        if (btn) btn.onclick = () => pickRow(host, tlist).querySelector(focus).focus();
+    }
 
     const rawRows = (host) => [...host.querySelectorAll('.grs-act-row')].map(row => ({
         kind: row.querySelector('.grs-pick-kind').value,
@@ -1155,21 +1171,21 @@ function locksWidget(form, opts) {
     const rowsOf = (host) => rawRows(host).filter(x => x.val);
 
     const clear = () => {
-        for (const t of [visToggle, reqToggle, fxToggle]) t.checked = false;
-        for (const b of [visBody, reqBody, fxBody]) b.style.display = 'none';
-        for (const l of [visLabel, reqLabel, fxLabel]) l.style.display = '';
-        for (const h of [visRows, reqRows, fxRows]) h.innerHTML = '';
-        lockMsg.value = '';
+        for (const t of [visToggle, reqToggle, fxToggle].filter(Boolean)) t.checked = false;
+        for (const b of [visBody, reqBody, fxBody].filter(Boolean)) b.style.display = 'none';
+        for (const l of [visLabel, reqLabel, fxLabel].filter(Boolean)) l.style.display = '';
+        for (const h of [visRows, reqRows, fxRows].filter(Boolean)) h.innerHTML = '';
+        if (lockMsg) lockMsg.value = '';
     };
     const showAuthoring = (on) => {
-        for (const l of [visLabel, reqLabel, fxLabel]) l.style.display = on ? '' : 'none';
-        if (!on) for (const b of [visBody, reqBody, fxBody]) b.style.display = 'none';
+        for (const l of [visLabel, reqLabel, fxLabel].filter(Boolean)) l.style.display = on ? '' : 'none';
+        if (!on) for (const b of [visBody, reqBody, fxBody].filter(Boolean)) b.style.display = 'none';
     };
 
     // Visible-when rows → the existence gate: `hidden` (search reveal)
     // and/or a condition {has, did, flag}.
     const readVis = () => {
-        if (!visToggle.checked) return null;
+        if (!visToggle || !visToggle.checked) return null;
         const out = { hidden: false, cond: {} };
         for (const x of rawRows(visRows)) {
             if (x.kind === 'searched') out.hidden = true;
@@ -1182,19 +1198,18 @@ function locksWidget(form, opts) {
         return (out.hidden || out.cond) ? out : null;
     };
 
-    const readLocks = (name) => {
-        if (!reqToggle.checked && !fxToggle.checked) return null;
+    const readLocks = () => {
+        const reqOn = reqToggle && reqToggle.checked;
+        const fxOn = fxToggle && fxToggle.checked;
+        if (!reqOn && !fxOn) return null;
         const cond = {};
-        let puzzle = null, dice = null;
-        if (reqToggle.checked) for (const x of rowsOf(reqRows)) {
+        let dice = null;
+        if (reqOn) for (const x of rowsOf(reqRows)) {
             if (x.kind === 'has' && !cond.has) cond.has = x.val;
             else if (x.kind === 'did' && !cond.did) cond.did = x.val;
             else if (x.kind === 'flag' && !cond.flag) cond.flag = x.val;
-            else if (x.kind === 'password' && !puzzle) {
-                puzzle = { riddle: x.extra || OBJ_RIDDLE_DEFAULT,
-                           solution: x.val };
-                cond.solved = name;
-            } else if ((x.kind === 'd20' || x.kind === 'd100') && !dice) {
+            else if (x.kind === 'solved' && !cond.solved) cond.solved = x.val;
+            else if ((x.kind === 'd20' || x.kind === 'd100') && !dice) {
                 const sides = x.kind === 'd20' ? 20 : 100;
                 const beat = parseInt(x.val, 10);
                 dice = { sides, beat: Number.isFinite(beat)
@@ -1202,7 +1217,7 @@ function locksWidget(form, opts) {
             }
         }
         const fx = {};
-        if (fxToggle.checked) for (const x of rowsOf(fxRows)) {
+        if (fxOn) for (const x of rowsOf(fxRows)) {
             if (x.kind === 'set') (fx.set = fx.set || {})[x.val] = true;
             else if (x.kind === 'clear') (fx.set = fx.set || {})[x.val] = false;
             else if (x.kind === 'give' && !fx.gives) fx.gives = x.val;
@@ -1219,59 +1234,61 @@ function locksWidget(form, opts) {
             }
         }
         const out = { cond: Object.keys(cond).length ? cond : null,
-                      puzzle, dice,
+                      dice,
                       fx: Object.keys(fx).length ? fx : null,
-                      msg: lockMsg.value.trim() };
-        return (out.cond || out.puzzle || out.dice || out.fx) ? out : null;
+                      msg: lockMsg ? lockMsg.value.trim() : '' };
+        return (out.cond || out.dice || out.fx) ? out : null;
     };
 
     // descriptor → rows (edit round-trip)
     const prefill = (d) => {
         let anyReq = false, anyFx = false, anyVis = false;
-        if (d.hidden) { pickRow(visRows, types.vis, 'searched'); anyVis = true; }
-        const tc = d.visCond || {};
-        if (tc.has) { pickRow(visRows, types.vis, 'has', tc.has); anyVis = true; }
-        if (tc.did) { pickRow(visRows, types.vis, 'did', tc.did); anyVis = true; }
-        if (tc.flag) { pickRow(visRows, types.vis, 'flag', tc.flag); anyVis = true; }
-        const cond = d.cond || {};
-        if (cond.has) { pickRow(reqRows, types.req, 'has', cond.has); anyReq = true; }
-        if (cond.did) { pickRow(reqRows, types.req, 'did', cond.did); anyReq = true; }
-        if (cond.flag) { pickRow(reqRows, types.req, 'flag', cond.flag); anyReq = true; }
-        if (d.puzzle) {
-            pickRow(reqRows, types.req, 'password',
-                    (d.puzzle.solutions || [])[0] || d.puzzle.solution || '',
-                    d.puzzle.riddle || '');
-            anyReq = true;
+        if (visRows) {
+            if (d.hidden) { pickRow(visRows, types.vis, 'searched'); anyVis = true; }
+            const tc = d.visCond || {};
+            if (tc.has) { pickRow(visRows, types.vis, 'has', tc.has); anyVis = true; }
+            if (tc.did) { pickRow(visRows, types.vis, 'did', tc.did); anyVis = true; }
+            if (tc.flag) { pickRow(visRows, types.vis, 'flag', tc.flag); anyVis = true; }
         }
-        if (d.roll) {
-            pickRow(reqRows, types.req, d.roll.sides === 20 ? 'd20' : 'd100',
-                    String(d.roll.beat ?? ''));
-            anyReq = true;
+        if (reqRows) {
+            const cond = d.cond || {};
+            if (cond.has) { pickRow(reqRows, types.req, 'has', cond.has); anyReq = true; }
+            if (cond.did) { pickRow(reqRows, types.req, 'did', cond.did); anyReq = true; }
+            if (cond.flag) { pickRow(reqRows, types.req, 'flag', cond.flag); anyReq = true; }
+            if (cond.solved) { pickRow(reqRows, types.req, 'solved', cond.solved); anyReq = true; }
+            if (d.roll) {
+                pickRow(reqRows, types.req, d.roll.sides === 20 ? 'd20' : 'd100',
+                        String(d.roll.beat ?? ''));
+                anyReq = true;
+            }
         }
-        const src = d.fx || {};
-        for (const [k, v] of Object.entries(src.set || {})) {
-            pickRow(fxRows, types.fx, v === false ? 'clear' : 'set', k);
-            anyFx = true;
+        if (fxRows) {
+            const src = d.fx || {};
+            for (const [k, v] of Object.entries(src.set || {})) {
+                pickRow(fxRows, types.fx, v === false ? 'clear' : 'set', k);
+                anyFx = true;
+            }
+            if (src.gives) { pickRow(fxRows, types.fx, 'give', src.gives); anyFx = true; }
+            for (const [k, n] of Object.entries(src.adjust || {})) {
+                pickRow(fxRows, types.fx, 'adjust', k, String(n));
+                anyFx = true;
+            }
+            for (const e of (src.extras || [])) { pickRow(fxRows, types.fx, 'xadd', e); anyFx = true; }
+            for (const e of (src.extras_remove || [])) { pickRow(fxRows, types.fx, 'xrem', e); anyFx = true; }
+            if (src.goto != null) { pickRow(fxRows, types.fx, 'goto', String(src.goto)); anyFx = true; }
         }
-        if (src.gives) { pickRow(fxRows, types.fx, 'give', src.gives); anyFx = true; }
-        for (const [k, n] of Object.entries(src.adjust || {})) {
-            pickRow(fxRows, types.fx, 'adjust', k, String(n));
-            anyFx = true;
-        }
-        for (const e of (src.extras || [])) { pickRow(fxRows, types.fx, 'xadd', e); anyFx = true; }
-        for (const e of (src.extras_remove || [])) { pickRow(fxRows, types.fx, 'xrem', e); anyFx = true; }
-        if (src.goto != null) { pickRow(fxRows, types.fx, 'goto', String(src.goto)); anyFx = true; }
         // A refusal message alone is dead data — it only shows when a
         // lock fails. Stage it in the field (recoverable if a lock is
         // re-added) but let real locks own the checkbox; counting it made
         // Requirements re-check on stripped doors (Krem 2026-08-21).
-        if (d.msg) lockMsg.value = d.msg;
-        visToggle.checked = anyVis;
-        visBody.style.display = anyVis ? '' : 'none';
-        reqToggle.checked = anyReq;
-        reqBody.style.display = anyReq ? '' : 'none';
-        fxToggle.checked = anyFx;
-        fxBody.style.display = anyFx ? '' : 'none';
+        if (lockMsg && d.msg) lockMsg.value = d.msg;
+        for (const [t, b, on] of [[visToggle, visBody, anyVis],
+                                  [reqToggle, reqBody, anyReq],
+                                  [fxToggle, fxBody, anyFx]]) {
+            if (!t) continue;
+            t.checked = on;
+            b.style.display = on ? '' : 'none';
+        }
     };
 
     return { readVis, readLocks, prefill, clear, showAuthoring };
@@ -1361,23 +1378,26 @@ function objectsTab(slug, session, data) {
             <div class="grs-obj-mech-note" style="display:none;color:var(--text-secondary,#8a8fa3);font-size:var(--font-sm,0.85em)">\u{2699}\u{FE0E} This object has story mechanics — your edits reword it; the machinery stays.</div>
             <input type="text" class="grs-obj-desc" placeholder="what looking at it shows her">
             <div class="grs-act-rows"></div>
-            <button type="button" class="pk-btn grs-act-add" title="One more verb it responds to — 'eat' → 'You shrink to very small.'">+ Add action</button>
+            <button type="button" class="pk-btn grs-act-add" title="One more command it answers to — 'eat' → 'You shrink to very small.'">+ Add action</button>
             <label class="st-tools-check grs-take-label" style="margin:0"><input type="checkbox" class="grs-obj-take"> Can be picked up — goes into her inventory and leaves the room</label>
-            <label class="st-tools-check grs-vis-label" style="margin:0"><input type="checkbox" class="grs-vis-toggle"> Visible when — until then it doesn't exist for her</label>
-            <div class="grs-lock-body grs-vis-body" style="display:none">
-                <div class="grs-vis-rows"></div>
-                <button type="button" class="pk-btn grs-vis-add">+ Add condition</button>
+            <div class="grs-obj-vis">
+                <label class="st-tools-check grs-vis-label" style="margin:0"><input type="checkbox" class="grs-vis-toggle"> Visible when — until then it doesn't exist for her</label>
+                <div class="grs-lock-body grs-vis-body" style="display:none">
+                    <div class="grs-vis-rows"></div>
+                    <button type="button" class="pk-btn grs-vis-add">+ Add condition</button>
+                </div>
             </div>
-            <label class="st-tools-check grs-req-label" style="margin:0"><input type="checkbox" class="grs-req-toggle"> Requirements — what it takes to use this</label>
-            <div class="grs-lock-body grs-req-body" style="display:none">
-                <div class="grs-req-rows"></div>
-                <button type="button" class="pk-btn grs-req-add">+ Add requirement</button>
-                <input type="text" class="grs-lock-msg" placeholder="locked message (optional) — what she sees while it refuses">
-            </div>
-            <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Effects — what using it changes</label>
-            <div class="grs-lock-body grs-fx-body" style="display:none">
-                <div class="grs-fx-rows"></div>
-                <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+            <label class="st-tools-check grs-rid-label" style="margin:0"><input type="checkbox" class="grs-rid-toggle"> Riddle — a puzzle she can solve by answering</label>
+            <div class="grs-lock-body grs-rid-body" style="display:none">
+                <input type="text" class="grs-rid-text" placeholder="the riddle / prompt she sees">
+                <input type="text" class="grs-rid-answer" placeholder="the answer, e.g. 1234">
+                <div class="grs-obj-ridfx">
+                    <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Solve effects — what solving it changes</label>
+                    <div class="grs-lock-body grs-fx-body" style="display:none">
+                        <div class="grs-fx-rows"></div>
+                        <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+                    </div>
+                </div>
             </div>
             <div style="display:flex;gap:6px">
                 <button type="button" class="pk-btn pk-btn-primary grs-obj-place">Place</button>
@@ -1768,7 +1788,7 @@ function objectsTab(slug, session, data) {
             if (!se || exitMechFits(se, exitMech(se, (r.exit_shadows || {})[String(to)]))) {
                 const vis = xw.readVis();
                 if (vis && vis.cond) body.visible_when = vis.cond;
-                const lk = xw.readLocks(body.label || String(to));
+                const lk = xw.readLocks();
                 if (lk) {
                     if (lk.cond) body.condition = lk.cond;
                     if (lk.msg) body.blocked_message = lk.msg;
@@ -1812,18 +1832,67 @@ function objectsTab(slug, session, data) {
         const mechNote = addForm.querySelector('.grs-obj-mech-note');
         let editing = null;   // object name while editing, else null
 
-        const addActRow = (verb, resp) => {
-            const row = document.createElement('div');
-            row.className = 'grs-act-row';
-            row.innerHTML = `
-                <input type="text" class="grs-act-verb" placeholder="verb, e.g. eat">
-                <input type="text" class="grs-act-resp" placeholder="what the world says back — returned to her as story truth">
-                <button type="button" class="sb-icon-btn grs-act-del" title="Remove action">✕</button>`;
-            row.querySelector('.grs-act-verb').value = verb || '';
-            row.querySelector('.grs-act-resp').value = resp || '';
-            row.querySelector('.grs-act-del').onclick = () => row.remove();
-            actRows.appendChild(row);
-            return row;
+        // Per-ACTION machinery (the flip, Krem 2026-08-21): each card is
+        // one command — verb + response — hosting its OWN requirements/
+        // dice/effects via the shared widget. Matches the engine's real
+        // per-verb grammar; the object-level lock sections that secretly
+        // stamped every verb are gone.
+        const addActCard = (a) => {
+            const card = document.createElement('div');
+            card.className = 'grs-act-card';
+            card.innerHTML = `
+                <div class="grs-act-row grs-act-main">
+                    <input type="text" class="grs-act-verb" placeholder="verb, e.g. eat">
+                    <input type="text" class="grs-act-resp" placeholder="what the world says back — returned to her as story truth">
+                    <button type="button" class="sb-icon-btn grs-act-gear" title="Requirements & effects — this action's own locks, dice and changes">\u{2699}\u{FE0E}</button>
+                    <button type="button" class="sb-icon-btn grs-act-del" title="Remove action">✕</button>
+                </div>
+                <div class="grs-act-sum" style="display:none"></div>
+                <div class="grs-lock-body grs-act-mech" style="display:none">
+                    <label class="st-tools-check grs-req-label" style="margin:0"><input type="checkbox" class="grs-req-toggle"> Requirements — what it takes to do this</label>
+                    <div class="grs-lock-body grs-req-body" style="display:none">
+                        <div class="grs-req-rows"></div>
+                        <button type="button" class="pk-btn grs-req-add">+ Add requirement</button>
+                        <input type="text" class="grs-lock-msg" placeholder="blocked message (optional) — what she sees while it refuses">
+                    </div>
+                    <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Effects — what doing it changes</label>
+                    <div class="grs-lock-body grs-fx-body" style="display:none">
+                        <div class="grs-fx-rows"></div>
+                        <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+                    </div>
+                </div>`;
+            const gear = card.querySelector('.grs-act-gear');
+            const sum = card.querySelector('.grs-act-sum');
+            const mech = card.querySelector('.grs-act-mech');
+            card._lw = locksWidget(card, { types: { req: REQ_TYPES, fx: FX_TYPES },
+                                           pieceList: 'grs-piece-list' });
+            if (a) {
+                card.querySelector('.grs-act-verb').value = a.verb || '';
+                card.querySelector('.grs-act-resp').value = a.resp || '';
+                card._lw.prefill({ cond: a.cond, roll: a.dice, fx: a.fx || {}, msg: a.msg });
+            }
+            // collapsed = a plain-words summary of what's inside
+            const paintSum = () => {
+                if (mech.style.display !== 'none') { sum.style.display = 'none'; return; }
+                const lk = card._lw.readLocks() || {};
+                const bits = [];
+                if (lk.cond) bits.push('\u{1F512} ' + _condWords(lk.cond));
+                if (lk.dice) bits.push(`\u{1F3B2} d${lk.dice.sides} beat ${lk.dice.beat}`);
+                if (lk.fx) bits.push('⚡ ' + _fxWords(lk.fx));
+                sum.textContent = bits.join(' · ');
+                sum.style.display = bits.length ? '' : 'none';
+            };
+            gear.onclick = () => {
+                const open = mech.style.display === 'none';
+                mech.style.display = open ? '' : 'none';
+                gear.classList.toggle('on', open);
+                paintSum();
+            };
+            if (!authoring) gear.style.display = 'none';
+            paintSum();
+            card.querySelector('.grs-act-del').onclick = () => card.remove();
+            actRows.appendChild(card);
+            return card;
         };
 
         const openAdd = (name) => {
@@ -1832,6 +1901,7 @@ function objectsTab(slug, session, data) {
             editing = name || null;
             actRows.innerHTML = '';
             clearLocks();
+            setAuthoring(true);
             objName.value = editing || '';
             objName.disabled = !!editing;
             const so = editing ? (r.shipped_objs || {})[editing] : null;
@@ -1844,14 +1914,14 @@ function objectsTab(slug, session, data) {
                     prefillFromSpec(eff.merged);
                     mechNote.style.display = 'none';
                 } else {
+                    setAuthoring(false);
                     objDesc.value = eff.desc;
-                    for (const [v, m] of Object.entries(eff.verbs)) addActRow(v, m);
+                    for (const [v, m] of Object.entries(eff.verbs))
+                        addActCard({ verb: v, resp: m });
                     mechNote.textContent = '\u{2699}\u{FE0E} Story machinery richer than this '
                         + 'editor — shown read-only, your text edits reword it: '
                         + (objMechWords(eff.merged) || 'unnamed machinery');
                     mechNote.style.display = '';
-                    lw.showAuthoring(false);
-                    takeLabel.style.display = 'none';
                 }
                 resetBtn.style.display = ov ? '' : 'none';
             } else if (editing && ov) {
@@ -1875,58 +1945,75 @@ function objectsTab(slug, session, data) {
             actRows.innerHTML = '';
             clearLocks();
         };
-        addForm.querySelector('.grs-act-add').onclick = () => addActRow().querySelector('.grs-act-verb').focus();
+        addForm.querySelector('.grs-act-add').onclick = () => addActCard(null).querySelector('.grs-act-verb').focus();
 
-        // ── Locks & effects — the shared widget carries the machinery
-        // (exits editor DRY, 2026-08-21); this form maps its object grammar
-        // in and out around it.
+        // ── Object-level sections (the flip): visibility, and the riddle
+        // (text + answer + solve effects). Actions carry their own
+        // machinery per card — the conjured open/use row hack died with
+        // the object-level lock sections.
         const objTake = addForm.querySelector('.grs-obj-take');
         const takeLabel = addForm.querySelector('.grs-take-label');
-        const lw = locksWidget(addForm, {
-            types: { vis: VIS_TYPES, req: REQ_TYPES, fx: FX_TYPES },
-            pieceList: 'grs-piece-list',
-            // A lock/effect wants a carrier verb — offer 'open'/'use' as
-            // visible, editable action rows (Krem's clown_chest 2026-08-20:
-            // hand-authoring the obvious verb was friction, not law).
-            onReqOpen: () => { if (!actRows.children.length) addActRow('open', ''); },
-            onFxOpen: () => {
-                if (!actRows.children.length)
-                    addActRow('use', '').querySelector('.grs-act-resp').focus();
-            },
-        });
-
-        const clearLocks = () => {
-            lw.clear();
-            objTake.checked = false;
-            takeLabel.style.display = '';
+        const visW = locksWidget(addForm.querySelector('.grs-obj-vis'),
+                                 { types: { vis: VIS_TYPES } });
+        const ridFxW = locksWidget(addForm.querySelector('.grs-obj-ridfx'),
+                                   { types: { fx: FX_TYPES }, pieceList: 'grs-piece-list' });
+        const ridToggle = addForm.querySelector('.grs-rid-toggle');
+        const ridLabel = addForm.querySelector('.grs-rid-label');
+        const ridBody = addForm.querySelector('.grs-rid-body');
+        const ridText = addForm.querySelector('.grs-rid-text');
+        const ridAnswer = addForm.querySelector('.grs-rid-answer');
+        ridToggle.onchange = () => { ridBody.style.display = ridToggle.checked ? '' : 'none'; };
+        let authoring = true;   // false = machinery rides pack-side, text edits only
+        const setAuthoring = (on) => {
+            authoring = on;
+            visW.showAuthoring(on);
+            for (const l of [takeLabel, ridLabel]) l.style.display = on ? '' : 'none';
+            if (!on) ridBody.style.display = 'none';
+            actRows.querySelectorAll('.grs-act-gear').forEach(g => { g.style.display = on ? '' : 'none'; });
         };
-        const readVis = lw.readVis;
-        const readLocks = lw.readLocks;
+        const clearLocks = () => {
+            visW.clear();
+            ridFxW.clear();
+            ridToggle.checked = false;
+            ridBody.style.display = 'none';
+            ridText.value = ''; ridAnswer.value = '';
+            objTake.checked = false;
+        };
         // spec → form (one prefill for user objects AND gated shipped
         // ones — objToDescriptor is the single spec reader)
         const prefillFromSpec = (spec) => {
             const d = objToDescriptor(spec);
             objDesc.value = d.desc;
-            for (const [v, m] of d.acts) addActRow(v, m);
+            for (const a of d.acts) addActCard(a);
             objTake.checked = d.take;
-            lw.prefill({ hidden: d.hidden, visCond: d.visCond, cond: d.cond,
-                         puzzle: d.puzzle, roll: d.dice, fx: d.fx || {}, msg: d.msg });
+            visW.prefill({ hidden: d.hidden, visCond: d.visCond });
+            if (d.puzzle) {
+                ridToggle.checked = true;
+                ridBody.style.display = '';
+                ridText.value = d.puzzle.riddle || '';
+                ridAnswer.value = d.puzzle.solution || '';
+                if (d.solveFx) ridFxW.prefill({ fx: d.solveFx });
+            }
         };
-        // form → descriptor (compileObj's input; solved is stripped — the
-        // compile re-stamps it from the puzzle, matching the password row)
-        const readObjDescriptor = (name) => {
-            const acts = [...actRows.querySelectorAll('.grs-act-row')].map(row => [
-                row.querySelector('.grs-act-verb').value.trim(),
-                row.querySelector('.grs-act-resp').value.trim()]).filter(a => a[0]);
-            const vis = readVis() || {};
-            const lk = readLocks(name) || {};
-            const cond = { ...(lk.cond || {}) };
-            delete cond.solved;
+        // form → descriptor (compileObj's input); a riddle needs an
+        // answer to exist, and solve effects only exist with the riddle
+        const readObjDescriptor = () => {
+            const acts = [...actRows.querySelectorAll('.grs-act-card')].map(card => {
+                const lk = card._lw.readLocks() || {};
+                return { verb: card.querySelector('.grs-act-verb').value.trim(),
+                         resp: card.querySelector('.grs-act-resp').value.trim(),
+                         cond: lk.cond || null, dice: lk.dice || null,
+                         fx: lk.fx || null, msg: lk.msg || '' };
+            }).filter(a => a.verb);
+            const vis = visW.readVis() || {};
+            const rid = ridToggle.checked && ridAnswer.value.trim()
+                ? { riddle: ridText.value.trim() || OBJ_RIDDLE_DEFAULT,
+                    solution: ridAnswer.value.trim() } : null;
             return { desc: objDesc.value.trim(), take: objTake.checked,
                      hidden: !!vis.hidden, visCond: vis.cond || null,
-                     cond: Object.keys(cond).length ? cond : null,
-                     puzzle: lk.puzzle || null, dice: lk.dice || null,
-                     fx: lk.fx || null, msg: lk.msg || '', acts };
+                     puzzle: rid,
+                     solveFx: rid ? ((ridFxW.readLocks() || {}).fx || null) : null,
+                     acts };
         };
 
         addForm.querySelector('.grs-obj-cancel').onclick = closeAdd;
@@ -1946,15 +2033,7 @@ function objectsTab(slug, session, data) {
             if (!name) { ui.showToast('Object needs a name', 'error'); return; }
             const so = (r.shipped_objs || {})[name];
             const ovNow = ((world.objects || {})[String(r.id)] || {})[name];
-            const d = readObjDescriptor(name);
-            const fxHas = d.fx && Object.keys(d.fx).length;
-            // Locks want a carrier verb (widget hidden = fields empty, so
-            // the read-only shipped lane never trips this).
-            if ((d.cond || d.dice || fxHas) && !d.acts.length && !d.puzzle) {
-                ui.showToast('Requirements & effects need at least one action — or a password to solve.',
-                             'error', 3500);
-                return;
-            }
+            const d = readObjDescriptor();
             const restoreAndClose = async () => {
                 try {
                     if (ovNow)
@@ -1981,11 +2060,11 @@ function objectsTab(slug, session, data) {
                 const desc = objDesc.value.trim();
                 if (desc !== (so.desc || '')) spec.desc = desc;
                 const ints = {};
-                for (const [verb, resp] of d.acts) {
-                    if (verb in (so.verbs || {})) {
-                        if (resp !== so.verbs[verb]) ints[verb] = { message: resp };
+                for (const a of d.acts) {
+                    if (a.verb in (so.verbs || {})) {
+                        if (a.resp !== so.verbs[a.verb]) ints[a.verb] = { message: a.resp };
                     } else {
-                        ints[verb] = { message: resp || `You ${verb} the ${name}.` };
+                        ints[a.verb] = { message: a.resp || `You ${a.verb} the ${name}.` };
                     }
                 }
                 if (Object.keys(ints).length) spec.interactions = ints;

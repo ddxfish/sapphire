@@ -1,11 +1,11 @@
 {
   "plugin": "game-room",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "files": {
-    "app/game-room.css": "sha256:e8bd1c04bc37b3cbc4fb4870bd4d8efbff915c811af78e36e25939c3b1e9eda5",
+    "app/game-room.css": "sha256:5a80ea6ad5e770c49f27213f0e9525866f3632374dcda117c184003333a77598",
     "app/index.js": "sha256:43ec99f00f611746577cfce3aefe9087c4b12487ea141b924b357910b54955ac",
     "app/room.js": "sha256:17d369c524997d3eddf786a7452f9cae6bc68b20aae609b6c88ab326281c1974",
-    "app/settings-modal.js": "sha256:3f093f93bbd3ee1b20b600fa12f3e12cfbc42a1865bafb15fc5e9a09471e15b6",
+    "app/settings-modal.js": "sha256:d64f24a5af07d1ffe0f2f89352175db8a7d459d51c239d2ec53d9ca4269e422f",
     "app/story-room.js": "sha256:46f21610c9c305fed00e677664b267417adbc87cd030f9e4c6fad6c50dfce13a",
     "gameroom_core.py": "sha256:19a9c0e4b4fddf5d4fb1986c1e06241cf2048c74fb72a0457892a7656ee95eb6",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
@@ -13,18 +13,18 @@
     "gameroom_story/referee.py": "sha256:1095455dab23bd6156077d06cdc1da94d10d8dcc9723ee82c6eb2fa1ea7cd65c",
     "gameroom_story/render.py": "sha256:8f6e9a29114c17cc01ee6f1ded2575634a6f5a60ab02f0e50b0a2ef5ca5bfce8",
     "gameroom_story/rooms.py": "sha256:ed4ffcdc459f031e8c9b4231d0329487b8e885ef887cd617c25a950c3bb3ea72",
-    "gameroom_story/session.py": "sha256:e08ee2a708516947ee88f5663372d75aa3a2e5d2c8979d7db6f966ac293765e7",
-    "gameroom_story/state.py": "sha256:d86d50de8d85c496b8cf76a7254a84a6167833395b45a866c1cd9a52efd88545",
+    "gameroom_story/session.py": "sha256:57859943caae6770dadcfdb47a8772a886f483740fd79370ec9d4879a8cfa7cc",
+    "gameroom_story/state.py": "sha256:2e2cd28702f92ad064e27e80db568bcc6aa82aa6d16b3d9ef676741cb5510d16",
     "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/ghost.py": "sha256:43ca9d9a8312c447c63a80175b623c7498c4c4c5bdd25e338fcdfb70bd1ff0e8",
     "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
     "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
-    "plugin.json": "sha256:f07eb9c903068b9a7d70c624db8441e856e4375555858d500fde63bd12295796",
+    "plugin.json": "sha256:c9e478dce34b1b2ee2ba08497d725f19d171bf1b61cb6076cef0f80eb905481d",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
     "routes/play.py": "sha256:e1b6e9803c74440d4a94f451ccfcf25bed0d35247b79a08177ec514b8807a284",
     "routes/story_routes.py": "sha256:e0e3181cabd4a62e26cf18515eba122aa128dab4a5264d029a0cbd6aaf0ecf41",
-    "tests/conftest.py": "sha256:31e7c87346b3209f5ea359a6d9f32703e1be2d258af1cb5d243ccecb33db5636",
+    "tests/conftest.py": "sha256:32f9c70044d21c2529e3613c9992dc635b2605d0383925110a425e498c7af8f2",
     "tests/fixtures/stories/goblin-den/rooms/1-cave-mouth.json": "sha256:befb3fe7b4ccc87d62aad4c98ca703176a3279d626c5518ca74e7b5c86b489c9",
     "tests/fixtures/stories/goblin-den/rooms/2-goblin-den.json": "sha256:56c4cf345be9e33c45429373e8f560a8b81cea1584c05a786394765b4c2aaf2e",
     "tests/fixtures/stories/goblin-den/rooms/3-moonstone-vault.json": "sha256:006cb2de36d52b2e83469fcceb47fe9c498684fce582ebfe9ff3160551da2800",
@@ -36,7 +36,7 @@
     "tests/fixtures/stories/roled-tale/rooms/1-parlor.json": "sha256:8248a3e408c6b95f391918355836c46fa59666d144c0ea1ed4de772afa0845ea",
     "tests/fixtures/stories/roled-tale/story.json": "sha256:f5f31aacb8ccc34576958b58933234c606e0c1f9fd1a26750ead34fc42b5e693",
     "tests/test_chat_lifecycle_hooks.py": "sha256:bebf7787432754f920bed8220fdbce7da01c451571ef2fe832491a3faec187f2",
-    "tests/test_open_mansion.py": "sha256:56d6055efce9a9e03e656e39cc82046efae599619de50a7608f3e6550d36e7f2",
+    "tests/test_open_mansion.py": "sha256:45f09b277a3b6c68dec52c6fed76d6eebeb7bf58683b852ca31d203b4de2a6ca",
     "tests/test_save_paths.py": "sha256:9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "tests/test_seal_wait.py": "sha256:fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
     "tests/test_story_engine.py": "sha256:67cbbe8b96bd98f201dbb50a834935899bbeddb45ac4fe607d14af81aa841031",
@@ -47,5 +47,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "M2zD2fjxlx2exP6rf+LH44rH2pEM0nGWiYcy+INCLX6ytZLxPhofmyJI+GJj1KVZlU0Hg5o/ClnzMFeJ+kgeDg=="
+  "signature": "S6UN/RiGmLU+s9POnTY0RgyajW9/xOMigirIAw8Yy3LTZhRs2LPiLdAT2ewWMZ9xvxWQtUHAP0MdLQl4hemVDw=="
 }

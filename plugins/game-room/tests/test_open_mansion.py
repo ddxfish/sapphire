@@ -62,7 +62,8 @@ def test_did_and_solved_conditions():
 
 
 def test_password_gates_verb_via_solved(story):
-    # The exact spec the Add Object form compiles for (password, 1234):
+    # The exact spec the Add Object form compiles (the flip, 2026-08-21:
+    # object-level Riddle section + 'riddle solved' req row on an action):
     # puzzle on the object + {solved} condition on its verbs. No flag wiring.
     room = {"id": 9, "title": "Vault room", "objects": {
         "vault": {"desc": "A steel vault.",

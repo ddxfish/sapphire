@@ -47,6 +47,10 @@ def hermetic_chat_store(tmp_path, monkeypatch):
             sm.create_chat(chat)
             return super().append(chat, key, value)
 
+        def append_many(self, chat, key, values):
+            sm.create_chat(chat)
+            return super().append_many(chat, key, values)
+
         def replace(self, chat, key, values):
             sm.create_chat(chat)
             return super().replace(chat, key, values)

@@ -867,15 +867,17 @@ def _seal_wait_payload(chat):
 
 
 def _commit(system, story, slug, chat, state, events):
-    """Journal a resolve's events; re-register the prompt if any of them
-    touched it. Extracted from act() so the live-wait path can commit the
-    held attempt and, after the wake, the reveal."""
+    """Journal a resolve's events ATOMICALLY — one transaction, all land or
+    none (2026-08-21 torn-commit incident: per-event appends journaled the
+    `hold` but died before its set-flag). Re-register the prompt if any of
+    them touched it. Extracted from act() so the live-wait path can commit
+    the held attempt and, after the wake, the reveal."""
     prompt_dirty = False
     for ev in events:
         ev["turn"] = state["turn"]
-        st.append(slug, chat, ev)
         if ev["event"] in ("emotions", "extras"):
             prompt_dirty = True
+    st.append_many(slug, chat, events)
     if prompt_dirty:
         fresh = st.replay(slug, chat)
         prompt_name = _register_prompt(story, fresh, st.get_active().get(chat, {}), chat)

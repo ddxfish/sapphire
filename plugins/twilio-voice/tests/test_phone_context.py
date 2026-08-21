@@ -30,6 +30,11 @@ def _event(call):
     ev = MagicMock()
     ev.metadata = {"system": system}
     ev.ghost_text = None
+    # The hook reads the runner's stamp first (event.chat_name, F2 resolver
+    # 2026-08-21) — a bare MagicMock auto-attr is truthy garbage, so stamp
+    # it explicitly like the real runner does. The session walk above stays
+    # as the fallback lane.
+    ev.chat_name = "chat1"
     return ev
 
 
@@ -71,3 +76,19 @@ def test_outbound_includes_goal_and_rails():
     assert "YOU placed" in ev.ghost_text
     assert "refill the prescription" in ev.ghost_text
     assert "RAILS-TEXT" in ev.ghost_text
+
+
+def test_fallback_walk_when_runner_stamp_missing():
+    # No runner stamp → the session-manager walk resolves the chat.
+    ev = _event({"caller": "+15551234567", "direction": "inbound", "rails": "RAILS-TEXT"})
+    ev.chat_name = None
+    pc.ghost_inject(ev)
+    assert "RAILS-TEXT" in ev.ghost_text
+
+
+def test_no_fire_for_chat_without_call():
+    # The chat IS the gate: a turn in a chat hosting no call gets nothing.
+    ev = _event({"caller": "+15551234567", "direction": "inbound", "rails": "RAILS-TEXT"})
+    ev.chat_name = "other_chat"
+    pc.ghost_inject(ev)
+    assert ev.ghost_text is None

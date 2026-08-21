@@ -791,6 +791,73 @@ class ConversationHistory:
         return False
     
 
+# ── DB watchdog (2026-08-21, the frozen-close incident): a live conn.close()
+# hung in C for 5½ minutes and — because SQLite's unix VFS takes one
+# process-global mutex during open AND close — every later connect() queued
+# behind it, freezing all plugin/chat data with zero diagnostics until a
+# manual SIGABRT. The watchdog registers every _get_connection context; an op
+# stuck past the threshold gets ALL thread stacks dumped to stderr (the
+# journal) once, plus a heartbeat line each further minute. Diagnostic only —
+# it never kills anything. No legitimate op here should approach 30s; a rare
+# false positive (huge vault re-encrypt) costs one loud log block.
+_DB_WATCHDOG_SECS = 30.0
+_DB_WATCHDOG_POLL = 5.0
+_db_ops = {}                     # token -> {started, thread, dumped, beat}
+_db_ops_lock = threading.Lock()
+_db_watchdog_started = False
+
+
+def _db_watchdog_scan():
+    """One scan pass — separated from the loop so tests can drive it
+    deterministically. Returns how many stuck ops it reported on."""
+    now = time.monotonic()
+    dump_needed = False
+    reported = 0
+    with _db_ops_lock:
+        for op in _db_ops.values():
+            age = now - op['started']
+            if age <= _DB_WATCHDOG_SECS:
+                continue
+            reported += 1
+            if not op['dumped']:
+                op['dumped'] = True
+                dump_needed = True
+                logger.error(
+                    f"[DB-WATCHDOG] db op stuck {int(age)}s on thread "
+                    f"'{op['thread']}' — dumping all thread stacks to stderr")
+            elif int(age) // 60 > op['beat']:
+                op['beat'] = int(age) // 60
+                logger.error(
+                    f"[DB-WATCHDOG] still stuck: {int(age)}s on thread "
+                    f"'{op['thread']}'")
+    if dump_needed:
+        try:
+            import faulthandler
+            faulthandler.dump_traceback(all_threads=True)
+        except Exception:
+            pass
+    return reported
+
+
+def _db_watchdog_loop():
+    while True:
+        time.sleep(_DB_WATCHDOG_POLL)
+        try:
+            _db_watchdog_scan()
+        except Exception:
+            pass                 # the watchdog must never die of its own bug
+
+
+def _db_watchdog_ensure():
+    global _db_watchdog_started
+    with _db_ops_lock:
+        if _db_watchdog_started:
+            return
+        _db_watchdog_started = True
+    threading.Thread(target=_db_watchdog_loop, name="db-watchdog",
+                     daemon=True).start()
+
+
 class ChatSessionManager:
     """
     Manages chat sessions with SQLite storage for atomic writes.
@@ -1015,17 +1082,31 @@ class ChatSessionManager:
         WAL + synchronous are set once in _init_db (persisted in db header).
         busy_timeout IS honored during active transactions; sqlite3.connect's
         timeout= kwarg is ignored once BEGIN fires (CPython #124510).
+
+        Watchdog (2026-08-21, the frozen-close incident): the WHOLE context
+        — connect through close, both proven hang points — is registered so
+        a stuck op gets its stacks dumped instead of wedging silently.
         """
-        conn = sqlite3.connect(str(self._db_path), timeout=30.0)
+        _db_watchdog_ensure()
+        token = object()
+        with _db_ops_lock:
+            _db_ops[token] = {'started': time.monotonic(),
+                              'thread': threading.current_thread().name,
+                              'dumped': False, 'beat': 0}
         try:
-            conn.execute("PRAGMA busy_timeout=30000")
-            # synchronous is a per-connection PRAGMA — must set at every open.
-            # journal_mode=WAL is persistent in the db header; no need to re-set.
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.row_factory = sqlite3.Row
-            yield conn
+            conn = sqlite3.connect(str(self._db_path), timeout=30.0)
+            try:
+                conn.execute("PRAGMA busy_timeout=30000")
+                # synchronous is a per-connection PRAGMA — must set at every open.
+                # journal_mode=WAL is persistent in the db header; no need to re-set.
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.row_factory = sqlite3.Row
+                yield conn
+            finally:
+                conn.close()
         finally:
-            conn.close()
+            with _db_ops_lock:
+                _db_ops.pop(token, None)
 
     def _init_db(self):
         """Initialize SQLite database with schema."""
@@ -2543,6 +2624,33 @@ class ChatSessionManager:
                  datetime.now().isoformat()))
             conn.commit()
             return seq
+
+    def plugin_data_append_many(self, plugin: str, chat_name: str, key: str,
+                                values: list) -> list:
+        """Append several event rows in ONE transaction — all land or none.
+        Returns the assigned seqs. Same raise semantics as append. Born
+        2026-08-21: per-event appends let a mid-write death journal HALF a
+        story resolve (the interaction landed, its set-flag didn't). All
+        payloads are encoded BEFORE the first INSERT, so an encode refusal
+        (sealed vault, bad value) aborts with zero rows written."""
+        if not values:
+            return []
+        with self._lock, self._get_connection() as conn:
+            self._plugin_data_writable(conn, chat_name)
+            seq = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 FROM plugin_chat_data "
+                "WHERE plugin = ? AND chat_name = ? AND key = ?",
+                (plugin, chat_name, key)).fetchone()[0]
+            now = datetime.now().isoformat()
+            rows = [(plugin, chat_name, key, seq + i,
+                     self._plugin_data_payload(conn, chat_name, v), now)
+                    for i, v in enumerate(values)]
+            conn.executemany(
+                "INSERT INTO plugin_chat_data "
+                "(plugin, chat_name, key, seq, value, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)", rows)
+            conn.commit()
+            return list(range(seq, seq + len(values)))
 
     def plugin_data_read_all(self, plugin: str, chat_name: str, key: str) -> list:
         """All rows for (plugin, chat, key) ordered by seq — the journal

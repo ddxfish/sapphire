@@ -211,6 +211,22 @@
 .grs-act-row { display: flex; gap: 6px; align-items: center; }
 .grs-act-row .grs-act-verb { flex: 0 1 9em; min-width: 5em; }
 .grs-act-row .grs-act-resp { flex: 1 1 auto; min-width: 0; }
+/* Action cards (the flip): one command per card, its own machinery
+   behind the ⚙ disclosure — collapsed shows a plain-words summary */
+.grs-act-card {
+    display: flex; flex-direction: column; gap: 6px;
+    border: 1px solid var(--border, #2a3040);
+    border-radius: var(--radius-sm, 6px);
+    padding: 6px;
+}
+.grs-act-card .grs-act-gear { flex: 0 0 auto; }
+.grs-act-card .grs-act-gear.on { color: var(--accent, #6ea8fe); }
+.grs-act-sum {
+    color: var(--text-secondary, #8a8fa3);
+    font-size: var(--font-sm, 0.85em);
+    overflow-wrap: anywhere;
+}
+.grs-act-mech { margin-left: 4px; }
 .grs-obj-card-title { font-weight: 600; overflow-wrap: anywhere; }
 .grs-obj-card-desc { color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); overflow-wrap: anywhere; }
 .grs-obj-card-verbs { color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); font-style: italic; margin-top: 2px; }

@@ -91,6 +91,34 @@ class TestPublicRoundtrip:
         assert sm.plugin_data_read_all(PLUGIN, "pub", "journal") == [
             {"e": "a"}, {"e": "b"}, {"e": "c"}]
 
+    def test_append_many_ordered_after_singles(self, sm, monkeypatch):
+        # 2026-08-21 torn-commit incident: a resolve's events land in ONE
+        # transaction, seqs continuing wherever singles left off.
+        _open(monkeypatch)
+        assert sm.plugin_data_append(PLUGIN, "pub", "journal", {"e": "a"}) == 1
+        assert sm.plugin_data_append_many(
+            PLUGIN, "pub", "journal",
+            [{"e": "b"}, {"e": "c"}, {"e": "d"}]) == [2, 3, 4]
+        assert sm.plugin_data_read_all(PLUGIN, "pub", "journal") == [
+            {"e": "a"}, {"e": "b"}, {"e": "c"}, {"e": "d"}]
+
+    def test_append_many_empty_is_noop(self, sm, monkeypatch):
+        _open(monkeypatch)
+        assert sm.plugin_data_append_many(PLUGIN, "pub", "journal", []) == []
+        assert len(raw(sm.history_dir, "SELECT * FROM plugin_chat_data")) == 0
+
+    def test_append_many_all_or_nothing(self, sm, monkeypatch):
+        # An unencodable value ANYWHERE in the batch aborts with zero rows —
+        # payloads encode before the first INSERT.
+        _open(monkeypatch)
+        with pytest.raises(Exception):
+            sm.plugin_data_append_many(PLUGIN, "pub", "journal",
+                                       [{"e": "good"}, {"bad": {1, 2}}])
+        assert sm.plugin_data_read_all(PLUGIN, "pub", "journal") == []
+        with pytest.raises(Exception):
+            sm.plugin_data_append_many(PLUGIN, "ghost", "journal", [1, 2])
+        assert len(raw(sm.history_dir, "SELECT * FROM plugin_chat_data")) == 0
+
     def test_replace_renumbers(self, sm, monkeypatch):
         _open(monkeypatch)
         for e in ("a", "b", "c", "d"):
