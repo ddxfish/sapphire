@@ -36,6 +36,7 @@ const bootV = () => document.querySelector('meta[name="boot-version"]')?.content
 let _root = null, _story = null, _session = null, _back = null, _stories = [];
 let _chatSettings = {};
 let _status = null;              // last story/status payload (.active)
+let _houseWasOpen = null;        // zork-line transition detector (null = no baseline)
 let _timer = null;
 let _tickNow = null;             // current open()'s tick, for the bus nudge
 let _liveShown = {};             // seal key → live popup already raised this wait
@@ -130,9 +131,11 @@ async function startWithSetup(slug) {
     let payload = { story: slug };
     let sealedFills = [];
     if (setup) {
-        const choice = await mod.openStorySetup(slug, setup);
+        // _session rides along so the form's Environment tab can stock the
+        // house pre-start (rows land on this chat's user layer; start merges).
+        const choice = await mod.openStorySetup(slug, setup, _session);
         if (choice === null) return null;
-        payload = { story: slug, slots: choice.slots, objset: choice.objset || undefined };
+        payload = { story: slug, slots: choice.slots };
         sealedFills = choice.sealed || [];
     }
     const r = await api('story/start', 'POST', payload);
@@ -156,6 +159,7 @@ export async function openStoryRoom(root, story, sessionName, opts) {
     }
     close();
     _root = root; _story = story; _session = sessionName;
+    _houseWasOpen = null;                      // fresh baseline per room entry
     _back = opts?.back; _stories = opts?.stories || [];
     root.innerHTML = '<div class="pk-loading">Opening the book...</div>';
 
@@ -689,6 +693,16 @@ function paintPanel() {
     const a = _status;
     const info = _root?.querySelector('#st-stage-info');
     if (info) info.textContent = a ? `turn ${a.turn}${a.paused ? ' · paused' : a.ended ? ' · ended' : ''}` : '';
+    // Zork-line moment (open-mansion v1): toast ONCE when the house opens
+    // live in this session. Baseline null on entry — resuming an already
+    // open house never re-toasts.
+    if (a && a.open_flag) {
+        if (_houseWasOpen === false && a.house_open) {
+            ui.showToast('\u{1F3E0} The house is open — the Objects panel is live. '
+                + 'Stock rooms, load a set, be the ghost. (\u{1F3E0} button or ⚙)', 'success', 8000);
+        }
+        _houseWasOpen = !!a.house_open;
+    }
     paintStatus(a);
     paintControls(a);
     paintBackdrop(a);
@@ -732,8 +746,17 @@ function paintControls(a) {
         <button class="btn-sm" id="st-pause" title="${a.paused ? 'Resume the story' : 'Pause — intermission'}">${a.paused ? '&#x25B6;' : '&#x23F8;'}</button>
         <button class="btn-sm danger" id="st-end" title="End story (journal kept)">&#x23F9;</button>
         <button class="btn-sm" id="st-inspect" title="Inspect raw state">&#x1F50D;</button>
+        ${a.open_flag && a.house_open ? '<button class="btn-sm" id="st-house" title="The house is open — place objects, load sets">&#x1F3E0;</button>' : ''}
         ${gearHtml}`;
     bindGear();
+    const houseBtn = row.querySelector('#st-house');
+    if (houseBtn) houseBtn.onclick = async () => {
+        const mod = await import(`./settings-modal.js?v=${bootV()}`);
+        mod.openStorySettings(_story?.slug, {
+            session: _session, active: true,
+            slots: _status?.slots || {}, tab: 'Environment',
+        });
+    };
     row.querySelector('#st-pause').onclick = async () => {
         try {
             await api('story/pause', 'POST', { paused: !a.paused });

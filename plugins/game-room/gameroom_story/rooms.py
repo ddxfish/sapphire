@@ -170,8 +170,12 @@ def story_slots(meta):
     """Normalized Mad-Libs slot declarations from story.json `slots` (plan
     tmp/open-mansion-plan.md). Soft: malformed entries warn + drop, never
     break the story. Each: {key, label, options[], allow_custom, default,
-    sealed, seal_key}. `default` falls back to the first option so an
-    unanswered slot never leaks a raw {token} into her prompt."""
+    sealed, seal_key, section, width}. `default` falls back to the first
+    option so an unanswered slot never leaks a raw {token} into her prompt.
+    Layout hints (pure form cosmetics): `section` names a header the form
+    groups consecutive slots under; `width` (10-100, % of the row) lets
+    slots share a line — e.g. a 20% name beside its 80% backstory. An
+    explicitly EMPTY label ("") renders no label (the section carries it)."""
     out = []
     for s in (meta.get("slots") or []):
         if not isinstance(s, dict):
@@ -182,14 +186,25 @@ def story_slots(meta):
             continue
         options = [str(o) for o in (s.get("options") or []) if str(o).strip()]
         default = str(s.get("default") or "").strip() or (options[0] if options else "")
+        try:
+            slot_rows = max(0, min(10, int(s.get("rows") or 0)))
+        except (TypeError, ValueError):
+            slot_rows = 0
+        try:
+            width = max(10, min(100, int(s.get("width") or 100)))
+        except (TypeError, ValueError):
+            width = 100
         out.append({
             "key": key,
-            "label": str(s.get("label") or key.replace("_", " ")),
+            "label": str(s["label"]) if "label" in s else key.replace("_", " "),
             "options": options,
             "allow_custom": bool(s.get("allow_custom", True)),
             "default": default,
+            "rows": slot_rows,          # >0 = long-text slot (textarea in the form)
             "sealed": bool(s.get("sealed")),
             "seal_key": str(s.get("seal_key") or "").strip().lower(),
+            "section": str(s.get("section") or "").strip()[:60],
+            "width": width,
         })
     return out
 

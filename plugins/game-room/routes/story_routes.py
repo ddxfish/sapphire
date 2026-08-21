@@ -149,35 +149,47 @@ def get_story_settings(slug, **_):
     mine = sess._store().get(f'storycfg:{slug}') or {}
     role = meta.get('role') or {}
     role_name = (role.get('name') or '').strip()
+    # Slot-assembled stories (Krem's 3-tab ruling 2026-08-20): the Story tab
+    # (slots) already owns role/premise/player identity — the raw storycfg
+    # text editors would just show {tokens} and invite breakage. Those
+    # stories get ONE schema tab: GM (dm_guide + both conduct layers).
+    has_slots = bool(rooms.story_slots(meta))
+    gm_tab = 'GM' if has_slots else 'GM Style (all stories)'
+    dm_tab = 'GM' if has_slots else 'This story'
     schema = []
     settings = {}
-    if role_name:  # a story with no shipped role gets no half-role editor
-        schema.append(
-            {'key': 'role_text', 'label': f'{role_name} — backstory & character '
-             '(the pack ships this default)',
-             'type': 'text', 'rows': 9, 'tab': 'This story',
-             'default': role.get('text') or ''})
-        settings['role_text'] = (mine.get('role_text') or '').strip() \
-            or (role.get('text') or '')
+    if not has_slots:
+        if role_name:  # a story with no shipped role gets no half-role editor
+            schema.append(
+                {'key': 'role_text', 'label': f'{role_name} — backstory & character '
+                 '(the pack ships this default)',
+                 'type': 'text', 'rows': 9, 'tab': 'This story',
+                 'default': role.get('text') or ''})
+            settings['role_text'] = (mine.get('role_text') or '').strip() \
+                or (role.get('text') or '')
+        schema += [
+            {'key': 'premise', 'label': 'Premise — the setup (the pack ships this default)',
+             'type': 'text', 'rows': 4, 'tab': 'This story',
+             'default': meta.get('premise') or ''},
+            {'key': 'player_role', 'label': 'Player role — who the player is in the tale',
+             'type': 'text', 'rows': 2, 'tab': 'This story',
+             'default': meta.get('player_role') or ''},
+        ]
+        settings.update({
+            'premise': (mine.get('premise') or '').strip() or (meta.get('premise') or ''),
+            'player_role': (mine.get('player_role') or '').strip() or (meta.get('player_role') or ''),
+        })
     schema += [
-        {'key': 'premise', 'label': 'Premise — the setup (the pack ships this default)',
-         'type': 'text', 'rows': 4, 'tab': 'This story',
-         'default': meta.get('premise') or ''},
-        {'key': 'player_role', 'label': 'Player role — who the player is in the tale',
-         'type': 'text', 'rows': 2, 'tab': 'This story',
-         'default': meta.get('player_role') or ''},
         {'key': 'dm_guide', 'label': 'DM guide — this story only (the pack ships this default)',
-         'type': 'text', 'rows': 9, 'tab': 'This story',
+         'type': 'text', 'rows': 9, 'tab': dm_tab,
          'default': meta.get('dm_guide') or ''},
         {'key': 'use_universal', 'label': 'Use the shared GM style in this story',
-         'type': 'checkbox', 'tab': 'GM Style (all stories)', 'default': True},
+         'type': 'checkbox', 'tab': gm_tab, 'default': True},
         {'key': 'gm_universal', 'label': 'GM style — shared by ALL stories',
-         'type': 'text', 'rows': 9, 'tab': 'GM Style (all stories)',
+         'type': 'text', 'rows': 9, 'tab': gm_tab,
          'default': sess.UNIVERSAL_GM_DEFAULT},
     ]
     settings.update({
-        'premise': (mine.get('premise') or '').strip() or (meta.get('premise') or ''),
-        'player_role': (mine.get('player_role') or '').strip() or (meta.get('player_role') or ''),
         'dm_guide': (mine.get('dm_guide') or '').strip() or (meta.get('dm_guide') or ''),
         'use_universal': sess._as_bool(mine.get('use_universal'), True),
         'gm_universal': (uni.get('text') or '').strip() or sess.UNIVERSAL_GM_DEFAULT,
@@ -242,16 +254,22 @@ def get_setup(slug, **_):
 
 def _active_ctx(query=None, body=None):
     """(chat, slug, error) for routes operating on the session's active
-    playthrough."""
-    from gameroom_story import state as st
+    playthrough. Pre-start fallback (2026-08-20): the setup modal's
+    Environment tab edits the slug+chat user layer BEFORE story/start —
+    an explicit `slug` names the story, and the playthrough merges those
+    rows at load. Same authority as the active path, just earlier."""
+    from gameroom_story import rooms, state as st
     system = _system()
     sess = _session()
     chat = sess._chat_name(system, _sess_arg(body, query))
     entry = st.get_active().get(chat)
-    if not entry:
-        return None, None, {'active': False, 'success': False,
-                            'detail': 'No story is active in this session.'}
-    return chat, entry['story'], None
+    if entry:
+        return chat, entry['story'], None
+    slug = str((body or {}).get('slug') or (query or {}).get('slug') or '').strip()
+    if slug and slug in rooms.list_stories():
+        return chat, slug, None
+    return None, None, {'active': False, 'success': False,
+                        'detail': 'No story is active in this session.'}
 
 
 def get_objects(query=None, **_):
@@ -264,16 +282,52 @@ def get_objects(query=None, **_):
     shipped = rooms.load_story(slug)
     layer = st.get_user_layer(slug, chat)
     room_rows = []
+    def _mech(o):
+        # Anything beyond desc/hidden/plain-message interactions = story
+        # machinery (effects, seals, dice, conditions, items...)
+        if set(o) - {'desc', 'hidden', 'interactions'}:
+            return True
+        return any(set(v) - {'message'}
+                   for v in (o.get('interactions') or {}).values()
+                   if isinstance(v, dict))
+
     for rid in sorted(shipped['rooms']):
         room = shipped['rooms'][rid]
         ov = (layer.get('rooms') or {}).get(str(rid)) or {}
+        objs = room.get('objects') or {}
         room_rows.append({'id': rid, 'title': room.get('title'),
                           'shipped_template': room.get('template') or '',
                           'shipped_player_desc': room.get('player_desc') or '',
                           'template': ov.get('template') or '',
-                          'player_desc': ov.get('player_desc') or ''})
+                          'player_desc': ov.get('player_desc') or '',
+                          # Shipped objects, editor view (editor v2: cards +
+                          # shadow/tombstone) — counts everything, hidden/
+                          # gated included; this is the author's surface.
+                          'shipped_objs': {
+                              n: {'desc': (o or {}).get('desc') or '',
+                                  'hidden': bool((o or {}).get('hidden')),
+                                  'verbs': {v: str((s or {}).get('message') or '')
+                                            for v, s in ((o or {}).get('interactions') or {}).items()},
+                                  'has_mechanics': _mech(o or {})}
+                              for n, o in objs.items() if isinstance(o, dict)},
+                          'shipped_exits': [
+                              {'label': e.get('label') or '', 'to': e.get('to')}
+                              for e in (room.get('exits') or []) if isinstance(e, dict)],
+                          'add_exits': list(ov.get('add_exits') or []),
+                          'exits': len(room.get('exits') or []),
+                          'shipped_objects': len(objs),
+                          'shipped_actions': sum(
+                              len((o or {}).get('interactions') or {})
+                              for o in objs.values() if isinstance(o, dict))})
+    # Where the player IS right now — the Environment pane opens there.
+    cur_room = None
+    try:
+        cur_room = st.replay(slug, chat).get('room')
+    except Exception:
+        pass
     return {'active': True, 'slug': slug,
             'open_flag': (shipped['meta'].get('open_flag') or '').strip(),
+            'current_room': cur_room,
             'rooms': room_rows,
             'objects': layer.get('objects') or {}}
 
@@ -295,25 +349,43 @@ def set_object(body=None, **_):
     if not room:
         return {'success': False, 'detail': f'No room {rid} in this story.'}
     name = str(body.get('name') or '').strip()
-    if name in (room.get('objects') or {}):
-        return {'success': False,
-                'detail': f"The story already ships an object named '{name}' there."}
+    # Shipped names are ALLOWED — that's the shadow path (editor v2,
+    # 2026-08-20): the override field-merges at load, mechanics survive.
     spec = body.get('spec')
     if not isinstance(spec, dict):
         return {'success': False, 'detail': 'spec must be an object.'}
     spec.pop('_author', None)
+    spec.pop('_removed', None)   # tombstoning goes through delete, not upsert
     msg, ok = _session().upsert_user_object(chat, slug, rid, name, spec,
                                             author='player')
     return {'success': ok, 'detail': msg}
 
 
 def delete_object(body=None, **_):
+    """Delete a user object — or, for a SHIPPED name, write a tombstone
+    (restorable). `restore: true` drops the layer entry for a shipped name
+    instead: tombstone lifted / shadow edits reset, back to the pack."""
+    from gameroom_story import rooms
     body = body or {}
     chat, slug, err = _active_ctx(body=body)
     if err:
         return err
-    msg, ok = _session().delete_user_object(chat, slug, body.get('room_id'),
-                                            str(body.get('name') or '').strip())
+    try:
+        rid = int(body.get('room_id'))
+    except (TypeError, ValueError):
+        return {'success': False, 'detail': 'room_id must be a room number.'}
+    name = str(body.get('name') or '').strip()
+    sess = _session()
+    shipped_objs = (rooms.load_story(slug)['rooms'].get(rid) or {}).get('objects') or {}
+    if name in shipped_objs:
+        if body.get('restore'):
+            msg, ok = sess.delete_user_object(chat, slug, rid, name)
+            return {'success': ok,
+                    'detail': f"'{name}' restored to shipped." if ok else msg}
+        msg, ok = sess.upsert_user_object(chat, slug, rid, name, {'_removed': True})
+        return {'success': ok,
+                'detail': f"'{name}' removed from the room (restorable)." if ok else msg}
+    msg, ok = sess.delete_user_object(chat, slug, rid, name)
     return {'success': ok, 'detail': msg}
 
 
@@ -329,7 +401,8 @@ def set_room_text(body=None, **_):
         rid = int(body.get('room_id'))
     except (TypeError, ValueError):
         return {'success': False, 'detail': 'room_id must be a room number.'}
-    shipped = rooms.load_story(slug)['rooms'].get(rid)
+    all_rooms = rooms.load_story(slug)['rooms']
+    shipped = all_rooms.get(rid)
     if not shipped:
         return {'success': False, 'detail': f'No room {rid} in this story.'}
     t, p = body.get('template'), body.get('player_desc')
@@ -337,7 +410,26 @@ def set_room_text(body=None, **_):
         t = ''
     if p is not None and str(p).strip() == (shipped.get('player_desc') or '').strip():
         p = ''
-    msg, ok = _session().set_room_text(chat, slug, rid, template=t, player_desc=p)
+    # User-added exits (additive): validated to real rooms, capped, labels
+    # default to the target room's title. None = leave stored exits alone.
+    ax = body.get('add_exits')
+    add_exits = None
+    if ax is not None:
+        add_exits = []
+        for e in (ax if isinstance(ax, list) else [])[:12]:
+            if not isinstance(e, dict):
+                continue
+            try:
+                to = int(e.get('to'))
+            except (TypeError, ValueError):
+                continue
+            if to == rid or to not in all_rooms:
+                continue
+            label = str(e.get('label') or all_rooms[to].get('title') or to).strip()[:80]
+            if not any(x['to'] == to for x in add_exits):
+                add_exits.append({'label': label, 'to': to})
+    msg, ok = _session().set_room_text(chat, slug, rid, template=t,
+                                       player_desc=p, add_exits=add_exits)
     return {'success': ok, 'detail': msg}
 
 

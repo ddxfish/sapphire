@@ -398,12 +398,17 @@ def load_active(chat):
 
 
 def _merge_user_layer(story, slug, chat, state):
-    """K1 — merge once, at load. User-placed objects join the room dicts
-    (shipped names win collisions: a user object never silently shadows
-    authored content). Objects carry their own per-object `condition`
-    (stamped at set-import), checked by the referee's visibility funnel —
-    no gating here. Room TEXT overrides apply only past the zork-line
-    (meta.open_flag; no flag declared = no line = apply always)."""
+    """K1 — merge once, at load. User-placed objects join the room dicts.
+    Shadow law (2026-08-20, editor v2): a user entry matching a SHIPPED
+    name is a deliberate override — `{"_removed": true}` tombstones the
+    shipped object; anything else field-merges over it (desc/hidden
+    replace; interactions overlay per-verb, replacing only `message` so
+    shipped mechanics — effects, seals, dice, conditions — survive a
+    reword). New names add wholesale, carrying their own per-object
+    `condition` (stamped at set-import for non-shipped names), checked by
+    the referee's visibility funnel — no gating here. Room TEXT overrides
+    and user-added exits apply only past the zork-line (meta.open_flag;
+    no flag declared = no line = apply always)."""
     try:
         data = st.get_user_layer(slug, chat)
     except Exception as e:
@@ -422,8 +427,29 @@ def _merge_user_layer(story, slug, chat, state):
         for name, spec in objs.items():
             if not isinstance(spec, dict):
                 continue
-            if name in target:
-                logger.info(f"[STORY] user object '{name}' shadows shipped in room {rid} — skipped")
+            if spec.get("_removed"):
+                target.pop(name, None)
+                continue
+            if name in target and isinstance(target[name], dict):
+                base = dict(target[name])
+                if "desc" in spec:
+                    base["desc"] = spec["desc"]
+                if "hidden" in spec:
+                    base["hidden"] = bool(spec["hidden"])
+                ints = dict(base.get("interactions") or {})
+                for verb, vspec in (spec.get("interactions") or {}).items():
+                    if not isinstance(vspec, dict):
+                        continue
+                    if verb in ints and isinstance(ints[verb], dict):
+                        merged = dict(ints[verb])
+                        if "message" in vspec:
+                            merged["message"] = vspec["message"]
+                        ints[verb] = merged
+                    else:
+                        ints[verb] = vspec
+                if ints:
+                    base["interactions"] = ints
+                target[name] = base
                 continue
             target[name] = spec
     open_flag = (story["meta"].get("open_flag") or "").strip()
@@ -440,13 +466,22 @@ def _merge_user_layer(story, slug, chat, state):
             room["template"] = str(txt["template"])
         if str(txt.get("player_desc") or "").strip():
             room["player_desc"] = str(txt["player_desc"])
+        # User-added exits (additive only — shipped exits, their conditions
+        # and blocked doors are never touched). Dedupe by destination.
+        have = {e.get("to") for e in (room.get("exits") or []) if isinstance(e, dict)}
+        for ex in (txt.get("add_exits") or []):
+            if isinstance(ex, dict) and ex.get("to") not in have:
+                room.setdefault("exits", []).append(dict(ex))
+                have.add(ex.get("to"))
 
 
 def _apply_slots(story, slots):
     """K2 — substitute once, at load: {slot_key} tokens in the story's meta
     text and every string a room dict carries. Values are brace-stripped at
     start, so a slot can't smuggle {ai_name} into core's later template
-    pass. Role NAME and title stay literal (prompt names derive from them)."""
+    pass. Role name/text substitute too — the assembled-setup-as-role pattern
+    (_start substitutes before prompt-name derivation, so the costume's
+    registered name comes from the RESOLVED role name). Title stays literal."""
     vals = {k: str(v) for k, v in (slots or {}).items() if str(v).strip()}
     if not vals:
         return
@@ -466,8 +501,12 @@ def _apply_slots(story, slots):
         return node
 
     meta = story["meta"]
-    if isinstance(meta.get("role"), dict) and meta["role"].get("text"):
-        meta["role"] = dict(meta["role"], text=sub(meta["role"]["text"]))
+    if isinstance(meta.get("role"), dict):
+        r = dict(meta["role"])
+        for f in ("name", "text"):
+            if r.get(f):
+                r[f] = sub(r[f])
+        meta["role"] = r
     for f in ("premise", "player_role", "dm_guide"):
         if isinstance(meta.get(f), str) and "{" in meta[f]:
             meta[f] = sub(meta[f])
@@ -484,7 +523,7 @@ def _clean_slots(story, slots):
         if decl["sealed"]:
             continue
         v = str((slots or {}).get(decl["key"], "")).strip() or decl["default"]
-        v = v.replace("{", "").replace("}", "")[:500].strip()
+        v = v.replace("{", "").replace("}", "")[:1000].strip()
         if v:
             out[decl["key"]] = v
     return out
@@ -512,12 +551,20 @@ def _import_objset(chat, slug, story, name):
     for rid, objs in (data.get("objects") or {}).items():
         if not isinstance(objs, dict):
             continue
+        try:
+            shipped_objs = (story["rooms"].get(int(rid)) or {}).get("objects") or {}
+        except (TypeError, ValueError):
+            shipped_objs = {}
         cur = dict(merged_objects.get(str(rid)) or {})
         for oname, spec in objs.items():
             if not isinstance(spec, dict):
                 continue
             spec = dict(spec)
-            if open_flag and "condition" not in spec:
+            # Shadow/tombstone entries for SHIPPED names never get the
+            # zork-line stamp — stamping a chest shadow would hide the
+            # chest until the chest opens (deadlock).
+            if (open_flag and "condition" not in spec
+                    and oname not in shipped_objs and not spec.get("_removed")):
                 spec["condition"] = {"flag": open_flag}
             spec.setdefault("_author", "player")
             cur[oname] = spec
@@ -545,6 +592,13 @@ def _start(system, slug, character, mode, local, session, slots=None, objset=Non
     start_room = story["rooms"][story["meta"]["start"]]
     character = character or default_character()
 
+    # Slots substitute BEFORE identity/mode/prompt-name derivation — a story
+    # may assemble its whole role from the setup form (role.name/text as
+    # slot tokens; Krem's ruling 2026-08-20: the setup popup IS the
+    # assembled prompt, registered as the story costume).
+    slot_vals = _clean_slots(story, slots)
+    _apply_slots(story, slot_vals)
+
     # Identity mode (ruling 2026-08-03): role ships → total swap by default;
     # no role → the local persona narrates (the classic gear).
     role = story["meta"].get("role") or {}
@@ -567,7 +621,6 @@ def _start(system, slug, character, mode, local, session, slots=None, objset=Non
     # Local persona defaults to whatever the chat was wearing pre-story
     local = local or prev_prompt
 
-    slot_vals = _clean_slots(story, slots)
     st.set_active(chat, slug, prev_prompt)
     st.update_active(chat, character=character, mode=mode, local=local,
                      prompt_name=_prompt_name_for(story, mode, chat),
@@ -581,9 +634,6 @@ def _start(system, slug, character, mode, local, session, slots=None, objset=Non
             logger.warning(f"[STORY] object set '{objset}' not found for '{slug}' — starting without it")
         except Exception as e:
             logger.warning(f"[STORY] object set '{objset}' import failed: {e}")
-    # The local story object must render with slots applied — the first
-    # costume and room 1's on_enter narration carry the player's words.
-    _apply_slots(story, slot_vals)
 
     # Stamp the story cockpit: none of hers + the referee (ruling 2026-08-03).
     # Users change it after via the sidebar; the checkbox is extra_toolsets.
@@ -1259,10 +1309,12 @@ def delete_user_object(chat, slug, room_id, name):
     return f"'{name}' removed.", True
 
 
-def set_room_text(chat, slug, room_id, template=None, player_desc=None):
-    """Store per-room text overrides. Empty/whitespace value clears that
-    field (routes apply verbatim-equals-shipped upstream, same house rule
-    as story settings)."""
+def set_room_text(chat, slug, room_id, template=None, player_desc=None,
+                  add_exits=None):
+    """Store per-room text overrides + user-added exits. Empty/whitespace
+    text clears that field (routes apply verbatim-equals-shipped upstream,
+    same house rule as story settings); an empty add_exits list clears the
+    exits. None = leave that field as stored."""
     layer = st.get_user_layer(slug, chat)
     rooms_ov = dict(layer.get("rooms") or {})
     cur = dict(rooms_ov.get(str(room_id)) or {})
@@ -1270,14 +1322,17 @@ def set_room_text(chat, slug, room_id, template=None, player_desc=None):
         cur["template"] = str(template)
     if player_desc is not None:
         cur["player_desc"] = str(player_desc)
-    cur = {k: v for k, v in cur.items() if str(v).strip()}
+    if add_exits is not None:
+        cur["add_exits"] = list(add_exits)
+    cur = {k: v for k, v in cur.items()
+           if (v if k == "add_exits" else str(v).strip())}
     if cur:
         rooms_ov[str(room_id)] = cur
     else:
         rooms_ov.pop(str(room_id), None)
     st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
                                     "rooms": rooms_ov})
-    return "Room text saved.", True
+    return "Room saved.", True
 
 
 def _resolve_room(story, ref, state):

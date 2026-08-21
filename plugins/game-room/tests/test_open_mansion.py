@@ -127,6 +127,11 @@ def test_story_slots_normalized(story):
     rel = slots[0]
     assert rel["default"] == "partner" and rel["options"] == ["partner", "rival"]
     assert slots[2]["sealed"] and slots[2]["seal_key"] == "1:chest:open"
+    # Layout hints (2026-08-20): section/width pass through, width clamps,
+    # an explicitly EMPTY label survives (section header carries it).
+    assert rel["section"] == "Characters" and rel["width"] == 30
+    assert slots[1]["label"] == "" and slots[1]["width"] == 100   # 999 clamped
+    assert slots[2]["section"] == "" and slots[2]["width"] == 100  # defaults
 
 
 def test_clean_slots_defaults_and_hygiene(story):
@@ -144,7 +149,18 @@ def test_apply_slots_substitutes_everywhere(story):
     assert "as wife" in story["meta"]["premise"]
     assert "My wife stands" in story["rooms"][1]["template"]
     assert "whispered ember" in story["rooms"][2]["template"]
-    assert story["meta"]["role"]["name"] == "Vex"       # names stay literal
+    assert story["meta"]["role"]["name"] == "Vex"       # literal names untouched
+
+
+def test_role_assembled_from_slots(story):
+    # The setup-popup-IS-the-assembled-prompt pattern (Krem 2026-08-20):
+    # role name/text may be slot tokens — the form output becomes the costume.
+    story["meta"]["role"] = {"name": "{ai_character}", "text": "{ai_backstory}"}
+    session._apply_slots(story, {"ai_character": "Vera",
+                                 "ai_backstory": "A runaway circus walrus, an alien, an AI, a time traveler."})
+    assert story["meta"]["role"] == {
+        "name": "Vera",
+        "text": "A runaway circus walrus, an alien, an AI, a time traveler."}
 
 
 # ── User layer: placed objects + room text ──────────────────────────────────
@@ -165,14 +181,63 @@ def test_user_object_merges_and_acts(story):
     assert ok and "You see a paper" in msg
 
 
-def test_user_object_never_shadows_shipped(story):
+def test_shadow_merges_over_shipped(story):
+    # Shadow law (editor v2, 2026-08-20): a user entry on a shipped name
+    # field-merges — desc replaces, verb messages overlay, MECHANICS SURVIVE.
     session.upsert_user_object(CHAT, "mad-manse", 1, "chest",
-                               {"desc": "an impostor chest"})
+                               {"desc": "a neon party chest",
+                                "interactions": {"open": {"message": "Confetti!"},
+                                                 "kick": {"message": "Ow."}}})
     fresh = rooms.load_story("mad-manse")
     state = _fresh(fresh)
     session._merge_user_layer(fresh, "mad-manse", CHAT, state)
-    assert fresh["rooms"][1]["objects"]["chest"]["desc"] == \
+    chest = fresh["rooms"][1]["objects"]["chest"]
+    assert chest["desc"] == "a neon party chest"
+    assert chest["interactions"]["open"]["message"] == "Confetti!"
+    assert chest["interactions"]["open"]["set"] == {"chest_opened": True}  # kept
+    assert chest["interactions"]["kick"]["message"] == "Ow."               # added
+    session.delete_user_object(CHAT, "mad-manse", 1, "chest")
+
+
+def test_tombstone_removes_shipped_and_restores(story):
+    session.upsert_user_object(CHAT, "mad-manse", 1, "chest", {"_removed": True})
+    fresh = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh, "mad-manse", CHAT, _fresh(fresh))
+    assert "chest" not in fresh["rooms"][1]["objects"]
+    session.delete_user_object(CHAT, "mad-manse", 1, "chest")   # restore
+    fresh2 = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh2, "mad-manse", CHAT, _fresh(fresh2))
+    assert fresh2["rooms"][1]["objects"]["chest"]["desc"] == \
         "An old chest with a brass dial."
+
+
+def test_added_exits_gated_and_deduped(story):
+    session.set_room_text(CHAT, "mad-manse", 1,
+                          add_exits=[{"label": "the parlor again", "to": 2},
+                                     {"label": "the void", "to": 99}])
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)
+    session._merge_user_layer(fresh, "mad-manse", CHAT, state)
+    assert len(fresh["rooms"][1]["exits"]) == 1          # pre-line: gated
+    state["flags"]["chest_opened"] = True
+    fresh2 = rooms.load_story("mad-manse")
+    session._merge_user_layer(fresh2, "mad-manse", CHAT, state)
+    exits = fresh2["rooms"][1]["exits"]
+    assert len(exits) == 2                               # to=2 deduped, void added
+    assert exits[-1] == {"label": "the void", "to": 99}
+    session.set_room_text(CHAT, "mad-manse", 1, add_exits=[])
+
+
+def test_import_objset_skips_stamp_for_shipped_names(story, cfg_store):
+    cfg_store.save("storyobjsets:mad-manse",
+                   {"mix": {"objects": {"1": {"chest": {"desc": "gilded"},
+                                              "lamp": {"desc": "a lamp"}}}}})
+    session._import_objset(CHAT, "mad-manse", story, "mix")
+    layer = st.get_user_layer("mad-manse", CHAT)["objects"]["1"]
+    assert "condition" not in layer["chest"]             # shadow: no deadlock stamp
+    assert layer["lamp"]["condition"] == {"flag": "chest_opened"}
+    session.delete_user_object(CHAT, "mad-manse", 1, "chest")
+    session.delete_user_object(CHAT, "mad-manse", 1, "lamp")
 
 
 def test_room_text_override_gated_by_zork_line(story):
@@ -263,12 +328,69 @@ def test_preset_roundtrip(story, cfg_store):
     assert story_routes.get_presets("mad-manse")["presets"] == {}
 
 
+def test_prestart_environment_edits(story, cfg_store, monkeypatch):
+    # Pre-start fallback (2026-08-20): the start modal's Environment tab
+    # edits the slug+chat user layer BEFORE story/start — an explicit slug
+    # resolves when nothing is active; the playthrough merges the rows at
+    # load. Without a slug the routes still refuse.
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-prestart-chat"
+    r = story_routes.set_object(body={"session": chat, "slug": "mad-manse",
+                                      "room_id": 1, "name": "welcome_mat",
+                                      "spec": {"desc": "a mat"}})
+    assert r["success"], r
+    world = story_routes.get_objects(query={"session": chat, "slug": "mad-manse"})
+    assert world["active"] and world["current_room"] is None
+    assert "welcome_mat" in world["objects"]["1"]
+    # Author-view room stats (the "In this room" blurb, 2026-08-20):
+    # 1-hall ships 1 exit, 3 objects, 2 interactions (chest:open, bell:ring)
+    hall = world["rooms"][0]
+    assert (hall["exits"], hall["shipped_objects"], hall["shipped_actions"]) == (1, 3, 2)
+    refused = story_routes.get_objects(query={"session": chat})
+    assert refused["active"] is False
+    bogus = story_routes.get_objects(query={"session": chat, "slug": "no-such"})
+    assert bogus["active"] is False
+
+
+def test_route_shadow_tombstone_restore(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-shadow-chat"
+    r = story_routes.set_object(body={"session": chat, "slug": "mad-manse",
+                                      "room_id": 1, "name": "chest",
+                                      "spec": {"desc": "shadowed"}})
+    assert r["success"], r          # shipped names allowed now — shadow path
+    r = story_routes.delete_object(body={"session": chat, "slug": "mad-manse",
+                                         "room_id": 1, "name": "chest"})
+    assert r["success"] and "restorable" in r["detail"]
+    assert st.get_user_layer("mad-manse", chat)["objects"]["1"]["chest"]["_removed"]
+    r = story_routes.delete_object(body={"session": chat, "slug": "mad-manse",
+                                         "room_id": 1, "name": "chest",
+                                         "restore": True})
+    assert r["success"]
+    assert "chest" not in (st.get_user_layer("mad-manse", chat)
+                           .get("objects") or {}).get("1", {})
+
+
 def test_setup_route_shape(story, cfg_store):
     from routes import story_routes
     r = story_routes.get_setup("mad-manse")
     assert r["open_flag"] == "chest_opened"
     assert [s["key"] for s in r["slots"]] == ["relationship", "watchword", "combo"]
     assert r["objsets"] == [] and r["presets"] == {}
+
+
+def test_settings_schema_slot_story_gm_only(story, cfg_store):
+    # 3-tab ruling (Krem 2026-08-20): slot-assembled stories drop the raw
+    # storycfg text editors (they'd show {tokens}) — schema is GM-tab only.
+    from routes import story_routes
+    r = story_routes.get_story_settings("mad-manse")
+    keys = [f["key"] for f in r["schema"]]
+    assert "role_text" not in keys and "premise" not in keys \
+        and "player_role" not in keys
+    assert "dm_guide" in keys and "gm_universal" in keys
+    assert all(f["tab"] == "GM" for f in r["schema"])
 
 
 # ── Pre-seeded seal at turn 0 (the sealed Mad-Libs slot lane) ───────────────

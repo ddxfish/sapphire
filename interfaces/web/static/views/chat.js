@@ -551,6 +551,7 @@ export default {
     async show() {
         if (_docClickHandler) document.addEventListener('click', _docClickHandler);
         if (_personaHandler) window.addEventListener('persona-loaded', _personaHandler);
+        await steerOffGameChat();
         await refreshInitData();
         await loadSidebar();
     },
@@ -560,6 +561,33 @@ export default {
         if (_personaHandler) window.removeEventListener('persona-loaded', _personaHandler);
     }
 };
+
+// Game/story sessions belong to their plugin surface (isolation ruling
+// 2026-08-03 — renderChatDropdown already hides them from the picker).
+// Refreshing or navigating into Chat while a game session is still the
+// SERVER-active chat must not render it here: steer to the most recent
+// regular chat instead (the list is updated_at DESC). No eligible target,
+// or a turn mid-stream → leave things alone; the picker still hides it.
+async function steerOffGameChat() {
+    try {
+        const data = await api.fetchChatList();
+        const active = (data.chats || []).find(c => c.name === data.active_chat);
+        if (!active || active.mode !== 'game') return;
+        const target = (data.chats || []).find(c => c.mode !== 'game' && !c.archived);
+        if (!target || getIsProc()) return;
+        const chatSelect = getElements().chatSelect || document.getElementById('chat-select');
+        if (!chatSelect) return;
+        if (![...chatSelect.options].some(o => o.value === target.name)) {
+            const opt = document.createElement('option');
+            opt.value = opt.textContent = target.name;
+            chatSelect.appendChild(opt);
+        }
+        chatSelect.value = target.name;
+        await handleChatChange();
+    } catch (e) {
+        console.warn('[CHAT] game-chat steer failed:', e);
+    }
+}
 
 function toggleSidebar(container) {
     const sidebar = container.querySelector('.chat-sidebar');

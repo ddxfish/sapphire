@@ -52,9 +52,12 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 ```
 
 - Declared slots make the story open with a setup form (dropdowns + "Other"); stories without slots keep zero-friction auto-start.
-- `{key}` tokens substitute into role text, premise, `player_role`, `dm_guide`, and every string in every room — once, at load, per playthrough.
+- Form layout (optional, pure cosmetics): `"rows": N` turns a slot into an N-line textarea; `"section": "Characters"` groups consecutive slots under a named header; `"width": 20` (percent, 10–100) lets slots share a line — e.g. a 20% name beside its 80% backstory textarea (rows wrap responsively). An explicitly empty `"label": ""` renders no label — the section header or the neighboring field carries the meaning.
+- `{key}` tokens substitute into role name AND text, premise, `player_role`, `dm_guide`, and every string in every room — once, at load, per playthrough.
+- The assembled-setup-as-role pattern: declare `"role": {"name": "{ai_character}", "text": "{ai_backstory}"}` and the setup form becomes the story's whole identity — story mode activates (a role now ships), and the costume registers under the resolved name. Give every such slot a solid `default` so an untouched form still plays.
 - `sealed: true` slots never substitute: the player's text is written into the sealed blank named by `seal_key` (the room-scoped `"{room_id}:{object}:{verb}"` key of a `sealed` interaction you declare) — she discovers it in play.
 - Players can save filled forms as per-story **setup presets**, and save/load **object sets** (rooms stocked with their own objects + room-text overrides, materializing at the zork-line). Both live user-side; your pack never changes.
+- **Shadow law** (editor v2): the Environment editor also shows your SHIPPED objects. A player editing one stores a same-name override that field-merges at load — desc/hidden replace, interaction *messages* overlay per-verb, and your mechanics (effects, seals, dice, conditions) always survive the reword. Deleting a shipped object writes a restorable tombstone. Players can also ADD exits (never edit yours — conditions and blocked doors are untouchable); added exits open past the zork-line. All of it lives in the user layer; the pack stays canonical.
 
 ## Room JSON
 

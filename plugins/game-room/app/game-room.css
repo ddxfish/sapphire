@@ -105,11 +105,119 @@
 .grs-tabs { padding: 8px 24px 0; border-bottom: 1px solid var(--border, #2a3040); flex-shrink: 0; }
 .grs-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 26px 30px; }
 .grs-pane .sb-field { margin-bottom: 18px; }
-.grs-pane textarea.grs-field {
-    width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace;
-    font-size: 0.9em; line-height: 1.5; min-height: 220px;
+.grs-pane textarea {
+    /* No font-family/size override — core's .sb-field textarea rule (app
+       font, var(--font-sm)) governs EVERY field in this modal so Story and
+       Environment read identically (Krem 2026-08-20, no monospace).
+       rows="" governs height — the old 220px floor made every field ~10
+       lines whatever the schema asked for. */
+    width: 100%; box-sizing: border-box; line-height: 1.5; min-height: 3.2em;
 }
-.grs-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+/* Room selector: dropdown left (~50% on desktop), "In this room" stats
+   right — the stats anchor the dropdown as THE room picker. Wraps on
+   narrow screens. */
+.grs-room-row {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin: 0 0 14px;
+}
+.grs-room-row select { flex: 1 1 50%; max-width: 50%; min-width: min(100%, 14em); }
+.grs-room-stats { flex: 1 1 auto; min-width: 12em; }
+.grs-room-stats-head { font-weight: 600; font-size: var(--font-sm, 0.85em); }
+.grs-room-stats-line { color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); }
+
+/* Placed objects — card grid (Krem 2026-08-20): title / look description /
+   CSV of extra verbs. */
+.grs-obj-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(14em, 1fr));
+    gap: 8px;
+}
+.grs-obj-card {
+    position: relative;
+    background: var(--bg-tertiary, var(--input-bg, rgba(128,128,128,.12)));
+    border: 1px solid var(--border, #2a3040);
+    border-radius: var(--radius-sm, 6px);
+    padding: 8px 30px 8px 10px;
+    min-width: 0;
+}
+.grs-obj-card .grs-obj-del { position: absolute; top: 4px; right: 4px; }
+.grs-obj-editable { cursor: pointer; }
+.grs-obj-editable:hover { border-color: var(--text-secondary, #8a8fa3); }
+.grs-obj-ghost { opacity: .55; border-style: dashed; }
+.grs-obj-ghost .grs-obj-restore { position: absolute; top: 4px; right: 4px; }
+/* Exits: shipped = solid badges, user-added = dashed + removable */
+.grs-exit-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.grs-exit-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: var(--bg-tertiary, var(--input-bg, rgba(128,128,128,.12)));
+    border: 1px solid var(--border, #2a3040);
+    border-radius: 999px; padding: 2px 10px; font-size: var(--font-sm, 0.85em);
+}
+.grs-exit-user { border-style: dashed; }
+.grs-exit-x {
+    background: none; border: none; color: inherit; cursor: pointer;
+    padding: 0 2px; font-size: 1em; line-height: 1;
+}
+.grs-exit-add { max-width: 24em; }
+.grs-obj-addtile {
+    display: flex; align-items: center; justify-content: center;
+    border-style: dashed; cursor: pointer; padding: 8px 10px;
+    color: var(--text-secondary, #8a8fa3); font-weight: 600; user-select: none;
+    min-height: 3.4em;
+}
+.grs-obj-addtile:hover { color: var(--text, inherit); border-color: var(--text-secondary, #8a8fa3); }
+.grs-obj-add-form {
+    background: var(--bg-tertiary, var(--input-bg, rgba(128,128,128,.12)));
+    border: 1px solid var(--border, #2a3040);
+    border-radius: var(--radius-sm, 6px);
+    padding: 10px; margin-top: 8px;
+    display: flex; flex-direction: column; gap: 6px; align-items: stretch;
+}
+.grs-obj-add-form input[type="text"] {
+    /* bare inputs (no .sb-field wrapper) — mirror core's field skin */
+    width: 100%; box-sizing: border-box; min-width: 0; padding: 5px 6px;
+    background: var(--input-bg); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text); font-size: var(--font-sm);
+}
+.grs-obj-add-form .pk-btn { align-self: flex-start; }
+.grs-act-row { display: flex; gap: 6px; align-items: center; }
+.grs-act-row .grs-act-verb { flex: 0 1 9em; min-width: 5em; }
+.grs-act-row .grs-act-resp { flex: 1 1 auto; min-width: 0; }
+.grs-obj-card-title { font-weight: 600; overflow-wrap: anywhere; }
+.grs-obj-card-desc { color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); overflow-wrap: anywhere; }
+.grs-obj-card-verbs { color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); font-style: italic; margin-top: 2px; }
+/* Actions live in the header, left of the ✕ (Krem 2026-08-20: no
+   below-the-fold buttons, no extra vertical space). h3 eats free width so
+   the buttons cluster right; long titles ellipsize instead of shoving. */
+.grs-modal .pr-modal-header { gap: 8px; }
+.grs-modal .pr-modal-header h3 {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.grs-actions { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.grs-actions .pk-btn { white-space: nowrap; }
+
+/* Setup form layout — named sections + width-hinted slot columns
+   (slot `section`/`width` in story.json; Krem 2026-08-20). */
+.grs-section-title {
+    font-weight: 600; font-size: 0.95em; margin: 16px 0 8px;
+    color: var(--text, inherit);
+}
+.grs-slot-row { display: flex; flex-wrap: wrap; column-gap: 12px; }
+.grs-slot {
+    flex: 1 1 calc(var(--w, 100%) - 12px);
+    min-width: min(100%, 9em); box-sizing: border-box;
+}
+.grs-slot .sb-field { margin-bottom: 12px; }
+.grs-preset-row {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+/* flex-basis 0 = the dropdown always shrinks to fit — buttons never wrap */
+.grs-preset-row > select { flex: 1 1 0; min-width: 0; }
+.grs-preset-row .pk-btn { flex: 0 0 auto; white-space: nowrap; }
+.grs-preset-namer { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; }
+.grs-preset-namer input { flex: 1 1 auto; min-width: 8em; }
 
 /* ---------------- stage / felt ---------------- */
 .pk-stage { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 0; }
