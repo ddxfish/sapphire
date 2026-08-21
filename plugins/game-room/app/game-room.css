@@ -121,6 +121,7 @@
     margin: 0 0 14px;
 }
 .grs-room-row select { flex: 1 1 50%; max-width: 50%; min-width: min(100%, 14em); }
+.grs-room-row .grs-room-del { flex: 0 0 auto; align-self: center; }
 /* basis 0, not auto: a long "Rooms that lead here" list must WRAP inside
    the column, not demand max-content width and shove the block onto its
    own row (Krem 2026-08-21, the 8-exit hallway) */
@@ -249,17 +250,48 @@
 /* ● = canvas/form drifted from the loaded scenario — a 💾 re-save is due */
 .grs-scn-unsaved { color: var(--warning, #e0a836); font-size: 1.1em; cursor: help; }
 
-/* Full description 75% + baked-in room art 25% (view-only thumbnail);
-   the thumb hides on narrow screens. */
+/* Full description 75% + room art column 25% (thumb + backdrop controls,
+   W1 2026-08-21); the art column hides on narrow screens. */
 .grs-room-desc-row { display: flex; gap: 12px; align-items: flex-start; }
 .grs-room-desc-row .grs-room-desc { flex: 3 1 0; min-width: 0; }
-.grs-room-thumb {
-    flex: 1 1 0; width: 25%; min-width: 0; height: auto;
+.grs-bd-col {
+    flex: 1 1 0; min-width: 0; display: flex; flex-direction: column;
+    gap: 6px;
     margin-top: 1.5em;   /* optical align with the textarea top (label height) */
+}
+.grs-room-thumb {
+    width: 100%; height: auto;
     border: 1px solid var(--border, #2a3040);
     border-radius: var(--radius-sm, 6px);
 }
-@media (max-width: 640px) { .grs-room-thumb { display: none !important; } }
+.grs-bd-controls { display: flex; gap: 4px; align-items: center; }
+.grs-bd-controls .grs-bd-pick { flex: 1 1 0; min-width: 0; }
+@media (max-width: 640px) { .grs-bd-col { display: none !important; } }
+/* Prompt Pieces pool (Characters tab, 2026-08-21) */
+.grs-piece-row {
+    border: 1px solid var(--border, #2a3040);
+    border-radius: var(--radius-sm, 6px);
+    padding: 6px 8px; margin-bottom: 6px;
+}
+.grs-piece-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.grs-piece-head code { margin-right: auto; }
+/* Autosave receipt — fades in on a landed save, fades back out */
+.grs-piece-saved {
+    color: var(--success, #6fbf73); font-size: 0.85em;
+    opacity: 0; transition: opacity 0.3s;
+}
+.grs-piece-saved.on { opacity: 1; }
+.grs-piece-src {
+    font-size: 0.75em; color: var(--text-secondary, #8a8fa3);
+    border: 1px solid var(--border, #2a3040); border-radius: 8px;
+    padding: 0 6px;
+}
+/* Calm at rest (the row's border carries the shape), lit only on focus */
+.grs-piece-row .grs-piece-text { width: 100%; border-color: transparent; }
+.grs-piece-row .grs-piece-text:focus {
+    border-color: var(--trim, #8ab8ff); outline: none;
+}
+
 .grs-preset-namer { display: flex; align-items: center; gap: 6px; flex: 1 1 100%; }
 .grs-preset-namer input { flex: 1 1 auto; min-width: 8em; }
 

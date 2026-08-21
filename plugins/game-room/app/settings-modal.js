@@ -400,7 +400,8 @@ function buildModal(title, tabs, actionsHtml, barHtml, opts = {}) {
     // "discard changes?" with nothing changed (Krem 2026-08-21).
     const fingerprint = () => JSON.stringify(
         [...overlay.querySelectorAll(
-            'input, select:not(.grs-obj-room):not(.grs-scn-pick), textarea:not(.grs-obj-template):not(.grs-obj-pdesc)')]
+            'input, select:not(.grs-obj-room):not(.grs-scn-pick), '
+            + 'textarea:not(.grs-obj-template):not(.grs-obj-pdesc):not(.grs-piece-text)')]
             .map(el => el.type === 'checkbox' ? !!el.checked : el.value));
     let baseline = null;   // stamped after inits run (below)
     const dirty = () => fingerprint() !== baseline;
@@ -450,6 +451,112 @@ export async function openGameSettings(gameId) {
 // opts.session + opts.active → the in-game gear: Setup-this-run + Objects
 // tabs join the schema tabs. Library gear (no session) = schema tabs only,
 // exactly as before.
+// ── Prompt Pieces panel (Krem 2026-08-21, one factory, two homes: the
+// in-game gear's Characters tab and the setup modal's — the PLAY
+// surfaces; the library wheel is conduct-only and never carries it).
+// One user concept: pool pieces AND engine built-ins in one list, all
+// editable — editing a built-in writes a pool OVERRIDE (tier-one key,
+// wins in both lanes); ↩ reverts to shipped text; autosave debounced
+// when non-empty (a cleared textarea never deletes); ✓ receipt on the
+// landed response. Fields are OUTSIDE the modal fingerprint (own lane).
+function piecesPanel(slug, session) {
+    const html = `
+        <div class="grs-section-title">Prompt Pieces</div>
+        <div style="opacity:.7;font-size:.85em;margin-bottom:6px">Text she wears while a piece is active — toggled by Effects (add/remove prompt piece) on objects, exits and dice. Edits apply live. This is their one home; they don't show on the Prompts page.</div>
+        <div class="grs-piece-rows"></div>
+        <button type="button" class="pk-btn grs-piece-add">+ Add Prompt Piece</button>`;
+    const wire = async (root) => {
+        let data;
+        try {
+            data = await api(`story/${encodeURIComponent(slug)}/pieces`);
+        } catch { return; }
+        const rowsHost = root.querySelector('.grs-piece-rows');
+        const addBtn = root.querySelector('.grs-piece-add');
+        if (!rowsHost || !addBtn) return;
+        const dl = root.querySelector('#grs-piece-list');
+        let pool = data.pieces || {};
+        const builtin = data.builtin || {};
+        const syncDl = () => { if (dl) dl.innerHTML =
+            Object.keys({ ...builtin, ...pool }).map(n => `<option value="${esc(n)}">`).join(''); };
+        const pieceTimers = {};
+        const savePiece = async (name, text) => {
+            try {
+                const r = await api(`story/${encodeURIComponent(slug)}/pieces`, 'POST',
+                                    { session, name, text });
+                if (!r.success) { ui.showToast(r.detail || 'refused', 'error'); return false; }
+                pool = r.pieces || {};
+                syncDl();
+                return true;
+            } catch (e) { ui.showToast(e.message, 'error'); return false; }
+        };
+        const pieceRow = (name, engineText) => {
+            const isEngine = engineText != null;
+            const div = document.createElement('div');
+            div.className = 'grs-piece-row';
+            div.innerHTML = `
+                <div class="grs-piece-head"><code>${esc(name)}</code>
+                    ${isEngine ? '<span class="grs-piece-src">engine</span>' : ''}
+                    <span class="grs-piece-saved">✓ saved</span>
+                    <button type="button" class="sb-icon-btn grs-piece-revert" title="Revert to the engine text" style="display:none">↩</button>
+                    <button type="button" class="sb-icon-btn grs-piece-del" title="Delete piece"${isEngine ? ' style="display:none"' : ''}>✕</button></div>
+                <textarea rows="2" class="grs-piece-text" placeholder="prompt text while this piece is active"></textarea>`;
+            const ta = div.querySelector('.grs-piece-text');
+            const savedMark = div.querySelector('.grs-piece-saved');
+            const revBtn = div.querySelector('.grs-piece-revert');
+            const flash = () => {
+                savedMark.classList.add('on');
+                clearTimeout(savedMark._t);
+                savedMark._t = setTimeout(() => savedMark.classList.remove('on'), 1600);
+            };
+            const paintRev = () => {
+                revBtn.style.display = (isEngine && name in pool) ? '' : 'none';
+            };
+            ta.value = (name in pool) ? pool[name] : (engineText || '');
+            ta.oninput = () => {
+                clearTimeout(pieceTimers[name]);
+                const v = ta.value.trim();
+                if (!v) return;
+                // typed back to the shipped text = a revert, not an override
+                const asShipped = isEngine && v === String(engineText).trim();
+                if (asShipped && !(name in pool)) return;
+                pieceTimers[name] = setTimeout(async () => {
+                    if (await savePiece(name, asShipped ? '' : v)) { paintRev(); flash(); }
+                }, 700);
+            };
+            revBtn.onclick = async () => {
+                if (!confirm(`Revert '${name}' to the engine text?`)) return;
+                if (await savePiece(name, '')) {
+                    ta.value = engineText || '';
+                    paintRev();
+                    flash();
+                }
+            };
+            div.querySelector('.grs-piece-del').onclick = async () => {
+                if ((name in pool) && !confirm(`Delete piece '${name}'?`)) return;
+                if (name in pool) await savePiece(name, '');
+                div.remove();
+            };
+            paintRev();
+            return div;
+        };
+        const names = [...new Set([...Object.keys(builtin), ...Object.keys(pool)])].sort();
+        for (const n of names)
+            rowsHost.appendChild(pieceRow(n, n in builtin ? builtin[n] : null));
+        addBtn.onclick = () => {
+            let name = prompt('Piece name (letters/numbers/underscores):');
+            if (!name) return;
+            name = name.toLowerCase().replace(/[^a-z0-9_]+/g, '_')
+                       .replace(/^_+|_+$/g, '').slice(0, 40);
+            if (!name) { ui.showToast('Name needs letters or numbers', 'error'); return; }
+            if (name in pool || name in builtin) { ui.showToast('That piece already exists', 'error'); return; }
+            const div = pieceRow(name, null);
+            rowsHost.appendChild(div);
+            div.querySelector('.grs-piece-text').focus();
+        };
+    };
+    return { html, wire };
+}
+
 export async function openStorySettings(slug, opts = {}) {
     if (!slug) return;
     let data, setup = null, objData = null;
@@ -476,6 +583,17 @@ export async function openStorySettings(slug, opts = {}) {
         if (st.length) st[0].html +=
             '<div style="opacity:.7;font-size:.85em">Changes save as you type — live on her next turn. Sealed blanks are edited from the ✍ chips in the scene panel.</div>';
         tabs.push(...st);
+    }
+
+    // Prompt Pieces (Krem 2026-08-21, surfaces ruling: content/conduct/
+    // run) — the panel rides the PLAY surfaces only: this gear (running
+    // world) and the setup modal (pre-run). The library wheel is CONDUCT
+    // (GM tab) and carries no story content.
+    const pp = objData ? piecesPanel(slug, opts.session) : null;
+    if (pp) {
+        const chars = tabs.find(t => t.title === 'Characters');
+        if (chars) chars.html += pp.html;
+        else tabs.push({ title: 'Characters', html: pp.html });
     }
 
     // Rooms — the open-world pane (active playthrough only). Order ruling
@@ -535,6 +653,8 @@ export async function openStorySettings(slug, opts = {}) {
         const btn = [...overlay.querySelectorAll('.grs-tab')].find(t => t.dataset.tab === opts.tab);
         if (btn) btn.click();
     }
+
+    if (pp) pp.wire(overlay);
 
     // ⏹ End story — moved from the toolbar into State (Krem 2026-08-21)
     const endBtn = overlay.querySelector('.grs-end-story');
@@ -608,6 +728,13 @@ export async function openStorySetup(slug, setup, session) {
         const finish = (v) => { if (!done) { done = true; resolve(v); } };
 
         const tabs = slotTabs(open, sealed, () => undefined);
+        // Prompt Pieces ride the setup modal too (Krem 2026-08-21: author
+        // the moods before pressing ▶) — under Characters, same panel as
+        // the in-game gear.
+        const pp = piecesPanel(slug, session);
+        const charsTab = tabs.find(t => t.title === 'Characters');
+        if (charsTab) charsTab.html += pp.html;
+        else tabs.push({ title: 'Characters', html: pp.html });
         const envTab = objData ? objectsTab(slug, session, objData) : null;
         if (envTab) tabs.push(envTab);
 
@@ -634,6 +761,7 @@ export async function openStorySetup(slug, setup, session) {
             },
               onClose: () => finish(null) });
         const { overlay, close } = modal;
+        pp.wire(overlay);
         const scnState = wireScenarioBar(overlay, slug, setup, open, {},
                               { session,
                                 current: objData?.scenario || '',
@@ -730,8 +858,12 @@ const REQ_TYPES = [
 ];
 const FX_TYPES = [
     ['set', 'set flag', 'flag name, e.g. ballroom_unlocked', ''],
+    ['clear', 'clear flag', 'flag name, e.g. ballroom_unlocked', ''],
     ['give', 'give item', 'item name, e.g. bronze_key', ''],
     ['adjust', 'adjust number', 'name, e.g. love', 'amount, e.g. 10 or -5'],
+    ['xadd', 'add prompt piece', 'piece name, e.g. hostile', ''],
+    ['xrem', 'remove prompt piece', 'piece name, e.g. hostile', ''],
+    ['goto', 'move player to room', 'room number, e.g. 3', ''],
 ];
 // Exits: no password (a riddle door = a door OBJECT with a password; the
 // exit then Requires "needs opened/used" on it) and no searched (search
@@ -749,9 +881,12 @@ const EXIT_MECH = ['condition', 'roll', 'effects', 'visible_when'];
 const _condFits = (c) => !c || Object.entries(c).every(([k, v]) =>
     ['has', 'did', 'flag'].includes(k) && typeof v === 'string');
 const _fxFits = (f) => !f || Object.entries(f).every(([k, v]) =>
-    (k === 'set' && Object.values(v).every(x => x === true))
+    (k === 'set' && Object.values(v).every(x => x === true || x === false))
     || (k === 'gives' && typeof v === 'string')
-    || (k === 'adjust' && Object.values(v).every(x => typeof x === 'number')));
+    || (k === 'adjust' && Object.values(v).every(x => typeof x === 'number'))
+    || ((k === 'extras' || k === 'extras_remove') && Array.isArray(v)
+        && v.every(x => typeof x === 'string'))
+    || (k === 'goto' && typeof v === 'number'));
 const _rollFits = (r) => !r || (
     (r.sides === 20 || r.sides === 100) && Number.isFinite(r.beat)
     && Object.keys(r).every(k => ['sides', 'beat', 'success', 'failure'].includes(k))
@@ -845,7 +980,8 @@ const objToDescriptor = (spec) => {
     const fxSrc = v0.roll ? (v0.roll.success || {})
         : (vspecs.length ? v0 : (spec.on_solve || {}));
     const fx = {};
-    for (const k of ['set', 'gives', 'adjust']) if (fxSrc[k] != null) fx[k] = fxSrc[k];
+    for (const k of ['set', 'gives', 'adjust', 'extras', 'extras_remove', 'goto'])
+        if (fxSrc[k] != null) fx[k] = fxSrc[k];
     const cond = { ...(v0.condition || {}) };
     delete cond.solved;
     const puz = spec.puzzle;
@@ -991,6 +1127,10 @@ function locksWidget(form, opts) {
             xIn.placeholder = t[3];
             vIn.style.display = t[2] ? '' : 'none';   // value-less kinds (searched)
             xIn.style.display = t[3] ? '' : 'none';
+            // Prompt-piece kinds offer the story's pool as suggestions
+            if (opts.pieceList && (t[0] === 'xadd' || t[0] === 'xrem'))
+                vIn.setAttribute('list', opts.pieceList);
+            else vIn.removeAttribute('list');
         };
         sel.onchange = paint;
         paint();
@@ -1064,10 +1204,18 @@ function locksWidget(form, opts) {
         const fx = {};
         if (fxToggle.checked) for (const x of rowsOf(fxRows)) {
             if (x.kind === 'set') (fx.set = fx.set || {})[x.val] = true;
+            else if (x.kind === 'clear') (fx.set = fx.set || {})[x.val] = false;
             else if (x.kind === 'give' && !fx.gives) fx.gives = x.val;
             else if (x.kind === 'adjust') {
                 const n = parseFloat(x.extra);
                 if (Number.isFinite(n)) (fx.adjust = fx.adjust || {})[x.val] = n;
+            } else if (x.kind === 'xadd') {
+                if (!(fx.extras || []).includes(x.val)) (fx.extras = fx.extras || []).push(x.val);
+            } else if (x.kind === 'xrem') {
+                if (!(fx.extras_remove || []).includes(x.val)) (fx.extras_remove = fx.extras_remove || []).push(x.val);
+            } else if (x.kind === 'goto' && fx.goto == null) {
+                const n = parseInt(x.val, 10);
+                if (Number.isFinite(n)) fx.goto = n;
             }
         }
         const out = { cond: Object.keys(cond).length ? cond : null,
@@ -1101,12 +1249,18 @@ function locksWidget(form, opts) {
             anyReq = true;
         }
         const src = d.fx || {};
-        for (const k of Object.keys(src.set || {})) { pickRow(fxRows, types.fx, 'set', k); anyFx = true; }
+        for (const [k, v] of Object.entries(src.set || {})) {
+            pickRow(fxRows, types.fx, v === false ? 'clear' : 'set', k);
+            anyFx = true;
+        }
         if (src.gives) { pickRow(fxRows, types.fx, 'give', src.gives); anyFx = true; }
         for (const [k, n] of Object.entries(src.adjust || {})) {
             pickRow(fxRows, types.fx, 'adjust', k, String(n));
             anyFx = true;
         }
+        for (const e of (src.extras || [])) { pickRow(fxRows, types.fx, 'xadd', e); anyFx = true; }
+        for (const e of (src.extras_remove || [])) { pickRow(fxRows, types.fx, 'xrem', e); anyFx = true; }
+        if (src.goto != null) { pickRow(fxRows, types.fx, 'goto', String(src.goto)); anyFx = true; }
         // A refusal message alone is dead data — it only shows when a
         // lock fails. Stage it in the field (recoverable if a lock is
         // re-added) but let real locks own the checkbox; counting it made
@@ -1134,6 +1288,7 @@ function objectsTab(slug, session, data) {
             <select class="grs-obj-room">
                 ${rooms.map(r => `<option value="${r.id}"${r.id === curId ? ' selected' : ''}>${r.id === curId ? '\u{1F4CD} ' : ''}${esc(r.title)}${r.id === curId ? ' — you are here' : ''}</option>`).join('')}
             </select>
+            <button type="button" class="sb-icon-btn grs-room-del" style="display:none" title="Remove this room — its doors and objects go with it">✕</button>
             <div class="grs-room-stats">
                 <div class="grs-room-stats-head">In this room</div>
                 <div class="grs-room-stats-line"></div>
@@ -1145,7 +1300,15 @@ function objectsTab(slug, session, data) {
                 <label>Full description (<span class="grs-obj-count">0</span>/900)</label>
                 <textarea class="grs-obj-template" rows="6" title="what she reads — the room's reality"></textarea>
             </div>
-            <img class="grs-room-thumb" style="display:none" alt="room image" title="the room's baked-in art (view only)">
+            <div class="grs-bd-col">
+                <img class="grs-room-thumb" style="display:none" alt="room image" title="the room's art">
+                <div class="grs-bd-controls">
+                    <select class="grs-bd-pick" title="pick from this story's art"></select>
+                    <button type="button" class="sb-icon-btn grs-bd-upload" title="Upload an image — recompressed to webp, stored once no matter how many rooms use it">\u{2B06}</button>
+                    <button type="button" class="sb-icon-btn grs-bd-reset" title="Back to the story's shipped art" style="display:none">\u{21A9}</button>
+                    <input type="file" class="grs-bd-file" accept="image/*" style="display:none">
+                </div>
+            </div>
         </div>
         <div class="sb-field sb-field-stack">
             <label>Short description</label>
@@ -1158,6 +1321,7 @@ function objectsTab(slug, session, data) {
             </div>
             <div class="grs-exit-badges"></div>
         </div>
+        <datalist id="grs-piece-list"></datalist>
         <div class="grs-exit-form grs-obj-add-form" style="display:none">
             <div style="display:flex;gap:6px">
                 <select class="grs-ex-to" title="where this way leads"></select>
@@ -1259,6 +1423,7 @@ function objectsTab(slug, session, data) {
         tab.hasContent = () =>
             Object.values(world.objects || {}).some(o => Object.keys(o || {}).length)
             || (world.rooms || []).some(r => r.template || r.player_desc
+                                             || r.backdrop_override
                                              || (r.add_exits || []).length
                                              || Object.keys(r.exit_shadows || {}).length);
         // Divergence, not existence (Krem 2026-08-20: "prompt only when the
@@ -1268,6 +1433,7 @@ function objectsTab(slug, session, data) {
         const canvasFp = () => JSON.stringify([
             world.objects || {},
             (world.rooms || []).map(r => [r.template || '', r.player_desc || '',
+                                          r.backdrop_override || '',
                                           r.add_exits || [], r.exit_shadows || {}]),
             pending]);
         let cleanFp = null;
@@ -1295,9 +1461,26 @@ function objectsTab(slug, session, data) {
                         ?? (s.roll && s.roll.success && s.roll.success.message) ?? '');
             return { desc: m.desc ?? '', verbs, merged: m };
         };
+        // W2: options rebuild every paint — user rooms appear/disappear
+        // live; selection survives; "+ New room…" rides at the bottom.
+        const paintRoomOptions = () => {
+            const cur = roomSel.value;
+            const curId = world.current_room;
+            roomSel.innerHTML = (world.rooms || []).map(r =>
+                `<option value="${r.id}">${r.id === curId ? '\u{1F4CD} ' : ''}${r.user_room ? '\u{1F3D7}\u{FE0F} ' : ''}${esc(r.title)}${r.id === curId ? ' — you are here' : ''}</option>`).join('')
+                + '<option value="__new__">\u{2795} New room\u{2026}</option>';
+            if (cur && [...roomSel.options].some(o => o.value === cur))
+                roomSel.value = cur;
+            else if (roomSel.options.length > 1)
+                roomSel.selectedIndex = 0;
+        };
         const paintRoom = () => {
+            paintRoomOptions();
             const r = curRoom();
             if (!r) return;
+            roomSel.dataset.prev = String(r.id);
+            pane.querySelector('.grs-room-del').style.display =
+                r.user_room ? '' : 'none';
             const px = pending[r.id];
             tArea.value = px ? px.template : (r.template || r.shipped_template || '');
             pArea.value = px ? px.player_desc : (r.player_desc || r.shipped_player_desc || '');
@@ -1305,6 +1488,22 @@ function objectsTab(slug, session, data) {
             const thumb = pane.querySelector('.grs-room-thumb');
             if (r.backdrop) { thumb.src = r.backdrop; thumb.style.display = ''; }
             else { thumb.style.display = 'none'; }
+            // Backdrop controls (W1): dropdown = this story's art palette
+            // (pack files + this room's upload); ↩ only when overridden.
+            const bdPick = pane.querySelector('.grs-bd-pick');
+            const eff = r.backdrop_file || '';
+            const isStore = /^[0-9a-f]{16}\.webp$/.test(eff);
+            const opts = [];
+            if (!eff) opts.push('<option value="" selected>no art</option>');
+            for (const f of (world.pack_backdrops || []))
+                opts.push(`<option value="${esc(f)}"${f === eff ? ' selected' : ''}>${esc(f)}</option>`);
+            if (isStore)
+                opts.push(`<option value="${esc(eff)}" selected>uploaded ${esc(eff.slice(0, 6))}…</option>`);
+            bdPick.innerHTML = opts.join('');
+            pane.querySelector('.grs-bd-reset').style.display =
+                r.backdrop_override ? '' : 'none';
+            pane.querySelector('#grs-piece-list').innerHTML =
+                Object.keys(world.pieces || {}).map(n => `<option value="${esc(n)}">`).join('');
             const layerObjs = (world.objects || {})[String(r.id)] || {};
             const shippedObjs = r.shipped_objs || {};
 
@@ -1472,7 +1671,8 @@ function objectsTab(slug, session, data) {
         const exReturnLabel = exitForm.querySelector('.grs-ex-return-label');
         const exSave = exitForm.querySelector('.grs-ex-save');
         const exReset = exitForm.querySelector('.grs-ex-reset');
-        const xw = locksWidget(exitForm, { types: { vis: EXIT_VIS, req: EXIT_REQ, fx: FX_TYPES } });
+        const xw = locksWidget(exitForm, { types: { vis: EXIT_VIS, req: EXIT_REQ, fx: FX_TYPES },
+                                           pieceList: 'grs-piece-list' });
         let exEditing = null;   // destination id while editing, else null
 
         const closeExit = () => {
@@ -1684,6 +1884,7 @@ function objectsTab(slug, session, data) {
         const takeLabel = addForm.querySelector('.grs-take-label');
         const lw = locksWidget(addForm, {
             types: { vis: VIS_TYPES, req: REQ_TYPES, fx: FX_TYPES },
+            pieceList: 'grs-piece-list',
             // A lock/effect wants a carrier verb — offer 'open'/'use' as
             // visible, editable action rows (Krem's clown_chest 2026-08-20:
             // hand-authoring the obvious verb was friction, not law).
@@ -1803,7 +2004,70 @@ function objectsTab(slug, session, data) {
             } catch (e) { ui.showToast(e.message, 'error'); }
         };
 
-        roomSel.onchange = paintRoom;
+        // ── Backdrop controls (W1, 2026-08-21): pick applies immediately
+        // (same lane as objects/exits); upload → content-hash store → set.
+        const bdPick = pane.querySelector('.grs-bd-pick');
+        const bdFile = pane.querySelector('.grs-bd-file');
+        const setBackdrop = async (name) => {
+            const r = curRoom();
+            try {
+                const res = await api('story/backdrop', 'POST',
+                                      { session, slug, room_id: r.id, name });
+                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
+                await refresh();
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+        bdPick.onchange = () => { if (bdPick.value) setBackdrop(bdPick.value); };
+        pane.querySelector('.grs-bd-reset').onclick = () => setBackdrop('');
+        pane.querySelector('.grs-bd-upload').onclick = () => bdFile.click();
+        bdFile.onchange = async () => {
+            const f = bdFile.files && bdFile.files[0];
+            bdFile.value = '';
+            if (!f) return;
+            const fd = new FormData();
+            fd.append('file', f);
+            try {
+                const up = await fetch('/api/plugin/game-room/story/art',
+                                       { method: 'POST', body: fd });
+                const j = await up.json();
+                if (!j.success) { ui.showToast(j.detail || 'upload refused', 'error'); return; }
+                await setBackdrop(j.name);
+                ui.showToast('Image stored & applied', 'success', 1800);
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+
+        // ── W2: room create/delete (playthrough rooms — id ≥ 100) ──────
+        roomSel.onchange = async () => {
+            if (roomSel.value !== '__new__') { paintRoom(); return; }
+            const title = prompt('New room name:');
+            roomSel.value = roomSel.dataset.prev || '';   // cancel-safe
+            if (!title || !title.trim()) { paintRoom(); return; }
+            try {
+                const res = await api('story/rooms', 'POST',
+                                      { session, slug, title: title.trim() });
+                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); paintRoom(); return; }
+                await refresh();
+                roomSel.value = String(res.id);
+                paintRoom();
+                ui.showToast(res.detail, 'success', 2000);
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+        pane.querySelector('.grs-room-del').onclick = async () => {
+            const r = curRoom();
+            if (!r || !r.user_room) return;
+            if (!confirm(`Remove '${r.title}'? Its doors and objects go with it.`)) return;
+            try {
+                const res = await api('story/rooms/delete', 'POST',
+                                      { session, slug, room_id: r.id });
+                ui.showToast(res.detail || (res.success ? 'Removed' : 'refused'),
+                             res.success ? 'success' : 'error', 2500);
+                if (!res.success) return;
+                await refresh();
+                roomSel.value = String(world.current_room
+                    ?? ((world.rooms || [])[0] || {}).id ?? '');
+                paintRoom();
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
         paintRoom();
     };
     return tab;

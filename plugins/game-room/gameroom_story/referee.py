@@ -145,6 +145,16 @@ def _effect_events(effects, state):
     xrem = effects.get("extras_remove") or []
     if xadd or xrem:
         events.append({"event": "extras", "add": xadd, "remove": xrem})
+    # Teleport (Krem's wand, 2026-08-21): {"goto": room_id} moves the
+    # player as part of any effect. Emits the moved event ONLY — the
+    # destination's on_enter does not fire on a teleport (documented;
+    # keeps effects non-recursive).
+    goto = effects.get("goto")
+    if goto is not None:
+        try:
+            events.append({"event": "moved", "to": int(goto)})
+        except (TypeError, ValueError):
+            logger.warning(f"[STORY] goto effect with non-numeric room: {goto!r} — ignored")
     return events
 
 
@@ -216,6 +226,22 @@ def visible_exits(room, state):
             and check_condition(ex.get("visible_when"), state)]
 
 
+def _carried_objects(all_rooms, state):
+    """{name: (home_room, spec)} for taken objects — they left their room
+    but ride with the player (Krem 2026-08-21: 'what she carries, she can
+    use'). home_room anchors seal/dice keys so once-chances and sealed
+    reveals stay spent/revealed wherever the object travels."""
+    taken = {_key(t) for t in state.get("taken") or []}
+    out = {}
+    if not taken:
+        return out
+    for rm in (all_rooms or {}).values():
+        for n, o in (rm.get("objects") or {}).items():
+            if _key(n) in taken and isinstance(o, dict) and n not in out:
+                out[n] = (rm, o)
+    return out
+
+
 def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     """Adjudicate one act. Returns (events, message, ok).
 
@@ -229,7 +255,21 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     if verb == "look":
         if target_n and target_n not in ("room", "around", "here"):
             _name, obj = _find(_visible_objects(room, state), target_n)
+            carried = False
             if not obj:
+                # Carried things (Krem 2026-08-21): a taken object left its
+                # room but rides in the inventory — look works wherever she
+                # is, resolving the spec from whichever room shipped it.
+                _name, pair = _find(_carried_objects(all_rooms, state), target_n)
+                if pair:
+                    obj = pair[1]
+                    carried = True
+            if not obj:
+                # Bare inventory tokens (a `gives` reward has no object
+                # spec) still acknowledge — the off-script license voice.
+                if _key(target_n) in {_key(i) for i in state.get("inventory") or []}:
+                    return [], (f"{target}: an item in the inventory — no further "
+                                f"detail is tracked; describe it freely."), True
                 return [], f"There is no '{target}' here to look at.", False
             bits = [obj.get("desc", "nothing remarkable")]
             if obj.get("puzzle"):
@@ -239,7 +279,8 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                            ({"solve"} if obj.get("puzzle") else set()))
             if verbs:
                 bits.append(f"It responds to: {', '.join(verbs)}")
-            return [], f"{target}: " + " — ".join(bits), True
+            return [], f"{target}{' (in the inventory)' if carried else ''}: " \
+                + " — ".join(bits), True
         # look room — on-demand re-read (Krem 2026-08-20): the ghost block
         # already carries this each turn, but a single room that CHANGES
         # (placed objects, zork-line reveals) deserves an explicit read.
@@ -341,6 +382,11 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
         name, obj = _find(_visible_objects(room, state), target_n)
         if not obj:
             name, obj = _find(room.get("objects") or {}, target_n)
+        if not obj:
+            # carried puzzles solve anywhere (solved list is name-global)
+            name, pair = _find(_carried_objects(all_rooms, state), target_n)
+            if pair:
+                obj = pair[1]
         if not obj or (obj.get("hidden") and name not in state["found"]) \
                 or not check_condition(obj.get("condition"), state):
             return [], f"There is no '{target}' here to solve.", False
@@ -370,6 +416,16 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     # listings; aliases resolve silently and journal under the canon verb.
     objs = _visible_objects(room, state)
     obj_name, obj = _find(objs, target_n)
+    home, carried = room, False
+    if not obj:
+        # Ring two (Krem 2026-08-21): carried objects — declared verbs,
+        # dice, seals and effects all fire from the pocket, in any room.
+        # Mechanics are state-scoped; only seal/dice keys are room-scoped,
+        # and those anchor to the object's HOME room (see _carried_objects).
+        obj_name, pair = _find(_carried_objects(all_rooms, state), target_n)
+        if pair:
+            home, obj = pair
+            carried = True
     if obj:
         target_n = obj_name                      # author's key wins for state
         canon, spec = None, None
@@ -401,7 +457,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
             # the blank before the player has had their shot.
             sealed = spec.get("sealed")
             if isinstance(sealed, dict):
-                key = seal_key(room, target_n, canon)
+                key = seal_key(home, target_n, canon)
                 legacy = legacy_seal_key(target_n, canon)
                 revealed = state.get("revealed", [])
                 if key in revealed or legacy in revealed:
@@ -445,7 +501,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                                f"{type(roll).__name__}, not an object — ignored")
                 roll = None
             if roll:
-                key = seal_key(room, target_n, canon)
+                key = seal_key(home, target_n, canon)
                 rolled = state.get("rolled", [])
                 if roll.get("once") and (key in rolled
                                          or legacy_seal_key(target_n, canon) in rolled):
@@ -462,7 +518,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                 won = value >= beat
                 branch = roll.get("success" if won else "failure") or {}
                 events = [{"event": "rolled", "target": target_n, "verb": canon,
-                           "room": (room or {}).get("id"),
+                           "room": (home or {}).get("id"),
                            "value": value, "beat": beat, "sides": sides, "success": won}]
                 events += _effect_events(branch, state)
                 msg = branch.get("message") or (f"You {canon} the {target}." if won
@@ -479,6 +535,8 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     # narrative pick-ups stay free.
     if obj and obj.get("takeable") \
             and _key(verb) in ("take", "grab", "get", "pickup", "pocket"):
+        if carried:
+            return [], f"The {target} is already in the inventory.", True
         events = [{"event": "taken", "target": target_n}]
         return events, obj.get(
             "take_message",
@@ -487,6 +545,11 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     # Off-script acts are a FEATURE (Krem 2026-08-03, the bracelet-overboard
     # incident): no mechanical hook means the DM improvises — a license, not
     # a refusal. Refusals taught the model to force wrong mappings.
+    # examine/inspect fall back to LOOK — but only HERE, past the declared-
+    # interaction path: titanic's ice-shavings declares `examine` as a real
+    # verb, so a global alias would shadow authored machinery (2026-08-21).
+    if _key(verb) in ("examine", "inspect"):
+        return resolve(story, state, room, all_rooms, "look", target, answer)
     if obj:
         verbs = sorted({_norm(v) for v in (obj.get("interactions") or {})} | {"look"} |
                        ({"solve"} if obj.get("puzzle") else set()))

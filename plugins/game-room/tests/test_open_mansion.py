@@ -714,6 +714,242 @@ def test_exit_routes_mechanics_shadow(story, cfg_store, monkeypatch):
     assert "1" not in (st.get_user_layer("mad-manse", chat).get("rooms") or {})
 
 
+def test_user_room_create_merge_travel_delete(story):
+    # W2 (2026-08-21): a playthrough-created room is a full citizen —
+    # exits reach it, objects live in it, text is UNGATED (it IS the
+    # room), and deletion takes its doors and objects with it.
+    chat = "manse-room-chat"
+    msg, ok, rid = session.create_user_room(chat, "mad-manse", "The Séance Room")
+    assert ok and rid >= 100, (msg, rid)
+    session.set_room_text(chat, "mad-manse", rid,
+                          template="Candles gutter around a bare table.")
+    session.set_user_exit(chat, "mad-manse", 1,
+                          rid, {"to": rid, "label": "the veiled arch"})
+    session.upsert_user_object(chat, "mad-manse", rid, "planchette",
+                               {"desc": "A worn planchette."})
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)                                # zork flag UNSET
+    session._merge_user_layer(fresh, "mad-manse", chat, state)
+    room = fresh["rooms"][rid]
+    assert room["title"] == "The Séance Room"
+    assert "Candles gutter" in room["template"]          # ungated
+    assert "planchette" in room["objects"]
+    _, msg2, ok2 = referee.resolve(fresh, state, fresh["rooms"][1],
+                                   fresh["rooms"], "move", "the veiled arch")
+    assert ok2 and "Séance" in msg2
+    # journal is empty here (she never moved) → deletion allowed, and the
+    # cleanup sweep takes the arch and the planchette with it
+    msg3, ok3 = session.delete_user_room(chat, "mad-manse", rid)
+    assert ok3, msg3
+    layer = st.get_user_layer("mad-manse", chat)
+    assert str(rid) not in (layer.get("rooms") or {})
+    assert str(rid) not in (layer.get("objects") or {})
+    assert not any(e.get("to") == rid
+                   for e in (layer.get("rooms") or {}).get("1", {}).get("add_exits") or [])
+
+
+def test_user_room_routes_and_guards(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    chat = "manse-room-route-chat"
+    base = {"session": chat, "slug": "mad-manse"}
+    r = story_routes.create_room(body={**base, "title": "Widow's Walk"})
+    assert r["success"] and r["id"] >= 100, r
+    rid = r["id"]
+    # exits validate user rooms at both ends; label defaults to its title
+    r2 = story_routes.set_exit(body={**base, "room_id": 1, "to": rid})
+    assert r2["success"], r2
+    ue = st.get_user_layer("mad-manse", chat)["rooms"]["1"]["add_exits"][0]
+    assert ue["label"] == "Widow's Walk"
+    r3 = story_routes.set_exit(body={**base, "room_id": rid, "to": 2,
+                                     "label": "back down"})
+    assert r3["success"], r3
+    # world view rows carry the user room
+    row = next(x for x in story_routes.get_objects(
+        query={"session": chat, "slug": "mad-manse"})["rooms"] if x["id"] == rid)
+    assert row["user_room"] and row["title"] == "Widow's Walk"
+    assert row["exits"] == 1
+    # guards: shipped rooms never delete; she can't stand in a dead room
+    assert not story_routes.delete_room(body={**base, "room_id": 1})["success"]
+    monkeypatch.setattr(st, "replay", lambda s, c: {"room": rid})
+    assert not story_routes.delete_room(body={**base, "room_id": rid})["success"]
+
+
+def test_look_reaches_carried_objects(story):
+    # Krem 2026-08-21 (Sapph's love_letter): a taken object leaves the
+    # room's visible set, but look must still find it — here, in another
+    # room, and even for bare `gives` tokens with no spec anywhere.
+    room = {"id": 7, "title": "Gate", "exits": [], "objects": {
+        "love_letter": {"desc": "Folded twice, sealed with wax.",
+                        "takeable": True}}}
+    far = {"id": 8, "title": "Field", "exits": [], "objects": {}}
+    all_rooms = {7: room, 8: far}
+    state = st.initial_state()
+    state["room"] = 7
+    events, msg, ok = referee.resolve(story, state, room, all_rooms,
+                                      "take", "love_letter")
+    assert ok
+    for e in events:
+        st.apply_event(state, e)
+    assert "love_letter" in state["inventory"]
+    _, msg, ok = referee.resolve(story, state, room, all_rooms,
+                                 "look", "love_letter")
+    assert ok and "sealed with wax" in msg and "inventory" in msg
+    state["room"] = 8                                    # carried elsewhere
+    _, msg, ok = referee.resolve(story, state, far, all_rooms,
+                                 "look", "love_letter")
+    assert ok and "sealed with wax" in msg
+    state["inventory"].append("rusty_key")               # bare token
+    _, msg, ok = referee.resolve(story, state, far, all_rooms,
+                                 "look", "rusty_key")
+    assert ok and "describe it freely" in msg
+    _, msg, ok = referee.resolve(story, state, far, all_rooms,
+                                 "look", "ghost_item")
+    assert not ok                                        # still honest
+
+
+def test_carried_verbs_fire_anywhere(story, monkeypatch):
+    # Krem 2026-08-21: what she carries, she can use — declared verbs,
+    # effects and dice fire from the pocket in any room; once-dice keys
+    # anchor to the object's HOME room so a chance can't re-arm by walking.
+    wand = {"desc": "A wand of black walnut.", "takeable": True,
+            "interactions": {"wave": {
+                "message": "The wand hums.",
+                "roll": {"sides": 20, "beat": 1, "once": True,
+                         "success": {"extras": ["hostile"], "goto": 8,
+                                     "message": "The world lurches."}}}}}
+    home = {"id": 7, "title": "Study", "exits": [], "objects": {"wand": wand}}
+    far = {"id": 8, "title": "Belfry", "exits": [], "objects": {}}
+    all_rooms = {7: home, 8: far}
+    state = st.initial_state()
+    state["room"] = 7
+    events, _, ok = referee.resolve(story, state, home, all_rooms, "take", "wand")
+    assert ok
+    for e in events:
+        st.apply_event(state, e)
+    state["room"] = 8                                    # walked away
+    monkeypatch.setattr(referee.random, "randint", lambda a, b: 20)
+    events, msg, ok = referee.resolve(story, state, far, all_rooms, "wave", "wand")
+    assert ok and "world lurches" in msg
+    kinds = {e["event"]: e for e in events}
+    assert kinds["rolled"]["room"] == 7                  # HOME-anchored key
+    assert "hostile" in kinds["extras"]["add"]           # prompt piece on
+    assert kinds["moved"]["to"] == 8                     # goto teleport
+    for e in events:
+        st.apply_event(state, e)
+    assert "hostile" in state["extras"]
+    # once is spent — everywhere, forever
+    _, msg, ok = referee.resolve(story, state, far, all_rooms, "wave", "wand")
+    assert not ok and "spent" in msg
+    # take-again guard
+    _, msg, ok = referee.resolve(story, state, far, all_rooms, "take", "wand")
+    assert ok and "already in the inventory" in msg
+
+
+def test_examine_alias_and_declared_examine(story):
+    # examine/inspect fall back to LOOK — but an AUTHOR-declared examine
+    # (titanic's ice-shavings) still wins over the alias.
+    room = {"id": 7, "title": "Deck", "exits": [], "objects": {
+        "shavings": {"desc": "Curls of ice.",
+                     "interactions": {"examine": {"message": "Cold and fresh — minutes old."}}},
+        "railing": {"desc": "White-painted iron, beaded with spray."}}}
+    state = st.initial_state()
+    state["room"] = 7
+    _, msg, ok = referee.resolve(story, state, room, {7: room}, "examine", "shavings")
+    assert ok and "minutes old" in msg                   # declared verb wins
+    _, msg, ok = referee.resolve(story, state, room, {7: room}, "inspect", "railing")
+    assert ok and "beaded with spray" in msg             # alias → look
+
+
+def test_prompt_pieces_pool_and_registration(story, cfg_store, monkeypatch):
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    r = story_routes.set_piece("mad-manse", body={"name": "Bat Form!",
+                                                  "text": "You are a small bat."})
+    assert r["success"] and r["name"] == "bat_form"      # normalized key
+    assert r["pieces"] == {"bat_form": "You are a small bat."}
+    # the pool folds into the pack's pieces under the story-scoped key —
+    # and into BOTH ctypes (one pool, both lanes: Krem's ruling); engine
+    # emotion pieces mirror into extras so any name toggles anywhere
+    _, pieces = session._manifest_prompts()
+    comps = pieces["components"]
+    assert comps["extras"]["story_mad-manse_bat_form"] == "You are a small bat."
+    assert comps["emotions"]["story_mad-manse_bat_form"] == "You are a small bat."
+    assert "story_engine_dread" in comps["extras"]       # emotion → extras mirror
+    got = story_routes.get_pieces("mad-manse")
+    assert got["pieces"] == r["pieces"]
+    assert "dread" in got["builtin"]                     # engine rows listed
+    # overriding an engine piece: pool wins at resolve, builtin keeps
+    # the SHIPPED text (the ↩ revert target)
+    r2 = story_routes.set_piece("mad-manse", body={"name": "dread",
+                                                   "text": "Sharper dread."})
+    assert r2["success"]
+    assert r2["builtin"]["dread"] != "Sharper dread."
+    story_routes.set_piece("mad-manse", body={"name": "dread", "text": ""})
+    r = story_routes.set_piece("mad-manse", body={"name": "bat_form", "text": ""})
+    assert r["success"] and r["pieces"] == {}            # empty text deletes
+    _, pieces = session._manifest_prompts()
+    assert "story_mad-manse_bat_form" not in (pieces.get("extras") or {})
+
+
+def test_art_store_ingest_dedup_and_refusals(tmp_path, monkeypatch):
+    # W1 (2026-08-21): content-hash store — same image lands on the same
+    # file (dedup is the addressing scheme); junk and oversize refused.
+    import io
+    from PIL import Image
+    from gameroom_story import art
+    store = tmp_path / "art"
+    monkeypatch.setattr(art, "store_dir",
+                        lambda: (store.mkdir(exist_ok=True) or store))
+    buf = io.BytesIO()
+    Image.new("RGB", (2400, 1200), (200, 30, 40)).save(buf, "PNG")
+    data = buf.getvalue()
+    name, err = art.ingest(data)
+    assert err is None and art.ART_NAME_RE.fullmatch(name), (name, err)
+    name2, _ = art.ingest(data)
+    assert name2 == name                                  # dedup
+    assert len(list(store.iterdir())) == 1
+    from PIL import Image as I2
+    out = I2.open(store / name)
+    assert max(out.size) == art.MAX_EDGE                  # long edge capped
+    assert art.ingest(b"not an image")[1]
+    monkeypatch.setattr(art, "MAX_UPLOAD", 10)
+    assert "too large" in art.ingest(data)[1].lower()
+
+
+def test_backdrop_override_merge_and_route(story, cfg_store, tmp_path, monkeypatch):
+    # W1: backdrop override is UNGATED (like objects/exits) and resolves
+    # through the store lane; unknown names refused; '' clears to shipped.
+    import io
+    from PIL import Image
+    from gameroom_story import art
+    from routes import story_routes
+    store = tmp_path / "art"
+    monkeypatch.setattr(art, "store_dir",
+                        lambda: (store.mkdir(exist_ok=True) or store))
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 48), (10, 120, 90)).save(buf, "PNG")
+    name, _ = art.ingest(buf.getvalue())
+    chat = "manse-backdrop-chat"
+    base = {"session": chat, "slug": "mad-manse", "room_id": 1}
+    r = story_routes.set_backdrop(body={**base, "name": "nope.webp"})
+    assert not r["success"]                               # unknown refused
+    r = story_routes.set_backdrop(body={**base, "name": name})
+    assert r["success"], r
+    fresh = rooms.load_story("mad-manse")
+    state = _fresh(fresh)                                 # zork flag UNSET
+    session._merge_user_layer(fresh, "mad-manse", chat, state)
+    assert fresh["rooms"][1]["backdrop"] == name          # ungated
+    assert session._art_url(fresh, name) == \
+        f"/api/plugin/game-room/story/art/{name}"
+    assert story_routes.get_art(name=name).media_type == "image/webp"
+    assert story_routes.get_art(name="zz.webp").status_code == 404
+    r = story_routes.set_backdrop(body={**base, "name": ""})
+    assert r["success"]
+    assert "1" not in (st.get_user_layer("mad-manse", chat).get("rooms") or {})
+
+
 def test_setup_route_shape(story, cfg_store):
     from routes import story_routes
     r = story_routes.get_setup("mad-manse")

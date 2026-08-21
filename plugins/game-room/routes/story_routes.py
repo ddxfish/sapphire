@@ -318,8 +318,13 @@ def get_objects(query=None, **_):
         room = shipped['rooms'][rid]
         ov = (layer.get('rooms') or {}).get(str(rid)) or {}
         objs = room.get('objects') or {}
+        # Effective art (W1): the override wins over the pack field —
+        # resolve through the same lane play uses (store name or pack file).
+        eff_bd = str(ov.get('backdrop') or '').strip() or (room.get('backdrop') or '')
         room_rows.append({'id': rid, 'title': room.get('title'),
-                          'backdrop': sess._backdrop_url(shipped, room) or '',
+                          'backdrop': sess._art_url(shipped, eff_bd) or '',
+                          'backdrop_file': eff_bd,
+                          'backdrop_override': str(ov.get('backdrop') or '').strip(),
                           'shipped_template': room.get('template') or '',
                           'shipped_player_desc': room.get('player_desc') or '',
                           'template': ov.get('template') or '',
@@ -361,6 +366,22 @@ def get_objects(query=None, **_):
                           'shipped_actions': sum(
                               len((o or {}).get('interactions') or {})
                               for o in objs.values() if isinstance(o, dict))})
+    # Playthrough-created rooms (W2, 2026-08-21) — author rows built from
+    # the layer entry itself: no shipped anything, all lanes user-side.
+    for rid, txt in sorted(sess.user_rooms(chat, slug).items()):
+        bd = str(txt.get('backdrop') or '').strip()
+        room_rows.append({'id': rid, 'title': str(txt.get('title') or '').strip(),
+                          'user_room': True,
+                          'backdrop': sess._art_url(shipped, bd) or '',
+                          'backdrop_file': bd, 'backdrop_override': bd,
+                          'shipped_template': '', 'shipped_player_desc': '',
+                          'template': str(txt.get('template') or ''),
+                          'player_desc': str(txt.get('player_desc') or ''),
+                          'shipped_objs': {}, 'shipped_exits': [],
+                          'exit_shadows': {},
+                          'add_exits': list(txt.get('add_exits') or []),
+                          'exits': len(txt.get('add_exits') or []),
+                          'shipped_objects': 0, 'shipped_actions': 0})
     # Where the player IS right now — the Environment pane opens there.
     cur_room = None
     try:
@@ -372,7 +393,136 @@ def get_objects(query=None, **_):
             'scenario': layer.get('scenario') or '',
             'current_room': cur_room,
             'rooms': room_rows,
+            'pack_backdrops': _pack_backdrops(shipped['path']),
+            'pieces': {**sess.builtin_story_pieces(slug),
+                       **sess.get_story_pieces(slug)},
             'objects': layer.get('objects') or {}}
+
+
+_ART_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _pack_backdrops(story_path):
+    """Image filenames in a pack's backdrops/ dir (basenames only)."""
+    from pathlib import Path
+    d = Path(story_path) / "backdrops"
+    if not d.is_dir():
+        return []
+    return sorted(f.name for f in d.iterdir()
+                  if f.is_file() and f.suffix.lower() in _ART_SUFFIXES)
+
+
+def get_art(name=None, **_):
+    """Serve one store image (W1). Content-hash names → immutable cache."""
+    from fastapi.responses import JSONResponse, Response
+    from gameroom_story import art
+    p = art.art_path(name)
+    if p is None:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return Response(content=p.read_bytes(), media_type="image/webp",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+async def upload_art(request=None, **_):
+    """Multipart upload → recompress → content-hash store. Returns the
+    bare name (the reference everything stores) + a display URL."""
+    from gameroom_story import art
+    try:
+        form = await request.form()
+        f = form.get("file")
+        data = await f.read() if f is not None else b""
+    except Exception as e:
+        return {"success": False, "detail": f"Bad upload: {e}"}
+    name, err = art.ingest(data)
+    if err:
+        return {"success": False, "detail": err}
+    return {"success": True, "name": name,
+            "url": f"/api/plugin/game-room/story/art/{name}"}
+
+
+def get_pieces(slug, **_):
+    """This story's Prompt Pieces (Characters tab, 2026-08-21): the user
+    pool + pack-shipped built-ins (one user concept — Krem's ruling)."""
+    sess = _session()
+    return {'pieces': sess.get_story_pieces(slug),
+            'builtin': sess.builtin_story_pieces(slug)}
+
+
+def set_piece(slug, body=None, **_):
+    """Upsert/delete one pool piece; live-refresh any active playthrough
+    of this story in the calling session's chat so text edits land now."""
+    body = body or {}
+    sess = _session()
+    msg, ok, name = sess.set_story_piece(slug, body.get('name'),
+                                         body.get('text'))
+    if ok:
+        try:
+            chat = _sess_arg(body=body)
+            system = _system()
+            if system and chat and (sess.st.get_active().get(chat) or {}) \
+                    .get('story') == slug:
+                sess.refresh_prompt(system, session=chat)
+        except Exception:
+            pass   # next re-render picks it up
+    return {'success': ok, 'detail': msg, 'name': name,
+            'pieces': sess.get_story_pieces(slug),
+            'builtin': sess.builtin_story_pieces(slug)}
+
+
+def create_room(body=None, **_):
+    """New playthrough room (W2) — a user-layer room definition; every
+    editor lane (text/backdrop/objects/exits) then works on it as-is."""
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    msg, ok, rid = _session().create_user_room(chat, slug, body.get('title'))
+    return {'success': ok, 'detail': msg, 'id': rid}
+
+
+def delete_room(body=None, **_):
+    """Remove a playthrough-created room (never shipped ones)."""
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    try:
+        rid = int(body.get('room_id'))
+    except (TypeError, ValueError):
+        return {'success': False, 'detail': 'room_id must be a room number.'}
+    msg, ok = _session().delete_user_room(chat, slug, rid)
+    return {'success': ok, 'detail': msg}
+
+
+def set_backdrop(body=None, **_):
+    """Set/clear one room's backdrop override (playthrough layer, W1).
+    name = store hash-name OR a pack backdrops/ filename; '' clears back
+    to shipped. UNGATED like objects/exits — deliberate user content."""
+    from gameroom_story import art, rooms
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    try:
+        rid = int(body.get('room_id'))
+    except (TypeError, ValueError):
+        return {'success': False, 'detail': 'room_id must be a room number.'}
+    sess = _session()
+    story = rooms.load_story(slug)
+    if rid not in story['rooms'] and rid not in sess.user_rooms(chat, slug):
+        return {'success': False, 'detail': f'No room {rid} in this story.'}
+    name = str(body.get('name') or '').strip()
+    if name and not (art.art_path(name) or name in _pack_backdrops(story['path'])):
+        return {'success': False, 'detail': 'Unknown image — upload it first '
+                                            'or pick one of this story’s backdrops.'}
+    def mutate(cur):
+        if name:
+            cur['backdrop'] = name
+        else:
+            cur.pop('backdrop', None)
+    sess._mutate_room_layer(chat, slug, rid, mutate)
+    return {'success': True,
+            'detail': 'Backdrop set.' if name else 'Backdrop back to shipped.'}
 
 
 def set_object(body=None, **_):
@@ -388,8 +538,11 @@ def set_object(body=None, **_):
     except (TypeError, ValueError):
         return {'success': False, 'detail': 'room_id must be a room number.'}
     shipped = rooms.load_story(slug)
-    room = shipped['rooms'].get(rid)
-    if not room:
+    # W2: user rooms take objects too — no shipped names there, so every
+    # object rides the user lane.
+    room = shipped['rooms'].get(rid) if rid in shipped['rooms'] \
+        else ({} if rid in _session().user_rooms(chat, slug) else None)
+    if room is None:
         return {'success': False, 'detail': f'No room {rid} in this story.'}
     name = str(body.get('name') or '').strip()
     # Shipped names are ALLOWED — that's the shadow path (editor v2,
@@ -451,8 +604,11 @@ def set_room_text(body=None, **_):
     except (TypeError, ValueError):
         return {'success': False, 'detail': 'room_id must be a room number.'}
     all_rooms = rooms.load_story(slug)['rooms']
-    shipped = all_rooms.get(rid)
-    if not shipped:
+    ur = _session().user_rooms(chat, slug)
+    # W2: a user room has no shipped text — verbatim-equals-'' clears.
+    shipped = all_rooms.get(rid) if rid in all_rooms \
+        else ({} if rid in ur else None)
+    if shipped is None:
         return {'success': False, 'detail': f'No room {rid} in this story.'}
     t, p = body.get('template'), body.get('player_desc')
     if t is not None and str(t).strip() == (shipped.get('template') or '').strip():
@@ -472,9 +628,11 @@ def set_room_text(body=None, **_):
                 to = int(e.get('to'))
             except (TypeError, ValueError):
                 continue
-            if to == rid or to not in all_rooms:
+            if to == rid or (to not in all_rooms and to not in ur):
                 continue
-            label = str(e.get('label') or all_rooms[to].get('title') or to).strip()[:80]
+            label = str(e.get('label')
+                        or (all_rooms.get(to) or ur.get(to) or {}).get('title')
+                        or to).strip()[:80]
             if not any(x['to'] == to for x in add_exits):
                 add_exits.append({'label': label, 'to': to})
     msg, ok = _session().set_room_text(chat, slug, rid, template=t,
@@ -539,13 +697,18 @@ def set_exit(body=None, **_):
         to = int(body.get('to'))
     except (TypeError, ValueError):
         return {'success': False, 'detail': 'room_id and to must be room numbers.'}
+    sess0 = _session()
     all_rooms = rooms.load_story(slug)['rooms']
-    room = all_rooms.get(rid)
-    if not room:
+    ur = sess0.user_rooms(chat, slug)
+    # W2: user rooms are valid at BOTH ends; a user from-room has no pack
+    # exits, so everything on it rides the user lane below.
+    room = all_rooms.get(rid) if rid in all_rooms else ({} if rid in ur else None)
+    if room is None:
         return {'success': False, 'detail': f'No room {rid} in this story.'}
-    if to == rid or to not in all_rooms:
+    if to == rid or (to not in all_rooms and to not in ur):
         return {'success': False, 'detail': 'Destination must be a different, real room.'}
-    label = str(body.get('label') or all_rooms[to].get('title') or to).strip()[:80]
+    dest_title = (all_rooms.get(to) or ur.get(to) or {}).get('title')
+    label = str(body.get('label') or dest_title or to).strip()[:80]
     desc = str(body.get('desc') or '').strip()[:300]
     blocked = str(body.get('blocked_message') or '').strip()[:300]
     sess = _session()
@@ -602,10 +765,12 @@ def delete_exit(body=None, **_):
         to = int(body.get('to'))
     except (TypeError, ValueError):
         return {'success': False, 'detail': 'room_id and to must be room numbers.'}
-    room = rooms.load_story(slug)['rooms'].get(rid)
-    if not room:
-        return {'success': False, 'detail': f'No room {rid} in this story.'}
     sess = _session()
+    all_rooms = rooms.load_story(slug)['rooms']
+    room = all_rooms.get(rid) if rid in all_rooms \
+        else ({} if rid in sess.user_rooms(chat, slug) else None)
+    if room is None:
+        return {'success': False, 'detail': f'No room {rid} in this story.'}
     shipped_ex = any(isinstance(e, dict) and e.get('to') == to
                      for e in (room.get('exits') or []))
     if shipped_ex:

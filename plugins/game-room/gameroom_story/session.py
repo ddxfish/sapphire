@@ -114,6 +114,30 @@ def _manifest_prompts():
     # unlocked read re-merges it. (v1.3 cutover, 2026-08-15.)
     dyn = st.get_dynamic()
     monoliths.update(dyn)
+    # Prompt Pieces pool (Krem 2026-08-21): per-story, user-authored in the
+    # gear's Characters tab, stored plugin-side and registered as PACK
+    # pieces (kind='internal') — hidden from the Prompts page by the
+    # existing kind-filter, so the tab stays the one and only editor.
+    # Scoped keys = resolution tier one; toggled via effects extras lists.
+    # ONE POOL, BOTH LANES (Krem's second ruling, same day): emotions and
+    # extras are the same machinery — every piece mirrors into both
+    # ctypes, so any name toggles via the editor's add/remove-piece
+    # effects AND via pack rooms' `emotions` lists, and a pool override
+    # of an engine emotion (e.g. 'dread') wins in either lane.
+    try:
+        comps = pieces.setdefault("components", {})   # register_pack's shape
+        ex = comps.setdefault("extras", {})
+        emo = comps.setdefault("emotions", {})
+        for k, v in list(emo.items()):
+            ex.setdefault(k, v)
+        for k, v in list(ex.items()):
+            emo.setdefault(k, v)
+        for slug in rooms.list_stories():
+            for n, t in (_store().get(f"storypieces:{slug}") or {}).items():
+                ex.setdefault(f"story_{slug}_{n}", str(t))
+                emo.setdefault(f"story_{slug}_{n}", str(t))
+    except Exception as e:
+        logger.warning(f"[STORY] pieces pool fold failed: {e}")
     return monoliths, pieces
 
 
@@ -418,6 +442,25 @@ def _merge_user_layer(story, slug, chat, state):
         return
     if not data:
         return
+    # W2 (2026-08-21): playthrough-CREATED rooms first — a rooms-layer
+    # entry whose id isn't shipped and which carries a title defines a
+    # whole room. Its text applies here (ungated — it IS the room, there
+    # is no shipped corridor to protect); every later loop (objects,
+    # exits, backdrop) then treats it like any other room.
+    for rid, txt in (data.get("rooms") or {}).items():
+        try:
+            irid = int(rid)
+        except (TypeError, ValueError):
+            continue
+        if irid in story["rooms"] or not isinstance(txt, dict):
+            continue
+        title = str(txt.get("title") or "").strip()
+        if not title:
+            continue
+        story["rooms"][irid] = {"id": irid, "title": title,
+                                "template": str(txt.get("template") or ""),
+                                "player_desc": str(txt.get("player_desc") or ""),
+                                "exits": [], "objects": {}}
     for rid, objs in (data.get("objects") or {}).items():
         try:
             room = story["rooms"].get(int(rid))
@@ -503,6 +546,11 @@ def _merge_user_layer(story, slug, chat, state):
             if isinstance(ex, dict) and ex.get("to") not in have:
                 room.setdefault("exits", []).append(dict(ex))
                 have.add(ex.get("to"))
+        # Backdrop override (W1, 2026-08-21) — UNGATED like objects/exits:
+        # the user picked this art deliberately; hiding it behind the
+        # zork-line would read as a broken upload, not a tutorial.
+        if str(txt.get("backdrop") or "").strip():
+            room["backdrop"] = str(txt["backdrop"]).strip()
     # Room TEXT overrides stay zork-gated: pre-open, the shipped tutorial
     # corridor reads as shipped (a different animal from user CONTENT).
     open_flag = (story["meta"].get("open_flag") or "").strip()
@@ -1014,11 +1062,16 @@ def set_paused(system, paused, session=None):
 
 
 def _art_url(story, filename):
-    """Web URL for a file in the pack's backdrops/ dir, or None. Checks the
-    file EXISTS so JSONs may declare art before it's painted (no broken
-    imgs). Only plugin-band packs are web-served (images-only lane)."""
+    """Web URL for a room's art, or None. Store names (content-hash, W1
+    2026-08-21) resolve to the game-room art route; anything else is a
+    pack backdrops/ filename. Checks the file EXISTS so JSONs may declare
+    art before it's painted (no broken imgs). Only plugin-band packs are
+    web-served (images-only lane)."""
     if not filename:
         return None
+    from . import art
+    if art.art_path(filename):
+        return f"/api/plugin/game-room/story/art/{filename}"
     try:
         base = Path(story.get("path", ""))
         if not (base / "backdrops" / filename).is_file():
@@ -1455,6 +1508,136 @@ def remove_user_exit(chat, slug, room_id, to):
     if not found:
         return "No user-added exit to that room here.", False
     return "Exit removed.", True
+
+
+def _norm_piece_name(name):
+    """Piece names are component keys: lowercase, snake, short."""
+    import re
+    n = re.sub(r"[^a-z0-9_]+", "_", str(name or "").strip().lower()).strip("_")
+    return n[:40]
+
+
+def get_story_pieces(slug):
+    """{name: text} — this story's Prompt Pieces pool."""
+    return dict(_store().get(f"storypieces:{slug}") or {})
+
+
+def set_story_piece(slug, name, text):
+    """Upsert (text) or delete (empty text) one pool piece, then
+    re-register the pack so the merge sees it immediately."""
+    name = _norm_piece_name(name)
+    if not name:
+        return "Piece needs a name (letters/numbers/underscores).", False, None
+    pieces = get_story_pieces(slug)
+    text = str(text or "").strip()[:2000]
+    if text:
+        if name not in pieces and len(pieces) >= 40:
+            return "Piece cap reached (40 per story).", False, None
+        pieces[name] = text
+    else:
+        pieces.pop(name, None)
+    _store().save(f"storypieces:{slug}", pieces)
+    _restore_pack()
+    return ("Piece saved." if text else "Piece removed."), True, name
+
+
+def builtin_story_pieces(slug):
+    """{bare_name: SHIPPED text} — pack pieces this story resolves (engine
+    + story-scoped), pool overrides NOT applied. The Characters tab lists
+    these as editable engine rows; editing writes a pool override (the
+    tier-one key wins in both lanes), reverting deletes it."""
+    pool = set(get_story_pieces(slug))
+    _, pieces = _manifest_prompts()
+    comps = pieces.get("components") or {}
+    merged = {}
+    for ctype in ("extras", "emotions"):
+        merged.update(comps.get(ctype) or {})
+    out = {}
+    for key, text in merged.items():
+        for pref in (f"story_{slug}_", "story_engine_"):
+            if key.startswith(pref):
+                name = key[len(pref):]
+                # story_{slug}_X keys the POOL injected aren't "shipped"
+                if name and not (pref != "story_engine_" and name in pool):
+                    out.setdefault(name, str(text))
+                break
+    return out
+
+
+def user_rooms(chat, slug):
+    """{id: layer-entry} for playthrough-created rooms (W2, 2026-08-21):
+    a rooms-layer entry whose id isn't shipped and which carries a title.
+    The routes' merged-world view for validation and author rows."""
+    try:
+        shipped = rooms.load_story(slug)["rooms"]
+        data = st.get_user_layer(slug, chat)
+    except Exception:
+        return {}
+    out = {}
+    for rid, txt in (data.get("rooms") or {}).items():
+        try:
+            irid = int(rid)
+        except (TypeError, ValueError):
+            continue
+        if irid in shipped or not isinstance(txt, dict):
+            continue
+        if str(txt.get("title") or "").strip():
+            out[irid] = txt
+    return out
+
+
+_ROOM_CAP = 20
+
+
+def create_user_room(chat, slug, title):
+    """New playthrough room. Ids allocate next-free from 100 up — visual
+    separation from shipped ids, and a pack update adding low rooms can't
+    collide with the player's wing."""
+    title = str(title or "").strip()[:80]
+    if not title:
+        return "Room needs a name.", False, None
+    shipped = rooms.load_story(slug)["rooms"]
+    ur = user_rooms(chat, slug)
+    if len(ur) >= _ROOM_CAP:
+        return f"Room cap reached ({_ROOM_CAP} per playthrough).", False, None
+    nid = max([99] + list(shipped) + list(ur)) + 1
+    def mutate(cur):
+        cur["title"] = title
+    _mutate_room_layer(chat, slug, nid, mutate)
+    return f"Room '{title}' created.", True, nid
+
+
+def delete_user_room(chat, slug, rid):
+    """Remove a playthrough-created room. Refused while she's standing in
+    it; user exits pointing at it and objects placed in it die with it
+    (they're playthrough-authored too). Shipped rooms never delete."""
+    ur = user_rooms(chat, slug)
+    if rid not in ur:
+        return "Not a playthrough-created room.", False
+    try:
+        if st.replay(slug, chat).get("room") == rid:
+            return "She's standing in that room — move her out first.", False
+    except Exception:
+        pass
+    layer = st.get_user_layer(slug, chat)
+    rooms_ov = dict(layer.get("rooms") or {})
+    rooms_ov.pop(str(rid), None)
+    for orid, entry in list(rooms_ov.items()):
+        if not (isinstance(entry, dict) and entry.get("add_exits")):
+            continue
+        kept = [e for e in entry["add_exits"]
+                if not (isinstance(e, dict) and e.get("to") == rid)]
+        if kept != entry["add_exits"]:
+            e2 = _prune_room_layer({**entry, "add_exits": kept})
+            if e2:
+                rooms_ov[orid] = e2
+            else:
+                rooms_ov.pop(orid, None)
+    objects = dict(layer.get("objects") or {})
+    objects.pop(str(rid), None)
+    st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
+                                    "scenario": layer.get("scenario") or ""})
+    return "Room removed — its doors and objects went with it.", True
 
 
 def set_exit_shadow(chat, slug, room_id, to, shadow):

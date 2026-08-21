@@ -4,7 +4,7 @@
   "short_display_name": "Game Room",
   "display_name": "Game Room",
   "description": "The Game Room host: Surface rooms, sealed-seat rails, and the story referee. Ships EMPTY — games and stories arrive as their own plugins (game-holdem, game-darkhorse, story packs) and register through core. Sessions are chats — the chat is the save.",
-  "version": "0.14.0",
+  "version": "0.17.0",
   "emoji": "🎲",
   "author": "Krem & Claude",
   "default_enabled": true,
@@ -196,6 +196,41 @@
         "method": "POST",
         "path": "story/slots",
         "handler": "routes/story_routes.py:set_slots"
+      },
+      {
+        "method": "GET",
+        "path": "story/art/{name}",
+        "handler": "routes/story_routes.py:get_art"
+      },
+      {
+        "method": "POST",
+        "path": "story/art",
+        "handler": "routes/story_routes.py:upload_art"
+      },
+      {
+        "method": "POST",
+        "path": "story/backdrop",
+        "handler": "routes/story_routes.py:set_backdrop"
+      },
+      {
+        "method": "POST",
+        "path": "story/rooms",
+        "handler": "routes/story_routes.py:create_room"
+      },
+      {
+        "method": "POST",
+        "path": "story/rooms/delete",
+        "handler": "routes/story_routes.py:delete_room"
+      },
+      {
+        "method": "GET",
+        "path": "story/{slug}/pieces",
+        "handler": "routes/story_routes.py:get_pieces"
+      },
+      {
+        "method": "POST",
+        "path": "story/{slug}/pieces",
+        "handler": "routes/story_routes.py:set_piece"
       }
     ]
   }
