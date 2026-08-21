@@ -1,3 +1,8 @@
+# 2.12.2 - Story Engine
+- Story editor in app
+- Can edit characters, rooms, exits, scenario, place items
+- Items have full conditions: flags, items, values, riddle
+- Inventory system
 # 2.12.1 - Prompt page cleanup
 - Added tidy up button to delete orphans and danglers
 - Make prompts multi-select for many delete and move to vault
