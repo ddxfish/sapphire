@@ -1,3 +1,8 @@
+# 2.12.3 - Story Engine expansion
+- Items can have multiple verbs with actions
+- Set images and create rooms
+- Add prompt pieces to story, items can toggle on off
+- Edit story mid-run
 # 2.12.2 - Story Engine
 - Story editor in app
 - Can edit characters, rooms, exits, scenario, place items
