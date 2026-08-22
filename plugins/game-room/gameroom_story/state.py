@@ -137,6 +137,14 @@ def _okey(story):
     return f"story:objects:{story}"
 
 
+# Serializes every read-modify-write of the user layer (2026-08-21 hunt,
+# race R1: two editor lanes — or an editor lane and story_place — doing
+# bare get→mutate→save clobbered each other's whole-blob writes). RLock:
+# create_user_room allocates its id and then writes through
+# _mutate_room_layer inside the same critical section.
+layer_lock = threading.RLock()
+
+
 def get_user_layer(story, chat):
     row = _cs().get(chat, _okey(story))
     return row if isinstance(row, dict) else {}
@@ -172,7 +180,10 @@ def _stamp_anchor(chat, event):
 
 def append(story, chat, event):
     """Append one resolved event. Caller supplies {'event': ..., ...};
-    the current turn number is stamped in by the caller via 'turn'."""
+    the current turn number is stamped in by the caller via 'turn'.
+    Returns True if the write landed, False if the store refused it —
+    callers that report outcomes MUST check (2026-08-21 fix-wave: a
+    swallowed refusal made act() narrate moves the journal never got)."""
     _stamp_anchor(chat, event)
     # Sealed-vault backstop (P3-T9, now core-enforced): the store RAISES on
     # a hidden chat's write — catch and warn to keep this rail no-raise for
@@ -180,24 +191,28 @@ def append(story, chat, event):
     with _lock:
         try:
             _cs().append(chat, _jkey(story), event)
+            return True
         except Exception as e:
             logger.warning(f"[STORY] journal write refused: {e}")
+            return False
 
 
 def append_many(story, chat, events):
     """Append a resolve's events in ONE transaction — all land or none
     (2026-08-21 torn-commit incident: per-event appends journaled `hold`
     but died before its set-flag, leaving replay half a turn). Same anchor
-    stamping and no-raise rail as append."""
+    stamping and refusal-returns-False contract as append."""
     if not events:
-        return
+        return True
     for ev in events:
         _stamp_anchor(chat, ev)
     with _lock:
         try:
             _cs().append_many(chat, _jkey(story), events)
+            return True
         except Exception as e:
             logger.warning(f"[STORY] journal write refused: {e}")
+            return False
 
 
 def read_journal(story, chat):

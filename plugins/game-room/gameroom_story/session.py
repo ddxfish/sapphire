@@ -52,6 +52,11 @@ _cfg_store = None
 # just created (finding 4.12). Cheap: these are user-paced operations.
 _lifecycle_lock = threading.RLock()
 
+# One pack registration at a time: register_pack is a wholesale replace fed
+# from an all-chats costume snapshot — concurrent snapshot→register spans
+# dropped each other's costumes (2026-08-21 hunt, race R2/G).
+_register_lock = threading.Lock()
+
 
 def _store():
     global _cfg_store
@@ -96,17 +101,32 @@ def refresh_prompt(system, session=None):
     return True
 
 
+_pack_file_cache = {}    # filename → last-good raw text (2026-08-21 hunt)
+
+
+def _read_pack_file(fname):
+    """Parse one shipped pack file, falling back to the last successfully
+    read copy on a transient failure — a momentary read error used to
+    register the pack nearly EMPTY, wiping shipped prompts until the next
+    re-registration (2026-08-21 hunt)."""
+    try:
+        txt = (_PLUGIN_DIR / "prompts" / fname).read_text(encoding="utf-8")
+        data = json.loads(txt)
+        _pack_file_cache[fname] = txt
+        return data
+    except Exception as e:
+        cached = _pack_file_cache.get(fname)
+        if cached is not None:
+            logger.warning(f"[STORY] {fname} unreadable ({e}) — using last-good copy")
+            return json.loads(cached)
+        logger.warning(f"[STORY] {fname} unreadable: {e}")
+        return {}
+
+
 def _manifest_prompts():
     """The plugin's shipped pack files (base for dynamic re-registration)."""
-    monoliths, pieces = {}, {}
-    try:
-        monoliths = json.loads((_PLUGIN_DIR / "prompts" / "monoliths.json").read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning(f"[STORY] monoliths.json unreadable: {e}")
-    try:
-        pieces = json.loads((_PLUGIN_DIR / "prompts" / "pieces.json").read_text(encoding="utf-8"))
-    except Exception as e:
-        logger.warning(f"[STORY] pieces.json unreadable: {e}")
+    monoliths = _read_pack_file("monoliths.json")
+    pieces = _read_pack_file("pieces.json")
     # Restart-proof rendered story prompts. The sealed filter (P3-T16) is
     # STRUCTURAL now: costumes live on their chat's plugin_chat_data row,
     # and core's cross-chat read omits hidden chats — a locked chat's
@@ -255,7 +275,6 @@ def _register_prompt(story, state, entry, chat):
     from core import prompt_packs
     from core.prompt_manager import prompt_manager
     entry = entry or {}
-    monoliths, pieces = _manifest_prompts()
     slug = story["meta"]["slug"]
     mode = entry.get("mode")
     # Vault gate (vault recon finding 7): local/combined modes extract the
@@ -285,11 +304,18 @@ def _register_prompt(story, state, entry, chat):
                                    conduct=conduct_for(story))
     name = entry.get("prompt_name") or _prompt_name_for(story, mode or "local", chat)
     private = _inherits_privacy(entry, chat=chat)
-    st.save_dynamic(name, rendered, privacy_required=private, chat=chat)
-    monoliths[name] = {"content": rendered, "privacy_required": private,
-                       "kind": "story"}
-    prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces,
-                               kind="internal")
+    # Snapshot→save→register as ONE unit (2026-08-21 hunt, race R2/G): two
+    # chats re-registering concurrently each read the all-chats costume
+    # snapshot, and the later register_pack (a wholesale replace) shipped a
+    # snapshot missing the other chat's just-saved costume. The render above
+    # stays outside the lock — only the read-and-replace span serializes.
+    with _register_lock:
+        monoliths, pieces = _manifest_prompts()
+        st.save_dynamic(name, rendered, privacy_required=private, chat=chat)
+        monoliths[name] = {"content": rendered, "privacy_required": private,
+                           "kind": "story"}
+        prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces,
+                                   kind="internal")
     return name
 
 
@@ -316,9 +342,10 @@ def _restore_pack():
     remain in the sidecar. Used after drop_dynamic (story_end) AND at boot
     via the plugins_ready hook (reboot-proofing active story prompts)."""
     from core import prompt_packs
-    monoliths, pieces = _manifest_prompts()
-    prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces,
-                               kind="internal")
+    with _register_lock:
+        monoliths, pieces = _manifest_prompts()
+        prompt_packs.register_pack(PLUGIN_NAME, monoliths=monoliths, pieces=pieces,
+                                   kind="internal")
 
 
 # ── Which chat does this call operate on? (findings 1.1 + 1.2) ──────────────
@@ -418,6 +445,22 @@ def load_active(chat):
     state = st.replay(entry["story"], chat)
     _merge_user_layer(story, entry["story"], chat, state)
     _apply_slots(story, entry.get("slots") or {})
+    # Missing-room fallback (2026-08-21 hunt — the "bricked run" class, four
+    # doors in: a goto to a nonexistent room, a scenario swap dropping the
+    # room she stands in, a user-room delete racing her move into it, and a
+    # chat clear emptying the journal under an active story). The journal
+    # is never touched — this is a VIEW-level heal, applied at the one seam
+    # every consumer reads through, so act/ghost/status/full_state all agree.
+    # Her next real move journals a real room and the fallback stops firing.
+    if not state["ended"]:
+        start_id = story["meta"].get("start")
+        if state["room"] not in story["rooms"] and start_id in story["rooms"]:
+            if state["room"] is not None:
+                logger.warning(
+                    f"[STORY] room {state['room']} missing from "
+                    f"'{entry['story']}' — falling back to the start room")
+            state["room"] = start_id
+            state["turns_in_room"] = 0
     return story, state
 
 
@@ -639,8 +682,9 @@ def _apply_scenario_env(chat, slug, story, name):
     load. At-open materialization is the author's explicit choice via a
     Visible-when condition on the object."""
     if not name:
-        st.save_user_layer(slug, chat, {"objects": {}, "rooms": {},
-                                        "scenario": ""})
+        with st.layer_lock:
+            st.save_user_layer(slug, chat, {"objects": {}, "rooms": {},
+                                            "scenario": ""})
         return
     sets = _store().get(f"storyscenarios:{slug}") or {}
     data = sets.get(name)
@@ -661,8 +705,9 @@ def _apply_scenario_env(chat, slug, story, name):
             objects[str(rid)] = cur
     rooms_ov = {str(rid): txt for rid, txt in (data.get("rooms") or {}).items()
                 if isinstance(txt, dict)}
-    st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
-                                    "scenario": name})
+    with st.layer_lock:
+        st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
+                                        "scenario": name})
 
 
 def _start(system, slug, character, mode, local, session, slots=None):
@@ -695,9 +740,6 @@ def _start(system, slug, character, mode, local, session, slots=None):
     if mode in ("story", "combined") and not role.get("text"):
         mode = "local"
 
-    # Fresh playthrough = fresh journal; the old one archives beside it
-    st.new_run(slug, chat)
-
     from core import prompts
     # Pre-story costume + cockpit come from the TARGET chat's own settings,
     # not the global active preset — a story started for another session must
@@ -707,6 +749,26 @@ def _start(system, slug, character, mode, local, session, slots=None):
                    or (prompts.get_active_preset_name() if _is_live(system, chat) else None))
     # Local persona defaults to whatever the chat was wearing pre-story
     local = local or prev_prompt
+
+    # Vault pre-check BEFORE any mutation (2026-08-21 hunt): the same gate
+    # _register_prompt raises later — but by then the journal was archived,
+    # the cockpit stamped, and active set, leaving a half-started wreck only
+    # story_end could clean up. Refuse at the door instead; the raise in
+    # _register_prompt stays as the backstop for its other callers.
+    if mode in ("local", "combined") and local:
+        try:
+            from core.prompt_crud import is_vault_prompt
+            _vaulted = is_vault_prompt(local)
+        except Exception:
+            _vaulted = False
+        if _vaulted:
+            return (f"Story mode can't carry vault prompts yet — '{local}' "
+                    f"lives in the encrypted vault and the story engine "
+                    f"persists rendered prompts in plaintext. Pick a "
+                    f"non-vault prompt, or use 'story' identity mode."), False
+
+    # Fresh playthrough = fresh journal; the old one archives beside it
+    st.new_run(slug, chat)
 
     st.set_active(chat, slug, prev_prompt)
     st.update_active(chat, character=character, mode=mode, local=local,
@@ -729,8 +791,20 @@ def _start(system, slug, character, mode, local, session, slots=None):
     for ev in referee._effect_events(start_room.get("on_enter") or {}, st.initial_state()):
         ev["turn"] = 0
         events.append(ev)
-    for ev in events:
-        st.append(slug, chat, ev)
+    # ONE transaction (2026-08-21 hunt: the per-event loop here was the same
+    # torn-write class _commit was cured of that morning — a death between
+    # `started` and an initial flag left replay half a turn 0). A refusal
+    # unwinds the start instead of leaving a journal-less active story.
+    if not st.append_many(slug, chat, events):
+        try:
+            st.clear_active(chat)
+            _stamp_settings(system, chat,
+                            {"toolset": cur.get("toolset", "all"),
+                             "extra_toolsets": cur.get("extra_toolsets") or []})
+        except Exception:
+            pass
+        return ("The journal refused the opening write — story not started "
+                "(is this chat sealed or deleted?)."), False
 
     state = st.replay(slug, chat)
     prompt_name = _register_prompt(story, state, st.get_active().get(chat, {}), chat)
@@ -871,17 +945,28 @@ def _commit(system, story, slug, chat, state, events):
     none (2026-08-21 torn-commit incident: per-event appends journaled the
     `hold` but died before its set-flag). Re-register the prompt if any of
     them touched it. Extracted from act() so the live-wait path can commit
-    the held attempt and, after the wake, the reveal."""
+    the held attempt and, after the wake, the reveal.
+
+    Returns False when the store refused the write — act() must then report
+    the truth instead of narrating a move the journal never got (2026-08-21
+    hunt: the vault idle-lock makes this reachable on a live private chat)."""
     prompt_dirty = False
     for ev in events:
         ev["turn"] = state["turn"]
         if ev["event"] in ("emotions", "extras"):
             prompt_dirty = True
-    st.append_many(slug, chat, events)
+    if not st.append_many(slug, chat, events):
+        return False
     if prompt_dirty:
-        fresh = st.replay(slug, chat)
-        prompt_name = _register_prompt(story, fresh, st.get_active().get(chat, {}), chat)
-        _activate_prompt_for(system, chat, prompt_name)
+        # Re-check active HERE, not before the write: an act() racing ⏹ End
+        # used to re-dress the chat in a costume end() had just retired,
+        # leaving an orphan monolith row (race R4, 2026-08-21 hunt).
+        entry = st.get_active().get(chat)
+        if entry:
+            fresh = st.replay(slug, chat)
+            prompt_name = _register_prompt(story, fresh, entry, chat)
+            _activate_prompt_for(system, chat, prompt_name)
+    return True
 
 
 def act(system, verb, target=None, answer=None, session=None):
@@ -899,7 +984,11 @@ def act(system, verb, target=None, answer=None, session=None):
 
     slug = story["meta"]["slug"]
     events, message, ok = referee.resolve(story, state, room, story["rooms"], verb, target, answer)
-    _commit(system, story, slug, chat, state, events)
+    _REFUSED = ("The journal refused this write — the move was NOT recorded "
+                "and the world did not change (chat sealed, locked, or "
+                "deleted). Tell the player plainly instead of narrating it.")
+    if not _commit(system, story, slug, chat, state, events):
+        return _REFUSED, False
 
     # Held seal + player in the room → wait for their words, then re-resolve:
     # the reveal replaces the hold as this very tool call's result. The held
@@ -914,7 +1003,8 @@ def act(system, verb, target=None, answer=None, session=None):
             if room:
                 events, message, ok = referee.resolve(
                     story, state, room, story["rooms"], verb, target, answer)
-                _commit(system, story, slug, chat, state, events)
+                if not _commit(system, story, slug, chat, state, events):
+                    return _REFUSED, False
 
     return message, ok
 
@@ -1195,14 +1285,17 @@ def fill_seal(system, key, text=None, skip=False, session=None):
         if state.get("seals", {}).get(key) is not None:
             return ("You've already written this one — clear it from the ✍ chip if you "
                     "want the author's line instead."), False
-        st.append(slug, chat, {"event": "seal_skipped", "key": key, "turn": state["turn"]})
+        if not st.append(slug, chat, {"event": "seal_skipped", "key": key,
+                                      "turn": state["turn"]}):
+            return "The journal refused the write — the skip was NOT recorded.", False
         _signal_seals(chat)
         return "Skipped — the author's line will fire instead.", True
     text = str(text or "").strip()
     if not text:
         return "Write something — the blank is the whole point.", False
-    st.append(slug, chat, {"event": "sealed", "key": key, "text": text[:2000],
-                           "turn": state["turn"]})
+    if not st.append(slug, chat, {"event": "sealed", "key": key,
+                                  "text": text[:2000], "turn": state["turn"]}):
+        return "The journal refused the write — your words were NOT recorded.", False
     _signal_seals(chat)
     return "Sealed in. She'll find it when she gets there.", True
 
@@ -1395,34 +1488,39 @@ def upsert_user_object(chat, slug, room_id, name, spec, author="player"):
         return "Object spec isn't JSON-serializable.", False
     spec = dict(spec)
     spec["_author"] = str(author)
-    layer = st.get_user_layer(slug, chat)
-    objects = dict(layer.get("objects") or {})
-    room_objs = dict(objects.get(str(room_id)) or {})
-    total = sum(len(v) for v in objects.values() if isinstance(v, dict))
-    if name not in room_objs and total >= _OBJ_CAP:
-        return f"Placed-object cap reached ({_OBJ_CAP} per playthrough).", False
-    room_objs[name] = spec
-    objects[str(room_id)] = room_objs
-    st.save_user_layer(slug, chat, {"objects": objects,
-                                    "rooms": layer.get("rooms") or {},
-                                    "scenario": layer.get("scenario") or ""})
+    # layer_lock on every get→mutate→save (2026-08-21 hunt, race R1: two
+    # editor lanes — or a lane and story_place — clobbered each other's
+    # whole-blob writes; "my edit didn't stick").
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        objects = dict(layer.get("objects") or {})
+        room_objs = dict(objects.get(str(room_id)) or {})
+        total = sum(len(v) for v in objects.values() if isinstance(v, dict))
+        if name not in room_objs and total >= _OBJ_CAP:
+            return f"Placed-object cap reached ({_OBJ_CAP} per playthrough).", False
+        room_objs[name] = spec
+        objects[str(room_id)] = room_objs
+        st.save_user_layer(slug, chat, {"objects": objects,
+                                        "rooms": layer.get("rooms") or {},
+                                        "scenario": layer.get("scenario") or ""})
     return f"'{name}' placed.", True
 
 
 def delete_user_object(chat, slug, room_id, name):
-    layer = st.get_user_layer(slug, chat)
-    objects = dict(layer.get("objects") or {})
-    room_objs = dict(objects.get(str(room_id)) or {})
-    if name not in room_objs:
-        return "No placed object by that name in that room.", False
-    room_objs.pop(name)
-    if room_objs:
-        objects[str(room_id)] = room_objs
-    else:
-        objects.pop(str(room_id), None)
-    st.save_user_layer(slug, chat, {"objects": objects,
-                                    "rooms": layer.get("rooms") or {},
-                                    "scenario": layer.get("scenario") or ""})
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        objects = dict(layer.get("objects") or {})
+        room_objs = dict(objects.get(str(room_id)) or {})
+        if name not in room_objs:
+            return "No placed object by that name in that room.", False
+        room_objs.pop(name)
+        if room_objs:
+            objects[str(room_id)] = room_objs
+        else:
+            objects.pop(str(room_id), None)
+        st.save_user_layer(slug, chat, {"objects": objects,
+                                        "rooms": layer.get("rooms") or {},
+                                        "scenario": layer.get("scenario") or ""})
     return f"'{name}' removed.", True
 
 
@@ -1432,23 +1530,24 @@ def set_room_text(chat, slug, room_id, template=None, player_desc=None,
     text clears that field (routes apply verbatim-equals-shipped upstream,
     same house rule as story settings); an empty add_exits list clears the
     exits. None = leave that field as stored."""
-    layer = st.get_user_layer(slug, chat)
-    rooms_ov = dict(layer.get("rooms") or {})
-    cur = dict(rooms_ov.get(str(room_id)) or {})
-    if template is not None:
-        cur["template"] = str(template)
-    if player_desc is not None:
-        cur["player_desc"] = str(player_desc)
-    if add_exits is not None:
-        cur["add_exits"] = list(add_exits)
-    cur = _prune_room_layer(cur)
-    if cur:
-        rooms_ov[str(room_id)] = cur
-    else:
-        rooms_ov.pop(str(room_id), None)
-    st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
-                                    "rooms": rooms_ov,
-                                    "scenario": layer.get("scenario") or ""})
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        rooms_ov = dict(layer.get("rooms") or {})
+        cur = dict(rooms_ov.get(str(room_id)) or {})
+        if template is not None:
+            cur["template"] = str(template)
+        if player_desc is not None:
+            cur["player_desc"] = str(player_desc)
+        if add_exits is not None:
+            cur["add_exits"] = list(add_exits)
+        cur = _prune_room_layer(cur)
+        if cur:
+            rooms_ov[str(room_id)] = cur
+        else:
+            rooms_ov.pop(str(room_id), None)
+        st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
+                                        "rooms": rooms_ov,
+                                        "scenario": layer.get("scenario") or ""})
     return "Room saved.", True
 
 
@@ -1463,18 +1562,19 @@ def _mutate_room_layer(chat, slug, room_id, mutate):
     """Load the layer, apply mutate(cur) to one room's dict, prune, save —
     the one write path for exit storage (scenario tag rides, same as the
     object savers)."""
-    layer = st.get_user_layer(slug, chat)
-    rooms_ov = dict(layer.get("rooms") or {})
-    cur = dict(rooms_ov.get(str(room_id)) or {})
-    mutate(cur)
-    cur = _prune_room_layer(cur)
-    if cur:
-        rooms_ov[str(room_id)] = cur
-    else:
-        rooms_ov.pop(str(room_id), None)
-    st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
-                                    "rooms": rooms_ov,
-                                    "scenario": layer.get("scenario") or ""})
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        rooms_ov = dict(layer.get("rooms") or {})
+        cur = dict(rooms_ov.get(str(room_id)) or {})
+        mutate(cur)
+        cur = _prune_room_layer(cur)
+        if cur:
+            rooms_ov[str(room_id)] = cur
+        else:
+            rooms_ov.pop(str(room_id), None)
+        st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
+                                        "rooms": rooms_ov,
+                                        "scenario": layer.get("scenario") or ""})
 
 
 def set_user_exit(chat, slug, room_id, to, spec):
@@ -1599,13 +1699,16 @@ def create_user_room(chat, slug, title):
     if not title:
         return "Room needs a name.", False, None
     shipped = rooms.load_story(slug)["rooms"]
-    ur = user_rooms(chat, slug)
-    if len(ur) >= _ROOM_CAP:
-        return f"Room cap reached ({_ROOM_CAP} per playthrough).", False, None
-    nid = max([99] + list(shipped) + list(ur)) + 1
-    def mutate(cur):
-        cur["title"] = title
-    _mutate_room_layer(chat, slug, nid, mutate)
+    # RLock held across allocation AND write: two concurrent creates used
+    # to allocate the same id and merge into one room (race R8).
+    with st.layer_lock:
+        ur = user_rooms(chat, slug)
+        if len(ur) >= _ROOM_CAP:
+            return f"Room cap reached ({_ROOM_CAP} per playthrough).", False, None
+        nid = max([99] + list(shipped) + list(ur)) + 1
+        def mutate(cur):
+            cur["title"] = title
+        _mutate_room_layer(chat, slug, nid, mutate)
     return f"Room '{title}' created.", True, nid
 
 
@@ -1613,32 +1716,33 @@ def delete_user_room(chat, slug, rid):
     """Remove a playthrough-created room. Refused while she's standing in
     it; user exits pointing at it and objects placed in it die with it
     (they're playthrough-authored too). Shipped rooms never delete."""
-    ur = user_rooms(chat, slug)
-    if rid not in ur:
-        return "Not a playthrough-created room.", False
-    try:
-        if st.replay(slug, chat).get("room") == rid:
-            return "She's standing in that room — move her out first.", False
-    except Exception:
-        pass
-    layer = st.get_user_layer(slug, chat)
-    rooms_ov = dict(layer.get("rooms") or {})
-    rooms_ov.pop(str(rid), None)
-    for orid, entry in list(rooms_ov.items()):
-        if not (isinstance(entry, dict) and entry.get("add_exits")):
-            continue
-        kept = [e for e in entry["add_exits"]
-                if not (isinstance(e, dict) and e.get("to") == rid)]
-        if kept != entry["add_exits"]:
-            e2 = _prune_room_layer({**entry, "add_exits": kept})
-            if e2:
-                rooms_ov[orid] = e2
-            else:
-                rooms_ov.pop(orid, None)
-    objects = dict(layer.get("objects") or {})
-    objects.pop(str(rid), None)
-    st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
-                                    "scenario": layer.get("scenario") or ""})
+    with st.layer_lock:
+        ur = user_rooms(chat, slug)
+        if rid not in ur:
+            return "Not a playthrough-created room.", False
+        try:
+            if st.replay(slug, chat).get("room") == rid:
+                return "She's standing in that room — move her out first.", False
+        except Exception:
+            pass
+        layer = st.get_user_layer(slug, chat)
+        rooms_ov = dict(layer.get("rooms") or {})
+        rooms_ov.pop(str(rid), None)
+        for orid, entry in list(rooms_ov.items()):
+            if not (isinstance(entry, dict) and entry.get("add_exits")):
+                continue
+            kept = [e for e in entry["add_exits"]
+                    if not (isinstance(e, dict) and e.get("to") == rid)]
+            if kept != entry["add_exits"]:
+                e2 = _prune_room_layer({**entry, "add_exits": kept})
+                if e2:
+                    rooms_ov[orid] = e2
+                else:
+                    rooms_ov.pop(orid, None)
+        objects = dict(layer.get("objects") or {})
+        objects.pop(str(rid), None)
+        st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
+                                        "scenario": layer.get("scenario") or ""})
     return "Room removed — its doors and objects went with it.", True
 
 

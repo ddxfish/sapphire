@@ -180,16 +180,19 @@ def blockers(room, state):
                 _add(f"'{ex.get('label')}'", ex["blocked_message"])
             else:
                 needs = []
+                # str() everywhere: this runs inside the 12s status poll, and
+                # an author-typed non-string ({"has": 3} via API/pack) used to
+                # AttributeError here and 500 the whole sidebar (2026-08-21).
                 if cond.get("has"):
-                    needs.append(f"needs {cond['has'].replace('_', ' ')}")
+                    needs.append(f"needs {str(cond['has']).replace('_', ' ')}")
                 if cond.get("flag"):
-                    needs.append(f"needs {cond['flag'].replace('_', ' ')}")
+                    needs.append(f"needs {str(cond['flag']).replace('_', ' ')}")
                 if cond.get("did"):
                     needs.append(f"needs {str(cond['did']).replace('_', ' ')} used first")
                 if cond.get("solved"):
                     needs.append(f"needs {str(cond['solved']).replace('_', ' ')} solved")
                 for k, v in (cond.get("flags") or {}).items():
-                    needs.append(f"needs {k.replace('_', ' ')} = {v}")
+                    needs.append(f"needs {str(k).replace('_', ' ')} = {v}")
                 _add(f"'{ex.get('label')}'", ", ".join(needs) or "blocked")
     for b in room.get("blockers", []):
         if not check_condition(b.get("until"), state):

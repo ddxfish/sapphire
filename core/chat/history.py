@@ -813,6 +813,11 @@ def _db_watchdog_scan():
     now = time.monotonic()
     dump_needed = False
     reported = 0
+    msgs = []
+    # Collect under the lock, LOG outside it: logging handlers can block
+    # (disk, a wedged stderr pipe), and a watchdog that stalls while holding
+    # its own registry lock would freeze every _get_connection at register
+    # time — the exact failure class it exists to diagnose (2026-08-21 hunt).
     with _db_ops_lock:
         for op in _db_ops.values():
             age = now - op['started']
@@ -822,14 +827,16 @@ def _db_watchdog_scan():
             if not op['dumped']:
                 op['dumped'] = True
                 dump_needed = True
-                logger.error(
+                msgs.append(
                     f"[DB-WATCHDOG] db op stuck {int(age)}s on thread "
                     f"'{op['thread']}' — dumping all thread stacks to stderr")
             elif int(age) // 60 > op['beat']:
                 op['beat'] = int(age) // 60
-                logger.error(
+                msgs.append(
                     f"[DB-WATCHDOG] still stuck: {int(age)}s on thread "
                     f"'{op['thread']}'")
+    for m in msgs:
+        logger.error(m)
     if dump_needed:
         try:
             import faulthandler

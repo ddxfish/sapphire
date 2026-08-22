@@ -223,8 +223,14 @@ def set_story_settings(slug, body=None, **_):
             mine[key] = '' if v == shipped.strip() else v
     sess._store().save(f'storycfg:{slug}', mine)
     refreshed = False
+    # Refresh ONLY a chat actually playing THIS story (2026-08-21 hunt, R6:
+    # the modal's autosave posting without a session fell back to the
+    # globally active chat and re-dressed whatever story IT was running).
     try:
-        refreshed = sess.refresh_prompt(_system(), session=_sess_arg(body))
+        from gameroom_story import state as st
+        chat = sess._chat_name(_system(), _sess_arg(body))
+        if (st.get_active().get(chat) or {}).get('story') == slug:
+            refreshed = sess.refresh_prompt(_system(), session=chat)
     except Exception:
         pass
     return {'status': 'ok', 'refreshed': refreshed}
@@ -252,11 +258,13 @@ def get_setup(slug, **_):
                           for n, e in scen.items()}}
 
 
-def _scenarios(store, slug):
+def _scenarios(store, slug, persist=False):
     """The unified per-story scenario store (Krem 2026-08-20: one dropdown,
     slots + environment = one authored thing). Lazy one-time migration
     folds the old setup presets and object sets in — same-named pairs merge
-    into one scenario; the old keys stay behind untouched."""
+    into one scenario; the old keys stay behind untouched. The migration
+    PERSISTS only from write lanes (persist=True) — a GET that wrote the
+    store was the 2026-08-21 hunt's side-effect finding."""
     key = f'storyscenarios:{slug}'
     cur = store.get(key)
     if cur is not None:
@@ -270,7 +278,8 @@ def _scenarios(store, slug):
             ent = cur.setdefault(str(name), {})
             ent['objects'] = o.get('objects') or {}
             ent['rooms'] = o.get('rooms') or {}
-    store.save(key, cur)
+    if persist:
+        store.save(key, cur)
     return cur
 
 
@@ -285,9 +294,18 @@ def _active_ctx(query=None, body=None):
     sess = _session()
     chat = sess._chat_name(system, _sess_arg(body, query))
     entry = st.get_active().get(chat)
+    slug = str((body or {}).get('slug') or (query or {}).get('slug') or '').strip()
+    # An explicit slug NAMES the story it edits (2026-08-21 hunt, D8):
+    # editing story X's environment from the library while story Y runs in
+    # this chat used to silently land X's edits on Y's layer. Same authority
+    # as the pre-start lane — the rows wait on (chat, X) until X starts.
+    if slug and entry and slug != entry['story']:
+        if slug in rooms.list_stories():
+            return chat, slug, None
+        return None, None, {'active': False, 'success': False,
+                            'detail': f"No story named '{slug}'."}
     if entry:
         return chat, entry['story'], None
-    slug = str((body or {}).get('slug') or (query or {}).get('slug') or '').strip()
     if slug and slug in rooms.list_stories():
         return chat, slug, None
     return None, None, {'active': False, 'success': False,
@@ -428,9 +446,18 @@ async def upload_art(request=None, **_):
     bare name (the reference everything stores) + a display URL."""
     from gameroom_story import art
     try:
+        # Cap BEFORE buffering into RAM (2026-08-21 hunt): a 2GB body used
+        # to be read whole and only then refused by ingest's size check.
+        try:
+            cl = int(request.headers.get("content-length") or 0)
+        except (TypeError, ValueError):
+            cl = 0
+        if cl > art.MAX_UPLOAD + 1024 * 1024:
+            return {"success": False, "detail":
+                    f"Image too large ({art.MAX_UPLOAD // (1024 * 1024)}MB cap)."}
         form = await request.form()
         f = form.get("file")
-        data = await f.read() if f is not None else b""
+        data = await f.read(art.MAX_UPLOAD + 1) if f is not None else b""
     except Exception as e:
         return {"success": False, "detail": f"Bad upload: {e}"}
     name, err = art.ingest(data)
@@ -642,13 +669,20 @@ def set_room_text(body=None, **_):
 
 def _clean_cond(c):
     """Light whitelist for an editor-authored condition dict — the referee
-    is defensive, this just keeps junk shapes out of the layer."""
+    is defensive, this just keeps junk shapes out of the layer. Values
+    COERCE to what the grammar means (2026-08-21 hunt: str()-validating but
+    storing raw let {'has': 3} through — the referee's .replace() then
+    500'd the 12s poll)."""
     if not isinstance(c, dict):
         return None
-    out = {k: c[k] for k in ('has', 'did', 'flag', 'solved') if str(c.get(k) or '').strip()}
+    out = {k: str(c[k]).strip() for k in ('has', 'did', 'flag', 'solved')
+           if str(c.get(k) or '').strip()}
     for k in ('flags', 'flag_gte'):
         if isinstance(c.get(k), dict) and c[k]:
-            out[k] = c[k]
+            vals = {str(fk): fv for fk, fv in c[k].items()
+                    if isinstance(fv, (str, int, float, bool))}
+            if vals:
+                out[k] = vals
     return out or None
 
 
@@ -803,7 +837,7 @@ def set_scenario(slug, body=None, **_):
     sess = _session()
     store = sess._store()
     key = f'storyscenarios:{slug}'
-    cur = dict(_scenarios(store, slug))
+    cur = dict(_scenarios(store, slug, persist=True))
     if body.get('delete'):
         cur.pop(name, None)
         store.save(key, cur)
@@ -837,22 +871,25 @@ def set_scenario(slug, body=None, **_):
         return {'success': False, 'detail': f'Scenario cap reached ({_PRESET_CAP}).'}
     slots = body.get('slots') if isinstance(body.get('slots'), dict) else {}
     slots = {str(k)[:60]: str(v)[:1200] for k, v in slots.items() if str(v).strip()}
-    layer = st.get_user_layer(slug, chat)
-    objects = {}
-    for rid, objs in (layer.get('objects') or {}).items():
-        if not isinstance(objs, dict):
-            continue
-        keep = {n: s for n, s in objs.items()
-                if isinstance(s, dict) and s.get('_author') != 'ai'}
-        if keep:
-            objects[rid] = keep
-    cur[name] = {'slots': slots, 'objects': objects,
-                 'rooms': layer.get('rooms') or {}}
-    store.save(key, cur)
-    # The canvas IS this scenario now — remember it (gear reopens on it).
-    st.save_user_layer(slug, chat, {'objects': layer.get('objects') or {},
-                                    'rooms': layer.get('rooms') or {},
-                                    'scenario': name})
+    # layer_lock across the read→save (2026-08-21 hunt, race R1 family):
+    # the scenario-tag stamp is a whole-blob rewrite of the layer it read.
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        objects = {}
+        for rid, objs in (layer.get('objects') or {}).items():
+            if not isinstance(objs, dict):
+                continue
+            keep = {n: s for n, s in objs.items()
+                    if isinstance(s, dict) and s.get('_author') != 'ai'}
+            if keep:
+                objects[rid] = keep
+        cur[name] = {'slots': slots, 'objects': objects,
+                     'rooms': layer.get('rooms') or {}}
+        store.save(key, cur)
+        # The canvas IS this scenario now — remember it (gear reopens on it).
+        st.save_user_layer(slug, chat, {'objects': layer.get('objects') or {},
+                                        'rooms': layer.get('rooms') or {},
+                                        'scenario': name})
     return {'success': True, 'scenarios': sorted(cur)}
 
 
@@ -877,6 +914,10 @@ def load_scenario(body=None, **_):
     name = str(body.get('name') or '').strip()
     story = rooms.load_story(slug)
     sess = _session()
+    # Write lane: fold any legacy presets/objsets in first, persisted —
+    # _apply_scenario_env reads the unified key raw (migration used to lean
+    # on the setup GET's side-effect write; that GET is pure now).
+    _scenarios(sess._store(), slug, persist=True)
     try:
         sess._apply_scenario_env(chat, slug, story, name)
     except KeyError:

@@ -679,7 +679,10 @@ export async function openStorySettings(slug, opts = {}) {
             if (v !== undefined) out[f.key] = v;
         }
         try {
-            await api(`story/${encodeURIComponent(slug)}/settings`, 'POST', { settings: out });
+            // session rides so the server refreshes THIS chat's costume,
+            // not whichever chat is globally active (2026-08-21 hunt, R6)
+            await api(`story/${encodeURIComponent(slug)}/settings`, 'POST',
+                      { settings: out, session: opts.session });
             if (setup && slots.length) {
                 const vals = {};
                 for (const s of slots) vals[s.key] = readField(overlay, s.key) ?? '';
@@ -1077,8 +1080,34 @@ const compileObj = (name, d, src) => {
     if (Object.keys(acts).length) spec.interactions = acts;
     return spec;
 };
-const objFits = (name, spec) =>
-    deepEq(compileObj(name, objToDescriptor(spec), spec), spec);
+// The round trip catches STRUCTURAL extras, but verbatim-passthrough
+// leaves (visCond, per-act cond, fx values, dice sides) survive it as
+// identity even when the WIDGET can't speak them — the gate passed, the
+// user edited, and readLocks silently stripped the rich shape on save
+// (2026-08-21 hunt, HIGH-3). These shape rules are the widget's actual
+// vocabulary: vis rows has/did/flag, req rows + solved, fx per FX_TYPES,
+// dice d20/d100 only. Anything richer → read-only plain-words summary.
+const _condFitsO = (c, keys) => !c || Object.entries(c).every(([k, v]) =>
+    keys.includes(k) && typeof v === 'string');
+const _fxFitsO = (f) => !f || Object.entries(f).every(([k, v]) =>
+    (k === 'set' && v && typeof v === 'object'
+        && Object.values(v).every(x => x === true || x === false))
+    || (k === 'gives' && typeof v === 'string')
+    || (k === 'adjust' && v && typeof v === 'object'
+        && Object.values(v).every(x => typeof x === 'number'))
+    || ((k === 'extras' || k === 'extras_remove') && Array.isArray(v)
+        && v.every(x => typeof x === 'string'))
+    || (k === 'goto' && typeof v === 'number'));
+const _diceFitsO = (d) => !d
+    || ((d.sides === 20 || d.sides === 100) && Number.isFinite(d.beat));
+const objFits = (name, spec) => {
+    const d = objToDescriptor(spec);
+    return deepEq(compileObj(name, d, spec), spec)
+        && _condFitsO(d.visCond, ['has', 'did', 'flag'])
+        && _fxFitsO(d.solveFx)
+        && d.acts.every(a => _condFitsO(a.cond, ['has', 'did', 'flag', 'solved'])
+                             && _fxFitsO(a.fx) && _diceFitsO(a.dice));
+};
 const objMarks = (spec) => {
     const ints = Object.values(spec.interactions || {}).filter(s => s && typeof s === 'object');
     return (spec.hidden || spec.condition ? ' \u{1F32B}\u{FE0F}' : '')

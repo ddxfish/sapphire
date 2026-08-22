@@ -565,6 +565,12 @@ def test_scenario_migration_folds_old_stores(story, cfg_store):
     assert scen["ghost-run"]["slots"] == {"relationship": "wife"}   # merged pair
     assert "orb" in scen["ghost-run"]["objects"]["1"]
     assert scen["bbq-only"]["rooms"]["2"]["template"] == "B."
+    # A bare READ never writes the store (2026-08-21 fix-wave: the setup
+    # GET's side-effect save was the hunt's GET-that-writes finding) —
+    # write lanes pass persist=True and land the fold exactly once.
+    assert "storyscenarios:mad-manse" not in cfg_store.d
+    scen2 = story_routes._scenarios(cfg_store, "mad-manse", persist=True)
+    assert scen2 == scen
     assert cfg_store.d["storyscenarios:mad-manse"] == scen          # persisted once
 
 

@@ -59,9 +59,21 @@ def ingest(data):
     name = hashlib.sha256(out).hexdigest()[:16] + ".webp"
     path = store_dir() / name
     if not path.exists():
-        tmp = path.with_name(f".tmp-{name}")
-        tmp.write_bytes(out)
-        os.replace(tmp, path)
+        # Unique tmp per writer (2026-08-21 hunt, 3-scout convergence): a
+        # shared ".tmp-<name>" let two concurrent identical uploads write
+        # into ONE tmp file — a torn interleave could get promoted, and on
+        # Windows the second replace hits WinError 32. Content-addressing
+        # makes a lost race harmless: the winner's bytes are ours too.
+        import threading
+        tmp = path.with_name(f".tmp-{os.getpid()}-{threading.get_ident()}-{name}")
+        try:
+            tmp.write_bytes(out)
+            os.replace(tmp, path)
+        except OSError:
+            if not path.exists():
+                raise
+        finally:
+            tmp.unlink(missing_ok=True)
         logger.info(f"[STORY-ART] stored {name} ({len(out) // 1024}KB, "
                     f"{img.size[0]}x{img.size[1]})")
     return name, None

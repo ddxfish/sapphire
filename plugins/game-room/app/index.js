@@ -186,7 +186,7 @@ async function renderLibrary() {
                 content: `
                     <div class="sb-field">
                         <label>player name</label>
-                        <input type="text" id="gr-player-name" maxlength="40" placeholder="Krem" value="${esc(roomCfg.player_name || '')}">
+                        <input type="text" id="gr-player-name" maxlength="40" placeholder="Player" value="${esc(roomCfg.player_name || '')}">
                     </div>
                     <div class="gr-seat-note">Your seat name in new sessions.</div>
                     <div class="sb-field">

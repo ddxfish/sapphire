@@ -253,13 +253,20 @@ async def strip_dangling_refs(request: Request, _=Depends(require_login)):
                                    "missing. Unlock it before stripping.")
     d = prompt_crud.dangling_refs()
     pairs = {(r['type'], r['key']) for refs in d.values() for r in refs}
+    # A piece sitting in the TRASH is restorable — stripping its refs would
+    # bring the text back unwired on restore (2026-08-21 hunt). Skip those;
+    # only refs to pieces that exist NOWHERE strip.
+    in_trash = {(it.get('type'), it.get('key')) for it in prompt_crud.list_trash()}
+    skipped = sorted(pairs & in_trash)
+    pairs -= in_trash
     stripped = []
     for ctype, key in sorted(pairs):
         res = prompt_crud.rewrite_piece_refs(ctype, key, None,
                                              reason="strip dangling refs")
         stripped.append({'type': ctype, 'key': key,
                          'prompts': res['changed'] + res['vault_changed']})
-    return {"stripped": stripped, "count": len(pairs)}
+    return {"stripped": stripped, "count": len(pairs),
+            "skipped_in_trash": [{'type': t, 'key': k} for t, k in skipped]}
 
 
 @router.get("/api/prompts/{name}")
