@@ -285,7 +285,8 @@ export function close() {
     releaseOrgans(OWNER);                    // organs home BEFORE any other view shows
     _root = null; _story = null; _session = null; _status = null;
     _hintShown = {}; _lastActive = null; _sealPrompted = {}; _sealHeld = {};
-    _liveShown = {};
+    _liveShown = {}; _shownSeq = null;
+    document.getElementById('st-lightbox')?.remove();
 }
 
 // ------------------------------------------------------------------ layout
@@ -709,6 +710,7 @@ function paintPanel() {
     paintBackdrop(a);
     if (_paintPrompt) _paintPrompt();
     checkSeals(a);
+    checkShown(a);
 }
 
 // The controls line, icon-only: ⏸/▶ · ⏹ · 🔍 · ⚙ (▶ Start when idle).
@@ -1117,6 +1119,41 @@ function sealModal(seal, urgent, live) {
     document.body.appendChild(wrap);
     if (live) startCountdown(wrap, live.remaining);
     wrap.querySelector('#st-seal-text').focus();
+}
+
+// ------------------------------------------------------------------ lightbox
+// Show-image fx (Krem 2026-08-22): a `show` effect fired server-side — the
+// journal folded it, full_state carries the latest as shown_last {url,
+// caption, seq}. Raise it exactly once per seq bump. Arrival baselines
+// (resume/refresh never replays an old reveal); the seal modal wins the
+// screen (their writing > our picture) — the seq stays unconsumed so the
+// next tick retries, same law as the seals' busy check.
+
+let _shownSeq = null;   // last seq raised; null = no baseline yet
+
+function checkShown(a) {
+    if (!a) return;
+    const s = a.shown_last;
+    if (!s) { _shownSeq = 0; return; }        // fresh run (or nothing shown)
+    if (_shownSeq === null) { _shownSeq = s.seq; return; }   // arrival baseline
+    if (s.seq <= _shownSeq) return;
+    if (document.getElementById('st-seal-modal')) return;    // retry next tick
+    _shownSeq = s.seq;
+    lightbox(s);
+}
+
+function lightbox(s) {
+    const esc = room.esc;
+    document.getElementById('st-lightbox')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'st-lightbox';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.82);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10001;cursor:pointer;gap:14px;padding:24px;box-sizing:border-box';
+    wrap.innerHTML = `
+        <img src="${esc(s.url)}" alt="" style="max-width:min(1100px,94vw);max-height:80vh;border-radius:10px;box-shadow:0 12px 48px rgba(0,0,0,0.6);object-fit:contain">
+        ${s.caption ? `<div style="color:#e8e8ee;font-size:1.05em;text-align:center;max-width:min(900px,90vw);text-shadow:0 1px 4px rgba(0,0,0,0.8)">${esc(s.caption)}</div>` : ''}
+        <div class="st-card-note" style="color:#aaa">click anywhere to close</div>`;
+    wrap.onclick = () => wrap.remove();
+    document.body.appendChild(wrap);
 }
 
 // ------------------------------------------------------------------ tap-to-draft

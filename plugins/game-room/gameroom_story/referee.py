@@ -155,6 +155,18 @@ def _effect_events(effects, state):
             events.append({"event": "moved", "to": int(goto)})
         except (TypeError, ValueError):
             logger.warning(f"[STORY] goto effect with non-numeric room: {goto!r} — ignored")
+    # Lightbox (Krem 2026-08-22): {"show": "name.webp"} or {"show": {"image":
+    # ..., "caption": ...}} pops the image full-screen for the player. The
+    # event carries name + caption only — URL resolution stays view-side
+    # (full_state), so replay never bakes a path.
+    show = effects.get("show")
+    if isinstance(show, str) and show.strip():
+        events.append({"event": "shown", "image": show.strip(), "caption": ""})
+    elif isinstance(show, dict) and str(show.get("image") or "").strip():
+        events.append({"event": "shown", "image": str(show["image"]).strip(),
+                       "caption": str(show.get("caption") or "")})
+    elif show is not None:
+        logger.warning(f"[STORY] show effect with no usable image: {show!r} — ignored")
     return events
 
 

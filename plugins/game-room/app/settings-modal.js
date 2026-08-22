@@ -867,6 +867,7 @@ const FX_TYPES = [
     ['xadd', 'add prompt piece', 'piece name, e.g. hostile', ''],
     ['xrem', 'remove prompt piece', 'piece name, e.g. hostile', ''],
     ['goto', 'move player to room', 'room number, e.g. 3', ''],
+    ['show', 'show image (lightbox)', 'image — 📷 uploads', 'caption (optional)'],
 ];
 // Exits: no riddle-solved (a riddle door = a door OBJECT with a riddle;
 // the exit then Requires "needs opened/used" on it) and no searched
@@ -883,13 +884,19 @@ const EXIT_MECH = ['condition', 'roll', 'effects', 'visible_when'];
 // summary instead; text edits still shadow.
 const _condFits = (c) => !c || Object.entries(c).every(([k, v]) =>
     ['has', 'did', 'flag'].includes(k) && typeof v === 'string');
+// show speaks two shapes: bare name, or {image, caption} — nothing richer.
+const _showFits = (v) => typeof v === 'string'
+    || (!!v && typeof v === 'object' && typeof v.image === 'string'
+        && Object.keys(v).every(k => k === 'image' || k === 'caption')
+        && (v.caption == null || typeof v.caption === 'string'));
 const _fxFits = (f) => !f || Object.entries(f).every(([k, v]) =>
     (k === 'set' && Object.values(v).every(x => x === true || x === false))
     || (k === 'gives' && typeof v === 'string')
     || (k === 'adjust' && Object.values(v).every(x => typeof x === 'number'))
     || ((k === 'extras' || k === 'extras_remove') && Array.isArray(v)
         && v.every(x => typeof x === 'string'))
-    || (k === 'goto' && typeof v === 'number'));
+    || (k === 'goto' && typeof v === 'number')
+    || (k === 'show' && _showFits(v)));
 const _rollFits = (r) => !r || (
     (r.sides === 20 || r.sides === 100) && Number.isFinite(r.beat)
     && Object.keys(r).every(k => ['sides', 'beat', 'success', 'failure'].includes(k))
@@ -926,7 +933,8 @@ const exitMechWords = (se, m) => {
     if (fx && Object.keys(fx).length) bits.push('⚡ ' + [
         ...Object.keys(fx.set || {}).map(k => `sets ${k}`),
         ...(fx.gives ? [`gives ${fx.gives}`] : []),
-        ...Object.entries(fx.adjust || {}).map(([k, n]) => `${k} ${n > 0 ? '+' : ''}${n}`)].join(', '));
+        ...Object.entries(fx.adjust || {}).map(([k, n]) => `${k} ${n > 0 ? '+' : ''}${n}`),
+        ...(fx.show ? ['\u{1F4F7} shows image'] : [])].join(', '));
     return bits.join(' · ');
 };
 
@@ -980,7 +988,7 @@ const objMerged = (sspec, ov) => {
 // riddle (on_solve — the engine fires it at solve time regardless of
 // interactions, referee solve path); `solved` is a plain condition key
 // (the 'riddle solved' req row), so cross-object solves express too.
-const FX_KEYS = ['set', 'gives', 'adjust', 'extras', 'extras_remove', 'goto'];
+const FX_KEYS = ['set', 'gives', 'adjust', 'extras', 'extras_remove', 'goto', 'show'];
 const _fxOf = (src) => {
     const fx = {};
     for (const k of FX_KEYS) if (src[k] != null) fx[k] = src[k];
@@ -992,7 +1000,8 @@ const _fxWords = (f) => [
     ...Object.entries(f.adjust || {}).map(([k, n]) => `${k} ${n > 0 ? '+' : ''}${n}`),
     ...(f.extras || []).map(e => `+${e}`),
     ...(f.extras_remove || []).map(e => `−${e}`),
-    ...(f.goto != null ? [`→ room ${f.goto}`] : [])].join(', ');
+    ...(f.goto != null ? [`→ room ${f.goto}`] : []),
+    ...(f.show ? [`\u{1F4F7} ${(typeof f.show === 'string' ? '' : f.show.caption) || 'shows image'}`] : [])].join(', ');
 const objToDescriptor = (spec) => {
     const puz = spec.puzzle;
     return {
@@ -1097,7 +1106,8 @@ const _fxFitsO = (f) => !f || Object.entries(f).every(([k, v]) =>
         && Object.values(v).every(x => typeof x === 'number'))
     || ((k === 'extras' || k === 'extras_remove') && Array.isArray(v)
         && v.every(x => typeof x === 'string'))
-    || (k === 'goto' && typeof v === 'number'));
+    || (k === 'goto' && typeof v === 'number')
+    || (k === 'show' && _showFits(v)));
 const _diceFitsO = (d) => !d
     || ((d.sides === 20 || d.sides === 100) && Number.isFinite(d.beat));
 const objFits = (name, spec) => {
@@ -1161,20 +1171,44 @@ function locksWidget(form, opts) {
                 `<option value="${t[0]}"${t[0] === kind ? ' selected' : ''}>${t[1]}</option>`).join('')}</select>
             <input type="text" class="grs-pick-val">
             <input type="text" class="grs-pick-extra">
+            <button type="button" class="sb-icon-btn grs-pick-art" title="Upload image" style="display:none">&#x1F4F7;</button>
+            <input type="file" class="grs-pick-file" accept="image/*" style="display:none">
             <button type="button" class="sb-icon-btn grs-act-del" title="Remove">✕</button>`;
         const sel = row.querySelector('.grs-pick-kind');
         const vIn = row.querySelector('.grs-pick-val');
         const xIn = row.querySelector('.grs-pick-extra');
+        const artBtn = row.querySelector('.grs-pick-art');
+        const fileIn = row.querySelector('.grs-pick-file');
         const paint = () => {
             const t = tlist.find(x => x[0] === sel.value) || tlist[0];
             vIn.placeholder = t[2];
             xIn.placeholder = t[3];
             vIn.style.display = t[2] ? '' : 'none';   // value-less kinds (searched)
             xIn.style.display = t[3] ? '' : 'none';
+            artBtn.style.display = t[0] === 'show' ? '' : 'none';
             // Prompt-piece kinds offer the story's pool as suggestions
             if (opts.pieceList && (t[0] === 'xadd' || t[0] === 'xrem'))
                 vIn.setAttribute('list', opts.pieceList);
             else vIn.removeAttribute('list');
+        };
+        // Show-image rows upload straight into the content-hash store (the
+        // backdrop lane's twin) — the returned name fills the value field;
+        // 🔒 Save is still what applies it.
+        artBtn.onclick = () => fileIn.click();
+        fileIn.onchange = async () => {
+            const f = fileIn.files && fileIn.files[0];
+            fileIn.value = '';
+            if (!f) return;
+            const fd = new FormData();
+            fd.append('file', f);
+            try {
+                const up = await fetch('/api/plugin/game-room/story/art',
+                                       { method: 'POST', body: fd });
+                const j = await up.json();
+                if (!j.success) { ui.showToast(j.detail || 'upload refused', 'error'); return; }
+                vIn.value = j.name;
+                ui.showToast('Image stored — save the action to apply', 'success', 2200);
+            } catch (e) { ui.showToast(e.message, 'error'); }
         };
         sel.onchange = paint;
         paint();
@@ -1260,6 +1294,8 @@ function locksWidget(form, opts) {
             } else if (x.kind === 'goto' && fx.goto == null) {
                 const n = parseInt(x.val, 10);
                 if (Number.isFinite(n)) fx.goto = n;
+            } else if (x.kind === 'show' && fx.show == null) {
+                fx.show = x.extra ? { image: x.val, caption: x.extra } : x.val;
             }
         }
         const out = { cond: Object.keys(cond).length ? cond : null,
@@ -1305,6 +1341,11 @@ function locksWidget(form, opts) {
             for (const e of (src.extras || [])) { pickRow(fxRows, types.fx, 'xadd', e); anyFx = true; }
             for (const e of (src.extras_remove || [])) { pickRow(fxRows, types.fx, 'xrem', e); anyFx = true; }
             if (src.goto != null) { pickRow(fxRows, types.fx, 'goto', String(src.goto)); anyFx = true; }
+            if (src.show != null) {
+                const sh = typeof src.show === 'string' ? { image: src.show } : src.show;
+                pickRow(fxRows, types.fx, 'show', sh.image || '', sh.caption || '');
+                anyFx = true;
+            }
         }
         // A refusal message alone is dead data — it only shows when a
         // lock fails. Stage it in the field (recoverable if a lock is

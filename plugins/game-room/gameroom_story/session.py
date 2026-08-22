@@ -1006,6 +1006,14 @@ def act(system, verb, target=None, answer=None, session=None):
                 if not _commit(system, story, slug, chat, state, events):
                     return _REFUSED, False
 
+    # Lightbox honesty (Krem's 2b, 2026-08-22): she can't see the image yet,
+    # but the player just did — one line keeps them in the same scene. The
+    # caption does double duty as her description of what they saw.
+    shown = [e for e in events if e.get("event") == "shown"]
+    if shown:
+        cap = str(shown[-1].get("caption") or "").strip()
+        message += (" (The player is shown an illustration"
+                    + (f": {cap}" if cap else "") + ".)")
     return message, ok
 
 
@@ -1179,6 +1187,21 @@ def _art_url(story, filename):
 
 def _backdrop_url(story, room):
     return _art_url(story, (room or {}).get("backdrop"))
+
+
+def _shown_last(story, state):
+    """The most recent show-image effect, URL-resolved for the lightbox.
+    seq = the fold position, so the client raises each image exactly once.
+    An unresolvable name yields None — no popup, never a broken img."""
+    shown = state.get("shown") or []
+    if not shown:
+        return None
+    last = shown[-1]
+    url = _art_url(story, last.get("image"))
+    if not url:
+        return None
+    return {"url": url, "caption": last.get("caption") or "",
+            "turn": last.get("turn", 0), "seq": len(shown)}
 
 
 # ── Sealed blanks (Krem 2026-08-04) ─────────────────────────────────────────
@@ -1391,6 +1414,9 @@ def full_state(system, session=None):
         # Live wait (she's blocked inside story_act right now): drives the
         # popup's countdown bar. ask/has_fallback come from seals[] by key.
         "seal_wait": _seal_wait_payload(chat),
+        # Lightbox (2026-08-22): last show-image effect — the client pops it
+        # once when seq advances past what it has already raised.
+        "shown_last": _shown_last(story, state),
         "room_id": state["room"],
         "turn": state["turn"],
         "turns_in_room": state["turns_in_room"],

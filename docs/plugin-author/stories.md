@@ -143,6 +143,8 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 | `gives` | put an item in inventory |
 | `emotions` / `emotions_remove` | live emotion layers in her prompt |
 | `extras` / `extras_remove` | extra prompt pieces on / off |
+| `goto` | `room_id` — teleport the player (destination `on_enter` does NOT fire) |
+| `show` | pop an image lightbox for the player — `"name.webp"` or `{"image": "name.webp", "caption": "…"}`. Names resolve like backdrops (store hash or pack `backdrops/` file); a missing file is silently inert, so packs may declare art before it's painted. She can't see the image — the referee tells her one fired (with the caption), so narrate from that. On a `sealed` interaction it fires at reveal time. |
 
 **Conditions** (on exits, interactions, blockers, ending cards): `{"has": "item"}`, `{"flag": "name"}` (truthy), `{"flags": {"k": expected}}`, `{"flag_gte": {"k": 50}}` (numeric threshold) — all listed clauses must hold.
 

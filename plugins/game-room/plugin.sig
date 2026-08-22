@@ -1,25 +1,25 @@
 {
   "plugin": "game-room",
-  "version": "0.18.1",
+  "version": "0.19.0",
   "files": {
     "app/game-room.css": "sha256:5a80ea6ad5e770c49f27213f0e9525866f3632374dcda117c184003333a77598",
     "app/index.js": "sha256:abe09b4eff0401e1e4e3db198268157227deedcf33ed3b656a82b64d349a4d69",
     "app/room.js": "sha256:17d369c524997d3eddf786a7452f9cae6bc68b20aae609b6c88ab326281c1974",
-    "app/settings-modal.js": "sha256:5b27c02c3af7b9a31218736503bd93cc1eecf6fc6e248523477b32e6a3ed14cb",
-    "app/story-room.js": "sha256:46f21610c9c305fed00e677664b267417adbc87cd030f9e4c6fad6c50dfce13a",
+    "app/settings-modal.js": "sha256:035360c4eb5bdfcf487ed4aab7f073addc91e7eed8cefec34e0de5b2b348def5",
+    "app/story-room.js": "sha256:1f72b53196a15f299f2d8920fd3be4546b09b262d45e0200b6ad681fe6067f17",
     "gameroom_core.py": "sha256:19a9c0e4b4fddf5d4fb1986c1e06241cf2048c74fb72a0457892a7656ee95eb6",
     "gameroom_story/__init__.py": "sha256:fea74002f94883c47018fdb57f8ce29176b3175d004a5d9366c0384fdc1a27ac",
     "gameroom_story/art.py": "sha256:9798a8b5b19b658feb782753b58b4bcc5ba05cf617503568eeb5c724ad251d27",
-    "gameroom_story/referee.py": "sha256:0d7ee6ef04e44965ba39407ca6a050ee2e21f4c917fb0c056423b8a61339e91b",
+    "gameroom_story/referee.py": "sha256:dc025a6bbdd0dc5beffdc0f1f57bda24ebfb5498227c1b4d93189944f1e77b66",
     "gameroom_story/render.py": "sha256:8f6e9a29114c17cc01ee6f1ded2575634a6f5a60ab02f0e50b0a2ef5ca5bfce8",
     "gameroom_story/rooms.py": "sha256:ed4ffcdc459f031e8c9b4231d0329487b8e885ef887cd617c25a950c3bb3ea72",
-    "gameroom_story/session.py": "sha256:417cee927a2b59f91906723be6fa492697337a6668122a40e5079febae17e342",
-    "gameroom_story/state.py": "sha256:8d4e73c042104beb5e67c59e33a5fa6ce70e252314d89f00f4e460146d508190",
+    "gameroom_story/session.py": "sha256:fa24e03da78e0bfea620907493c2976fee46e16765649b2d72c56038a74a459e",
+    "gameroom_story/state.py": "sha256:4fae1b282883929567898f49bb35c0fedf925f45cdd585b17bee2b60597d1b7a",
     "hooks/boot.py": "sha256:40f16198902f440d8bf10a02112d256aba72e8061fda9566b7e89e8dcbced7d4",
     "hooks/ghost.py": "sha256:43ca9d9a8312c447c63a80175b623c7498c4c4c5bdd25e338fcdfb70bd1ff0e8",
     "hooks/lifecycle.py": "sha256:73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
     "hooks/vault.py": "sha256:da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
-    "plugin.json": "sha256:22497b0f7e4f53487f342ec04aa9213d29f635545f6f1dfe33a7dbbf9a592af9",
+    "plugin.json": "sha256:81407a648c29b76dc40dd6e6d04911a34adb188ace90b0eedd4510643e069498",
     "prompts/monoliths.json": "sha256:22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "prompts/pieces.json": "sha256:56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
     "routes/play.py": "sha256:e1b6e9803c74440d4a94f451ccfcf25bed0d35247b79a08177ec514b8807a284",
@@ -40,6 +40,7 @@
     "tests/test_open_mansion.py": "sha256:34a0f3c3e63f1312a3dce98e6eee2513aac569f534434b8673e4beaf6b0d8428",
     "tests/test_save_paths.py": "sha256:9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "tests/test_seal_wait.py": "sha256:fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
+    "tests/test_show_fx.py": "sha256:8def28f4d1065b4eed1893b926257b8374d2be728e472a90deb163984d1d7a70",
     "tests/test_story_engine.py": "sha256:67cbbe8b96bd98f201dbb50a834935899bbeddb45ac4fe607d14af81aa841031",
     "tests/test_story_lifecycle.py": "sha256:aad2a4d36801ebf3fcd759c1daca9cb050f1abb2ed1504823294d9f0b13d0840",
     "tests/test_story_overrides.py": "sha256:8856a8770c90e1e102a91f8515d81e754b928db55837996470837988c7c36caf",
@@ -48,5 +49,5 @@
     "tools/story_info.py": "sha256:28570e91e47f7dd9aeb51bed56acb11004cc448b5ff88fbe556e13d9c3e1874a",
     "tools/story_tools.py": "sha256:7351f14233b953a9ae902332858d88382eeaf23d6399bae531d8900ce503dff5"
   },
-  "signature": "95M9cZ4AbRM5I3srkg0p8gdyqcJVUtknyFWYztf74CTRZ5S12TRfQl1trJGSmSSlJV+A9z5yfLIXnA6o8a9DAA=="
+  "signature": "Tjqy4YxXkTrwhZaVPXbNHoMoatdQDGXzXVDGuVMCXcI+NZwq6q7G8eGiIGGkt/oW6reQx84TwWGxJqrlI17oAw=="
 }

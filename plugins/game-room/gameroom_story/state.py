@@ -268,6 +268,7 @@ def initial_state():
         "solved": [], "found": [], "used": [], "rolled": [], "taken": [],
         "ended": False,
         "seals": {}, "seal_skipped": [], "seal_holds": {}, "revealed": [],
+        "shown": [],
     }
 
 
@@ -364,6 +365,12 @@ def apply_event(state, ev):
         rv = state.setdefault("revealed", [])
         if ev["key"] not in rv:
             rv.append(ev["key"])
+    elif kind == "shown":
+        # Lightbox history (2026-08-22): every show-image effect, in order.
+        # The list length is the client's dedup seq; revert un-shows.
+        state.setdefault("shown", []).append(
+            {"image": ev.get("image"), "caption": ev.get("caption") or "",
+             "turn": ev.get("turn", 0)})
     elif kind == "ended":
         state["ended"] = True
     # room_created carries no direct state change beyond its companion
