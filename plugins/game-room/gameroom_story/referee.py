@@ -257,6 +257,20 @@ def _carried_objects(all_rooms, state):
     return out
 
 
+def _declares(obj, verb):
+    """Does this object declare `verb` as an interaction (aliases included)?
+    Lets authored machinery win over the generic look read (2026-08-22)."""
+    for vname, vspec in ((obj or {}).get("interactions") or {}).items():
+        if not isinstance(vspec, dict):
+            continue
+        raw = vspec.get("aliases") or []
+        if isinstance(raw, str):
+            raw = [raw]
+        if _key(verb) in {_key(vname)} | {_key(a) for a in raw}:
+            return True
+    return False
+
+
 def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     """Adjudicate one act. Returns (events, message, ok).
 
@@ -286,26 +300,36 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                     return [], (f"{target}: an item in the inventory — no further "
                                 f"detail is tracked; describe it freely."), True
                 return [], f"There is no '{target}' here to look at.", False
-            bits = [obj.get("desc", "nothing remarkable")]
-            if obj.get("puzzle"):
-                solved = target_n in state["solved"]
-                bits.append(f"Its puzzle{' (SOLVED)' if solved else ''}: {obj['puzzle'].get('riddle', '')}")
-            verbs = sorted({_norm(v) for v in (obj.get("interactions") or {})} |
-                           ({"solve"} if obj.get("puzzle") else set()))
-            if verbs:
-                bits.append(f"It responds to: {', '.join(verbs)}")
-            return [], f"{target}{' (in the inventory)' if carried else ''}: " \
-                + " — ".join(bits), True
-        # look room — on-demand re-read (Krem 2026-08-20): the ghost block
-        # already carries this each turn, but a single room that CHANGES
-        # (placed objects, zork-line reveals) deserves an explicit read.
-        vis = _visible_objects(room, state)
-        bits = [f"{room['title']}: {(room.get('template') or '').strip()}"]
-        if vis:
-            bits.append("Here: " + ", ".join(vis))
-        labels = ", ".join(f"'{e.get('label')}'" for e in visible_exits(room, state))
-        bits.append(f"Exits: {labels or 'none'}")
-        return [], " — ".join(bits), True
+            if not _declares(obj, "look"):
+                bits = [obj.get("desc", "nothing remarkable")]
+                if obj.get("puzzle"):
+                    solved = target_n in state["solved"]
+                    bits.append(f"Its puzzle{' (SOLVED)' if solved else ''}: {obj['puzzle'].get('riddle', '')}")
+                verbs = sorted({_norm(v) for v in (obj.get("interactions") or {})} |
+                               ({"solve"} if obj.get("puzzle") else set()))
+                if verbs:
+                    bits.append(f"It responds to: {', '.join(verbs)}")
+                return [], f"{target}{' (in the inventory)' if carried else ''}: " \
+                    + " — ".join(bits), True
+            # Authored look wins (2026-08-22, the clown_key lightbox): a
+            # declared 'look' interaction used to be SHADOWED by the generic
+            # read above — its message, effects (show!), seals and dice
+            # never fired. Same law examine/inspect already follow: declared
+            # machinery beats the built-in verb. Fall through to the
+            # interaction path below, which re-finds the object (visible or
+            # carried, both lanes).
+        else:
+            # look room — on-demand re-read (Krem 2026-08-20): the ghost
+            # block already carries this each turn, but a single room that
+            # CHANGES (placed objects, zork-line reveals) deserves an
+            # explicit read.
+            vis = _visible_objects(room, state)
+            bits = [f"{room['title']}: {(room.get('template') or '').strip()}"]
+            if vis:
+                bits.append("Here: " + ", ".join(vis))
+            labels = ", ".join(f"'{e.get('label')}'" for e in visible_exits(room, state))
+            bits.append(f"Exits: {labels or 'none'}")
+            return [], " — ".join(bits), True
 
     if verb == "move":
         if not target_n:

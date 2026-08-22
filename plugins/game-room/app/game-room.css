@@ -652,3 +652,44 @@
     border-radius: 7px; cursor: pointer; font-size: 0.85em;
 }
 .td-pri button.on { border-color: var(--trim, #4a9eff); color: var(--text, #e6e6ef); background: var(--bg-hover, #1c2230); }
+
+/* Find (Krem 2026-08-22): collapsed 🔎 chip in the Rooms-pane header;
+   expands to a jump-list search over the whole world (client-side —
+   story/objects already ships every room). glow = standing match ring
+   while search text stands; flash = the one-shot landing pulse. */
+.grs-room-head { display: flex; align-items: center; gap: 8px; }
+.grs-find-chip {
+    margin-left: auto; cursor: pointer; user-select: none;
+    font-size: var(--font-sm, 0.85em); font-weight: 400;
+    color: var(--text-secondary, #8a8fa3);
+    border: 1px dashed var(--border, #2a3040);
+    border-radius: 999px; padding: 1px 10px;
+}
+.grs-find-chip:hover { color: var(--trim, #8ab8ff); border-color: var(--trim, #8ab8ff); }
+.grs-find-wrap { margin-left: auto; position: relative; flex: 0 1 18em; min-width: 9em; }
+.grs-find-wrap input { width: 100%; box-sizing: border-box; font-weight: 400; }
+.grs-find-results {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 30;
+    min-width: min(24em, 80vw); max-height: 50vh; overflow: auto;
+    background: var(--bg-secondary, #161b26);
+    border: 1px solid var(--border, #2a3040);
+    border-radius: var(--radius-sm, 6px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+    display: flex; flex-direction: column;
+}
+.grs-find-hit {
+    display: flex; align-items: baseline; gap: 8px; width: 100%;
+    background: none; border: none; color: var(--text, #e1e1e6);
+    text-align: left; padding: 7px 10px; cursor: pointer;
+    font-size: var(--font-sm, 0.9em);
+}
+.grs-find-hit:hover { background: var(--bg-hover, #1c2230); }
+.grs-find-name { font-weight: 600; }
+.grs-find-where { margin-left: auto; color: var(--text-secondary, #8a8fa3); white-space: nowrap; }
+.grs-find-empty { padding: 7px 10px; color: var(--text-secondary, #8a8fa3); font-size: var(--font-sm, 0.85em); }
+.grs-find-glow { border-color: var(--trim, #8ab8ff); box-shadow: 0 0 0 1px var(--trim, #8ab8ff); }
+.grs-find-flash { animation: grs-find-pulse 2.4s ease-out; }
+@keyframes grs-find-pulse {
+    0%, 55% { border-color: var(--trim, #8ab8ff); box-shadow: 0 0 0 3px var(--trim, #8ab8ff); }
+    100% { box-shadow: 0 0 0 1px transparent; }
+}

@@ -115,6 +115,39 @@ def test_string_show_reports_without_caption(story, cfg_store):
     assert ok and msg.endswith("(The player is shown an illustration.)")
 
 
+def test_declared_look_wins_over_generic(story, cfg_store):
+    # The clown_key wound (2026-08-22): a declared 'look' interaction was
+    # shadowed by the generic read — authored message, effects and show
+    # never fired. Declared machinery beats the built-in verb now, and
+    # examine routes there through the same door.
+    chat = "show-look-chat"
+    _begin(story, chat)
+    session.upsert_user_object(chat, "mad-manse", story["meta"]["start"], "clown_key", {
+        "desc": "a key that looks like a clown",
+        "interactions": {"look": {"message": "It's a clown key!",
+                                  "show": {"image": ART, "caption": "The key"}}}})
+    msg, ok = session.act(None, "look", "clown_key", session=chat)
+    assert ok and "It's a clown key!" in msg
+    assert "(The player is shown an illustration: The key.)" in msg
+    assert "It responds to" not in msg          # the generic read stayed home
+    state = st.replay("mad-manse", chat)
+    assert "clown_key" in state["used"] and len(state["shown"]) == 1
+    # examine falls back into the SAME authored look
+    msg2, ok2 = session.act(None, "examine", "clown_key", session=chat)
+    assert ok2 and "It's a clown key!" in msg2
+    assert len(st.replay("mad-manse", chat)["shown"]) == 2
+
+
+def test_generic_look_unchanged_without_declared(story, cfg_store):
+    chat = "show-look-plain-chat"
+    _begin(story, chat)
+    session.upsert_user_object(chat, "mad-manse", story["meta"]["start"], "plain_urn", {
+        "desc": "a plain urn",
+        "interactions": {"open": {"message": "It opens."}}})
+    msg, ok = session.act(None, "look", "plain_urn", session=chat)
+    assert ok and "a plain urn" in msg and "It responds to" in msg
+
+
 def test_shown_last_unresolvable_is_none(story, cfg_store):
     # a name that is neither a store hash nor a pack backdrop → no popup,
     # never a broken img

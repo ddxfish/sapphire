@@ -150,6 +150,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 
 - An object may also carry a **top-level** `condition`: until it holds, the object doesn't exist at all (invisible, unsearchable, unactable). This is what the editor's Visible-when section writes — e.g. dormant-until-the-zork-line objects.
 - `look` with no target (or target `room`) returns the room's current truth — title, scene text, visible objects, exits. Useful in single-room stories whose contents change.
+- An object may declare its own `look` interaction — it **replaces** the generic object read and carries the full grammar (message, conditions, dice, seals, effects, `show`). `examine`/`inspect` route into it too. Undeclared, `look` keeps its built-in desc + verbs read. (2026-08-22 — declared machinery beats every built-in verb now, `take` and `look` included.)
 
 ## Dice
 

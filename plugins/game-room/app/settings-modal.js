@@ -1370,7 +1370,13 @@ function objectsTab(slug, session, data) {
     const authorOf = (spec) => spec?._author === 'ai' ? ' \u{1F916}' : '';
     const curId = data.current_room;
     const html = `
-        <div class="grs-section-title" style="margin-top:0">Room</div>
+        <div class="grs-section-title grs-room-head" style="margin-top:0">Room
+            <span class="grs-find-chip" role="button" tabindex="0" title="Find an object, exit or room anywhere in this story">&#x1F50E; Search</span>
+            <span class="grs-find-wrap" style="display:none">
+                <input type="text" class="grs-find-input" placeholder="object, exit or room…">
+                <div class="grs-find-results" style="display:none"></div>
+            </span>
+        </div>
         <div class="grs-room-row">
             <select class="grs-obj-room">
                 ${rooms.map(r => `<option value="${r.id}"${r.id === curId ? ' selected' : ''}>${r.id === curId ? '\u{1F4CD} ' : ''}${esc(r.title)}${r.id === curId ? ' — you are here' : ''}</option>`).join('')}
@@ -1734,6 +1740,7 @@ function objectsTab(slug, session, data) {
             const fromLine = pane.querySelector('.grs-room-stats-from');
             fromLine.textContent = `Rooms that lead here: ${inbound.join(', ') || 'none'}`;
             fromLine.title = inbound.join(', ');
+            applyFindGlow();                  // standing search-match rings
             if (tab.onCanvasPaint) tab.onCanvasPaint();   // scenario bar's ● dot
         };
 
@@ -1743,6 +1750,110 @@ function objectsTab(slug, session, data) {
                 if (d.active !== false) { world = d; paintRoom(); }
             } catch { /* pane keeps last state */ }
         };
+
+        // ── Find (Krem 2026-08-22): the 🔎 chip expands to a jump-list
+        // search over the WHOLE world — pure client-side, `world` already
+        // holds every room/object/exit. Click a hit → room switches, the
+        // card flashes; while text stands, matches in any viewed room keep
+        // a glow ring. The room dropdown never mutates (no mystery-missing-
+        // rooms state). Forgiving keys like the referee: 'mirror' finds
+        // 'the_mirror'. Function declaration on purpose — hoisted, so
+        // paintRoom (defined above) can call the glow safely.
+        const findNorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const findChip = pane.querySelector('.grs-find-chip');
+        const findWrap = pane.querySelector('.grs-find-wrap');
+        const findInput = pane.querySelector('.grs-find-input');
+        const findRes = pane.querySelector('.grs-find-results');
+        function applyFindGlow() {
+            const k = findNorm(findInput.value);
+            pane.querySelectorAll('.grs-obj-card[data-name]').forEach(c =>
+                c.classList.toggle('grs-find-glow', !!k && findNorm(c.textContent).includes(k)));
+            pane.querySelectorAll('.grs-exit-badge[data-to]').forEach(c =>
+                c.classList.toggle('grs-find-glow', !!k && findNorm((c.title || '') + c.textContent).includes(k)));
+        }
+        const findHits = (q) => {
+            const k = findNorm(q);
+            if (!k) return [];
+            const prim = [], sec = [];
+            for (const r of (world.rooms || [])) {
+                if (findNorm(r.title).includes(k) || String(r.id) === q.trim())
+                    prim.push({ kind: 'room', name: r.title, room: r });
+                const layer = (world.objects || {})[String(r.id)] || {};
+                const names = new Set([...Object.keys(r.shipped_objs || {}), ...Object.keys(layer)]);
+                for (const n of names) {
+                    const so = (r.shipped_objs || {})[n] || {};
+                    const ov = layer[n] || {};
+                    const desc = ov.desc != null ? ov.desc : so.desc || '';
+                    if (findNorm(n).includes(k)) prim.push({ kind: 'object', name: n, room: r });
+                    else if (findNorm(desc).includes(k)) sec.push({ kind: 'object', name: n, room: r });
+                }
+                for (const e of (r.shipped_exits || []).concat(r.add_exits || []))
+                    if (findNorm(e.label).includes(k))
+                        sec.push({ kind: 'exit', name: e.label, room: r });
+            }
+            return prim.concat(sec).slice(0, 12);
+        };
+        const findJump = (h) => {
+            roomSel.value = String(h.room.id);
+            paintRoom();
+            if (h.kind === 'object') {
+                const card = pane.querySelector(`.grs-obj-card[data-name="${CSS.escape(h.name)}"]`);
+                if (card) {
+                    card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                    card.classList.remove('grs-find-flash');
+                    void card.offsetWidth;               // restart the pulse
+                    card.classList.add('grs-find-flash');
+                }
+            } else if (h.kind === 'exit') {
+                const badges = pane.querySelector('.grs-exit-badges');
+                badges.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+        };
+        const paintFindResults = () => {
+            const q = findInput.value;
+            const hits = findHits(q);
+            const icon = { room: '\u{1F5FA}', object: '\u{1F4E6}', exit: '\u{1F6AA}' };
+            findRes.innerHTML = hits.map((h, i) => `
+                <button type="button" class="grs-find-hit" data-i="${i}">
+                    <span>${icon[h.kind]}</span>
+                    <span class="grs-find-name">${esc(h.name || '')}</span>
+                    <span class="grs-find-where">${h.kind} · ${h.room.id} ${esc(h.room.title || '')}</span>
+                </button>`).join('')
+                || `<div class="grs-find-empty">no match in ${world.rooms?.length || 0} rooms</div>`;
+            findRes.style.display = q.trim() ? '' : 'none';
+            findRes.querySelectorAll('.grs-find-hit').forEach(b =>
+                b.onclick = () => { findJump(hits[+b.dataset.i]); findRes.style.display = 'none'; });
+        };
+        const findCollapse = () => {
+            findWrap.style.display = 'none';
+            findChip.style.display = '';
+            findInput.value = '';
+            findRes.style.display = 'none';
+            applyFindGlow();
+        };
+        const findExpand = () => {
+            findChip.style.display = 'none';
+            findWrap.style.display = '';
+            findInput.focus();
+        };
+        findChip.onclick = findExpand;
+        findChip.onkeydown = (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); findExpand(); }
+        };
+        findInput.oninput = () => { paintFindResults(); applyFindGlow(); };
+        findInput.onkeydown = (e) => {
+            if (e.key === 'Escape') findCollapse();
+            else if (e.key === 'Enter') {
+                if (findRes.style.display === 'none') paintFindResults();
+                findRes.querySelector('.grs-find-hit')?.click();
+            }
+        };
+        // Empty box loses focus → fold back to the chip (clicking a hit is
+        // safe: the box still holds text). Delay lets the click land first.
+        findInput.onblur = () => setTimeout(() => {
+            if (findWrap.style.display !== 'none' && !findInput.value.trim()
+                && document.activeElement !== findInput) findCollapse();
+        }, 250);
 
         tArea.addEventListener('input', () => { count.textContent = tArea.value.length; stash(); });
         pArea.addEventListener('input', stash);
