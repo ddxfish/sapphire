@@ -9,7 +9,7 @@
     "Dockerfile": "c59d556368c60e582e078f092f6c74d4c698fe9021df3b4d0a171137606c6a2b",
     "LICENSE": "8486a10c4393cee1c25392769ddd3b2d6c242d6ec7928e1414efff7dfb2f07ef",
     "README.md": "a25278ca3aaf69ebc6dac74e3d027440233c0f4a60bbabbb5585a4dcfd2aeea4",
-    "VERSION": "990ce199559bdc662226529378ce51377c5a7243e4e642681aa22726fcb98d40",
+    "VERSION": "df9fc5e3ec6dc966cf390de93465bf9dd26adf90bc72135d598ba3c05192984c",
     "config.py": "6bfc07eef0b8e33805cbf177587e087e4eb7a2459c13e0401d9f1821e8c1facb",
     "core/agents/__init__.py": "423d4b6f51e3573e3d381923a27376a1e27c746c0ac8b18125246ca7573b495c",
     "core/agents/base_worker.py": "ea803aef0414c2317866aa1203aa6361fa9e950abdcf459e396110405ea80645",
@@ -170,7 +170,7 @@
     "docs/AGENTS.md": "a262656224d518ec46ad7fbe4dae822618e48e43a4192c85356c4d101a081956",
     "docs/API.md": "b8f9dcb8181e83cd0c8f8816ffd86dd75107c7f1c280b4d335a7eb1bfa3287df",
     "docs/BACKUPS.md": "2fb87041d8d867dd1ce709a9a2123093356becca5bdf80eb5d39fd5938080f38",
-    "docs/CHANGELOG.md": "ee8d4d3909eb8407443adb4c285d3a6491fc3abce75015f1beffd9e9f56cd6a8",
+    "docs/CHANGELOG.md": "a2e7f400ed8548e4b48790eee0383352d2ad388c9c74c1abddcab10bd0e5a9d1",
     "docs/CONTINUITY.md": "f97ebbcb2fc5219a4d0e0e84e4b12861a62b3808efb7a3e6182e70980f6434fa",
     "docs/COSTS.md": "2d23cd40a11419bfef2abf2c5e41869ab62b86675a6d011fe475dff2ba26fa32",
     "docs/DAEMONS-WEBHOOKS.md": "2cdb547b02770805fc35924275c3841a6df3e182464c1ba4b62c3bbb2f2a0552",
@@ -533,8 +533,8 @@
     "plugins/game-room/hooks/ghost.py": "43ca9d9a8312c447c63a80175b623c7498c4c4c5bdd25e338fcdfb70bd1ff0e8",
     "plugins/game-room/hooks/lifecycle.py": "73c17deb09aa981afa767cbc0cab825d17a5407b97bcc8bb7827cc49284d2e94",
     "plugins/game-room/hooks/vault.py": "da71da7bda8cbdec21ca61096d3957a5bbe024514f7a29e2d6afc5bc7618026e",
-    "plugins/game-room/plugin.json": "c9e478dce34b1b2ee2ba08497d725f19d171bf1b61cb6076cef0f80eb905481d",
-    "plugins/game-room/plugin.sig": "fcdd82dbaa504cd12072d1dea8e919a83d06eb5ac9ee412ec59f277aa60a0ad0",
+    "plugins/game-room/plugin.json": "22497b0f7e4f53487f342ec04aa9213d29f635545f6f1dfe33a7dbbf9a592af9",
+    "plugins/game-room/plugin.sig": "f91636ad7afa6d64d04de6f4835cb40ff466e4df45eb9ccfcff591d0cad1d270",
     "plugins/game-room/prompts/monoliths.json": "22f0d857f0ac119f992cc3de6fe55d4a1bc2b98d6ff248df58205940272b0ef3",
     "plugins/game-room/prompts/pieces.json": "56bf07d6ec59c09a8816f061520bb48fc96d68ab7d9a82a7fa6f6fb58e2769f9",
     "plugins/game-room/routes/play.py": "e1b6e9803c74440d4a94f451ccfcf25bed0d35247b79a08177ec514b8807a284",
@@ -551,6 +551,7 @@
     "plugins/game-room/tests/fixtures/stories/roled-tale/rooms/1-parlor.json": "8248a3e408c6b95f391918355836c46fa59666d144c0ea1ed4de772afa0845ea",
     "plugins/game-room/tests/fixtures/stories/roled-tale/story.json": "f5f31aacb8ccc34576958b58933234c606e0c1f9fd1a26750ead34fc42b5e693",
     "plugins/game-room/tests/test_chat_lifecycle_hooks.py": "bebf7787432754f920bed8220fdbce7da01c451571ef2fe832491a3faec187f2",
+    "plugins/game-room/tests/test_fixwave_hunt.py": "a2264152e44a9e869d2ca2fcd7b63bb039170209575b9e16c87e7f077c928686",
     "plugins/game-room/tests/test_open_mansion.py": "34a0f3c3e63f1312a3dce98e6eee2513aac569f534434b8673e4beaf6b0d8428",
     "plugins/game-room/tests/test_save_paths.py": "9858b1545813950a49be1821519562b8d42aed223248295da335ec79b98085c1",
     "plugins/game-room/tests/test_seal_wait.py": "fd5727b266006fa4680695aca4b4103d64cbbda803017ddd6a312650f3668136",
@@ -988,5 +989,5 @@
     "tools/tts_benchmark.py": "991e395a4d093362da854dbb69610823bb54d0be295cfaf6e8bd6d3bb889d625",
     "tools/verify_chat_storage.py": "8e69ed4b9ed9641b6989848cdd0d17a7bfcfb1c1377bf352873bd2c383c5c9f5"
   },
-  "version": "2.12.2"
+  "version": "2.12.3"
 }
