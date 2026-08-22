@@ -229,7 +229,7 @@ def set_story_settings(slug, body=None, **_):
     try:
         from gameroom_story import state as st
         chat = sess._chat_name(_system(), _sess_arg(body))
-        if (st.get_active().get(chat) or {}).get('story') == slug:
+        if (st.get_active_entry(chat) or {}).get('story') == slug:
             refreshed = sess.refresh_prompt(_system(), session=chat)
     except Exception:
         pass
@@ -293,7 +293,7 @@ def _active_ctx(query=None, body=None):
     system = _system()
     sess = _session()
     chat = sess._chat_name(system, _sess_arg(body, query))
-    entry = st.get_active().get(chat)
+    entry = st.get_active_entry(chat)
     slug = str((body or {}).get('slug') or (query or {}).get('slug') or '').strip()
     # An explicit slug NAMES the story it edits (2026-08-21 hunt, D8):
     # editing story X's environment from the library while story Y runs in
@@ -414,7 +414,17 @@ def get_objects(query=None, **_):
             'pack_backdrops': _pack_backdrops(shipped['path']),
             'pieces': {**sess.builtin_story_pieces(slug),
                        **sess.get_story_pieces(slug)},
-            'objects': layer.get('objects') or {}}
+            'objects': layer.get('objects') or {},
+            # Starting items (2026-08-22): shipped pool (editor view, spec
+            # verbatim for the fidelity gate) + the layer's kit bucket.
+            'shipped_items': {n: {'desc': (o or {}).get('desc') or '',
+                                  'verbs': {v: str((s or {}).get('message') or '')
+                                            for v, s in ((o or {}).get('interactions') or {}).items()
+                                            if isinstance(s, dict)},
+                                  'spec': o}
+                              for n, o in (shipped['meta'].get('start_items') or {}).items()
+                              if isinstance(o, dict)},
+            'user_items': layer.get('items') or {}}
 
 
 _ART_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif")
@@ -486,7 +496,7 @@ def set_piece(slug, body=None, **_):
         try:
             chat = _sess_arg(body=body)
             system = _system()
-            if system and chat and (sess.st.get_active().get(chat) or {}) \
+            if system and chat and (sess.st.get_active_entry(chat) or {}) \
                     .get('story') == slug:
                 sess.refresh_prompt(system, session=chat)
         except Exception:
@@ -615,6 +625,53 @@ def delete_object(body=None, **_):
         return {'success': ok,
                 'detail': f"'{name}' removed from the room (restorable)." if ok else msg}
     msg, ok = sess.delete_user_object(chat, slug, rid, name)
+    return {'success': ok, 'detail': msg}
+
+
+def set_item(body=None, **_):
+    """Upsert one starting item — the player's kit (story-level, no room).
+    Same NEVER-through-the-AI law as objects; membership is derived at
+    load, so it's in her inventory next turn."""
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    name = str(body.get('name') or '').strip()
+    spec = body.get('spec')
+    if not isinstance(spec, dict):
+        return {'success': False, 'detail': 'spec must be an object.'}
+    spec.pop('_author', None)
+    spec.pop('_removed', None)
+    spec.pop('_replace', None)
+    from gameroom_story import rooms
+    shipped = (rooms.load_story(slug)['meta'].get('start_items') or {})
+    if body.get('replace') and name in shipped:
+        spec['_replace'] = True
+    msg, ok = _session().upsert_user_item(chat, slug, name, spec,
+                                          author='player')
+    return {'success': ok, 'detail': msg}
+
+
+def delete_item(body=None, **_):
+    """Delete a user starting item — or tombstone a SHIPPED one
+    (restorable); `restore: true` lifts the tombstone / resets shadows."""
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    name = str(body.get('name') or '').strip()
+    sess = _session()
+    from gameroom_story import rooms
+    shipped = (rooms.load_story(slug)['meta'].get('start_items') or {})
+    if name in shipped:
+        if body.get('restore'):
+            msg, ok = sess.delete_user_item(chat, slug, name)
+            return {'success': ok,
+                    'detail': f"'{name}' restored to shipped." if ok else msg}
+        msg, ok = sess.upsert_user_item(chat, slug, name, {'_removed': True})
+        return {'success': ok,
+                'detail': f"'{name}' removed from the kit (restorable)." if ok else msg}
+    msg, ok = sess.delete_user_item(chat, slug, name)
     return {'success': ok, 'detail': msg}
 
 
@@ -887,9 +944,9 @@ def set_scenario(slug, body=None, **_):
                      'rooms': layer.get('rooms') or {}}
         store.save(key, cur)
         # The canvas IS this scenario now — remember it (gear reopens on it).
-        st.save_user_layer(slug, chat, {'objects': layer.get('objects') or {},
-                                        'rooms': layer.get('rooms') or {},
-                                        'scenario': name})
+        # Spread-forward: only the tag changes here; every other bucket
+        # (items included) rides untouched.
+        st.save_user_layer(slug, chat, {**layer, 'scenario': name})
     return {'success': True, 'scenarios': sorted(cur)}
 
 
@@ -940,7 +997,7 @@ def inspect(query=None, **_):
     if not full:
         return {"active": False}
     chat = sess._chat_name(system, session_name)
-    entry = st.get_active().get(chat, {})
+    entry = (st.get_active_entry(chat) or {})
     # load_active, not a hand-rolled load: the merged+substituted world
     # (user objects, room-text overrides, slot values) is what she actually
     # plays — inspect must show THAT, not the shipped skeleton.

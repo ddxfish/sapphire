@@ -96,7 +96,7 @@ def refresh_prompt(system, session=None):
     story, state = load_active(chat)
     if not story:
         return False
-    prompt_name = _register_prompt(story, state, st.get_active().get(chat, {}), chat)
+    prompt_name = _register_prompt(story, state, (st.get_active_entry(chat) or {}), chat)
     _activate_prompt_for(system, chat, prompt_name)
     return True
 
@@ -433,7 +433,7 @@ def load_active(chat):
     substitution — ONE seam, so the referee, the ghost block, full_state,
     and the seal scans all see the same world (plan tmp/open-mansion-plan.md
     keystones K1/K2)."""
-    entry = st.get_active().get(chat)
+    entry = st.get_active_entry(chat)
     if not entry:
         return None, None
     try:
@@ -442,6 +442,13 @@ def load_active(chat):
         logger.warning(f"[STORY] active story '{entry.get('story')}' failed to load: {e}")
         return None, None
     story["rooms"].update(rooms.load_generated_rooms(entry["story"], chat))
+    # Starting items (Krem 2026-08-22): a story-level object pool — things
+    # the player begins with, living in NO room. Shipped in story.json
+    # ("start_items"), user-authored in the layer's "items" bucket (same
+    # shadow law as room objects, merged below).
+    story["items"] = {n: dict(s) for n, s
+                      in (story["meta"].get("start_items") or {}).items()
+                      if isinstance(s, dict)}
     state = st.replay(entry["story"], chat)
     _merge_user_layer(story, entry["story"], chat, state)
     _apply_slots(story, entry.get("slots") or {})
@@ -461,7 +468,65 @@ def load_active(chat):
                     f"'{entry['story']}' — falling back to the start room")
             state["room"] = start_id
             state["turns_in_room"] = 0
+    # Starting-item membership is DERIVED, not journaled (Krem's B ruling
+    # 2026-08-22): the pool is the single source of truth, injected at this
+    # one seam — no journal events means no rename orphans, and an item
+    # added mid-run simply always-was. Referee conditions ({"has": ...}),
+    # ghost, sidebar and full_state all read the injected state; the specs
+    # resolve through the carried-objects pool arm.
+    if story.get("items") and not state["ended"]:
+        inv = {referee._key(i) for i in state["inventory"]}
+        tkn = {referee._key(t) for t in state.get("taken") or []}
+        for n in story["items"]:
+            k = referee._key(n)
+            if not k:
+                continue
+            if k not in tkn:
+                state.setdefault("taken", []).append(n)
+                tkn.add(k)
+            if k not in inv:
+                state["inventory"].append(n)
+                inv.add(k)
     return story, state
+
+
+def _overlay_object_map(target, objs):
+    """The one object-shadow law, factored (2026-08-22) so room objects and
+    the start-items pool merge identically: `_removed` tombstones, `_replace`
+    swaps wholesale, plain shadows field-merge (desc/hidden replace;
+    interactions overlay per-verb, replacing only `message` so shipped
+    mechanics survive a reword), new names add wholesale."""
+    for name, spec in objs.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("_removed"):
+            target.pop(name, None)
+            continue
+        if spec.get("_replace"):
+            target[name] = {k: v for k, v in spec.items() if k != "_replace"}
+            continue
+        if name in target and isinstance(target[name], dict):
+            base = dict(target[name])
+            if "desc" in spec:
+                base["desc"] = spec["desc"]
+            if "hidden" in spec:
+                base["hidden"] = bool(spec["hidden"])
+            ints = dict(base.get("interactions") or {})
+            for verb, vspec in (spec.get("interactions") or {}).items():
+                if not isinstance(vspec, dict):
+                    continue
+                if verb in ints and isinstance(ints[verb], dict):
+                    merged = dict(ints[verb])
+                    if "message" in vspec:
+                        merged["message"] = vspec["message"]
+                    ints[verb] = merged
+                else:
+                    ints[verb] = vspec
+            if ints:
+                base["interactions"] = ints
+            target[name] = base
+            continue
+        target[name] = spec
 
 
 def _merge_user_layer(story, slug, chat, state):
@@ -511,42 +576,11 @@ def _merge_user_layer(story, slug, chat, state):
             room = None
         if not room or not isinstance(objs, dict):
             continue
-        target = room.setdefault("objects", {})
-        for name, spec in objs.items():
-            if not isinstance(spec, dict):
-                continue
-            if spec.get("_removed"):
-                target.pop(name, None)
-                continue
-            # Fidelity-gate lane (2026-08-21): a _replace entry swaps the
-            # shipped object WHOLESALE — machinery included ({} strips it
-            # to nothing but what the entry carries). Editor-only marker;
-            # the field-merge below stays the law for plain shadows.
-            if spec.get("_replace"):
-                target[name] = {k: v for k, v in spec.items() if k != "_replace"}
-                continue
-            if name in target and isinstance(target[name], dict):
-                base = dict(target[name])
-                if "desc" in spec:
-                    base["desc"] = spec["desc"]
-                if "hidden" in spec:
-                    base["hidden"] = bool(spec["hidden"])
-                ints = dict(base.get("interactions") or {})
-                for verb, vspec in (spec.get("interactions") or {}).items():
-                    if not isinstance(vspec, dict):
-                        continue
-                    if verb in ints and isinstance(ints[verb], dict):
-                        merged = dict(ints[verb])
-                        if "message" in vspec:
-                            merged["message"] = vspec["message"]
-                        ints[verb] = merged
-                    else:
-                        ints[verb] = vspec
-                if ints:
-                    base["interactions"] = ints
-                target[name] = base
-                continue
-            target[name] = spec
+        _overlay_object_map(room.setdefault("objects", {}), objs)
+    # Starting items (2026-08-22): the layer's "items" bucket overlays the
+    # shipped start_items pool under the exact same shadow law.
+    if isinstance(data.get("items"), dict):
+        _overlay_object_map(story.setdefault("items", {}), data["items"])
     # Exits (exits editor, 2026-08-21) — UNGATED like objects (F2, the
     # clown_key law: no implicit zork stamps; authors gate explicitly via
     # visible_when). exit_shadows field-merge over the shipped exit with
@@ -649,6 +683,8 @@ def _apply_slots(story, slots):
             meta[f] = sub(meta[f])
     for rid in list(story["rooms"]):
         story["rooms"][rid] = walk(story["rooms"][rid])
+    if story.get("items"):
+        story["items"] = walk(story["items"])
 
 
 def _clean_slots(story, slots):
@@ -683,7 +719,11 @@ def _apply_scenario_env(chat, slug, story, name):
     Visible-when condition on the object."""
     if not name:
         with st.layer_lock:
-            st.save_user_layer(slug, chat, {"objects": {}, "rooms": {},
+            # Spread-forward (2026-08-22): scenario swap owns the ENV buckets
+            # only — other layer buckets (start items = the player's kit)
+            # ride through untouched.
+            layer = st.get_user_layer(slug, chat)
+            st.save_user_layer(slug, chat, {**layer, "objects": {}, "rooms": {},
                                             "scenario": ""})
         return
     sets = _store().get(f"storyscenarios:{slug}") or {}
@@ -706,8 +746,9 @@ def _apply_scenario_env(chat, slug, story, name):
     rooms_ov = {str(rid): txt for rid, txt in (data.get("rooms") or {}).items()
                 if isinstance(txt, dict)}
     with st.layer_lock:
-        st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
-                                        "scenario": name})
+        layer = st.get_user_layer(slug, chat)
+        st.save_user_layer(slug, chat, {**layer, "objects": objects,
+                                        "rooms": rooms_ov, "scenario": name})
 
 
 def _start(system, slug, character, mode, local, session, slots=None):
@@ -718,7 +759,7 @@ def _start(system, slug, character, mode, local, session, slots=None):
     # on the chat's plugin_chat_data rows and seal with it — private chats
     # host stories now. The HIDDEN gate (sealed vault) still refuses via
     # the store's own write raise + the P3 seat rails.
-    if st.get_active().get(chat):
+    if st.get_active_entry(chat):
         return f"A story is already active in this chat — story_end first.", False
     story = rooms.load_story(slug)
     start_room = story["rooms"][story["meta"]["start"]]
@@ -807,7 +848,7 @@ def _start(system, slug, character, mode, local, session, slots=None):
                 "(is this chat sealed or deleted?)."), False
 
     state = st.replay(slug, chat)
-    prompt_name = _register_prompt(story, state, st.get_active().get(chat, {}), chat)
+    prompt_name = _register_prompt(story, state, (st.get_active_entry(chat) or {}), chat)
     ok, msg = _activate_prompt_for(system, chat, prompt_name)
     if not ok:
         logger.warning(f"[STORY] prompt activation failed: {msg}")
@@ -892,7 +933,7 @@ def _wait_for_fill(slug, chat, room, target, verb, key, timeout):
                     or key in skipped
                     or referee.legacy_seal_key(target, verb) in skipped):
                 return True
-            active = st.get_active().get(chat)
+            active = st.get_active_entry(chat)
             if not active or active.get("paused"):
                 return False
             with _waits_lock:
@@ -961,7 +1002,7 @@ def _commit(system, story, slug, chat, state, events):
         # Re-check active HERE, not before the write: an act() racing ⏹ End
         # used to re-dress the chat in a costume end() had just retired,
         # leaving an orphan monolith row (race R4, 2026-08-21 hunt).
-        entry = st.get_active().get(chat)
+        entry = st.get_active_entry(chat)
         if entry:
             fresh = st.replay(slug, chat)
             prompt_name = _register_prompt(story, fresh, entry, chat)
@@ -976,7 +1017,7 @@ def act(system, verb, target=None, answer=None, session=None):
         return "No story is active in this chat. story_start begins one.", False
     if state["ended"]:
         return "This story has ended. story_end to close it out.", False
-    if st.get_active().get(chat, {}).get("paused"):
+    if (st.get_active_entry(chat) or {}).get("paused"):
         return "The story is paused (intermission) — resume it from the sidebar.", False
     room = story["rooms"].get(state["room"])
     if not room:
@@ -1041,7 +1082,7 @@ def _set_mode(system, mode, local, return_prompt, session):
         return "Identity mode must be story, local, or combined.", False
     if mode in ("story", "combined") and not role.get("text"):
         return f"'{story['meta'].get('title')}' ships no role — only local mode works here.", False
-    entry = st.get_active().get(chat, {})
+    entry = (st.get_active_entry(chat) or {})
     old_name = entry.get("prompt_name") or f"story_{story['meta']['slug']}"
     updates = {"mode": mode, "prompt_name": _prompt_name_for(story, mode, chat)}
     if local:
@@ -1049,7 +1090,7 @@ def _set_mode(system, mode, local, return_prompt, session):
     st.update_active(chat, **updates)
     if updates["prompt_name"] != old_name:
         st.drop_dynamic(old_name)
-    prompt_name = _register_prompt(story, state, st.get_active().get(chat, {}), chat)
+    prompt_name = _register_prompt(story, state, (st.get_active_entry(chat) or {}), chat)
     _activate_prompt_for(system, chat, prompt_name)
     return f"Identity mode now '{mode}' — prompt '{prompt_name}' active.", True
 
@@ -1066,7 +1107,7 @@ def _end(system, session):
     # cockpit are actually restored. Popping first meant any throw below left
     # a dirty cockpit and an invisible save whose journal the next ▶Start
     # would archive out from under the player (finding 4.8).
-    entry = st.get_active().get(chat)
+    entry = st.get_active_entry(chat)
     if not entry:
         return "No story is active in this chat.", False
     if story and state and not state["ended"]:
@@ -1366,7 +1407,7 @@ def full_state(system, session=None):
     story, state = load_active(chat)
     if not story:
         return None
-    entry = st.get_active().get(chat, {})
+    entry = (st.get_active_entry(chat) or {})
     room = story["rooms"].get(state["room"])
     _open_flag = (story["meta"].get("open_flag") or "").strip()
     return {
@@ -1438,7 +1479,7 @@ def last_played(system, session=None):
     truth — replay recovers the final room, flags, and thus the earned
     ending card. (Krem 2026-08-03: 'expected to see the outcome background')."""
     chat = _chat_name(system, session)
-    if not chat or st.get_active().get(chat):
+    if not chat or st.get_active_entry(chat):
         return None
     # Sealed-vault gate (P3-T9): a hidden chat's finished playthrough
     # (ending card, story title) answers like it never happened.
@@ -1526,9 +1567,7 @@ def upsert_user_object(chat, slug, room_id, name, spec, author="player"):
             return f"Placed-object cap reached ({_OBJ_CAP} per playthrough).", False
         room_objs[name] = spec
         objects[str(room_id)] = room_objs
-        st.save_user_layer(slug, chat, {"objects": objects,
-                                        "rooms": layer.get("rooms") or {},
-                                        "scenario": layer.get("scenario") or ""})
+        st.save_user_layer(slug, chat, {**layer, "objects": objects})
     return f"'{name}' placed.", True
 
 
@@ -1544,10 +1583,46 @@ def delete_user_object(chat, slug, room_id, name):
             objects[str(room_id)] = room_objs
         else:
             objects.pop(str(room_id), None)
-        st.save_user_layer(slug, chat, {"objects": objects,
-                                        "rooms": layer.get("rooms") or {},
-                                        "scenario": layer.get("scenario") or ""})
+        st.save_user_layer(slug, chat, {**layer, "objects": objects})
     return f"'{name}' removed.", True
+
+
+def upsert_user_item(chat, slug, name, spec, author="player"):
+    """Starting items (2026-08-22): upsert one entry in the layer's "items"
+    bucket — the player's kit, story-level, no room. Same soft validation
+    and shadow semantics as placed objects; membership is derived at
+    load_active, so the change is live on the very next turn."""
+    name = str(name or "").strip()
+    if not name:
+        return "Item needs a name.", False
+    if not isinstance(spec, dict):
+        return "Item spec must be an object.", False
+    try:
+        if len(json.dumps(spec)) > _OBJ_BYTES:
+            return f"Item too large ({_OBJ_BYTES // 1024}KB cap).", False
+    except (TypeError, ValueError):
+        return "Item spec isn't JSON-serializable.", False
+    spec = dict(spec)
+    spec["_author"] = str(author)
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        items = dict(layer.get("items") or {})
+        if name not in items and len(items) >= _OBJ_CAP:
+            return f"Item cap reached ({_OBJ_CAP} per playthrough).", False
+        items[name] = spec
+        st.save_user_layer(slug, chat, {**layer, "items": items})
+    return f"'{name}' is in the starting kit.", True
+
+
+def delete_user_item(chat, slug, name):
+    with st.layer_lock:
+        layer = st.get_user_layer(slug, chat)
+        items = dict(layer.get("items") or {})
+        if name not in items:
+            return "No starting item by that name.", False
+        items.pop(name)
+        st.save_user_layer(slug, chat, {**layer, "items": items})
+    return f"'{name}' removed from the kit.", True
 
 
 def set_room_text(chat, slug, room_id, template=None, player_desc=None,
@@ -1571,9 +1646,7 @@ def set_room_text(chat, slug, room_id, template=None, player_desc=None,
             rooms_ov[str(room_id)] = cur
         else:
             rooms_ov.pop(str(room_id), None)
-        st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
-                                        "rooms": rooms_ov,
-                                        "scenario": layer.get("scenario") or ""})
+        st.save_user_layer(slug, chat, {**layer, "rooms": rooms_ov})
     return "Room saved.", True
 
 
@@ -1598,9 +1671,7 @@ def _mutate_room_layer(chat, slug, room_id, mutate):
             rooms_ov[str(room_id)] = cur
         else:
             rooms_ov.pop(str(room_id), None)
-        st.save_user_layer(slug, chat, {"objects": layer.get("objects") or {},
-                                        "rooms": rooms_ov,
-                                        "scenario": layer.get("scenario") or ""})
+        st.save_user_layer(slug, chat, {**layer, "rooms": rooms_ov})
 
 
 def set_user_exit(chat, slug, room_id, to, spec):
@@ -1767,8 +1838,8 @@ def delete_user_room(chat, slug, rid):
                     rooms_ov.pop(orid, None)
         objects = dict(layer.get("objects") or {})
         objects.pop(str(rid), None)
-        st.save_user_layer(slug, chat, {"objects": objects, "rooms": rooms_ov,
-                                        "scenario": layer.get("scenario") or ""})
+        st.save_user_layer(slug, chat, {**layer, "objects": objects,
+                                        "rooms": rooms_ov})
     return "Room removed — its doors and objects went with it.", True
 
 
@@ -1840,6 +1911,6 @@ def revert(system, turn, session=None):
     slug = story["meta"]["slug"]
     dropped = st.truncate(slug, chat, int(turn))
     fresh = st.replay(slug, chat)
-    prompt_name = _register_prompt(story, fresh, st.get_active().get(chat, {}), chat)
+    prompt_name = _register_prompt(story, fresh, (st.get_active_entry(chat) or {}), chat)
     _activate_prompt_for(system, chat, prompt_name)
     return f"Reverted to turn {turn} — {dropped} event(s) archived off the timeline.", True

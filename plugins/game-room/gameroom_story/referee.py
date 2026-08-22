@@ -241,11 +241,13 @@ def visible_exits(room, state):
             and check_condition(ex.get("visible_when"), state)]
 
 
-def _carried_objects(all_rooms, state):
+def _carried_objects(story, all_rooms, state):
     """{name: (home_room, spec)} for taken objects — they left their room
     but ride with the player (Krem 2026-08-21: 'what she carries, she can
     use'). home_room anchors seal/dice keys so once-chances and sealed
-    reveals stay spent/revealed wherever the object travels."""
+    reveals stay spent/revealed wherever the object travels. Starting items
+    (2026-08-22) resolve from the story-level pool with home_room None —
+    their seal/dice keys are room-independent by construction."""
     taken = {_key(t) for t in state.get("taken") or []}
     out = {}
     if not taken:
@@ -254,6 +256,9 @@ def _carried_objects(all_rooms, state):
         for n, o in (rm.get("objects") or {}).items():
             if _key(n) in taken and isinstance(o, dict) and n not in out:
                 out[n] = (rm, o)
+    for n, o in ((story or {}).get("items") or {}).items():
+        if _key(n) in taken and isinstance(o, dict) and n not in out:
+            out[n] = (None, o)
     return out
 
 
@@ -289,7 +294,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                 # Carried things (Krem 2026-08-21): a taken object left its
                 # room but rides in the inventory — look works wherever she
                 # is, resolving the spec from whichever room shipped it.
-                _name, pair = _find(_carried_objects(all_rooms, state), target_n)
+                _name, pair = _find(_carried_objects(story, all_rooms, state), target_n)
                 if pair:
                     obj = pair[1]
                     carried = True
@@ -423,7 +428,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
             name, obj = _find(room.get("objects") or {}, target_n)
         if not obj:
             # carried puzzles solve anywhere (solved list is name-global)
-            name, pair = _find(_carried_objects(all_rooms, state), target_n)
+            name, pair = _find(_carried_objects(story, all_rooms, state), target_n)
             if pair:
                 obj = pair[1]
         if not obj or (obj.get("hidden") and name not in state["found"]) \
@@ -461,7 +466,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
         # dice, seals and effects all fire from the pocket, in any room.
         # Mechanics are state-scoped; only seal/dice keys are room-scoped,
         # and those anchor to the object's HOME room (see _carried_objects).
-        obj_name, pair = _find(_carried_objects(all_rooms, state), target_n)
+        obj_name, pair = _find(_carried_objects(story, all_rooms, state), target_n)
         if pair:
             home, obj = pair
             carried = True

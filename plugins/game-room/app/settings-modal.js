@@ -557,6 +557,303 @@ function piecesPanel(slug, session) {
     return { html, wire };
 }
 
+// ── Starting items (Krem 2026-08-22, ruling B): the player's kit — story-
+// level objects living in NO room, in the inventory from turn 0, and live
+// on the very next turn when edited (membership is DERIVED server-side,
+// never journaled — no rename orphans; delete = it never was). Cards
+// mirror the Rooms pane's objects (📦 shipped, ✏ shadowed, ghost
+// tombstoned); same fidelity gate, but items speak a SUBSET of the object
+// grammar — no take/hidden/visible-when/riddle (a kit item is simply with
+// you) — so richer shipped specs open read-only, text edits shadowing.
+const itemFits = (name, spec) => objFits(name, spec)
+    && !spec.takeable && !spec.hidden && !spec.condition && !spec.puzzle;
+
+// ── ONE owner for the Characters tab's shared content (2026-08-22, Krem's
+// dual-surface finding: the in-game gear and the Play/setup modal each
+// hand-assembled Characters, so a section added to one silently missed
+// the other — the items panel did exactly that on day one; pieces only
+// avoided it by luck of being added to both). Every shared section
+// registers HERE and rides BOTH surfaces by construction — the same
+// pattern that keeps the Rooms tab drift-free (objectsTab, one builder).
+// Gating is per-section, not per-surface: items need world data (objData
+// resolves pre-start via the explicit-slug layer lane), pieces need only
+// a session.
+function charactersPanels(slug, session, objData) {
+    const panels = [];
+    if (objData) panels.push(itemsPanel(slug, session, objData));
+    if (session) panels.push(piecesPanel(slug, session));
+    return {
+        html: panels.map(p => p.html).join(''),
+        wire: (root) => { for (const p of panels) p.wire(root); },
+    };
+}
+
+// Merge shared content into a tab list — appends to an existing tab of
+// that title (slot sections may already own one) or creates it.
+const mergeTab = (tabs, title, html) => {
+    if (!html) return;
+    const t = tabs.find(x => x.title === title);
+    if (t) t.html += html;
+    else tabs.push({ title, html });
+};
+
+// ── The WORLD sections (2026-08-22, DRY'd ahead of the scenario builder —
+// rule of three: items drifted, pieces survived by luck, the builder is
+// next). Everything a story surface shows of the world — Characters
+// content (items + pieces) and the Rooms tab, plus the envTab hooks the
+// scenario bar needs — assembled ONCE. A surface splices these into its
+// own frame; the frames themselves (setup: slots/draft-net/▶ Start; gear:
+// GM/State/autosave) are legitimately different and stay surface-owned.
+// A new shared tab or section registers HERE and reaches every surface by
+// construction.
+function worldSections(slug, session, objData) {
+    const chars = charactersPanels(slug, session, objData);
+    const envTab = objData ? objectsTab(slug, session, objData) : null;
+    return {
+        envTab,
+        splice: (tabs) => {
+            mergeTab(tabs, 'Characters', chars.html);
+            if (envTab) tabs.push(envTab);
+        },
+        wire: (overlay) => { chars.wire(overlay); },
+        // envTab hooks every surface hands to wireScenarioBar — spread
+        // these into its opts alongside surface-specific ones.
+        scnOpts: {
+            envFlush: () => envTab?.flush?.(),
+            envDiverged: () => !!(envTab && envTab.diverged()),
+            onSwap: () => envTab?.swapped?.(),
+            onSaved: () => envTab?.markClean?.(),
+        },
+        bindBar: (scnState) => {
+            if (envTab && scnState) envTab.onCanvasPaint = scnState.updateDot;
+        },
+    };
+}
+
+function itemsPanel(slug, session, initialData) {
+    const html = `
+        <div class="grs-section-title">\u{1F392} Player starts with</div>
+        <div style="opacity:.7;font-size:.85em;margin-bottom:6px">Items in the player's pocket from turn 0 — no room, always carried, live on her next turn. Actions fire anywhere; a look action with a show-image effect makes a poppable keepsake.</div>
+        <div class="grs-items-list grs-obj-grid"></div>
+        <div class="grs-item-form grs-obj-add-form" style="display:none">
+            <input type="text" class="grs-item-name" placeholder="item name, e.g. picture_of_joey">
+            <div class="grs-item-mech-note" style="display:none;color:var(--text-secondary,#8a8fa3);font-size:var(--font-sm,0.85em)"></div>
+            <input type="text" class="grs-item-desc" placeholder="what looking at it shows her">
+            <div class="grs-item-act-rows"></div>
+            <button type="button" class="pk-btn grs-item-act-add">+ Add action</button>
+            <div style="display:flex;gap:6px">
+                <button type="button" class="pk-btn pk-btn-primary grs-item-save">Add</button>
+                <button type="button" class="pk-btn grs-item-cancel">Cancel</button>
+                <button type="button" class="pk-btn grs-item-reset" style="display:none" title="Drop your edits — back to the pack's version">↩ Reset to shipped</button>
+            </div>
+        </div>`;
+    const wire = (root) => {
+        let shipped = initialData.shipped_items || {};
+        let userItems = initialData.user_items || {};
+        const list = root.querySelector('.grs-items-list');
+        const form = root.querySelector('.grs-item-form');
+        if (!list || !form) return;
+        const nameIn = form.querySelector('.grs-item-name');
+        const descIn = form.querySelector('.grs-item-desc');
+        const actRows = form.querySelector('.grs-item-act-rows');
+        const mechNote = form.querySelector('.grs-item-mech-note');
+        const resetBtn = form.querySelector('.grs-item-reset');
+        let editing = null;
+        let authoring = true;
+        const addCard = (a) => makeActCard(actRows, a,
+            { authoring: () => authoring, pieceList: 'grs-piece-list' });
+        form.querySelector('.grs-item-act-add').onclick = () =>
+            addCard(null).querySelector('.grs-act-verb').focus();
+
+        const refresh = async () => {
+            try {
+                const d = await api(`story/objects?session=${encodeURIComponent(session)}&slug=${encodeURIComponent(slug)}`);
+                if (d.active !== false) {
+                    shipped = d.shipped_items || {};
+                    userItems = d.user_items || {};
+                }
+            } catch { /* keep last state */ }
+            paint();
+        };
+        const closeForm = () => {
+            form.style.display = 'none';
+            editing = null; authoring = true;
+            nameIn.value = ''; nameIn.disabled = false;
+            descIn.value = ''; actRows.innerHTML = '';
+            mechNote.style.display = 'none';
+        };
+        const readDescriptor = () => ({
+            desc: descIn.value.trim(), take: false, hidden: false,
+            visCond: null, puzzle: null, solveFx: null,
+            acts: [...actRows.querySelectorAll('.grs-act-card')].map(card => {
+                const lk = card._lw.readLocks() || {};
+                return { verb: card.querySelector('.grs-act-verb').value.trim(),
+                         resp: card.querySelector('.grs-act-resp').value.trim(),
+                         cond: lk.cond || null, dice: lk.dice || null,
+                         fx: lk.fx || null, msg: lk.msg || '' };
+            }).filter(a => a.verb),
+        });
+        const openForm = (name) => {
+            editing = name || null;
+            authoring = true;
+            actRows.innerHTML = '';
+            nameIn.value = editing || '';
+            nameIn.disabled = !!editing;
+            descIn.value = '';
+            mechNote.style.display = 'none';
+            resetBtn.style.display = 'none';
+            const so = editing ? shipped[editing] : null;
+            const ov = editing ? userItems[editing] : null;
+            if (so) {
+                const merged = objMerged(so.spec || {}, ov);
+                if (itemFits(editing, merged)) {
+                    const d = objToDescriptor(merged);
+                    descIn.value = d.desc;
+                    for (const a of d.acts) addCard(a);
+                } else {
+                    // Text-shadow lane: machinery rides pack-side, read-only.
+                    authoring = false;
+                    descIn.value = (ov && ov.desc != null) ? ov.desc : (so.desc || '');
+                    for (const [v, m] of Object.entries(so.verbs || {})) {
+                        const ovMsg = ov?.interactions?.[v]?.message;
+                        addCard({ verb: v, resp: ovMsg != null ? ovMsg : m });
+                    }
+                    mechNote.textContent = '⚙︎ Story machinery richer than this '
+                        + 'editor — shown read-only, your text edits reword it: '
+                        + (objMechWords(merged) || 'unnamed machinery');
+                    mechNote.style.display = '';
+                }
+                resetBtn.style.display = ov ? '' : 'none';
+            } else if (editing && ov) {
+                const d = objToDescriptor(ov);
+                descIn.value = d.desc;
+                for (const a of d.acts) addCard(a);
+            }
+            form.querySelector('.grs-item-save').textContent = editing ? 'Save' : 'Add';
+            form.style.display = '';
+            (editing ? descIn : nameIn).focus();
+        };
+
+        form.querySelector('.grs-item-cancel').onclick = closeForm;
+        resetBtn.onclick = async () => {
+            if (!editing) return;
+            try {
+                await api('story/items/delete', 'POST',
+                          { session, slug, name: editing, restore: true });
+                closeForm();
+                await refresh();
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+        form.querySelector('.grs-item-save').onclick = async () => {
+            const name = editing || nameIn.value.trim();
+            if (!name) { ui.showToast('Item needs a name', 'error'); return; }
+            const so = shipped[name];
+            const ovNow = userItems[name];
+            const d = readDescriptor();
+            const restoreAndClose = async () => {
+                try {
+                    if (ovNow)
+                        await api('story/items/delete', 'POST',
+                                  { session, slug, name, restore: true });
+                    closeForm();
+                    await refresh();
+                } catch (e) { ui.showToast(e.message, 'error'); }
+            };
+            let body;
+            if (so && itemFits(name, objMerged(so.spec || {}, ovNow))) {
+                const spec = compileObj(name, d, objMerged(so.spec || {}, ovNow));
+                if (deepEq(spec, so.spec || {})) { await restoreAndClose(); return; }
+                body = { session, slug, name, spec, replace: true };
+            } else if (so) {
+                const spec = {};
+                const desc = descIn.value.trim();
+                if (desc !== (so.desc || '')) spec.desc = desc;
+                const ints = {};
+                for (const a of d.acts) {
+                    if (a.verb in (so.verbs || {})) {
+                        if (a.resp !== so.verbs[a.verb]) ints[a.verb] = { message: a.resp };
+                    } else {
+                        ints[a.verb] = { message: a.resp || `You ${a.verb} the ${name}.` };
+                    }
+                }
+                if (Object.keys(ints).length) spec.interactions = ints;
+                if (!Object.keys(spec).length) { await restoreAndClose(); return; }
+                body = { session, slug, name, spec };
+            } else {
+                body = { session, slug, name, spec: compileObj(name, d, null) };
+            }
+            try {
+                const res = await api('story/items', 'POST', body);
+                if (!res.success) { ui.showToast(res.detail || 'refused', 'error'); return; }
+                closeForm();
+                ui.showToast(`'${name}' is in the kit`, 'success', 2000);
+                await refresh();
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+
+        const paint = () => {
+            const cards = [];
+            for (const [n, so] of Object.entries(shipped)) {
+                const ov = userItems[n];
+                if (ov && ov._removed) {
+                    cards.push(`<div class="grs-obj-card grs-obj-ghost">
+                        <button type="button" class="sb-icon-btn grs-item-restore" data-name="${esc(n)}" title="Bring it back">↩</button>
+                        <div class="grs-obj-card-title">${esc(n)} \u{1F4E6}</div>
+                        <div class="grs-obj-card-desc">removed from the kit</div>
+                    </div>`);
+                    continue;
+                }
+                const merged = objMerged(so.spec || {}, ov);
+                const verbs = Object.keys(merged.interactions || {}).join(', ');
+                cards.push(`<div class="grs-obj-card grs-obj-editable" data-item="${esc(n)}">
+                    <button type="button" class="sb-icon-btn grs-item-del" data-name="${esc(n)}" title="Remove from the kit (restorable)">✕</button>
+                    <div class="grs-obj-card-title">${esc(n)} \u{1F4E6}${ov ? ' ✏' : ''}${objMarks(merged)}</div>
+                    <div class="grs-obj-card-desc">${esc(merged.desc || '')}</div>
+                    ${verbs ? `<div class="grs-obj-card-verbs">${esc(verbs)}</div>` : ''}
+                </div>`);
+            }
+            for (const [n, spec] of Object.entries(userItems)) {
+                if (shipped[n]) continue;
+                const verbs = Object.keys(spec.interactions || {}).join(', ');
+                cards.push(`<div class="grs-obj-card grs-obj-editable" data-item="${esc(n)}">
+                    <button type="button" class="sb-icon-btn grs-item-del" data-name="${esc(n)}" title="Remove">✕</button>
+                    <div class="grs-obj-card-title">${esc(n)}${spec?._author === 'ai' ? ' \u{1F916}' : ''}${objMarks(spec)}</div>
+                    <div class="grs-obj-card-desc">${esc(spec.desc || '')}</div>
+                    ${verbs ? `<div class="grs-obj-card-verbs">${esc(verbs)}</div>` : ''}
+                </div>`);
+            }
+            list.innerHTML = cards.join('')
+                + '<div class="grs-obj-card grs-obj-addtile grs-item-addtile" role="button" tabindex="0">+ Add item</div>';
+            const tile = list.querySelector('.grs-item-addtile');
+            tile.onclick = () => openForm();
+            tile.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openForm(); } };
+            list.querySelectorAll('[data-item]').forEach(c => c.onclick = (e) => {
+                if (e.target.closest('.grs-item-del')) return;
+                openForm(c.dataset.item);
+            });
+            list.querySelectorAll('.grs-item-del').forEach(b => b.onclick = async (e) => {
+                e.stopPropagation();
+                try {
+                    const res = await api('story/items/delete', 'POST',
+                                          { session, slug, name: b.dataset.name });
+                    if (res.detail) ui.showToast(res.detail, res.success ? 'success' : 'error', 2000);
+                    await refresh();
+                } catch (e2) { ui.showToast(e2.message, 'error'); }
+            });
+            list.querySelectorAll('.grs-item-restore').forEach(b => b.onclick = async (e) => {
+                e.stopPropagation();
+                try {
+                    await api('story/items/delete', 'POST',
+                              { session, slug, name: b.dataset.name, restore: true });
+                    await refresh();
+                } catch (e2) { ui.showToast(e2.message, 'error'); }
+            });
+        };
+        paint();
+    };
+    return { html, wire };
+}
+
 export async function openStorySettings(slug, opts = {}) {
     if (!slug) return;
     let data, setup = null, objData = null;
@@ -585,21 +882,12 @@ export async function openStorySettings(slug, opts = {}) {
         tabs.push(...st);
     }
 
-    // Prompt Pieces (Krem 2026-08-21, surfaces ruling: content/conduct/
-    // run) — the panel rides the PLAY surfaces only: this gear (running
-    // world) and the setup modal (pre-run). The library wheel is CONDUCT
-    // (GM tab) and carries no story content.
-    const pp = objData ? piecesPanel(slug, opts.session) : null;
-    if (pp) {
-        const chars = tabs.find(t => t.title === 'Characters');
-        if (chars) chars.html += pp.html;
-        else tabs.push({ title: 'Characters', html: pp.html });
-    }
-
-    // Rooms — the open-world pane (active playthrough only). Order ruling
+    // World sections — Characters (items + pieces) + Rooms, the ONE
+    // assembly shared with the setup modal (2026-08-22). Order ruling
     // (Krem 2026-08-21): Story, Characters, Rooms first; GM + State last.
-    const envTab = objData ? objectsTab(slug, opts.session, objData) : null;
-    if (envTab) tabs.push(envTab);
+    const world = worldSections(slug, opts.session, objData);
+    world.splice(tabs);
+    const envTab = world.envTab;
 
     // Schema tabs (This story / GM Style) — unchanged behavior.
     const byTab = {};
@@ -641,12 +929,9 @@ export async function openStorySettings(slug, opts = {}) {
         ? wireScenarioBar(overlay, slug, setup, slots, opts.slots || {},
                           { session: opts.session,
                             current: objData?.scenario || '',
-                            envFlush: () => envTab?.flush?.(),
-                            envDiverged: () => !!(envTab && envTab.diverged()),
-                            onSwap: () => envTab?.swapped?.(),
-                            onSaved: () => envTab?.markClean?.() })
+                            ...world.scnOpts })
         : null;
-    if (envTab && scnState) envTab.onCanvasPaint = scnState.updateDot;
+    world.bindBar(scnState);
 
     // Deep link (the 🏠 button lands on the Objects tab directly)
     if (opts.tab) {
@@ -654,7 +939,7 @@ export async function openStorySettings(slug, opts = {}) {
         if (btn) btn.click();
     }
 
-    if (pp) pp.wire(overlay);
+    world.wire(overlay);
 
     // ⏹ End story — moved from the toolbar into State (Krem 2026-08-21)
     const endBtn = overlay.querySelector('.grs-end-story');
@@ -731,15 +1016,11 @@ export async function openStorySetup(slug, setup, session) {
         const finish = (v) => { if (!done) { done = true; resolve(v); } };
 
         const tabs = slotTabs(open, sealed, () => undefined);
-        // Prompt Pieces ride the setup modal too (Krem 2026-08-21: author
-        // the moods before pressing ▶) — under Characters, same panel as
-        // the in-game gear.
-        const pp = piecesPanel(slug, session);
-        const charsTab = tabs.find(t => t.title === 'Characters');
-        if (charsTab) charsTab.html += pp.html;
-        else tabs.push({ title: 'Characters', html: pp.html });
-        const envTab = objData ? objectsTab(slug, session, objData) : null;
-        if (envTab) tabs.push(envTab);
+        // World sections — the ONE assembly shared with the in-game gear
+        // (2026-08-22): Characters (items + pieces) + Rooms.
+        const world = worldSections(slug, session, objData);
+        world.splice(tabs);
+        const envTab = world.envTab;
 
         // Draft net (Krem 2026-08-20, three lost setups): every edit lands
         // in sessionStorage; reopening the form — same tab, even after a
@@ -764,15 +1045,12 @@ export async function openStorySetup(slug, setup, session) {
             },
               onClose: () => finish(null) });
         const { overlay, close } = modal;
-        pp.wire(overlay);
+        world.wire(overlay);
         const scnState = wireScenarioBar(overlay, slug, setup, open, {},
                               { session,
                                 current: objData?.scenario || '',
-                                envFlush: () => envTab?.flush?.(),
-                                envDiverged: () => !!(envTab && envTab.diverged()),
-                                onSwap: () => envTab?.swapped?.(),
-                                onSaved: () => envTab?.markClean?.() });
-        if (envTab && scnState) envTab.onCanvasPaint = scnState.updateDot;
+                                ...world.scnOpts });
+        world.bindBar(scnState);
 
         try {
             const d = JSON.parse(sessionStorage.getItem(draftKey) || 'null');
@@ -1148,6 +1426,68 @@ const objMechWords = (spec) => {
     }
     return bits.join(' · ');
 };
+
+// Shared action-card builder (factored 2026-08-22): one command — verb +
+// response — hosting its OWN requirements/dice/effects via locksWidget.
+// Used by the Rooms-pane object form and the Characters-tab items panel.
+// opts.authoring() gates the ⚙ gear (read-only shipped machinery).
+function makeActCard(host, a, opts) {
+    const card = document.createElement('div');
+    card.className = 'grs-act-card';
+    card.innerHTML = `
+        <div class="grs-act-row grs-act-main">
+            <input type="text" class="grs-act-verb" placeholder="verb, e.g. eat">
+            <input type="text" class="grs-act-resp" placeholder="what the world says back — returned to her as story truth">
+            <button type="button" class="sb-icon-btn grs-act-gear" title="Requirements & effects — this action's own locks, dice and changes">\u{2699}\u{FE0E}</button>
+            <button type="button" class="sb-icon-btn grs-act-del" title="Remove action">✕</button>
+        </div>
+        <div class="grs-act-sum" style="display:none"></div>
+        <div class="grs-lock-body grs-act-mech" style="display:none">
+            <label class="st-tools-check grs-req-label" style="margin:0"><input type="checkbox" class="grs-req-toggle"> Requirements — what it takes to do this</label>
+            <div class="grs-lock-body grs-req-body" style="display:none">
+                <div class="grs-req-rows"></div>
+                <button type="button" class="pk-btn grs-req-add">+ Add requirement</button>
+                <input type="text" class="grs-lock-msg" placeholder="blocked message (optional) — what she sees while it refuses">
+            </div>
+            <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Effects — what doing it changes</label>
+            <div class="grs-lock-body grs-fx-body" style="display:none">
+                <div class="grs-fx-rows"></div>
+                <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+            </div>
+        </div>`;
+    const gear = card.querySelector('.grs-act-gear');
+    const sum = card.querySelector('.grs-act-sum');
+    const mech = card.querySelector('.grs-act-mech');
+    card._lw = locksWidget(card, { types: { req: REQ_TYPES, fx: FX_TYPES },
+                                   pieceList: opts.pieceList });
+    if (a) {
+        card.querySelector('.grs-act-verb').value = a.verb || '';
+        card.querySelector('.grs-act-resp').value = a.resp || '';
+        card._lw.prefill({ cond: a.cond, roll: a.dice, fx: a.fx || {}, msg: a.msg });
+    }
+    // collapsed = a plain-words summary of what's inside
+    const paintSum = () => {
+        if (mech.style.display !== 'none') { sum.style.display = 'none'; return; }
+        const lk = card._lw.readLocks() || {};
+        const bits = [];
+        if (lk.cond) bits.push('\u{1F512} ' + _condWords(lk.cond));
+        if (lk.dice) bits.push(`\u{1F3B2} d${lk.dice.sides} beat ${lk.dice.beat}`);
+        if (lk.fx) bits.push('⚡ ' + _fxWords(lk.fx));
+        sum.textContent = bits.join(' · ');
+        sum.style.display = bits.length ? '' : 'none';
+    };
+    gear.onclick = () => {
+        const open = mech.style.display === 'none';
+        mech.style.display = open ? '' : 'none';
+        gear.classList.toggle('on', open);
+        paintSum();
+    };
+    if (!opts.authoring()) gear.style.display = 'none';
+    paintSum();
+    card.querySelector('.grs-act-del').onclick = () => card.remove();
+    host.appendChild(card);
+    return card;
+}
 
 function locksWidget(form, opts) {
     const types = opts.types;
@@ -2016,65 +2356,10 @@ function objectsTab(slug, session, data) {
         // Per-ACTION machinery (the flip, Krem 2026-08-21): each card is
         // one command — verb + response — hosting its OWN requirements/
         // dice/effects via the shared widget. Matches the engine's real
-        // per-verb grammar; the object-level lock sections that secretly
-        // stamped every verb are gone.
-        const addActCard = (a) => {
-            const card = document.createElement('div');
-            card.className = 'grs-act-card';
-            card.innerHTML = `
-                <div class="grs-act-row grs-act-main">
-                    <input type="text" class="grs-act-verb" placeholder="verb, e.g. eat">
-                    <input type="text" class="grs-act-resp" placeholder="what the world says back — returned to her as story truth">
-                    <button type="button" class="sb-icon-btn grs-act-gear" title="Requirements & effects — this action's own locks, dice and changes">\u{2699}\u{FE0E}</button>
-                    <button type="button" class="sb-icon-btn grs-act-del" title="Remove action">✕</button>
-                </div>
-                <div class="grs-act-sum" style="display:none"></div>
-                <div class="grs-lock-body grs-act-mech" style="display:none">
-                    <label class="st-tools-check grs-req-label" style="margin:0"><input type="checkbox" class="grs-req-toggle"> Requirements — what it takes to do this</label>
-                    <div class="grs-lock-body grs-req-body" style="display:none">
-                        <div class="grs-req-rows"></div>
-                        <button type="button" class="pk-btn grs-req-add">+ Add requirement</button>
-                        <input type="text" class="grs-lock-msg" placeholder="blocked message (optional) — what she sees while it refuses">
-                    </div>
-                    <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Effects — what doing it changes</label>
-                    <div class="grs-lock-body grs-fx-body" style="display:none">
-                        <div class="grs-fx-rows"></div>
-                        <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
-                    </div>
-                </div>`;
-            const gear = card.querySelector('.grs-act-gear');
-            const sum = card.querySelector('.grs-act-sum');
-            const mech = card.querySelector('.grs-act-mech');
-            card._lw = locksWidget(card, { types: { req: REQ_TYPES, fx: FX_TYPES },
-                                           pieceList: 'grs-piece-list' });
-            if (a) {
-                card.querySelector('.grs-act-verb').value = a.verb || '';
-                card.querySelector('.grs-act-resp').value = a.resp || '';
-                card._lw.prefill({ cond: a.cond, roll: a.dice, fx: a.fx || {}, msg: a.msg });
-            }
-            // collapsed = a plain-words summary of what's inside
-            const paintSum = () => {
-                if (mech.style.display !== 'none') { sum.style.display = 'none'; return; }
-                const lk = card._lw.readLocks() || {};
-                const bits = [];
-                if (lk.cond) bits.push('\u{1F512} ' + _condWords(lk.cond));
-                if (lk.dice) bits.push(`\u{1F3B2} d${lk.dice.sides} beat ${lk.dice.beat}`);
-                if (lk.fx) bits.push('⚡ ' + _fxWords(lk.fx));
-                sum.textContent = bits.join(' · ');
-                sum.style.display = bits.length ? '' : 'none';
-            };
-            gear.onclick = () => {
-                const open = mech.style.display === 'none';
-                mech.style.display = open ? '' : 'none';
-                gear.classList.toggle('on', open);
-                paintSum();
-            };
-            if (!authoring) gear.style.display = 'none';
-            paintSum();
-            card.querySelector('.grs-act-del').onclick = () => card.remove();
-            actRows.appendChild(card);
-            return card;
-        };
+        // per-verb grammar. Builder factored to makeActCard (2026-08-22)
+        // so the starting-items panel shares it.
+        const addActCard = (a) => makeActCard(actRows, a,
+            { authoring: () => authoring, pieceList: 'grs-piece-list' });
 
         const openAdd = (name) => {
             const r = curRoom();

@@ -169,6 +169,16 @@
       },
       {
         "method": "POST",
+        "path": "story/items",
+        "handler": "routes/story_routes.py:set_item"
+      },
+      {
+        "method": "POST",
+        "path": "story/items/delete",
+        "handler": "routes/story_routes.py:delete_item"
+      },
+      {
+        "method": "POST",
         "path": "story/room-text",
         "handler": "routes/story_routes.py:set_room_text"
       },

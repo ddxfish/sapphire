@@ -151,6 +151,7 @@ Any plugin with a `stories/` dir is a story pack — the host scans every plugin
 - An object may also carry a **top-level** `condition`: until it holds, the object doesn't exist at all (invisible, unsearchable, unactable). This is what the editor's Visible-when section writes — e.g. dormant-until-the-zork-line objects.
 - `look` with no target (or target `room`) returns the room's current truth — title, scene text, visible objects, exits. Useful in single-room stories whose contents change.
 - An object may declare its own `look` interaction — it **replaces** the generic object read and carries the full grammar (message, conditions, dice, seals, effects, `show`). `examine`/`inspect` route into it too. Undeclared, `look` keeps its built-in desc + verbs read. (2026-08-22 — declared machinery beats every built-in verb now, `take` and `look` included.)
+- **Starting items** (2026-08-22): story.json may carry `"start_items": {name: spec}` — objects the player begins with, living in **no room**. Full object grammar minus room-bound fields (no `hidden`/`condition`/`takeable` — a kit item is simply with you); declared verbs, dice, seals and `show` all fire from the pocket in any room, and `{"has": name}` conditions see them with no wiring. Membership is **derived at load**, never journaled: editing the pool mid-run changes the inventory on her next turn, and seal/dice keys anchor room-independently. Players author their own via the gear's Characters tab (🎒 Player starts with — same shadow/tombstone law as room objects).
 
 ## Dice
 

@@ -10,6 +10,17 @@
     "name": "Vex",
     "text": "I am Vex, your {relationship}. Our watchword is {watchword}."
   },
+  "start_items": {
+    "locket": {
+      "desc": "A silver locket from my {relationship}.",
+      "interactions": {
+        "look": {
+          "message": "Her face, painted small.",
+          "show": {"image": "lightbox-test.webp", "caption": "The locket"}
+        }
+      }
+    }
+  },
   "slots": [
     {"key": "relationship", "label": "Our relationship", "section": "Characters",
      "width": 30, "options": ["partner", "rival"], "allow_custom": true, "default": "partner"},
