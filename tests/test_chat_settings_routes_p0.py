@@ -124,12 +124,24 @@ def test_activate_chat_applies_stored_settings_and_aligns_rag(chat_client):
     chat's stored settings AND set scope_rag to `__rag__:{chat_name}`.
     Before the 2026-04-18 fix, activation without sending a message left
     scope_rag pointing at the previous chat's docs.
+
+    Since 2026-08-22 the apply rides the store's on_switched hook inside
+    switch_chat (SWITCH MEANS APPLY — the route no longer applies itself).
+    switch_chat is a mock here, so this emulates the store firing the hook
+    with the landing chat's snapshot; tests/test_chat_switch_applies.py
+    covers the real store firing it.
     """
+    from core import api_fastapi
     c, csrf, mock_system, fm, captured = chat_client
 
     stored = {'memory_scope': 'alpha_mem', 'knowledge_scope': 'alpha_know'}
-    mock_system.llm_chat.session_manager.get_chat_settings.return_value = stored
-    mock_system.llm_chat.session_manager.get_active_chat_name.return_value = 'alpha'
+    sm = mock_system.llm_chat.session_manager
+    sm.get_chat_settings.return_value = stored
+    sm.get_active_chat_name.return_value = 'alpha'
+    sm._switch_gen = 1
+    sm.on_switched = lambda n, s_, g: api_fastapi.apply_on_switch(mock_system, n, s_, g)
+    mock_system.llm_chat.switch_chat.side_effect = \
+        lambda name: (sm.on_switched(name, dict(stored), 1), True)[1]
 
     r = c.post('/api/chats/alpha/activate', headers={'X-CSRF-Token': csrf})
     assert r.status_code == 200, r.text

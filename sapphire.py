@@ -212,6 +212,19 @@ class VoiceChatSystem:
         except Exception as e:
             logger.warning(f"Post-scan toolset apply failed: {e}")
 
+        # SWITCH MEANS APPLY (2026-08-22): from here on, every successful
+        # set_active_chat applies the landing chat's settings to the brain
+        # via apply_on_switch. The vault-lock eviction switched the store
+        # and left the FM on the private chat's toolset while the sidebar
+        # painted the landing chat's (Prime, 2026-08-22). Installed HERE,
+        # after the post-scan toolset apply: the two boot switches (game-
+        # chat handback, boot eviction) ran pre-scan and must never apply a
+        # toolset before plugin tools exist ('Enabled: []' class). Captures
+        # self — get_system() raises 503 until the server is up.
+        from core.api_fastapi import apply_on_switch
+        self.llm_chat.session_manager.on_switched = (
+            lambda name, settings, gen: apply_on_switch(self, name, settings, gen))
+
         # RAG orphan cleanup runs AFTER plugin_loader.scan() (Phase 4 reorder).
         # Previously this ran at line 100, BEFORE plugin loading, which meant it
         # imported memory/knowledge via the regular Python import path before the

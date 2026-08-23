@@ -5,6 +5,7 @@ import json
 import time
 import secrets
 import logging
+import threading
 from pathlib import Path
 from typing import Optional, Any
 
@@ -741,9 +742,41 @@ async def logout(request: Request, _=Depends(require_login)):
 from core.tts.utils import validate_voice as _validate_tts_voice, default_voice as _tts_default_voice
 
 
+# SWITCH MEANS APPLY (2026-08-22): every runtime apply serializes here.
+# Until now all six call sites sat inside async route handlers, so the event
+# loop serialized them by accident; the on_switched hook also fires from the
+# vault's idle-lock Timer thread and the stream-end worker, so the accident
+# becomes a lock. RLock: reapply_if_active → _apply_chat_settings nesting is
+# legal.
+_apply_lock = threading.RLock()
+
+
 def _apply_chat_settings(system, settings: dict):
     """Apply chat settings to the system (TTS, prompt, ability, state engine).
-    Each section is isolated so one failure doesn't skip the rest."""
+    Each section is isolated so one failure doesn't skip the rest.
+    Serialized by _apply_lock (see above)."""
+    with _apply_lock:
+        _apply_chat_settings_unlocked(system, settings)
+
+
+def apply_on_switch(system, name: str, settings: dict, gen: int):
+    """ChatSessionManager.on_switched body — installed post-plugin-scan by
+    sapphire.py. Takes the apply lock FIRST, then re-checks the store's
+    switch generation: two switches racing (story entry fires two
+    overlapping activates; an idle-lock eviction can land under a dropdown
+    click) must apply in order or not at all — a stale apply would leave the
+    store on chat B with the brain on chat A, the exact desync this hook
+    exists to close. `settings` is the snapshot the store captured under its
+    own lock; never re-read it here."""
+    sm = system.llm_chat.session_manager
+    with _apply_lock:
+        if gen != getattr(sm, '_switch_gen', gen):
+            logger.info(f"Switch apply for '{name}' superseded — skipped")
+            return
+        _apply_chat_settings_unlocked(system, settings)
+
+
+def _apply_chat_settings_unlocked(system, settings: dict):
     try:
         if "voice" in settings:
             voice = _validate_tts_voice(settings["voice"])
@@ -804,11 +837,15 @@ def _apply_chat_settings(system, settings: dict):
                 _fb_content = (_fb or {}).get('content') if isinstance(_fb, dict) else ''
                 system.llm_chat.set_system_prompt(_fb_content or '')
                 try:
+                    # Ephemeral (2026-08-22): a transient notice for live
+                    # tabs, never replayed — this apply now also runs inside
+                    # the vault-lock eviction, three lines after lock()
+                    # cleared the replay ring to keep sealed names out of it.
                     publish(Events.SETTINGS_CHANGED, {
                         "key": "chat_prompt_fallback",
                         "value": "default",
                         "reason": f"missing:{prompt_name}",
-                    })
+                    }, ephemeral=True)
                 except Exception:
                     pass
     except Exception as e:

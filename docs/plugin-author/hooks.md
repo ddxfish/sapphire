@@ -123,7 +123,7 @@ Through `system = event.metadata.get("system")`, plugins can control:
 | **Wakeword** | `system.toggle_wakeword(bool)` | Enable/disable wakeword detection |
 | **LLM** | `system.llm_chat` | `chat(query)` — send a message directly to the LLM |
 | **System Prompt** | `system.llm_chat` | `set_system_prompt(text)`, `get_system_prompt_template()` |
-| **Chat History** | `system.llm_chat.session_manager` | `get_messages()`, `list_chats()`, `create_chat(name)`, `set_active_chat(name)`, `delete_chat(name)` |
+| **Chat History** | `system.llm_chat.session_manager` | `get_messages()`, `list_chats()`, `create_chat(name)`, `set_active_chat(name)` (also applies that chat's prompt/toolset/voice to the live runtime), `delete_chat(name)` |
 | **Tool Manager** | `system.llm_chat.function_manager` | `update_enabled_functions([toolset])`, `execute_function(name, args)`, `get_enabled_function_names()` |
 | **Scopes** | `system.llm_chat.function_manager` | `set_rag_scope(s)`, `set_private_chat(bool)` — the only core scope setters. Plugin scopes (memory/knowledge/people/email/etc.) apply from chat settings via `apply_scopes_from_settings()`; there are no per-scope setter methods |
 | **Generation** | `system` | `cancel_generation()` — cancel in-progress LLM streaming |

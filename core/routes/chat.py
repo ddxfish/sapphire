@@ -851,6 +851,9 @@ def _delete_one_chat(system, chat_name: str, origin=None):
     if not system.llm_chat.delete_chat(chat_name):
         return False, f"Cannot delete '{chat_name}'"
     if was_active:
+        # delete_chat rebinds the active chat BY HAND (history.py, not via
+        # set_active_chat), so the store's on_switched hook never sees it —
+        # this explicit apply stays. Don't "symmetrize" it away.
         settings = system.llm_chat.session_manager.get_chat_settings()
         _apply_chat_settings(system, settings)
     # Cleanup per-chat RAG documents
@@ -1176,8 +1179,10 @@ async def activate_chat(chat_name: str, request: Request, _=Depends(require_logi
         except Exception:
             pass
         if system.llm_chat.switch_chat(chat_name):
+            # SWITCH MEANS APPLY (2026-08-22): the store's on_switched hook
+            # applied the landing chat's settings inside switch_chat — this
+            # route used to be the only switch site that remembered to.
             settings = system.llm_chat.session_manager.get_chat_settings()
-            _apply_chat_settings(system, settings)
             origin = request.headers.get('X-Session-ID')
             publish(Events.CHAT_SWITCHED, {"name": chat_name, "origin": origin})
             # Same backfill as GET /settings — the frontend paints the sidebar

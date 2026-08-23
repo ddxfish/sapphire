@@ -891,6 +891,11 @@ class ChatSessionManager:
         
         self._db_path = self.history_dir / "sapphire_history.db"
         self._lock = threading.RLock()
+        # SWITCH MEANS APPLY (2026-08-22): runtime-apply hook, installed by
+        # the system AFTER the plugin scan (sapphire.py) — None until then
+        # and in every bare-store test. See set_active_chat.
+        self.on_switched = None
+        self._switch_gen = 0
         
         self.current_chat = ConversationHistory(max_history=max_history)
         self.active_chat_name = "default"
@@ -3218,29 +3223,51 @@ class ChatSessionManager:
             pass
 
     def set_active_chat(self, chat_name: str) -> bool:
-        """Switch to a different chat - loads messages AND settings."""
+        """Switch to a different chat - loads messages AND settings.
+
+        SWITCH MEANS APPLY (2026-08-22): every True return fires
+        `on_switched(name, settings, gen)` — the runtime-apply hook the
+        system installs post-plugin-scan — so no caller can switch the
+        store and forget the brain. The vault-lock eviction did exactly
+        that: the sidebar painted the landing chat's toolset while the FM
+        still held the private chat's (Prime, 2026-08-22). Fires on the
+        same-chat no-op too: re-activating the active chat is the
+        documented user repair. The settings snapshot + generation are
+        captured UNDER the lock and handed over — never re-read via
+        get_chat_settings(), which is brain-override-aware (a callback on a
+        phone-turn thread would stamp the call chat onto the global brain).
+        Fired OUTSIDE the lock: the apply takes fm._tools_lock, which a
+        plugin scan holds while reaching back into this store — an
+        inside-the-lock fire is a real A→B/B→A deadlock, not style. A
+        callback failure never fails the switch."""
         if self._vault_hidden(chat_name):
             logger.warning("Chat switch refused — target is sealed in a locked vault")
             return False
         with self._lock:
-            if chat_name == self.active_chat_name:
-                return True
+            if chat_name != self.active_chat_name:
+                if self._is_streaming:
+                    logger.warning(f"Cannot switch to '{chat_name}' — streaming in progress on '{self.active_chat_name}'")
+                    return False
 
-            if self._is_streaming:
-                logger.warning(f"Cannot switch to '{chat_name}' — streaming in progress on '{self.active_chat_name}'")
-                return False
+                self._save_current_chat()
 
-            self._save_current_chat()
-
-            if self._load_chat(chat_name):
+                if not self._load_chat(chat_name):
+                    logger.error(f"Failed to switch to chat: {chat_name}")
+                    return False
                 self.active_chat_name = chat_name
                 self._save_last_active(chat_name)
                 self._in_tool_cycle = False  # Reset tool cycle state on chat switch
                 logger.info(f"Switched to chat: {chat_name}")
-                return True
-            else:
-                logger.error(f"Failed to switch to chat: {chat_name}")
-                return False
+            self._switch_gen = getattr(self, '_switch_gen', 0) + 1
+            gen = self._switch_gen
+            snapshot = dict(self.current_settings)
+        cb = getattr(self, 'on_switched', None)
+        if cb is not None:
+            try:
+                cb(chat_name, snapshot, gen)
+            except Exception as e:
+                logger.error(f"on_switched apply failed for '{chat_name}': {e}")
+        return True
 
     def get_active_chat_name(self) -> str:
         """Get active chat name (thread-safe)."""
