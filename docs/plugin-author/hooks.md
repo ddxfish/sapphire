@@ -77,9 +77,10 @@ class HookEvent:
     skip_tts: bool = False                   # Cancel TTS
     chat_name: Optional[str] = None          # This turn's chat (runner-stamped)
     chat_private: Optional[bool] = None      # True = private chat (runner-stamped)
+    surface: Optional[str] = None            # 'chat' | 'game' — the chat's surface (fire-site-stamped)
 ```
 
-`chat_name` / `chat_private` are stamped by the runner, not by you — read them, don't set them. See [Private chats](#private-chats--privacy_aware).
+`chat_name` / `chat_private` are stamped by the runner, not by you — read them, don't set them. See [Private chats](#private-chats--privacy_aware). `surface` is stamped by the fire site for the presence hooks — see [Surfaces](#surfaces--where-presence-hooks-fire).
 
 ---
 
@@ -139,6 +140,20 @@ def pre_chat(event):
     if hasattr(system, "tts") and system.tts:
         system.tts.set_voice("af_sky")
 ```
+
+---
+
+## Surfaces — where presence hooks fire
+
+A chat is shown on a **surface**: `chat` (the chat view, with plugin sidebar accordions) or `game` (the Game Room — stories and games, where core sections render but plugin accordions don't). The story engine stamps the chat setting `surface: "game"` while a story is active and hands it back at the end.
+
+If your plugin injects text *because something is on screen* — an avatar, a scene, a soundscape — declare where that something actually lives:
+
+```json
+{ "surfaces": ["chat"] }
+```
+
+Core then withholds **`prompt_inject` and `ghost_inject`** (only those two — the presence hooks) from your plugin on every other surface. No declaration = fire everywhere, exactly as before. The user can change your default per plugin from **Settings › Plugins** ("Show in: ☑ Chat ☐ Game Room") — the override lives in your plugin state under `surfaces` and wins over the manifest. Unknown surface ids are dropped. `GET /api/chats/{name}/prompt-preview` shows the assembled prompt for a chat *after* this filtering — the honest way to check what she gets.
 
 ---
 

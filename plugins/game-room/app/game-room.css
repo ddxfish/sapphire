@@ -211,6 +211,8 @@
 .grs-act-row { display: flex; gap: 6px; align-items: center; }
 .grs-act-row .grs-act-verb { flex: 0 1 9em; min-width: 5em; }
 .grs-act-row .grs-act-resp { flex: 1 1 auto; min-width: 0; }
+/* response box doubles as the hold line while an "ask the player" row stands */
+.grs-act-row .grs-act-resp.grs-act-hold { border-style: dashed; }
 /* Action cards (the flip): one command per card, its own machinery
    behind the ⚙ disclosure — collapsed shows a plain-words summary */
 .grs-act-card {

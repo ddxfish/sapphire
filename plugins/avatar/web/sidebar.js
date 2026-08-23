@@ -90,6 +90,40 @@ export async function init(container) {
     const statusEl = container.querySelector('#avatar-status');
     if (!canvas) return;
 
+    // Enabled switch (Krem 2026-08-23): one server-side flag gates BOTH the
+    // scene (GPU) and the prompt instructions (hook). Off → nothing below
+    // this block runs; on → a fresh init builds the scene.
+    const displayBox = container.querySelector('#avatar-display');
+    const enabledCb = container.querySelector('#avatar-enabled');
+    const enabledNote = container.querySelector('#avatar-enabled-note');
+    let enabled = true;
+    try {
+        const r = await fetch('/api/plugin/avatar/config');
+        if (r.ok) enabled = (await r.json()).enabled !== false;
+    } catch (_) { /* default on */ }
+    if (myToken !== _initToken) return;
+    const paintEnabled = (on) => {
+        if (displayBox) displayBox.style.display = on ? '' : 'none';
+        if (enabledCb) enabledCb.checked = on;
+        if (enabledNote) enabledNote.style.display = on ? 'none' : '';
+    };
+    paintEnabled(enabled);
+    if (enabledCb) enabledCb.onchange = async () => {
+        const on = enabledCb.checked;
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        try {
+            await fetch('/api/plugin/avatar/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                body: JSON.stringify({ enabled: on }),
+            });
+        } catch (_) { /* the switch still applies locally this session */ }
+        if (on) { init(container); return; }      // rebuild the scene
+        if (_cleanup) _cleanup();                 // renderer.dispose() — GPU back
+        paintEnabled(false);
+    };
+    if (!enabled) return;
+
     // --- Display mode controls ---
     const displayEl = container.querySelector('#avatar-display');
     const btnExpand = container.querySelector('#avatar-btn-expand');

@@ -185,3 +185,29 @@ def test_two_sessions_do_not_collide(system, engine):
     assert set(active) == {"story-chat", "second"}
     sess.end(system, session="story-chat")
     assert set(st.get_active()) == {"second"}
+
+
+# ── Plugin surfaces (2026-08-23): the story owns the chat's `surface` ───────
+# Start stamps surface=game (presence plugins declared chat-only — avatar —
+# stop injecting); end hands it back; refresh_prompt (the reassert door)
+# heals runs started before the stamp existed.
+
+def test_start_stamps_game_surface_and_end_returns_it(system, engine):
+    sm = system.llm_chat.session_manager
+    sess.start(system, "goblin-den", session="story-chat")
+    assert sm.settings["story-chat"]["surface"] == "game"
+    assert "surface" not in sm.settings["main"]          # live chat untouched
+    sess.end(system, session="story-chat")
+    assert sm.settings["story-chat"]["surface"] == "chat"
+    # end's runtime leg never fires for a surface-only stamp (no toolset in
+    # the patch → would have applied 'all')
+    assert system.llm_chat.function_manager.calls == []
+
+
+def test_reassert_heals_missing_surface(system, engine, monkeypatch):
+    sm = system.llm_chat.session_manager
+    sess.start(system, "goblin-den", session="story-chat")
+    sm.settings["story-chat"].pop("surface")           # a run from before the stamp
+    monkeypatch.setattr(sess, "_activate_prompt_for", lambda *a, **k: None)
+    assert sess.refresh_prompt(system, session="story-chat")
+    assert sm.settings["story-chat"]["surface"] == "game"

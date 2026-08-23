@@ -422,9 +422,30 @@ function _renderRow(p, locked) {
                 <span class="pm-deps-text">Missing: ${_esc(p.missing_deps.join(', '))}</span>
                 <button class="btn btn-sm pm-deps-fix-btn" data-deps-plugin="${_esc(p.name)}">Install</button>
             </div>` : ''}
+            ${_surfacesStripHTML(p)}
             ${_envStripHTML(p)}
         </div>
     `;
+}
+
+// ── Plugin surfaces (2026-08-23) ─────────────────────────────────────────────
+// A plugin whose manifest declares `surfaces` (where its presence injections
+// belong — avatar: chat only) gets a "Show in" strip; the user's picks are a
+// per-plugin override core applies to prompt_inject/ghost_inject delivery.
+// Labels come from the list payload (core/hooks.py SURFACES).
+let _surfaceDefs = [];
+function _surfacesStripHTML(p) {
+    if (!Array.isArray(p.surfaces) || !_surfaceDefs.length) return '';
+    const active = new Set(p.surfaces_active || []);
+    return `
+        <div class="pm-surfaces" data-plugin-surfaces="${_esc(p.name)}">
+            <span class="pm-surfaces-label">Show in:</span>
+            ${_surfaceDefs.map(s => `
+            <label class="pm-surface-opt">
+                <input type="checkbox" data-surface="${_esc(s.id)}" ${active.has(s.id) ? 'checked' : ''}>
+                ${_esc(s.label)}
+            </label>`).join('')}
+        </div>`;
 }
 
 // ── Per-plugin conda environments ────────────────────────────────────────────
@@ -603,6 +624,7 @@ export default {
     description: 'Enable or disable feature plugins',
 
     render(ctx) {
+        _surfaceDefs = ctx.pluginSurfaces || _surfaceDefs;
         const visible = (ctx.pluginList || []).filter(p => !_isHidden(p));
         if (!visible.length) return '<p class="text-muted">No feature plugins available.</p>';
 
@@ -1077,6 +1099,29 @@ export default {
                 ui.showToast(`Update check failed: ${err.message}`, 'error');
                 btn.textContent = 'Check Update';
                 btn.disabled = false;
+            }
+        });
+
+        // ── Show in (plugin surfaces, delegated) ──
+        el.addEventListener('change', async e => {
+            const strip = e.target.closest('.pm-surfaces');
+            if (!strip || !e.target.matches('input[data-surface]')) return;
+            const name = strip.dataset.pluginSurfaces;
+            const chosen = [...strip.querySelectorAll('input[data-surface]:checked')]
+                .map(i => i.dataset.surface);
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            try {
+                const res = await fetch(`/api/plugins/${encodeURIComponent(name)}/surfaces`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+                    body: JSON.stringify({ surfaces: chosen }),
+                });
+                if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+                const p = (el._pluginCtx?.pluginList || []).find(x => x.name === name);
+                if (p) p.surfaces_active = chosen;
+                ui.showToast(chosen.length ? `${name}: shows in ${chosen.join(', ')}` : `${name}: hidden everywhere`, 'success', 1800);
+            } catch (err) {
+                ui.showToast(`Surfaces save failed: ${err.message}`, 'error');
             }
         });
 

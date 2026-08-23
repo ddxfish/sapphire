@@ -453,7 +453,10 @@ class LLMChat:
 
         # Plugin prompt_inject hook — append to context_parts
         if hook_runner.has_handlers("prompt_inject"):
-            inject_event = HookEvent(context_parts=context_parts, config=config)
+            # surface stamp: presence plugins (avatar…) only inject where
+            # they're actually shown — chat setting `surface`, default chat
+            inject_event = HookEvent(context_parts=context_parts, config=config,
+                                     surface=chat_settings.get("surface") or "chat")
             hook_runner.fire("prompt_inject", inject_event)
 
         # Combine all static context into main prompt

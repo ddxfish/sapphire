@@ -17,6 +17,7 @@
 import * as ui from '/static/ui.js';
 
 const PLUGIN_API = '/api/plugin/game-room/';
+const bootV = () => document.querySelector('meta[name="boot-version"]')?.content || '';
 
 function csrf() {
     return document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -689,7 +690,7 @@ function itemsPanel(slug, session, initialData) {
                 const lk = card._lw.readLocks() || {};
                 return { verb: card.querySelector('.grs-act-verb').value.trim(),
                          resp: card.querySelector('.grs-act-resp').value.trim(),
-                         cond: lk.cond || null, dice: lk.dice || null,
+                         cond: lk.cond || null, dice: lk.dice || null, sealed: lk.sealed || null,
                          fx: lk.fx || null, msg: lk.msg || '' };
             }).filter(a => a.verb),
         });
@@ -941,6 +942,20 @@ export async function openStorySettings(slug, opts = {}) {
 
     world.wire(overlay);
 
+    // 👁 full prompt — core's assembly, on demand (Krem 2026-08-23)
+    const loadBtn = overlay.querySelector('.grs-prompt-load');
+    if (loadBtn) loadBtn.onclick = async () => {
+        const view = overlay.querySelector('.grs-prompt-view');
+        loadBtn.disabled = true;
+        try {
+            const pp = await import(`./prompt-preview.js?v=${bootV()}`);
+            view.innerHTML = pp.promptPreviewHtml(await pp.fetchPromptPreview(opts.session));
+            view.style.display = '';
+            loadBtn.textContent = 'Reload full prompt';
+        } catch (e) { ui.showToast(e.message, 'error'); }
+        loadBtn.disabled = false;
+    };
+
     // ⏹ End story — moved from the toolbar into State (Krem 2026-08-21)
     const endBtn = overlay.querySelector('.grs-end-story');
     if (endBtn && opts.onEndStory) endBtn.onclick = async () => {
@@ -1111,6 +1126,10 @@ function stateTab(a) {
     return { title: 'State', html: `
         <div class="grs-section-title" style="margin-top:0">Behind the scenes — read-only snapshot at open</div>
         <table style="border-collapse:collapse;font-size:var(--font-sm,13px)">${rows}</table>
+        <div class="grs-section-title">\u{1F441} What she gets — verbatim</div>
+        <div style="opacity:.7;font-size:.85em;margin-bottom:6px">Core's own assembly for the next turn: persona, custom context, spice, every plugin injection (avatar, anything on this surface), then the per-turn envelope and the tools offered.</div>
+        <button type="button" class="pk-btn grs-prompt-load">Load full prompt</button>
+        <div class="grs-prompt-view" style="display:none;margin-top:8px"></div>
         <div class="grs-section-title">End of the tale</div>
         <button type="button" class="pk-btn danger grs-end-story" title="The journal is kept; the chat returns per your return settings">⏹ End story</button>` };
 }
@@ -1146,7 +1165,13 @@ const FX_TYPES = [
     ['xrem', 'remove prompt piece', 'piece name, e.g. hostile', ''],
     ['goto', 'move player to room', 'room number, e.g. 3', ''],
     ['show', 'show image (lightbox)', 'image — 📷 uploads', 'caption (optional)'],
+    // Sealed blank (2026-08-23): the player writes the reveal in a popup
+    // when she performs the verb. Compiles to the verb's `sealed` block,
+    // NOT an fx key — verbs only (exits/solve-fx use FX_BASE). While an
+    // ask row exists the action's response box is the hold message.
+    ['ask', 'ask the player (popup)', 'the question the popup asks', 'fallback if they skip (optional)'],
 ];
+const FX_BASE = FX_TYPES.filter(t => t[0] !== 'ask');
 // Exits: no riddle-solved (a riddle door = a door OBJECT with a riddle;
 // the exit then Requires "needs opened/used" on it) and no searched
 // (search finds objects; a found lever's flag makes the passage appear).
@@ -1292,15 +1317,21 @@ const objToDescriptor = (spec) => {
         solveFx: puz ? _fxOf(spec.on_solve || {}) : null,
         acts: Object.entries(spec.interactions || {})
             .filter(([, s]) => s && typeof s === 'object')
-            .map(([verb, s]) => ({
-                verb,
-                resp: s.message
-                    ?? (s.roll && s.roll.success && s.roll.success.message) ?? '',
-                cond: Object.keys(s.condition || {}).length ? { ...s.condition } : null,
-                dice: s.roll ? { sides: s.roll.sides, beat: s.roll.beat } : null,
-                fx: _fxOf(s.roll ? (s.roll.success || {}) : s),
-                msg: s.blocked_message || '',
-            })),
+            .map(([verb, s]) => {
+                // sealed verb: the player's text IS the response, so the
+                // response box carries the hold message instead
+                const sl = s.sealed && typeof s.sealed === 'object' ? s.sealed : null;
+                return {
+                    verb,
+                    resp: sl ? (typeof sl.hold_message === 'string' ? sl.hold_message : '')
+                        : (s.message ?? (s.roll && s.roll.success && s.roll.success.message) ?? ''),
+                    cond: Object.keys(s.condition || {}).length ? { ...s.condition } : null,
+                    dice: s.roll ? { sides: s.roll.sides, beat: s.roll.beat } : null,
+                    fx: _fxOf(s.roll ? (s.roll.success || {}) : s),
+                    msg: s.blocked_message || '',
+                    sealed: sl ? { ask: sl.ask ?? '', fallback: sl.fallback ?? '' } : null,
+                };
+            }),
     };
 };
 // descriptor (+ passenger source) → spec. ONE compile for the user-object
@@ -1321,7 +1352,16 @@ const compileObj = (name, d, src) => {
             v.condition = { ...a.cond };
             if (a.msg) v.blocked_message = a.msg;
         }
-        if (a.dice) {
+        if (a.sealed) {
+            // the engine answers with the player's words — no message;
+            // effects fire at reveal time. A roll never runs on a sealed
+            // verb (referee returns at the seal), so none is emitted: a
+            // shipped sealed+roll fails the round trip → read-only.
+            v.sealed = { ask: a.sealed.ask };
+            if (a.resp) v.sealed.hold_message = a.resp;
+            if (a.sealed.fallback) v.sealed.fallback = a.sealed.fallback;
+            if (a.fx) Object.assign(v, a.fx);
+        } else if (a.dice) {
             // chance replaces the flat outcome: response + effects
             // ride the success branch
             v.roll = { sides: a.dice.sides, beat: a.dice.beat,
@@ -1349,6 +1389,9 @@ const compileObj = (name, d, src) => {
             const sv = sints[verb];
             if (!sv || typeof sv !== 'object') continue;
             if (sv.aliases != null) v.aliases = sv.aliases;
+            // seal countdown is a tuning knob, not authoring — rides verbatim
+            if (v.sealed && sv.sealed && typeof sv.sealed === 'object' && sv.sealed.wait != null)
+                v.sealed.wait = sv.sealed.wait;
             if (v.roll && sv.roll && typeof sv.roll === 'object') {
                 if (sv.roll.failure) v.roll.failure = { ...sv.roll.failure };
                 // once-dice metadata rides the roll it belongs to (the
@@ -1388,20 +1431,25 @@ const _fxFitsO = (f) => !f || Object.entries(f).every(([k, v]) =>
     || (k === 'show' && _showFits(v)));
 const _diceFitsO = (d) => !d
     || ((d.sides === 20 || d.sides === 100) && Number.isFinite(d.beat));
+// ask row = one non-empty question + optional string fallback (the
+// round trip already rejects extra seal keys and a dead roll beside it)
+const _sealFitsO = (s) => !s
+    || (typeof s.ask === 'string' && s.ask.trim() !== '' && typeof s.fallback === 'string');
 const objFits = (name, spec) => {
     const d = objToDescriptor(spec);
     return deepEq(compileObj(name, d, spec), spec)
         && _condFitsO(d.visCond, ['has', 'did', 'flag'])
         && _fxFitsO(d.solveFx)
         && d.acts.every(a => _condFitsO(a.cond, ['has', 'did', 'flag', 'solved'])
-                             && _fxFitsO(a.fx) && _diceFitsO(a.dice));
+                             && _fxFitsO(a.fx) && _diceFitsO(a.dice) && _sealFitsO(a.sealed));
 };
 const objMarks = (spec) => {
     const ints = Object.values(spec.interactions || {}).filter(s => s && typeof s === 'object');
     return (spec.hidden || spec.condition ? ' \u{1F32B}\u{FE0F}' : '')
         + (spec.takeable ? ' \u{1F392}' : '')
         + (spec.puzzle || ints.some(v => v.condition) ? ' \u{1F512}' : '')
-        + (ints.some(v => v.roll) ? ' \u{1F3B2}' : '');
+        + (ints.some(v => v.roll) ? ' \u{1F3B2}' : '')
+        + (ints.some(v => v.sealed) ? ' \u{270D}' : '');
 };
 const objMechWords = (spec) => {
     const bits = [];
@@ -1458,12 +1506,24 @@ function makeActCard(host, a, opts) {
     const gear = card.querySelector('.grs-act-gear');
     const sum = card.querySelector('.grs-act-sum');
     const mech = card.querySelector('.grs-act-mech');
+    const resp = card.querySelector('.grs-act-resp');
+    const RESP_PH = resp.placeholder;
+    // ask row present → the player's words are the response; the box
+    // becomes the hold line she gets while the popup waits
+    const relabel = () => {
+        const sealed = !!(card._lw && (card._lw.readLocks() || {}).sealed);
+        resp.placeholder = sealed
+            ? 'hold message (optional) — what she gets while the popup waits for the player'
+            : RESP_PH;
+        resp.classList.toggle('grs-act-hold', sealed);
+    };
     card._lw = locksWidget(card, { types: { req: REQ_TYPES, fx: FX_TYPES },
-                                   pieceList: opts.pieceList });
+                                   pieceList: opts.pieceList, onChange: relabel });
     if (a) {
         card.querySelector('.grs-act-verb').value = a.verb || '';
-        card.querySelector('.grs-act-resp').value = a.resp || '';
-        card._lw.prefill({ cond: a.cond, roll: a.dice, fx: a.fx || {}, msg: a.msg });
+        resp.value = a.resp || '';
+        card._lw.prefill({ cond: a.cond, roll: a.dice, fx: a.fx || {}, msg: a.msg,
+                           sealed: a.sealed || null });
     }
     // collapsed = a plain-words summary of what's inside
     const paintSum = () => {
@@ -1472,6 +1532,7 @@ function makeActCard(host, a, opts) {
         const bits = [];
         if (lk.cond) bits.push('\u{1F512} ' + _condWords(lk.cond));
         if (lk.dice) bits.push(`\u{1F3B2} d${lk.dice.sides} beat ${lk.dice.beat}`);
+        if (lk.sealed) bits.push(`\u{270D} player writes: ${lk.sealed.ask}`);
         if (lk.fx) bits.push('⚡ ' + _fxWords(lk.fx));
         sum.textContent = bits.join(' · ');
         sum.style.display = bits.length ? '' : 'none';
@@ -1502,7 +1563,7 @@ function locksWidget(form, opts) {
     const visRows = q('.grs-vis-rows'), reqRows = q('.grs-req-rows'), fxRows = q('.grs-fx-rows');
     const lockMsg = q('.grs-lock-msg');
     for (const [t, b] of [[visToggle, visBody], [reqToggle, reqBody], [fxToggle, fxBody]])
-        if (t) t.onchange = () => { b.style.display = t.checked ? '' : 'none'; };
+        if (t) t.onchange = () => { b.style.display = t.checked ? '' : 'none'; sync(); };
     const pickRow = (host, tlist, kind, val, extra) => {
         const row = document.createElement('div');
         row.className = 'grs-act-row';
@@ -1550,13 +1611,30 @@ function locksWidget(form, opts) {
                 ui.showToast('Image stored — save the action to apply', 'success', 2200);
             } catch (e) { ui.showToast(e.message, 'error'); }
         };
-        sel.onchange = paint;
+        sel.onchange = () => { paint(); sync(); };
         paint();
         vIn.value = val || '';
         xIn.value = extra || '';
-        row.querySelector('.grs-act-del').onclick = () => row.remove();
+        row.querySelector('.grs-act-del').onclick = () => { row.remove(); sync(); };
         host.appendChild(row);
+        sync();
         return row;
+    };
+    // One outcome per verb: a sealed reveal and a dice roll can't share an
+    // action (the engine answers at the seal and never rolls), so each
+    // kind's option greys out in the dropdowns while the other is picked.
+    // Also the hosts' change hook (the action card relabels its response
+    // box as the hold message while an ask row stands).
+    const sync = () => {
+        if (reqRows && fxRows) {
+            const hasAsk = rawRows(fxRows).some(x => x.kind === 'ask');
+            const hasDice = rawRows(reqRows).some(x => x.kind === 'd20' || x.kind === 'd100');
+            for (const o of reqRows.querySelectorAll('option[value="d20"],option[value="d100"]'))
+                o.disabled = hasAsk && !o.selected;
+            for (const o of fxRows.querySelectorAll('option[value="ask"]'))
+                o.disabled = hasDice && !o.selected;
+        }
+        if (opts.onChange) opts.onChange();
     };
     for (const [sel, host, tlist, focus] of [
         ['.grs-vis-add', visRows, types.vis, '.grs-pick-kind'],
@@ -1579,6 +1657,7 @@ function locksWidget(form, opts) {
         for (const l of [visLabel, reqLabel, fxLabel].filter(Boolean)) l.style.display = '';
         for (const h of [visRows, reqRows, fxRows].filter(Boolean)) h.innerHTML = '';
         if (lockMsg) lockMsg.value = '';
+        sync();
     };
     const showAuthoring = (on) => {
         for (const l of [visLabel, reqLabel, fxLabel].filter(Boolean)) l.style.display = on ? '' : 'none';
@@ -1620,8 +1699,10 @@ function locksWidget(form, opts) {
             }
         }
         const fx = {};
+        let sealed = null;
         if (fxOn) for (const x of rowsOf(fxRows)) {
-            if (x.kind === 'set') (fx.set = fx.set || {})[x.val] = true;
+            if (x.kind === 'ask') { if (!sealed) sealed = { ask: x.val, fallback: x.extra }; }
+            else if (x.kind === 'set') (fx.set = fx.set || {})[x.val] = true;
             else if (x.kind === 'clear') (fx.set = fx.set || {})[x.val] = false;
             else if (x.kind === 'give' && !fx.gives) fx.gives = x.val;
             else if (x.kind === 'adjust') {
@@ -1639,10 +1720,11 @@ function locksWidget(form, opts) {
             }
         }
         const out = { cond: Object.keys(cond).length ? cond : null,
-                      dice,
+                      dice: sealed ? null : dice,     // one outcome per verb
+                      sealed,
                       fx: Object.keys(fx).length ? fx : null,
                       msg: lockMsg ? lockMsg.value.trim() : '' };
-        return (out.cond || out.dice || out.fx) ? out : null;
+        return (out.cond || out.dice || out.fx || out.sealed) ? out : null;
     };
 
     // descriptor → rows (edit round-trip)
@@ -1686,6 +1768,11 @@ function locksWidget(form, opts) {
                 pickRow(fxRows, types.fx, 'show', sh.image || '', sh.caption || '');
                 anyFx = true;
             }
+            // ask row first so the seal leads the list the player reads
+            if (d.sealed) {
+                fxRows.prepend(pickRow(fxRows, types.fx, 'ask', d.sealed.ask, d.sealed.fallback || ''));
+                anyFx = true;
+            }
         }
         // A refusal message alone is dead data — it only shows when a
         // lock fails. Stage it in the field (recoverable if a lock is
@@ -1699,6 +1786,7 @@ function locksWidget(form, opts) {
             t.checked = on;
             b.style.display = on ? '' : 'none';
         }
+        sync();                            // toggles just changed → hosts relabel
     };
 
     return { readVis, readLocks, prefill, clear, showAuthoring };
@@ -2212,7 +2300,7 @@ function objectsTab(slug, session, data) {
         const exReturnLabel = exitForm.querySelector('.grs-ex-return-label');
         const exSave = exitForm.querySelector('.grs-ex-save');
         const exReset = exitForm.querySelector('.grs-ex-reset');
-        const xw = locksWidget(exitForm, { types: { vis: EXIT_VIS, req: EXIT_REQ, fx: FX_TYPES },
+        const xw = locksWidget(exitForm, { types: { vis: EXIT_VIS, req: EXIT_REQ, fx: FX_BASE },
                                            pieceList: 'grs-piece-list' });
         let exEditing = null;   // destination id while editing, else null
 
@@ -2422,7 +2510,7 @@ function objectsTab(slug, session, data) {
         const visW = locksWidget(addForm.querySelector('.grs-obj-vis'),
                                  { types: { vis: VIS_TYPES } });
         const ridFxW = locksWidget(addForm.querySelector('.grs-obj-ridfx'),
-                                   { types: { fx: FX_TYPES }, pieceList: 'grs-piece-list' });
+                                   { types: { fx: FX_BASE }, pieceList: 'grs-piece-list' });
         const ridToggle = addForm.querySelector('.grs-rid-toggle');
         const ridLabel = addForm.querySelector('.grs-rid-label');
         const ridBody = addForm.querySelector('.grs-rid-body');
@@ -2468,7 +2556,7 @@ function objectsTab(slug, session, data) {
                 const lk = card._lw.readLocks() || {};
                 return { verb: card.querySelector('.grs-act-verb').value.trim(),
                          resp: card.querySelector('.grs-act-resp').value.trim(),
-                         cond: lk.cond || null, dice: lk.dice || null,
+                         cond: lk.cond || null, dice: lk.dice || null, sealed: lk.sealed || null,
                          fx: lk.fx || null, msg: lk.msg || '' };
             }).filter(a => a.verb);
             const vis = visW.readVis() || {};

@@ -160,6 +160,7 @@ def build_ghost_message(
         ghost_event = HookEvent(
             input=user_input,
             metadata={"system": system},
+            surface=(chat_settings or {}).get("surface") or "chat",
         )
         try:
             hook_runner.fire("ghost_inject", ghost_event)

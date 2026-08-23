@@ -296,3 +296,11 @@
 
     <div id="avatar-status" style="position:absolute; bottom:4px; left:0; right:0; text-align:center; font-size:0.7rem; color:var(--text-muted); pointer-events:none;"></div>
 </div>
+<!-- Enabled switch (Krem 2026-08-23): off = the 3D scene is torn down (the
+     browser's GPU share comes back, the render loop stops) AND the prompt
+     instructions stop — one switch, both halves. Stored server-side. -->
+<label id="avatar-enabled-row" style="display:flex; align-items:center; gap:8px; margin-top:6px; font-size:0.85em; cursor:pointer;">
+    <input type="checkbox" id="avatar-enabled" checked style="margin:0;">
+    <span>Enabled</span>
+    <span id="avatar-enabled-note" style="color:var(--text-muted); font-size:0.9em; display:none;">— off: no render, no prompt instructions</span>
+</label>

@@ -1253,6 +1253,56 @@ async def get_chat_settings(chat_name: str, request: Request, _=Depends(require_
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/chats/{chat_name}/prompt-preview")
+async def chat_prompt_preview(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
+    """The system prompt and ghost envelope EXACTLY as the next turn on this
+    chat would carry them — persona template, custom context, spice, every
+    plugin prompt_inject (surface-filtered), the ghost rail — plus the tool
+    names. Built by the same assembly a turn uses (`_get_system_prompt` /
+    `build_ghost_message`); a non-active chat rides the stream-brain
+    override like any stream on it. Read-only: hooks fire as on a turn,
+    nothing is persisted. (Krem 2026-08-23: the story room's 👁 preview was
+    assembled client-side and never showed plugin injections.)"""
+    from core.chat import stream_brain
+    from core import prompts, ghost_messages
+    llm = system.llm_chat
+    sm = llm.session_manager
+    token = None
+    try:
+        sess = None
+        if chat_name != sm.active_chat_name:
+            sess = sm.make_stream_session(chat_name)
+            if not sess:
+                raise HTTPException(status_code=404, detail=f"Chat '{chat_name}' not found")
+            pn = sess["settings"].get("prompt", "default")
+            pd = prompts.get_prompt(pn)
+            if not isinstance(pd, dict):
+                pd = prompts.get_prompt("default")
+            sess["system_prompt"] = (pd.get("content", "") if isinstance(pd, dict) else "") or ""
+            sess["tools"] = llm._resolve_toolset_tools(
+                sess["settings"].get("toolset", "all"), sess["settings"].get("extra_toolsets"))
+            token = stream_brain.set_override(sess)
+        settings = sm.get_chat_settings()
+        prompt, _user, _ = llm._get_system_prompt()
+        ghost = ghost_messages.build_ghost_message(system, settings, "")
+        if sess is not None:
+            names = sorted(t["function"]["name"] for t in (sess["tools"] or []))
+        else:
+            try:
+                names = sorted(llm.function_manager.get_enabled_function_names() or [])
+            except Exception:
+                names = []
+        return {"chat": chat_name, "system_prompt": prompt, "ghost": ghost or "",
+                "tools": names, "surface": settings.get("surface") or "chat"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if token is not None:
+            stream_brain.reset_override(token)
+
+
 @router.put("/api/chats/{chat_name}/settings")
 async def update_chat_settings(chat_name: str, request: Request, _=Depends(require_login), system=Depends(get_system)):
     """Update settings for active chat."""

@@ -532,32 +532,26 @@ async function initToolsetBlock() {
     });
 }
 
-// The critical feature (Krem 2026-08-03): EXACTLY what she gets — the
-// rendered system prompt + the per-turn state block, verbatim from
-// story/inspect, plus the custom-context rider if one is set.
+// The critical feature (Krem 2026-08-03): EXACTLY what she gets. Since
+// 2026-08-23 this is core's own assembly (/api/chats/{chat}/prompt-preview):
+// persona + custom context + spice + EVERY plugin prompt_inject (surface-
+// filtered — avatar, etc.) and the real ghost envelope (story state block
+// rides inside it). The old client-side stitch silently omitted plugin
+// injections — Krem caught avatar instructions she was getting unseen.
 async function previewModal() {
-    let data;
-    try { data = await api('story/inspect'); }
-    catch (e) { ui.showToast(e.message, 'error'); return; }
-    if (!data.active) { ui.showToast('No active story to preview.', 'warning'); return; }
-    const esc = room.esc;
+    let pp, data;
+    try {
+        pp = await import(`./prompt-preview.js?v=${bootV()}`);
+        data = await pp.fetchPromptPreview(_session);
+    } catch (e) { ui.showToast(e.message, 'error'); return; }
     document.getElementById('st-modal')?.remove();
     const wrap = document.createElement('div');
     wrap.id = 'st-modal';
     wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:10000';
-    const rider = (_chatSettings.custom_context || '').trim();
-    const pre = 'white-space:pre-wrap;background:var(--bg-secondary,#161b26);border:1px solid var(--border,#333);border-radius:8px;padding:12px;font-size:var(--font-sm,12.5px);line-height:1.5;overflow:auto;margin:6px 0 14px';
     wrap.innerHTML = `
         <div style="background:var(--bg-primary,#0f1020);color:var(--text,#e1e1e6);padding:20px 24px;border-radius:10px;width:min(860px,92vw);max-height:86vh;overflow:auto;border:1px solid var(--border,#333)">
             <h3 style="margin:0 0 4px">&#x1F441; What she gets — verbatim</h3>
-            <div style="color:var(--text-muted);font-size:var(--font-sm,12.5px);margin-bottom:10px">
-                System prompt below, state block rides every turn.${rider ? '' : ' No custom-context rider set.'}</div>
-            <b>System prompt</b>
-            <div style="${pre}">${esc(data.prompt || '(empty)')}</div>
-            ${rider ? `<b>Custom context rider (per-chat setting, appended by core)</b>
-            <div style="${pre}">${esc(rider)}</div>` : ''}
-            <b>State block (this turn)</b>
-            <div style="${pre}">${esc(data.ghost || '(empty)')}</div>
+            ${pp.promptPreviewHtml(data)}
             <div style="display:flex;justify-content:flex-end">
                 <button class="btn-sm" id="st-modal-close">Close</button>
             </div>

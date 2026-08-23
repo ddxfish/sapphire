@@ -118,6 +118,20 @@ class HookEvent:
     ephemeral: bool = False
     chat_name: Optional[str] = None
     chat_private: Optional[bool] = None
+    # Surface this turn's chat is on ('chat', 'game'…) — stamped by the fire
+    # site from the chat's `surface` setting. Presence hooks (prompt_inject /
+    # ghost_inject) are withheld from plugins whose surfaces exclude it.
+    # None = unknown → deliver to all (plugin surfaces, 2026-08-23).
+    surface: Optional[str] = None
+
+
+# The surfaces a chat can be shown on. A plugin's manifest `surfaces` list
+# (top-level, like privacy_aware) names where its PRESENCE injections
+# belong — an avatar that only renders in the chat view has no business
+# telling her she's visible in a story. Absent = everywhere. The user
+# overrides per plugin from the Plugins page (plugin-state `surfaces`).
+SURFACES = (("chat", "Chat"), ("game", "Game Room"))
+SURFACE_HOOKS = frozenset({"prompt_inject", "ghost_inject"})
 
 
 class HookRunner:
@@ -155,6 +169,22 @@ class HookRunner:
         # plugins whose manifest declares privacy_aware register here.
         self._privacy_resolver: Optional[Callable] = None
         self._privacy_aware: set = set()
+        # {plugin_name: frozenset(surfaces)} — only plugins that declared
+        # (or were overridden) appear here; absent = everywhere.
+        self._surfaces: Dict[str, frozenset] = {}
+
+    def set_surfaces(self, plugin_name: str, surfaces):
+        """Record where a plugin's presence hooks belong (effective list:
+        user override if set, else the manifest default). None/non-list
+        clears the restriction."""
+        if isinstance(surfaces, (list, tuple, set, frozenset)):
+            self._surfaces[plugin_name] = frozenset(str(s) for s in surfaces)
+        else:
+            self._surfaces.pop(plugin_name, None)
+
+    def surfaces_of(self, plugin_name: str):
+        s = self._surfaces.get(plugin_name)
+        return sorted(s) if s is not None else None
 
     def set_privacy_resolver(self, resolver: Optional[Callable]):
         """Install the (chat_name, is_private) resolver. None uninstalls
@@ -206,6 +236,7 @@ class HookRunner:
         for hook_name in list(self._hooks.keys()):
             self.unregister(hook_name, plugin_name)
         self._privacy_aware.discard(plugin_name)
+        self._surfaces.pop(plugin_name, None)
 
     def _ensure_sorted(self, hook_name: str):
         if not self._sorted.get(hook_name, True):
@@ -272,12 +303,19 @@ class HookRunner:
                     event.chat_private = True
 
         withhold = bool(event.chat_private) and hook_name not in self.ALWAYS_DELIVER
+        surface = event.surface if hook_name in SURFACE_HOOKS else None
 
         for priority, handler, plugin_name, voice_match in snapshot:
             if withhold and plugin_name not in self._privacy_aware:
                 logger.debug(f"[HOOKS] '{hook_name}' withheld from {plugin_name} "
                              f"(private chat, plugin not privacy_aware)")
                 continue
+            if surface is not None:
+                allowed = self._surfaces.get(plugin_name)
+                if allowed is not None and surface not in allowed:
+                    logger.debug(f"[HOOKS] '{hook_name}' withheld from {plugin_name} "
+                                 f"(surface '{surface}' not in {sorted(allowed)})")
+                    continue
             if not self._check_voice_match(voice_match, event.input):
                 continue
 
@@ -332,6 +370,7 @@ class HookRunner:
             self._sorted.clear()
             self._privacy_resolver = None
             self._privacy_aware.clear()
+            self._surfaces.clear()
 
 
 # Singleton

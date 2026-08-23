@@ -43,6 +43,7 @@ let providerMeta = {};
 let dynamicTabs = [];
 let pluginList = [];
 let lockedPlugins = [];
+let pluginSurfaces = [];   // [{id,label}] — the app's surfaces (plugin 'Show in' strip)
 let mobileMenuCleanup = null;
 let managed = false;
 let docker = false;
@@ -92,6 +93,7 @@ async function loadPluginList() {
             const d = await res.json();
             pluginList = d.plugins || [];
             lockedPlugins = d.locked || [];
+            pluginSurfaces = d.surfaces || [];
             // Auto-load settings tabs for enabled plugins that have a web UI.
             // Parallelized — sequential awaits here were making Settings tab load ~N*RTT
             // slow (once per enabled plugin). Promise.all gives us max(RTT) instead.
@@ -353,7 +355,7 @@ function createCtx() {
     return {
         settings, help, overrides, pendingChanges, managed, docker, unrestricted,
         wakewordModels, availableThemes, avatarPaths, providerMeta,
-        pluginList, lockedPlugins,
+        pluginList, lockedPlugins, pluginSurfaces,
         renderFields, renderAccordion, renderInput, formatLabel,
         attachAccordionListeners,
         markChanged(key, value) { pendingChanges[key] = value; },

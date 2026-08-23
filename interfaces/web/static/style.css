@@ -6254,6 +6254,22 @@ a.gallery-caption:hover {
 }
 .pm-row .pm-deps-text { word-break: break-word; min-width: 0; }
 
+/* "Show in" strip — plugins that declare surfaces (where their presence
+   injections belong); checkboxes write a per-plugin override */
+.pm-row .pm-surfaces {
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    align-items: center;
+    margin-top: 4px;
+    font-size: 0.82em;
+    color: var(--text-muted);
+}
+.pm-surfaces-label { opacity: .8; }
+.pm-surface-opt { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; color: var(--text-light); }
+.pm-surface-opt input { margin: 0; }
+
 /* Search input rides the filter-pill row */
 .pm-search {
     margin-left: auto;

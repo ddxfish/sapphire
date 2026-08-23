@@ -46,6 +46,7 @@ def _get_config():
     return {
         'active_model': active,
         'models': models,
+        'enabled': state.get('enabled', True),
         'inject_prompt': state.get('inject_prompt', True),
         'strip_tags': state.get('strip_tags', False),
         'user_tags': state.get('user_tags', False),
@@ -223,6 +224,10 @@ async def save_config(**kwargs):
             cfg['models'][model_name] = model_cfg
 
     # Update global avatar settings
+    if 'enabled' in body:
+        # The accordion's Enabled switch (Krem 2026-08-23): off = no render
+        # (frees the browser's GPU share) AND no prompt instructions.
+        _get_state().save('enabled', bool(body['enabled']))
     if 'inject_prompt' in body:
         state = _get_state()
         state.save('inject_prompt', bool(body['inject_prompt']))

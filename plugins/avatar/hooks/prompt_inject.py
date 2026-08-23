@@ -36,7 +36,8 @@ def prompt_inject(event):
     try:
         from core.plugin_loader import plugin_loader
         state = plugin_loader.get_plugin_state("avatar")
-        if not state.get("inject_prompt", True):
+        # Enabled switch (accordion) and inject_prompt (settings page) both gate
+        if not state.get("enabled", True) or not state.get("inject_prompt", True):
             return
     except Exception:
         pass

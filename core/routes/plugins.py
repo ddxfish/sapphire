@@ -367,6 +367,10 @@ async def list_plugins(request: Request, _=Depends(require_login)):
                     "band": info.get("band"),
                     "has_script": has_script,
                     "sidebar_accordion": manifest.get("capabilities", {}).get("sidebar_accordion"),
+                    # plugin surfaces (2026-08-23): manifest default + the
+                    # effective list (user override wins); None = everywhere
+                    "surfaces": manifest.get("surfaces") if isinstance(manifest.get("surfaces"), list) else None,
+                    "surfaces_active": plugin_loader.effective_surfaces(info["name"], manifest),
                     "missing_deps": info.get("missing_deps", []),
                     "essential": manifest.get("essential", False),
                     "env": info.get("env"),
@@ -378,7 +382,33 @@ async def list_plugins(request: Request, _=Depends(require_login)):
         # if that ever happens the user must at least see why in the log.
         logger.warning(f"[PLUGINS] Backend plugin listing failed mid-loop: {e}", exc_info=True)
 
-    return {"plugins": result, "locked": LOCKED_PLUGINS}
+    from core.hooks import SURFACES
+    return {"plugins": result, "locked": LOCKED_PLUGINS,
+            "surfaces": [{"id": s, "label": l} for s, l in SURFACES]}
+
+
+@router.put("/api/plugins/{plugin_name}/surfaces")
+async def set_plugin_surfaces(plugin_name: str, request: Request, _=Depends(require_login)):
+    """Where this plugin's presence injections show up (Plugins page
+    'Show in' strip). Body {"surfaces": [...]} stores a per-plugin override;
+    {"surfaces": null} returns to the manifest default. Only plugins that
+    declare `surfaces` in their manifest have anything to override."""
+    from core.hooks import SURFACES
+    from core.plugin_loader import plugin_loader
+    info = plugin_loader._plugins.get(plugin_name)
+    if not info:
+        raise HTTPException(status_code=404, detail="Plugin not found")
+    if not isinstance((info.get("manifest") or {}).get("surfaces"), list):
+        raise HTTPException(status_code=400, detail="Plugin does not declare surfaces")
+    body = await request.json()
+    chosen = body.get("surfaces")
+    if chosen is not None:
+        if not isinstance(chosen, list):
+            raise HTTPException(status_code=400, detail="surfaces must be a list or null")
+        known = {s for s, _ in SURFACES}
+        chosen = [s for s in chosen if isinstance(s, str) and s in known]
+    eff = plugin_loader.set_surfaces_override(plugin_name, chosen)
+    return {"success": True, "surfaces_active": eff}
 
 
 @router.put("/api/webui/plugins/toggle/{plugin_name}")

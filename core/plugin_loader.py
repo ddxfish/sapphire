@@ -617,6 +617,10 @@ class PluginLoader:
         # ruling F2): only plugins declaring it receive hooks for private-chat
         # turns — undeclared plugins are withheld, fail-closed.
         hook_runner.mark_privacy_aware(name, bool(manifest.get("privacy_aware")))
+        # Plugin surfaces (2026-08-23): manifest `surfaces` = where this
+        # plugin's presence injections belong; the user's override (plugin
+        # state `surfaces`, Plugins page) wins. Absent = everywhere.
+        hook_runner.set_surfaces(name, self.effective_surfaces(name, manifest))
         hooks = capabilities.get("hooks", {})
         for hook_name, handler_path in hooks.items():
             handler_func = self._load_handler(plugin_dir, handler_path, hook_name)
@@ -2166,6 +2170,33 @@ class PluginLoader:
             if name not in self._plugin_state_cache:
                 self._plugin_state_cache[name] = PluginState(name)
             return self._plugin_state_cache[name]
+
+    def effective_surfaces(self, name: str, manifest: dict = None):
+        """Where a plugin's presence hooks fire: the user's override (plugin
+        state `surfaces`) if it is a list, else the manifest's `surfaces`,
+        else None (= everywhere). Unknown surface ids are dropped."""
+        from core.hooks import SURFACES
+        known = {s for s, _ in SURFACES}
+        if manifest is None:
+            manifest = (self._plugins.get(name) or {}).get("manifest") or {}
+        declared = manifest.get("surfaces")
+        if not isinstance(declared, list):
+            return None
+        override = self.get_plugin_state(name).get("surfaces")
+        chosen = override if isinstance(override, list) else declared
+        return [s for s in chosen if s in known]
+
+    def set_surfaces_override(self, name: str, surfaces):
+        """Persist the user's per-plugin surfaces choice (None = back to the
+        manifest default) and apply it to the live runner."""
+        state = self.get_plugin_state(name)
+        if surfaces is None:
+            state.delete("surfaces")
+        else:
+            state.save("surfaces", list(surfaces))
+        eff = self.effective_surfaces(name)
+        hook_runner.set_surfaces(name, eff)
+        return eff
 
     _chat_state_cache: dict = {}
 

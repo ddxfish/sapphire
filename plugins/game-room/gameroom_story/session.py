@@ -98,6 +98,12 @@ def refresh_prompt(system, session=None):
         return False
     prompt_name = _register_prompt(story, state, (st.get_active_entry(chat) or {}), chat)
     _activate_prompt_for(system, chat, prompt_name)
+    # Surface stamp rides the same door (plugin surfaces, 2026-08-23): an
+    # active story chat is on the game surface — presence plugins that
+    # only live in the chat view (avatar) stop injecting here. Asserted on
+    # entry so runs started before the stamp existed heal too.
+    if _settings_for(system, chat).get("surface") != "game":
+        _stamp_settings(system, chat, {"surface": "game"}, runtime_toolset=False)
     return True
 
 
@@ -823,7 +829,8 @@ def _start(system, slug, character, mode, local, session, slots=None):
     # Stamp the story cockpit: none of hers + the referee (ruling 2026-08-03).
     # Users change it after via the sidebar; the checkbox is extra_toolsets.
     _stamp_settings(system, chat, {"toolset": "none",
-                                   "extra_toolsets": [STORY_TOOLS_MODULE]})
+                                   "extra_toolsets": [STORY_TOOLS_MODULE],
+                                   "surface": "game"})
 
     events = [{"event": "started", "story": slug, "room": start_room["id"], "turn": 0}]
     # Story-declared starting stats (HP, gold, ...) seed as replayable events
@@ -841,7 +848,8 @@ def _start(system, slug, character, mode, local, session, slots=None):
             st.clear_active(chat)
             _stamp_settings(system, chat,
                             {"toolset": cur.get("toolset", "all"),
-                             "extra_toolsets": cur.get("extra_toolsets") or []})
+                             "extra_toolsets": cur.get("extra_toolsets") or [],
+                             "surface": cur.get("surface") or "chat"})
         except Exception:
             pass
         return ("The journal refused the opening write — story not started "
@@ -1145,7 +1153,11 @@ def _end(system, session):
     if ret and "prev_toolset" in entry:
         _stamp_settings(system, chat,
                         {"toolset": entry.get("prev_toolset") or "all",
-                         "extra_toolsets": entry.get("prev_extras") or []})
+                         "extra_toolsets": entry.get("prev_extras") or [],
+                         "surface": "chat"})
+    else:
+        # cockpit stays, but the story no longer owns the chat's surface
+        _stamp_settings(system, chat, {"surface": "chat"}, runtime_toolset=False)
     st.clear_active(chat)
     # v1.3: the journal lives on this chat's rows now — kept until the chat
     # itself is deleted, sealed if the chat is.
