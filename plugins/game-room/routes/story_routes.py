@@ -191,11 +191,16 @@ def get_story_settings(slug, **_):
         {'key': 'gm_universal', 'label': 'GM style — shared by ALL stories',
          'type': 'text', 'rows': 9, 'tab': gm_tab,
          'default': sess.UNIVERSAL_GM_DEFAULT},
+        {'key': 'one_move_per_turn',
+         'label': 'Max one move per turn — the engine refuses a second move until '
+                  'the player\'s next message (all stories)',
+         'type': 'checkbox', 'tab': gm_tab, 'default': True},
     ]
     settings.update({
         'dm_guide': (mine.get('dm_guide') or '').strip() or (meta.get('dm_guide') or ''),
         'use_universal': sess._as_bool(mine.get('use_universal'), True),
         'gm_universal': (uni.get('text') or '').strip() or sess.UNIVERSAL_GM_DEFAULT,
+        'one_move_per_turn': sess._as_bool(uni.get('one_move_per_turn'), True),
     })
     return {'story': slug, 'title': meta.get('title', slug),
             'schema': schema, 'settings': settings}
@@ -211,8 +216,16 @@ def set_story_settings(slug, body=None, **_):
     if slug not in rooms.list_stories():
         return ({'error': f'Unknown story: {slug}'}, 404)
     vals = (body or {}).get('settings') or {}
-    if 'gm_universal' in vals:
-        sess._store().save('storycfg:universal', {'text': str(vals['gm_universal']).strip()})
+    # The universal record carries the shared GM text AND the global laws
+    # (one_move_per_turn) — merge, never replace, so a text save can't
+    # silently reset a switch.
+    if 'gm_universal' in vals or 'one_move_per_turn' in vals:
+        uni = sess._store().get('storycfg:universal') or {}
+        if 'gm_universal' in vals:
+            uni['text'] = str(vals['gm_universal']).strip()
+        if 'one_move_per_turn' in vals:
+            uni['one_move_per_turn'] = sess._as_bool(vals['one_move_per_turn'], True)
+        sess._store().save('storycfg:universal', uni)
     mine = sess._store().get(f'storycfg:{slug}') or {}
     if 'use_universal' in vals:
         mine['use_universal'] = sess._as_bool(vals['use_universal'], True)

@@ -135,6 +135,8 @@ def test_on_enter_override_fires_on_arrival_and_clear_strips(story, cfg_store):
     # the fixture's hall door is flag-gated — open it the replayable way
     assert st.append("mad-manse", chat, {"event": "state_set", "key": "chest_opened",
                                          "value": True, "turn": 1})
+    # the player's message ticks before she acts (one-move-per-turn law)
+    assert st.append("mad-manse", chat, {"event": "turn_tick", "turn": 1})
     msg, ok = session.act(None, "move", label, session=chat)
     assert ok, msg
     s3, state3 = session.load_active(chat)

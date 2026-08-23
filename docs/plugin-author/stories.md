@@ -192,6 +192,8 @@ One trigger rule: the popup only ever raises because **she reached for the blank
 
 If your pack ships a `role`, a playthrough defaults to **story mode**: full identity swap, the prompt registers under the role's name, and the 👁 preview shows the player byte-exactly what she gets. `local` keeps her own persona narrating; `combined` interleaves her persona with the role. No hidden instructions, ever — your `dm_guide` and the shared GM style are user-editable in ⚙ GM Settings and visible in the preview.
 
+The GM tab also carries one engine law, **Max one move per turn** (all stories, default on): a turn is one player message, and a second `move` inside it is refused until the player's next message — she can't carry them through a room they never stood in. `turns_in_room == 0` is the signal (the same one that raises NEW SCENE); uncheck it for a story that wants a dash.
+
 ## Emotion pieces
 
 Ship `prompts/pieces.json` with keys namespaced `story_<slug>_<emotion>` (e.g. `story_titanic_smitten`). Resolution order: your story-specific piece, then the generic `story_engine_<emotion>`, else the emotion is silently skipped.

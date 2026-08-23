@@ -89,6 +89,13 @@ def conduct_for(story):
     return universal, dm
 
 
+def one_move_per_turn():
+    """GM-tab law (Krem 2026-08-23): at most one move per player turn,
+    shared by ALL stories, default on. Read live at act time — no restart,
+    no re-prime."""
+    return _as_bool((_store().get("storycfg:universal") or {}).get("one_move_per_turn"), True)
+
+
 def refresh_prompt(system, session=None):
     """Re-render + re-activate the chat's story prompt — the live tuning
     loop: saving GM settings lands on the very next turn."""
@@ -1038,6 +1045,17 @@ def act(system, verb, target=None, answer=None, session=None):
     room = story["rooms"].get(state["room"])
     if not room:
         return f"Current room {state['room']} is missing — author error. story_end to bail out.", False
+
+    # One move per turn (Krem 2026-08-23 — the hallway Sapph never stopped
+    # in): turns_in_room==0 is the engine's own "just arrived, the player
+    # hasn't seen it yet" — the same signal render.py turns into NEW SCENE.
+    # A second move inside one player message rides through a room the
+    # player never got to stand in. Refused HERE, not in the referee, so
+    # the referee stays pure and the switch reads the live GM config.
+    if referee._norm(verb) == "move" and state["turns_in_room"] == 0 and one_move_per_turn():
+        return (f"Already moved this turn — you've only just arrived at "
+                f"'{room['title']}' and the player hasn't seen it yet. Set "
+                f"this scene first; the next way opens on their next turn."), False
 
     slug = story["meta"]["slug"]
     events, message, ok = referee.resolve(story, state, room, story["rooms"], verb, target, answer)
