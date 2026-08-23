@@ -799,6 +799,7 @@
     "tests/test_chat_routes_p1.py": "5d0bfe5b9a9b4e9745e4ebd2112fc7800a0129d98591ec48afc131559c819e47",
     "tests/test_chat_search.py": "77488924da84eec3a77122dc8431c14b234a156c8c4de630a886e30f2e505088",
     "tests/test_chat_settings_routes_p0.py": "f5af0239e1ad024edd34598b18e631ec0d426411dd2a7fe7183e6289aacf0f0e",
+    "tests/test_chat_switch_applies.py": "f249fc90c37027959a0898dd2f62db29a3dbb51578c7fe4eb752ff5fccf347a5",
     "tests/test_claude_cache_marker.py": "47114508623fb5e185135d1ef7c7948d5c23ef883c077608d665c3f30092360a",
     "tests/test_cleanup_paths_guard.py": "2718b6bbbef790a64d3481e05202fd5a34c8926df4680e5d2edc3a111f669d05",
     "tests/test_code_validator.py": "c0fc350d72b0d464b5f2a6e318225bb0a8128474c1fa033aa14b78b37cfd5d96",
