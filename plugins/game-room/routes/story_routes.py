@@ -8,6 +8,7 @@
 # Session absent (older client, curl) → the engine falls back to this turn's
 # effective chat, which is the old behavior minus the global-active bug.
 
+import logging
 import sys
 from pathlib import Path
 
@@ -20,6 +21,9 @@ if _PLUGIN_ROOT not in sys.path:
 def _session():
     from gameroom_story import session
     return session
+
+
+logger = logging.getLogger(__name__)
 
 
 def _system():
@@ -998,13 +1002,25 @@ def load_scenario(body=None, **_):
     # Write lane: fold any legacy presets/objsets in first, persisted —
     # _apply_scenario_env reads the unified key raw (migration used to lean
     # on the setup GET's side-effect write; that GET is pure now).
-    _scenarios(sess._store(), slug, persist=True)
+    cur = _scenarios(sess._store(), slug, persist=True)
     try:
         sess._apply_scenario_env(chat, slug, story, name)
     except KeyError:
         return {'success': False, 'detail': f"No scenario named '{name}'."}
     except Exception as e:
         return {'success': False, 'detail': str(e)}
+    # Mid-run the swap is PURE too (2026-08-23): the running entry's slots
+    # become the scenario's (reset → declared defaults) and the costume
+    # re-bakes — so the layer's scenario tag can never outrun what she's
+    # wearing. Pre-start there is no entry; the form seeds from the tag.
+    try:
+        from gameroom_story import state as st
+        entry = st.get_active_entry(chat) or {}
+        if entry.get('story') == slug:
+            sess.update_slots(_system(), (cur.get(name) or {}).get('slots') or {} if name else {},
+                              session=chat)
+    except Exception as e:
+        logger.warning(f"[STORY] scenario swap slot apply failed: {e}")
     return {'success': True,
             'detail': (f"'{name}' loaded — the house is now this scenario."
                        if name else 'Back to the default story.')}

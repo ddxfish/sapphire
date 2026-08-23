@@ -998,3 +998,30 @@ def test_seal_preseed_right_after_start(story):
                                       story2["rooms"], "read", "letter")
     assert ok and "Free energy is real." in msg
     st.clear_active(CHAT)
+
+
+def test_mid_run_scenario_swap_applies_slots(story, cfg_store, monkeypatch):
+    # Prime repro 2026-08-23 (dropdown said test2, fields showed defaults):
+    # the swap must be PURE for slots too — mid-run the entry's slots become
+    # the scenario's (reset → declared defaults), so the layer's scenario
+    # tag can never outrun what she's wearing. Pre-start (no entry) the
+    # form seeds from the tag client-side.
+    from routes import story_routes
+    monkeypatch.setattr(story_routes, "_system", lambda: None)
+    monkeypatch.setattr(session, "refresh_prompt", lambda *a, **k: True)
+    st.set_active(CHAT, "mad-manse", None)
+    st.update_active(CHAT, slots={"relationship": "rivals"})
+    cfg_store.save("storyscenarios:mad-manse",
+                   {"test2": {"slots": {"relationship": "wife"}, "objects": {}, "rooms": {}}})
+    r = story_routes.load_scenario(body={"name": "test2", "session": CHAT})
+    assert r["success"], r
+    entry = st.get_active_entry(CHAT)
+    assert entry["slots"]["relationship"] == "wife"
+    assert st.get_user_layer("mad-manse", CHAT)["scenario"] == "test2"
+    # reset → declared defaults, tag cleared
+    r = story_routes.load_scenario(body={"name": "", "session": CHAT})
+    assert r["success"], r
+    entry = st.get_active_entry(CHAT)
+    assert entry["slots"]["relationship"] != "wife"
+    assert st.get_user_layer("mad-manse", CHAT).get("scenario") == ""
+    st.clear_active(CHAT)

@@ -1030,7 +1030,13 @@ export async function openStorySetup(slug, setup, session) {
         let done = false;
         const finish = (v) => { if (!done) { done = true; resolve(v); } };
 
-        const tabs = slotTabs(open, sealed, () => undefined);
+        // ONE source of truth (Prime repro 2026-08-23: dropdown said test2,
+        // fields showed defaults): the layer's scenario tag — which the bar
+        // preselects from — also seeds the Story-tab fields. Pre-start has
+        // no running entry, so the saved scenario's slots ARE the canvas.
+        const tag = objData?.scenario || '';
+        const tagged = tag ? (setup.scenarios || {})[tag] : null;
+        const tabs = slotTabs(open, sealed, f => tagged ? (tagged.slots || {})[f.key] : undefined);
         // World sections — the ONE assembly shared with the in-game gear
         // (2026-08-22): Characters (items + pieces) + Rooms.
         const world = worldSections(slug, session, objData);
