@@ -636,6 +636,7 @@ def test_openai_compat_low_max_tokens_does_not_stream(monkeypatch):
     provider._transform_params_for_model = lambda p: dict(p)  # type: ignore
     provider.model = "fake-model"  # used in logging
     provider._fireworks_session_id = None  # attr check in non-streaming path
+    provider._rejected_params = set()  # learn-once strip state (set in __init__)
     provider._is_fireworks_reasoning_model = lambda: False  # type: ignore
     provider.config = {}  # required by _inject_qwen_no_think → self.config.get(...)
 
