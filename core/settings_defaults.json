@@ -202,7 +202,7 @@
     "LLM_FALLBACK_ORDER": ["lmstudio", "claude", "gemini", "openai"],
     "MODEL_GENERATION_PROFILES": {
       "_comment": "Balanced generation params per model. Edit values here to tune.",
-      "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096, "presence_penalty": 0.1, "frequency_penalty": 0.1 },
+      "__fallback__": { "temperature": 0.7, "top_p": 0.9, "max_tokens": 4096 },
       
       "claude-fable-5": { "max_tokens": 16000 },
       "claude-opus-4-8": { "max_tokens": 16000 },

@@ -54,6 +54,30 @@ def _shared_http_client(base_url):
         return cli
 
 
+# Params a strict endpoint may refuse; each is optional to the request. A
+# 400 naming one is learned ONCE per provider instance (Krem's F1a,
+# 2026-08-23): stripped, the request retried, never sent again until
+# restart — one warning + toast names it and where to clear it.
+# stream_options rides the same law (it used to re-pay the double request
+# on EVERY streaming call to an endpoint that refused it).
+OPTIONAL_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty',
+                   'top_k', 'stream_options')
+# Not in the OpenAI SDK's signature — passing them as kwargs is a TypeError,
+# so they ride extra_body (LM Studio / llama.cpp honor them there).
+EXTRA_BODY_PARAMS = ('repeat_penalty', 'top_k')
+PENALTY_PARAMS = ('presence_penalty', 'frequency_penalty', 'repeat_penalty', 'top_k')
+
+
+def _notify(message: str, severity: str = 'warning') -> None:
+    """Surface a provider notice as a UI toast (best effort, never raises)."""
+    try:
+        from core.event_bus import publish, Events
+        publish(Events.PLUGIN_NOTICE, {'plugin': 'llm', 'message': message,
+                                       'severity': severity})
+    except Exception:
+        pass
+
+
 class OpenAICompatProvider(BaseProvider):
     """
     Provider for OpenAI-compatible APIs.
@@ -79,6 +103,9 @@ class OpenAICompatProvider(BaseProvider):
             self._fireworks_session_id = f"sapphire-{key_hash}"
         else:
             self._fireworks_session_id = None
+
+        # Optional params this endpoint has refused (learn-once, see OPTIONAL_PARAMS)
+        self._rejected_params: set = set()
 
         logger.info(f"OpenAI-compat provider initialized: {self.base_url}")
     
@@ -256,7 +283,8 @@ class OpenAICompatProvider(BaseProvider):
         if not params:
             return params
 
-        result = dict(params)
+        # Blank = absent = never sent (None would go out as JSON null).
+        result = {k: v for k, v in params.items() if v is not None and v != ''}
 
         # Strip internal Sapphire params that aren't part of the OpenAI API
         result.pop('disable_thinking', None)
@@ -283,7 +311,7 @@ class OpenAICompatProvider(BaseProvider):
 
             # Remove unsupported sampling params (reasoning models don't use these)
             removed = []
-            for unsupported in ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty']:
+            for unsupported in ['temperature', 'top_p', *PENALTY_PARAMS]:
                 if unsupported in result:
                     result.pop(unsupported)
                     removed.append(unsupported)
@@ -293,15 +321,64 @@ class OpenAICompatProvider(BaseProvider):
 
         elif is_grok:
             removed = []
-            for unsupported in ['presence_penalty', 'frequency_penalty', 'stop']:
+            for unsupported in [*PENALTY_PARAMS, 'stop']:
                 if unsupported in result:
                     result.pop(unsupported)
                     removed.append(unsupported)
 
             if removed:
                 logger.debug(f"Filtered unsupported params for {self.model}: {removed}")
-        
+
+        # Non-schema knobs ride extra_body — as kwargs they'd TypeError in the SDK.
+        for k in EXTRA_BODY_PARAMS:
+            if k in result:
+                result.setdefault('extra_body', {})[k] = result.pop(k)
+
         return result
+
+    # ── Learn-once param stripping ─────────────────────────────────────────
+
+    def _strip_rejected(self, kwargs: Dict[str, Any]) -> None:
+        for p in self._rejected_params:
+            kwargs.pop(p, None)
+            eb = kwargs.get('extra_body')
+            if isinstance(eb, dict):
+                eb.pop(p, None)
+                if not eb:
+                    kwargs.pop('extra_body', None)
+
+    def _params_named(self, err: Exception, kwargs: Dict[str, Any]) -> List[str]:
+        """Which OPTIONAL params of THIS request the error names."""
+        text = f"{err} {getattr(err, 'body', '') or ''}".lower()
+        eb = kwargs.get('extra_body') or {}
+        sent = [p for p in OPTIONAL_PARAMS if p in kwargs or p in eb]
+        named = [p for p in sent if p in text]
+        if not named and 'stream_options' in sent and any(
+                h in text for h in ('unrecognized', 'unknown parameter', 'unknown field')):
+            # endpoints that refuse stream_options without naming it (llama.cpp lineage)
+            named = ['stream_options']
+        return named
+
+    def _create(self, request_kwargs: Dict[str, Any]):
+        """chat.completions.create with learn-once stripping of refused
+        optional params: strip what this endpoint already refused, try,
+        and on a refusal naming an optional param remember it, warn once
+        (log + toast), retry once without it."""
+        self._strip_rejected(request_kwargs)
+        try:
+            return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
+        except Exception as e:
+            bad = self._params_named(e, request_kwargs)
+            if not bad:
+                raise
+            self._rejected_params.update(bad)
+            self._strip_rejected(request_kwargs)
+            where = self.config.get('display_name') or self.provider_name
+            msg = (f"{where} ({self.model}) rejected {', '.join(bad)} — sent without it from "
+                   f"now on (until restart). Clear it under Settings › LLM › {where} to stop this.")
+            logger.warning(f"[OPENAI-COMPAT] {msg} | {e}")
+            _notify(msg)
+            return retry_on_rate_limit(self._client.chat.completions.create, **request_kwargs)
     
     def _sanitize_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -545,11 +622,7 @@ class OpenAICompatProvider(BaseProvider):
         self._inject_thinking_control(
             request_kwargs, want_disable=(generation_params or {}).get('disable_thinking', False))
 
-        # Wrap in retry for rate limiting
-        response = retry_on_rate_limit(
-            self._client.chat.completions.create,
-            **request_kwargs
-        )
+        response = self._create(request_kwargs)
 
         return self._parse_response(response)
 
@@ -676,39 +749,15 @@ class OpenAICompatProvider(BaseProvider):
 
         logger.info(f"[OPENAI-COMPAT] Request params: model={request_kwargs.get('model')}, tools={len(request_kwargs.get('tools', []))}")
 
-        # Wrap in retry for rate limiting
-        # If stream_options is rejected (local servers like LM Studio/llama.cpp), retry without.
-        # Narrow the trigger: only retry when the error actually mentions stream_options or
-        # related "unknown parameter" phrasing — NOT on every 400/422, which was catching
-        # unrelated errors (like tool call validation failures) and producing misleading logs.
+        # Refused optional params (stream_options on llama.cpp-lineage servers,
+        # a penalty a strict cloud endpoint won't take) are learned once and
+        # retried without — see _create. Anything else fails loud.
         try:
-            stream = retry_on_rate_limit(
-                self._client.chat.completions.create,
-                **request_kwargs
-            )
+            stream = self._create(request_kwargs)
         except Exception as e:
-            err_str = str(e).lower()
-            looks_like_stream_options_issue = (
-                "stream_options" in err_str
-                or "unrecognized" in err_str
-                or "unknown parameter" in err_str
-                or "unknown field" in err_str
-            )
-            if looks_like_stream_options_issue:
-                logger.info(f"[OPENAI-COMPAT] stream_options rejected, retrying without: {e}")
-                request_kwargs.pop("stream_options", None)
-                try:
-                    stream = retry_on_rate_limit(
-                        self._client.chat.completions.create,
-                        **request_kwargs
-                    )
-                except Exception as e2:
-                    logger.error(f"[OPENAI-COMPAT] REQUEST FAILED (retry): {e2}")
-                    raise
-            else:
-                logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
-                logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
-                raise
+            logger.error(f"[OPENAI-COMPAT] REQUEST FAILED: {e}")
+            logger.error(f"[OPENAI-COMPAT] Message count: {len(clean_messages)}, has tool_calls: {any('tool_calls' in m for m in clean_messages)}")
+            raise
         
         # Track accumulated state for final response
         full_content = ""

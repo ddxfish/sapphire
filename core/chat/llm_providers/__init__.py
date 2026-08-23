@@ -31,13 +31,13 @@ from .anthropic_compat import AnthropicCompatProvider
 
 logger = logging.getLogger(__name__)
 
-# Default generation params for new instances
+# Default generation params for new instances. Penalties / top_k are NOT
+# here on purpose (Krem 2026-08-23): blank = never sent. A 0.1 presence/
+# frequency penalty used to ride silently into every custom provider.
 DEFAULT_GENERATION_PARAMS = {
     'temperature': 0.7,
     'top_p': 0.9,
     'max_tokens': 4096,
-    'presence_penalty': 0.1,
-    'frequency_penalty': 0.1,
 }
 
 

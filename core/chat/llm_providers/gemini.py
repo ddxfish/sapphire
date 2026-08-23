@@ -32,10 +32,12 @@ class GeminiProvider(OpenAICompatProvider):
 
     def _transform_params_for_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Strip unsupported params, add thinking config for 2.5+ models."""
+        # Penalties/top_k/stop before the base lift (else top_k would ride
+        # extra_body into an endpoint that doesn't take it).
+        params = {k: v for k, v in (params or {}).items()
+                  if k not in ('stop', 'frequency_penalty', 'presence_penalty',
+                               'repeat_penalty', 'top_k')}
         result = super()._transform_params_for_model(params)
-        result.pop('stop', None)
-        result.pop('frequency_penalty', None)
-        result.pop('presence_penalty', None)
 
         # reasoning_effort controls thinking depth (2.5+ models)
         # include_thoughts (extra_body.google) only works on gemini-3+

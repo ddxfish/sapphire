@@ -295,12 +295,26 @@ function _renderCustomRow(k, c, i) {
 }
 
 // ── Shared "Advanced" fields (single source of truth for Add + Edit wizards) ──
-// Renders temp/max-tokens/top-p + the universal disable-thinking toggle + raw
-// extra_body escape hatch. `prefix` namespaces the element ids ('wizard' | 'edit').
+// Renders temp/max-tokens/top-p, the optional sampling knobs (penalties / top-k:
+// blank = never sent), the universal disable-thinking toggle + raw extra_body
+// escape hatch. `prefix` namespaces the element ids ('wizard' | 'edit').
+const _OPTIONAL_KNOBS = [
+    // [id, key, label, step, min, max]
+    ['pres', 'presence_penalty', 'Presence penalty', '0.05', '-2', '2'],
+    ['freq', 'frequency_penalty', 'Frequency penalty', '0.05', '-2', '2'],
+    ['rep', 'repeat_penalty', 'Repeat penalty', '0.01', '0', '3'],
+    ['topk', 'top_k', 'Top K', '1', '0', ''],
+];
+
 function _advancedFieldsHtml(prefix, v = {}) {
     const temp = v.temperature ?? 0.7;
     const maxTok = v.max_tokens ?? 4096;
     const topP = v.top_p ?? 0.9;
+    const knobs = _OPTIONAL_KNOBS.map(([id, key, label, step, min, max]) => `
+                <div class="field-row" style="margin-bottom:6px">
+                    <label>${label}</label>
+                    <input type="number" id="${prefix}-${id}" value="${v[key] ?? ''}" placeholder="off" step="${step}" min="${min}"${max ? ` max="${max}"` : ''} style="width:80px">
+                </div>`).join('');
     const noThink = v.disable_thinking ? 'checked' : '';
     const extraBody = v.extra_body ? (typeof v.extra_body === 'string' ? v.extra_body : JSON.stringify(v.extra_body)) : '';
     return `
@@ -318,6 +332,9 @@ function _advancedFieldsHtml(prefix, v = {}) {
                 <div class="field-row" style="margin-bottom:6px">
                     <label>Top P</label>
                     <input type="number" id="${prefix}-topp" value="${topP}" step="0.05" min="0" max="1" style="width:80px">
+                </div>${knobs}
+                <div class="text-muted" style="font-size:0.8em;margin-left:24px;margin-top:2px">
+                    Blank = not sent. Repeat penalty and Top K are local-model knobs (LM Studio, llama.cpp — repeat 1.05–1.1 or presence 1–1.5 tames a looping Qwen). A provider that rejects one is retried without it and a warning names it.
                 </div>
                 <div class="field-row" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
                     <label class="checkbox-inline">
@@ -351,6 +368,11 @@ function _readAdvancedFields(root, prefix) {
     if (!isNaN(temp)) generation_params.temperature = temp;
     if (!isNaN(maxTok)) generation_params.max_tokens = maxTok;
     if (!isNaN(topP)) generation_params.top_p = topP;
+    for (const [id, key] of _OPTIONAL_KNOBS) {
+        const raw = (g(id)?.value ?? '').trim();
+        const n = key === 'top_k' ? parseInt(raw) : parseFloat(raw);
+        if (raw !== '' && !isNaN(n)) generation_params[key] = n;   // blank = never sent
+    }
     const disable_thinking = g('no-think')?.checked || false;
     const rawExtra = (g('extra-body')?.value || '').trim();
     let extra_body = '';
@@ -397,6 +419,10 @@ function _providerFormHtml(prefix, config = {}, opts = {}) {
             temperature: gen.temperature,
             max_tokens: gen.max_tokens,
             top_p: gen.top_p,
+            presence_penalty: gen.presence_penalty,
+            frequency_penalty: gen.frequency_penalty,
+            repeat_penalty: gen.repeat_penalty,
+            top_k: gen.top_k,
             disable_thinking: (config.disable_thinking ?? config.disable_thinking_qwen),
             extra_body: config.extra_body,
         })}
