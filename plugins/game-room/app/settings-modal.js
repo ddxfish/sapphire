@@ -1147,14 +1147,21 @@ const VIS_TYPES = [
     ['has', 'when carrying item', 'item name, e.g. uv_lamp', ''],
     ['did', 'after another object is used', 'object name, e.g. door1', ''],
     ['flag', 'when a flag is set', 'flag name, e.g. house_open', ''],
+    // numbers + time (2026-08-23): the third leg of stats (initial_flags
+    // seeds, adjust moves, this checks) and hints-as-objects
+    ['gte', 'when a number is at least', 'name, e.g. trust', 'amount, e.g. 3'],
+    ['turns', 'after turns in this room', 'turns, e.g. 3', ''],
 ];
 const REQ_TYPES = [
     ['has', 'needs item', 'item name, e.g. bronze_key', ''],
     ['did', 'needs opened/used', 'object name, e.g. door1', ''],
     ['flag', 'flag is set', 'flag name, e.g. ballroom_unlocked', ''],
     ['solved', 'riddle solved', 'object with the riddle — usually this one', ''],
-    ['d20', 'd20 chance', 'roll needed, e.g. 11', ''],
-    ['d100', 'd100 chance', 'roll needed, e.g. 51', ''],
+    ['gte', 'number at least', 'name, e.g. trust', 'amount, e.g. 3'],
+    ['turns', 'after turns in this room', 'turns, e.g. 3', ''],
+    // dice: second slot = the miss line; a "one try" box rides the row
+    ['d20', 'd20 chance', 'roll needed, e.g. 11', 'on a miss (optional)'],
+    ['d100', 'd100 chance', 'roll needed, e.g. 51', 'on a miss (optional)'],
 ];
 const FX_TYPES = [
     ['set', 'set flag', 'flag name, e.g. ballroom_unlocked', ''],
@@ -1186,7 +1193,10 @@ const EXIT_MECH = ['condition', 'roll', 'effects', 'visible_when'];
 // branches, generation). Richer doors show a read-only plain-words
 // summary instead; text edits still shadow.
 const _condFits = (c) => !c || Object.entries(c).every(([k, v]) =>
-    ['has', 'did', 'flag'].includes(k) && typeof v === 'string');
+    (['has', 'did', 'flag'].includes(k) && typeof v === 'string')
+    || (k === 'after_turns' && Number.isFinite(v))
+    || (k === 'flag_gte' && !!v && typeof v === 'object'
+        && Object.values(v).every(n => typeof n === 'number')));
 // show speaks two shapes: bare name, or {image, caption} — nothing richer.
 const _showFits = (v) => typeof v === 'string'
     || (!!v && typeof v === 'object' && typeof v.image === 'string'
@@ -1200,11 +1210,15 @@ const _fxFits = (f) => !f || Object.entries(f).every(([k, v]) =>
         && v.every(x => typeof x === 'string'))
     || (k === 'goto' && typeof v === 'number')
     || (k === 'show' && _showFits(v)));
+// failure = a miss LINE only (failure effects are richer than the row);
+// `once` rides as the row's "one try" box
 const _rollFits = (r) => !r || (
     (r.sides === 20 || r.sides === 100) && Number.isFinite(r.beat)
-    && Object.keys(r).every(k => ['sides', 'beat', 'success', 'failure'].includes(k))
+    && Object.keys(r).every(k => ['sides', 'beat', 'success', 'failure', 'once'].includes(k))
+    && (r.once == null || typeof r.once === 'boolean')
     && _fxFits(r.success)
-    && (!r.failure || JSON.stringify(r.failure) === JSON.stringify({ message: EXIT_FAIL_MSG })));
+    && (!r.failure || (typeof r.failure.message === 'string'
+                       && Object.keys(r.failure).every(k => k === 'message'))));
 const exitMechFits = (se, m) => !se.generate && se.to != null
     && !(m.roll && m.effects)
     && _condFits(m.condition) && _condFits(m.visible_when)
@@ -1224,6 +1238,7 @@ const exitMarks = (m) => {
 const _condWords = (c) => Object.entries(c || {}).map(([k, v]) =>
     k === 'has' ? `carrying ${v}` : k === 'did' ? `used ${v}`
     : k === 'flag' ? `flag ${v}` : k === 'solved' ? `solved ${v}`
+    : k === 'after_turns' ? `after ${v} turns here`
     : k === 'flag_gte' ? Object.entries(v).map(([f, n]) => `${f} ≥ ${n}`).join(', ')
     : `${k} ${JSON.stringify(v)}`).join(', ');
 const exitMechWords = (se, m) => {
@@ -1310,8 +1325,10 @@ const objToDescriptor = (spec) => {
     return {
         desc: spec.desc || '', take: !!spec.takeable,
         hidden: !!spec.hidden, visCond: spec.condition || null,
+        // answers as CSV — one req row, OR inside the field (Krem 2026-08-23)
         puzzle: puz ? { riddle: puz.riddle || OBJ_RIDDLE_DEFAULT,
-                        solution: (puz.solutions || [])[0] ?? puz.solution ?? '' } : null,
+                        solution: (Array.isArray(puz.solutions) ? puz.solutions : [puz.solution])
+                            .filter(x => x != null && x !== '').join(', ') } : null,
         // solve effects only make sense with a riddle to solve; an
         // on_solve on a puzzle-less object is unexpressible → gated out
         solveFx: puz ? _fxOf(spec.on_solve || {}) : null,
@@ -1322,11 +1339,14 @@ const objToDescriptor = (spec) => {
                 // response box carries the hold message instead
                 const sl = s.sealed && typeof s.sealed === 'object' ? s.sealed : null;
                 return {
-                    verb,
+                    // verb field = "canonical, alias, alias" (Krem 2026-08-23)
+                    verb: [verb, ...(Array.isArray(s.aliases) ? s.aliases : [])].join(', '),
                     resp: sl ? (typeof sl.hold_message === 'string' ? sl.hold_message : '')
                         : (s.message ?? (s.roll && s.roll.success && s.roll.success.message) ?? ''),
                     cond: Object.keys(s.condition || {}).length ? { ...s.condition } : null,
-                    dice: s.roll ? { sides: s.roll.sides, beat: s.roll.beat } : null,
+                    dice: s.roll ? { sides: s.roll.sides, beat: s.roll.beat, once: !!s.roll.once,
+                                     miss: (s.roll.failure && typeof s.roll.failure.message === 'string')
+                                         ? s.roll.failure.message : '' } : null,
                     fx: _fxOf(s.roll ? (s.roll.success || {}) : s),
                     msg: s.blocked_message || '',
                     sealed: sl ? { ask: sl.ask ?? '', fallback: sl.fallback ?? '' } : null,
@@ -1341,13 +1361,20 @@ const compileObj = (name, d, src) => {
     if (d.take) spec.takeable = true;
     if (d.hidden) spec.hidden = true;
     if (d.visCond) spec.condition = d.visCond;
-    if (d.puzzle) spec.puzzle = { ...d.puzzle };
+    if (d.puzzle) {
+        const answers = String(d.puzzle.solution || '').split(',').map(x => x.trim()).filter(Boolean);
+        spec.puzzle = { riddle: d.puzzle.riddle,
+                        ...(answers.length > 1 ? { solutions: answers } : { solution: answers[0] ?? '' }) };
+    }
     if (d.solveFx) spec.on_solve = { ...d.solveFx };
     const acts = {};
     for (const a of d.acts) {
-        if (!a.verb) continue;
+        const names = String(a.verb || '').split(',').map(x => x.trim()).filter(Boolean);
+        if (!names.length) continue;
+        const verb = names[0];
         const v = {};
-        const resp = a.resp || `You ${a.verb} the ${name}.`;
+        if (names.length > 1) v.aliases = names.slice(1);
+        const resp = a.resp || `You ${verb} the ${name}.`;
         if (a.cond && Object.keys(a.cond).length) {
             v.condition = { ...a.cond };
             if (a.msg) v.blocked_message = a.msg;
@@ -1365,13 +1392,14 @@ const compileObj = (name, d, src) => {
             // chance replaces the flat outcome: response + effects
             // ride the success branch
             v.roll = { sides: a.dice.sides, beat: a.dice.beat,
+                       ...(a.dice.once ? { once: true } : {}),
                        success: { message: resp, ...(a.fx || {}) },
-                       failure: { message: OBJ_FAIL_MSG } };
+                       failure: { message: a.dice.miss || OBJ_FAIL_MSG } };
         } else {
             v.message = resp;
             if (a.fx) Object.assign(v, a.fx);
         }
-        acts[a.verb] = v;
+        acts[verb] = v;
     }
     if (src) {                             // passengers ride their carrier
         for (const k of ['found_by', 'gives'])
@@ -1388,16 +1416,13 @@ const compileObj = (name, d, src) => {
         for (const [verb, v] of Object.entries(acts)) {
             const sv = sints[verb];
             if (!sv || typeof sv !== 'object') continue;
-            if (sv.aliases != null) v.aliases = sv.aliases;
             // seal countdown is a tuning knob, not authoring — rides verbatim
             if (v.sealed && sv.sealed && typeof sv.sealed === 'object' && sv.sealed.wait != null)
                 v.sealed.wait = sv.sealed.wait;
             if (v.roll && sv.roll && typeof sv.roll === 'object') {
-                if (sv.roll.failure) v.roll.failure = { ...sv.roll.failure };
-                // once-dice metadata rides the roll it belongs to (the
-                // authoring checkbox is a W3 rider — passenger until then)
-                for (const k of ['once', 'retry_message'])
-                    if (sv.roll[k] != null) v.roll[k] = sv.roll[k];
+                // once + miss line are authored now (2026-08-23); the
+                // "spent" line still rides as a passenger
+                if (sv.roll.retry_message != null) v.roll.retry_message = sv.roll.retry_message;
                 for (const k of ['emotions', 'emotions_remove'])
                     if (sv.roll.success && sv.roll.success[k] != null)
                         v.roll.success[k] = sv.roll.success[k];
@@ -1418,7 +1443,10 @@ const compileObj = (name, d, src) => {
 // vocabulary: vis rows has/did/flag, req rows + solved, fx per FX_TYPES,
 // dice d20/d100 only. Anything richer → read-only plain-words summary.
 const _condFitsO = (c, keys) => !c || Object.entries(c).every(([k, v]) =>
-    keys.includes(k) && typeof v === 'string');
+    (keys.includes(k) && typeof v === 'string')
+    || (k === 'after_turns' && Number.isFinite(v))
+    || (k === 'flag_gte' && !!v && typeof v === 'object'
+        && Object.values(v).every(n => typeof n === 'number')));
 const _fxFitsO = (f) => !f || Object.entries(f).every(([k, v]) =>
     (k === 'set' && v && typeof v === 'object'
         && Object.values(v).every(x => x === true || x === false))
@@ -1484,7 +1512,7 @@ function makeActCard(host, a, opts) {
     card.className = 'grs-act-card';
     card.innerHTML = `
         <div class="grs-act-row grs-act-main">
-            <input type="text" class="grs-act-verb" placeholder="verb, e.g. eat">
+            <input type="text" class="grs-act-verb" placeholder="verb(s), e.g. open, unlock, force" title="First word is the command; the rest are synonyms she can also use">
             <input type="text" class="grs-act-resp" placeholder="what the world says back — returned to her as story truth">
             <button type="button" class="sb-icon-btn grs-act-gear" title="Requirements & effects — this action's own locks, dice and changes">\u{2699}\u{FE0E}</button>
             <button type="button" class="sb-icon-btn grs-act-del" title="Remove action">✕</button>
@@ -1531,7 +1559,7 @@ function makeActCard(host, a, opts) {
         const lk = card._lw.readLocks() || {};
         const bits = [];
         if (lk.cond) bits.push('\u{1F512} ' + _condWords(lk.cond));
-        if (lk.dice) bits.push(`\u{1F3B2} d${lk.dice.sides} beat ${lk.dice.beat}`);
+        if (lk.dice) bits.push(`\u{1F3B2} d${lk.dice.sides} beat ${lk.dice.beat}${lk.dice.once ? ' (one try)' : ''}`);
         if (lk.sealed) bits.push(`\u{270D} player writes: ${lk.sealed.ask}`);
         if (lk.fx) bits.push('⚡ ' + _fxWords(lk.fx));
         sum.textContent = bits.join(' · ');
@@ -1564,7 +1592,7 @@ function locksWidget(form, opts) {
     const lockMsg = q('.grs-lock-msg');
     for (const [t, b] of [[visToggle, visBody], [reqToggle, reqBody], [fxToggle, fxBody]])
         if (t) t.onchange = () => { b.style.display = t.checked ? '' : 'none'; sync(); };
-    const pickRow = (host, tlist, kind, val, extra) => {
+    const pickRow = (host, tlist, kind, val, extra, once) => {
         const row = document.createElement('div');
         row.className = 'grs-act-row';
         row.innerHTML = `
@@ -1572,6 +1600,7 @@ function locksWidget(form, opts) {
                 `<option value="${t[0]}"${t[0] === kind ? ' selected' : ''}>${t[1]}</option>`).join('')}</select>
             <input type="text" class="grs-pick-val">
             <input type="text" class="grs-pick-extra">
+            <label class="st-tools-check grs-pick-once-wrap" style="display:none;margin:0;white-space:nowrap" title="The chance is spent after one roll — a miss stays missed"><input type="checkbox" class="grs-pick-once"> one try</label>
             <button type="button" class="sb-icon-btn grs-pick-art" title="Upload image" style="display:none">&#x1F4F7;</button>
             <input type="file" class="grs-pick-file" accept="image/*" style="display:none">
             <button type="button" class="sb-icon-btn grs-act-del" title="Remove">✕</button>`;
@@ -1580,6 +1609,7 @@ function locksWidget(form, opts) {
         const xIn = row.querySelector('.grs-pick-extra');
         const artBtn = row.querySelector('.grs-pick-art');
         const fileIn = row.querySelector('.grs-pick-file');
+        const onceWrap = row.querySelector('.grs-pick-once-wrap');
         const paint = () => {
             const t = tlist.find(x => x[0] === sel.value) || tlist[0];
             vIn.placeholder = t[2];
@@ -1587,6 +1617,7 @@ function locksWidget(form, opts) {
             vIn.style.display = t[2] ? '' : 'none';   // value-less kinds (searched)
             xIn.style.display = t[3] ? '' : 'none';
             artBtn.style.display = t[0] === 'show' ? '' : 'none';
+            onceWrap.style.display = (t[0] === 'd20' || t[0] === 'd100') ? '' : 'none';
             // Prompt-piece kinds offer the story's pool as suggestions
             if (opts.pieceList && (t[0] === 'xadd' || t[0] === 'xrem'))
                 vIn.setAttribute('list', opts.pieceList);
@@ -1615,6 +1646,7 @@ function locksWidget(form, opts) {
         paint();
         vIn.value = val || '';
         xIn.value = extra || '';
+        row.querySelector('.grs-pick-once').checked = !!once;
         row.querySelector('.grs-act-del').onclick = () => { row.remove(); sync(); };
         host.appendChild(row);
         sync();
@@ -1648,6 +1680,7 @@ function locksWidget(form, opts) {
         kind: row.querySelector('.grs-pick-kind').value,
         val: row.querySelector('.grs-pick-val').value.trim(),
         extra: row.querySelector('.grs-pick-extra').value.trim(),
+        once: !!row.querySelector('.grs-pick-once')?.checked,
     }));
     const rowsOf = (host) => rawRows(host).filter(x => x.val);
 
@@ -1675,6 +1708,13 @@ function locksWidget(form, opts) {
             else if (x.kind === 'has' && !out.cond.has) out.cond.has = x.val;
             else if (x.kind === 'did' && !out.cond.did) out.cond.did = x.val;
             else if (x.kind === 'flag' && !out.cond.flag) out.cond.flag = x.val;
+            else if (x.kind === 'gte') {
+                const n = parseFloat(x.extra);
+                if (Number.isFinite(n)) (out.cond.flag_gte = out.cond.flag_gte || {})[x.val] = n;
+            } else if (x.kind === 'turns' && out.cond.after_turns == null) {
+                const n = parseInt(x.val, 10);
+                if (Number.isFinite(n)) out.cond.after_turns = Math.max(0, n);
+            }
         }
         if (!Object.keys(out.cond).length) out.cond = null;
         return (out.hidden || out.cond) ? out : null;
@@ -1691,11 +1731,18 @@ function locksWidget(form, opts) {
             else if (x.kind === 'did' && !cond.did) cond.did = x.val;
             else if (x.kind === 'flag' && !cond.flag) cond.flag = x.val;
             else if (x.kind === 'solved' && !cond.solved) cond.solved = x.val;
-            else if ((x.kind === 'd20' || x.kind === 'd100') && !dice) {
+            else if (x.kind === 'gte') {
+                const n = parseFloat(x.extra);
+                if (Number.isFinite(n)) (cond.flag_gte = cond.flag_gte || {})[x.val] = n;
+            } else if (x.kind === 'turns' && cond.after_turns == null) {
+                const n = parseInt(x.val, 10);
+                if (Number.isFinite(n)) cond.after_turns = Math.max(0, n);
+            } else if ((x.kind === 'd20' || x.kind === 'd100') && !dice) {
                 const sides = x.kind === 'd20' ? 20 : 100;
                 const beat = parseInt(x.val, 10);
                 dice = { sides, beat: Number.isFinite(beat)
-                         ? Math.max(1, Math.min(sides, beat)) : sides / 2 + 1 };
+                         ? Math.max(1, Math.min(sides, beat)) : sides / 2 + 1,
+                         once: !!x.once, miss: x.extra };
             }
         }
         const fx = {};
@@ -1736,6 +1783,8 @@ function locksWidget(form, opts) {
             if (tc.has) { pickRow(visRows, types.vis, 'has', tc.has); anyVis = true; }
             if (tc.did) { pickRow(visRows, types.vis, 'did', tc.did); anyVis = true; }
             if (tc.flag) { pickRow(visRows, types.vis, 'flag', tc.flag); anyVis = true; }
+            for (const [f, n] of Object.entries(tc.flag_gte || {})) { pickRow(visRows, types.vis, 'gte', f, String(n)); anyVis = true; }
+            if (tc.after_turns != null) { pickRow(visRows, types.vis, 'turns', String(tc.after_turns)); anyVis = true; }
         }
         if (reqRows) {
             const cond = d.cond || {};
@@ -1743,9 +1792,13 @@ function locksWidget(form, opts) {
             if (cond.did) { pickRow(reqRows, types.req, 'did', cond.did); anyReq = true; }
             if (cond.flag) { pickRow(reqRows, types.req, 'flag', cond.flag); anyReq = true; }
             if (cond.solved) { pickRow(reqRows, types.req, 'solved', cond.solved); anyReq = true; }
+            for (const [f, n] of Object.entries(cond.flag_gte || {})) { pickRow(reqRows, types.req, 'gte', f, String(n)); anyReq = true; }
+            if (cond.after_turns != null) { pickRow(reqRows, types.req, 'turns', String(cond.after_turns)); anyReq = true; }
             if (d.roll) {
                 pickRow(reqRows, types.req, d.roll.sides === 20 ? 'd20' : 'd100',
-                        String(d.roll.beat ?? ''));
+                        String(d.roll.beat ?? ''),
+                        d.roll.miss ?? (d.roll.failure && d.roll.failure.message) ?? '',
+                        !!d.roll.once);
                 anyReq = true;
             }
         }
@@ -1835,6 +1888,18 @@ function objectsTab(slug, session, data) {
             <label>Short description</label>
             <textarea class="grs-obj-pdesc" rows="2" title="the one-liner in your scene strip"></textarea>
         </div>
+        <div class="grs-enter sb-field sb-field-stack">
+            <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> On entering — what arriving here changes (flags, prompt pieces, an image…)</label>
+            <div class="grs-enter-note" style="display:none;color:var(--text-secondary,#8a8fa3);font-size:var(--font-sm,0.85em)"></div>
+            <div class="grs-lock-body grs-fx-body" style="display:none">
+                <div class="grs-fx-rows"></div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button type="button" class="pk-btn grs-fx-add">+ Add effect</button>
+                    <button type="button" class="pk-btn pk-btn-primary grs-enter-save">Save on-entry</button>
+                    <button type="button" class="pk-btn grs-enter-reset" style="display:none" title="Drop your edits — back to the pack's on-entry effects">↩ Reset to shipped</button>
+                </div>
+            </div>
+        </div>
         <div class="sb-field sb-field-stack">
             <div class="grs-exit-head">
                 <label>Exits</label>
@@ -1894,7 +1959,7 @@ function objectsTab(slug, session, data) {
             <label class="st-tools-check grs-rid-label" style="margin:0"><input type="checkbox" class="grs-rid-toggle"> Riddle — a puzzle she can solve by answering</label>
             <div class="grs-lock-body grs-rid-body" style="display:none">
                 <input type="text" class="grs-rid-text" placeholder="the riddle / prompt she sees">
-                <input type="text" class="grs-rid-answer" placeholder="the answer, e.g. 1234">
+                <input type="text" class="grs-rid-answer" placeholder="answer(s), e.g. 1234 — comma-separated if more than one">
                 <div class="grs-obj-ridfx">
                     <label class="st-tools-check grs-fx-label" style="margin:0"><input type="checkbox" class="grs-fx-toggle"> Solve effects — what solving it changes</label>
                     <div class="grs-lock-body grs-fx-body" style="display:none">
@@ -1987,6 +2052,62 @@ function objectsTab(slug, session, data) {
         };
         // W2: options rebuild every paint — user rooms appear/disappear
         // live; selection survives; "+ New room…" rides at the bottom.
+        // ── On-entry effects (2026-08-23) — the room's own fx widget; the
+        // layer stores the block WHOLESALE ({_clear} strips a shipped one,
+        // verbatim-equals-shipped drops the override). Immediate save.
+        const enterForm = pane.querySelector('.grs-enter');
+        const enterNote = enterForm.querySelector('.grs-enter-note');
+        const enterSave = enterForm.querySelector('.grs-enter-save');
+        const enterReset = enterForm.querySelector('.grs-enter-reset');
+        const ew = locksWidget(enterForm, { types: { fx: FX_BASE }, pieceList: 'grs-piece-list' });
+        const effEnter = (r) => r.on_enter
+            ? (r.on_enter._clear ? null : r.on_enter)
+            : (r.shipped_on_enter || null);
+        const paintEnter = (r) => {
+            ew.clear();
+            const eff = effEnter(r);
+            enterReset.style.display = r.on_enter ? '' : 'none';
+            if (eff && !_fxFitsO(eff)) {
+                ew.showAuthoring(false);
+                enterNote.textContent = '\u{2699}\u{FE0E} Shipped on-entry machinery richer than this editor — '
+                    + 'read-only: ' + (_fxWords(eff) || 'unnamed effects');
+                enterNote.style.display = '';
+                return;
+            }
+            ew.showAuthoring(true);
+            enterNote.style.display = 'none';
+            if (eff) ew.prefill({ fx: eff });
+        };
+        enterSave.onclick = async () => {
+            const r = curRoom();
+            if (!r) return;
+            const fx = (ew.readLocks() || {}).fx || null;
+            const shipped = r.shipped_on_enter || null;
+            let body;
+            if (fx && shipped && deepEq(fx, shipped)) body = null;          // verbatim = reset
+            else if (!fx) body = shipped ? { _clear: true } : null;        // nothing = strip / reset
+            else body = fx;
+            try {
+                const res = await api('story/room-enter', 'POST',
+                                      { session, slug, room_id: r.id, on_enter: body });
+                if (!res.success) { ui.showToast(res.detail || 'save failed', 'error'); return; }
+                r.on_enter = body;
+                paintEnter(r);
+                ui.showToast(res.detail || 'Saved', 'success', 1800);
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+        enterReset.onclick = async () => {
+            const r = curRoom();
+            if (!r) return;
+            try {
+                const res = await api('story/room-enter', 'POST',
+                                      { session, slug, room_id: r.id, on_enter: null });
+                if (!res.success) { ui.showToast(res.detail || 'reset failed', 'error'); return; }
+                r.on_enter = null;
+                paintEnter(r);
+            } catch (e) { ui.showToast(e.message, 'error'); }
+        };
+
         const paintRoomOptions = () => {
             const cur = roomSel.value;
             const curId = world.current_room;
@@ -2028,6 +2149,7 @@ function objectsTab(slug, session, data) {
                 r.backdrop_override ? '' : 'none';
             pane.querySelector('#grs-piece-list').innerHTML =
                 Object.keys(world.pieces || {}).map(n => `<option value="${esc(n)}">`).join('');
+            paintEnter(r);
             const layerObjs = (world.objects || {})[String(r.id)] || {};
             const shippedObjs = r.shipped_objs || {};
 
@@ -2401,10 +2523,12 @@ function objectsTab(slug, session, data) {
                 if (lk) {
                     if (lk.cond) body.condition = lk.cond;
                     if (lk.msg) body.blocked_message = lk.msg;
-                    if (lk.dice) body.roll = {
-                        ...lk.dice,
-                        success: { ...(lk.fx || {}) },
-                        failure: { message: EXIT_FAIL_MSG } };
+                    if (lk.dice) {
+                        const { miss, once, ...d } = lk.dice;
+                        body.roll = { ...d, ...(once ? { once: true } : {}),
+                                      success: { ...(lk.fx || {}) },
+                                      failure: { message: miss || EXIT_FAIL_MSG } };
+                    }
                     else if (lk.fx) body.effects = lk.fx;
                 }
                 if (se) body.edit_mechanics = true;

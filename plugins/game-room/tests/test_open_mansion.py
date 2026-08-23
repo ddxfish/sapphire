@@ -145,12 +145,13 @@ def test_take_moves_object_to_inventory(story):
     # non-takeable falls to the off-script license (narrate freely, no events)
     events, msg, ok = referee.resolve(story, state, room, {8: room}, "take", "vase")
     assert ok and not events and "narrate" in msg
-    # declared take interactions still win over the generic verb
+    # declared take interactions COMPOSE with the pocket (2026-08-23 ruling —
+    # the look-shadow's mirror): the authored line speaks AND it's taken
     room["objects"]["coin"] = {"desc": "A coin.", "takeable": True,
                                "interactions": {"take": {"message": "It bites you!"}}}
     events, msg, ok = referee.resolve(story, state, room, {8: room}, "take", "coin")
     assert ok and "bites" in msg
-    assert all(e["event"] != "taken" for e in events)
+    assert any(e["event"] == "taken" and e["target"] == "coin" for e in events)
 
 
 def test_flag_gte_threshold():

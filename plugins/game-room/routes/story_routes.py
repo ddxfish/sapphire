@@ -347,6 +347,10 @@ def get_objects(query=None, **_):
                           'shipped_player_desc': room.get('player_desc') or '',
                           'template': ov.get('template') or '',
                           'player_desc': ov.get('player_desc') or '',
+                          # On-entry effects (2026-08-23): shipped block +
+                          # the layer's override ({_clear} strips shipped)
+                          'shipped_on_enter': room.get('on_enter') or None,
+                          'on_enter': ov.get('on_enter') if isinstance(ov.get('on_enter'), dict) else None,
                           # Shipped objects, editor view (editor v2: cards +
                           # shadow/tombstone) — counts everything, hidden/
                           # gated included; this is the author's surface.
@@ -395,6 +399,8 @@ def get_objects(query=None, **_):
                           'shipped_template': '', 'shipped_player_desc': '',
                           'template': str(txt.get('template') or ''),
                           'player_desc': str(txt.get('player_desc') or ''),
+                          'shipped_on_enter': None,
+                          'on_enter': txt.get('on_enter') if isinstance(txt.get('on_enter'), dict) else None,
                           'shipped_objs': {}, 'shipped_exits': [],
                           'exit_shadows': {},
                           'add_exits': list(txt.get('add_exits') or []),
@@ -672,6 +678,24 @@ def delete_item(body=None, **_):
         return {'success': ok,
                 'detail': f"'{name}' removed from the kit (restorable)." if ok else msg}
     msg, ok = sess.delete_user_item(chat, slug, name)
+    return {'success': ok, 'detail': msg}
+
+
+def set_room_enter(body=None, **_):
+    """Room on-entry effects (editor 2026-08-23): {room_id, on_enter:
+    {effects}|{_clear:true}|null}. Playthrough layer, wholesale."""
+    from gameroom_story import rooms
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    try:
+        rid = int(body.get('room_id'))
+    except (TypeError, ValueError):
+        return {'success': False, 'detail': 'room_id must be a room number.'}
+    if rid not in rooms.load_story(slug)['rooms'] and rid not in _session().user_rooms(chat, slug):
+        return {'success': False, 'detail': f'No room {rid} in this story.'}
+    msg, ok = _session().set_room_enter(chat, slug, rid, body.get('on_enter'))
     return {'success': ok, 'detail': msg}
 
 

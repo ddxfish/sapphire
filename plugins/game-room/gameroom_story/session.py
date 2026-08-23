@@ -634,6 +634,14 @@ def _merge_user_layer(story, slug, chat, state):
         # zork-line would read as a broken upload, not a tutorial.
         if str(txt.get("backdrop") or "").strip():
             room["backdrop"] = str(txt["backdrop"]).strip()
+        # On-entry effects (editor 2026-08-23): the layer's dict replaces
+        # the shipped block wholesale; {"_clear": true} strips a shipped one.
+        oe = txt.get("on_enter")
+        if isinstance(oe, dict):
+            if oe.get("_clear"):
+                room.pop("on_enter", None)
+            else:
+                room["on_enter"] = dict(oe)
     # Room TEXT overrides stay zork-gated: pre-open, the shipped tutorial
     # corridor reads as shipped (a different animal from user CONTENT).
     open_flag = (story["meta"].get("open_flag") or "").strip()
@@ -1666,7 +1674,7 @@ def _prune_room_layer(cur):
     """Drop empty fields from one room's layer dict: text by strip,
     exit containers by truthiness (empty list/dict = gone)."""
     return {k: v for k, v in cur.items()
-            if (v if k in ("add_exits", "exit_shadows") else str(v).strip())}
+            if (v if k in ("add_exits", "exit_shadows", "on_enter") else str(v).strip())}
 
 
 def _mutate_room_layer(chat, slug, room_id, mutate):
@@ -1684,6 +1692,37 @@ def _mutate_room_layer(chat, slug, room_id, mutate):
         else:
             rooms_ov.pop(str(room_id), None)
         st.save_user_layer(slug, chat, {**layer, "rooms": rooms_ov})
+
+
+_ENTER_KEYS = {"set", "adjust", "gives", "extras", "extras_remove", "goto", "show",
+               "emotions", "emotions_remove", "message"}
+
+
+def set_room_enter(chat, slug, room_id, fx):
+    """Room on-entry effects override (editor 2026-08-23). fx = a dict of
+    effect keys → stored wholesale; {"_clear": true} → strips the shipped
+    block; None → drop the override (back to shipped). Keys outside the
+    effects grammar are refused — the referee would silently ignore them."""
+    if fx is not None:
+        if not isinstance(fx, dict):
+            return "on_enter must be an object.", False
+        if not fx.get("_clear"):
+            bad = set(fx) - _ENTER_KEYS
+            if bad:
+                return f"Unknown effect key(s): {', '.join(sorted(bad))}.", False
+            if len(json.dumps(fx)) > _OBJ_BYTES:
+                return "On-entry effects too large.", False
+            if not fx:
+                fx = None
+
+    def mutate(cur):
+        if fx is None:
+            cur.pop("on_enter", None)
+        else:
+            cur["on_enter"] = {"_clear": True} if fx.get("_clear") else dict(fx)
+    _mutate_room_layer(chat, slug, room_id, mutate)
+    return ("On-entry effects saved." if fx is not None
+            else "On-entry effects back to shipped."), True
 
 
 def set_user_exit(chat, slug, room_id, to, spec):

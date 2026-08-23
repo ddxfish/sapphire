@@ -45,6 +45,9 @@ def _find(mapping, target):
     return None, None
 
 
+TAKE_VERBS = ("take", "grab", "get", "pickup", "pocket")
+
+
 def seal_key(room, obj_name, verb):
     """Room-scoped key for sealed blanks and once-only dice.
 
@@ -113,6 +116,15 @@ def check_condition(cond, state):
     flag = cond.get("flag")
     if flag and not state["flags"].get(flag):
         return False
+    # {"after_turns": n} — the player has been in the CURRENT room n+ turns
+    # (editor 2026-08-23: hints-as-objects — "a guard appears after 3").
+    after = cond.get("after_turns")
+    if after is not None:
+        try:
+            if int(state.get("turns_in_room") or 0) < int(after):
+                return False
+        except (TypeError, ValueError):
+            return False
     for k, expected in (cond.get("flags") or {}).items():
         if state["flags"].get(k) != expected:
             return False
@@ -260,6 +272,18 @@ def _carried_objects(story, all_rooms, state):
         if _key(n) in taken and isinstance(o, dict) and n not in out:
             out[n] = (None, o)
     return out
+
+
+def _take_rider(obj, canon, verb, carried, target_n):
+    """Compose law (2026-08-23, the look-shadow's mirror): a DECLARED take
+    verb on a TAKEABLE object used to fire its message and silently skip
+    the pocket. Now the declared machinery fires AND the object is taken —
+    'what she says when it's picked up' is just a take action card."""
+    if not (obj and obj.get("takeable")) or carried:
+        return []
+    if _key(canon) in TAKE_VERBS or _key(verb) in TAKE_VERBS:
+        return [{"event": "taken", "target": target_n}]
+    return []
 
 
 def _declares(obj, verb):
@@ -530,6 +554,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                 events = [{"event": "interacted", "target": target_n, "verb": canon},
                           {"event": "revealed", "key": key}]
                 events += _effect_events(spec, state)
+                events += _take_rider(obj, canon, verb, carried, target_n)
                 return events, (f"\U0001F512 Revealed for the first time: “{filled}” "
                                 f"({origin}story canon now; narrate the discovery)."), True
             # Dice (Krem's ruling 2026-08-03): "roll": {sides, beat, once,
@@ -565,11 +590,14 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
                            "room": (home or {}).get("id"),
                            "value": value, "beat": beat, "sides": sides, "success": won}]
                 events += _effect_events(branch, state)
+                if won:
+                    events += _take_rider(obj, canon, verb, carried, target_n)
                 msg = branch.get("message") or (f"You {canon} the {target}." if won
                                                 else f"The {canon} fails.")
                 return events, f"\U0001F3B2 Rolled {value} of {sides} (needed {beat}+) — {msg}", True
             events = [{"event": "interacted", "target": target_n, "verb": canon}]
             events += _effect_events(spec, state)
+            events += _take_rider(obj, canon, verb, carried, target_n)
             return events, spec.get("message", f"You {canon} the {target}."), True
 
     # Takeable (Krem 2026-08-20): the object ITSELF moves into inventory and
@@ -577,8 +605,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     # Declared 'take' interactions win (the loop above already returned);
     # non-takeable objects fall through to the off-script license so
     # narrative pick-ups stay free.
-    if obj and obj.get("takeable") \
-            and _key(verb) in ("take", "grab", "get", "pickup", "pocket"):
+    if obj and obj.get("takeable") and _key(verb) in TAKE_VERBS:
         if carried:
             return [], f"The {target} is already in the inventory.", True
         events = [{"event": "taken", "target": target_n}]
