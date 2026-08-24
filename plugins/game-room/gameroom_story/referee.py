@@ -300,6 +300,22 @@ def _declares(obj, verb):
     return False
 
 
+def _scene_summary(room, state, cap=None):
+    """Spoiler-free scene line — title, template, visible objects, visible
+    exits. Shared by look-room and the move result; hidden/unfound objects
+    and solutions never appear (visibility is the same gate the ghost uses)."""
+    tmpl = (room.get("template") or "").strip()
+    if cap and len(tmpl) > cap:
+        tmpl = tmpl[:cap] + "…"
+    bits = [f"{room['title']}: {tmpl}"]
+    vis = _visible_objects(room, state)
+    if vis:
+        bits.append("Here: " + ", ".join(vis))
+    labels = ", ".join(f"'{e.get('label')}'" for e in visible_exits(room, state))
+    bits.append(f"Exits: {labels or 'none'}")
+    return " — ".join(bits)
+
+
 def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
     """Adjudicate one act. Returns (events, message, ok).
 
@@ -352,13 +368,7 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
             # block already carries this each turn, but a single room that
             # CHANGES (placed objects, zork-line reveals) deserves an
             # explicit read.
-            vis = _visible_objects(room, state)
-            bits = [f"{room['title']}: {(room.get('template') or '').strip()}"]
-            if vis:
-                bits.append("Here: " + ", ".join(vis))
-            labels = ", ".join(f"'{e.get('label')}'" for e in visible_exits(room, state))
-            bits.append(f"Exits: {labels or 'none'}")
-            return [], " — ".join(bits), True
+            return [], _scene_summary(room, state), True
 
     if verb == "move":
         if not target_n:
@@ -420,7 +430,14 @@ def resolve(story, state, room, all_rooms, verb, target=None, answer=None):
         # traverse, before the destination's own on_enter.
         events += _effect_events(exit_match.get("effects") or {}, state)
         events += _effect_events(dest.get("on_enter") or {}, state)
-        return events, dice_line + f"Moved to '{dest['title']}'. The new room's details arrive in your turn context.", True
+        # The scene rides IN the tool result (server-Sapph spiral,
+        # 2026-08-23): the ghost block she holds was built BEFORE the move
+        # and still shows the old room — promising "details in your turn
+        # context" sent her hunting for context that wasn't there yet, on
+        # repeat. Promise and payload now arrive together; next turn's
+        # ghost repaints with NEW SCENE as before.
+        return events, dice_line + f"Moved to '{dest['title']}'. " \
+            + _scene_summary(dest, state, cap=900), True
 
     if verb == "search":
         found = []

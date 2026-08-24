@@ -1552,7 +1552,8 @@ function makeActCard(host, a, opts) {
         resp.classList.toggle('grs-act-hold', sealed);
     };
     card._lw = locksWidget(card, { types: { req: REQ_TYPES, fx: FX_TYPES },
-                                   pieceList: opts.pieceList, onChange: relabel });
+                                   pieceList: opts.pieceList, onChange: relabel,
+                                   selfName: opts.selfName });
     if (a) {
         card.querySelector('.grs-act-verb').value = a.verb || '';
         resp.value = a.resp || '';
@@ -1648,7 +1649,16 @@ function locksWidget(form, opts) {
                 ui.showToast('Image stored — save the action to apply', 'success', 2200);
             } catch (e) { ui.showToast(e.message, 'error'); }
         };
-        sel.onchange = () => { paint(); sync(); };
+        sel.onchange = () => {
+            paint();
+            // picking "riddle solved" on an empty row offers this object's
+            // own name — the padlock-on-itself case (Krem 2026-08-23)
+            if (sel.value === 'solved' && !vIn.value.trim() && opts.selfName) {
+                const self = opts.selfName();
+                if (self) vIn.value = self;
+            }
+            sync();
+        };
         paint();
         vIn.value = val || '';
         xIn.value = extra || '';
@@ -2577,7 +2587,8 @@ function objectsTab(slug, session, data) {
         // per-verb grammar. Builder factored to makeActCard (2026-08-22)
         // so the starting-items panel shares it.
         const addActCard = (a) => makeActCard(actRows, a,
-            { authoring: () => authoring, pieceList: 'grs-piece-list' });
+            { authoring: () => authoring, pieceList: 'grs-piece-list',
+              selfName: () => (objName.value || '').trim() });
 
         const openAdd = (name) => {
             const r = curRoom();

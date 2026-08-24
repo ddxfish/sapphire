@@ -106,3 +106,20 @@ def test_gm_tab_switch_round_trips_and_survives_text_save(story, cfg_store, monk
     assert session.one_move_per_turn() is False
     assert session.conduct_for(story)[0] == "Terse GM."
     assert story_routes.get_story_settings("mad-manse")["settings"]["one_move_per_turn"] is False
+
+
+def test_move_result_carries_the_new_scene(story, cfg_store):
+    # Server-Sapph spiral (2026-08-23): the ghost block predates the move,
+    # so promising "details in your turn context" pointed at the OLD room.
+    # The destination scene now rides in the tool result itself.
+    chat = "omt-scene"
+    _begin(chat)
+    # a hidden thing in the parlor must NOT leak through the move summary
+    session.upsert_user_object(chat, "mad-manse", 2, "cobweb_key", {
+        "desc": "a key in the cobwebs", "hidden": True, "found_by": "search"})
+    msg, ok = session.act(None, "move", "the parlor", session=chat)
+    assert ok
+    assert "Moved to 'The Parlor'" in msg
+    assert "A parlor. Someone whispered" in msg     # template inline
+    assert "Exits: 'the hall'" in msg               # visible exits inline
+    assert "cobweb_key" not in msg                  # hidden stays hidden
