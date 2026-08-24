@@ -722,6 +722,7 @@ function paintControls(a) {
                 session: _session,
                 active: !!(_status && _status.slug === _story?.slug),
                 slots: _status?.slots || {},
+                fence: _status?.fence || [],
                 state: _status || null,   // read-only State tab (the old 🔍)
                 onEndStory: endStory,
                 storyTitle: _story?.title || _story?.slug,

@@ -40,6 +40,15 @@ class HookEvent:
         post_chat:         After response saved — observational (`input`, `response`)
         pre_execute:       Before tool call — mutate `arguments`, block with `skip_llm`
         post_execute:      After tool call — observational (`function_name`, `result`)
+        tools_filter:      Per-request tool schema — fired after toolset
+                           resolution with the FINAL tool list for this turn's
+                           LLM call in `tools`; remove entries to withhold
+                           tools from this turn (e.g. the game-room's
+                           per-scenario fence). SUBTRACT-ONLY: the fire site
+                           intersects the result against the original list,
+                           so additions never land. Errors fail open (the
+                           unfiltered list ships). `chat_name` is pre-stamped
+                           by the fire site. 2026-08-24.
         pre_tts:           Before speech — mutate `tts_text`, cancel with `skip_tts`. metadata['tts_client'] = calling TTSClient
         post_tts:          After playback — observational (`tts_text`, metadata has `duration`)
         provider_switched: After TTS/STT/embed provider hot-swap. metadata: `kind` (tts|stt|embed), `provider` (new key). Observational — plugins warm caches / reset state.
@@ -113,6 +122,9 @@ class HookEvent:
     function_name: Optional[str] = None
     arguments: Optional[dict] = None
     result: Optional[str] = None
+    # tools_filter rail: the request's tool-schema list. Handlers REMOVE
+    # entries; the fire site enforces subtract-only via intersection.
+    tools: Optional[List[Dict]] = None
     tts_text: Optional[str] = None
     skip_tts: bool = False
     ephemeral: bool = False

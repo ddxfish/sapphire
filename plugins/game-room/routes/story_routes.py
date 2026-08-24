@@ -1006,7 +1006,10 @@ def set_scenario(slug, body=None, **_):
             if keep:
                 objects[rid] = keep
         cur[name] = {'slots': slots, 'objects': objects,
-                     'rooms': layer.get('rooms') or {}}
+                     'rooms': layer.get('rooms') or {},
+                     # AI tools fence rides the scenario like slots do —
+                     # read server-side from the running entry (2026-08-24)
+                     'fence': (st.get_active_entry(chat) or {}).get('fence') or []}
         store.save(key, cur)
         # The canvas IS this scenario now — remember it (gear reopens on it).
         # Spread-forward: only the tag changes here; every other bucket
@@ -1021,6 +1024,24 @@ def set_slots(body=None, **_):
     slots = body.get('slots') if isinstance(body.get('slots'), dict) else {}
     msg, ok = _session().update_slots(_system(), slots, session=_sess_arg(body))
     return {'success': ok, 'detail': msg}
+
+
+def set_fence(body=None, **_):
+    """Per-playthrough AI tools fence — story tools she may NOT use this
+    run (Krem's B ruling 2026-08-24: core tools_filter hook removes them
+    from her schema entirely). Rides scenario save/load like slots.
+    Validated against session.FENCEABLE_TOOLS — story_act can never fence."""
+    body = body or {}
+    chat, slug, err = _active_ctx(body=body)
+    if err:
+        return err
+    from gameroom_story import state as st
+    sess = _session()
+    allowed = set(sess.FENCEABLE_TOOLS)
+    fence = [str(t) for t in (body.get('tools') or []) if str(t) in allowed]
+    if not st.update_active(chat, fence=fence):
+        return {'success': False, 'detail': 'No active playthrough.'}
+    return {'success': True, 'fence': fence}
 
 
 def load_scenario(body=None, **_):
@@ -1054,6 +1075,10 @@ def load_scenario(body=None, **_):
         from gameroom_story import state as st
         entry = st.get_active_entry(chat) or {}
         if entry.get('story') == slug:
+            # Fence FIRST — independent of the slot re-bake below, which
+            # needs a live system (fence must land even in headless lanes).
+            st.update_active(chat, fence=(((cur.get(name) or {}).get('fence') or [])
+                                          if name else []))
             sess.update_slots(_system(), (cur.get(name) or {}).get('slots') or {} if name else {},
                               session=chat)
     except Exception as e:

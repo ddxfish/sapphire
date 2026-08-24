@@ -387,6 +387,23 @@ class StreamingChat:
             # Snapshot names too — used to validate tool calls against what LLM actually received
             # Snapshot executors to protect against reload yanking executors mid-chat
             enabled_tools = self._effective_enabled_tools()
+            # tools_filter hook (2026-08-24): plugins subtract tools from THIS
+            # turn's schema — the game-room scenario fence. Subtract-only by
+            # construction (intersection against the resolved list), fail-open
+            # on any error. Sits at the ONE seam both lanes cross (active
+            # chat + stream-brain override), so _allowed_tool_names below is
+            # derived from the FILTERED list — a hallucinated call to a
+            # fenced tool is refused like any unknown tool.
+            try:
+                from core.hooks import hook_runner, HookEvent
+                _ev = HookEvent(chat_name=chat_name, tools=list(enabled_tools))
+                hook_runner.fire("tools_filter", _ev)
+                _kept = {t["function"]["name"] for t in (_ev.tools or [])
+                         if isinstance(t, dict) and "function" in t}
+                enabled_tools = [t for t in enabled_tools
+                                 if t.get("function", {}).get("name") in _kept]
+            except Exception as e:
+                logger.warning(f"tools_filter hook failed (unfiltered list ships): {e}")
             _allowed_tool_names = {t["function"]["name"] for t in enabled_tools if "function" in t}
             _executor_snapshot = self.main_chat.function_manager.snapshot_executors()
 

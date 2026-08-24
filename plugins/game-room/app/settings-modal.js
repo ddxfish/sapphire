@@ -880,6 +880,22 @@ export async function openStorySettings(slug, opts = {}) {
         const st = slotTabs(slots, [], f => (opts.slots || {})[f.key]);
         if (st.length) st[0].html +=
             '<div style="opacity:.7;font-size:.85em">Changes save as you type — live on her next turn. Sealed blanks are edited from the ✍ chips in the scene panel.</div>';
+        // AI tools fence (Krem 2026-08-24): per-playthrough, rides the
+        // scenario 💾 like slots. Unchecked = the tool leaves her schema
+        // entirely (core tools_filter hook — not a "please don't" note).
+        if (st.length && opts.active) {
+            const fenced = new Set(opts.fence || []);
+            const FENCE = [
+                ['story_place', 'story_place — author new objects into rooms'],
+                ['story_status', 'story_status — read story state on demand'],
+                ['story_end', 'story_end — end the story from inside']];
+            st[0].html += `<div class="grs-fence-block" style="margin-top:12px">
+                <div><b>AI tools</b> — what she may use in this scenario:</div>
+                ${FENCE.map(([k, label]) => `<label style="display:block;margin:2px 0">
+                    <input type="checkbox" class="grs-fence" data-tool="${k}"${fenced.has(k) ? '' : ' checked'}> ${label}</label>`).join('')}
+                <div style="opacity:.7;font-size:.85em">Unchecked = fenced off her toolset this run; saved into the scenario with 💾. story_act (the referee) always stays.</div>
+            </div>`;
+        }
         tabs.push(...st);
     }
 
@@ -941,6 +957,17 @@ export async function openStorySettings(slug, opts = {}) {
     }
 
     world.wire(overlay);
+
+    // AI tools fence — applies immediately (own lane, not the autosave
+    // debounce: a fence is a rule change, not prose in flight)
+    overlay.querySelectorAll('.grs-fence').forEach(cb => cb.onchange = async () => {
+        const tools = [...overlay.querySelectorAll('.grs-fence')]
+            .filter(c => !c.checked).map(c => c.dataset.tool);
+        try {
+            const r = await api('story/fence', 'POST', { session: opts.session, tools });
+            if (!r.success) throw new Error(r.detail || 'fence failed');
+        } catch (e) { ui.showToast(e.message, 'error'); }
+    });
 
     // 👁 full prompt — core's assembly, on demand (Krem 2026-08-23)
     const loadBtn = overlay.querySelector('.grs-prompt-load');

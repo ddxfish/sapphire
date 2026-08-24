@@ -60,6 +60,33 @@ def handle(event):
             logger.debug(f"[STORY] ghost: no active story on '{chat}'"
                          + (" (paused)" if entry else ""))
             return  # intermission: no ticks, no block — clock stops
+        # Two-ledger regen (plan tmp/regen-two-ledger-plan.md, F1-A): if the
+        # chat was rewound (regenerate/delete), the journal tail is anchored
+        # past the current message count — rewind the world to match BEFORE
+        # ticking, so the re-run turn plays on the state the player actually
+        # sees. Detection only on the active chat: anchors are only
+        # comparable there (the same rule _stamp_anchor lives by). This also
+        # retires the regen double-tick: the stray tick gets REVERTED.
+        try:
+            from core.api_fastapi import get_system
+            system = get_system()
+            sm = system.llm_chat.session_manager if system else None
+            if sm is not None and sm.get_active_chat_name() == chat:
+                count = len(sm.get_messages_for_display())
+                rw = st.rewind_to_match(entry["story"], chat, count)
+                if rw:
+                    logger.info(f"[STORY] chat rewound on '{chat}' — world follows: "
+                                f"turn {rw['turn']}, {rw['dropped']} event(s) off, "
+                                f"{rw['salvaged']} seal(s) salvaged")
+                    session.refresh_prompt(system, session=chat)
+                    from core.event_bus import publish, Events
+                    publish(Events.PLUGIN_NOTICE, {
+                        "plugin": "game-room", "severity": "info",
+                        "message": f"Story rewound to turn {rw['turn']} to match "
+                                   f"the regenerated chat"})
+        except Exception as e:
+            logger.warning(f"[STORY] regen rewind check failed: {e}")
+
         story, state = session.load_active(chat)
         if not story or state["ended"]:
             logger.info(f"[STORY] ghost: story unloadable/ended on '{chat}' — no block")

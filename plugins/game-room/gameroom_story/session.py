@@ -76,6 +76,11 @@ def _as_bool(v, default=True):
     return str(v).strip().lower() not in ("false", "0", "no", "off", "")
 
 
+# Per-playthrough AI tools fence (Krem 2026-08-24): story tools a scenario
+# may deny her. story_act is the engine door — never listed, never fenced.
+FENCEABLE_TOOLS = ("story_place", "story_status", "story_end")
+
+
 def conduct_for(story):
     """(universal_text | None, dm_guide | None) — the two GM layers."""
     slug = story["meta"]["slug"]
@@ -862,6 +867,18 @@ def _start(system, slug, character, mode, local, session, slots=None):
                      prev_toolset=cur.get("toolset", "all"),
                      prev_extras=cur.get("extra_toolsets") or [],
                      slots=slot_vals)
+    # Adopt the tagged scenario's tools fence — the fence rides scenarios
+    # like slots do, but pre-start there is no entry to stamp, so the start
+    # adopts it from the scenario the canvas is wearing (2026-08-24).
+    try:
+        tag = (st.get_user_layer(slug, chat) or {}).get("scenario") or ""
+        if tag:
+            scn = (_store().get(f"storyscenarios:{slug}") or {}).get(tag) or {}
+            if scn.get("fence"):
+                st.update_active(chat, fence=[str(t) for t in scn["fence"]
+                                              if str(t) in FENCEABLE_TOOLS])
+    except Exception as e:
+        logger.warning(f"[STORY] fence adopt failed: {e}")
     # (Scenario ENV swaps happen via story/scenarios/load — applied the
     # moment the setup form's dropdown changes; no start-time param.)
 
@@ -1478,6 +1495,7 @@ def full_state(system, session=None):
         # Mad-Libs layer (open-mansion v1): this run's slot values, the
         # zork-line flag, and whether the house has opened.
         "slots": entry.get("slots") or {},
+        "fence": entry.get("fence") or [],
         "open_flag": _open_flag,
         "house_open": (not _open_flag) or bool(state["flags"].get(_open_flag)),
         "mode": entry.get("mode"),

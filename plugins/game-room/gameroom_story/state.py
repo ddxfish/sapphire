@@ -244,6 +244,47 @@ def truncate(story, chat, turn):
     return len(dropped)
 
 
+def rewind_to_match(story, chat, msg_count):
+    """Two-ledger regen (plan tmp/regen-two-ledger-plan.md): the chat was
+    rewound (regenerate/delete), so journal events anchored AT or PAST the
+    current message count belong to turns whose chat messages no longer
+    exist. Drop those turns — forensics-archived, same law as truncate —
+    SALVAGING the player's sealed text: their words survive any rewind
+    (re-anchored at the cut), while the reveal event drops, so the blank
+    re-closes still filled and the ✉ chip offers it back for editing.
+
+    Conservative by design (F1/F2 ruling 2026-08-24): any doomed event
+    missing its anchor ⇒ no-op — anchors are best-effort, and we never do
+    state surgery on ambiguity. Returns {"turn", "dropped", "salvaged"}
+    when a rewind happened, else None."""
+    with _lock:
+        events = _cs().read_all(chat, _jkey(story))
+        doomed_turns = {e["turn"] for e in events
+                       if e.get("event") == "turn_tick"
+                       and isinstance(e.get("msg_index"), int)
+                       and e["msg_index"] >= msg_count}
+        if not doomed_turns:
+            return None
+        t_cut = min(doomed_turns) - 1
+        keep = [e for e in events if e.get("turn", 0) <= t_cut]
+        drop = [e for e in events if e.get("turn", 0) > t_cut]
+        if any(not isinstance(e.get("msg_index"), int) for e in drop):
+            logger.warning(f"[STORY] chat rewound on '{chat}' but the doomed "
+                           f"span has unanchored events — leaving the world alone")
+            return None
+        salvaged = []
+        for e in drop:
+            if e.get("event") == "sealed":
+                s = {k: v for k, v in e.items() if k != "msg_index"}
+                s["turn"] = t_cut
+                _stamp_anchor(chat, s)     # fresh anchor: survives the NEXT rewind too
+                salvaged.append(s)
+        for e in drop:
+            _cs().append(chat, f"story:reverted:{story}", e)
+        _cs().replace(chat, _jkey(story), keep + salvaged)
+        return {"turn": t_cut, "dropped": len(drop), "salvaged": len(salvaged)}
+
+
 def new_run(story, chat):
     """Fresh playthrough: archive the existing journal aside as run<n>
     (never erased — same law as revert forensics), leaving the live key
